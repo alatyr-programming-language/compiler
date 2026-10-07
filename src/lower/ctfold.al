@@ -1140,37 +1140,42 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
 ## possibly nested inside `comptime if` branches? Used by the mono worklist to instantiate a
 ## self-recursive derive for each field type. EXHAUSTIVE over `Stmt` (every arm sets `s = nx`) so
 ## the walk always terminates.
-pub stmts_have_compfor := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
-  mut s := head
+pub stmts_have_compfor := fn(head : Option(ptr(mut Stmt)), a : rt::Arena) -> bool {
+  mut s : Option(ptr(mut Stmt)) = head
   mut found := false
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::CompFor(vs, vl, iv, b, nx) => { if iv == 0 { found = true } ; s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if stmts_have_compfor(rb, a) { found = true } ; s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); if stmts_have_compfor(cam.body_stmts, a) { found = true }; car = cam.next }; None => { break } } } ; s = nx }
-      Stmt::CompIf(c, th, el, nx) => {
-        if stmts_have_compfor(th, a) { found = true }
-        if stmts_have_compfor(el, a) { found = true }
-        s = nx
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::CompFor(vs, vl, iv, b, nx) => { if iv == 0 { found = true } ; s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if stmts_have_compfor(rb, a) { found = true } ; s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); if stmts_have_compfor(cam.body_stmts, a) { found = true }; car = cam.next }; None => { break } } } ; s = nx }
+          Stmt::CompIf(c, th, el, nx) => {
+            if stmts_have_compfor(th, a) { found = true }
+            if stmts_have_compfor(el, a) { found = true }
+            s = nx
+          }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::Loop(b, nx) => { s = nx }
+          Stmt::Unchecked(b, nx) => { s = nx }
+          Stmt::AllocWith(ae, b, nx) => { s = nx }
+          Stmt::For(f1, f2, f3, f4, fb, nx) => { s = nx }
+          Stmt::Match(sc, ah, nx) => { s = nx }
+          Stmt::Assign(a1, a2, a3, nx) => { s = nx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::FieldAssign(b1, b2, b3, b4, b5, nx) => { s = nx }
+          Stmt::FieldPathAssign(pb1, pb2, nx) => { s = nx }
+          Stmt::DerefAssign(p1, p2, nx) => { s = nx }
+          Stmt::IndexAssign(i1, i2, i3, nx) => { s = nx }
+          Stmt::IndexFieldAssign(j1, j2, j3, j4, j5, nx) => { s = nx }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+        }
       }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::Loop(b, nx) => { s = nx }
-      Stmt::Unchecked(b, nx) => { s = nx }
-      Stmt::AllocWith(ae, b, nx) => { s = nx }
-      Stmt::For(f1, f2, f3, f4, fb, nx) => { s = nx }
-      Stmt::Match(sc, ah, nx) => { s = nx }
-      Stmt::Assign(a1, a2, a3, nx) => { s = nx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::FieldAssign(b1, b2, b3, b4, b5, nx) => { s = nx }
-      Stmt::FieldPathAssign(pb1, pb2, nx) => { s = nx }
-      Stmt::DerefAssign(p1, p2, nx) => { s = nx }
-      Stmt::IndexAssign(i1, i2, i3, nx) => { s = nx }
-      Stmt::IndexFieldAssign(j1, j2, j3, j4, j5, nx) => { s = nx }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
+      None => { break }
     }
   }
   found
@@ -1179,55 +1184,60 @@ pub stmts_have_compfor := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
 ## Does a statement list contain a `match` with a COMPTIME-VARIANT-TEMPLATE arm (`wild == 2`), possibly
 ## nested? Used by the mono worklist to instantiate a self-recursive enum derive per variant PAYLOAD
 ## type. EXHAUSTIVE over `Stmt` so the walk terminates.
-pub stmts_have_variant_template := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
-  mut s := head
+pub stmts_have_variant_template := fn(head : Option(ptr(mut Stmt)), a : rt::Arena) -> bool {
+  mut s : Option(ptr(mut Stmt)) = head
   mut found := false
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Match(sc, ah, nx) => {
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              if am.wild == 2 { found = true }
-              if stmts_have_variant_template(am.body_stmts, a) { found = true }
-              arm = am.next
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Match(sc, ah, nx) => {
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  if am.wild == 2 { found = true }
+                  if stmts_have_variant_template(am.body_stmts, a) { found = true }
+                  arm = am.next
+                }
+                None => { break }
+              }
             }
-            None => { break }
+            s = nx
           }
+          Stmt::CompIf(c, th, el, nx) => {
+            if stmts_have_variant_template(th, a) { found = true }
+            if stmts_have_variant_template(el, a) { found = true }
+            s = nx
+          }
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => { if stmts_have_variant_template(cb, a) { found = true } ; s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if stmts_have_variant_template(rb, a) { found = true } ; s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); if stmts_have_variant_template(cam.body_stmts, a) { found = true }; car = cam.next }; None => { break } } } ; s = nx }
+          Stmt::If(c, th, el, nx) => {
+            if stmts_have_variant_template(th, a) { found = true }
+            if stmts_have_variant_template(el, a) { found = true }
+            s = nx
+          }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::Loop(b, nx) => { s = nx }
+          Stmt::Unchecked(b, nx) => { s = nx }
+          Stmt::AllocWith(ae, b, nx) => { s = nx }
+          Stmt::For(f1, f2, f3, f4, fb, nx) => { s = nx }
+          Stmt::Assign(a1, a2, a3, nx) => { s = nx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::FieldAssign(b1, b2, b3, b4, b5, nx) => { s = nx }
+          Stmt::FieldPathAssign(pb1, pb2, nx) => { s = nx }
+          Stmt::DerefAssign(p1, p2, nx) => { s = nx }
+          Stmt::IndexAssign(i1, i2, i3, nx) => { s = nx }
+          Stmt::IndexFieldAssign(j1, j2, j3, j4, j5, nx) => { s = nx }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
         }
-        s = nx
       }
-      Stmt::CompIf(c, th, el, nx) => {
-        if stmts_have_variant_template(th, a) { found = true }
-        if stmts_have_variant_template(el, a) { found = true }
-        s = nx
-      }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { if stmts_have_variant_template(cb, a) { found = true } ; s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if stmts_have_variant_template(rb, a) { found = true } ; s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); if stmts_have_variant_template(cam.body_stmts, a) { found = true }; car = cam.next }; None => { break } } } ; s = nx }
-      Stmt::If(c, th, el, nx) => {
-        if stmts_have_variant_template(th, a) { found = true }
-        if stmts_have_variant_template(el, a) { found = true }
-        s = nx
-      }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::Loop(b, nx) => { s = nx }
-      Stmt::Unchecked(b, nx) => { s = nx }
-      Stmt::AllocWith(ae, b, nx) => { s = nx }
-      Stmt::For(f1, f2, f3, f4, fb, nx) => { s = nx }
-      Stmt::Assign(a1, a2, a3, nx) => { s = nx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::FieldAssign(b1, b2, b3, b4, b5, nx) => { s = nx }
-      Stmt::FieldPathAssign(pb1, pb2, nx) => { s = nx }
-      Stmt::DerefAssign(p1, p2, nx) => { s = nx }
-      Stmt::IndexAssign(i1, i2, i3, nx) => { s = nx }
-      Stmt::IndexFieldAssign(j1, j2, j3, j4, j5, nx) => { s = nx }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
+      None => { break }
     }
   }
   found

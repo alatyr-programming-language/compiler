@@ -45,6 +45,10 @@ arg_p := ast::arg_p
 arg_at := ast::arg_at
 arg_any := ast::arg_any
 stmt_p := ast::stmt_p
+stmt_same := ast::stmt_same
+stmt_at := ast::stmt_at
+stmt_any := ast::stmt_any
+stmt_next := ast::stmt_next
 stmt_label_span := ast::stmt_label_span
 ## FN-6 expression-callee site set — the parser's marker for a call whose ARGUMENT 0 IS THE CALLEE
 ## EXPRESSION (`fs[i](x)`), keyed by the call's borrowed callee-name-span start (see `ast.al`).
@@ -1703,7 +1707,7 @@ derive_cmp_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), want_lt : bool) -> i6
 ## native-width array indexes (fixpoint-sensitive overload/routing), but `print("{}", xs[i])` still
 ## needs the declared element type to select the same `print_one__T` instance in both passes. A call
 ## hole likewise uses its declared return type when the general resolver cannot recover it.
-variadic_hole_type_span := fn(e : ptr(Expr), block_head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+variadic_hole_type_span := fn(e : ptr(Expr), block_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   match deref(e) {
     Expr::Index(base, idx) => {
       bv := var_name_span(base)
@@ -1732,7 +1736,7 @@ variadic_hole_type_span := fn(e : ptr(Expr), block_head : ptr(mut Stmt), decls :
 ## interleaving `[seg0, arg0, seg1, …]`. v1: holes fill trailing args in order; each arg needs an
 ## inferable type (`expr_type_span` plus `variadic_hole_type_span`); `{{`/`}}` escapes + non-literal
 ## templates are follow-ups.
-emit_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   fmt := arg_expr_at(args_head, 0, a)
   fi := str_lit_info(fmt)
   ## A NON-LITERAL template (`t : str = "…"` then `print(t)`): §7.1 specifies the expansion over the
@@ -7992,50 +7996,55 @@ match_depth_expr := fn(e : ptr(Expr), a : rt::Arena, decls : ptr(rt::Vec), src :
   m
 }
 
-match_depth_stmts := fn(head : ptr(mut Stmt), a : rt::Arena, decls : ptr(rt::Vec), src : ptr(u8), in out cw : usize) -> usize {
-  mut s := head
+match_depth_stmts := fn(head : Option(ptr(mut Stmt)), a : rt::Arena, decls : ptr(rt::Vec), src : ptr(u8), in out cw : usize) -> usize {
+  mut s : Option(ptr(mut Stmt)) = head
   mut m := 0
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { m = imax(m, match_depth_expr(v, a, decls, src, cw)); s = nx }
-      Stmt::While(c, b, nx) => { m = imax(m, imax(match_depth_expr(c, a, decls, src, cw), match_depth_stmts(b, a, decls, src, cw))); s = nx }
-      Stmt::Loop(b, nx) => { m = imax(m, match_depth_stmts(b, a, decls, src, cw)); s = nx }
-      Stmt::Unchecked(b, nx) => { m = imax(m, match_depth_stmts(b, a, decls, src, cw)); s = nx }
-      Stmt::AllocWith(ae, b, nx) => { m = imax(m, match_depth_stmts(b, a, decls, src, cw)); s = nx }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { m = imax(m, match_depth_expr(e, a, decls, src, cw)); s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, match_depth_expr(fv, a, decls, src, cw)); s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, match_depth_expr(fpv, a, decls, src, cw)); s = nx }
-      Stmt::Return(rv, nx) => { m = imax(m, match_depth_expr(rv, a, decls, src, cw)); s = nx }
-      Stmt::DerefAssign(pe, val, nx) => { m = imax(m, imax(match_depth_expr(pe, a, decls, src, cw), match_depth_expr(val, a, decls, src, cw))); s = nx }
-      Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(match_depth_expr(ib, a, decls, src, cw), imax(match_depth_expr(ii, a, decls, src, cw), match_depth_expr(iv, a, decls, src, cw)))); s = nx }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(match_depth_expr(fia, a, decls, src, cw), imax(match_depth_expr(fii, a, decls, src, cw), match_depth_expr(fiv, a, decls, src, cw)))); s = nx }
-      Stmt::If(c, th, el, nx) => { m = imax(m, imax(match_depth_expr(c, a, decls, src, cw), imax(match_depth_stmts(th, a, decls, src, cw), match_depth_stmts(el, a, decls, src, cw)))); s = nx }
-      Stmt::Match(sc, ah, nx) => {
-        cw = imax(cw, match_call_scrut_words(sc, decls, src, a))
-        mut inner := match_depth_expr(sc, a, decls, src, cw)
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              inner = imax(inner, match_depth_expr(am.body, a, decls, src, cw))
-              inner = imax(inner, match_depth_stmts(am.body_stmts, a, decls, src, cw))
-              arm = am.next
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { m = imax(m, match_depth_expr(v, a, decls, src, cw)); s = nx }
+          Stmt::While(c, b, nx) => { m = imax(m, imax(match_depth_expr(c, a, decls, src, cw), match_depth_stmts(b, a, decls, src, cw))); s = nx }
+          Stmt::Loop(b, nx) => { m = imax(m, match_depth_stmts(b, a, decls, src, cw)); s = nx }
+          Stmt::Unchecked(b, nx) => { m = imax(m, match_depth_stmts(b, a, decls, src, cw)); s = nx }
+          Stmt::AllocWith(ae, b, nx) => { m = imax(m, match_depth_stmts(b, a, decls, src, cw)); s = nx }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { m = imax(m, match_depth_expr(e, a, decls, src, cw)); s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, match_depth_expr(fv, a, decls, src, cw)); s = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, match_depth_expr(fpv, a, decls, src, cw)); s = nx }
+          Stmt::Return(rv, nx) => { m = imax(m, match_depth_expr(rv, a, decls, src, cw)); s = nx }
+          Stmt::DerefAssign(pe, val, nx) => { m = imax(m, imax(match_depth_expr(pe, a, decls, src, cw), match_depth_expr(val, a, decls, src, cw))); s = nx }
+          Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(match_depth_expr(ib, a, decls, src, cw), imax(match_depth_expr(ii, a, decls, src, cw), match_depth_expr(iv, a, decls, src, cw)))); s = nx }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(match_depth_expr(fia, a, decls, src, cw), imax(match_depth_expr(fii, a, decls, src, cw), match_depth_expr(fiv, a, decls, src, cw)))); s = nx }
+          Stmt::If(c, th, el, nx) => { m = imax(m, imax(match_depth_expr(c, a, decls, src, cw), imax(match_depth_stmts(th, a, decls, src, cw), match_depth_stmts(el, a, decls, src, cw)))); s = nx }
+          Stmt::Match(sc, ah, nx) => {
+            cw = imax(cw, match_call_scrut_words(sc, decls, src, a))
+            mut inner := match_depth_expr(sc, a, decls, src, cw)
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  inner = imax(inner, match_depth_expr(am.body, a, decls, src, cw))
+                  inner = imax(inner, match_depth_stmts(am.body_stmts, a, decls, src, cw))
+                  arm = am.next
+                }
+                None => { break }
+              }
             }
-            None => { break }
+            m = imax(m, 1 + inner)
+            s = nx
           }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(match_depth_expr(flo, a, decls, src, cw), match_depth_stmts(fb, a, decls, src, cw))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, match_depth_expr(fhi, a, decls, src, cw)) } ; s = nx }
+          Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(match_depth_stmts(cthen, a, decls, src, cw), match_depth_stmts(celse, a, decls, src, cw))); s = nx }
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, match_depth_stmts(cb, a, decls, src, cw)); s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, match_depth_stmts(rb, a, decls, src, cw)); s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, match_depth_stmts(cam.body_stmts, a, decls, src, cw)); car = cam.next }; None => { break } } } ; s = nx }
         }
-        m = imax(m, 1 + inner)
-        s = nx
       }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(match_depth_expr(flo, a, decls, src, cw), match_depth_stmts(fb, a, decls, src, cw))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, match_depth_expr(fhi, a, decls, src, cw)) } ; s = nx }
-      Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(match_depth_stmts(cthen, a, decls, src, cw), match_depth_stmts(celse, a, decls, src, cw))); s = nx }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, match_depth_stmts(cb, a, decls, src, cw)); s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, match_depth_stmts(rb, a, decls, src, cw)); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, match_depth_stmts(cam.body_stmts, a, decls, src, cw)); car = cam.next }; None => { break } } } ; s = nx }
+      None => { break }
     }
   }
   m
@@ -8418,38 +8427,43 @@ inline_frame_need_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
   }
   m
 }
-inline_frame_need_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, slots : ptr(SVec), a : rt::Arena, mar : ptr(mut rt::Arena)) -> usize {
-  mut s := head
+inline_frame_need_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, slots : ptr(SVec), a : rt::Arena, mar : ptr(mut rt::Arena)) -> usize {
+  mut s : Option(ptr(mut Stmt)) = head
   mut m := 0
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { m = imax(m, inline_frame_need_expr(v, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::ExprStmt(e, nx) => { m = imax(m, inline_frame_need_expr(e, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::Return(rv, nx) => { m = imax(m, inline_frame_need_expr(rv, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::While(c, b, nx) => { m = imax(m, imax(inline_frame_need_expr(c, decls, src, ms, ml, slots, a, mar), inline_frame_need_stmts(b, decls, src, ms, ml, slots, a, mar))); s = nx }
-      Stmt::Loop(b, nx) => { m = imax(m, inline_frame_need_stmts(b, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::Unchecked(b, nx) => { m = imax(m, inline_frame_need_stmts(b, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::AllocWith(ae, b, nx) => { m = imax(m, inline_frame_need_stmts(b, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::If(c, th, el, nx) => { m = imax(m, imax(inline_frame_need_expr(c, decls, src, ms, ml, slots, a, mar), imax(inline_frame_need_stmts(th, decls, src, ms, ml, slots, a, mar), inline_frame_need_stmts(el, decls, src, ms, ml, slots, a, mar)))); s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, inline_frame_need_expr(fv, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, inline_frame_need_expr(fpv, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::DerefAssign(pe, val, nx) => { m = imax(m, imax(inline_frame_need_expr(pe, decls, src, ms, ml, slots, a, mar), inline_frame_need_expr(val, decls, src, ms, ml, slots, a, mar))); s = nx }
-      Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(inline_frame_need_expr(ib, decls, src, ms, ml, slots, a, mar), imax(inline_frame_need_expr(ii, decls, src, ms, ml, slots, a, mar), inline_frame_need_expr(iv, decls, src, ms, ml, slots, a, mar)))); s = nx }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(inline_frame_need_expr(fia, decls, src, ms, ml, slots, a, mar), imax(inline_frame_need_expr(fii, decls, src, ms, ml, slots, a, mar), inline_frame_need_expr(fiv, decls, src, ms, ml, slots, a, mar)))); s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(inline_frame_need_expr(flo, decls, src, ms, ml, slots, a, mar), inline_frame_need_stmts(fb, decls, src, ms, ml, slots, a, mar))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, inline_frame_need_expr(fhi, decls, src, ms, ml, slots, a, mar)) } ; s = nx }
-      Stmt::Match(sc, ah, nx) => {
-        m = imax(m, inline_frame_need_expr(sc, decls, src, ms, ml, slots, a, mar))
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop { match arm { Some(armq) => { am := deref(arm_p(armq)); m = imax(m, inline_frame_need_expr(am.body, decls, src, ms, ml, slots, a, mar)); m = imax(m, inline_frame_need_stmts(am.body_stmts, decls, src, ms, ml, slots, a, mar)); arm = am.next }; None => { break } } }
-        s = nx
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { m = imax(m, inline_frame_need_expr(v, decls, src, ms, ml, slots, a, mar)); s = nx }
+          Stmt::ExprStmt(e, nx) => { m = imax(m, inline_frame_need_expr(e, decls, src, ms, ml, slots, a, mar)); s = nx }
+          Stmt::Return(rv, nx) => { m = imax(m, inline_frame_need_expr(rv, decls, src, ms, ml, slots, a, mar)); s = nx }
+          Stmt::While(c, b, nx) => { m = imax(m, imax(inline_frame_need_expr(c, decls, src, ms, ml, slots, a, mar), inline_frame_need_stmts(b, decls, src, ms, ml, slots, a, mar))); s = nx }
+          Stmt::Loop(b, nx) => { m = imax(m, inline_frame_need_stmts(b, decls, src, ms, ml, slots, a, mar)); s = nx }
+          Stmt::Unchecked(b, nx) => { m = imax(m, inline_frame_need_stmts(b, decls, src, ms, ml, slots, a, mar)); s = nx }
+          Stmt::AllocWith(ae, b, nx) => { m = imax(m, inline_frame_need_stmts(b, decls, src, ms, ml, slots, a, mar)); s = nx }
+          Stmt::If(c, th, el, nx) => { m = imax(m, imax(inline_frame_need_expr(c, decls, src, ms, ml, slots, a, mar), imax(inline_frame_need_stmts(th, decls, src, ms, ml, slots, a, mar), inline_frame_need_stmts(el, decls, src, ms, ml, slots, a, mar)))); s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, inline_frame_need_expr(fv, decls, src, ms, ml, slots, a, mar)); s = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, inline_frame_need_expr(fpv, decls, src, ms, ml, slots, a, mar)); s = nx }
+          Stmt::DerefAssign(pe, val, nx) => { m = imax(m, imax(inline_frame_need_expr(pe, decls, src, ms, ml, slots, a, mar), inline_frame_need_expr(val, decls, src, ms, ml, slots, a, mar))); s = nx }
+          Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(inline_frame_need_expr(ib, decls, src, ms, ml, slots, a, mar), imax(inline_frame_need_expr(ii, decls, src, ms, ml, slots, a, mar), inline_frame_need_expr(iv, decls, src, ms, ml, slots, a, mar)))); s = nx }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(inline_frame_need_expr(fia, decls, src, ms, ml, slots, a, mar), imax(inline_frame_need_expr(fii, decls, src, ms, ml, slots, a, mar), inline_frame_need_expr(fiv, decls, src, ms, ml, slots, a, mar)))); s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(inline_frame_need_expr(flo, decls, src, ms, ml, slots, a, mar), inline_frame_need_stmts(fb, decls, src, ms, ml, slots, a, mar))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, inline_frame_need_expr(fhi, decls, src, ms, ml, slots, a, mar)) } ; s = nx }
+          Stmt::Match(sc, ah, nx) => {
+            m = imax(m, inline_frame_need_expr(sc, decls, src, ms, ml, slots, a, mar))
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop { match arm { Some(armq) => { am := deref(arm_p(armq)); m = imax(m, inline_frame_need_expr(am.body, decls, src, ms, ml, slots, a, mar)); m = imax(m, inline_frame_need_stmts(am.body_stmts, decls, src, ms, ml, slots, a, mar)); arm = am.next }; None => { break } } }
+            s = nx
+          }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(inline_frame_need_stmts(cthen, decls, src, ms, ml, slots, a, mar), inline_frame_need_stmts(celse, decls, src, ms, ml, slots, a, mar))); s = nx }
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, inline_frame_need_stmts(cb, decls, src, ms, ml, slots, a, mar)); s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, inline_frame_need_stmts(rb, decls, src, ms, ml, slots, a, mar)); s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, inline_frame_need_stmts(cam.body_stmts, decls, src, ms, ml, slots, a, mar)); car = cam.next }; None => { break } } } ; s = nx }
+        }
       }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(inline_frame_need_stmts(cthen, decls, src, ms, ml, slots, a, mar), inline_frame_need_stmts(celse, decls, src, ms, ml, slots, a, mar))); s = nx }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, inline_frame_need_stmts(cb, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, inline_frame_need_stmts(rb, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, inline_frame_need_stmts(cam.body_stmts, decls, src, ms, ml, slots, a, mar)); car = cam.next }; None => { break } } } ; s = nx }
+      None => { break }
     }
   }
   m
@@ -9462,42 +9476,47 @@ lam_param_span_at := fn(decls : ptr(rt::Vec), lidx : usize, idx : usize) -> CSpa
 ## `dyn_over(ptr(mut <store>))` for the store name `[s,n)` — read off that dyn local's type annotation.
 ## -1 if no such dyn_over binding exists. FLAT scan (the store binding, its `dyn_over`, and the dyn
 ## local sit in the same block); mirrors `stmts_have_dyn_over`'s inline `st = nx` advance.
-dyn_store_nuser := fn(head : ptr(mut Stmt), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> i64 {
-  mut st := head
+dyn_store_nuser := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> i64 {
+  mut st : Option(ptr(mut Stmt)) = head
   mut res : i64 = 0 - 1
-  while st != 0 {
-    stx := deref(stmt_p(Stmt, st))
-    match stx {
-      Stmt::Assign(ans, anl, av, anx) => {
-        if is_dyn_over_call(av, src) {
-          sv := dyn_over_store_span(av, a)
-          if sv.n != 0 and streq(src, sv.s, sv.n, s, n) {
-            lt := local_type_span(src, ans, anl)
-            if lt.n != 0 and is_dyn_type(src, lt.s, lt.n) { res = i64(dyn_type_nuser(src, lt.s, lt.n)) }
+  loop {
+    match st {
+      Some(stq) => {
+        stx := deref(stmt_p(Stmt, stq))
+        match stx {
+          Stmt::Assign(ans, anl, av, anx) => {
+            if is_dyn_over_call(av, src) {
+              sv := dyn_over_store_span(av, a)
+              if sv.n != 0 and streq(src, sv.s, sv.n, s, n) {
+                lt := local_type_span(src, ans, anl)
+                if lt.n != 0 and is_dyn_type(src, lt.s, lt.n) { res = i64(dyn_type_nuser(src, lt.s, lt.n)) }
+              }
+            }
+            st = anx
           }
+          Stmt::While(c, b, nx) => { st = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { st = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { st = nx }
+          Stmt::Return(rv, nx) => { st = nx }
+          Stmt::If(c, th, el, nx) => { st = nx }
+          Stmt::Match(sc, ah, nx) => { st = nx }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { st = nx }
+          Stmt::DerefAssign(p, dv, nx) => { st = nx }
+          Stmt::IndexAssign(b, ix, iv, nx) => { st = nx }
+          Stmt::IndexFieldAssign(b, ix, ifs, ifl, iv, nx) => { st = nx }
+          Stmt::Loop(b, nx) => { st = nx }
+          Stmt::Unchecked(b, nx) => { st = nx }
+          Stmt::AllocWith(ae, b, nx) => { st = nx }
+          Stmt::Break(_bv, _bd, nx) => { st = nx }
+          Stmt::Continue(_cd, nx) => { st = nx }
+          Stmt::ExprStmt(e, nx) => { st = nx }
+          Stmt::CompIf(c, th, el, nx) => { st = nx }
+          Stmt::CompFor(vs, vl, iv, b, nx) => { st = nx }
+          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { st = nx }
+          Stmt::CompMatch(sc, ah, nx) => { st = nx }
         }
-        st = anx
       }
-      Stmt::While(c, b, nx) => { st = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { st = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { st = nx }
-      Stmt::Return(rv, nx) => { st = nx }
-      Stmt::If(c, th, el, nx) => { st = nx }
-      Stmt::Match(sc, ah, nx) => { st = nx }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { st = nx }
-      Stmt::DerefAssign(p, dv, nx) => { st = nx }
-      Stmt::IndexAssign(b, ix, iv, nx) => { st = nx }
-      Stmt::IndexFieldAssign(b, ix, ifs, ifl, iv, nx) => { st = nx }
-      Stmt::Loop(b, nx) => { st = nx }
-      Stmt::Unchecked(b, nx) => { st = nx }
-      Stmt::AllocWith(ae, b, nx) => { st = nx }
-      Stmt::Break(_bv, _bd, nx) => { st = nx }
-      Stmt::Continue(_cd, nx) => { st = nx }
-      Stmt::ExprStmt(e, nx) => { st = nx }
-      Stmt::CompIf(c, th, el, nx) => { st = nx }
-      Stmt::CompFor(vs, vl, iv, b, nx) => { st = nx }
-      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { st = nx }
-      Stmt::CompMatch(sc, ah, nx) => { st = nx }
+      None => { break }
     }
   }
   res
@@ -9506,39 +9525,44 @@ dyn_store_nuser := fn(head : ptr(mut Stmt), src : ptr(u8), s : usize, n : usize,
 ## (A FLAT scan of the current list — the store binding and its `dyn_over` sit in the same block.)
 ## The advance sets `st = nx` INSIDE each arm (a tail-match returning a `ptr` mis-lowers under the lean
 ## seed — mirror `collect_slots`' inline advance instead).
-stmts_have_dyn_over := fn(head : ptr(mut Stmt), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
-  mut st := head
+stmts_have_dyn_over := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
+  mut st : Option(ptr(mut Stmt)) = head
   mut res := false
-  while st != 0 {
-    stx := deref(stmt_p(Stmt, st))
-    match stx {
-      Stmt::Assign(ans, anl, av, anx) => {
-        if is_dyn_over_call(av, src) {
-          sv := dyn_over_store_span(av, a)
-          if sv.n != 0 and streq(src, sv.s, sv.n, s, n) { res = true }
+  loop {
+    match st {
+      Some(stq) => {
+        stx := deref(stmt_p(Stmt, stq))
+        match stx {
+          Stmt::Assign(ans, anl, av, anx) => {
+            if is_dyn_over_call(av, src) {
+              sv := dyn_over_store_span(av, a)
+              if sv.n != 0 and streq(src, sv.s, sv.n, s, n) { res = true }
+            }
+            st = anx
+          }
+          Stmt::While(c, b, nx) => { st = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { st = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { st = nx }
+          Stmt::Return(rv, nx) => { st = nx }
+          Stmt::If(c, th, el, nx) => { st = nx }
+          Stmt::Match(sc, ah, nx) => { st = nx }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { st = nx }
+          Stmt::DerefAssign(p, dv, nx) => { st = nx }
+          Stmt::IndexAssign(b, ix, iv, nx) => { st = nx }
+          Stmt::IndexFieldAssign(b, ix, ifs, ifl, iv, nx) => { st = nx }
+          Stmt::Loop(b, nx) => { st = nx }
+          Stmt::Unchecked(b, nx) => { st = nx }
+          Stmt::AllocWith(ae, b, nx) => { st = nx }
+          Stmt::Break(_bv, _bd, nx) => { st = nx }
+          Stmt::Continue(_cd, nx) => { st = nx }
+          Stmt::ExprStmt(e, nx) => { st = nx }
+          Stmt::CompIf(c, th, el, nx) => { st = nx }
+          Stmt::CompFor(vs, vl, iv, b, nx) => { st = nx }
+          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { st = nx }
+          Stmt::CompMatch(sc, ah, nx) => { st = nx }
         }
-        st = anx
       }
-      Stmt::While(c, b, nx) => { st = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { st = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { st = nx }
-      Stmt::Return(rv, nx) => { st = nx }
-      Stmt::If(c, th, el, nx) => { st = nx }
-      Stmt::Match(sc, ah, nx) => { st = nx }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { st = nx }
-      Stmt::DerefAssign(p, dv, nx) => { st = nx }
-      Stmt::IndexAssign(b, ix, iv, nx) => { st = nx }
-      Stmt::IndexFieldAssign(b, ix, ifs, ifl, iv, nx) => { st = nx }
-      Stmt::Loop(b, nx) => { st = nx }
-      Stmt::Unchecked(b, nx) => { st = nx }
-      Stmt::AllocWith(ae, b, nx) => { st = nx }
-      Stmt::Break(_bv, _bd, nx) => { st = nx }
-      Stmt::Continue(_cd, nx) => { st = nx }
-      Stmt::ExprStmt(e, nx) => { st = nx }
-      Stmt::CompIf(c, th, el, nx) => { st = nx }
-      Stmt::CompFor(vs, vl, iv, b, nx) => { st = nx }
-      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { st = nx }
-      Stmt::CompMatch(sc, ah, nx) => { st = nx }
+      None => { break }
     }
   }
   res
@@ -13462,7 +13486,7 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
 ##   * a BUILTIN target resolves through `convert_callee_idx_incl_builtin`, and only for an operand
 ##     that is a provable AGGREGATE (`twin_operand_aggregate`), so `u64(5)` stays the scalar lattice.
 ## -1 = not a user conversion; the call is left exactly as it was.
-pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, a0 : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt)) -> i64 {
+pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, a0 : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt))) -> i64 {
   ## null-ok: d_convert_expr passes a null `a0` for a call with no argument (see its `a0` binding)
   if nargs != 1 or unchecked bitcast(usize, a0) == 0 { return 0 - 1 }
   ## conv_kind answers a builtin-lattice INDEX, and -1 for "not a builtin"; its Option(i64) form belongs
@@ -13495,7 +13519,7 @@ twin_type_is_aggregate := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl
 ## without a slot table: a struct / enum / array-or-tuple LITERAL, a PARAMETER whose declared type is a
 ## named struct/enum or a tuple, or a flat LOCAL whose annotation is, or whose unannotated initializer
 ## is such a literal. Anything else answers false and keeps its previous lowering.
-twin_operand_aggregate := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+twin_operand_aggregate := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
   if array_lit_info(e).is_a or struct_lit_info(e).is_s or enum_lit_info(e).is_e { return true }
   vn := var_name_span(e)
   if vn.n == 0 { return false }
@@ -13513,22 +13537,24 @@ twin_operand_aggregate := fn(e : ptr(Expr), params_head : Option(ptr(mut Param))
       None => { break }
     }
   }
-  d := lower_layout::local_decl_assign(body_head, src, vn.s, vn.n)
+  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(body_head, src, vn.s, vn.n)
   mut r := false
-  ## null-ok: local_decl_assign answers a null Stmt when the name has no flat local declaration
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => {
-        an := lower_ctx::ann_span(src, ans, anl)
-        if an.n != 0 { r = twin_type_is_aggregate(decls, src, an.s, an.n) }
-        else { r = array_lit_info(v).is_a or struct_lit_info(v).is_s or enum_lit_info(v).is_e }
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => {
+          an := lower_ctx::ann_span(src, ans, anl)
+          if an.n != 0 { r = twin_type_is_aggregate(decls, src, an.s, an.n) }
+          else { r = array_lit_info(v).is_a or struct_lit_info(v).is_s or enum_lit_info(v).is_e }
+        }
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
       }
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
+    None => {}
   }
   r
 }
@@ -17264,7 +17290,7 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       None => { break }
     }
   }
-  if icd.body_stmts == 0 {
+  if not stmt_any(icd.body_stmts) {
     ## TAIL-EXPRESSION body — emit its value; params resolve to the scratch aliases. Advance the
     ## nested-inline base past this callee's params (a tail-expr body has no locals) so a routed
     ## operator in the value expands into fresh scratch.
@@ -17642,7 +17668,7 @@ emit_variadic_body := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), nfixed 
   mut aidx := 0
   while aidx < nfixed and arg_any(ah) { ah = deref(arg_at(ah, "argument list ended early")).next; aidx += 1 }
   cx.pack_args = ah
-  if icd.body_stmts == 0 {
+  if not stmt_any(icd.body_stmts) {
     emit_gas(icd.value, sb, cx, a, nl)
   } else {
     mut ls := SVec(base = 0, len = 0, cap = 0, arena = cx.mar)
@@ -21393,80 +21419,85 @@ tuple_byte_slot_for_off := fn(base : i64, cx : ptr(LCtx)) -> i64 {
   -1
 }
 
-tuple_layout_collect := fn(head : ptr(mut Stmt), slots : ptr(SVec), in out tcomps : SVec, src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, mar : ptr(mut rt::Arena)) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => {
-        ali := array_lit_info(v)
-        if ali.is_a {
-          slot := slot_of(slots, src, ns, nl)
-          if slot >= 0 {
-            ## first pass: uniform? (all components same eek+width). second pass: if mixed, record each.
-            mut g0 : Option(ptr(mut Arg)) = ali.ehead
-            mut w0 := i64(-1)
-            mut ek0 := u8(255)
-            mut mixed := false
-            loop {
-              match g0 {
-                Some(g0q) => {
-                  g0a := deref(arg_p(g0q))
-                  cw := elem_expr_width(g0a.e, slots, decls, src, a)
-                  ce := comp_eek(g0a.e, slots, src, decls, a)
-                  if w0 < 0 { w0 = cw; ek0 = ce } else if cw != w0 or ce != ek0 { mixed = true }
-                  g0 = g0a.next
-                }
-                None => { break }
-              }
-            }
-            if mixed {
-              mut g : Option(ptr(mut Arg)) = ali.ehead
-              mut idx := 0
-              mut cum := i64(0)
-              loop {
-                match g {
-                  Some(gq) => {
-                    ga := deref(arg_p(gq))
-                    cts := comp_type_span(ga.e, slots, src)
-                    ## `ek` = 6 marks a component that is a FLAT single-word-position tuple — the ONLY shape the
-                    ## nested `t.N.M` value-read supports (see `tuple_flat_single_word` + the `emit_gas` Index arm);
-                    ## every other component keeps `ek` = 5 (the value used elsewhere is `estride`/`eek`, not `ek`).
-                    mut cmek : u8 = 5
-                    if tuple_flat_single_word(ga.e, slots, decls, src, a) { cmek = 6 }
-                    svec_push(tcomps, SlotEntry(ns = usize(slot), nl = usize(idx), off = usize(cum), sns = cts.s, snl = cts.n, ek = cmek, estride = 1, eek = comp_eek(ga.e, slots, src, decls, a), is_ref = false, tmod_s = 0, tmod_l = 0))
-                    cum += elem_expr_width(ga.e, slots, decls, src, a)
-                    idx += 1
-                    g = ga.next
+tuple_layout_collect := fn(head : Option(ptr(mut Stmt)), slots : ptr(SVec), in out tcomps : SVec, src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, mar : ptr(mut rt::Arena)) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => {
+            ali := array_lit_info(v)
+            if ali.is_a {
+              slot := slot_of(slots, src, ns, nl)
+              if slot >= 0 {
+                ## first pass: uniform? (all components same eek+width). second pass: if mixed, record each.
+                mut g0 : Option(ptr(mut Arg)) = ali.ehead
+                mut w0 := i64(-1)
+                mut ek0 := u8(255)
+                mut mixed := false
+                loop {
+                  match g0 {
+                    Some(g0q) => {
+                      g0a := deref(arg_p(g0q))
+                      cw := elem_expr_width(g0a.e, slots, decls, src, a)
+                      ce := comp_eek(g0a.e, slots, src, decls, a)
+                      if w0 < 0 { w0 = cw; ek0 = ce } else if cw != w0 or ce != ek0 { mixed = true }
+                      g0 = g0a.next
+                    }
+                    None => { break }
                   }
-                  None => { break }
+                }
+                if mixed {
+                  mut g : Option(ptr(mut Arg)) = ali.ehead
+                  mut idx := 0
+                  mut cum := i64(0)
+                  loop {
+                    match g {
+                      Some(gq) => {
+                        ga := deref(arg_p(gq))
+                        cts := comp_type_span(ga.e, slots, src)
+                        ## `ek` = 6 marks a component that is a FLAT single-word-position tuple — the ONLY shape the
+                        ## nested `t.N.M` value-read supports (see `tuple_flat_single_word` + the `emit_gas` Index arm);
+                        ## every other component keeps `ek` = 5 (the value used elsewhere is `estride`/`eek`, not `ek`).
+                        mut cmek : u8 = 5
+                        if tuple_flat_single_word(ga.e, slots, decls, src, a) { cmek = 6 }
+                        svec_push(tcomps, SlotEntry(ns = usize(slot), nl = usize(idx), off = usize(cum), sns = cts.s, snl = cts.n, ek = cmek, estride = 1, eek = comp_eek(ga.e, slots, src, decls, a), is_ref = false, tmod_s = 0, tmod_l = 0))
+                        cum += elem_expr_width(ga.e, slots, decls, src, a)
+                        idx += 1
+                        g = ga.next
+                      }
+                      None => { break }
+                    }
+                  }
                 }
               }
             }
+            s = nx
           }
+          Stmt::While(c, b, nx) => { tuple_layout_collect(b, slots, tcomps, src, decls, a, mar); s = nx }
+          Stmt::Loop(b, nx) => { tuple_layout_collect(b, slots, tcomps, src, decls, a, mar); s = nx }
+          Stmt::Unchecked(b, nx) => { tuple_layout_collect(b, slots, tcomps, src, decls, a, mar); s = nx }
+          Stmt::AllocWith(ae, b, nx) => { tuple_layout_collect(b, slots, tcomps, src, decls, a, mar); s = nx }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { s = nx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::DerefAssign(p, val, nx) => { s = nx }
+          Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { s = nx }
+          Stmt::If(c, th, el, nx) => { tuple_layout_collect(th, slots, tcomps, src, decls, a, mar); tuple_layout_collect(el, slots, tcomps, src, decls, a, mar); s = nx }
+          Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah; loop { match arm { Some(armq) => { am := deref(arm_p(armq)); tuple_layout_collect(am.body_stmts, slots, tcomps, src, decls, a, mar); arm = am.next }; None => { break } } } ; s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { tuple_layout_collect(fb, slots, tcomps, src, decls, a, mar); s = nx }
+          Stmt::CompIf(cc, ct, ce, nx) => { tuple_layout_collect(ct, slots, tcomps, src, decls, a, mar); tuple_layout_collect(ce, slots, tcomps, src, decls, a, mar); s = nx }
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => { tuple_layout_collect(cb, slots, tcomps, src, decls, a, mar); s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { tuple_layout_collect(rb, slots, tcomps, src, decls, a, mar); s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); tuple_layout_collect(cam.body_stmts, slots, tcomps, src, decls, a, mar); car = cam.next }; None => { break } } } ; s = nx }
         }
-        s = nx
       }
-      Stmt::While(c, b, nx) => { tuple_layout_collect(b, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::Loop(b, nx) => { tuple_layout_collect(b, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::Unchecked(b, nx) => { tuple_layout_collect(b, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::AllocWith(ae, b, nx) => { tuple_layout_collect(b, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { s = nx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::DerefAssign(p, val, nx) => { s = nx }
-      Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { s = nx }
-      Stmt::If(c, th, el, nx) => { tuple_layout_collect(th, slots, tcomps, src, decls, a, mar); tuple_layout_collect(el, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah; loop { match arm { Some(armq) => { am := deref(arm_p(armq)); tuple_layout_collect(am.body_stmts, slots, tcomps, src, decls, a, mar); arm = am.next }; None => { break } } } ; s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { tuple_layout_collect(fb, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::CompIf(cc, ct, ce, nx) => { tuple_layout_collect(ct, slots, tcomps, src, decls, a, mar); tuple_layout_collect(ce, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { tuple_layout_collect(cb, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { tuple_layout_collect(rb, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); tuple_layout_collect(cam.body_stmts, slots, tcomps, src, decls, a, mar); car = cam.next }; None => { break } } } ; s = nx }
+      None => { break }
     }
   }
 }
@@ -24693,7 +24724,7 @@ guard_cmp := fn(op : i64, l : i64, r : i64) -> i64 {
 guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
   match deref(bs) {
     Stmt::Return(e, next) => {
-      if unchecked bitcast(usize, next) == 0 { return e }
+      if not stmt_any(next) { return e }
       unchecked bitcast(ptr(Expr), 0)
     }
     Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
@@ -24702,9 +24733,9 @@ guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
       | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
-guard_pred_body_expr := fn(bs : ptr(mut Stmt), val : ptr(Expr)) -> ptr(Expr) {
-  if unchecked bitcast(usize, bs) == 0 { return val }   ## trailing-expr body (no statements)
-  guard_stmt_ret_expr(bs)                                 ## else must be a lone `return <expr>`
+guard_pred_body_expr := fn(bs : Option(ptr(mut Stmt)), val : ptr(Expr)) -> ptr(Expr) {
+  if not stmt_any(bs) { return val }   ## trailing-expr body (no statements)
+  guard_stmt_ret_expr(stmt_at(bs, "guard predicate body: empty list"))   ## else must be a lone `return <expr>`
 }
 
 ## The RESOLVED concrete type a `typeinfo(X)` comptime call names, threaded through the instance bindings
@@ -24978,7 +25009,7 @@ mut AMBIENT_ALLOC : usize = 0
 ## value arg (`v.push(i)`, `i` a local) via `fn_local_type` — but ONLY for a UFCS-style call whose callee
 ## takes a `ptr(...)` RECEIVER as its first runtime param (so `hash(key)`/`eq(a,b)`, whose args pass by
 ## value, are NOT affected — that path stays exactly as before → `src/` byte-identical, fixpoint-safe).
-mut COLLECT_BODY : usize = 0
+mut COLLECT_BODY : Option(ptr(mut Stmt)) = Option.None
 
 ## The MODULE of the declaration whose body the mono pre-pass is collecting — the `COLLECT_BODY`
 ## twin, and for the same reason. `generic_decl_of` resolves a BARE generic call by the §3 ancestor
@@ -24995,7 +25026,7 @@ mut COLLECT_MOD_L : usize = 0
 ## SOURCE annotation — the slot keeps only the aggregate's BASE name (`Result`), losing the type-args
 ## (`u64, u64`), so `recv_full_emit` re-reads them exactly as the pre-pass's `recv_full_pre` does, and
 ## the two passes agree on the implicit-UFCS instance label. 0 = not inside a fn body emit.
-mut EMIT_BODY : usize = 0
+mut EMIT_BODY : Option(ptr(mut Stmt)) = Option.None
 mut EMIT_PARAMS : Option(ptr(mut Param)) = Option.None
 
 
@@ -25046,26 +25077,26 @@ defer_frame_push := fn(cx : ptr(LCtx)) {
 defer_frame_pop := fn(cx : ptr(LCtx)) { if cx.defer_sp > 0 { cx.defer_sp = cx.defer_sp - 1 } }
 ## The `Stmt::Match` arm of `emit_stmts`, moved out verbatim (Step 4.1). Statement-position dispatch;
 ## the caller keeps `s = nx`. Touches no module global.
-emit_st_match := fn(sc : ptr(Expr), ah : Option(ptr(mut Arm)), nx : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
+emit_st_match := fn(sc : ptr(Expr), ah : Option(ptr(mut Arm)), nx : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
   ## TAIL: an arm body's last statement is the fn's return value only for a DIRECTLY-tail `match`
   ## (`cx.tail` already true AND nothing follows it) — the braced value-`match` path documented at
   ## `emit_fn`. A `match` with statements after it must not let an arm's trailing call `jmp` the
   ## epilogue.
   mov_tail := cx.tail
-  cx.tail = mov_tail and nx == 0
+  cx.tail = mov_tail and not stmt_any(nx)
   emit_match_stmt(sc, ah, sb, cx, nl)
   cx.tail = mov_tail
 }
 
 ## The `Stmt::CompIf` arm of `emit_stmts`, moved out verbatim (Step 4.1). Re-enters `emit_stmts`
 ## on the selected branch; the caller keeps `s = nx`. Touches no module global.
-emit_st_comp_if := fn(ccond : ptr(Expr), cthen : ptr(mut Stmt), celse : ptr(mut Stmt), nx : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_st_comp_if := fn(ccond : ptr(Expr), cthen : Option(ptr(mut Stmt)), celse : Option(ptr(mut Stmt)), nx : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## The selected branch's inner last statement is the function TAIL only when the CompIf is
   ## ITSELF in tail position (cx.tail already true AND nothing follows it, nx == 0). Otherwise
   ## a bare-ExprStmt tail (e.g. num.al's `comptime if … { x86_64.addq(out, b) }` followed by a
   ## `return out`) would wrongly `jmp` the epilogue, skipping the real trailing statements.
   ov_tail := cx.tail
-  cx.tail = ov_tail and nx == 0
+  cx.tail = ov_tail and not stmt_any(nx)
   cv := comptime_cond_eval(ccond, cx, a)
   if cv < 0 { comptime_reject_cond(ccond, cx, a) }
   if cv == 1 { emit_stmts(cthen, sb, cx, nl) }
@@ -25075,7 +25106,7 @@ emit_st_comp_if := fn(ccond : ptr(Expr), cthen : ptr(mut Stmt), celse : ptr(mut 
 
 ## The `Stmt::ExprStmt` arm of `emit_stmts`, moved out verbatim (Step 4.1). Takes `head` because the
 ## variadic-`print` expansion needs the block head; the caller keeps `s = nx`. Touches no module global.
-emit_st_expr_stmt := fn(e : ptr(Expr), nx : ptr(mut Stmt), head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_st_expr_stmt := fn(e : ptr(Expr), nx : Option(ptr(mut Stmt)), head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## `<call>.expect(msg)` / `<call>?` as a DISCARDED STATEMENT (not the base of a `.field`):
   ## the stdlib's fallible mutators are used this way (`push(T, out, v).expect("oom")` in
   ## `vec::filter`/`split`). Handle it like the Field-arm tryable unwrap MINUS the field read:
@@ -25125,7 +25156,7 @@ emit_st_expr_stmt := fn(e : ptr(Expr), nx : ptr(mut Stmt), head : ptr(mut Stmt),
         ## emit the single machine instruction directly — no stack value, and crucially NO discard-pop
         ## (a `popq %rax` would clobber the register just written, breaking a syscall register setup).
         emit_raw_instr(e, sb, cx, a)
-      } else if cx.tail and nx == 0 {
+      } else if cx.tail and not stmt_any(nx) {
         ## TAIL position (last stmt of a value-returning fn / of a directly-tail `match` arm):
         ## this bare expression IS the return value — deliver it via the return convention + `jmp`
         ## epilogue instead of discarding it (the value-`match`-arm path the lean parser can't form).
@@ -25169,7 +25200,7 @@ emit_st_expr_stmt := fn(e : ptr(Expr), nx : ptr(mut Stmt), head : ptr(mut Stmt),
 ## The `Stmt::CompForRange` arm of `emit_stmts`, moved out verbatim (Step 4.1). Both the pack unroll
 ## and the constant-range unroll re-enter `emit_stmts` per iteration; the caller keeps `s = nx`.
 ## Touches no module global.
-emit_st_comp_for_range := fn(rvs : usize, rvl : usize, rlo : ptr(Expr), rhi : ptr(Expr), rbody : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_st_comp_for_range := fn(rvs : usize, rvl : usize, rlo : ptr(Expr), rhi : ptr(Expr), rbody : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   if unchecked bitcast(usize, rhi) == 0 {
     ## PACK unroll (Functions §7.1) — a null hi marks `comptime for v in <pack>`: bind the loop var
     ## `v` to each TRAILING pack argument (`cx.pack_args`) in turn (evaluate the arg → `v`'s slot),
@@ -25244,7 +25275,7 @@ emit_st_comp_for_range := fn(rvs : usize, rvl : usize, rlo : ptr(Expr), rhi : pt
 ## The `Stmt::CompFor` arm of `emit_stmts`, moved out verbatim (Step 4.1). Unrolls a
 ## `comptime for` over a type's members, re-entering `emit_stmts` per member; the caller keeps
 ## `s = nx`. Touches no module global.
-emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   cft := compfor_target_type(cx, cvs, cvl)
   cfts := cft.s
   cftl := cft.n
@@ -25392,7 +25423,7 @@ emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : ptr(mut St
 
 
 
-emit_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
+emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
   a := arena_of(cx)
   ## DEFER (§9.3): only if this block carries a `defer` marker do we track exit-ordering (gate: defer-free
   ## code — all of `src/`+`lib/` — pays nothing beyond this cheap prescan). `defer_exit_seen` becomes true
@@ -25400,990 +25431,999 @@ emit_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx
   ## cleanup would otherwise run on a path that never reached the defer).
   hasdef := list_has_defer(head, cx.src, a)
   mut defer_exit_seen := false
-  mut s := head
-  while s != 0 and (cx.ir_stop == 0 or unchecked bitcast(usize, s) != cx.ir_stop) {
-    ## Intercept a `__defer(<expr>)` marker: register the inner cleanup under the CURRENT frame (LIFO),
-    ## do NOT emit it inline, and advance. A marker reached here registers into whatever frame is active
-    ## (the fn body's base boundary 0, or the nearest enclosing block frame) — the drain at that frame's
-    ## block exit / the early-exit drains discharges it on the correct runtime path.
-    dfi := defer_marker_inner_h(unchecked bitcast(usize, s), cx.src, a)
-    if dfi != 0 {
-      if defer_exit_seen { panic("selfhost: defer — a `defer` that follows an early-exit path (return/?/branch) is not yet modelled; place defers before any early exit (fail-loud rather than run a mis-registered cleanup)") }
-      if cx.defer_n >= 128 { panic("selfhost: defer — more than 128 defers in one function is unsupported") }
-      cx.defer_inner[cx.defer_n] = dfi
-      cx.defer_n = cx.defer_n + 1
-      s = unchecked bitcast(ptr(mut Stmt), lower_stmt_nx(unchecked bitcast(usize, s), a))
-      continue
-    }
-    ## Intercept a `__deferblk()` marker (the head of a `defer { S1; S2 }` chain): register the WHOLE
-    ## chain (from the marker to its `__deferblkend`) as ONE block-defer entry and jump OVER it — the
-    ## block's statements run only at LIFO drain time (`emit_defer_chain` emits them via `emit_stmts`).
-    dbi := defer_blk_start_h(unchecked bitcast(usize, s), cx.src, a)
-    if dbi != 0 {
-      if defer_exit_seen { panic("selfhost: defer — a `defer { }` that follows an early-exit path (return/?/branch) is not yet modelled; place defers before any early exit (fail-loud rather than run a mis-registered cleanup)") }
-      if cx.defer_n >= 128 { panic("selfhost: defer — more than 128 defers in one function is unsupported") }
-      cx.defer_inner[cx.defer_n] = dbi
-      cx.defer_blk[cx.defer_n] = 1
-      cx.defer_n = cx.defer_n + 1
-      e := defer_blk_end_h(dbi, cx.src, a)
-      s = unchecked bitcast(ptr(mut Stmt), lower_stmt_nx(e, a))
-      continue
-    }
-    ## A `__deferblkend()` reached as a NORMAL statement: the block it terminates was already consumed
-    ## as a single deferred unit (the `__deferblk()` branch above jumped the emitter past it, and the
-    ## drain chain re-runs the block via `emit_stmts`) — skip it (advance). (Every marker is parser-paired;
-    ## this skip is what lets the drain's `emit_stmts`-of-the-block terminate cleanly at its end marker.)
-    if is_defer_blk_end_h(unchecked bitcast(usize, s), cx.src, a) {
-      s = unchecked bitcast(ptr(mut Stmt), lower_stmt_nx(unchecked bitcast(usize, s), a))
-      continue
-    }
-    if hasdef and stmt_may_early_exit(unchecked bitcast(usize, s), cx.src, a) { defer_exit_seen = true }
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl2, v, nx) => {
-        emit_st_assign(ns, nl2, v, sb, cx, a, nl)
-        s = nx
-      }
-      ## A struct field mutation `var.field = e`: lower the value (left on the stack), pop it
-      ## into the field's reserved frame slot. The field lives at slot `base_off + index`,
-      ## i.e. byte offset -(slot + 1) * 8(%rbp) — the store dual of the `Field` READ.
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
-        emit_st_field_assign(bns, bnl, fns, fnl, fv, sb, cx, a, nl)
-        s = nx
-      }
-      ## `o.i.v = <expr>` — a NESTED field store. Resolve the place's frame slot via `field_slot`
-      ## (walks the nested `Field(Field(Var(o), i), v)` recursively → the down-growing inline slot),
-      ## lower the value, store it. Scalar-word field; a LOCAL struct base (`field_slot` reads the
-      ## base var's frame slot — a by-ref/ptr nested base is future work).
-      Stmt::FieldPathAssign(pl, v, nx) => {
-        emit_st_field_path_assign(pl, v, sb, cx, a, nl)
-        s = nx
-      }
-      Stmt::While(cnd, b, nx) => {
-        lguard := nl
-        ldone := nl + 1
-        nl += 2
-        emit_label(sb, lguard)
-        push_str(sb, ":\n")
-        emit_gas(cnd, sb, cx, a, nl)   ## condition value pushed
-        push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  je ")
-        emit_label(sb, ldone)
-        push_str(sb, "\n")
-        ## set the `break` target to this loop's done-label + the `continue` target to its GUARD
-        ## (re-evaluate the condition) for the body, restore both after
-        ob := cx.brk
-        oc := cx.cont
-        cx.brk = i64(ldone)
-        cx.cont = i64(lguard)
-        ## DEFER (§9.3): push a per-iteration defer frame for the loop body and record its boundary
-        ## (for a `break`/`continue` drain), gated on `cx.defer_active` so a defer-free fn stays byte-identical.
-        if cx.defer_active {
-          defer_frame_push(cx)
-          cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        if stmt_same(cx.ir_stop, s) { break }
+        ## Intercept a `__defer(<expr>)` marker: register the inner cleanup under the CURRENT frame (LIFO),
+        ## do NOT emit it inline, and advance. A marker reached here registers into whatever frame is active
+        ## (the fn body's base boundary 0, or the nearest enclosing block frame) — the drain at that frame's
+        ## block exit / the early-exit drains discharges it on the correct runtime path.
+        dfi := defer_marker_inner_h(sq, cx.src, a)
+        if dfi != 0 {
+          if defer_exit_seen { panic("selfhost: defer — a `defer` that follows an early-exit path (return/?/branch) is not yet modelled; place defers before any early exit (fail-loud rather than run a mis-registered cleanup)") }
+          if cx.defer_n >= 128 { panic("selfhost: defer — more than 128 defers in one function is unsupported") }
+          cx.defer_inner[cx.defer_n] = dfi
+          cx.defer_n = cx.defer_n + 1
+          s = stmt_next(sq)
+          continue
         }
-        loop_push(cx, i64(ldone), i64(lguard), 0)   ## depth-frame for labeled break/continue (byte-neutral)
-        ## TAIL (see the `ExprStmt` arm): a LOOP body's last statement is NEVER the function's return
-        ## value — the loop runs many times and then falls through. Clearing `cx.tail` for the body stops
-        ## a trailing bare-call statement inside the loop from being emitted as the fn's return (`jmp`
-        ## epilogue), which silently ABORTED the enclosing fn mid-loop.
-        wov_tail := cx.tail
-        cx.tail = false
-        emit_stmts(b, sb, cx, nl) ## loop body
-        cx.tail = wov_tail
-        loop_pop(cx)
-        if cx.defer_active {
-          emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
-          defer_frame_pop(cx)
+        ## Intercept a `__deferblk()` marker (the head of a `defer { S1; S2 }` chain): register the WHOLE
+        ## chain (from the marker to its `__deferblkend`) as ONE block-defer entry and jump OVER it — the
+        ## block's statements run only at LIFO drain time (`emit_defer_chain` emits them via `emit_stmts`).
+        dbi : Option(ptr(mut Stmt)) = defer_blk_start_h(sq, cx.src, a)
+        match dbi {
+          Some(dbq) => {
+          if defer_exit_seen { panic("selfhost: defer — a `defer { }` that follows an early-exit path (return/?/branch) is not yet modelled; place defers before any early exit (fail-loud rather than run a mis-registered cleanup)") }
+          if cx.defer_n >= 128 { panic("selfhost: defer — more than 128 defers in one function is unsupported") }
+          cx.defer_blk_head[cx.defer_n] = dbi
+          cx.defer_blk[cx.defer_n] = 1
+          cx.defer_n = cx.defer_n + 1
+          e := defer_blk_end_h(dbq, cx.src, a)
+          s = stmt_next(e)
+          continue
         }
-        cx.brk = ob
-        cx.cont = oc
-        push_str(sb, "  jmp ")
-        emit_label(sb, lguard)
-        push_str(sb, "\n")
-        emit_label(sb, ldone)
-        push_str(sb, ":\n")
-        s = nx
-      }
-      ## An infinite `loop { body }`: a label, the body (with `break` → done-label), an
-      ## unconditional `jmp` back, then the done-label. No guard, so the body's `break` is the
-      ## only exit (a loop with no `break` is an intentional spin — emitted faithfully).
-      Stmt::Loop(b, nx) => {
-        ltop := nl
-        ldone := nl + 1
-        nl += 2
-        emit_label(sb, ltop)
-        push_str(sb, ":\n")
-        ob := cx.brk
-        oc := cx.cont
-        cx.brk = i64(ldone)
-        cx.cont = i64(ltop)     ## `continue` re-enters the top (no guard)
-        if cx.defer_active {
-          defer_frame_push(cx)
-          cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+        None => {}
         }
-        loop_push(cx, i64(ldone), i64(ltop), 0)     ## depth-frame for labeled break/continue (byte-neutral)
-        ## TAIL: a `loop` body's last statement is never the fn's return value (see the `While` arm).
-        lov_tail := cx.tail
-        cx.tail = false
-        emit_stmts(b, sb, cx, nl)
-        cx.tail = lov_tail
-        loop_pop(cx)
-        if cx.defer_active {
-          emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
-          defer_frame_pop(cx)
+        ## A `__deferblkend()` reached as a NORMAL statement: the block it terminates was already consumed
+        ## as a single deferred unit (the `__deferblk()` branch above jumped the emitter past it, and the
+        ## drain chain re-runs the block via `emit_stmts`) — skip it (advance). (Every marker is parser-paired;
+        ## this skip is what lets the drain's `emit_stmts`-of-the-block terminate cleanly at its end marker.)
+        if is_defer_blk_end_h(sq, cx.src, a) {
+          s = stmt_next(sq)
+          continue
         }
-        cx.brk = ob
-        cx.cont = oc
-        push_str(sb, "  jmp ")
-        emit_label(sb, ltop)
-        push_str(sb, "\n")
-        emit_label(sb, ldone)
-        push_str(sb, ":\n")
-        s = nx
-      }
-      ## `unchecked { body }` (Grammar §130 statement form): lower the body with `verify.checked` FALSE
-      ## (overflow/bounds guards comptime-absent), then restore the mode. The body is an ordinary
-      ## statement list — no loop/label; just the scoped verification toggle.
-      Stmt::Unchecked(b, nx) => {
-        ov := cx.vchk
-        cx.vchk = false
-        ## TAIL: the block's last statement is the fn's tail only when the `unchecked` block ITSELF is
-        ## in tail position (`cx.tail` already true AND nothing follows it) — the `CompIf` discipline.
-        uov_tail := cx.tail
-        cx.tail = uov_tail and nx == 0
-        if cx.defer_active { defer_frame_push(cx) }
-        emit_stmts(b, sb, cx, nl)
-        cx.tail = uov_tail
-        if cx.defer_active {
-          emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
-          defer_frame_pop(cx)
-        }
-        cx.vchk = ov
-        s = nx
-      }
-      ## `alloc::with(A) { body }` (MEM-5): establish `A` as the ambient allocator for the body, then
-      ## restore. A call in the body omitting an allocator param reads `AMBIENT_ALLOC` and injects `ptr(A)`
-      ## (see the elided-allocator path in the call emit). Nesting is lexical shadowing (save/restore).
-      Stmt::AllocWith(ae, b, nx) => {
-        oa := AMBIENT_ALLOC
-        AMBIENT_ALLOC = unchecked bitcast(usize, ae)
-        ## TAIL: only when the `alloc::with` block itself is in tail position (the `CompIf` discipline).
-        aov_tail := cx.tail
-        cx.tail = aov_tail and nx == 0
-        if cx.defer_active { defer_frame_push(cx) }
-        emit_stmts(b, sb, cx, nl)
-        cx.tail = aov_tail
-        if cx.defer_active {
-          emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
-          defer_frame_pop(cx)
-        }
-        AMBIENT_ALLOC = oa
-        s = nx
-      }
-      ## `break [name] [<expr>]` (Control Flow §7): jump to the target loop's done-label. `depth` 0 = the
-      ## nearest enclosing loop; depth > 0 = a labeled `break name`, resolved to the loop frame `depth`
-      ## levels out on the loop-target stack. The target is ALWAYS read from the loop-frame stack
-      ## (`cx.loop_brk`), which every loop kind — `loop`/`while`/`for` and the value-bearing `Expr::Loop` —
-      ## pushes with its real done-label. For `loop`/`while`/`Expr::Loop` this equals `cx.brk` (pushed at
-      ## the same site), so the depth-0 emit stays byte-identical to the classic bare `break`; a `for`,
-      ## however, never sets `cx.brk` (its emit tracks only the continue target), so reading `cx.brk`
-      ## there yielded the `-1` no-loop sentinel → `jmp .L-1` (an undefined label — a bare break inside a
-      ## `for` link-errored). Reading `cx.loop_brk[cx.loop_sp-1]` fixes `for`-break and also makes a break inside
-      ## a `for` nested in an outer loop target the `for`'s exit (innermost), not the outer loop's.
-      ## `value` (0 = none) is the loop-EXPRESSION value (§7.2): it is emitted (left on the stack) so the
-      ## done-label converges with exactly one value — but only if the TARGET loop is value-bearing (an
-      ## `Expr::Loop`); a `break <expr>` to a statement-position loop is ill-formed (fail-loud, not a
-      ## silent stack imbalance).
-      Stmt::Break(value, depth, nx) => {
-        mut btgt := cx.brk
-        mut tisexpr : usize = 1
-        if depth != 0 {
-          if depth >= cx.loop_sp { panic("selfhost: break to a label beyond the enclosing loop nesting") }
-          btgt = cx.loop_brk[(cx.loop_sp - 1) - depth]
-          tisexpr = cx.loop_isexpr[(cx.loop_sp - 1) - depth]
-        } else if cx.loop_sp > 0 {
-          btgt = cx.loop_brk[cx.loop_sp - 1]
-          tisexpr = cx.loop_isexpr[cx.loop_sp - 1]
-        }
-        if unchecked bitcast(usize, value) != 0 {
-          if tisexpr == 0 { panic("selfhost: `break <expr>` targets a non-value loop (loop-expression value only from a loop consumed for a value, Control Flow §7.2)") }
-          emit_gas(value, sb, cx, a, nl)   ## leave the loop-expression value on the stack at the done-label
-        }
-        ## DEFER (§9.3): a `break` leaves the TARGET loop, so drain that loop's body-frame defers before
-        ## jumping (its boundary from `cx.loop_dframe`, parallel to `btgt`/`tisexpr`). SAVE & RESTORE the
-        ## ledger — this is an alternate runtime path; the emission continues on the fall-through path, and
-        ## only ONE of the drains actually runs at runtime. The chain's pushes sit ABOVE the emitted break
-        ## value (emitted first), so the done-label still converges with exactly one value. Gated on a
-        ## nested defer frame (`cx.defer_sp > 0`) so a defer-free fn emits nothing here.
-        if cx.defer_sp > 0 {
-          mut bdb := 0
-          if depth != 0 {
-            bdb = cx.loop_dframe[(cx.loop_sp - 1) - depth]
-          } else if cx.loop_sp > 0 {
-            bdb = cx.loop_dframe[cx.loop_sp - 1]
+        if hasdef and stmt_may_early_exit(sq, cx.src, a) { defer_exit_seen = true }
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl2, v, nx) => {
+            emit_st_assign(ns, nl2, v, sb, cx, a, nl)
+            s = nx
           }
-          sv := cx.defer_n
-          emit_defer_chain(sb, cx, a, nl, bdb)
-          cx.defer_n = sv
-        }
-        push_str(sb, "  jmp ")
-        emit_label(sb, usize(btgt))
-        push_str(sb, "\n")
-        s = nx
-      }
-      ## `continue [name]` (Control Flow §7): jump to the target loop's CONTINUE label — a `while`'s guard,
-      ## a `loop`'s top, or a `for`'s increment (so the loop index still advances). depth 0 = nearest loop
-      ## (`cx.cont`, byte-identical); depth > 0 = a labeled `continue name` (a loop, §7.1).
-      Stmt::Continue(depth, nx) => {
-        mut ctgt := cx.cont
-        if depth != 0 {
-          if depth >= cx.loop_sp { panic("selfhost: continue to a label beyond the enclosing loop nesting") }
-          ctgt = cx.loop_cont[(cx.loop_sp - 1) - depth]
-        }
-        ## DEFER (§9.3): a `continue` re-enters the target loop's next iteration, so drain THIS iteration's
-        ## defers (the target loop body-frame boundary) before jumping — SAVE & RESTORE the ledger (an
-        ## alternate runtime path). Gated on a nested defer frame so a defer-free fn emits nothing here.
-        if cx.defer_sp > 0 {
-          mut cdb := 0
-          if depth != 0 {
-            cdb = cx.loop_dframe[(cx.loop_sp - 1) - depth]
-          } else if cx.loop_sp > 0 {
-            cdb = cx.loop_dframe[cx.loop_sp - 1]
+          ## A struct field mutation `var.field = e`: lower the value (left on the stack), pop it
+          ## into the field's reserved frame slot. The field lives at slot `base_off + index`,
+          ## i.e. byte offset -(slot + 1) * 8(%rbp) — the store dual of the `Field` READ.
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
+            emit_st_field_assign(bns, bnl, fns, fnl, fv, sb, cx, a, nl)
+            s = nx
           }
-          sv := cx.defer_n
-          emit_defer_chain(sb, cx, a, nl, cdb)
-          cx.defer_n = sv
-        }
-        push_str(sb, "  jmp ")
-        emit_label(sb, usize(ctgt))
-        push_str(sb, "\n")
-        s = nx
-      }
-      ## A bare expression statement `f(args)` / `mod::f(args)` / `expr?`: emit the expression
-      ## (a call pushes its result), then DISCARD the result (`popq %rax`). The pervasive
-      ## side-effecting statement in the passes (`lexer::lex_all(lx, toks)`, `vec::push(out, d)`).
-      ## emit_gas always leaves exactly one value on the stack for a call, so the single pop
-      ## keeps the stack balanced regardless of the callee's return (void/scalar/aggregate).
-      Stmt::ExprStmt(e, nx) => {
-        ls := stmt_label_span(s)
-        if ls.n != 0 {
-          emit_code_label_name(sb, cx, ls.s, ls.n)
-          push_str(sb, ":\n")
-        }
-        emit_st_expr_stmt(e, nx, head, sb, cx, a, nl)
-        s = nx
-      }
-      ## An early `return e`: lower the value (left on the stack), pop into %rax, and `jmp`
-      ## the function epilogue (`cx.epi`), which restores the frame and `ret`s. So the value
-      ## is delivered the same way as the trailing return, just at an arbitrary body point.
-      Stmt::Return(rv, nx) => {
-        rvm := match_info(rv)
-        rvi := if_info(rv)
-        ## Route through emit_return_value for: a `return match` of ANY aggregate/str/enum (emit_enum_value
-        ## / emit_struct_value / emit_str_pair have no Match arm), OR a `return if` of struct/tuple/str
-        ## (those lack an If arm) — but NOT an enum `return if`: emit_enum_value ALREADY has an If arm,
-        ## and routing it would change src/'s (working, byte-identical) enum-if emission.
-        if (rvm.is_m and (cx.ret_struct or cx.ret_tuple or cx.ret_str or cx.ret_enum or fixed_array_byte_return_len_span(cx.src, cx.ret_ss, cx.ret_sl) >= 1)) or (rvi.is_if and (cx.ret_struct or cx.ret_tuple or cx.ret_str or fixed_array_byte_return_len_span(cx.src, cx.ret_ss, cx.ret_sl) >= 1)) {
-          ## `return match … { … => P(…) / (a,b) / "s" / E.V(…) }` OR `return if c { … } else { … }` — a value-`match`/`if` returning an
-          ## AGGREGATE / `str` / ENUM. Route it through `emit_return_value` (dispatch the scrutinee +
-          ## deliver EACH arm's value via the return convention + jump the epilogue). `emit_struct_value`
-          ## / `emit_str_pair` / `emit_enum_value` have no `Match` arm, so this used to deliver {0} / an
-          ## empty str (a silent miscompile). A SCALAR `return match` is left to `emit_gas` (which HAS an
-          ## Expr::Match arm) — routing scalars regressed a bool-returning derive `return match`
-          ## (`cx.ret_enum` is FALSE for a bool return, so that stays on emit_gas).
-          emit_return_value(rv, sb, cx, a, nl)
-          s = nx
-        } else {
-        if fixed_array_byte_return_len_span(cx.src, cx.ret_ss, cx.ret_sl) >= 1 {
-          emit_byte_array_return_value(rv, sb, cx, a, nl)
-        } else if is_niche_folded(cx.src, cx.ret_ss, cx.ret_sl) {
-          ## §8 `@niche`: a fn returning `Option(ptr(T))` delivers ONE folded word in %rax (`Some(p)`=p,
-          ## `None`=0) — NOT the 2-register enum convention. Checked FIRST because a folded return type is
-          ## NOT recognized as an enum (`enum_decl_of` can't resolve the parenthesized `Option(ptr(T))`),
-          ## so `cx.ret_enum` is FALSE for it. Gated by `is_niche_folded`; non-folded returns unchanged.
-          emit_folded_option_value(rv, sb, cx, a, nl)
-        } else if cx.ret_sret {
-          ## a >7-word AGGREGATE return via the hidden result-pointer — enum (disc + payload) or struct.
-          ## Checked BEFORE `ret_enum`: a WIDE enum has BOTH `ret_sret` and `ret_enum` set and the sret
-          ## path must win (the two-register/`emit_retreg` enum convention tops out at %r11 = 7 words).
-          ## `emit_return_value` (the trailing / tail-`match`-arm path) already ordered it this way; this
-          ## is the explicit-`return` (Stmt::Return) DUAL, which used to fall to `emit_enum_value` — a
-          ## SILENT 0 for the `return e` (enum Var) form and a fail-loud panic for the `return E.V(…)`
-          ## (EnumLit) form. Neutral for the self-host build: no `src/`+`lib/` fn returns a >7-word
-          ## aggregate, so `cx.ret_sret` is false everywhere there.
-          if cx.ret_enum { emit_enum_to_sret(rv, sb, cx, a, nl) }
-          else { emit_struct_to_sret(rv, sb, cx, a, nl) }
-        } else if cx.ret_enum {
-          ## an enum-returning fn: deliver the value via the two-register convention
-          ## (disc/%rax, payload/%rdx) then jump the epilogue (no stack push/pop).
-          emit_enum_value(rv, sb, cx, a, nl)
-        } else if cx.ret_struct {
-          ## a 2-word-struct-returning fn: deliver field 0/%rax, field 1/%rdx (same convention).
-          emit_struct_value(rv, sb, cx, a, nl)
-        } else if cx.ret_tuple {
-          ## a TUPLE-returning fn: deliver component k → %rax/%rdx/… (emit_struct_value's ArrayLit arm).
-          emit_struct_value(rv, sb, cx, a, nl)
-        } else if cx.ret_str {
-          ## a str-returning fn: materialize the {ptr, len} pair (ptr deep, len top), then deliver
-          ## ptr/%rax, len/%rdx (the str dual of the 2-word-struct return).
-          emit_str_pair(rv, sb, cx, a, nl)
-          push_str(sb, "  popq %rdx\n  popq %rax\n")
-        } else {
-          ## (TYP-6) the `return <aggregate>` from a scalar-return fn soundness net moved UP into
-          ## `sema::check_program` (build-path gate; covers int/float/char/bool + the reverse direction).
-          emit_gas(rv, sb, cx, a, nl)
-          push_str(sb, "  popq %rax\n")
-          ## an f64/f32-returning fn delivers in %xmm0 — set it BEFORE the jump to the epilogue
-          ## (the epilogue label sits past the trailing-return's own %xmm0 move).
-          if cx.ret_float { push_str(sb, "  movq %rax, %xmm0\n") }
-        }
-        ## DEFER (§9.3): an early `return` runs the NESTED-frame defers (everything at/above the first
-        ## nested frame's boundary `FRAME[0]` — the fn-body top-level entries `[0, FRAME[0])` stay for the
-        ## epilogue, preserving LIFO across scopes) BEFORE jumping. SAVE & RESTORE the ledger (an alternate
-        ## runtime path; the emission continues on the fall-through path, and only one drain runs).
-        if cx.defer_sp > 0 {
-          sv := cx.defer_n
-          emit_defer_chain(sb, cx, a, nl, cx.defer_frame[0])
-          cx.defer_n = sv
-        }
-        push_str(sb, "  jmp ")
-        emit_label(sb, cx.epi)
-        push_str(sb, "\n")
-        s = nx
-        }
-      }
-      ## A statement-position `if cond { then-stmts } [ else { else-stmts } ]`: lower the cond,
-      ## pop, `cmpq $0` + `je else-label`; emit the then statement list; `jmp end-label`; the
-      ## else-label, the else statement list; the end-label. No value is left on the stack
-      ## (these are statements). Fresh else/end labels via the shared `nl`.
-      Stmt::If(c, th, el, nx) => {
-        lelse := nl
-        lend := nl + 1
-        nl += 2
-        emit_gas(c, sb, cx, a, nl)
-        push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  je ")
-        emit_label(sb, lelse)
-        push_str(sb, "\n")
-        ## TAIL: a branch's last statement is the fn's return value only when the `if` ITSELF is in tail
-        ## position (`cx.tail` already true AND nothing follows it, `nx == 0`) — the same discipline the
-        ## `CompIf` arm applies. Without it, a bare-call statement ending an `if` branch anywhere in a
-        ## value-returning fn was emitted as that fn's RETURN (`jmp` epilogue): the call vanished when it
-        ## had no return value and the fn silently aborted at that point.
-        iov_tail := cx.tail
-        cx.tail = iov_tail and nx == 0
-        if cx.defer_active { defer_frame_push(cx) }
-        emit_stmts(th, sb, cx, nl)   ## then statement list (no value)
-        if cx.defer_active {
-          emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
-          defer_frame_pop(cx)
-        }
-        push_str(sb, "  jmp ")
-        emit_label(sb, lend)
-        push_str(sb, "\n")
-        emit_label(sb, lelse)
-        push_str(sb, ":\n")
-        if cx.defer_active { defer_frame_push(cx) }
-        emit_stmts(el, sb, cx, nl)   ## else statement list (0 head = empty)
-        if cx.defer_active {
-          emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
-          defer_frame_pop(cx)
-        }
-        cx.tail = iov_tail
-        emit_label(sb, lend)
-        push_str(sb, ":\n")
-        s = nx
-      }
-      ## A statement-position `match scrut { pat => { stmts } ; … }`: dispatch on the
-      ## scrutinee (an enum `Var` local on its discriminant, else an integer value compare)
-      ## and run the matching arm's STATEMENT LIST — no value pushed. Mirrors the expression
-      ## match dispatch shape (`emit_gas`'s `Match` arm / `emit_enum_match`) but each arm body
-      ## is `emit_stmts(am.body_stmts)`, and there is no default value to push.
-      Stmt::Match(sc, ah, nx) => {
-        emit_st_match(sc, ah, nx, sb, cx, nl)
-        s = nx
-      }
-      ## A `deref(p) = v` store through a pointer: lower the value (left on the stack), lower
-      ## the pointer (its value on top), pop the pointer into %rax and the value into %rbx, and
-      ## store `movq %rbx, (%rax)`. The store dual of the `Deref` READ.
-      Stmt::DerefAssign(ptr, val, nx) => {
-        emit_st_deref_assign(ptr, val, sb, cx, a, nl)
-        s = nx
-      }
-      ## An `arr[i] = v` array element write: lower the value (left on the stack), compute the
-      ## element address (`emit_index_addr` → %rax; the value on the stack survives its index
-      ## lowering), pop the value into %rbx, and store `movq %rbx, (%rax)`. The store dual of
-      ## the `Index` READ.
-      Stmt::IndexAssign(ib, ii, iv, nx) => {
-        emit_st_index_assign(ib, ii, iv, sb, cx, a, nl)
-        s = nx
-      }
-      ## An `a[i].f = v` element-field write: lower the value (left on the stack), compute the
-      ## element-field address (`emit_idx_field_addr` → %rax; the value survives), pop the value
-      ## into %rbx, and store `movq %rbx, (%rax)`. The store dual of the `Field(Index(...), f)`
-      ## READ.
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
-        emit_st_index_field_assign(fia, fii, ifs, ifl, fiv, sb, cx, a, nl)
-        s = nx
-      }
-      ## A `for i in lo .. hi { body }`: desugar to a counted while. Store `lo` into `i`'s
-      ## frame slot, then at a guard label compare `i < hi` (lower `i` and `hi`, `cmpq`/`setl`),
-      ## `je` past the body to a done-label when false; emit the body; increment `i` by 1;
-      ## back-edge `jmp` to the guard. Half-open: `i` runs `lo, lo+1, …, hi-1`. Fresh
-      ## guard/done labels via `nl` so nested loops never collide.
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-      if unchecked bitcast(usize, fhi) == 0 {
-        ## ITERABLE `for x in s { … }`: `s` is a Slice VAR `{ptr @ B, len @ B+1}` OR a scalar/float
-        ## ARRAY VAR (`ek == 5`, elements inline in the frame). The loop var (each element) lives at
-        ## `vslot`, the hidden index at `vslot+1`. Desugar to a counted loop — for a slice
-        ## `__i = 0; while __i < s.len { x = *(s.ptr + __i*8) ; body ; __i += 1 }`; for an array the
-        ## length is the static element count (`snl`) and element `__i` is read inline at
-        ## `&element0 − __i*stride*8` (the down-growing frame layout). SCALAR/word elements only;
-        ## aggregate elements / non-var iterables are future work.
-        fv := var_name_span(flo)
-        is_nonvar := fv.n == 0
-        ## a `for c in bytes(s)` iterable is a BYTE slice (u8 elements, stride 1) — read each element
-        ## with `movzbq` at stride 1, not a word load at stride 8. (Detected on the `bytes(…)` call.)
-        mut byte_elem := is_nonvar and is_bytes_call(flo, cx.src)
-        vslot := slot_of(cx.slots, cx.src, fns, fnl)
-        mut islot := vslot + 1   ## hidden loop index; moved to vslot+agg_stride for an aggregate loop var
-        ## scalar-word (eek 0) and FLOAT (eek 9) element arrays: both keep the element COUNT in `snl`
-        ## and read the element as an inline word (a float rides its slot as bits; the loop var is
-        ## tagged `ek==9` by collect_slots so body float ops dispatch the xmm path). Aggregate/str
-        ## arrays keep `snl` as a type span (no static count) → they stay on the slice path (future).
-        ## A NON-VAR iterable (`for x in f()`) is materialized ONCE into the {ptr,len} temp at
-        ## `vslot+2 .. +3` (reserved by collect_slots), then read like a by-VALUE slice with base there.
-        ## The iterable's SlotEntry fields as SCALARS (a `mut bent : SlotEntry = …; bent = deref(…)`
-        ## struct-local reassignment SILENTLY DROPS some fields — the documented landmine; read the
-        ## fields into scalars from an IMMUTABLE `bent := deref(…)` instead).
-        mut is_arr := false
-        mut is_agg_arr := false   ## a struct/enum-ELEMENT array (eek 2/3): loop var is that aggregate
-        mut is_agg_slice := false ## a struct/enum-ELEMENT slice VIEW (eek 2/3, is_ref): copy via the ptr
-        mut is_str_slice := false ## a str-ELEMENT slice VIEW (eek 4, is_ref): loop var is a 2-word str
-        mut is_glob_arr := false  ## a MUTABLE ARRAY GLOBAL iterable (`for v in TABLE`): `.data` base
-        mut glob_nel := 0        ## the global array's element count (from its ArrayLit)
-        mut glob_is_agg := false  ## a STRUCT-element global array: copy `glob_stride` words per element
-        mut glob_stride := 1     ## the global array's element width in words
-        mut agg_n := 0           ## element count (parsed from the `[T; N]` annotation)
-        mut agg_stride := 0      ## element width in words
-        mut b_snl := 0           ## the var array's static scalar/float count (bent.snl)
-        mut b_estride := 1       ## the var array's element stride in words (bent.estride)
-        mut b_is_ref := false
-        mut bslot := 0
-        ## a `for x in v` over an arena-backed `Vec(T)` (`@owning struct { idx, len, cap, arena }`, 4
-        ## words): word 0 = the arena HANDLE index (NOT a pointer), so the slice path would deref a raw
-        ## index and trap. Resolve the element base as `arena.base + idx` per iteration setup instead.
-        mut is_vec := false
-        mut vec_bslot := 0    ## the Vec struct local's base slot (word 0 = idx)
-        ## a `for v in <mutable array GLOBAL>` — the iterable is a module global (no frame slot), so it
-        ## is neither the non-var nor the slot path: read the count from its ArrayLit and each element
-        ## from `LABEL + i*8`. Scalar-word elements. Detected before the slot read (which would garbage).
-        gfor_mgv := if fv.n != 0 { mut_global_value(cx.decls, cx.src, fv.s, fv.n) } else { unchecked bitcast(ptr(Expr), 0) }
-        lg := nl
-        ld := nl + 1
-        lcont := nl + 2      ## `continue` target: the increment (so the index still advances)
-        nl += 3
-        if is_nonvar {
-          ## §4 UP-GROWING: the 2-word temp is reserved at slots [vslot+2, vslot+3]; its base (word 0 =
-          ## ptr) is the TOP of that block = vslot+3, so word 1 (len) lands at vslot+2 — BELOW the base,
-          ## clear of the hidden index __i at vslot+1 (a `vslot+2` base would put len at vslot+1 and
-          ## clobber __i, so the loop bound read 0 and never ran). `emit_arm_val_store` handles a
-          ## `Slice(…)` StructLit (emit_struct_assign) AND a `bytes(s)`/`sub(…)` str-view (emit_str_pair
-          ## pair pop) — both write ptr @ base, len @ base-1 (the up-growing 2-word layout).
-          bslot = vslot + 3
-          emit_arm_val_store(flo, i64(bslot), sb, cx, a, nl)
-        } else if unchecked bitcast(usize, gfor_mgv) != 0 and array_lit_info(gfor_mgv).is_a {
-          is_glob_arr = true
-          glob_nel = array_lit_info(gfor_mgv).nel
-          gfor_mgvehi := array_lit_info(gfor_mgv)
-          gesli := struct_lit_info(arg_expr_at(gfor_mgvehi.ehead, 0, a))
-          ## an ENUM-element array global: the loop var would be bound as a SCALAR and each iteration
-          ## would read ONE word at `LABEL + i*8` — mid-element, a silent wrong-discriminant read.
-          if global_arr_enum(cx.decls, cx.src, fv.s, fv.n, gfor_mgv, a).is_e {
-            panic("selfhost: `for x in <ENUM-element ARRAY GLOBAL>` is not lowered (the loop var would be a single word, not the enum's `1 + max-payload`) — index it instead (`for i in 0..N { match GE[i] { … } }`). [fail-loud guard: never a silent mid-element read]")
+          ## `o.i.v = <expr>` — a NESTED field store. Resolve the place's frame slot via `field_slot`
+          ## (walks the nested `Field(Field(Var(o), i), v)` recursively → the down-growing inline slot),
+          ## lower the value, store it. Scalar-word field; a LOCAL struct base (`field_slot` reads the
+          ## base var's frame slot — a by-ref/ptr nested base is future work).
+          Stmt::FieldPathAssign(pl, v, nx) => {
+            emit_st_field_path_assign(pl, v, sb, cx, a, nl)
+            s = nx
           }
-          if gesli.is_s {
-            ## STRUCT-element global array — the loop var is that struct; its `glob_stride` slots push the
-            ## hidden index to `vslot + glob_stride` (matching collect_slots, which bound the struct var).
-            glob_is_agg = true
-            glob_stride = struct_words(cx.decls, cx.src, gesli.ss, gesli.sl, a)
-            islot = vslot + glob_stride
-          }
-        } else {
-          bent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fv.s, fv.n)))
-          ## an INLINE scalar/float array is `ek==5` NOT by-ref; a `s := arr[lo..hi]` slice VIEW is also
-          ## `ek==5` but `is_ref` (a runtime {ptr,len}) → it must take the by-value slice path below (read
-          ## its runtime len + deref its ptr), not the inline-array path (which reads the ptr/len slots as
-          ## elements against a hardcoded static count).
-          is_arr = bent.ek == 5 and (bent.eek == 0 or bent.eek == 9) and (not bent.is_ref)
-          is_agg_arr = bent.ek == 5 and (bent.eek == 2 or bent.eek == 3) and (not bent.is_ref)
-          ## a struct/enum-element slice VIEW (`s := structs[lo..hi]`, `ek==5 is_ref eek 2/3`): like the
-          ## scalar VIEW it has a runtime len + an element POINTER (word 0) — copy `stride` words per
-          ## element FROM that pointer, not inline from the frame.
-          is_agg_slice = bent.ek == 5 and (bent.eek == 2 or bent.eek == 3) and bent.is_ref
-          ## a str-element slice VIEW LOCAL (`s := strs[lo..hi]`, `ek==5 is_ref eek 4 sns==0`): like the
-          ## scalar VIEW it holds its {ptr,len} BY VALUE in the frame (word 0 = element ptr, word 1 =
-          ## runtime len). The loop var is a 2-word str; per element copy its {ptr,len} pair (2 words)
-          ## from the element addr. Gated `sns == 0` so a `Slice(str)` PARAM (`sns == 1`) is not intercepted.
-          is_str_slice = bent.ek == 5 and bent.eek == 4 and bent.is_ref and bent.sns == 0
-          ## a struct local (ek 2) whose type is `Vec(...)` → the arena-backed Vec iteration path.
-          if bent.ek == 2 and bent.snl != 0 {
-            vbn := base_type_name(cx.src, bent.sns, bent.snl)
-            if str_at((cx.src + vbn.s), vbn.n) == "Vec" { is_vec = true; vec_bslot = bent.off }
-          }
-          b_is_ref = bent.is_ref
-          ## a LOCAL scalar/float slice VIEW (`s := arr[lo..hi]`, bound `ek==5 is_ref`) holds its {ptr,len}
-          ## BY VALUE in the frame (word 0 = the element pointer, word 1 = the runtime len) — NOT a pointer
-          ## to a caller's Slice — so it reads by-value (ptr @ word 0 directly, len @ word 1), else the
-          ## by-ref branches double-deref word 0 and fault.
-          ## A scalar/float slice VIEW (`sns == 0`) reads its data-ptr inline (single deref) → by-value. A
-          ## Slice PARAM (`sns == 1`, `bind_param`'s "Slice" case) is a POINTER to the {ptr,len} block, so it
-          ## KEEPS `b_is_ref` (the double-deref path: slot → block, ptr @ 0, len @ 8) — do NOT override it.
-          if bent.ek == 5 and (bent.eek == 0 or bent.eek == 9) and bent.is_ref and bent.sns == 0 { b_is_ref = false }
-          bslot = bent.off
-          b_snl = bent.snl
-          b_estride = bent.estride
-          bent_slice_param_elem := slice_param_elem_span(cx.src, bent.ns, bent.nl)
-          ## A concrete Slice(u8) PARAM/LOCAL is still a two-word view, but its iterable element is one
-          ## byte. Keep this text-path control correct beside the RA byte-load seam; arrays do not return a
-          ## Slice element span here and remain on their existing word/aggregate branches.
-          if bent.is_ref and bent_slice_param_elem.n != 0 and str_at((cx.src + bent_slice_param_elem.s), bent_slice_param_elem.n) == "u8" {
-            byte_elem = true
-          }
-          if is_agg_arr {
-            ## a `[Pt; N]` array of structs/enums: N is not in the slot (`snl` holds the element type
-            ## span) — recover it from the `[T; N]` annotation via local_type_span + parse_arr_len,
-            ## scanning from the array's DECLARATION name span (`bent.ns/nl`, recorded by
-            ## bind_array_slot), NOT the for-site `fv` (which is followed by the loop body `{`).
-            lts := local_type_span(cx.src, bent.ns, bent.nl)
-            agg_n = parse_arr_len(cx.src, lts.s, lts.n)
-            agg_stride = bent.estride
-            ## a LITERAL-bound aggregate array (`arr := [Pt(…), …]`) has no `[T; N]` annotation, so
-            ## `parse_arr_len` yields 0 — recover the count from the reserved element filler slots
-            ## (else `for e in arr` iterated zero times: a silent empty loop).
-            if agg_n == 0 and agg_stride > 0 { agg_n = agg_arr_fill_count(cx.slots, bslot) / agg_stride }
-            ## the loop var is `agg_stride` words wide, so the hidden index sits at `vslot+agg_stride`
-            ## (where collect_slots reserved it), not `vslot+1` — avoid clobbering the aggregate var.
-            islot = vslot + agg_stride
-          }
-          if is_agg_slice {
-            ## a struct/enum-element slice VIEW: element width from the slot's stride; the loop var is
-            ## that wide, so the hidden index sits at `vslot+agg_stride`; word 0 is the element ptr (by
-            ## value for a local view, or behind the caller's Slice block for a param). Length is runtime.
-            agg_stride = bent.estride
-            islot = vslot + agg_stride
-            if bent_slice_param_elem.n == 0 { b_is_ref = false }
-          }
-        }
-        ## `s` is a Slice `{ptr, len}`. A by-VALUE local holds ptr @ slot `B`, len @ slot `B+1`. A by-REF
-        ## struct PARAM (`is_ref`) holds a POINTER `P` @ slot `B` to the caller's Slice, whose fields ride
-        ## the down-growing convention: ptr (field 0) at `(P)`, len (field 1) at `-8(P)`.
-        push_str(sb, "  movq $0, -")
-        push_int(sb, i64((islot + 1) * 8))
-        push_str(sb, "(%rbp)\n")
-        emit_label(sb, lg)
-        push_str(sb, ":\n")
-        ## len → %rbx
-        if is_glob_arr {
-          ## mutable array global: the static element count from its ArrayLit
-          push_str(sb, "  movq $")
-          push_int(sb, i64(glob_nel))
-          push_str(sb, ", %rbx\n")
-        } else if is_agg_arr {
-          ## aggregate-element array: the static count parsed from `[T; N]`
-          push_str(sb, "  movq $")
-          push_int(sb, i64(agg_n))
-          push_str(sb, ", %rbx\n")
-        } else if is_arr {
-          ## array: the static element count is `snl` (recorded by bind_array_slot)
-          push_str(sb, "  movq $")
-          push_int(sb, i64(b_snl))
-          push_str(sb, ", %rbx\n")
-        } else if is_agg_slice {
-          ## struct/enum-element slice: local VIEW stores len in frame word 1; PARAM stores a pointer to
-          ## the caller's {ptr,len} block and reads len at +8(block).
-          if b_is_ref {
-            push_str(sb, "  movq -")
-            push_int(sb, i64((bslot + 1) * 8))
-            push_str(sb, "(%rbp), %rax\n  movq 8(%rax), %rbx\n")
-          } else {
-            push_str(sb, "  movq -")
-            push_int(sb, i64(bslot * 8))
-            push_str(sb, "(%rbp), %rbx\n")
-          }
-        } else if is_str_slice {
-          ## str-element slice LOCAL VIEW: the runtime len is stored BY VALUE in frame word 1 (at -bslot*8,
-          ## matching emit_array_slice_assign's `len @ base*8` store).
-          push_str(sb, "  movq -")
-          push_int(sb, i64(bslot * 8))
-          push_str(sb, "(%rbp), %rbx\n")
-        } else if is_vec {
-          ## Vec.len = word 1, at slot vec_bslot-1 (§4 up-growing: word k at base-k) → frame -(vec_bslot)*8.
-          push_str(sb, "  movq -")
-          push_int(sb, i64(vec_bslot * 8))
-          push_str(sb, "(%rbp), %rbx\n")
-        } else if b_is_ref {
-          push_str(sb, "  movq -")
-          push_int(sb, i64((bslot + 1) * 8))
-          push_str(sb, "(%rbp), %rax\n  movq 8(%rax), %rbx\n")
-        } else {
-          push_str(sb, "  movq -")
-          push_int(sb, i64(bslot * 8))
-          push_str(sb, "(%rbp), %rbx\n")
-        }
-        ## __i < len ?  (false → done)
-        push_str(sb, "  movq -")
-        push_int(sb, i64((islot + 1) * 8))
-        push_str(sb, "(%rbp), %rax\n  cmpq %rbx, %rax\n  setl %al\n  movzbq %al, %rax\n  cmpq $0, %rax\n  je ")
-        emit_label(sb, ld)
-        push_str(sb, "\n")
-        if is_glob_arr {
-          ## element __i of a global array, from its `.data` at `LABEL + __i*stride*8` (`leaq LABEL(%rip)`
-          ## PIE-safe base). Compute `%rax = &element[__i]` = base + __i*stride*8, then either copy the
-          ## `glob_stride` struct words into the loop var's slots (ascending .data → down-growing frame:
-          ## word k at `LABEL+k*8` → `-(vslot+k+1)*8(%rbp)`) or load the single scalar word.
-          push_str(sb, "  leaq ")
-          emit_global_label(sb, cx.decls, cx.src, fv.s, fv.n)
-          push_str(sb, "(%rip), %rax\n  movq -")
-          push_int(sb, i64((islot + 1) * 8))
-          push_str(sb, "(%rbp), %rcx\n  imulq $")
-          push_int(sb, i64(glob_stride * 8))
-          push_str(sb, ", %rcx\n  addq %rcx, %rax\n")
-          if glob_is_agg {
-            for k in 0..glob_stride {
-              push_str(sb, "  movq ")
-              push_int(sb, i64(k * 8))
-              push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
-              push_int(sb, i64((vslot - k + 1) * 8))
-              push_str(sb, "(%rbp)\n")
+          Stmt::While(cnd, b, nx) => {
+            lguard := nl
+            ldone := nl + 1
+            nl += 2
+            emit_label(sb, lguard)
+            push_str(sb, ":\n")
+            emit_gas(cnd, sb, cx, a, nl)   ## condition value pushed
+            push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  je ")
+            emit_label(sb, ldone)
+            push_str(sb, "\n")
+            ## set the `break` target to this loop's done-label + the `continue` target to its GUARD
+            ## (re-evaluate the condition) for the body, restore both after
+            ob := cx.brk
+            oc := cx.cont
+            cx.brk = i64(ldone)
+            cx.cont = i64(lguard)
+            ## DEFER (§9.3): push a per-iteration defer frame for the loop body and record its boundary
+            ## (for a `break`/`continue` drain), gated on `cx.defer_active` so a defer-free fn stays byte-identical.
+            if cx.defer_active {
+              defer_frame_push(cx)
+              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
             }
-          } else {
-            push_str(sb, "  movq (%rax), %rax\n  movq %rax, -")
+            loop_push(cx, i64(ldone), i64(lguard), 0)   ## depth-frame for labeled break/continue (byte-neutral)
+            ## TAIL (see the `ExprStmt` arm): a LOOP body's last statement is NEVER the function's return
+            ## value — the loop runs many times and then falls through. Clearing `cx.tail` for the body stops
+            ## a trailing bare-call statement inside the loop from being emitted as the fn's return (`jmp`
+            ## epilogue), which silently ABORTED the enclosing fn mid-loop.
+            wov_tail := cx.tail
+            cx.tail = false
+            emit_stmts(b, sb, cx, nl) ## loop body
+            cx.tail = wov_tail
+            loop_pop(cx)
+            if cx.defer_active {
+              emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
+              defer_frame_pop(cx)
+            }
+            cx.brk = ob
+            cx.cont = oc
+            push_str(sb, "  jmp ")
+            emit_label(sb, lguard)
+            push_str(sb, "\n")
+            emit_label(sb, ldone)
+            push_str(sb, ":\n")
+            s = nx
+          }
+          ## An infinite `loop { body }`: a label, the body (with `break` → done-label), an
+          ## unconditional `jmp` back, then the done-label. No guard, so the body's `break` is the
+          ## only exit (a loop with no `break` is an intentional spin — emitted faithfully).
+          Stmt::Loop(b, nx) => {
+            ltop := nl
+            ldone := nl + 1
+            nl += 2
+            emit_label(sb, ltop)
+            push_str(sb, ":\n")
+            ob := cx.brk
+            oc := cx.cont
+            cx.brk = i64(ldone)
+            cx.cont = i64(ltop)     ## `continue` re-enters the top (no guard)
+            if cx.defer_active {
+              defer_frame_push(cx)
+              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+            }
+            loop_push(cx, i64(ldone), i64(ltop), 0)     ## depth-frame for labeled break/continue (byte-neutral)
+            ## TAIL: a `loop` body's last statement is never the fn's return value (see the `While` arm).
+            lov_tail := cx.tail
+            cx.tail = false
+            emit_stmts(b, sb, cx, nl)
+            cx.tail = lov_tail
+            loop_pop(cx)
+            if cx.defer_active {
+              emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
+              defer_frame_pop(cx)
+            }
+            cx.brk = ob
+            cx.cont = oc
+            push_str(sb, "  jmp ")
+            emit_label(sb, ltop)
+            push_str(sb, "\n")
+            emit_label(sb, ldone)
+            push_str(sb, ":\n")
+            s = nx
+          }
+          ## `unchecked { body }` (Grammar §130 statement form): lower the body with `verify.checked` FALSE
+          ## (overflow/bounds guards comptime-absent), then restore the mode. The body is an ordinary
+          ## statement list — no loop/label; just the scoped verification toggle.
+          Stmt::Unchecked(b, nx) => {
+            ov := cx.vchk
+            cx.vchk = false
+            ## TAIL: the block's last statement is the fn's tail only when the `unchecked` block ITSELF is
+            ## in tail position (`cx.tail` already true AND nothing follows it) — the `CompIf` discipline.
+            uov_tail := cx.tail
+            cx.tail = uov_tail and not stmt_any(nx)
+            if cx.defer_active { defer_frame_push(cx) }
+            emit_stmts(b, sb, cx, nl)
+            cx.tail = uov_tail
+            if cx.defer_active {
+              emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
+              defer_frame_pop(cx)
+            }
+            cx.vchk = ov
+            s = nx
+          }
+          ## `alloc::with(A) { body }` (MEM-5): establish `A` as the ambient allocator for the body, then
+          ## restore. A call in the body omitting an allocator param reads `AMBIENT_ALLOC` and injects `ptr(A)`
+          ## (see the elided-allocator path in the call emit). Nesting is lexical shadowing (save/restore).
+          Stmt::AllocWith(ae, b, nx) => {
+            oa := AMBIENT_ALLOC
+            AMBIENT_ALLOC = unchecked bitcast(usize, ae)
+            ## TAIL: only when the `alloc::with` block itself is in tail position (the `CompIf` discipline).
+            aov_tail := cx.tail
+            cx.tail = aov_tail and not stmt_any(nx)
+            if cx.defer_active { defer_frame_push(cx) }
+            emit_stmts(b, sb, cx, nl)
+            cx.tail = aov_tail
+            if cx.defer_active {
+              emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
+              defer_frame_pop(cx)
+            }
+            AMBIENT_ALLOC = oa
+            s = nx
+          }
+          ## `break [name] [<expr>]` (Control Flow §7): jump to the target loop's done-label. `depth` 0 = the
+          ## nearest enclosing loop; depth > 0 = a labeled `break name`, resolved to the loop frame `depth`
+          ## levels out on the loop-target stack. The target is ALWAYS read from the loop-frame stack
+          ## (`cx.loop_brk`), which every loop kind — `loop`/`while`/`for` and the value-bearing `Expr::Loop` —
+          ## pushes with its real done-label. For `loop`/`while`/`Expr::Loop` this equals `cx.brk` (pushed at
+          ## the same site), so the depth-0 emit stays byte-identical to the classic bare `break`; a `for`,
+          ## however, never sets `cx.brk` (its emit tracks only the continue target), so reading `cx.brk`
+          ## there yielded the `-1` no-loop sentinel → `jmp .L-1` (an undefined label — a bare break inside a
+          ## `for` link-errored). Reading `cx.loop_brk[cx.loop_sp-1]` fixes `for`-break and also makes a break inside
+          ## a `for` nested in an outer loop target the `for`'s exit (innermost), not the outer loop's.
+          ## `value` (0 = none) is the loop-EXPRESSION value (§7.2): it is emitted (left on the stack) so the
+          ## done-label converges with exactly one value — but only if the TARGET loop is value-bearing (an
+          ## `Expr::Loop`); a `break <expr>` to a statement-position loop is ill-formed (fail-loud, not a
+          ## silent stack imbalance).
+          Stmt::Break(value, depth, nx) => {
+            mut btgt := cx.brk
+            mut tisexpr : usize = 1
+            if depth != 0 {
+              if depth >= cx.loop_sp { panic("selfhost: break to a label beyond the enclosing loop nesting") }
+              btgt = cx.loop_brk[(cx.loop_sp - 1) - depth]
+              tisexpr = cx.loop_isexpr[(cx.loop_sp - 1) - depth]
+            } else if cx.loop_sp > 0 {
+              btgt = cx.loop_brk[cx.loop_sp - 1]
+              tisexpr = cx.loop_isexpr[cx.loop_sp - 1]
+            }
+            if unchecked bitcast(usize, value) != 0 {
+              if tisexpr == 0 { panic("selfhost: `break <expr>` targets a non-value loop (loop-expression value only from a loop consumed for a value, Control Flow §7.2)") }
+              emit_gas(value, sb, cx, a, nl)   ## leave the loop-expression value on the stack at the done-label
+            }
+            ## DEFER (§9.3): a `break` leaves the TARGET loop, so drain that loop's body-frame defers before
+            ## jumping (its boundary from `cx.loop_dframe`, parallel to `btgt`/`tisexpr`). SAVE & RESTORE the
+            ## ledger — this is an alternate runtime path; the emission continues on the fall-through path, and
+            ## only ONE of the drains actually runs at runtime. The chain's pushes sit ABOVE the emitted break
+            ## value (emitted first), so the done-label still converges with exactly one value. Gated on a
+            ## nested defer frame (`cx.defer_sp > 0`) so a defer-free fn emits nothing here.
+            if cx.defer_sp > 0 {
+              mut bdb := 0
+              if depth != 0 {
+                bdb = cx.loop_dframe[(cx.loop_sp - 1) - depth]
+              } else if cx.loop_sp > 0 {
+                bdb = cx.loop_dframe[cx.loop_sp - 1]
+              }
+              sv := cx.defer_n
+              emit_defer_chain(sb, cx, a, nl, bdb)
+              cx.defer_n = sv
+            }
+            push_str(sb, "  jmp ")
+            emit_label(sb, usize(btgt))
+            push_str(sb, "\n")
+            s = nx
+          }
+          ## `continue [name]` (Control Flow §7): jump to the target loop's CONTINUE label — a `while`'s guard,
+          ## a `loop`'s top, or a `for`'s increment (so the loop index still advances). depth 0 = nearest loop
+          ## (`cx.cont`, byte-identical); depth > 0 = a labeled `continue name` (a loop, §7.1).
+          Stmt::Continue(depth, nx) => {
+            mut ctgt := cx.cont
+            if depth != 0 {
+              if depth >= cx.loop_sp { panic("selfhost: continue to a label beyond the enclosing loop nesting") }
+              ctgt = cx.loop_cont[(cx.loop_sp - 1) - depth]
+            }
+            ## DEFER (§9.3): a `continue` re-enters the target loop's next iteration, so drain THIS iteration's
+            ## defers (the target loop body-frame boundary) before jumping — SAVE & RESTORE the ledger (an
+            ## alternate runtime path). Gated on a nested defer frame so a defer-free fn emits nothing here.
+            if cx.defer_sp > 0 {
+              mut cdb := 0
+              if depth != 0 {
+                cdb = cx.loop_dframe[(cx.loop_sp - 1) - depth]
+              } else if cx.loop_sp > 0 {
+                cdb = cx.loop_dframe[cx.loop_sp - 1]
+              }
+              sv := cx.defer_n
+              emit_defer_chain(sb, cx, a, nl, cdb)
+              cx.defer_n = sv
+            }
+            push_str(sb, "  jmp ")
+            emit_label(sb, usize(ctgt))
+            push_str(sb, "\n")
+            s = nx
+          }
+          ## A bare expression statement `f(args)` / `mod::f(args)` / `expr?`: emit the expression
+          ## (a call pushes its result), then DISCARD the result (`popq %rax`). The pervasive
+          ## side-effecting statement in the passes (`lexer::lex_all(lx, toks)`, `vec::push(out, d)`).
+          ## emit_gas always leaves exactly one value on the stack for a call, so the single pop
+          ## keeps the stack balanced regardless of the callee's return (void/scalar/aggregate).
+          Stmt::ExprStmt(e, nx) => {
+            ls := stmt_label_span(sq)
+            if ls.n != 0 {
+              emit_code_label_name(sb, cx, ls.s, ls.n)
+              push_str(sb, ":\n")
+            }
+            emit_st_expr_stmt(e, nx, head, sb, cx, a, nl)
+            s = nx
+          }
+          ## An early `return e`: lower the value (left on the stack), pop into %rax, and `jmp`
+          ## the function epilogue (`cx.epi`), which restores the frame and `ret`s. So the value
+          ## is delivered the same way as the trailing return, just at an arbitrary body point.
+          Stmt::Return(rv, nx) => {
+            rvm := match_info(rv)
+            rvi := if_info(rv)
+            ## Route through emit_return_value for: a `return match` of ANY aggregate/str/enum (emit_enum_value
+            ## / emit_struct_value / emit_str_pair have no Match arm), OR a `return if` of struct/tuple/str
+            ## (those lack an If arm) — but NOT an enum `return if`: emit_enum_value ALREADY has an If arm,
+            ## and routing it would change src/'s (working, byte-identical) enum-if emission.
+            if (rvm.is_m and (cx.ret_struct or cx.ret_tuple or cx.ret_str or cx.ret_enum or fixed_array_byte_return_len_span(cx.src, cx.ret_ss, cx.ret_sl) >= 1)) or (rvi.is_if and (cx.ret_struct or cx.ret_tuple or cx.ret_str or fixed_array_byte_return_len_span(cx.src, cx.ret_ss, cx.ret_sl) >= 1)) {
+              ## `return match … { … => P(…) / (a,b) / "s" / E.V(…) }` OR `return if c { … } else { … }` — a value-`match`/`if` returning an
+              ## AGGREGATE / `str` / ENUM. Route it through `emit_return_value` (dispatch the scrutinee +
+              ## deliver EACH arm's value via the return convention + jump the epilogue). `emit_struct_value`
+              ## / `emit_str_pair` / `emit_enum_value` have no `Match` arm, so this used to deliver {0} / an
+              ## empty str (a silent miscompile). A SCALAR `return match` is left to `emit_gas` (which HAS an
+              ## Expr::Match arm) — routing scalars regressed a bool-returning derive `return match`
+              ## (`cx.ret_enum` is FALSE for a bool return, so that stays on emit_gas).
+              emit_return_value(rv, sb, cx, a, nl)
+              s = nx
+            } else {
+            if fixed_array_byte_return_len_span(cx.src, cx.ret_ss, cx.ret_sl) >= 1 {
+              emit_byte_array_return_value(rv, sb, cx, a, nl)
+            } else if is_niche_folded(cx.src, cx.ret_ss, cx.ret_sl) {
+              ## §8 `@niche`: a fn returning `Option(ptr(T))` delivers ONE folded word in %rax (`Some(p)`=p,
+              ## `None`=0) — NOT the 2-register enum convention. Checked FIRST because a folded return type is
+              ## NOT recognized as an enum (`enum_decl_of` can't resolve the parenthesized `Option(ptr(T))`),
+              ## so `cx.ret_enum` is FALSE for it. Gated by `is_niche_folded`; non-folded returns unchanged.
+              emit_folded_option_value(rv, sb, cx, a, nl)
+            } else if cx.ret_sret {
+              ## a >7-word AGGREGATE return via the hidden result-pointer — enum (disc + payload) or struct.
+              ## Checked BEFORE `ret_enum`: a WIDE enum has BOTH `ret_sret` and `ret_enum` set and the sret
+              ## path must win (the two-register/`emit_retreg` enum convention tops out at %r11 = 7 words).
+              ## `emit_return_value` (the trailing / tail-`match`-arm path) already ordered it this way; this
+              ## is the explicit-`return` (Stmt::Return) DUAL, which used to fall to `emit_enum_value` — a
+              ## SILENT 0 for the `return e` (enum Var) form and a fail-loud panic for the `return E.V(…)`
+              ## (EnumLit) form. Neutral for the self-host build: no `src/`+`lib/` fn returns a >7-word
+              ## aggregate, so `cx.ret_sret` is false everywhere there.
+              if cx.ret_enum { emit_enum_to_sret(rv, sb, cx, a, nl) }
+              else { emit_struct_to_sret(rv, sb, cx, a, nl) }
+            } else if cx.ret_enum {
+              ## an enum-returning fn: deliver the value via the two-register convention
+              ## (disc/%rax, payload/%rdx) then jump the epilogue (no stack push/pop).
+              emit_enum_value(rv, sb, cx, a, nl)
+            } else if cx.ret_struct {
+              ## a 2-word-struct-returning fn: deliver field 0/%rax, field 1/%rdx (same convention).
+              emit_struct_value(rv, sb, cx, a, nl)
+            } else if cx.ret_tuple {
+              ## a TUPLE-returning fn: deliver component k → %rax/%rdx/… (emit_struct_value's ArrayLit arm).
+              emit_struct_value(rv, sb, cx, a, nl)
+            } else if cx.ret_str {
+              ## a str-returning fn: materialize the {ptr, len} pair (ptr deep, len top), then deliver
+              ## ptr/%rax, len/%rdx (the str dual of the 2-word-struct return).
+              emit_str_pair(rv, sb, cx, a, nl)
+              push_str(sb, "  popq %rdx\n  popq %rax\n")
+            } else {
+              ## (TYP-6) the `return <aggregate>` from a scalar-return fn soundness net moved UP into
+              ## `sema::check_program` (build-path gate; covers int/float/char/bool + the reverse direction).
+              emit_gas(rv, sb, cx, a, nl)
+              push_str(sb, "  popq %rax\n")
+              ## an f64/f32-returning fn delivers in %xmm0 — set it BEFORE the jump to the epilogue
+              ## (the epilogue label sits past the trailing-return's own %xmm0 move).
+              if cx.ret_float { push_str(sb, "  movq %rax, %xmm0\n") }
+            }
+            ## DEFER (§9.3): an early `return` runs the NESTED-frame defers (everything at/above the first
+            ## nested frame's boundary `FRAME[0]` — the fn-body top-level entries `[0, FRAME[0])` stay for the
+            ## epilogue, preserving LIFO across scopes) BEFORE jumping. SAVE & RESTORE the ledger (an alternate
+            ## runtime path; the emission continues on the fall-through path, and only one drain runs).
+            if cx.defer_sp > 0 {
+              sv := cx.defer_n
+              emit_defer_chain(sb, cx, a, nl, cx.defer_frame[0])
+              cx.defer_n = sv
+            }
+            push_str(sb, "  jmp ")
+            emit_label(sb, cx.epi)
+            push_str(sb, "\n")
+            s = nx
+            }
+          }
+          ## A statement-position `if cond { then-stmts } [ else { else-stmts } ]`: lower the cond,
+          ## pop, `cmpq $0` + `je else-label`; emit the then statement list; `jmp end-label`; the
+          ## else-label, the else statement list; the end-label. No value is left on the stack
+          ## (these are statements). Fresh else/end labels via the shared `nl`.
+          Stmt::If(c, th, el, nx) => {
+            lelse := nl
+            lend := nl + 1
+            nl += 2
+            emit_gas(c, sb, cx, a, nl)
+            push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  je ")
+            emit_label(sb, lelse)
+            push_str(sb, "\n")
+            ## TAIL: a branch's last statement is the fn's return value only when the `if` ITSELF is in tail
+            ## position (`cx.tail` already true AND nothing follows it, `not stmt_any(nx)`) — the same discipline the
+            ## `CompIf` arm applies. Without it, a bare-call statement ending an `if` branch anywhere in a
+            ## value-returning fn was emitted as that fn's RETURN (`jmp` epilogue): the call vanished when it
+            ## had no return value and the fn silently aborted at that point.
+            iov_tail := cx.tail
+            cx.tail = iov_tail and not stmt_any(nx)
+            if cx.defer_active { defer_frame_push(cx) }
+            emit_stmts(th, sb, cx, nl)   ## then statement list (no value)
+            if cx.defer_active {
+              emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
+              defer_frame_pop(cx)
+            }
+            push_str(sb, "  jmp ")
+            emit_label(sb, lend)
+            push_str(sb, "\n")
+            emit_label(sb, lelse)
+            push_str(sb, ":\n")
+            if cx.defer_active { defer_frame_push(cx) }
+            emit_stmts(el, sb, cx, nl)   ## else statement list (0 head = empty)
+            if cx.defer_active {
+              emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
+              defer_frame_pop(cx)
+            }
+            cx.tail = iov_tail
+            emit_label(sb, lend)
+            push_str(sb, ":\n")
+            s = nx
+          }
+          ## A statement-position `match scrut { pat => { stmts } ; … }`: dispatch on the
+          ## scrutinee (an enum `Var` local on its discriminant, else an integer value compare)
+          ## and run the matching arm's STATEMENT LIST — no value pushed. Mirrors the expression
+          ## match dispatch shape (`emit_gas`'s `Match` arm / `emit_enum_match`) but each arm body
+          ## is `emit_stmts(am.body_stmts)`, and there is no default value to push.
+          Stmt::Match(sc, ah, nx) => {
+            emit_st_match(sc, ah, nx, sb, cx, nl)
+            s = nx
+          }
+          ## A `deref(p) = v` store through a pointer: lower the value (left on the stack), lower
+          ## the pointer (its value on top), pop the pointer into %rax and the value into %rbx, and
+          ## store `movq %rbx, (%rax)`. The store dual of the `Deref` READ.
+          Stmt::DerefAssign(ptr, val, nx) => {
+            emit_st_deref_assign(ptr, val, sb, cx, a, nl)
+            s = nx
+          }
+          ## An `arr[i] = v` array element write: lower the value (left on the stack), compute the
+          ## element address (`emit_index_addr` → %rax; the value on the stack survives its index
+          ## lowering), pop the value into %rbx, and store `movq %rbx, (%rax)`. The store dual of
+          ## the `Index` READ.
+          Stmt::IndexAssign(ib, ii, iv, nx) => {
+            emit_st_index_assign(ib, ii, iv, sb, cx, a, nl)
+            s = nx
+          }
+          ## An `a[i].f = v` element-field write: lower the value (left on the stack), compute the
+          ## element-field address (`emit_idx_field_addr` → %rax; the value survives), pop the value
+          ## into %rbx, and store `movq %rbx, (%rax)`. The store dual of the `Field(Index(...), f)`
+          ## READ.
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
+            emit_st_index_field_assign(fia, fii, ifs, ifl, fiv, sb, cx, a, nl)
+            s = nx
+          }
+          ## A `for i in lo .. hi { body }`: desugar to a counted while. Store `lo` into `i`'s
+          ## frame slot, then at a guard label compare `i < hi` (lower `i` and `hi`, `cmpq`/`setl`),
+          ## `je` past the body to a done-label when false; emit the body; increment `i` by 1;
+          ## back-edge `jmp` to the guard. Half-open: `i` runs `lo, lo+1, …, hi-1`. Fresh
+          ## guard/done labels via `nl` so nested loops never collide.
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+          if unchecked bitcast(usize, fhi) == 0 {
+            ## ITERABLE `for x in s { … }`: `s` is a Slice VAR `{ptr @ B, len @ B+1}` OR a scalar/float
+            ## ARRAY VAR (`ek == 5`, elements inline in the frame). The loop var (each element) lives at
+            ## `vslot`, the hidden index at `vslot+1`. Desugar to a counted loop — for a slice
+            ## `__i = 0; while __i < s.len { x = *(s.ptr + __i*8) ; body ; __i += 1 }`; for an array the
+            ## length is the static element count (`snl`) and element `__i` is read inline at
+            ## `&element0 − __i*stride*8` (the down-growing frame layout). SCALAR/word elements only;
+            ## aggregate elements / non-var iterables are future work.
+            fv := var_name_span(flo)
+            is_nonvar := fv.n == 0
+            ## a `for c in bytes(s)` iterable is a BYTE slice (u8 elements, stride 1) — read each element
+            ## with `movzbq` at stride 1, not a word load at stride 8. (Detected on the `bytes(…)` call.)
+            mut byte_elem := is_nonvar and is_bytes_call(flo, cx.src)
+            vslot := slot_of(cx.slots, cx.src, fns, fnl)
+            mut islot := vslot + 1   ## hidden loop index; moved to vslot+agg_stride for an aggregate loop var
+            ## scalar-word (eek 0) and FLOAT (eek 9) element arrays: both keep the element COUNT in `snl`
+            ## and read the element as an inline word (a float rides its slot as bits; the loop var is
+            ## tagged `ek==9` by collect_slots so body float ops dispatch the xmm path). Aggregate/str
+            ## arrays keep `snl` as a type span (no static count) → they stay on the slice path (future).
+            ## A NON-VAR iterable (`for x in f()`) is materialized ONCE into the {ptr,len} temp at
+            ## `vslot+2 .. +3` (reserved by collect_slots), then read like a by-VALUE slice with base there.
+            ## The iterable's SlotEntry fields as SCALARS (a `mut bent : SlotEntry = …; bent = deref(…)`
+            ## struct-local reassignment SILENTLY DROPS some fields — the documented landmine; read the
+            ## fields into scalars from an IMMUTABLE `bent := deref(…)` instead).
+            mut is_arr := false
+            mut is_agg_arr := false   ## a struct/enum-ELEMENT array (eek 2/3): loop var is that aggregate
+            mut is_agg_slice := false ## a struct/enum-ELEMENT slice VIEW (eek 2/3, is_ref): copy via the ptr
+            mut is_str_slice := false ## a str-ELEMENT slice VIEW (eek 4, is_ref): loop var is a 2-word str
+            mut is_glob_arr := false  ## a MUTABLE ARRAY GLOBAL iterable (`for v in TABLE`): `.data` base
+            mut glob_nel := 0        ## the global array's element count (from its ArrayLit)
+            mut glob_is_agg := false  ## a STRUCT-element global array: copy `glob_stride` words per element
+            mut glob_stride := 1     ## the global array's element width in words
+            mut agg_n := 0           ## element count (parsed from the `[T; N]` annotation)
+            mut agg_stride := 0      ## element width in words
+            mut b_snl := 0           ## the var array's static scalar/float count (bent.snl)
+            mut b_estride := 1       ## the var array's element stride in words (bent.estride)
+            mut b_is_ref := false
+            mut bslot := 0
+            ## a `for x in v` over an arena-backed `Vec(T)` (`@owning struct { idx, len, cap, arena }`, 4
+            ## words): word 0 = the arena HANDLE index (NOT a pointer), so the slice path would deref a raw
+            ## index and trap. Resolve the element base as `arena.base + idx` per iteration setup instead.
+            mut is_vec := false
+            mut vec_bslot := 0    ## the Vec struct local's base slot (word 0 = idx)
+            ## a `for v in <mutable array GLOBAL>` — the iterable is a module global (no frame slot), so it
+            ## is neither the non-var nor the slot path: read the count from its ArrayLit and each element
+            ## from `LABEL + i*8`. Scalar-word elements. Detected before the slot read (which would garbage).
+            gfor_mgv := if fv.n != 0 { mut_global_value(cx.decls, cx.src, fv.s, fv.n) } else { unchecked bitcast(ptr(Expr), 0) }
+            lg := nl
+            ld := nl + 1
+            lcont := nl + 2      ## `continue` target: the increment (so the index still advances)
+            nl += 3
+            if is_nonvar {
+              ## §4 UP-GROWING: the 2-word temp is reserved at slots [vslot+2, vslot+3]; its base (word 0 =
+              ## ptr) is the TOP of that block = vslot+3, so word 1 (len) lands at vslot+2 — BELOW the base,
+              ## clear of the hidden index __i at vslot+1 (a `vslot+2` base would put len at vslot+1 and
+              ## clobber __i, so the loop bound read 0 and never ran). `emit_arm_val_store` handles a
+              ## `Slice(…)` StructLit (emit_struct_assign) AND a `bytes(s)`/`sub(…)` str-view (emit_str_pair
+              ## pair pop) — both write ptr @ base, len @ base-1 (the up-growing 2-word layout).
+              bslot = vslot + 3
+              emit_arm_val_store(flo, i64(bslot), sb, cx, a, nl)
+            } else if unchecked bitcast(usize, gfor_mgv) != 0 and array_lit_info(gfor_mgv).is_a {
+              is_glob_arr = true
+              glob_nel = array_lit_info(gfor_mgv).nel
+              gfor_mgvehi := array_lit_info(gfor_mgv)
+              gesli := struct_lit_info(arg_expr_at(gfor_mgvehi.ehead, 0, a))
+              ## an ENUM-element array global: the loop var would be bound as a SCALAR and each iteration
+              ## would read ONE word at `LABEL + i*8` — mid-element, a silent wrong-discriminant read.
+              if global_arr_enum(cx.decls, cx.src, fv.s, fv.n, gfor_mgv, a).is_e {
+                panic("selfhost: `for x in <ENUM-element ARRAY GLOBAL>` is not lowered (the loop var would be a single word, not the enum's `1 + max-payload`) — index it instead (`for i in 0..N { match GE[i] { … } }`). [fail-loud guard: never a silent mid-element read]")
+              }
+              if gesli.is_s {
+                ## STRUCT-element global array — the loop var is that struct; its `glob_stride` slots push the
+                ## hidden index to `vslot + glob_stride` (matching collect_slots, which bound the struct var).
+                glob_is_agg = true
+                glob_stride = struct_words(cx.decls, cx.src, gesli.ss, gesli.sl, a)
+                islot = vslot + glob_stride
+              }
+            } else {
+              bent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fv.s, fv.n)))
+              ## an INLINE scalar/float array is `ek==5` NOT by-ref; a `s := arr[lo..hi]` slice VIEW is also
+              ## `ek==5` but `is_ref` (a runtime {ptr,len}) → it must take the by-value slice path below (read
+              ## its runtime len + deref its ptr), not the inline-array path (which reads the ptr/len slots as
+              ## elements against a hardcoded static count).
+              is_arr = bent.ek == 5 and (bent.eek == 0 or bent.eek == 9) and (not bent.is_ref)
+              is_agg_arr = bent.ek == 5 and (bent.eek == 2 or bent.eek == 3) and (not bent.is_ref)
+              ## a struct/enum-element slice VIEW (`s := structs[lo..hi]`, `ek==5 is_ref eek 2/3`): like the
+              ## scalar VIEW it has a runtime len + an element POINTER (word 0) — copy `stride` words per
+              ## element FROM that pointer, not inline from the frame.
+              is_agg_slice = bent.ek == 5 and (bent.eek == 2 or bent.eek == 3) and bent.is_ref
+              ## a str-element slice VIEW LOCAL (`s := strs[lo..hi]`, `ek==5 is_ref eek 4 sns==0`): like the
+              ## scalar VIEW it holds its {ptr,len} BY VALUE in the frame (word 0 = element ptr, word 1 =
+              ## runtime len). The loop var is a 2-word str; per element copy its {ptr,len} pair (2 words)
+              ## from the element addr. Gated `sns == 0` so a `Slice(str)` PARAM (`sns == 1`) is not intercepted.
+              is_str_slice = bent.ek == 5 and bent.eek == 4 and bent.is_ref and bent.sns == 0
+              ## a struct local (ek 2) whose type is `Vec(...)` → the arena-backed Vec iteration path.
+              if bent.ek == 2 and bent.snl != 0 {
+                vbn := base_type_name(cx.src, bent.sns, bent.snl)
+                if str_at((cx.src + vbn.s), vbn.n) == "Vec" { is_vec = true; vec_bslot = bent.off }
+              }
+              b_is_ref = bent.is_ref
+              ## a LOCAL scalar/float slice VIEW (`s := arr[lo..hi]`, bound `ek==5 is_ref`) holds its {ptr,len}
+              ## BY VALUE in the frame (word 0 = the element pointer, word 1 = the runtime len) — NOT a pointer
+              ## to a caller's Slice — so it reads by-value (ptr @ word 0 directly, len @ word 1), else the
+              ## by-ref branches double-deref word 0 and fault.
+              ## A scalar/float slice VIEW (`sns == 0`) reads its data-ptr inline (single deref) → by-value. A
+              ## Slice PARAM (`sns == 1`, `bind_param`'s "Slice" case) is a POINTER to the {ptr,len} block, so it
+              ## KEEPS `b_is_ref` (the double-deref path: slot → block, ptr @ 0, len @ 8) — do NOT override it.
+              if bent.ek == 5 and (bent.eek == 0 or bent.eek == 9) and bent.is_ref and bent.sns == 0 { b_is_ref = false }
+              bslot = bent.off
+              b_snl = bent.snl
+              b_estride = bent.estride
+              bent_slice_param_elem := slice_param_elem_span(cx.src, bent.ns, bent.nl)
+              ## A concrete Slice(u8) PARAM/LOCAL is still a two-word view, but its iterable element is one
+              ## byte. Keep this text-path control correct beside the RA byte-load seam; arrays do not return a
+              ## Slice element span here and remain on their existing word/aggregate branches.
+              if bent.is_ref and bent_slice_param_elem.n != 0 and str_at((cx.src + bent_slice_param_elem.s), bent_slice_param_elem.n) == "u8" {
+                byte_elem = true
+              }
+              if is_agg_arr {
+                ## a `[Pt; N]` array of structs/enums: N is not in the slot (`snl` holds the element type
+                ## span) — recover it from the `[T; N]` annotation via local_type_span + parse_arr_len,
+                ## scanning from the array's DECLARATION name span (`bent.ns/nl`, recorded by
+                ## bind_array_slot), NOT the for-site `fv` (which is followed by the loop body `{`).
+                lts := local_type_span(cx.src, bent.ns, bent.nl)
+                agg_n = parse_arr_len(cx.src, lts.s, lts.n)
+                agg_stride = bent.estride
+                ## a LITERAL-bound aggregate array (`arr := [Pt(…), …]`) has no `[T; N]` annotation, so
+                ## `parse_arr_len` yields 0 — recover the count from the reserved element filler slots
+                ## (else `for e in arr` iterated zero times: a silent empty loop).
+                if agg_n == 0 and agg_stride > 0 { agg_n = agg_arr_fill_count(cx.slots, bslot) / agg_stride }
+                ## the loop var is `agg_stride` words wide, so the hidden index sits at `vslot+agg_stride`
+                ## (where collect_slots reserved it), not `vslot+1` — avoid clobbering the aggregate var.
+                islot = vslot + agg_stride
+              }
+              if is_agg_slice {
+                ## a struct/enum-element slice VIEW: element width from the slot's stride; the loop var is
+                ## that wide, so the hidden index sits at `vslot+agg_stride`; word 0 is the element ptr (by
+                ## value for a local view, or behind the caller's Slice block for a param). Length is runtime.
+                agg_stride = bent.estride
+                islot = vslot + agg_stride
+                if bent_slice_param_elem.n == 0 { b_is_ref = false }
+              }
+            }
+            ## `s` is a Slice `{ptr, len}`. A by-VALUE local holds ptr @ slot `B`, len @ slot `B+1`. A by-REF
+            ## struct PARAM (`is_ref`) holds a POINTER `P` @ slot `B` to the caller's Slice, whose fields ride
+            ## the down-growing convention: ptr (field 0) at `(P)`, len (field 1) at `-8(P)`.
+            push_str(sb, "  movq $0, -")
+            push_int(sb, i64((islot + 1) * 8))
+            push_str(sb, "(%rbp)\n")
+            emit_label(sb, lg)
+            push_str(sb, ":\n")
+            ## len → %rbx
+            if is_glob_arr {
+              ## mutable array global: the static element count from its ArrayLit
+              push_str(sb, "  movq $")
+              push_int(sb, i64(glob_nel))
+              push_str(sb, ", %rbx\n")
+            } else if is_agg_arr {
+              ## aggregate-element array: the static count parsed from `[T; N]`
+              push_str(sb, "  movq $")
+              push_int(sb, i64(agg_n))
+              push_str(sb, ", %rbx\n")
+            } else if is_arr {
+              ## array: the static element count is `snl` (recorded by bind_array_slot)
+              push_str(sb, "  movq $")
+              push_int(sb, i64(b_snl))
+              push_str(sb, ", %rbx\n")
+            } else if is_agg_slice {
+              ## struct/enum-element slice: local VIEW stores len in frame word 1; PARAM stores a pointer to
+              ## the caller's {ptr,len} block and reads len at +8(block).
+              if b_is_ref {
+                push_str(sb, "  movq -")
+                push_int(sb, i64((bslot + 1) * 8))
+                push_str(sb, "(%rbp), %rax\n  movq 8(%rax), %rbx\n")
+              } else {
+                push_str(sb, "  movq -")
+                push_int(sb, i64(bslot * 8))
+                push_str(sb, "(%rbp), %rbx\n")
+              }
+            } else if is_str_slice {
+              ## str-element slice LOCAL VIEW: the runtime len is stored BY VALUE in frame word 1 (at -bslot*8,
+              ## matching emit_array_slice_assign's `len @ base*8` store).
+              push_str(sb, "  movq -")
+              push_int(sb, i64(bslot * 8))
+              push_str(sb, "(%rbp), %rbx\n")
+            } else if is_vec {
+              ## Vec.len = word 1, at slot vec_bslot-1 (§4 up-growing: word k at base-k) → frame -(vec_bslot)*8.
+              push_str(sb, "  movq -")
+              push_int(sb, i64(vec_bslot * 8))
+              push_str(sb, "(%rbp), %rbx\n")
+            } else if b_is_ref {
+              push_str(sb, "  movq -")
+              push_int(sb, i64((bslot + 1) * 8))
+              push_str(sb, "(%rbp), %rax\n  movq 8(%rax), %rbx\n")
+            } else {
+              push_str(sb, "  movq -")
+              push_int(sb, i64(bslot * 8))
+              push_str(sb, "(%rbp), %rbx\n")
+            }
+            ## __i < len ?  (false → done)
+            push_str(sb, "  movq -")
+            push_int(sb, i64((islot + 1) * 8))
+            push_str(sb, "(%rbp), %rax\n  cmpq %rbx, %rax\n  setl %al\n  movzbq %al, %rax\n  cmpq $0, %rax\n  je ")
+            emit_label(sb, ld)
+            push_str(sb, "\n")
+            if is_glob_arr {
+              ## element __i of a global array, from its `.data` at `LABEL + __i*stride*8` (`leaq LABEL(%rip)`
+              ## PIE-safe base). Compute `%rax = &element[__i]` = base + __i*stride*8, then either copy the
+              ## `glob_stride` struct words into the loop var's slots (ascending .data → down-growing frame:
+              ## word k at `LABEL+k*8` → `-(vslot+k+1)*8(%rbp)`) or load the single scalar word.
+              push_str(sb, "  leaq ")
+              emit_global_label(sb, cx.decls, cx.src, fv.s, fv.n)
+              push_str(sb, "(%rip), %rax\n  movq -")
+              push_int(sb, i64((islot + 1) * 8))
+              push_str(sb, "(%rbp), %rcx\n  imulq $")
+              push_int(sb, i64(glob_stride * 8))
+              push_str(sb, ", %rcx\n  addq %rcx, %rax\n")
+              if glob_is_agg {
+                for k in 0..glob_stride {
+                  push_str(sb, "  movq ")
+                  push_int(sb, i64(k * 8))
+                  push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
+                  push_int(sb, i64((vslot - k + 1) * 8))
+                  push_str(sb, "(%rbp)\n")
+                }
+              } else {
+                push_str(sb, "  movq (%rax), %rax\n  movq %rax, -")
+                push_int(sb, i64((vslot + 1) * 8))
+                push_str(sb, "(%rbp)\n")
+              }
+            } else if is_agg_arr {
+              ## p = element[__i] — a struct/enum element COPY. &element[__i] word 0 (highest addr) =
+              ## -(bslot+1)*8(%rbp) − __i*stride*8; copy `stride` words (word k at -(k*8)(%rax)) into the
+              ## loop var's aggregate slots (vslot + k), the down-growing layout.
+              push_str(sb, "  leaq -")
+              push_int(sb, i64((bslot + 1) * 8))
+              push_str(sb, "(%rbp), %rax\n  movq -")
+              push_int(sb, i64((islot + 1) * 8))
+              push_str(sb, "(%rbp), %rcx\n  imulq $")
+              push_int(sb, i64(agg_stride * 8))
+              push_str(sb, ", %rcx\n  addq %rcx, %rax\n")
+              for k in 0..agg_stride {
+                push_str(sb, "  movq ")
+                push_int(sb, i64(k * 8))
+                push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
+                push_int(sb, i64((vslot - k + 1) * 8))
+                push_str(sb, "(%rbp)\n")
+              }
+            } else if is_agg_slice {
+              ## element[__i] of a struct/enum slice: local VIEW has data ptr inline; PARAM points to a caller
+              ## block whose word 0 is the data ptr. Then copy `stride` words into the loop var.
+              if b_is_ref {
+                push_str(sb, "  movq -")
+                push_int(sb, i64((bslot + 1) * 8))
+                push_str(sb, "(%rbp), %rax\n  movq (%rax), %rax\n")
+              } else {
+                push_str(sb, "  movq -")
+                push_int(sb, i64((bslot + 1) * 8))
+                push_str(sb, "(%rbp), %rax\n")
+              }
+              push_str(sb, "  movq -")
+              push_int(sb, i64((islot + 1) * 8))
+              push_str(sb, "(%rbp), %rcx\n  imulq $")
+              push_int(sb, i64(agg_stride * 8))
+              push_str(sb, ", %rcx\n  addq %rcx, %rax\n")
+              for k in 0..agg_stride {
+                push_str(sb, "  movq ")
+                push_int(sb, i64(k * 8))
+                push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
+                push_int(sb, i64((vslot - k + 1) * 8))
+                push_str(sb, "(%rbp)\n")
+              }
+            } else if is_arr {
+              ## x = element[__i], read INLINE from the frame: &element0 = -(bslot+1)*8(%rbp), and
+              ## element `__i` is `__i * estride` words LOWER (the frame grows DOWN). estride*8 bytes.
+              push_str(sb, "  leaq -")
+              push_int(sb, i64((bslot + 1) * 8))
+              push_str(sb, "(%rbp), %rax\n  movq -")
+              push_int(sb, i64((islot + 1) * 8))
+              push_str(sb, "(%rbp), %rcx\n  imulq $")
+              push_int(sb, i64(b_estride * 8))
+              push_str(sb, ", %rcx\n  addq %rcx, %rax\n  movq (%rax), %rax\n  movq %rax, -")
+              push_int(sb, i64((vslot + 1) * 8))
+              push_str(sb, "(%rbp)\n")
+            } else if is_str_slice {
+              ## x = element[__i] of a str slice LOCAL VIEW: data ptr @ frame word 0 (-(bslot+1)*8); element
+              ## __i's addr = dataptr + __i*stride*8 (stride = 2 words per str). Copy its {ptr,len} pair (2
+              ## words, word k at (k*8)(%rax)) into the loop var's str slots: ptr @ -(vslot+1)*8, len @
+              ## -(vslot)*8 — the down-growing str-local layout emit_str_pair reads back.
+              push_str(sb, "  movq -")
+              push_int(sb, i64((bslot + 1) * 8))
+              push_str(sb, "(%rbp), %rax\n  movq -")
+              push_int(sb, i64((islot + 1) * 8))
+              push_str(sb, "(%rbp), %rcx\n  imulq $")
+              push_int(sb, i64(b_estride * 8))
+              push_str(sb, ", %rcx\n  addq %rcx, %rax\n")
+              for k in 0..2 {
+                push_str(sb, "  movq ")
+                push_int(sb, i64(k * 8))
+                push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
+                push_int(sb, i64((vslot - k + 1) * 8))
+                push_str(sb, "(%rbp)\n")
+              }
+            } else if is_vec {
+              ## x = element[__i] of a Vec: base = arena.base + idx, element at base + __i*8. arena (word 3)
+              ## @ -(vec_bslot-2)*8; arena.base = word 0 through that pointer (+0); idx (word 0) @
+              ## -(vec_bslot+1)*8. SCALAR/word elements (stride 8) — the arraysum path; aggregate is future.
+              push_str(sb, "  movq -")
+              push_int(sb, i64((vec_bslot - 2) * 8))
+              push_str(sb, "(%rbp), %rcx\n  movq 0(%rcx), %rdx\n  movq -")
+              push_int(sb, i64((vec_bslot + 1) * 8))
+              push_str(sb, "(%rbp), %rax\n  addq %rax, %rdx\n  movq -")
+              push_int(sb, i64((islot + 1) * 8))
+              push_str(sb, "(%rbp), %rcx\n  leaq (%rdx,%rcx,8), %rax\n  movq (%rax), %rax\n  movq %rax, -")
+              push_int(sb, i64((vslot + 1) * 8))
+              push_str(sb, "(%rbp)\n")
+            } else {
+            ## data pointer → %rax
+            if b_is_ref {
+              push_str(sb, "  movq -")
+              push_int(sb, i64((bslot + 1) * 8))
+              push_str(sb, "(%rbp), %rax\n  movq (%rax), %rax\n")
+            } else {
+              push_str(sb, "  movq -")
+              push_int(sb, i64((bslot + 1) * 8))
+              push_str(sb, "(%rbp), %rax\n")
+            }
+            push_str(sb, "  movq -")
+            push_int(sb, i64((islot + 1) * 8))
+            if byte_elem {
+              ## x = *(u8*)(dataptr + __i)  — byte element, stride 1, zero-extended
+              push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,1), %rax\n  movzbq (%rax), %rax\n  movq %rax, -")
+            } else {
+              ## x = *(dataptr + __i * 8)  — scalar/word element, stride 8
+              push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,8), %rax\n  movq (%rax), %rax\n  movq %rax, -")
+            }
             push_int(sb, i64((vslot + 1) * 8))
             push_str(sb, "(%rbp)\n")
-          }
-        } else if is_agg_arr {
-          ## p = element[__i] — a struct/enum element COPY. &element[__i] word 0 (highest addr) =
-          ## -(bslot+1)*8(%rbp) − __i*stride*8; copy `stride` words (word k at -(k*8)(%rax)) into the
-          ## loop var's aggregate slots (vslot + k), the down-growing layout.
-          push_str(sb, "  leaq -")
-          push_int(sb, i64((bslot + 1) * 8))
-          push_str(sb, "(%rbp), %rax\n  movq -")
-          push_int(sb, i64((islot + 1) * 8))
-          push_str(sb, "(%rbp), %rcx\n  imulq $")
-          push_int(sb, i64(agg_stride * 8))
-          push_str(sb, ", %rcx\n  addq %rcx, %rax\n")
-          for k in 0..agg_stride {
-            push_str(sb, "  movq ")
-            push_int(sb, i64(k * 8))
-            push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
-            push_int(sb, i64((vslot - k + 1) * 8))
-            push_str(sb, "(%rbp)\n")
-          }
-        } else if is_agg_slice {
-          ## element[__i] of a struct/enum slice: local VIEW has data ptr inline; PARAM points to a caller
-          ## block whose word 0 is the data ptr. Then copy `stride` words into the loop var.
-          if b_is_ref {
+            }
+            oc := cx.cont
+            cx.cont = i64(lcont)
+            if cx.defer_active {
+              defer_frame_push(cx)
+              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+            }
+            loop_push(cx, i64(ld), i64(lcont), 0)   ## depth-frame (a `for` is never value-bearing); byte-neutral
+            ## TAIL: a `for` body's last statement is never the fn's return value (see the `While` arm).
+            f1ov_tail := cx.tail
+            cx.tail = false
+            emit_stmts(fb, sb, cx, nl)
+            cx.tail = f1ov_tail
+            loop_pop(cx)
+            if cx.defer_active {
+              emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
+              defer_frame_pop(cx)
+            }
+            cx.cont = oc
+            emit_label(sb, lcont)     ## `continue` lands here, then falls into the increment
+            push_str(sb, ":\n")
             push_str(sb, "  movq -")
-            push_int(sb, i64((bslot + 1) * 8))
-            push_str(sb, "(%rbp), %rax\n  movq (%rax), %rax\n")
+            push_int(sb, i64((islot + 1) * 8))
+            push_str(sb, "(%rbp), %rax\n  addq $1, %rax\n  movq %rax, -")
+            push_int(sb, i64((islot + 1) * 8))
+            push_str(sb, "(%rbp)\n  jmp ")
+            emit_label(sb, lg)
+            push_str(sb, "\n")
+            emit_label(sb, ld)
+            push_str(sb, ":\n")
           } else {
+            ioff := slot_of(cx.slots, cx.src, fns, fnl)
+            ## i := lo
+            emit_gas(flo, sb, cx, a, nl)
+            push_str(sb, "  popq %rax\n  movq %rax, -")
+            push_int(sb, (ioff + 1) * 8)
+            push_str(sb, "(%rbp)\n")
+            lguard := nl
+            ldone := nl + 1
+            lcont := nl + 2      ## `continue` target: the increment (so `i` still advances)
+            nl += 3
+            emit_label(sb, lguard)
+            push_str(sb, ":\n")
+            ## guard: i < hi  → %rax = i, %rbx = hi ; cmpq %rbx,%rax ; set{b,l} ; je done if false.
+            ## A range index takes the upper bound's proven signedness: `0..s.len` is unsigned, while
+            ## an unresolved bound retains the conservative signed fallback used by the comparison scan.
             push_str(sb, "  movq -")
-            push_int(sb, i64((bslot + 1) * 8))
-            push_str(sb, "(%rbp), %rax\n")
-          }
-          push_str(sb, "  movq -")
-          push_int(sb, i64((islot + 1) * 8))
-          push_str(sb, "(%rbp), %rcx\n  imulq $")
-          push_int(sb, i64(agg_stride * 8))
-          push_str(sb, ", %rcx\n  addq %rcx, %rax\n")
-          for k in 0..agg_stride {
-            push_str(sb, "  movq ")
-            push_int(sb, i64(k * 8))
-            push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
-            push_int(sb, i64((vslot - k + 1) * 8))
-            push_str(sb, "(%rbp)\n")
-          }
-        } else if is_arr {
-          ## x = element[__i], read INLINE from the frame: &element0 = -(bslot+1)*8(%rbp), and
-          ## element `__i` is `__i * estride` words LOWER (the frame grows DOWN). estride*8 bytes.
-          push_str(sb, "  leaq -")
-          push_int(sb, i64((bslot + 1) * 8))
-          push_str(sb, "(%rbp), %rax\n  movq -")
-          push_int(sb, i64((islot + 1) * 8))
-          push_str(sb, "(%rbp), %rcx\n  imulq $")
-          push_int(sb, i64(b_estride * 8))
-          push_str(sb, ", %rcx\n  addq %rcx, %rax\n  movq (%rax), %rax\n  movq %rax, -")
-          push_int(sb, i64((vslot + 1) * 8))
-          push_str(sb, "(%rbp)\n")
-        } else if is_str_slice {
-          ## x = element[__i] of a str slice LOCAL VIEW: data ptr @ frame word 0 (-(bslot+1)*8); element
-          ## __i's addr = dataptr + __i*stride*8 (stride = 2 words per str). Copy its {ptr,len} pair (2
-          ## words, word k at (k*8)(%rax)) into the loop var's str slots: ptr @ -(vslot+1)*8, len @
-          ## -(vslot)*8 — the down-growing str-local layout emit_str_pair reads back.
-          push_str(sb, "  movq -")
-          push_int(sb, i64((bslot + 1) * 8))
-          push_str(sb, "(%rbp), %rax\n  movq -")
-          push_int(sb, i64((islot + 1) * 8))
-          push_str(sb, "(%rbp), %rcx\n  imulq $")
-          push_int(sb, i64(b_estride * 8))
-          push_str(sb, ", %rcx\n  addq %rcx, %rax\n")
-          for k in 0..2 {
-            push_str(sb, "  movq ")
-            push_int(sb, i64(k * 8))
-            push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
-            push_int(sb, i64((vslot - k + 1) * 8))
-            push_str(sb, "(%rbp)\n")
-          }
-        } else if is_vec {
-          ## x = element[__i] of a Vec: base = arena.base + idx, element at base + __i*8. arena (word 3)
-          ## @ -(vec_bslot-2)*8; arena.base = word 0 through that pointer (+0); idx (word 0) @
-          ## -(vec_bslot+1)*8. SCALAR/word elements (stride 8) — the arraysum path; aggregate is future.
-          push_str(sb, "  movq -")
-          push_int(sb, i64((vec_bslot - 2) * 8))
-          push_str(sb, "(%rbp), %rcx\n  movq 0(%rcx), %rdx\n  movq -")
-          push_int(sb, i64((vec_bslot + 1) * 8))
-          push_str(sb, "(%rbp), %rax\n  addq %rax, %rdx\n  movq -")
-          push_int(sb, i64((islot + 1) * 8))
-          push_str(sb, "(%rbp), %rcx\n  leaq (%rdx,%rcx,8), %rax\n  movq (%rax), %rax\n  movq %rax, -")
-          push_int(sb, i64((vslot + 1) * 8))
-          push_str(sb, "(%rbp)\n")
-        } else {
-        ## data pointer → %rax
-        if b_is_ref {
-          push_str(sb, "  movq -")
-          push_int(sb, i64((bslot + 1) * 8))
-          push_str(sb, "(%rbp), %rax\n  movq (%rax), %rax\n")
-        } else {
-          push_str(sb, "  movq -")
-          push_int(sb, i64((bslot + 1) * 8))
-          push_str(sb, "(%rbp), %rax\n")
-        }
-        push_str(sb, "  movq -")
-        push_int(sb, i64((islot + 1) * 8))
-        if byte_elem {
-          ## x = *(u8*)(dataptr + __i)  — byte element, stride 1, zero-extended
-          push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,1), %rax\n  movzbq (%rax), %rax\n  movq %rax, -")
-        } else {
-          ## x = *(dataptr + __i * 8)  — scalar/word element, stride 8
-          push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,8), %rax\n  movq (%rax), %rax\n  movq %rax, -")
-        }
-        push_int(sb, i64((vslot + 1) * 8))
-        push_str(sb, "(%rbp)\n")
-        }
-        oc := cx.cont
-        cx.cont = i64(lcont)
-        if cx.defer_active {
-          defer_frame_push(cx)
-          cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
-        }
-        loop_push(cx, i64(ld), i64(lcont), 0)   ## depth-frame (a `for` is never value-bearing); byte-neutral
-        ## TAIL: a `for` body's last statement is never the fn's return value (see the `While` arm).
-        f1ov_tail := cx.tail
-        cx.tail = false
-        emit_stmts(fb, sb, cx, nl)
-        cx.tail = f1ov_tail
-        loop_pop(cx)
-        if cx.defer_active {
-          emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
-          defer_frame_pop(cx)
-        }
-        cx.cont = oc
-        emit_label(sb, lcont)     ## `continue` lands here, then falls into the increment
-        push_str(sb, ":\n")
-        push_str(sb, "  movq -")
-        push_int(sb, i64((islot + 1) * 8))
-        push_str(sb, "(%rbp), %rax\n  addq $1, %rax\n  movq %rax, -")
-        push_int(sb, i64((islot + 1) * 8))
-        push_str(sb, "(%rbp)\n  jmp ")
-        emit_label(sb, lg)
-        push_str(sb, "\n")
-        emit_label(sb, ld)
-        push_str(sb, ":\n")
-      } else {
-        ioff := slot_of(cx.slots, cx.src, fns, fnl)
-        ## i := lo
-        emit_gas(flo, sb, cx, a, nl)
-        push_str(sb, "  popq %rax\n  movq %rax, -")
-        push_int(sb, (ioff + 1) * 8)
-        push_str(sb, "(%rbp)\n")
-        lguard := nl
-        ldone := nl + 1
-        lcont := nl + 2      ## `continue` target: the increment (so `i` still advances)
-        nl += 3
-        emit_label(sb, lguard)
-        push_str(sb, ":\n")
-        ## guard: i < hi  → %rax = i, %rbx = hi ; cmpq %rbx,%rax ; set{b,l} ; je done if false.
-        ## A range index takes the upper bound's proven signedness: `0..s.len` is unsigned, while
-        ## an unresolved bound retains the conservative signed fallback used by the comparison scan.
-        push_str(sb, "  movq -")
-        push_int(sb, (ioff + 1) * 8)
-        push_str(sb, "(%rbp), %rax\n  pushq %rax\n")
-        emit_gas(fhi, sb, cx, a, nl)
-        push_str(sb, "  popq %rbx\n  popq %rax\n  cmpq %rbx, %rax\n")
-        if range_bound_is_unsigned(fhi, cx) {
-          push_str(sb, "  setb %al\n")
-        } else {
-          push_str(sb, "  setl %al\n")
-        }
-        push_str(sb, "  movzbq %al, %rax\n  cmpq $0, %rax\n  je ")
-        emit_label(sb, ldone)
-        push_str(sb, "\n")
-        oc := cx.cont
-        cx.cont = i64(lcont)
-        if cx.defer_active {
-          defer_frame_push(cx)
-          cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
-        }
-        loop_push(cx, i64(ldone), i64(lcont), 0)   ## depth-frame (a `for` is never value-bearing); byte-neutral
-        ## TAIL: a `for` body's last statement is never the fn's return value (see the `While` arm).
-        f2ov_tail := cx.tail
-        cx.tail = false
-        emit_stmts(fb, sb, cx, nl)   ## loop body
-        cx.tail = f2ov_tail
-        loop_pop(cx)
-        if cx.defer_active {
-          emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
-          defer_frame_pop(cx)
-        }
-        cx.cont = oc
-        emit_label(sb, lcont)        ## `continue` lands here, then falls into the increment
-        push_str(sb, ":\n")
-        ## i = i + 1
-        push_str(sb, "  movq -")
-        push_int(sb, (ioff + 1) * 8)
-        push_str(sb, "(%rbp), %rax\n  addq $1, %rax\n  movq %rax, -")
-        push_int(sb, (ioff + 1) * 8)
-        push_str(sb, "(%rbp)\n  jmp ")
-        emit_label(sb, lguard)
-        push_str(sb, "\n")
-        emit_label(sb, ldone)
-        push_str(sb, ":\n")
-      }
-        s = nx
-      }
-      ## `comptime if <cond> { then } else { else }` — fold the condition and emit ONLY the taken
-      ## branch's statements (Comptime §9.2: emission applies to the SELECTED branch). A condition the
-      ## lower cannot fold is a LOCATED REJECT (`comptime_reject_cond`) — it used to emit NEITHER
-      ## branch with no diagnostic, silently deleting both arms' effects.
-      Stmt::CompIf(ccond, cthen, celse, nx) => {
-        emit_st_comp_if(ccond, cthen, celse, nx, sb, cx, a, nl)
-        s = nx
-      }
-      ## `comptime for <var> in typeinfo(X).fields/.components/.elements/.variants { body }` — UNROLL
-      ## over `X`'s members: for each, bind the comptime var (`cf_*`) to that member (name + type) and
-      ## emit the body. Inside, a `CompField` `v.(var)` resolves to `Field(v, <member>)` and a
-      ## `<var>.type` type-arg to the member's type. The binding is saved/restored (single-level).
-      ##
-      ## The ITERATED TYPE is the header's OWN `typeinfo(X)` argument, recovered by SOURCE-SCAN and
-      ## resolved through this instance's type-param bindings (`compfor_target_type`) — the `CompFor`
-      ## AST node drops the argument at parse time, and keying off `cx.it` alone unrolled over the
-      ## WRONG type: a concrete `typeinfo(S)` at top level (no instance) unrolled ZERO times, and
-      ## `typeinfo(B)` inside an `A` instance unrolled over A. Both were silent. Every header
-      ## `src/`+`lib/` spells is `typeinfo(T)` with T the 1st type-param, which resolves to exactly the
-      ## `cx.it` used before → byte-identical.
-      Stmt::CompFor(cvs, cvl, cisvar, cbody, nx) => {
-        emit_st_comp_for(cvs, cvl, cisvar, cbody, sb, cx, a, nl)
-        s = nx
-      }
-      ## `comptime for i in lo .. hi { body }` — UNROLL at compile time: for each constant `k` in
-      ## `[lo, hi)`, bind the loop var `i` (a scalar local) to `k` (`movq $k → its slot`) then emit the
-      ## body. The control flow is erased (no runtime loop); each `Var(i)` in the body reads the
-      ## constant from the slot. Bounds are compile-time integer constants (`global_init_value`:
-      ## literal / module const / const arithmetic).
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rbody, nx) => {
-        emit_st_comp_for_range(rvs, rvl, rlo, rhi, rbody, sb, cx, a, nl)
-        s = nx
-      }
-      ## `comptime match typeinfo(T) { Struct(_) => … _ => … }` — evaluate T's KIND and emit ONLY the
-      ## matching arm's body (or the `_` fallback). The comptime sibling of `Stmt::Match`.
-      Stmt::CompMatch(cmsc, cmah, nx) => {
-        ## `comptime match var.payload { Some(_) => …, None => … }` (`display`'s enum arm): fold on the
-        ## CURRENT variant's arity — `Variant.payload` is `Some(type)` for a payloaded variant, `None`
-        ## for a unit variant (appendix §4.1). Choose the `Some` arm iff the variant carries a payload
-        ## (`variant_payload_type` non-empty over the instance's enum `cx.it`), else the `None`/`_` arm.
-        if is_cf_payload_ref(cmsc, cx) {
-          pty := variant_payload_type(cx.decls, cx.src, cx.it_s, cx.it_l, cx.cf_curvar_s, cx.cf_curvar_l, deref(cx.mar))
-          has_pay := pty.n != 0
-          mut pchosen : Option(ptr(mut Arm)) = Option.None
-          mut pwild : Option(ptr(mut Arm)) = Option.None
-          mut pcarm : Option(ptr(mut Arm)) = cmah
-          loop {
-            match pcarm {
-              Some(pcarmq) => {
-                pcam := deref(arm_p(pcarmq))
-                if pcam.wild != 0 { pwild = Option.Some(pcarmq) }
-                else {
-                  pnm := str_at((cx.src + pcam.vs), pcam.vl)
-                  if has_pay and pnm == "Some" { pchosen = Option.Some(pcarmq) }
-                  if (has_pay == false) and pnm == "None" { pchosen = Option.Some(pcarmq) }
-                }
-                pcarm = pcam.next
-              }
-              None => { break }
-            }
-          }
-          pchosen = ast::arm_or(pchosen, pwild)
-          match pchosen { Some(pchosenq) => { emit_stmts(deref(arm_p(pchosenq)).body_stmts, sb, cx, nl) }; None => {} }
-          s = nx
-        } else {
-        ## `comptime match typeinfo(p)` (p = the payload binding) folds on the PAYLOAD's type
-        ## (`cf_pay_ty`), not the instance type — rebind `cx.it` for the fold + the chosen arm body
-        ## (like the Brand-arm underlying rebind below), then restore. Lets `display`'s enum arm pick
-        ## the `Tuple(_)` arm for a multi-component payload (rendered `(a, b)` without a second wrap).
-        pti := is_cf_payload_typeinfo(cmsc, cx, a)
-        sav_pit_s := cx.it_s
-        sav_pit_l := cx.it_l
-        if pti { cx.it_s = cx.cf_pay_ty_s; cx.it_l = cx.cf_pay_ty_l }
-        kind := comptime_type_kind(cx.it_s, cx.it_l, cx.decls, cx.src)
-        ## The scalar NUMERIC sub-kind (Bool/Char/Int/Float/other) for an INNER `match k` over a
-        ## `Scalar`'s kind binding. Its arm names (`Int`/`Float`/…) are disjoint from the outer
-        ## `typeinfo(T)` arm names (`Struct`/`Scalar`/…), so this second dispatch is inert for the
-        ## type-kind matches `src/` uses (`comptime_num_kind_of_name` → -1 there) → fixpoint-neutral.
-        nkind := comptime_scalar_num_kind(cx.it_s, cx.it_l, cx.src)
-        mut chosen : Option(ptr(mut Arm)) = Option.None
-        mut cwild : Option(ptr(mut Arm)) = Option.None
-        mut carm : Option(ptr(mut Arm)) = cmah
-        loop {
-          match carm {
-            Some(carmq) => {
-              cam := deref(arm_p(carmq))
-              if cam.wild != 0 { cwild = Option.Some(carmq) }
-              else if comptime_kind_of_name(cx.src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
-              else if comptime_num_kind_of_name(cx.src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
-              carm = cam.next
-            }
-            None => { break }
-          }
-        }
-        chosen = ast::arm_or(chosen, cwild)
-        match chosen {
-          Some(chosenq) => {
-            ## For the `Brand(under, _)` arm (kind 6): the arm body dispatches on the UNDERLYING type
-            ## (`comptime match typeinfo(under)` + `i64(v)`/`u64(v)`/`f64(v)` peels), but the folder
-            ## keys every nested `comptime match` off `cx.it` (the scrutinee expr is not read). Rebind
-            ## `cx.it` to the brand's underlying `U` for the arm body so the nested Scalar/kind dispatch
-            ## folds on `U`, then restore it. (A brand over an unsigned/bits/signed underlying renders
-            ## correctly; a FLOAT-underlying brand still needs the value's slot marked float — deferred.)
-            if kind == 6 {
-              bu := brand_underlying(cx.decls, cx.src, cx.it_s, cx.it_l)
-              sav_s := cx.it_s
-              sav_l := cx.it_l
-              cx.it_s = bu.s
-              cx.it_l = bu.n
-              emit_stmts(deref(arm_p(chosenq)).body_stmts, sb, cx, nl)
-              cx.it_s = sav_s
-              cx.it_l = sav_l
+            push_int(sb, (ioff + 1) * 8)
+            push_str(sb, "(%rbp), %rax\n  pushq %rax\n")
+            emit_gas(fhi, sb, cx, a, nl)
+            push_str(sb, "  popq %rbx\n  popq %rax\n  cmpq %rbx, %rax\n")
+            if range_bound_is_unsigned(fhi, cx) {
+              push_str(sb, "  setb %al\n")
             } else {
-              emit_stmts(deref(arm_p(chosenq)).body_stmts, sb, cx, nl)
+              push_str(sb, "  setl %al\n")
+            }
+            push_str(sb, "  movzbq %al, %rax\n  cmpq $0, %rax\n  je ")
+            emit_label(sb, ldone)
+            push_str(sb, "\n")
+            oc := cx.cont
+            cx.cont = i64(lcont)
+            if cx.defer_active {
+              defer_frame_push(cx)
+              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+            }
+            loop_push(cx, i64(ldone), i64(lcont), 0)   ## depth-frame (a `for` is never value-bearing); byte-neutral
+            ## TAIL: a `for` body's last statement is never the fn's return value (see the `While` arm).
+            f2ov_tail := cx.tail
+            cx.tail = false
+            emit_stmts(fb, sb, cx, nl)   ## loop body
+            cx.tail = f2ov_tail
+            loop_pop(cx)
+            if cx.defer_active {
+              emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
+              defer_frame_pop(cx)
+            }
+            cx.cont = oc
+            emit_label(sb, lcont)        ## `continue` lands here, then falls into the increment
+            push_str(sb, ":\n")
+            ## i = i + 1
+            push_str(sb, "  movq -")
+            push_int(sb, (ioff + 1) * 8)
+            push_str(sb, "(%rbp), %rax\n  addq $1, %rax\n  movq %rax, -")
+            push_int(sb, (ioff + 1) * 8)
+            push_str(sb, "(%rbp)\n  jmp ")
+            emit_label(sb, lguard)
+            push_str(sb, "\n")
+            emit_label(sb, ldone)
+            push_str(sb, ":\n")
+          }
+            s = nx
+          }
+          ## `comptime if <cond> { then } else { else }` — fold the condition and emit ONLY the taken
+          ## branch's statements (Comptime §9.2: emission applies to the SELECTED branch). A condition the
+          ## lower cannot fold is a LOCATED REJECT (`comptime_reject_cond`) — it used to emit NEITHER
+          ## branch with no diagnostic, silently deleting both arms' effects.
+          Stmt::CompIf(ccond, cthen, celse, nx) => {
+            emit_st_comp_if(ccond, cthen, celse, nx, sb, cx, a, nl)
+            s = nx
+          }
+          ## `comptime for <var> in typeinfo(X).fields/.components/.elements/.variants { body }` — UNROLL
+          ## over `X`'s members: for each, bind the comptime var (`cf_*`) to that member (name + type) and
+          ## emit the body. Inside, a `CompField` `v.(var)` resolves to `Field(v, <member>)` and a
+          ## `<var>.type` type-arg to the member's type. The binding is saved/restored (single-level).
+          ##
+          ## The ITERATED TYPE is the header's OWN `typeinfo(X)` argument, recovered by SOURCE-SCAN and
+          ## resolved through this instance's type-param bindings (`compfor_target_type`) — the `CompFor`
+          ## AST node drops the argument at parse time, and keying off `cx.it` alone unrolled over the
+          ## WRONG type: a concrete `typeinfo(S)` at top level (no instance) unrolled ZERO times, and
+          ## `typeinfo(B)` inside an `A` instance unrolled over A. Both were silent. Every header
+          ## `src/`+`lib/` spells is `typeinfo(T)` with T the 1st type-param, which resolves to exactly the
+          ## `cx.it` used before → byte-identical.
+          Stmt::CompFor(cvs, cvl, cisvar, cbody, nx) => {
+            emit_st_comp_for(cvs, cvl, cisvar, cbody, sb, cx, a, nl)
+            s = nx
+          }
+          ## `comptime for i in lo .. hi { body }` — UNROLL at compile time: for each constant `k` in
+          ## `[lo, hi)`, bind the loop var `i` (a scalar local) to `k` (`movq $k → its slot`) then emit the
+          ## body. The control flow is erased (no runtime loop); each `Var(i)` in the body reads the
+          ## constant from the slot. Bounds are compile-time integer constants (`global_init_value`:
+          ## literal / module const / const arithmetic).
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rbody, nx) => {
+            emit_st_comp_for_range(rvs, rvl, rlo, rhi, rbody, sb, cx, a, nl)
+            s = nx
+          }
+          ## `comptime match typeinfo(T) { Struct(_) => … _ => … }` — evaluate T's KIND and emit ONLY the
+          ## matching arm's body (or the `_` fallback). The comptime sibling of `Stmt::Match`.
+          Stmt::CompMatch(cmsc, cmah, nx) => {
+            ## `comptime match var.payload { Some(_) => …, None => … }` (`display`'s enum arm): fold on the
+            ## CURRENT variant's arity — `Variant.payload` is `Some(type)` for a payloaded variant, `None`
+            ## for a unit variant (appendix §4.1). Choose the `Some` arm iff the variant carries a payload
+            ## (`variant_payload_type` non-empty over the instance's enum `cx.it`), else the `None`/`_` arm.
+            if is_cf_payload_ref(cmsc, cx) {
+              pty := variant_payload_type(cx.decls, cx.src, cx.it_s, cx.it_l, cx.cf_curvar_s, cx.cf_curvar_l, deref(cx.mar))
+              has_pay := pty.n != 0
+              mut pchosen : Option(ptr(mut Arm)) = Option.None
+              mut pwild : Option(ptr(mut Arm)) = Option.None
+              mut pcarm : Option(ptr(mut Arm)) = cmah
+              loop {
+                match pcarm {
+                  Some(pcarmq) => {
+                    pcam := deref(arm_p(pcarmq))
+                    if pcam.wild != 0 { pwild = Option.Some(pcarmq) }
+                    else {
+                      pnm := str_at((cx.src + pcam.vs), pcam.vl)
+                      if has_pay and pnm == "Some" { pchosen = Option.Some(pcarmq) }
+                      if (has_pay == false) and pnm == "None" { pchosen = Option.Some(pcarmq) }
+                    }
+                    pcarm = pcam.next
+                  }
+                  None => { break }
+                }
+              }
+              pchosen = ast::arm_or(pchosen, pwild)
+              match pchosen { Some(pchosenq) => { emit_stmts(deref(arm_p(pchosenq)).body_stmts, sb, cx, nl) }; None => {} }
+              s = nx
+            } else {
+            ## `comptime match typeinfo(p)` (p = the payload binding) folds on the PAYLOAD's type
+            ## (`cf_pay_ty`), not the instance type — rebind `cx.it` for the fold + the chosen arm body
+            ## (like the Brand-arm underlying rebind below), then restore. Lets `display`'s enum arm pick
+            ## the `Tuple(_)` arm for a multi-component payload (rendered `(a, b)` without a second wrap).
+            pti := is_cf_payload_typeinfo(cmsc, cx, a)
+            sav_pit_s := cx.it_s
+            sav_pit_l := cx.it_l
+            if pti { cx.it_s = cx.cf_pay_ty_s; cx.it_l = cx.cf_pay_ty_l }
+            kind := comptime_type_kind(cx.it_s, cx.it_l, cx.decls, cx.src)
+            ## The scalar NUMERIC sub-kind (Bool/Char/Int/Float/other) for an INNER `match k` over a
+            ## `Scalar`'s kind binding. Its arm names (`Int`/`Float`/…) are disjoint from the outer
+            ## `typeinfo(T)` arm names (`Struct`/`Scalar`/…), so this second dispatch is inert for the
+            ## type-kind matches `src/` uses (`comptime_num_kind_of_name` → -1 there) → fixpoint-neutral.
+            nkind := comptime_scalar_num_kind(cx.it_s, cx.it_l, cx.src)
+            mut chosen : Option(ptr(mut Arm)) = Option.None
+            mut cwild : Option(ptr(mut Arm)) = Option.None
+            mut carm : Option(ptr(mut Arm)) = cmah
+            loop {
+              match carm {
+                Some(carmq) => {
+                  cam := deref(arm_p(carmq))
+                  if cam.wild != 0 { cwild = Option.Some(carmq) }
+                  else if comptime_kind_of_name(cx.src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
+                  else if comptime_num_kind_of_name(cx.src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
+                  carm = cam.next
+                }
+                None => { break }
+              }
+            }
+            chosen = ast::arm_or(chosen, cwild)
+            match chosen {
+              Some(chosenq) => {
+                ## For the `Brand(under, _)` arm (kind 6): the arm body dispatches on the UNDERLYING type
+                ## (`comptime match typeinfo(under)` + `i64(v)`/`u64(v)`/`f64(v)` peels), but the folder
+                ## keys every nested `comptime match` off `cx.it` (the scrutinee expr is not read). Rebind
+                ## `cx.it` to the brand's underlying `U` for the arm body so the nested Scalar/kind dispatch
+                ## folds on `U`, then restore it. (A brand over an unsigned/bits/signed underlying renders
+                ## correctly; a FLOAT-underlying brand still needs the value's slot marked float — deferred.)
+                if kind == 6 {
+                  bu := brand_underlying(cx.decls, cx.src, cx.it_s, cx.it_l)
+                  sav_s := cx.it_s
+                  sav_l := cx.it_l
+                  cx.it_s = bu.s
+                  cx.it_l = bu.n
+                  emit_stmts(deref(arm_p(chosenq)).body_stmts, sb, cx, nl)
+                  cx.it_s = sav_s
+                  cx.it_l = sav_l
+                } else {
+                  emit_stmts(deref(arm_p(chosenq)).body_stmts, sb, cx, nl)
+                }
+              }
+              None => {}
+            }
+            cx.it_s = sav_pit_s
+            cx.it_l = sav_pit_l
+            s = nx
             }
           }
-          None => {}
-        }
-        cx.it_s = sav_pit_s
-        cx.it_l = sav_pit_l
-        s = nx
         }
       }
+      None => { break }
     }
   }
 }
@@ -27003,7 +27043,7 @@ mut IRSB_N := 0
 ## records the STATEMENT's `ptr(mut Stmt)` (its `nx` becomes the emit STOP sentinel so exactly one emits).
 ## STRICTLY gated: barriers are admitted ONLY in a fn that also has a register-allocated `for x in <Vec local>`
 ## (so NO fmt/display/print/general fn is ever admitted — see `is_scalar_leaf_shape`'s final Vec-shape gate).
-mut IRGSB_P : [usize; 16] = [0; 16]   ## the barriered Stmt pointer
+mut IRGSB_P : [Option(ptr(mut Stmt)); 16] = [Option.None; 16]   ## the barriered Stmt pointer
 mut IRGSB_N := 0
 
 
@@ -27094,7 +27134,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
       ir_inl_tmp = i64(ib) + i64(inl_reserve) - 1
     }
   }
-  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = Option.None, ind_fn_fmask = 0)
   cxv.fn_id = di
   cxv.ctslots = ptr(ir_cts)
   cx := ptr(cxv)
@@ -27424,7 +27464,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## Publish this fn's body + params so `recv_full_emit` can resolve a UFCS receiver's DECLARED type
   ## (with type-args) from the source — the slot keeps only the base name. Reset per fn; no nested
   ## `emit_fn` (inline expands in place), so a plain set/leave is safe.
-  EMIT_BODY = unchecked bitcast(usize, d.body_stmts)
+  EMIT_BODY = d.body_stmts
   EMIT_PARAMS = d.params_head
   ## COMMIT 2 (--ra): a scalar-leaf / `unchecked` fn takes the register-allocated IR path. Default OFF →
   ## the `and` short-circuits before the predicate is evaluated, so the flag-OFF build reaches the text
@@ -27856,7 +27896,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## this branch never fires for the self-host build (byte-identical → the TOOL-1 fixpoint holds).
   if fn_is_naked(p.src, d.name_start, d.name_len) {
     push_str(sb, ":\n")
-    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = Option.None, ind_fn_fmask = 0)
     ncx.fn_id = di
     ncx.ctslots = ptr(ct_slots)
     emit_stmts(d.body_stmts, sb, ptr(ncx), nl)
@@ -28119,7 +28159,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## push/drain ops are skipped and the emitted tree gas stays byte-identical (the TOOL-1 fixpoint is
   ## neutral). `defer_sp` starts at 0: the fn body has NO frame, only nested blocks push.
   d_has_defer := stmts_have_defer(d.body_stmts, p.src, deref(p.mar))
-  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = Option.None, ind_fn_fmask = 0)
   cx.fn_id = di
   cx.ctslots = ptr(ct_slots)
   emit_stmts(d.body_stmts, sb, ptr(cx), nl)
@@ -28391,7 +28431,7 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
             ## the collected instance's tag matches the label the call site emits (`…__str`). Restricted to
             ## a VIEW type — every other implicit call keeps the `recv_is_container`-gated resolution below,
             ## so nothing else moves (fixpoint-safe).
-            if COLLECT_BODY != 0 and vn.n != 0 {
+            if stmt_any(COLLECT_BODY) and vn.n != 0 {
               vlt := block_decl_type(COLLECT_BODY, vn.s, vn.n, src, decls, a)
               if vlt.n != 0 {
                 if str_at((src + vlt.s), vlt.n) == "str" { return CSpan(s = vlt.s, n = vlt.n) }
@@ -28430,7 +28470,7 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
       None => { break }
     }
   }
-  if COLLECT_BODY != 0 and recv_is_container {
+  if stmt_any(COLLECT_BODY) and recv_is_container {
     mut j2 := 0
     mut pc2 := gd.params_head
     loop {
@@ -28543,41 +28583,13 @@ arg_type_name_pre := fn(args_head : Option(ptr(mut Arg)), penv : Option(ptr(mut 
 ## Walk an expression, recording every generic-fn call's (generic-fn, typetag) instantiation.
 ## The deref-`match` is over the direct PARAM `e` (the lowerable shape) and is the recursion
 ## point. Mirrors `emit_rodata_expr`'s structure.
-## The `next` handle of any statement (mirrors sema::stmt_next_at) — to walk a block for a local's
-## declaring `Assign` in the pre-pass, where there are no frame slots to read a var's type from.
-lower_stmt_nx := fn(h : usize, a : rt::Arena) -> usize {
-  st := deref(stmt_p(Stmt, h))
-  match st {
-    Stmt::Assign(ns, nl, v, nx) => { nx }
-    Stmt::While(c, b, nx) => { nx }
-    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { nx }
-    Stmt::FieldPathAssign(pl, fpv, nx) => { nx }
-    Stmt::Return(rv, nx) => { nx }
-    Stmt::If(c, th, el, nx) => { nx }
-    Stmt::Match(sc, ah, nx) => { nx }
-    Stmt::For(ns, nl, lo, hi, b, nx) => { nx }
-    Stmt::DerefAssign(p, v, nx) => { nx }
-    Stmt::IndexAssign(b, i, v, nx) => { nx }
-    Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { nx }
-    Stmt::Loop(b, nx) => { nx }
-    Stmt::Unchecked(b, nx) => { nx }
-    Stmt::AllocWith(ae, b, nx) => { nx }
-    Stmt::Break(_bv, _bd, nx) => { nx }
-    Stmt::Continue(_cd, nx) => { nx }
-    Stmt::ExprStmt(e, nx) => { nx }
-    Stmt::CompIf(c, th, el, nx) => { nx }
-    Stmt::CompFor(vs, vl, iv, b, nx) => { nx }
-    Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { nx }
-    Stmt::CompMatch(sc, ah, nx) => { nx }
-  }
-}
 
 ## ---- DEFER (Control Flow §9.3 / Memory §5.8) -----------------------------------------------------
 ## If statement handle `h` is a `defer <expr>` marker — an `ExprStmt` whose expr is a `Call` to the
 ## parser-synthesized head `__defer` with one argument — return the inner action expr handle (a
 ## `ptr(Expr)` as usize); else 0. The parser desugars `defer <expr>` to `__defer(<expr>)` (kept in the
 ## body so every other pass sees it as an ordinary call); the x86 lower is the sole consumer of the marker.
-defer_marker_inner_h := fn(h : usize, src : ptr(u8), a : rt::Arena) -> usize {
+defer_marker_inner_h := fn(h : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> usize {
   mut res := 0
   st := deref(stmt_p(Stmt, h))
   match st {
@@ -28598,14 +28610,14 @@ defer_marker_inner_h := fn(h : usize, src : ptr(u8), a : rt::Arena) -> usize {
 ## If statement handle `h` is a `__deferblk()` marker — the HEAD of a `defer { … }` chain, an `ExprStmt`
 ## whose expr is a `Call` to the parser-synthesized head `__deferblk` with ZERO args — return the FIRST
 ## block statement's handle (the marker's `nx`, the chain body's head); else 0.
-defer_blk_start_h := fn(h : usize, src : ptr(u8), a : rt::Arena) -> usize {
-  mut res := 0
+defer_blk_start_h := fn(h : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> Option(ptr(mut Stmt)) {
+  mut res : Option(ptr(mut Stmt)) = Option.None
   st := deref(stmt_p(Stmt, h))
   match st {
     Stmt::ExprStmt(e, nx) => {
       cp := call_parts(e)
       if cp.is_call and cp.cl == 10 and cp.na == 0 and str_at((src + cp.cs), 10) == "__deferblk" {
-        res = lower_stmt_nx(h, a)
+        res = stmt_next(h)
       }
     }
     Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match
@@ -28620,12 +28632,9 @@ defer_blk_start_h := fn(h : usize, src : ptr(u8), a : rt::Arena) -> usize {
 ## terminating `__deferblkend()` marker (an `ExprStmt` whose expr is a `Call` to the parser-synthesized
 ## head `__deferblkend`, ZERO args); return that end-marker statement's handle. Panics if the chain runs
 ## out (a parser pairing invariant — fail loud, never emit a half-chain).
-defer_blk_end_h := fn(start : usize, src : ptr(u8), a : rt::Arena) -> usize {
+defer_blk_end_h := fn(start : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> ptr(mut Stmt) {
   mut s := start
-  mut res := 0
-  mut go := true
-  while go {
-    if s == 0 { panic("selfhost: defer — `__deferblkend` marker not found after a `__deferblk` (compiler invariant)") }
+  loop {
     st := deref(stmt_p(Stmt, s))
     mut end := false
     match st {
@@ -28638,14 +28647,15 @@ defer_blk_end_h := fn(start : usize, src : ptr(u8), a : rt::Arena) -> usize {
         | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::CompIf
         | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
-    if end { res = s ; go = false } else { s = lower_stmt_nx(s, a) }
+    if end { break }
+    s = stmt_at(stmt_next(s), "selfhost: defer — `__deferblkend` marker not found after a `__deferblk` (compiler invariant)")
   }
-  res
+  s
 }
 
 ## Is statement handle `h` a `__deferblkend()` end marker (an `ExprStmt` call to head `__deferblkend`, ZERO
 ## args)? Used by `emit_stmts` to skip a block-end reached after its block was consumed as ONE deferred unit.
-is_defer_blk_end_h := fn(h : usize, src : ptr(u8), a : rt::Arena) -> bool {
+is_defer_blk_end_h := fn(h : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
   mut res := false
   st := deref(stmt_p(Stmt, h))
   match st {
@@ -28664,13 +28674,18 @@ is_defer_blk_end_h := fn(h : usize, src : ptr(u8), a : rt::Arena) -> bool {
 ## Does the statement LIST `head` contain a top-level `defer` marker (either form)? A cheap linear prescan
 ## (no recursion — markers only occur at the block's own top level) used by `emit_stmts` to GATE the
 ## defer-ordering bookkeeping so a defer-free function (all of `src/`+`lib/`) pays no scan cost beyond this.
-list_has_defer := fn(head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
-  mut s := head
+list_has_defer := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
+  mut s : Option(ptr(mut Stmt)) = head
   mut res := false
-  while s != 0 {
-    if defer_marker_inner_h(unchecked bitcast(usize, s), src, a) != 0 { res = true }
-    if defer_blk_start_h(unchecked bitcast(usize, s), src, a) != 0 { res = true }
-    s = unchecked bitcast(ptr(mut Stmt), lower_stmt_nx(unchecked bitcast(usize, s), a))
+  loop {
+    match s {
+      Some(sq) => {
+        if defer_marker_inner_h(sq, src, a) != 0 { res = true }
+        if stmt_any(defer_blk_start_h(sq, src, a)) { res = true }
+        s = stmt_next(sq)
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -28712,41 +28727,46 @@ expr_have_defer := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> bool {
 ## expressions. Used by (a) `emit_fn` to set `cx.defer_active` and (b) the RA gate, so a fn whose defers
 ## live in NESTED blocks / an expression loop still takes the text (frame/drain) path.
 ## EXHAUSTIVE over `Stmt` so the walk always terminates.
-stmts_have_defer := fn(head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
-  mut s := head
+stmts_have_defer := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
+  mut s : Option(ptr(mut Stmt)) = head
   mut found := false
-  while s != 0 {
-    if defer_marker_inner_h(unchecked bitcast(usize, s), src, a) != 0 { found = true }
-    if defer_blk_start_h(unchecked bitcast(usize, s), src, a) != 0 { found = true }
-    if found == false {
-      st := deref(stmt_p(Stmt, s))
-      match st {
-        Stmt::While(c, b, nx) => { if expr_have_defer(c, src, a) { found = true } ; if stmts_have_defer(b, src, a) { found = true } ; s = nx }
-        Stmt::If(c, th, el, nx) => { if expr_have_defer(c, src, a) { found = true } ; if stmts_have_defer(th, src, a) { found = true } ; if stmts_have_defer(el, src, a) { found = true } ; s = nx }
-        Stmt::Match(sc, ah, nx) => { if expr_have_defer(sc, src, a) { found = true } ; mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if stmts_have_defer(am.body_stmts, src, a) { found = true } ; arm = am.next }; None => { break } } } ; s = nx }
-        Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if flo != 0 and expr_have_defer(flo, src, a) { found = true } ; if fhi != 0 and expr_have_defer(fhi, src, a) { found = true } ; if stmts_have_defer(fb, src, a) { found = true } ; s = nx }
-        Stmt::Loop(b, nx) => { if stmts_have_defer(b, src, a) { found = true } ; s = nx }
-        Stmt::Unchecked(b, nx) => { if stmts_have_defer(b, src, a) { found = true } ; s = nx }
-        Stmt::AllocWith(ae, b, nx) => { if expr_have_defer(ae, src, a) { found = true } ; if stmts_have_defer(b, src, a) { found = true } ; s = nx }
-        Stmt::CompIf(c, th, el, nx) => { if expr_have_defer(c, src, a) { found = true } ; if stmts_have_defer(th, src, a) { found = true } ; if stmts_have_defer(el, src, a) { found = true } ; s = nx }
-        Stmt::CompFor(vs, vl, iv, b, nx) => { if stmts_have_defer(b, src, a) { found = true } ; s = nx }
-        Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if lo != 0 and expr_have_defer(lo, src, a) { found = true } ; if hi != 0 and expr_have_defer(hi, src, a) { found = true } ; if stmts_have_defer(b, src, a) { found = true } ; s = nx }
-        Stmt::CompMatch(sc, ah, nx) => { if expr_have_defer(sc, src, a) { found = true } ; mut car : Option(ptr(mut Arm)) = ah ; loop { match car { Some(carq) => { cam := deref(arm_p(carq)) ; if stmts_have_defer(cam.body_stmts, src, a) { found = true } ; car = cam.next }; None => { break } } } ; s = nx }
-        Stmt::Assign(ans, anl, v, nx) => { if expr_have_defer(v, src, a) { found = true } ; s = nx }
-        Stmt::Return(rv, nx) => { if rv != 0 and expr_have_defer(rv, src, a) { found = true } ; s = nx }
-        Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { if expr_have_defer(fv, src, a) { found = true } ; s = nx }
-        Stmt::FieldPathAssign(pl, v, nx) => { if expr_have_defer(pl, src, a) or expr_have_defer(v, src, a) { found = true } ; s = nx }
-        Stmt::DerefAssign(p, v, nx) => { if expr_have_defer(p, src, a) or expr_have_defer(v, src, a) { found = true } ; s = nx }
-        Stmt::IndexAssign(b, i, v, nx) => { if expr_have_defer(b, src, a) or expr_have_defer(i, src, a) or expr_have_defer(v, src, a) { found = true } ; s = nx }
-        Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { if expr_have_defer(b, src, a) or expr_have_defer(i, src, a) or expr_have_defer(v, src, a) { found = true } ; s = nx }
-        Stmt::Break(bv, bd, nx) => { if bv != 0 and expr_have_defer(bv, src, a) { found = true } ; s = nx }
-        Stmt::Continue(cd, nx) => { s = nx }
-        Stmt::ExprStmt(e, nx) => { if expr_have_defer(e, src, a) { found = true } ; s = nx }
+  loop {
+    match s {
+      Some(sq) => {
+        if defer_marker_inner_h(sq, src, a) != 0 { found = true }
+        if stmt_any(defer_blk_start_h(sq, src, a)) { found = true }
+        if found == false {
+          st := deref(stmt_p(Stmt, sq))
+          match st {
+            Stmt::While(c, b, nx) => { if expr_have_defer(c, src, a) { found = true } ; if stmts_have_defer(b, src, a) { found = true } ; s = nx }
+            Stmt::If(c, th, el, nx) => { if expr_have_defer(c, src, a) { found = true } ; if stmts_have_defer(th, src, a) { found = true } ; if stmts_have_defer(el, src, a) { found = true } ; s = nx }
+            Stmt::Match(sc, ah, nx) => { if expr_have_defer(sc, src, a) { found = true } ; mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if stmts_have_defer(am.body_stmts, src, a) { found = true } ; arm = am.next }; None => { break } } } ; s = nx }
+            Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if flo != 0 and expr_have_defer(flo, src, a) { found = true } ; if fhi != 0 and expr_have_defer(fhi, src, a) { found = true } ; if stmts_have_defer(fb, src, a) { found = true } ; s = nx }
+            Stmt::Loop(b, nx) => { if stmts_have_defer(b, src, a) { found = true } ; s = nx }
+            Stmt::Unchecked(b, nx) => { if stmts_have_defer(b, src, a) { found = true } ; s = nx }
+            Stmt::AllocWith(ae, b, nx) => { if expr_have_defer(ae, src, a) { found = true } ; if stmts_have_defer(b, src, a) { found = true } ; s = nx }
+            Stmt::CompIf(c, th, el, nx) => { if expr_have_defer(c, src, a) { found = true } ; if stmts_have_defer(th, src, a) { found = true } ; if stmts_have_defer(el, src, a) { found = true } ; s = nx }
+            Stmt::CompFor(vs, vl, iv, b, nx) => { if stmts_have_defer(b, src, a) { found = true } ; s = nx }
+            Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if lo != 0 and expr_have_defer(lo, src, a) { found = true } ; if hi != 0 and expr_have_defer(hi, src, a) { found = true } ; if stmts_have_defer(b, src, a) { found = true } ; s = nx }
+            Stmt::CompMatch(sc, ah, nx) => { if expr_have_defer(sc, src, a) { found = true } ; mut car : Option(ptr(mut Arm)) = ah ; loop { match car { Some(carq) => { cam := deref(arm_p(carq)) ; if stmts_have_defer(cam.body_stmts, src, a) { found = true } ; car = cam.next }; None => { break } } } ; s = nx }
+            Stmt::Assign(ans, anl, v, nx) => { if expr_have_defer(v, src, a) { found = true } ; s = nx }
+            Stmt::Return(rv, nx) => { if rv != 0 and expr_have_defer(rv, src, a) { found = true } ; s = nx }
+            Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { if expr_have_defer(fv, src, a) { found = true } ; s = nx }
+            Stmt::FieldPathAssign(pl, v, nx) => { if expr_have_defer(pl, src, a) or expr_have_defer(v, src, a) { found = true } ; s = nx }
+            Stmt::DerefAssign(p, v, nx) => { if expr_have_defer(p, src, a) or expr_have_defer(v, src, a) { found = true } ; s = nx }
+            Stmt::IndexAssign(b, i, v, nx) => { if expr_have_defer(b, src, a) or expr_have_defer(i, src, a) or expr_have_defer(v, src, a) { found = true } ; s = nx }
+            Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { if expr_have_defer(b, src, a) or expr_have_defer(i, src, a) or expr_have_defer(v, src, a) { found = true } ; s = nx }
+            Stmt::Break(bv, bd, nx) => { if bv != 0 and expr_have_defer(bv, src, a) { found = true } ; s = nx }
+            Stmt::Continue(cd, nx) => { s = nx }
+            Stmt::ExprStmt(e, nx) => { if expr_have_defer(e, src, a) { found = true } ; s = nx }
+          }
+        } else {
+          ## Once a defer marker is found at this level, stop recursing into nested children (early exit)
+          ## but STILL advance the top-level scan — otherwise `s` pins on the marker node and loops forever.
+          s = stmt_next(sq)
+        }
       }
-    } else {
-      ## Once a defer marker is found at this level, stop recursing into nested children (early exit)
-      ## but STILL advance the top-level scan — otherwise `s` pins on the marker node and loops forever.
-      s = unchecked bitcast(ptr(mut Stmt), lower_stmt_nx(unchecked bitcast(usize, s), a))
+      None => { break }
     }
   }
   found
@@ -28784,7 +28804,7 @@ expr_has_try := fn(e : ptr(Expr)) -> bool {
 ## cleanup on a path where the `defer` was never actually reached. Conservative: unknown/other kinds → true
 ## (fail-loud rather than risk a mis-registered cleanup); only the clearly-straight-line statement kinds
 ## WITHOUT a `?` are safe (false).
-stmt_may_early_exit := fn(h : usize, src : ptr(u8), a : rt::Arena) -> bool {
+stmt_may_early_exit := fn(h : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
   mut res := true
   st := deref(stmt_p(Stmt, h))
   match st {
@@ -28819,13 +28839,13 @@ emit_defer_chain := fn(in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena
     cx.defer_n = cx.defer_n - 1
     j := cx.defer_n
     if cx.defer_blk[j] == 1 {
-      hd := unchecked bitcast(ptr(mut Stmt), cx.defer_inner[j])
+      hd := cx.defer_blk_head[j]
       ## Run the block's statements AS A UNIT, stopping at its `__deferblkend` marker (`cx.ir_stop`):
       ## the block's statement `next` chain continues past the end marker into the ENCLOSING statement
       ## list, so an un-rebounded `emit_stmts` would spill into the rest of the function (re-emitting a
       ## trailing `return`/its jump). Rebound to the end marker; the deferred unit is exactly the block.
       ostop := cx.ir_stop
-      cx.ir_stop = defer_blk_end_h(unchecked bitcast(usize, hd), cx.src, a)
+      cx.ir_stop = Option.Some(defer_blk_end_h(stmt_at(hd, "selfhost: defer — empty block-defer head (compiler invariant)"), cx.src, a))
       emit_stmts(hd, sb, cx, nl)          ## run the block's statements (an ordinary stmt list)
       cx.ir_stop = ostop
     } else {
@@ -29195,109 +29215,114 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
   }
 }
 
-mark_calls_stmts := fn(head : ptr(mut Stmt), rb : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { mark_calls_expr(v, rb, decls, src, a); s = nx }
-      Stmt::While(c, b, nx) => {
-        mark_calls_expr(c, rb, decls, src, a)
-        mark_calls_stmts(b, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::Loop(b, nx) => {
-        mark_calls_stmts(b, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::Unchecked(b, nx) => {
-        mark_calls_stmts(b, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::AllocWith(ae, b, nx) => {
-        mark_calls_expr(ae, rb, decls, src, a)
-        mark_calls_stmts(b, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => {
-        ## a `{}`-template variadic `print` emits `io::print` / `print_one_int` by mangled label (not
-        ## in the AST) — mark them reachable so they are emitted (print_one is a generic root already).
-        ecp := call_parts(e)
-        if ecp.is_call and variadic_print_target(decls, src, ecp.cs, ecp.cl, ecp.na, 0, 0, a) >= 0 {
-          mark_lit(rb, decls, src, "print")
-          mark_lit(rb, decls, src, "print_one_int")
-          mark_lit(rb, decls, src, "print_one_float")
-        }
-        mark_calls_expr(e, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { mark_calls_expr(fv, rb, decls, src, a); s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { mark_calls_expr(fpv, rb, decls, src, a); s = nx }
-      Stmt::Return(rv, nx) => { mark_calls_expr(rv, rb, decls, src, a); s = nx }
-      Stmt::If(c, th, el, nx) => {
-        mark_calls_expr(c, rb, decls, src, a)
-        mark_calls_stmts(th, rb, decls, src, a)
-        mark_calls_stmts(el, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::Match(sc, ah, nx) => {
-        mark_calls_expr(sc, rb, decls, src, a)
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              mark_calls_stmts(am.body_stmts, rb, decls, src, a)
-              arm = am.next
+mark_calls_stmts := fn(head : Option(ptr(mut Stmt)), rb : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { mark_calls_expr(v, rb, decls, src, a); s = nx }
+          Stmt::While(c, b, nx) => {
+            mark_calls_expr(c, rb, decls, src, a)
+            mark_calls_stmts(b, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::Loop(b, nx) => {
+            mark_calls_stmts(b, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::Unchecked(b, nx) => {
+            mark_calls_stmts(b, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::AllocWith(ae, b, nx) => {
+            mark_calls_expr(ae, rb, decls, src, a)
+            mark_calls_stmts(b, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => {
+            ## a `{}`-template variadic `print` emits `io::print` / `print_one_int` by mangled label (not
+            ## in the AST) — mark them reachable so they are emitted (print_one is a generic root already).
+            ecp := call_parts(e)
+            if ecp.is_call and variadic_print_target(decls, src, ecp.cs, ecp.cl, ecp.na, 0, 0, a) >= 0 {
+              mark_lit(rb, decls, src, "print")
+              mark_lit(rb, decls, src, "print_one_int")
+              mark_lit(rb, decls, src, "print_one_float")
             }
-            None => { break }
+            mark_calls_expr(e, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { mark_calls_expr(fv, rb, decls, src, a); s = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { mark_calls_expr(fpv, rb, decls, src, a); s = nx }
+          Stmt::Return(rv, nx) => { mark_calls_expr(rv, rb, decls, src, a); s = nx }
+          Stmt::If(c, th, el, nx) => {
+            mark_calls_expr(c, rb, decls, src, a)
+            mark_calls_stmts(th, rb, decls, src, a)
+            mark_calls_stmts(el, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::Match(sc, ah, nx) => {
+            mark_calls_expr(sc, rb, decls, src, a)
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  mark_calls_stmts(am.body_stmts, rb, decls, src, a)
+                  arm = am.next
+                }
+                None => { break }
+              }
+            }
+            s = nx
+          }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+            mark_calls_expr(flo, rb, decls, src, a)
+            if unchecked bitcast(usize, fhi) != 0 { mark_calls_expr(fhi, rb, decls, src, a) }   ## fhi==0 = for-over-iterable
+            mark_calls_stmts(fb, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::CompIf(ccond, cthen, celse, nx) => {
+            mark_calls_stmts(cthen, rb, decls, src, a)
+            mark_calls_stmts(celse, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => {
+            mark_calls_stmts(cb, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::CompForRange(crvs, crvl, crlo, crhi, crb, nx) => {
+            mark_calls_stmts(crb, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::CompMatch(cmsc, cmah, nx) => {
+            mut car : Option(ptr(mut Arm)) = cmah
+            loop { match car { Some(carq) => { cam := deref(arm_p(carq)); mark_calls_stmts(cam.body_stmts, rb, decls, src, a); car = cam.next }; None => { break } } }
+            s = nx
+          }
+          Stmt::DerefAssign(ptr, val, nx) => {
+            mark_calls_expr(ptr, rb, decls, src, a)
+            mark_calls_expr(val, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::IndexAssign(ib, ii, iv, nx) => {
+            mark_calls_expr(ib, rb, decls, src, a)
+            mark_calls_expr(ii, rb, decls, src, a)
+            mark_calls_expr(iv, rb, decls, src, a)
+            s = nx
+          }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
+            mark_calls_expr(fia, rb, decls, src, a)
+            mark_calls_expr(fii, rb, decls, src, a)
+            mark_calls_expr(fiv, rb, decls, src, a)
+            s = nx
           }
         }
-        s = nx
       }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-        mark_calls_expr(flo, rb, decls, src, a)
-        if unchecked bitcast(usize, fhi) != 0 { mark_calls_expr(fhi, rb, decls, src, a) }   ## fhi==0 = for-over-iterable
-        mark_calls_stmts(fb, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::CompIf(ccond, cthen, celse, nx) => {
-        mark_calls_stmts(cthen, rb, decls, src, a)
-        mark_calls_stmts(celse, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => {
-        mark_calls_stmts(cb, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::CompForRange(crvs, crvl, crlo, crhi, crb, nx) => {
-        mark_calls_stmts(crb, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::CompMatch(cmsc, cmah, nx) => {
-        mut car : Option(ptr(mut Arm)) = cmah
-        loop { match car { Some(carq) => { cam := deref(arm_p(carq)); mark_calls_stmts(cam.body_stmts, rb, decls, src, a); car = cam.next }; None => { break } } }
-        s = nx
-      }
-      Stmt::DerefAssign(ptr, val, nx) => {
-        mark_calls_expr(ptr, rb, decls, src, a)
-        mark_calls_expr(val, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::IndexAssign(ib, ii, iv, nx) => {
-        mark_calls_expr(ib, rb, decls, src, a)
-        mark_calls_expr(ii, rb, decls, src, a)
-        mark_calls_expr(iv, rb, decls, src, a)
-        s = nx
-      }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
-        mark_calls_expr(fia, rb, decls, src, a)
-        mark_calls_expr(fii, rb, decls, src, a)
-        mark_calls_expr(fiv, rb, decls, src, a)
-        s = nx
-      }
+      None => { break }
     }
   }
 }
@@ -29480,37 +29505,42 @@ fill_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
   }
 }
 ## Walk statement list `head`, filling defaults on every `Call` within. Twin of `scan_str_arg_stmts`.
-fill_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, mar : ptr(mut rt::Arena)) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { fill_expr(v, decls, src, ms, ml, mar); s = nx }
-      Stmt::While(c, b, nx) => { fill_expr(c, decls, src, ms, ml, mar); fill_stmts(b, decls, src, ms, ml, mar); s = nx }
-      Stmt::Loop(b, nx) => { fill_stmts(b, decls, src, ms, ml, mar); s = nx }
-      Stmt::Unchecked(b, nx) => { fill_stmts(b, decls, src, ms, ml, mar); s = nx }
-      Stmt::AllocWith(ae, b, nx) => { fill_stmts(b, decls, src, ms, ml, mar); s = nx }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { fill_expr(e, decls, src, ms, ml, mar); s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { fill_expr(fv, decls, src, ms, ml, mar); s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { fill_expr(pl, decls, src, ms, ml, mar); fill_expr(fpv, decls, src, ms, ml, mar); s = nx }
-      Stmt::Return(rv, nx) => { fill_expr(rv, decls, src, ms, ml, mar); s = nx }
-      Stmt::DerefAssign(dp, val, nx) => { fill_expr(dp, decls, src, ms, ml, mar); fill_expr(val, decls, src, ms, ml, mar); s = nx }
-      Stmt::IndexAssign(ib, ii, iv, nx) => { fill_expr(ib, decls, src, ms, ml, mar); fill_expr(ii, decls, src, ms, ml, mar); fill_expr(iv, decls, src, ms, ml, mar); s = nx }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { fill_expr(fia, decls, src, ms, ml, mar); fill_expr(fii, decls, src, ms, ml, mar); fill_expr(fiv, decls, src, ms, ml, mar); s = nx }
-      Stmt::If(c, th, el, nx) => { fill_expr(c, decls, src, ms, ml, mar); fill_stmts(th, decls, src, ms, ml, mar); fill_stmts(el, decls, src, ms, ml, mar); s = nx }
-      Stmt::Match(sc, ah, nx) => {
-        fill_expr(sc, decls, src, ms, ml, mar)
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop { match arm { Some(armq) => { am := deref(arm_p(armq)); fill_stmts(am.body_stmts, decls, src, ms, ml, mar); arm = am.next }; None => { break } } }
-        s = nx
+fill_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, mar : ptr(mut rt::Arena)) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { fill_expr(v, decls, src, ms, ml, mar); s = nx }
+          Stmt::While(c, b, nx) => { fill_expr(c, decls, src, ms, ml, mar); fill_stmts(b, decls, src, ms, ml, mar); s = nx }
+          Stmt::Loop(b, nx) => { fill_stmts(b, decls, src, ms, ml, mar); s = nx }
+          Stmt::Unchecked(b, nx) => { fill_stmts(b, decls, src, ms, ml, mar); s = nx }
+          Stmt::AllocWith(ae, b, nx) => { fill_stmts(b, decls, src, ms, ml, mar); s = nx }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { fill_expr(e, decls, src, ms, ml, mar); s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { fill_expr(fv, decls, src, ms, ml, mar); s = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { fill_expr(pl, decls, src, ms, ml, mar); fill_expr(fpv, decls, src, ms, ml, mar); s = nx }
+          Stmt::Return(rv, nx) => { fill_expr(rv, decls, src, ms, ml, mar); s = nx }
+          Stmt::DerefAssign(dp, val, nx) => { fill_expr(dp, decls, src, ms, ml, mar); fill_expr(val, decls, src, ms, ml, mar); s = nx }
+          Stmt::IndexAssign(ib, ii, iv, nx) => { fill_expr(ib, decls, src, ms, ml, mar); fill_expr(ii, decls, src, ms, ml, mar); fill_expr(iv, decls, src, ms, ml, mar); s = nx }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { fill_expr(fia, decls, src, ms, ml, mar); fill_expr(fii, decls, src, ms, ml, mar); fill_expr(fiv, decls, src, ms, ml, mar); s = nx }
+          Stmt::If(c, th, el, nx) => { fill_expr(c, decls, src, ms, ml, mar); fill_stmts(th, decls, src, ms, ml, mar); fill_stmts(el, decls, src, ms, ml, mar); s = nx }
+          Stmt::Match(sc, ah, nx) => {
+            fill_expr(sc, decls, src, ms, ml, mar)
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop { match arm { Some(armq) => { am := deref(arm_p(armq)); fill_stmts(am.body_stmts, decls, src, ms, ml, mar); arm = am.next }; None => { break } } }
+            s = nx
+          }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { fill_expr(flo, decls, src, ms, ml, mar); if unchecked bitcast(usize, fhi) != 0 { fill_expr(fhi, decls, src, ms, ml, mar) }; fill_stmts(fb, decls, src, ms, ml, mar); s = nx }
+          Stmt::CompIf(ccond, cthen, celse, nx) => { fill_stmts(cthen, decls, src, ms, ml, mar); fill_stmts(celse, decls, src, ms, ml, mar); s = nx }
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => { fill_stmts(cb, decls, src, ms, ml, mar); s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { fill_stmts(rb, decls, src, ms, ml, mar); s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); fill_stmts(cam.body_stmts, decls, src, ms, ml, mar); car = cam.next }; None => { break } } }; s = nx }
+        }
       }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { fill_expr(flo, decls, src, ms, ml, mar); if unchecked bitcast(usize, fhi) != 0 { fill_expr(fhi, decls, src, ms, ml, mar) }; fill_stmts(fb, decls, src, ms, ml, mar); s = nx }
-      Stmt::CompIf(ccond, cthen, celse, nx) => { fill_stmts(cthen, decls, src, ms, ml, mar); fill_stmts(celse, decls, src, ms, ml, mar); s = nx }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { fill_stmts(cb, decls, src, ms, ml, mar); s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { fill_stmts(rb, decls, src, ms, ml, mar); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); fill_stmts(cam.body_stmts, decls, src, ms, ml, mar); car = cam.next }; None => { break } } }; s = nx }
+      None => { break }
     }
   }
 }
@@ -29779,7 +29809,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
         ## body, params, and kind → an inert kind-0 no-op that matches no lookup and emits no code.
         deref(gdp) = Decl(name_start = dg.name_start, name_len = 0, value = dg.value,
           is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
-          body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
+          body_stmts = Option.None, fields_head = Option.None, ret_ts = 0, ret_tl = 0,
           mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       }
     }
@@ -29837,12 +29867,12 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   for i in 0..cnt {
     d := deref(decl_get(decls, i))
     if (d.kind == 1 and d.is_generic == false) or d.kind == 5 {
-      COLLECT_BODY = unchecked bitcast(usize, d.body_stmts)
+      COLLECT_BODY = d.body_stmts
       COLLECT_MOD_S = d.mod_start
       COLLECT_MOD_L = d.mod_len
       collect_insts_stmts(d.body_stmts, insts, decls, src, a, d.params_head)
       collect_insts_expr(d.value, insts, decls, src, a, d.params_head)
-      COLLECT_BODY = 0
+      COLLECT_BODY = Option.None
       COLLECT_MOD_S = 0
       COLLECT_MOD_L = 0
     }
@@ -29908,12 +29938,12 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
       }
       mut tmp := IVec(base = 0, len = 0, cap = 0, arena = mar)
       ivec_new(tmp, mar, 8)
-      COLLECT_BODY = unchecked bitcast(usize, gd.body_stmts)
+      COLLECT_BODY = gd.body_stmts
       COLLECT_MOD_S = gd.mod_start
       COLLECT_MOD_L = gd.mod_len
       collect_insts_stmts(gd.body_stmts, tmp, decls, src, a, gd.params_head)
       collect_insts_expr(gd.value, tmp, decls, src, a, gd.params_head)
-      COLLECT_BODY = 0
+      COLLECT_BODY = Option.None
       COLLECT_MOD_S = 0
       COLLECT_MOD_L = 0
       tn := ivec_len(ptr(tmp))

@@ -32,6 +32,8 @@ arg_at := ast::arg_at
 fld_p := ast::fld_p
 param_p := ast::param_p
 stmt_p := ast::stmt_p
+stmt_at := ast::stmt_at
+stmt_next := ast::stmt_next
 stmt_label_span := ast::stmt_label_span
 local_type_span := ast::local_type_span
 binding_is_comptime := ast::binding_is_comptime
@@ -475,7 +477,7 @@ ir_lower_cond := fn(c : ptr(Expr), lfalse : usize, cx : ptr(LCtx), unch : bool) 
 ## Extract data base = *(P) and len = *(P+8) ONCE into vregs, run a counted loop over a loop-carried index,
 ## and load each element `*(base + idx*8)` into the loop var's vreg through a register-held address:
 ##   base=*(P); len=*(P+8); idx=0; lg: cmp idx,len; jge done; x=*(base+idx*8); <body>; idx+=1; jmp lg; done:
-ir_lower_slice_for := fn(fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut Stmt), cx : ptr(LCtx), unch : bool) {
+ir_lower_slice_for := fn(fns : usize, fnl : usize, flo : ptr(Expr), fb : Option(ptr(mut Stmt)), cx : ptr(LCtx), unch : bool) {
   fv := var_name_span(flo)
   pidx := ir_slice_param_idx(cx.src, fv.s, fv.n)                  ## >= 0 (predicate-validated)
   bent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fv.s, fv.n)))
@@ -515,7 +517,7 @@ ir_lower_slice_for := fn(fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut
 ## counted loop over a loop-carried index, loading each element `*(base + idx*estride*8)` into the loop
 ## var's vreg through a register-held address — matching the text path's `is_arr` branch byte-for-answer:
 ##   base=&elem0; len=$N; idx=0; lg: cmp idx,len; jge done; x=*(base+idx*8); <body>; idx+=1; jmp lg; done:
-ir_lower_array_for := fn(fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut Stmt), cx : ptr(LCtx), unch : bool) {
+ir_lower_array_for := fn(fns : usize, fnl : usize, flo : ptr(Expr), fb : Option(ptr(mut Stmt)), cx : ptr(LCtx), unch : bool) {
   fv := var_name_span(flo)
   bent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fv.s, fv.n)))
   bslot := bent.off
@@ -563,38 +565,43 @@ ir_lower_array_for := fn(fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut
 ## element var. Returns its IRV INDEX, or -1 (none / ambiguous / any non-Assign top-level stmt ⇒ no hoist,
 ## body lowered byte-identically to before). Reuses the IRRD read-walker (re-init here; barrier syncs
 ## re-init it independently, so the transient clobber is safe).
-ir_find_accum := fn(cx : ptr(LCtx), fns : usize, fnl : usize, fb : ptr(mut Stmt)) -> i64 {
+ir_find_accum := fn(cx : ptr(LCtx), fns : usize, fnl : usize, fb : Option(ptr(mut Stmt))) -> i64 {
   mut acc_s := 0
   mut acc_l := 0
   mut count := 0
-  mut s := fb
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => {
-        if (not streq(cx.src, ns, nl, fns, fnl)) and ir_var_vreg_lookup(cx, ns, nl) >= 0 {
-          IRRD_N = 0
-          IRRD_OK = true
-          ir_rd_expr(cx.src, v)                                  ## collect the RHS read set
-          mut reads := false
-          mut k := 0
-          while k < IRRD_N { if streq(cx.src, IRRD_S[k], IRRD_L[k], ns, nl) { reads = true } ; k += 1 }
-          if reads {
-            off := slot_of(cx.slots, cx.src, ns, nl)
-            if off >= 0 {
-              ek := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, ns, nl))).ek
-              if ek == 0 {
-                if not (acc_l != 0 and streq(cx.src, acc_s, acc_l, ns, nl)) { count += 1; acc_s = ns; acc_l = nl }
+  mut s : Option(ptr(mut Stmt)) = fb
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => {
+            if (not streq(cx.src, ns, nl, fns, fnl)) and ir_var_vreg_lookup(cx, ns, nl) >= 0 {
+              IRRD_N = 0
+              IRRD_OK = true
+              ir_rd_expr(cx.src, v)                                  ## collect the RHS read set
+              mut reads := false
+              mut k := 0
+              while k < IRRD_N { if streq(cx.src, IRRD_S[k], IRRD_L[k], ns, nl) { reads = true } ; k += 1 }
+              if reads {
+                off := slot_of(cx.slots, cx.src, ns, nl)
+                if off >= 0 {
+                  ek := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, ns, nl))).ek
+                  if ek == 0 {
+                    if not (acc_l != 0 and streq(cx.src, acc_s, acc_l, ns, nl)) { count += 1; acc_s = ns; acc_l = nl }
+                  }
+                }
               }
             }
+            s = nx
           }
+          Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+            | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+            | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+            | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { s = Option.None }                                             ## non-Assign top-level stmt ⇒ stop (surgical)
         }
-        s = nx
       }
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }                                             ## non-Assign top-level stmt ⇒ stop (surgical)
+      None => { break }
     }
   }
   if count == 1 {
@@ -603,7 +610,7 @@ ir_find_accum := fn(cx : ptr(LCtx), fns : usize, fnl : usize, fb : ptr(mut Stmt)
     0 - 1
   } else { 0 - 1 }
 }
-ir_lower_vec_for := fn(fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut Stmt), cx : ptr(LCtx), unch : bool) {
+ir_lower_vec_for := fn(fns : usize, fnl : usize, flo : ptr(Expr), fb : Option(ptr(mut Stmt)), cx : ptr(LCtx), unch : bool) {
   fv := var_name_span(flo)
   bent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fv.s, fv.n)))
   ## authoritative slot guard: the loop var must be a Vec struct LOCAL (`ek == 2`, base type name "Vec").
@@ -738,10 +745,10 @@ ir_call_returns_vec := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr)) ->
 ## Record a GENERAL STATEMENT BARRIER for the statement at handle `sp` — emit a full-clobber op 24 carrying
 ## its side-table index; the render splices the WHOLE statement through the text `emit_stmts` (halting at its
 ## `nx` via the STOP sentinel so exactly one emits). Used for the Vec-build chain (mmap/arena/with_capacity/push).
-ir_emit_gbarrier := fn(sp : usize) {
+ir_emit_gbarrier := fn(sp : ptr(mut Stmt)) {
   id := IRGSB_N
   if id >= 16 { panic("selfhost: regalloc emit — general stmt-barrier side-table overflow (predicate too permissive)") }
-  IRGSB_P[id] = sp
+  IRGSB_P[id] = Option.Some(sp)
   IRGSB_N = IRGSB_N + 1
   regalloc::ra_ir_emit(24, 4, i64(id), 0, 0)
 }
@@ -775,30 +782,35 @@ ir_rd_expr := fn(src : ptr(u8), e : ptr(Expr)) {
   }
 }
 ## Collect every Var READ across a statement LIST (a barriered `while` body); an unhandled stmt → give up.
-ir_rd_stmts := fn(src : ptr(u8), head : ptr(mut Stmt)) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { ir_rd_expr(src, v); s = nx }
-      Stmt::ExprStmt(e, nx) => { ir_rd_expr(src, e); s = nx }
-      Stmt::If(c, th, el, nx) => { ir_rd_expr(src, c); ir_rd_stmts(src, th); ir_rd_stmts(src, el); s = nx }
-      Stmt::While(c, b, nx) => { ir_rd_expr(src, c); ir_rd_stmts(src, b); s = nx }
-      Stmt::Loop(b, nx) => { ir_rd_stmts(src, b); s = nx }
-      Stmt::Unchecked(b, nx) => { ir_rd_stmts(src, b); s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { ir_rd_expr(src, flo); if unchecked bitcast(usize, fhi) != 0 { ir_rd_expr(src, fhi) } ; ir_rd_stmts(src, fb); s = nx }
-      Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { IRRD_OK = false; s = unchecked bitcast(ptr(mut Stmt), 0) }
+ir_rd_stmts := fn(src : ptr(u8), head : Option(ptr(mut Stmt))) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { ir_rd_expr(src, v); s = nx }
+          Stmt::ExprStmt(e, nx) => { ir_rd_expr(src, e); s = nx }
+          Stmt::If(c, th, el, nx) => { ir_rd_expr(src, c); ir_rd_stmts(src, th); ir_rd_stmts(src, el); s = nx }
+          Stmt::While(c, b, nx) => { ir_rd_expr(src, c); ir_rd_stmts(src, b); s = nx }
+          Stmt::Loop(b, nx) => { ir_rd_stmts(src, b); s = nx }
+          Stmt::Unchecked(b, nx) => { ir_rd_stmts(src, b); s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { ir_rd_expr(src, flo); if unchecked bitcast(usize, fhi) != 0 { ir_rd_expr(src, fhi) } ; ir_rd_stmts(src, fb); s = nx }
+          Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+            | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { IRRD_OK = false; s = Option.None }
+        }
+      }
+      None => { break }
     }
   }
 }
 ## Reset IRRD and collect the READ set of a barrier statement `sp` (an Assign RHS / an ExprStmt call / a
 ## whole barriered `while`). `IRRD_OK` false ⇒ the walker met a form it could not analyse ⇒ reject the fn.
-ir_collect_barrier_reads := fn(src : ptr(u8), sp : usize) {
+ir_collect_barrier_reads := fn(src : ptr(u8), sp : ptr(mut Stmt)) {
   IRRD_N = 0
   IRRD_OK = true
-  st := deref(stmt_p(Stmt, unchecked bitcast(ptr(mut Stmt), sp)))
+  st := deref(stmt_p(Stmt, sp))
   match st {
     Stmt::Assign(ns, nl, v, nx) => { ir_rd_expr(src, v) }
     Stmt::ExprStmt(e, nx) => { ir_rd_expr(src, e) }
@@ -820,7 +832,7 @@ ir_var_vreg_lookup := fn(cx : ptr(LCtx), s : usize, n : usize) -> i64 {
 ## Before a general barrier: store every MODELED scalar the barrier reads into its TEXT frame slot. Only a
 ## var already in IRV (modeled + defined) with a scalar (ek 0) slot; a frame-resident Vec/Arena/build target
 ## is not in IRV → never synced. The store reads the vreg (kept live to here) and writes the reserved slot.
-ir_sync_before_barrier := fn(cx : ptr(LCtx), sp : usize) {
+ir_sync_before_barrier := fn(cx : ptr(LCtx), sp : ptr(mut Stmt)) {
   ir_collect_barrier_reads(cx.src, sp)
   mut i := 0
   while i < IRRD_N {
@@ -836,7 +848,7 @@ ir_sync_before_barrier := fn(cx : ptr(LCtx), sp : usize) {
   }
 }
 ## Sync live modeled scalars into their frame slots, THEN emit the op-24 barrier (text-splices `sp`).
-ir_gbarrier := fn(sp : usize, cx : ptr(LCtx)) {
+ir_gbarrier := fn(sp : ptr(mut Stmt), cx : ptr(LCtx)) {
   ir_sync_before_barrier(cx, sp)
   ir_emit_gbarrier(sp)
 }
@@ -844,7 +856,7 @@ ir_gbarrier := fn(sp : usize, cx : ptr(LCtx)) {
 ## (into IRP_NSYNC — the inst budget) and REJECT the fn if the read walker gave up. "Modeled scalar" =
 ## bound, not a global / by-ref struct param / slice-param / array-local / Vec-local / frame-resident build
 ## target — a superset of "in IRV at emit", so the count is a SOUND upper bound of the emitted stores.
-ir_count_barrier_syncs := fn(src : ptr(u8), decls : ptr(rt::Vec), sp : usize) {
+ir_count_barrier_syncs := fn(src : ptr(u8), decls : ptr(rt::Vec), sp : ptr(mut Stmt)) {
   ir_collect_barrier_reads(src, sp)
   if not IRRD_OK { IRP_OK = false }
   mut i := 0
@@ -857,143 +869,153 @@ ir_count_barrier_syncs := fn(src : ptr(u8), decls : ptr(rt::Vec), sp : usize) {
 ## Does a statement LIST contain a WHITELISTED Vec-build call (a `push`/`with_capacity`/`arena_over`/mmap)?
 ## Marks a `while i < n { v.push(…) }` build loop → the WHOLE loop becomes ONE text barrier (its cursor +
 ## pushes stay frame-resident). A plain arithmetic `while` has none → stays a MODELED loop (unchanged).
-ir_stmts_have_vecbuild := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt)) -> bool {
-  mut s := head
+ir_stmts_have_vecbuild := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(mut Stmt))) -> bool {
+  mut s : Option(ptr(mut Stmt)) = head
   mut r := false
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { if ir_is_call_rhs(v) and ir_is_vecbuild_call(src, decls, v) { r = true } ; s = nx }
-      Stmt::ExprStmt(e, nx) => { if ir_is_call_rhs(e) and ir_is_vecbuild_call(src, decls, e) { r = true } ; s = nx }
-      Stmt::Unchecked(b, nx) => { if ir_stmts_have_vecbuild(src, decls, b) { r = true } ; s = nx }
-      Stmt::If(c, th, el, nx) => { if ir_stmts_have_vecbuild(src, decls, th) or ir_stmts_have_vecbuild(src, decls, el) { r = true } ; s = nx }
-      Stmt::While(c, b, nx) => { if ir_stmts_have_vecbuild(src, decls, b) { r = true } ; s = nx }
-      Stmt::Loop(b, nx) => { if ir_stmts_have_vecbuild(src, decls, b) { r = true } ; s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if ir_stmts_have_vecbuild(src, decls, fb) { r = true } ; s = nx }
-      Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { if ir_is_call_rhs(v) and ir_is_vecbuild_call(src, decls, v) { r = true } ; s = nx }
+          Stmt::ExprStmt(e, nx) => { if ir_is_call_rhs(e) and ir_is_vecbuild_call(src, decls, e) { r = true } ; s = nx }
+          Stmt::Unchecked(b, nx) => { if ir_stmts_have_vecbuild(src, decls, b) { r = true } ; s = nx }
+          Stmt::If(c, th, el, nx) => { if ir_stmts_have_vecbuild(src, decls, th) or ir_stmts_have_vecbuild(src, decls, el) { r = true } ; s = nx }
+          Stmt::While(c, b, nx) => { if ir_stmts_have_vecbuild(src, decls, b) { r = true } ; s = nx }
+          Stmt::Loop(b, nx) => { if ir_stmts_have_vecbuild(src, decls, b) { r = true } ; s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if ir_stmts_have_vecbuild(src, decls, fb) { r = true } ; s = nx }
+          Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+            | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { s = Option.None }
+        }
+      }
+      None => { break }
     }
   }
   r
 }
-pub ir_lower_stmts := fn(head : ptr(mut Stmt), cx : ptr(LCtx), unch : bool) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl2, v, nx) => {
-        ## an inline SCALAR array local's array-literal INIT (`ys := [10,20,3,9]`) → a STATEMENT BARRIER:
-        ## the whole init is emitted through the text `emit_array_assign` at render (writing the element
-        ## words into the array's FRAME slots), bracketed by a full-clobber op 23 so any live-across scalar
-        ## spills. It produces NO scalar result (no result vreg / `mov`). The array stays frame-resident.
-        if array_lit_info(v).is_a {
-          bslot := slot_of(cx.slots, cx.src, ns, nl2)
-          id := IRSB_N
-          if id >= 8 { panic("selfhost: regalloc emit — stmt-barrier side-table overflow (predicate too permissive)") }
-          IRSB_E[id] = unchecked bitcast(usize, v)
-          IRSB_B[id] = bslot
-          IRSB_N = IRSB_N + 1
-          regalloc::ra_ir_emit(23, 4, i64(id), 0, 0)                ## STMT BARRIER: emit_array_assign(v, bslot)
-        } else if ir_is_call_rhs(v) and ir_is_vecbuild_call(cx.src, cx.decls, v) {
-          ## a Vec-build assign (`r := mmap(…)`, `ar := arena_over(…)`, `v := with_capacity(…)`) — the whole
-          ## statement is text-spliced into its FRAME slots via a GENERAL BARRIER (the aggregate stays in
-          ## memory); no scalar result vreg is produced. Any modeled scalar its args read is synced first.
-          ir_gbarrier(unchecked bitcast(usize, s), cx)
-        } else {
-          vr := ir_var_vreg(cx, ns, nl2)
-          o := ir_lower_expr(v, cx, unch)
-          regalloc::ra_ir_emit(0, 3, i64(vr), o.k, o.v)             ## mov vr, RHS
-        }
-        s = nx
-      }
-      ## a bare-call ExprStmt — a GENERAL BARRIER (result discarded): a Vec-build side effect
-      ## (`v.push(x).expect(…)`, the mutation lands in the frame-resident Vec) OR the trailing `fmt::print`
-      ## of the result (its `sum` arg is synced to its frame slot first). Both text-spliced via op-24.
-      Stmt::ExprStmt(e, nx) => { ir_gbarrier(unchecked bitcast(usize, s), cx); s = nx }
-      Stmt::If(c, th, el, nx) => {
-        lelse := ir_fresh_label()
-        lend := ir_fresh_label()
-        ir_lower_cond(c, lelse, cx, unch)
-        ir_lower_stmts(th, cx, unch)
-        regalloc::ra_ir_emit(8, 4, i64(lend), 0, 0)                 ## jmp lend
-        regalloc::ra_ir_emit(10, 4, i64(lelse), 0, 0)              ## lelse:
-        ir_lower_stmts(el, cx, unch)
-        regalloc::ra_ir_emit(10, 4, i64(lend), 0, 0)               ## lend:
-        s = nx
-      }
-      Stmt::While(c, b, nx) => {
-        if ir_stmts_have_vecbuild(cx.src, cx.decls, b) {
-          ## a Vec-BUILD `while` (`while i < n { v.push(…) }`): the WHOLE loop is a GENERAL BARRIER —
-          ## text-spliced verbatim, so its cursor + pushes stay frame-resident (the modeled cursor `i` set
-          ## just above is synced to its slot first). The `for x in v` sum loop over the built Vec is the
-          ## register-allocated hot loop that follows.
-          ir_gbarrier(unchecked bitcast(usize, s), cx)
-        } else {
-          lg := ir_fresh_label()
-          ld := ir_fresh_label()
-          regalloc::ra_ir_emit(10, 4, i64(lg), 0, 0)                 ## lguard:
-          ir_lower_cond(c, ld, cx, unch)
-          ir_lower_stmts(b, cx, unch)
-          regalloc::ra_ir_emit(8, 4, i64(lg), 0, 0)                  ## jmp lguard
-          regalloc::ra_ir_emit(10, 4, i64(ld), 0, 0)                 ## ldone:
-        }
-        s = nx
-      }
-      ## `alloc::with(A) { body }` (MEM-5): the ambient-allocator scope is a COMPILE-TIME wrapper — the
-      ## driver already elided each body call's allocator arg into the AST, so lowering just processes the
-      ## body statements (the `with_capacity`/`push` build barriers + the register-allocated `for x in v`).
-      Stmt::AllocWith(ae, b, nx) => { ir_lower_stmts(b, cx, unch); s = nx }
-      Stmt::Return(rv, nx) => {
-        o := ir_lower_expr(rv, cx, unch)
-        regalloc::ra_ir_emit(0, 2, 0, o.k, o.v)                    ## mov rax, val
-        regalloc::ra_ir_emit(7, 0, 0, 0, 0)                        ## ret (renderer: jmp epilogue)
-        s = nx
-      }
-      ## RANGE `for i in lo..hi { body }` — a counted loop (predicate admits ONLY `fhi != 0`). Lowers to:
-      ##   index = lo ; hi_r = hi (once, before the loop) ; lg: cmp index, hi_r ; jge/exit done ;
-      ##   <body> ; index += 1 ; jmp lg ; done:
-      ## The index is a loop-carried vreg whose interval spans the body (the allocator's loop-carried path).
-        ## The exit test follows the upper bound's proven signedness (`jae` for unsigned, `jge` for
-        ## signed), matching the text path's `setb`/`setl` semantics. An unresolved bound stays signed.
-        ## The `+= 1` increment is UNCHECKED (no overflow guard), exactly as the text path.
-      ## The bounds are evaluated ONCE before the loop (pure scalar exprs → equivalent to per-iteration
-      ## re-eval, but cheaper); a non-trivial `hi` is materialized into a reg via `ir_to_reg`.
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-        if unchecked bitcast(usize, fhi) == 0 {
-          ## ITERABLE `for x in <iterable>`: a `Slice(scalar)` PARAM (slice-for) OR an inline scalar ARRAY
-          ## LOCAL (array-for). The predicate admitted only these two; dispatch on which the base names.
-          fv := var_name_span(flo)
-          if ir_slice_param_idx(cx.src, fv.s, fv.n) >= 0 {
-            ir_lower_slice_for(fns, fnl, flo, fb, cx, unch)
-          } else if ir_vec_local_idx(cx.src, fv.s, fv.n) >= 0 {
-            ir_lower_vec_for(fns, fnl, flo, fb, cx, unch)
-          } else {
-            ir_lower_array_for(fns, fnl, flo, fb, cx, unch)
+pub ir_lower_stmts := fn(head : Option(ptr(mut Stmt)), cx : ptr(LCtx), unch : bool) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl2, v, nx) => {
+            ## an inline SCALAR array local's array-literal INIT (`ys := [10,20,3,9]`) → a STATEMENT BARRIER:
+            ## the whole init is emitted through the text `emit_array_assign` at render (writing the element
+            ## words into the array's FRAME slots), bracketed by a full-clobber op 23 so any live-across scalar
+            ## spills. It produces NO scalar result (no result vreg / `mov`). The array stays frame-resident.
+            if array_lit_info(v).is_a {
+              bslot := slot_of(cx.slots, cx.src, ns, nl2)
+              id := IRSB_N
+              if id >= 8 { panic("selfhost: regalloc emit — stmt-barrier side-table overflow (predicate too permissive)") }
+              IRSB_E[id] = unchecked bitcast(usize, v)
+              IRSB_B[id] = bslot
+              IRSB_N = IRSB_N + 1
+              regalloc::ra_ir_emit(23, 4, i64(id), 0, 0)                ## STMT BARRIER: emit_array_assign(v, bslot)
+            } else if ir_is_call_rhs(v) and ir_is_vecbuild_call(cx.src, cx.decls, v) {
+              ## a Vec-build assign (`r := mmap(…)`, `ar := arena_over(…)`, `v := with_capacity(…)`) — the whole
+              ## statement is text-spliced into its FRAME slots via a GENERAL BARRIER (the aggregate stays in
+              ## memory); no scalar result vreg is produced. Any modeled scalar its args read is synced first.
+              ir_gbarrier(sq, cx)
+            } else {
+              vr := ir_var_vreg(cx, ns, nl2)
+              o := ir_lower_expr(v, cx, unch)
+              regalloc::ra_ir_emit(0, 3, i64(vr), o.k, o.v)             ## mov vr, RHS
+            }
+            s = nx
           }
-          s = nx
-        } else {
-        ivr := ir_var_vreg(cx, fns, fnl)
-        lo_op := ir_lower_expr(flo, cx, unch)
-        regalloc::ra_ir_emit(0, 3, i64(ivr), lo_op.k, lo_op.v)         ## mov index, lo
-        hi_op := ir_to_reg(ir_lower_expr(fhi, cx, unch))               ## hi in a reg (evaluated once)
-        lg := ir_fresh_label()
-        ld := ir_fresh_label()
-        regalloc::ra_ir_emit(10, 4, i64(lg), 0, 0)                     ## lg:
-        regalloc::ra_ir_emit(4, 3, i64(ivr), hi_op.k, hi_op.v)         ## cmp index, hi
-        regalloc::ra_ir_emit(9, 4, i64(ld), 1, i64(ir_neg_cc(24, range_bound_is_unsigned(fhi, cx))))
-                                                                        ## jae/jge done (index >= hi → exit)
-        ir_lower_stmts(fb, cx, unch)                                   ## loop body (continue/break not admitted)
-        regalloc::ra_ir_emit(1, 3, i64(ivr), 1, 1)                     ## index += 1 (unchecked)
-        regalloc::ra_ir_emit(8, 4, i64(lg), 0, 0)                      ## jmp lg
-        regalloc::ra_ir_emit(10, 4, i64(ld), 0, 0)                     ## done:
-        s = nx
+          ## a bare-call ExprStmt — a GENERAL BARRIER (result discarded): a Vec-build side effect
+          ## (`v.push(x).expect(…)`, the mutation lands in the frame-resident Vec) OR the trailing `fmt::print`
+          ## of the result (its `sum` arg is synced to its frame slot first). Both text-spliced via op-24.
+          Stmt::ExprStmt(e, nx) => { ir_gbarrier(sq, cx); s = nx }
+          Stmt::If(c, th, el, nx) => {
+            lelse := ir_fresh_label()
+            lend := ir_fresh_label()
+            ir_lower_cond(c, lelse, cx, unch)
+            ir_lower_stmts(th, cx, unch)
+            regalloc::ra_ir_emit(8, 4, i64(lend), 0, 0)                 ## jmp lend
+            regalloc::ra_ir_emit(10, 4, i64(lelse), 0, 0)              ## lelse:
+            ir_lower_stmts(el, cx, unch)
+            regalloc::ra_ir_emit(10, 4, i64(lend), 0, 0)               ## lend:
+            s = nx
+          }
+          Stmt::While(c, b, nx) => {
+            if ir_stmts_have_vecbuild(cx.src, cx.decls, b) {
+              ## a Vec-BUILD `while` (`while i < n { v.push(…) }`): the WHOLE loop is a GENERAL BARRIER —
+              ## text-spliced verbatim, so its cursor + pushes stay frame-resident (the modeled cursor `i` set
+              ## just above is synced to its slot first). The `for x in v` sum loop over the built Vec is the
+              ## register-allocated hot loop that follows.
+              ir_gbarrier(sq, cx)
+            } else {
+              lg := ir_fresh_label()
+              ld := ir_fresh_label()
+              regalloc::ra_ir_emit(10, 4, i64(lg), 0, 0)                 ## lguard:
+              ir_lower_cond(c, ld, cx, unch)
+              ir_lower_stmts(b, cx, unch)
+              regalloc::ra_ir_emit(8, 4, i64(lg), 0, 0)                  ## jmp lguard
+              regalloc::ra_ir_emit(10, 4, i64(ld), 0, 0)                 ## ldone:
+            }
+            s = nx
+          }
+          ## `alloc::with(A) { body }` (MEM-5): the ambient-allocator scope is a COMPILE-TIME wrapper — the
+          ## driver already elided each body call's allocator arg into the AST, so lowering just processes the
+          ## body statements (the `with_capacity`/`push` build barriers + the register-allocated `for x in v`).
+          Stmt::AllocWith(ae, b, nx) => { ir_lower_stmts(b, cx, unch); s = nx }
+          Stmt::Return(rv, nx) => {
+            o := ir_lower_expr(rv, cx, unch)
+            regalloc::ra_ir_emit(0, 2, 0, o.k, o.v)                    ## mov rax, val
+            regalloc::ra_ir_emit(7, 0, 0, 0, 0)                        ## ret (renderer: jmp epilogue)
+            s = nx
+          }
+          ## RANGE `for i in lo..hi { body }` — a counted loop (predicate admits ONLY `fhi != 0`). Lowers to:
+          ##   index = lo ; hi_r = hi (once, before the loop) ; lg: cmp index, hi_r ; jge/exit done ;
+          ##   <body> ; index += 1 ; jmp lg ; done:
+          ## The index is a loop-carried vreg whose interval spans the body (the allocator's loop-carried path).
+            ## The exit test follows the upper bound's proven signedness (`jae` for unsigned, `jge` for
+            ## signed), matching the text path's `setb`/`setl` semantics. An unresolved bound stays signed.
+            ## The `+= 1` increment is UNCHECKED (no overflow guard), exactly as the text path.
+          ## The bounds are evaluated ONCE before the loop (pure scalar exprs → equivalent to per-iteration
+          ## re-eval, but cheaper); a non-trivial `hi` is materialized into a reg via `ir_to_reg`.
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+            if unchecked bitcast(usize, fhi) == 0 {
+              ## ITERABLE `for x in <iterable>`: a `Slice(scalar)` PARAM (slice-for) OR an inline scalar ARRAY
+              ## LOCAL (array-for). The predicate admitted only these two; dispatch on which the base names.
+              fv := var_name_span(flo)
+              if ir_slice_param_idx(cx.src, fv.s, fv.n) >= 0 {
+                ir_lower_slice_for(fns, fnl, flo, fb, cx, unch)
+              } else if ir_vec_local_idx(cx.src, fv.s, fv.n) >= 0 {
+                ir_lower_vec_for(fns, fnl, flo, fb, cx, unch)
+              } else {
+                ir_lower_array_for(fns, fnl, flo, fb, cx, unch)
+              }
+              s = nx
+            } else {
+            ivr := ir_var_vreg(cx, fns, fnl)
+            lo_op := ir_lower_expr(flo, cx, unch)
+            regalloc::ra_ir_emit(0, 3, i64(ivr), lo_op.k, lo_op.v)         ## mov index, lo
+            hi_op := ir_to_reg(ir_lower_expr(fhi, cx, unch))               ## hi in a reg (evaluated once)
+            lg := ir_fresh_label()
+            ld := ir_fresh_label()
+            regalloc::ra_ir_emit(10, 4, i64(lg), 0, 0)                     ## lg:
+            regalloc::ra_ir_emit(4, 3, i64(ivr), hi_op.k, hi_op.v)         ## cmp index, hi
+            regalloc::ra_ir_emit(9, 4, i64(ld), 1, i64(ir_neg_cc(24, range_bound_is_unsigned(fhi, cx))))
+                                                                            ## jae/jge done (index >= hi → exit)
+            ir_lower_stmts(fb, cx, unch)                                   ## loop body (continue/break not admitted)
+            regalloc::ra_ir_emit(1, 3, i64(ivr), 1, 1)                     ## index += 1 (unchecked)
+            regalloc::ra_ir_emit(8, 4, i64(lg), 0, 0)                      ## jmp lg
+            regalloc::ra_ir_emit(10, 4, i64(ld), 0, 0)                     ## done:
+            s = nx
+            }
+          }
+          Stmt::Unchecked(b, nx) => { ir_lower_stmts(b, cx, true); s = nx }
+          Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
+            | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { panic("selfhost: regalloc emit — unsupported statement in scalar-leaf IR path"); s = Option.None }
         }
       }
-      Stmt::Unchecked(b, nx) => { ir_lower_stmts(b, cx, true); s = nx }
-      Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
-        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { panic("selfhost: regalloc emit — unsupported statement in scalar-leaf IR path"); s = unchecked bitcast(ptr(mut Stmt), 0) }
+      None => { break }
     }
   }
 }
@@ -1061,11 +1083,11 @@ ir_emit_operand := fn(in out sb : strbuf::StrBuf, k : usize, v : i64) {
 ## instead the statement's OWN `nx` is installed as a STOP sentinel (`cx.ir_stop`) that `emit_stmts` halts
 ## at — emitting just this one statement (its result lands in its FRAME slots / its call side-effect runs).
 ## %rsp is at the frame base here (the IR body never pushes) so the spliced call is ABI-aligned.
-ir_splice_one_stmt := fn(sp : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
-  hp := unchecked bitcast(ptr(mut Stmt), sp)
-  cx.ir_stop = lower_stmt_nx(sp, arena_of(cx))
-  emit_stmts(hp, sb, cx, nl)
-  cx.ir_stop = 0
+ir_splice_one_stmt := fn(sp : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
+  hp := stmt_at(sp, "selfhost: regalloc emit — general stmt-barrier slot holds no statement (compiler invariant)")
+  cx.ir_stop = stmt_next(hp)
+  emit_stmts(Option.Some(hp), sb, cx, nl)
+  cx.ir_stop = Option.None
 }
 
 ## Render the allocated (VReg-free) output stream to GAS. `raprefix` namespaces the IR-internal labels
@@ -1351,29 +1373,34 @@ ir_bound_add := fn(s : usize, n : usize) {
   if IRB_N < 64 { IRB_S[IRB_N] = s; IRB_L[IRB_N] = n; IRB_N = IRB_N + 1 }
 }
 ## PRE-PASS: collect every Assign target name (function-flat locals) into the bound set.
-ir_collect_binds := fn(head : ptr(mut Stmt)) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl2, v, nx) => { ir_bound_add(ns, nl2); s = nx }
-      Stmt::If(c, th, el, nx) => { ir_collect_binds(th); ir_collect_binds(el); s = nx }
-      Stmt::While(c, b, nx) => { ir_collect_binds(b); s = nx }
-      ## a RANGE `for i in lo..hi` binds the index `i` (a fresh scalar local) + collects the body's assigns.
-      ## (The iterable form `fhi==0` is rejected later by ir_check_stmts; adding the index here is harmless.)
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { ir_bound_add(fns, fnl); ir_collect_binds(fb); s = nx }
-      Stmt::Unchecked(b, nx) => { ir_collect_binds(b); s = nx }
-      ## `alloc::with(A) { body }`: collect the body's binds (its Vec/cursor locals) and CONTINUE past it.
-      Stmt::AllocWith(ae, b, nx) => { ir_collect_binds(b); s = nx }
-      ## a bare-call ExprStmt (a Vec `push` side effect) binds nothing — skip it and CONTINUE (do not STOP;
-      ## a following scalar Assign like the loop accumulator still needs its target collected).
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::Return(rv, nx) => { s = nx }
-      ## an unhandled stmt kind: STOP (`nx` is NOT bound in the `_` arm — reading it would be garbage,
-      ## an unbounded-pointer walk). The fn will be rejected by `ir_check_stmts` anyway.
-      Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
-        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+ir_collect_binds := fn(head : Option(ptr(mut Stmt))) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl2, v, nx) => { ir_bound_add(ns, nl2); s = nx }
+          Stmt::If(c, th, el, nx) => { ir_collect_binds(th); ir_collect_binds(el); s = nx }
+          Stmt::While(c, b, nx) => { ir_collect_binds(b); s = nx }
+          ## a RANGE `for i in lo..hi` binds the index `i` (a fresh scalar local) + collects the body's assigns.
+          ## (The iterable form `fhi==0` is rejected later by ir_check_stmts; adding the index here is harmless.)
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { ir_bound_add(fns, fnl); ir_collect_binds(fb); s = nx }
+          Stmt::Unchecked(b, nx) => { ir_collect_binds(b); s = nx }
+          ## `alloc::with(A) { body }`: collect the body's binds (its Vec/cursor locals) and CONTINUE past it.
+          Stmt::AllocWith(ae, b, nx) => { ir_collect_binds(b); s = nx }
+          ## a bare-call ExprStmt (a Vec `push` side effect) binds nothing — skip it and CONTINUE (do not STOP;
+          ## a following scalar Assign like the loop accumulator still needs its target collected).
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::Return(rv, nx) => { s = nx }
+          ## an unhandled stmt kind: STOP (`nx` is NOT bound in the `_` arm — reading it would be garbage,
+          ## an unbounded-pointer walk). The fn will be rejected by `ir_check_stmts` anyway.
+          Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
+            | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { s = Option.None }
+        }
+      }
+      None => { break }
     }
   }
 }
@@ -1550,175 +1577,180 @@ ir_check_cond := fn(src : ptr(u8), decls : ptr(rt::Vec), c : ptr(Expr), unch : b
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { IRP_OK = false }
   }
 }
-ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), unch : bool) {
-  mut s := head
-  while s != 0 {
-    IRP_NSTMT = IRP_NSTMT + 1
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      ## an Assign whose TARGET is a module global is a global WRITE (not a local binding) → reject: the
-      ## IR would update a vreg, never the global's `.data` word.
-      Stmt::Assign(ns, nl2, v, nx) => {
-        if binding_is_comptime(src, ns) {
-          ## The scalar IR has no compile-time side table; force the text emitter, whose lower context
-          ## can inline the erased binding safely.
-          IRP_OK = false
-          s = nx
-        } else if array_lit_info(v).is_a {
-          ## an inline SCALAR array local init `ys : [<native-scalar>; N] = [<const>, …]` (COMMIT 6d) → the
-          ## statement barrier + a frame-resident array iterated by `for x in ys`. Admit iff: the target is a
-          ## real local (not a global / struct param); its declared annotation is `[T; N]` with N == the
-          ## literal's element count (`parse_arr_len > 0` also excludes a scalar TUPLE — also an ArrayLit, but
-          ## with no `; N` annotation); the element kind is scalar-word (eek 0, stride 1); and every element
-          ## is a compile-time constant (Num/BoolLit — the barrier's text emit must not read a register local).
-          ai := array_lit_info(v)
-          mar := deref(unchecked bitcast(ptr(rt::Arena), IRP_MARP))
-          lts := local_type_span(src, ns, nl2)
-          aln := parse_arr_len(src, lts.s, lts.n)
-          aei := arr_elem_info(ai.ehead, src, decls, mar, unchecked bitcast(ptr(SVec), 0))
-          okarr := (not ir_name_is_global(decls, src, ns, nl2)) and ir_sp_idx(src, ns, nl2) < 0 and aln > 0 and aln == ai.nel and aei.eek == 0 and aei.stride == 1 and ir_arraylit_all_const(ai.ehead) and IRARR_N < 4
-          if okarr {
-            IRARR_S[IRARR_N] = ns
-            IRARR_L[IRARR_N] = nl2
-            IRARR_N = IRARR_N + 1
-            IRP_NARRINIT = IRP_NARRINIT + 1
-          } else { IRP_OK = false }
-          s = nx
-        } else if ir_is_call_rhs(v) and ir_is_vecbuild_call(src, decls, v) {
-          ## a Vec-build assign (`r := mmap(…)`, `ar := arena_over(…)`, `v := with_capacity(…)`) → a GENERAL
-          ## STATEMENT BARRIER (text-spliced into FRAME slots; the aggregate stays in memory). WHITELISTED:
-          ## only a syscall / Vec- or Arena-returning / `push` call reaches here, so NO fmt/display/print/general
-          ## call becomes a barrier. Admit iff the target is a real local; the side-tables have room. Barriers
-          ## may now FOLLOW modeled statements (barriers-not-first) — a modeled scalar the RHS reads is synced to
-          ## its slot at emit (counted into IRP_NSYNC here). A Vec-RETURNING call additionally records `v` as the
-          ## iterable Vec local. RHS stays TEXT. The target is recorded frame-resident (IRFR) → a modeled read
-          ## of it rejects. Barrier statements cost ~1 IR inst (op-24), not 3× a modeled stmt → cancel the +1.
-          okg := (not ir_name_is_global(decls, src, ns, nl2)) and ir_sp_idx(src, ns, nl2) < 0 and IRP_NGBAR < 16 and IRFR_N < 8
-          if okg {
-            IRFR_S[IRFR_N] = ns
-            IRFR_L[IRFR_N] = nl2
-            IRFR_N = IRFR_N + 1
-            IRP_NGBAR = IRP_NGBAR + 1
-            IRP_NSTMT = IRP_NSTMT - 1
-            ir_count_barrier_syncs(src, decls, unchecked bitcast(usize, s))
-            if ir_call_returns_vec(src, decls, v) and IRVEC_N < 4 {
-              IRVEC_S[IRVEC_N] = ns
-              IRVEC_L[IRVEC_N] = nl2
-              IRVEC_N = IRVEC_N + 1
+ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(mut Stmt)), unch : bool) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        IRP_NSTMT = IRP_NSTMT + 1
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          ## an Assign whose TARGET is a module global is a global WRITE (not a local binding) → reject: the
+          ## IR would update a vreg, never the global's `.data` word.
+          Stmt::Assign(ns, nl2, v, nx) => {
+            if binding_is_comptime(src, ns) {
+              ## The scalar IR has no compile-time side table; force the text emitter, whose lower context
+              ## can inline the erased binding safely.
+              IRP_OK = false
+              s = nx
+            } else if array_lit_info(v).is_a {
+              ## an inline SCALAR array local init `ys : [<native-scalar>; N] = [<const>, …]` (COMMIT 6d) → the
+              ## statement barrier + a frame-resident array iterated by `for x in ys`. Admit iff: the target is a
+              ## real local (not a global / struct param); its declared annotation is `[T; N]` with N == the
+              ## literal's element count (`parse_arr_len > 0` also excludes a scalar TUPLE — also an ArrayLit, but
+              ## with no `; N` annotation); the element kind is scalar-word (eek 0, stride 1); and every element
+              ## is a compile-time constant (Num/BoolLit — the barrier's text emit must not read a register local).
+              ai := array_lit_info(v)
+              mar := deref(unchecked bitcast(ptr(rt::Arena), IRP_MARP))
+              lts := local_type_span(src, ns, nl2)
+              aln := parse_arr_len(src, lts.s, lts.n)
+              aei := arr_elem_info(ai.ehead, src, decls, mar, unchecked bitcast(ptr(SVec), 0))
+              okarr := (not ir_name_is_global(decls, src, ns, nl2)) and ir_sp_idx(src, ns, nl2) < 0 and aln > 0 and aln == ai.nel and aei.eek == 0 and aei.stride == 1 and ir_arraylit_all_const(ai.ehead) and IRARR_N < 4
+              if okarr {
+                IRARR_S[IRARR_N] = ns
+                IRARR_L[IRARR_N] = nl2
+                IRARR_N = IRARR_N + 1
+                IRP_NARRINIT = IRP_NARRINIT + 1
+              } else { IRP_OK = false }
+              s = nx
+            } else if ir_is_call_rhs(v) and ir_is_vecbuild_call(src, decls, v) {
+              ## a Vec-build assign (`r := mmap(…)`, `ar := arena_over(…)`, `v := with_capacity(…)`) → a GENERAL
+              ## STATEMENT BARRIER (text-spliced into FRAME slots; the aggregate stays in memory). WHITELISTED:
+              ## only a syscall / Vec- or Arena-returning / `push` call reaches here, so NO fmt/display/print/general
+              ## call becomes a barrier. Admit iff the target is a real local; the side-tables have room. Barriers
+              ## may now FOLLOW modeled statements (barriers-not-first) — a modeled scalar the RHS reads is synced to
+              ## its slot at emit (counted into IRP_NSYNC here). A Vec-RETURNING call additionally records `v` as the
+              ## iterable Vec local. RHS stays TEXT. The target is recorded frame-resident (IRFR) → a modeled read
+              ## of it rejects. Barrier statements cost ~1 IR inst (op-24), not 3× a modeled stmt → cancel the +1.
+              okg := (not ir_name_is_global(decls, src, ns, nl2)) and ir_sp_idx(src, ns, nl2) < 0 and IRP_NGBAR < 16 and IRFR_N < 8
+              if okg {
+                IRFR_S[IRFR_N] = ns
+                IRFR_L[IRFR_N] = nl2
+                IRFR_N = IRFR_N + 1
+                IRP_NGBAR = IRP_NGBAR + 1
+                IRP_NSTMT = IRP_NSTMT - 1
+                ir_count_barrier_syncs(src, decls, sq)
+                if ir_call_returns_vec(src, decls, v) and IRVEC_N < 4 {
+                  IRVEC_S[IRVEC_N] = ns
+                  IRVEC_L[IRVEC_N] = nl2
+                  IRVEC_N = IRVEC_N + 1
+                }
+              } else { IRP_OK = false }
+              s = nx
+            } else {
+              if ir_name_is_global(decls, src, ns, nl2) or ir_sp_idx(src, ns, nl2) >= 0 { IRP_OK = false }
+              IRP_SAWMODEL = true
+              ir_check_expr(src, decls, v, unch)
+              s = nx
             }
-          } else { IRP_OK = false }
-          s = nx
-        } else {
-          if ir_name_is_global(decls, src, ns, nl2) or ir_sp_idx(src, ns, nl2) >= 0 { IRP_OK = false }
-          IRP_SAWMODEL = true
-          ir_check_expr(src, decls, v, unch)
-          s = nx
-        }
-      }
-      ## a bare-call ExprStmt → a GENERAL STATEMENT BARRIER (side effect only, result discarded): a Vec-build
-      ## (`v.push(x).expect(…)`) OR the trailing `fmt::print(…)` of the result. Admitted for ANY call (so it is
-      ## NO LONGER whitelisted here) — the VEC-SHAPE final gate is the sole narrowing: only an arity-0 fn that
-      ## also register-allocates a `for x in <Vec local>` survives, so NO fmt/display/print/io helper fn (all
-      ## take the value-to-format as a PARAM → arity != 0) is ever admitted. A non-call ExprStmt cannot be
-      ## modeled → reject. A modeled scalar the call reads (the printed `sum`) is synced to its slot at emit.
-      Stmt::ExprStmt(e, nx) => {
-        ls := stmt_label_span(s)
-        mut is_jmp := false
-        ## #716 — asked through `call_callee_span`, whose `match deref(p)` is over a pointer PARAMETER.
-        ## Written inline over the payload binding `e`, the lowering could not type the scrutinee and
-        ## compared the `Call` arm against tag 0, so `is_jmp` was never true.
-        jcs := call_callee_span(e)
-        if jcs.n != 0 { is_jmp = str_at((src + jcs.s), jcs.n) == "jmp" }
-        if ls.n != 0 or is_jmp { IRP_OK = false
-        } else if ir_is_call_rhs(e) and IRP_NGBAR < 16 {
-          IRP_NGBAR = IRP_NGBAR + 1
-          IRP_NSTMT = IRP_NSTMT - 1
-          ir_count_barrier_syncs(src, decls, unchecked bitcast(usize, s))
-        } else { IRP_OK = false }
-        s = nx
-      }
-      Stmt::If(c, th, el, nx) => {
-        IRP_SAWMODEL = true
-        IRP_NCTRL = IRP_NCTRL + 1
-        ir_check_cond(src, decls, c, unch)
-        ir_check_stmts(src, decls, th, unch)
-        ir_check_stmts(src, decls, el, unch)
-        s = nx
-      }
-      Stmt::While(c, b, nx) => {
-        if ir_stmts_have_vecbuild(src, decls, b) {
-          ## a Vec-BUILD `while` (`while i < n { v.push(…) }`) → the WHOLE loop is a GENERAL BARRIER (text-
-          ## spliced verbatim). Its cursor/pushes stay frame-resident; a modeled scalar it reads (the cursor
-          ## `i` set above) is synced to its slot at emit (counted into IRP_NSYNC). Gated by the vec-shape
-          ## final gate like every barrier. Costs ~1 IR inst (op-24), not 3× a modeled stmt → cancel the +1.
-          if IRP_NGBAR < 16 {
-            IRP_NGBAR = IRP_NGBAR + 1
-            IRP_NSTMT = IRP_NSTMT - 1
-            ir_count_barrier_syncs(src, decls, unchecked bitcast(usize, s))
-          } else { IRP_OK = false }
-        } else {
-          IRP_SAWMODEL = true
-          IRP_NCTRL = IRP_NCTRL + 1
-          ir_check_cond(src, decls, c, unch)
-          ir_check_stmts(src, decls, b, unch)
-        }
-        s = nx
-      }
-      ## `alloc::with(A) { body }` (MEM-5): a compile-time allocator scope (the driver already elided the
-      ## body calls' allocator args). Recurse into the body — its build barriers + register-allocated
-      ## `for x in v` are checked exactly as at the top level.
-      Stmt::AllocWith(ae, b, nx) => { ir_check_stmts(src, decls, b, unch); s = nx }
-      ## RANGE `for i in lo..hi { body }` (`fhi != 0`): the counted-loop form. Admit iff its bounds are
-      ## native-scalar value exprs and its body stays within the whitelist — the loop lowers to an index
-      ## vreg + a header cmp/jcc + a `+= 1` back-edge (a loop-carried interval the allocator handles). The
-      ## ITERABLE / Vec form (`fhi == 0`: `for x in <collection>`) models an aggregate iterand and MUST stay
-      ## on the text path → reject. Budget: +1 NCTRL (2 labels: header + done) and +1 NBIN (the synthetic
-      ## cmp + the `+= 1` increment + the index vreg — a conservative inst/vreg allowance).
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-        IRP_SAWMODEL = true
-        if unchecked bitcast(usize, fhi) == 0 {
-          ## ITERABLE `for x in s` (COMMIT 6c + P3-RA-AGG): admit ONLY when `s` names an admitted
-          ## `Slice(native-scalar)` or bounded `Slice(u8)` PARAM. The byte case has a dedicated zero-ext
-          ## load. Any other iterable (Vec / array / a non-slice-param) stays on the text path.
-          fv := var_name_span(flo)
-          if fv.n != 0 and ir_slice_param_idx(src, fv.s, fv.n) >= 0 {
-            IRP_NSLFOR = IRP_NSLFOR + 1
-            ir_bound_add(fns, fnl)                          ## the loop element var is a fresh scalar local
-            ir_check_stmts(src, decls, fb, unch)
+          }
+          ## a bare-call ExprStmt → a GENERAL STATEMENT BARRIER (side effect only, result discarded): a Vec-build
+          ## (`v.push(x).expect(…)`) OR the trailing `fmt::print(…)` of the result. Admitted for ANY call (so it is
+          ## NO LONGER whitelisted here) — the VEC-SHAPE final gate is the sole narrowing: only an arity-0 fn that
+          ## also register-allocates a `for x in <Vec local>` survives, so NO fmt/display/print/io helper fn (all
+          ## take the value-to-format as a PARAM → arity != 0) is ever admitted. A non-call ExprStmt cannot be
+          ## modeled → reject. A modeled scalar the call reads (the printed `sum`) is synced to its slot at emit.
+          Stmt::ExprStmt(e, nx) => {
+            ls := stmt_label_span(sq)
+            mut is_jmp := false
+            ## #716 — asked through `call_callee_span`, whose `match deref(p)` is over a pointer PARAMETER.
+            ## Written inline over the payload binding `e`, the lowering could not type the scrutinee and
+            ## compared the `Call` arm against tag 0, so `is_jmp` was never true.
+            jcs := call_callee_span(e)
+            if jcs.n != 0 { is_jmp = str_at((src + jcs.s), jcs.n) == "jmp" }
+            if ls.n != 0 or is_jmp { IRP_OK = false
+            } else if ir_is_call_rhs(e) and IRP_NGBAR < 16 {
+              IRP_NGBAR = IRP_NGBAR + 1
+              IRP_NSTMT = IRP_NSTMT - 1
+              ir_count_barrier_syncs(src, decls, sq)
+            } else { IRP_OK = false }
             s = nx
-          } else if fv.n != 0 and ir_array_local_idx(src, fv.s, fv.n) >= 0 {
-            ## `for x in <inline scalar array local>` (COMMIT 6d): the array is frame-resident; the element
-            ## base is a LEA-SLOT and each element loads through an indexed address (budget: IRP_NARRFOR).
-            IRP_NARRFOR = IRP_NARRFOR + 1
-            ir_bound_add(fns, fnl)                          ## the loop element var is a fresh scalar local
-            ir_check_stmts(src, decls, fb, unch)
+          }
+          Stmt::If(c, th, el, nx) => {
+            IRP_SAWMODEL = true
+            IRP_NCTRL = IRP_NCTRL + 1
+            ir_check_cond(src, decls, c, unch)
+            ir_check_stmts(src, decls, th, unch)
+            ir_check_stmts(src, decls, el, unch)
             s = nx
-          } else if fv.n != 0 and ir_vec_local_idx(src, fv.s, fv.n) >= 0 {
-            ## `for x in <arena-backed Vec LOCAL>` (Vec-LOCAL increment): the Vec is frame-resident (built by
-            ## the general barriers); base = arena.base + idx and len are hoisted ONCE into vregs, then each
-            ## element loads through a register-held address (budget: IRP_NVECFOR).
-            IRP_NVECFOR = IRP_NVECFOR + 1
-            ir_bound_add(fns, fnl)                          ## the loop element var is a fresh scalar local
-            ir_check_stmts(src, decls, fb, unch)
+          }
+          Stmt::While(c, b, nx) => {
+            if ir_stmts_have_vecbuild(src, decls, b) {
+              ## a Vec-BUILD `while` (`while i < n { v.push(…) }`) → the WHOLE loop is a GENERAL BARRIER (text-
+              ## spliced verbatim). Its cursor/pushes stay frame-resident; a modeled scalar it reads (the cursor
+              ## `i` set above) is synced to its slot at emit (counted into IRP_NSYNC). Gated by the vec-shape
+              ## final gate like every barrier. Costs ~1 IR inst (op-24), not 3× a modeled stmt → cancel the +1.
+              if IRP_NGBAR < 16 {
+                IRP_NGBAR = IRP_NGBAR + 1
+                IRP_NSTMT = IRP_NSTMT - 1
+                ir_count_barrier_syncs(src, decls, sq)
+              } else { IRP_OK = false }
+            } else {
+              IRP_SAWMODEL = true
+              IRP_NCTRL = IRP_NCTRL + 1
+              ir_check_cond(src, decls, c, unch)
+              ir_check_stmts(src, decls, b, unch)
+            }
             s = nx
-          } else { IRP_OK = false; s = unchecked bitcast(ptr(mut Stmt), 0) }
-        }
-        else {
-          IRP_NCTRL = IRP_NCTRL + 1
-          IRP_NBIN = IRP_NBIN + 1
-          ir_bound_add(fns, fnl)                          ## the loop index is a fresh scalar local
-          ir_check_expr(src, decls, flo, unch)
-          ir_check_expr(src, decls, fhi, unch)
-          ir_check_stmts(src, decls, fb, unch)
-          s = nx
+          }
+          ## `alloc::with(A) { body }` (MEM-5): a compile-time allocator scope (the driver already elided the
+          ## body calls' allocator args). Recurse into the body — its build barriers + register-allocated
+          ## `for x in v` are checked exactly as at the top level.
+          Stmt::AllocWith(ae, b, nx) => { ir_check_stmts(src, decls, b, unch); s = nx }
+          ## RANGE `for i in lo..hi { body }` (`fhi != 0`): the counted-loop form. Admit iff its bounds are
+          ## native-scalar value exprs and its body stays within the whitelist — the loop lowers to an index
+          ## vreg + a header cmp/jcc + a `+= 1` back-edge (a loop-carried interval the allocator handles). The
+          ## ITERABLE / Vec form (`fhi == 0`: `for x in <collection>`) models an aggregate iterand and MUST stay
+          ## on the text path → reject. Budget: +1 NCTRL (2 labels: header + done) and +1 NBIN (the synthetic
+          ## cmp + the `+= 1` increment + the index vreg — a conservative inst/vreg allowance).
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+            IRP_SAWMODEL = true
+            if unchecked bitcast(usize, fhi) == 0 {
+              ## ITERABLE `for x in s` (COMMIT 6c + P3-RA-AGG): admit ONLY when `s` names an admitted
+              ## `Slice(native-scalar)` or bounded `Slice(u8)` PARAM. The byte case has a dedicated zero-ext
+              ## load. Any other iterable (Vec / array / a non-slice-param) stays on the text path.
+              fv := var_name_span(flo)
+              if fv.n != 0 and ir_slice_param_idx(src, fv.s, fv.n) >= 0 {
+                IRP_NSLFOR = IRP_NSLFOR + 1
+                ir_bound_add(fns, fnl)                          ## the loop element var is a fresh scalar local
+                ir_check_stmts(src, decls, fb, unch)
+                s = nx
+              } else if fv.n != 0 and ir_array_local_idx(src, fv.s, fv.n) >= 0 {
+                ## `for x in <inline scalar array local>` (COMMIT 6d): the array is frame-resident; the element
+                ## base is a LEA-SLOT and each element loads through an indexed address (budget: IRP_NARRFOR).
+                IRP_NARRFOR = IRP_NARRFOR + 1
+                ir_bound_add(fns, fnl)                          ## the loop element var is a fresh scalar local
+                ir_check_stmts(src, decls, fb, unch)
+                s = nx
+              } else if fv.n != 0 and ir_vec_local_idx(src, fv.s, fv.n) >= 0 {
+                ## `for x in <arena-backed Vec LOCAL>` (Vec-LOCAL increment): the Vec is frame-resident (built by
+                ## the general barriers); base = arena.base + idx and len are hoisted ONCE into vregs, then each
+                ## element loads through a register-held address (budget: IRP_NVECFOR).
+                IRP_NVECFOR = IRP_NVECFOR + 1
+                ir_bound_add(fns, fnl)                          ## the loop element var is a fresh scalar local
+                ir_check_stmts(src, decls, fb, unch)
+                s = nx
+              } else { IRP_OK = false; s = Option.None }
+            }
+            else {
+              IRP_NCTRL = IRP_NCTRL + 1
+              IRP_NBIN = IRP_NBIN + 1
+              ir_bound_add(fns, fnl)                          ## the loop index is a fresh scalar local
+              ir_check_expr(src, decls, flo, unch)
+              ir_check_expr(src, decls, fhi, unch)
+              ir_check_stmts(src, decls, fb, unch)
+              s = nx
+            }
+          }
+          Stmt::Return(rv, nx) => { IRP_SAWMODEL = true; ir_check_expr(src, decls, rv, unch); s = nx }
+          Stmt::Unchecked(b, nx) => { ir_check_stmts(src, decls, b, true); s = nx }
+          ## an unhandled stmt kind → reject + STOP (`nx` is NOT bound in the `_` arm; walking it is garbage).
+          Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
+            | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { IRP_OK = false; s = Option.None }
         }
       }
-      Stmt::Return(rv, nx) => { IRP_SAWMODEL = true; ir_check_expr(src, decls, rv, unch); s = nx }
-      Stmt::Unchecked(b, nx) => { ir_check_stmts(src, decls, b, true); s = nx }
-      ## an unhandled stmt kind → reject + STOP (`nx` is NOT bound in the `_` arm; walking it is garbage).
-      Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
-        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { IRP_OK = false; s = unchecked bitcast(ptr(mut Stmt), 0) }
+      None => { break }
     }
   }
 }

@@ -38,6 +38,8 @@ arg_p := ast::arg_p
 arg_at := ast::arg_at
 arg_any := ast::arg_any
 stmt_p := ast::stmt_p
+stmt_at := ast::stmt_at
+stmt_any := ast::stmt_any
 stmt_label_span := ast::stmt_label_span
 expr_label_span := ast::expr_label_span
 (push_str, push_int) := rt
@@ -2096,7 +2098,7 @@ fmt_emit_value_arm_pattern := fn(am : Arm, in out sb : rt::StrBuf, src : ptr(u8)
 ## changing the matched set or inventing a second AST representation.
 fmt_same_value_arm_body := fn(a : Arm, b : Arm) -> bool {
   if a.wild == 2 or b.wild == 2 { return false }
-  if a.body_stmts != 0 or b.body_stmts != 0 { return false }
+  if stmt_any(a.body_stmts) or stmt_any(b.body_stmts) { return false }
   unchecked bitcast(usize, a.body) == unchecked bitcast(usize, b.body)
 }
 
@@ -2126,7 +2128,7 @@ emit_fmt_arms := fn(arms_head : Option(ptr(mut Arm)), in out sb : rt::StrBuf, sr
           }
         }
         push_str(sb, " => ")
-        if am.body_stmts != 0 { panic("selfhost: fmt — braced match arm not modelled") }
+        if stmt_any(am.body_stmts) { panic("selfhost: fmt — braced match arm not modelled") }
         emit_fmt_expr(am.body, sb, src, a, decls)
         if am.wild == 2 { push_str(sb, " }") }
         first = false
@@ -2199,14 +2201,14 @@ emit_fmt_arms_multi := fn(arms_head : Option(ptr(mut Arm)), indent : usize, in o
         }
         if am.wild == 2 {
           push_str(sb, " => ")
-          if am.body_stmts != 0 { panic("selfhost: fmt — braced comptime arm not modelled") }
+          if stmt_any(am.body_stmts) { panic("selfhost: fmt — braced comptime arm not modelled") }
           emit_fmt_expr_res(am.body, sb, src, a, decls, 1)
           push_str(sb, "\n")
           fmt_emit_spaces(sb, indent + 2)
           push_str(sb, "}\n")
         } else {
           push_str(sb, " => ")
-          if am.body_stmts != 0 { panic("selfhost: fmt — braced match arm not modelled") }
+          if stmt_any(am.body_stmts) { panic("selfhost: fmt — braced match arm not modelled") }
           emit_fmt_expr_res(am.body, sb, src, a, decls, 1)
           push_str(sb, ",\n")
         }
@@ -2404,13 +2406,13 @@ emit_fmt_comptime_arms := fn(arms_head : Option(ptr(mut Arm)), scrut : ptr(Expr)
         ## but the source-shape pass above has already proved every outer `=>` is either braced or the
         ## exact nested-comptime form. A valid null list is therefore the empty braced spelling; emit its
         ## canonical two-line block. Non-empty bare arms remain handled by the recursive path below.
-        if am.body_stmts == 0 {
+        if not stmt_any(am.body_stmts) {
           push_str(sb, " => {\n")
           emit_indent(sb, indent)
           push_str(sb, "}\n")
-        } else if fmt_compmatch_stmt_is_bare(am.body_stmts, src) {
+        } else if fmt_compmatch_stmt_is_bare(stmt_at(am.body_stmts, "fmt: empty comptime arm body"), src) {
           push_str(sb, " => ")
-          emit_fmt_bare_comptime_match(am.body_stmts, sb, src, a, decls, indent, tparam)
+          emit_fmt_bare_comptime_match(stmt_at(am.body_stmts, "fmt: empty comptime arm body"), sb, src, a, decls, indent, tparam)
         } else {
           push_str(sb, " => {\n")
           emit_fmt_stmts(am.body_stmts, am.body_stmts, sb, src, a, indent + 1, decls, tparam)
@@ -2428,7 +2430,7 @@ emit_fmt_comptime_arms := fn(arms_head : Option(ptr(mut Arm)), scrut : ptr(Expr)
 ## the value-match form (variant `V(b0, …)` / integer literal / `_`); the body renders multi-line and
 ## indented (like `emit_fmt_comptime_arms`). A str-literal pattern (`wild == 4`) renders `"…"`; comptime
 ## template arms (`wild` 2) render the nested `comptime for`; var arms (`wild` 3) remain fail-loud.
-emit_fmt_stmt_match_arms := fn(arms_head : Option(ptr(mut Arm)), body_head : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), indent : usize, tparam : str) {
+emit_fmt_stmt_match_arms := fn(arms_head : Option(ptr(mut Arm)), body_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), indent : usize, tparam : str) {
   mut arm : Option(ptr(mut Arm)) = arms_head
   loop {
     match arm {
@@ -2494,35 +2496,41 @@ emit_fmt_stmt_match_arms := fn(arms_head : Option(ptr(mut Arm)), body_head : ptr
 ## Has the name `[ns, ns+nl)` been the target of an Assign STRICTLY BEFORE stmt handle `upto` in the
 ## list `head`? Drives the `:=` (first binding) vs `=` (reassignment) reconstruction — the parser
 ## erases the token, so fmt derives it canonically. Value-returning scan (no mutable set).
-fmt_name_seen_before := fn(head : ptr(mut Stmt), upto : usize, ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> bool {
-  mut s := head
+fmt_name_seen_before := fn(head : Option(ptr(mut Stmt)), upto : usize, ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> bool {
+  mut s : Option(ptr(mut Stmt)) = head
   mut seen := false
-  while s != 0 and s != upto {
-    stmt := deref(stmt_p(Stmt, s))
-    match stmt {
-      Stmt::Assign(ans, anl, v, nx) => { if streq(src, ans, anl, ns, nl) { seen = true } ; s = nx }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::ExprStmt(ex, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::Match(msc, mah, mnx) => { s = mnx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
-      Stmt::CompIf(cc, cth, cel, nx) => { s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { s = nx }
-      Stmt::CompFor(cvs, cvl, iv, cb, nx) => { s = nx }
-      ## control-flow / place-write statements bind no NEW top-level name — walk PAST them (follow `nx`)
-      ## rather than halting the scan, so a binding AFTER one is still seen (correct `:=`/`=` choice).
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
-      Stmt::DerefAssign(dp, dv, nx) => { s = nx }
-      Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { s = nx }
-      Stmt::FieldPathAssign(pl, pv, nx) => { s = nx }
-      Stmt::Loop(lb, nx) => { s = nx }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::Unchecked(ub, nx) => { s = nx }
-      Stmt::AllocWith(ae, awb, nx) => { s = nx }
+  loop {
+    match s {
+      Some(sq) => {
+        if not (s != upto) { break }
+        stmt := deref(stmt_p(Stmt, sq))
+        match stmt {
+          Stmt::Assign(ans, anl, v, nx) => { if streq(src, ans, anl, ns, nl) { seen = true } ; s = nx }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::ExprStmt(ex, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::Match(msc, mah, mnx) => { s = mnx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+          Stmt::CompIf(cc, cth, cel, nx) => { s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => { s = nx }
+          Stmt::CompFor(cvs, cvl, iv, cb, nx) => { s = nx }
+          ## control-flow / place-write statements bind no NEW top-level name — walk PAST them (follow `nx`)
+          ## rather than halting the scan, so a binding AFTER one is still seen (correct `:=`/`=` choice).
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
+          Stmt::DerefAssign(dp, dv, nx) => { s = nx }
+          Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { s = nx }
+          Stmt::FieldPathAssign(pl, pv, nx) => { s = nx }
+          Stmt::Loop(lb, nx) => { s = nx }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::Unchecked(ub, nx) => { s = nx }
+          Stmt::AllocWith(ae, awb, nx) => { s = nx }
+        }
+      }
+      None => { break }
     }
   }
   seen
@@ -2676,22 +2684,25 @@ fmt_expr_is_if := fn(e : ptr(Expr)) -> bool {
 }
 
 ## The `else` branch of a statement-`if`, when it is EXACTLY one `if` statement and nothing else —
-## i.e. the `else if` the author wrote (Control Flow §4). Returns that `Stmt::If`, else 0.
-## `Stmt::If`'s else field is a statement LIST, so "nothing else" is `nx == 0` on that one statement.
-fmt_stmt_lone_if := fn(el : ptr(mut Stmt)) -> ptr(mut Stmt) {
-  mut r := unchecked bitcast(ptr(mut Stmt), 0)
-  if el == 0 { return r }
-  ## Bind the `deref(<call>)` to a LOCAL before matching (the documented self-host lower limit — a
-  ## `match deref(<call>)` scrutinee silently matches nothing, which is how this fix first no-oped).
-  est := deref(stmt_p(Stmt, el))
-  match est {
-    Stmt::If(ic, ith, iel, inx) => { if inx == 0 { r = el } }
-    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::For
-      | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-      | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-      | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+## i.e. the `else if` the author wrote (Control Flow §4). Returns that `Stmt::If`, else `None`.
+## `Stmt::If`'s else field is a statement LIST, so "nothing else" is an empty `next` on that one statement.
+fmt_stmt_lone_if := fn(el : Option(ptr(mut Stmt))) -> Option(ptr(mut Stmt)) {
+  match el {
+    Some(elq) => {
+      ## Bind the `deref(<call>)` to a LOCAL before matching (the documented self-host lower limit — a
+      ## `match deref(<call>)` scrutinee silently matches nothing, which is how this fix first no-oped).
+      est := deref(stmt_p(Stmt, elq))
+      match est {
+        Stmt::If(ic, ith, iel, inx) => { if not stmt_any(inx) { return el } }
+        Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
+    }
+    None => {}
   }
-  r
+  Option.None
 }
 
 ## `if c { … } else if c2 { … } … else { … }` — one flat chain, written iteratively so the whole
@@ -2699,10 +2710,10 @@ fmt_stmt_lone_if := fn(el : ptr(mut Stmt)) -> ptr(mut Stmt) {
 ## made fmt non-idempotent on six of the compiler's own modules (see `Expr::If` above): the nested
 ## `if` lands last in a block, re-parses as an if-EXPRESSION, and pass 2 renders it inline — and an
 ## arm that stores through a pointer silently loses the store on the way.
-emit_fmt_if_chain := fn(c0 : ptr(Expr), th0 : ptr(mut Stmt), el0 : ptr(mut Stmt), body_head : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, indent : usize, decls : ptr(rt::Vec), tparam : str) {
+emit_fmt_if_chain := fn(c0 : ptr(Expr), th0 : Option(ptr(mut Stmt)), el0 : Option(ptr(mut Stmt)), body_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, indent : usize, decls : ptr(rt::Vec), tparam : str) {
   mut c := c0
-  mut th := th0
-  mut el := el0
+  mut th : Option(ptr(mut Stmt)) = th0
+  mut el : Option(ptr(mut Stmt)) = el0
   mut more := true
   emit_indent(sb, indent)
   push_str(sb, "if ")
@@ -2712,31 +2723,35 @@ emit_fmt_if_chain := fn(c0 : ptr(Expr), th0 : ptr(mut Stmt), el0 : ptr(mut Stmt)
     push_str(sb, " {\n")
     emit_fmt_stmts(th, body_head, sb, src, a, indent + 1, decls, tparam)
     emit_indent(sb, indent)
-    if el == 0 { push_str(sb, "}\n") }
-    if el != 0 {
-      nested := fmt_stmt_lone_if(el)
-      if nested != 0 {
-        push_str(sb, "} else if ")
-        more = true
-        nst := deref(stmt_p(Stmt, nested))
-        match nst {
-          Stmt::If(nc, nth, nel, nnx) => {
-            c = nc
-            th = nth
-            el = nel
+    match el {
+      Some(elq) => {
+        nested : Option(ptr(mut Stmt)) = fmt_stmt_lone_if(el)
+        match nested {
+          Some(nq) => {
+            push_str(sb, "} else if ")
+            more = true
+            nst := deref(stmt_p(Stmt, nq))
+            match nst {
+              Stmt::If(nc, nth, nel, nnx) => {
+                c = nc
+                th = nth
+                el = nel
+              }
+              Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::For
+                | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+                | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+                | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+            }
           }
-          Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::For
-            | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-            | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-            | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+          None => {
+            push_str(sb, "} else {\n")
+            emit_fmt_stmts(el, body_head, sb, src, a, indent + 1, decls, tparam)
+            emit_indent(sb, indent)
+            push_str(sb, "}\n")
+          }
         }
       }
-      if nested == 0 {
-        push_str(sb, "} else {\n")
-        emit_fmt_stmts(el, body_head, sb, src, a, indent + 1, decls, tparam)
-        emit_indent(sb, indent)
-        push_str(sb, "}\n")
-      }
+      None => { push_str(sb, "}\n") }
     }
   }
   return
@@ -2851,366 +2866,371 @@ fmt_compfor_iter_arg := fn(src : ptr(u8), vs : usize, vl : usize, out_s : ptr(mu
 ## (`__deferblk()` → S1 → S2 → `__deferblkend()`), so the block is rendered by shifting the statements
 ## between the two markers one level right — no sub-list, no recursion. Every arm below still reads
 ## `indent`, the per-iteration effective level.
-emit_fmt_stmts := fn(list : ptr(mut Stmt), body_head : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, ind0 : usize, decls : ptr(rt::Vec), tparam : str) {
-  mut s := list
+emit_fmt_stmts := fn(list : Option(ptr(mut Stmt)), body_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, ind0 : usize, decls : ptr(rt::Vec), tparam : str) {
+  mut s : Option(ptr(mut Stmt)) = list
   mut extra : usize = 0
-  while s != 0 {
-    indent := ind0 + extra
-    stmt := deref(stmt_p(Stmt, s))
-    match stmt {
-      Stmt::Assign(ans, anl, v, nx) => {
-        emit_indent(sb, indent)
-        ## A RE-assignment (`name = v`) renders `=`; recover the erased token directly from source so
-        ## nested block/arm locals remain scope-correct. A binding renders `:=`, UNLESS the source
-        ## declares a type (`name : T = v`) — recover `T` from source
-        ## (`local_type_span` returns 0/0 for both `:=` and `=`, so it fires only on a real `: T =`) and
-        ## re-emit `name : T = v` so the annotation round-trips (was dropped → `name := v`). FLAT ifs
-        ## (not nested if/else) — a big fn mis-lowers a nested if/else here (both branches fire).
-        ## The `mut` binding qualifier is erased by the parser (front-end-only); recover it from source
-        ## (`local_is_mut`) and re-emit it on the FIRST binding, else the reformatted local becomes
-        ## IMMUTABLE and a later `name = …` reassignment is (correctly) rejected by sema-on-build.
-        ## The NO-INITIALIZER form `mut xs : [A; 2]` (a reserved, uninitialized aggregate slot) is
-        ## parsed as an ordinary Assign carrying a PLACEHOLDER value, so re-emitting `name : T = <value>`
-        ## produced `mut xs : [A; 2] = 0` — a DIFFERENT program (the whole aggregate is initialized from
-        ## a scalar 0, and the subsequent element writes land elsewhere: the deep-place fixture ran 65
-        ## before and 1 after). `local_is_uninit` is the source metadata that recovers the distinction
-        ## (the same probe lower/sema use); when it fires, emit the declaration WITHOUT an initializer.
-        ## A STORAGE-ATTRIBUTE binding (`@alloc(ar) h := P(…)`) is DESUGARED by the parser into a
-        ## plain `h := alloc_into(ar, P(…))` with the marker gone, so the AST cannot rebuild the surface
-        ## form — copy the written statement VERBATIM (`fmt_stmt_lead_attr`) and skip the reconstruction
-        ## below. Flat guards, not an if/else: a nested if/else in this arm mis-lowers (both branches
-        ## fire) in a fn this big — the documented landmine the surrounding comment already warns about.
-        mut sas : usize = 0
-        sal := fmt_stmt_lead_attr(src, ans, ptr(sas))
-        plain := sal == 0
-        if sal != 0 { push_str(sb, str_at((src + sas), sal)) }
-        seen := assign_is_reassign(src, ans, anl)
-        if plain and (not seen) and binding_is_comptime(src, ans) { push_str(sb, "comptime ") }
-        if plain and (not seen) and local_is_mut(src, ans) { push_str(sb, "mut ") }
-        if plain { push_str(sb, str_at((src + ans), anl)) }
-        lts := local_type_span(src, ans, anl)
-        uninit := (not seen) and lts.n != 0 and local_is_uninit(src, ans, anl)
-        ## Restore the written compound spelling (`x += 1`, `x &= 58`) instead of the desugared
-        ## `x = x + 1`. Rendering the desugared shape is not a free choice of canonical form: Grammar §130
-        ## line 287 defines the compound form as sugar with the place evaluated ONCE, so for a place with a
-        ## side-effecting index (`a[f()] += 1`) the expanded spelling would evaluate it twice. All EIGHT
-        ## glyphs come from `ast::compound_assign_op_at`; the source-level assignment decision comes
-        ## from `ast::assign_is_reassign`. BOTH conditions must hold: the source shows `op=` AND the
-        ## value really is a `Bin`, so an unexpected shape falls back to the plain rendering.
-        cop := compound_assign_op_at(src, ans, anl)
-        mut crhs := unchecked bitcast(ptr(Expr), 0)
-        if plain and seen and cop.len != 0 { crhs = fmt_bin_right(v) }
-        compound := unchecked bitcast(usize, crhs) != 0
-        if plain and seen and (not compound) { push_str(sb, " = ") }
-        if plain and seen and compound { push_str(sb, " "); push_str(sb, cop); push_str(sb, "= ") }
-        if plain and (not seen) and lts.n != 0 and (not uninit) { push_str(sb, " : "); push_str(sb, str_at((src + lts.s), lts.n)); push_str(sb, " = ") }
-        if plain and uninit { push_str(sb, " : "); push_str(sb, str_at((src + lts.s), lts.n)) }
-        if plain and (not seen) and lts.n == 0 { push_str(sb, " := ") }
-        if plain and (not uninit) and (not compound) { emit_fmt_expr(v, sb, src, a, decls) }
-        if plain and (not uninit) and compound { emit_fmt_expr(crhs, sb, src, a, decls) }
-        push_str(sb, "\n")
-        s = nx
-      }
-      Stmt::Return(rv, nx) => {
-        emit_indent(sb, indent)
-        push_str(sb, "return ")
-        emit_fmt_expr(rv, sb, src, a, decls)
-        push_str(sb, "\n")
-        s = nx
-      }
-      Stmt::ExprStmt(ex, nx) => {
-        ls := stmt_label_span(s)
-        if ls.n != 0 {
-          emit_indent(sb, indent)
-          emit_fmt_label(ls, sb, src)
-          emit_fmt_expr(ex, sb, src, a, decls)
-          push_str(sb, "\n")
-        } else {
-          ## DEFER (§9.3): the parser desugars `defer <expr>` to the marker call `__defer(<expr>)` and
-          ## `defer { S1; S2 }` to the flat chain `__deferblk()` → S1 → S2 → `__deferblkend()`, all of
-          ## which STAY in this statement list. Re-emit the SURFACE form — rendering the markers literally
-          ## rewrites the user's `defer` into compiler internals (round-trips only because the lower
-          ## re-intercepts the marker names). FLAT ifs, not nested if/else (the documented big-fn landmine).
-          dact := fmt_defer_action(ex, src)
-          isblk := fmt_is_deferblk(ex, src)
-          isend := fmt_is_deferblkend(ex, src)
-          if unchecked bitcast(usize, dact) != 0 {
+  loop {
+    match s {
+      Some(sq) => {
+        indent := ind0 + extra
+        stmt := deref(stmt_p(Stmt, sq))
+        match stmt {
+          Stmt::Assign(ans, anl, v, nx) => {
             emit_indent(sb, indent)
-            push_str(sb, "defer ")
-            emit_fmt_expr(dact, sb, src, a, decls)
+            ## A RE-assignment (`name = v`) renders `=`; recover the erased token directly from source so
+            ## nested block/arm locals remain scope-correct. A binding renders `:=`, UNLESS the source
+            ## declares a type (`name : T = v`) — recover `T` from source
+            ## (`local_type_span` returns 0/0 for both `:=` and `=`, so it fires only on a real `: T =`) and
+            ## re-emit `name : T = v` so the annotation round-trips (was dropped → `name := v`). FLAT ifs
+            ## (not nested if/else) — a big fn mis-lowers a nested if/else here (both branches fire).
+            ## The `mut` binding qualifier is erased by the parser (front-end-only); recover it from source
+            ## (`local_is_mut`) and re-emit it on the FIRST binding, else the reformatted local becomes
+            ## IMMUTABLE and a later `name = …` reassignment is (correctly) rejected by sema-on-build.
+            ## The NO-INITIALIZER form `mut xs : [A; 2]` (a reserved, uninitialized aggregate slot) is
+            ## parsed as an ordinary Assign carrying a PLACEHOLDER value, so re-emitting `name : T = <value>`
+            ## produced `mut xs : [A; 2] = 0` — a DIFFERENT program (the whole aggregate is initialized from
+            ## a scalar 0, and the subsequent element writes land elsewhere: the deep-place fixture ran 65
+            ## before and 1 after). `local_is_uninit` is the source metadata that recovers the distinction
+            ## (the same probe lower/sema use); when it fires, emit the declaration WITHOUT an initializer.
+            ## A STORAGE-ATTRIBUTE binding (`@alloc(ar) h := P(…)`) is DESUGARED by the parser into a
+            ## plain `h := alloc_into(ar, P(…))` with the marker gone, so the AST cannot rebuild the surface
+            ## form — copy the written statement VERBATIM (`fmt_stmt_lead_attr`) and skip the reconstruction
+            ## below. Flat guards, not an if/else: a nested if/else in this arm mis-lowers (both branches
+            ## fire) in a fn this big — the documented landmine the surrounding comment already warns about.
+            mut sas : usize = 0
+            sal := fmt_stmt_lead_attr(src, ans, ptr(sas))
+            plain := sal == 0
+            if sal != 0 { push_str(sb, str_at((src + sas), sal)) }
+            seen := assign_is_reassign(src, ans, anl)
+            if plain and (not seen) and binding_is_comptime(src, ans) { push_str(sb, "comptime ") }
+            if plain and (not seen) and local_is_mut(src, ans) { push_str(sb, "mut ") }
+            if plain { push_str(sb, str_at((src + ans), anl)) }
+            lts := local_type_span(src, ans, anl)
+            uninit := (not seen) and lts.n != 0 and local_is_uninit(src, ans, anl)
+            ## Restore the written compound spelling (`x += 1`, `x &= 58`) instead of the desugared
+            ## `x = x + 1`. Rendering the desugared shape is not a free choice of canonical form: Grammar §130
+            ## line 287 defines the compound form as sugar with the place evaluated ONCE, so for a place with a
+            ## side-effecting index (`a[f()] += 1`) the expanded spelling would evaluate it twice. All EIGHT
+            ## glyphs come from `ast::compound_assign_op_at`; the source-level assignment decision comes
+            ## from `ast::assign_is_reassign`. BOTH conditions must hold: the source shows `op=` AND the
+            ## value really is a `Bin`, so an unexpected shape falls back to the plain rendering.
+            cop := compound_assign_op_at(src, ans, anl)
+            mut crhs := unchecked bitcast(ptr(Expr), 0)
+            if plain and seen and cop.len != 0 { crhs = fmt_bin_right(v) }
+            compound := unchecked bitcast(usize, crhs) != 0
+            if plain and seen and (not compound) { push_str(sb, " = ") }
+            if plain and seen and compound { push_str(sb, " "); push_str(sb, cop); push_str(sb, "= ") }
+            if plain and (not seen) and lts.n != 0 and (not uninit) { push_str(sb, " : "); push_str(sb, str_at((src + lts.s), lts.n)); push_str(sb, " = ") }
+            if plain and uninit { push_str(sb, " : "); push_str(sb, str_at((src + lts.s), lts.n)) }
+            if plain and (not seen) and lts.n == 0 { push_str(sb, " := ") }
+            if plain and (not uninit) and (not compound) { emit_fmt_expr(v, sb, src, a, decls) }
+            if plain and (not uninit) and compound { emit_fmt_expr(crhs, sb, src, a, decls) }
             push_str(sb, "\n")
+            s = nx
           }
-          if isblk {
+          Stmt::Return(rv, nx) => {
             emit_indent(sb, indent)
-            push_str(sb, "defer {\n")
-            extra = extra + 1
+            push_str(sb, "return ")
+            emit_fmt_expr(rv, sb, src, a, decls)
+            push_str(sb, "\n")
+            s = nx
           }
-          if isend {
-            if extra == 0 { panic("selfhost: fmt — a `__deferblkend` marker with no open `defer {` (compiler invariant)") }
-            extra = extra - 1
-            emit_indent(sb, ind0 + extra)
+          Stmt::ExprStmt(ex, nx) => {
+            ls := stmt_label_span(sq)
+            if ls.n != 0 {
+              emit_indent(sb, indent)
+              emit_fmt_label(ls, sb, src)
+              emit_fmt_expr(ex, sb, src, a, decls)
+              push_str(sb, "\n")
+            } else {
+              ## DEFER (§9.3): the parser desugars `defer <expr>` to the marker call `__defer(<expr>)` and
+              ## `defer { S1; S2 }` to the flat chain `__deferblk()` → S1 → S2 → `__deferblkend()`, all of
+              ## which STAY in this statement list. Re-emit the SURFACE form — rendering the markers literally
+              ## rewrites the user's `defer` into compiler internals (round-trips only because the lower
+              ## re-intercepts the marker names). FLAT ifs, not nested if/else (the documented big-fn landmine).
+              dact := fmt_defer_action(ex, src)
+              isblk := fmt_is_deferblk(ex, src)
+              isend := fmt_is_deferblkend(ex, src)
+              if unchecked bitcast(usize, dact) != 0 {
+                emit_indent(sb, indent)
+                push_str(sb, "defer ")
+                emit_fmt_expr(dact, sb, src, a, decls)
+                push_str(sb, "\n")
+              }
+              if isblk {
+                emit_indent(sb, indent)
+                push_str(sb, "defer {\n")
+                extra = extra + 1
+              }
+              if isend {
+                if extra == 0 { panic("selfhost: fmt — a `__deferblkend` marker with no open `defer {` (compiler invariant)") }
+                extra = extra - 1
+                emit_indent(sb, ind0 + extra)
+                push_str(sb, "}\n")
+              }
+              if unchecked bitcast(usize, dact) == 0 and isblk == false and isend == false {
+                emit_indent(sb, indent)
+                emit_fmt_expr(ex, sb, src, a, decls)
+                push_str(sb, "\n")
+              }
+            }
+            s = nx
+          }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
+            emit_indent(sb, indent)
+            push_str(sb, str_at((src + bns), bnl))
+            push_str(sb, ".")
+            push_str(sb, str_at((src + fns), fnl))
+            ## FieldAssign carries the parser's desugared `Bin(field, rhs)` value, just like a local
+            ## Assign. Recover the authored operator from the FIELD name span so `s.v op= e` stays a
+            ## single-evaluation compound place rather than becoming `s.v = s.v op e`.
+            cop := compound_assign_op_at(src, fns, fnl)
+            mut crhs := unchecked bitcast(ptr(Expr), 0)
+            if cop.len != 0 { crhs = fmt_bin_right(fv) }
+            compound := unchecked bitcast(usize, crhs) != 0
+            if compound {
+              push_str(sb, " ")
+              push_str(sb, cop)
+              push_str(sb, "= ")
+              emit_fmt_expr(crhs, sb, src, a, decls)
+            } else {
+              push_str(sb, " = ")
+              emit_fmt_expr(fv, sb, src, a, decls)
+            }
+            push_str(sb, "\n")
+            s = nx
+          }
+          Stmt::While(c, b, nx) => {
+            emit_indent(sb, indent)
+            emit_fmt_label(stmt_label_span(sq), sb, src)
+            push_str(sb, "while ")
+            emit_fmt_expr(c, sb, src, a, decls)
+            push_str(sb, " {\n")
+            emit_fmt_stmts(b, body_head, sb, src, a, indent + 1, decls, tparam)
+            emit_indent(sb, indent)
             push_str(sb, "}\n")
+            s = nx
           }
-          if unchecked bitcast(usize, dact) == 0 and isblk == false and isend == false {
+          Stmt::If(c, th, el, nx) => {
+            ## The whole `if / else if / … / else` CHAIN, flat at one indent (`emit_fmt_if_chain`).
+            emit_fmt_if_chain(c, th, el, body_head, sb, src, a, indent, decls, tparam)
+            s = nx
+          }
+          Stmt::Match(scrut, arms_head, nx) => {
+            ## a STATEMENT-match: its arm bodies are BRACED statement blocks (that is what made the parser
+            ## classify it a statement, not an expression), so it renders MULTI-LINE — the inline
+            ## `emit_fmt_arms` (value-match, bare arms) would fail-loud on the braced bodies.
             emit_indent(sb, indent)
-            emit_fmt_expr(ex, sb, src, a, decls)
+            push_str(sb, "match ")
+            emit_fmt_expr(scrut, sb, src, a, decls)
+            push_str(sb, " {\n")
+            emit_fmt_stmt_match_arms(arms_head, body_head, sb, src, a, decls, indent, tparam)
+            emit_indent(sb, indent)
+            push_str(sb, "}\n")
+            s = nx
+          }
+          Stmt::CompMatch(cmsc, cmah, nx) => {
+            emit_indent(sb, indent)
+            push_str(sb, "comptime match ")
+            emit_fmt_expr(cmsc, sb, src, a, decls)
+            push_str(sb, " {\n")
+            emit_fmt_comptime_arms(cmah, cmsc, sb, src, a, decls, indent + 1, tparam)
+            emit_indent(sb, indent)
+            push_str(sb, "}\n")
+            s = nx
+          }
+          Stmt::CompIf(cc, cthen, celse, nx) => {
+            emit_indent(sb, indent)
+            push_str(sb, "comptime if ")
+            emit_fmt_expr(cc, sb, src, a, decls)
+            push_str(sb, " {\n")
+            emit_fmt_stmts(cthen, body_head, sb, src, a, indent + 1, decls, tparam)
+            emit_indent(sb, indent)
+            if not stmt_any(celse) { push_str(sb, "}\n") } else {
+              push_str(sb, "} else {\n")
+              emit_fmt_stmts(celse, body_head, sb, src, a, indent + 1, decls, tparam)
+              emit_indent(sb, indent)
+              push_str(sb, "}\n")
+            }
+            s = nx
+          }
+          Stmt::CompFor(cvs, cvl, is_variants, cbody, nx) => {
+            ## `comptime for <var> in typeinfo(<T>).fields|variants { body }` — the iterable is IMPLICIT in
+            ## the node (only `is_variants` is stored); `T` is the enclosing fn's type-parameter, threaded
+            ## in as `tparam`. Fail-loud if no type-param is in scope (can't reconstruct the iterable).
+            ## The iterated type is recovered from the header text (`fmt_compfor_iter_arg`); the enclosing
+            ## fn's type-param is only a FALLBACK, and when neither is available fmt refuses.
+            mut cts : usize = 0
+            ctl := fmt_compfor_iter_arg(src, cvs, cvl, ptr(cts))
+            if ctl == 0 and tparam == "" { panic("selfhost: fmt — comptime for whose `typeinfo(...)` argument cannot be recovered and with no type-param in scope") }
+            emit_indent(sb, indent)
+            push_str(sb, "comptime for ")
+            push_str(sb, str_at((src + cvs), cvl))
+            push_str(sb, " in typeinfo(")
+            if ctl != 0 { push_str(sb, str_at((src + cts), ctl)) }
+            if ctl == 0 { push_str(sb, tparam) }
+            push_str(sb, ")")
+            if is_variants == 1 { push_str(sb, ".variants") } else { push_str(sb, ".fields") }
+            push_str(sb, " {\n")
+            emit_fmt_stmts(cbody, body_head, sb, src, a, indent + 1, decls, tparam)
+            emit_indent(sb, indent)
+            push_str(sb, "}\n")
+            s = nx
+          }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rbody, nx) => {
+            emit_indent(sb, indent)
+            push_str(sb, "comptime for ")
+            push_str(sb, str_at((src + rvs), rvl))
+            push_str(sb, " in ")
+            emit_fmt_expr(rlo, sb, src, a, decls)
+            ## a NULL hi is the pack-mode marker (`comptime for v in <pack>`, Functions §7.1) — no `.. hi`.
+            if unchecked bitcast(usize, rhi) != 0 {
+              push_str(sb, "..")
+              emit_fmt_expr(rhi, sb, src, a, decls)
+            }
+            push_str(sb, " {\n")
+            emit_fmt_stmts(rbody, body_head, sb, src, a, indent + 1, decls, tparam)
+            emit_indent(sb, indent)
+            push_str(sb, "}\n")
+            s = nx
+          }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+            emit_indent(sb, indent)
+            emit_fmt_label(stmt_label_span(sq), sb, src)
+            push_str(sb, "for ")
+            push_str(sb, str_at((src + fns), fnl))
+            push_str(sb, " in ")
+            emit_fmt_expr(flo, sb, src, a, decls)
+            ## RANGE form `for i in lo .. hi` has a non-null `hi`; the ITERABLE form `for x in <slice>` has
+            ## `hi == 0` (`lo` is the iterable) — mirrors the parser's two For shapes.
+            if unchecked bitcast(usize, fhi) != 0 {
+              push_str(sb, "..")
+              emit_fmt_expr(fhi, sb, src, a, decls)
+            }
+            push_str(sb, " {\n")
+            emit_fmt_stmts(fb, body_head, sb, src, a, indent + 1, decls, tparam)
+            emit_indent(sb, indent)
+            push_str(sb, "}\n")
+            s = nx
+          }
+          Stmt::DerefAssign(dp, dv, nx) => {
+            ## `deref(<ptr>) = <value>` — the store dual of the `Deref` read (the node carries the inner
+            ## pointer expr, not the `deref(...)` wrapper, so re-add it).
+            emit_indent(sb, indent)
+            push_str(sb, "deref(")
+            emit_fmt_expr(dp, sb, src, a, decls)
+            push_str(sb, ") = ")
+            emit_fmt_expr(dv, sb, src, a, decls)
             push_str(sb, "\n")
+            s = nx
+          }
+          Stmt::IndexAssign(ib, ii, iv, nx) => {
+            ## `<base>[<index>] = <value>` — an array/nested-place element write; `base` is a `Var` or a
+            ## `Field` place, both handled by `emit_fmt_expr`. A tuple-component write `t.N = v` /
+            ## `t.N.M = v` lands here too, with the SAME node shape — `fmt_sep_is_dot` recovers which
+            ## separator the source wrote (`t[1][0] = 20` is not a form the parser accepts back).
+            emit_indent(sb, indent)
+            emit_fmt_expr(ib, sb, src, a, decls)
+            if fmt_sep_is_dot(ib, ii, src) {
+              push_str(sb, ".")
+              emit_fmt_expr(ii, sb, src, a, decls)
+              push_str(sb, " = ")
+            } else {
+              push_str(sb, "[")
+              emit_fmt_expr(ii, sb, src, a, decls)
+              push_str(sb, "] = ")
+            }
+            emit_fmt_expr(iv, sb, src, a, decls)
+            push_str(sb, "\n")
+            s = nx
+          }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
+            ## `<base>[<index>].<field> = <value>` — an array-of-struct element-field write (or the tuple
+            ## form `t.N.<field> = v`, hence the same separator recovery as `Stmt::IndexAssign`).
+            emit_indent(sb, indent)
+            emit_fmt_expr(fia, sb, src, a, decls)
+            if fmt_sep_is_dot(fia, fii, src) {
+              push_str(sb, ".")
+              emit_fmt_expr(fii, sb, src, a, decls)
+              push_str(sb, ".")
+            } else {
+              push_str(sb, "[")
+              emit_fmt_expr(fii, sb, src, a, decls)
+              push_str(sb, "].")
+            }
+            push_str(sb, str_at((src + ifs), ifl))
+            push_str(sb, " = ")
+            emit_fmt_expr(fiv, sb, src, a, decls)
+            push_str(sb, "\n")
+            s = nx
+          }
+          Stmt::FieldPathAssign(pl, pv, nx) => {
+            ## `<place> = <value>` — a nested-field mutation `o.i.v = e`; the place is a nested `Field`
+            ## expression that `emit_fmt_expr` renders in full.
+            emit_indent(sb, indent)
+            emit_fmt_expr(pl, sb, src, a, decls)
+            push_str(sb, " = ")
+            emit_fmt_expr(pv, sb, src, a, decls)
+            push_str(sb, "\n")
+            s = nx
+          }
+          Stmt::Loop(lb, nx) => {
+            emit_indent(sb, indent)
+            emit_fmt_label(stmt_label_span(sq), sb, src)
+            push_str(sb, "loop {\n")
+            emit_fmt_stmts(lb, body_head, sb, src, a, indent + 1, decls, tparam)
+            emit_indent(sb, indent)
+            push_str(sb, "}\n")
+            s = nx
+          }
+          Stmt::Break(bv, _bd, nx) => {
+            emit_indent(sb, indent)
+            push_str(sb, "break")
+            label := stmt_label_span(sq)
+            bvu := unchecked bitcast(usize, bv)
+            if label.n != 0 {
+              push_str(sb, " ")
+              push_str(sb, str_at((src + label.s), label.n))
+            }
+            if bvu != 0 {
+              push_str(sb, " ")
+              emit_fmt_expr(bv, sb, src, a, decls)
+            }
+            push_str(sb, "\n")
+            s = nx
+          }
+          Stmt::Continue(_cd, nx) => {
+            emit_indent(sb, indent)
+            push_str(sb, "continue")
+            label := stmt_label_span(sq)
+            if label.n != 0 {
+              push_str(sb, " ")
+              push_str(sb, str_at((src + label.s), label.n))
+            }
+            push_str(sb, "\n")
+            s = nx
+          }
+          Stmt::Unchecked(ub, nx) => {
+            emit_indent(sb, indent)
+            push_str(sb, "unchecked {\n")
+            emit_fmt_stmts(ub, body_head, sb, src, a, indent + 1, decls, tparam)
+            emit_indent(sb, indent)
+            push_str(sb, "}\n")
+            s = nx
+          }
+          Stmt::AllocWith(ae, awb, nx) => {
+            emit_indent(sb, indent)
+            push_str(sb, "alloc::with(")
+            emit_fmt_expr(ae, sb, src, a, decls)
+            push_str(sb, ") {\n")
+            emit_fmt_stmts(awb, body_head, sb, src, a, indent + 1, decls, tparam)
+            emit_indent(sb, indent)
+            push_str(sb, "}\n")
+            s = nx
           }
         }
-        s = nx
       }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
-        emit_indent(sb, indent)
-        push_str(sb, str_at((src + bns), bnl))
-        push_str(sb, ".")
-        push_str(sb, str_at((src + fns), fnl))
-        ## FieldAssign carries the parser's desugared `Bin(field, rhs)` value, just like a local
-        ## Assign. Recover the authored operator from the FIELD name span so `s.v op= e` stays a
-        ## single-evaluation compound place rather than becoming `s.v = s.v op e`.
-        cop := compound_assign_op_at(src, fns, fnl)
-        mut crhs := unchecked bitcast(ptr(Expr), 0)
-        if cop.len != 0 { crhs = fmt_bin_right(fv) }
-        compound := unchecked bitcast(usize, crhs) != 0
-        if compound {
-          push_str(sb, " ")
-          push_str(sb, cop)
-          push_str(sb, "= ")
-          emit_fmt_expr(crhs, sb, src, a, decls)
-        } else {
-          push_str(sb, " = ")
-          emit_fmt_expr(fv, sb, src, a, decls)
-        }
-        push_str(sb, "\n")
-        s = nx
-      }
-      Stmt::While(c, b, nx) => {
-        emit_indent(sb, indent)
-        emit_fmt_label(stmt_label_span(s), sb, src)
-        push_str(sb, "while ")
-        emit_fmt_expr(c, sb, src, a, decls)
-        push_str(sb, " {\n")
-        emit_fmt_stmts(b, body_head, sb, src, a, indent + 1, decls, tparam)
-        emit_indent(sb, indent)
-        push_str(sb, "}\n")
-        s = nx
-      }
-      Stmt::If(c, th, el, nx) => {
-        ## The whole `if / else if / … / else` CHAIN, flat at one indent (`emit_fmt_if_chain`).
-        emit_fmt_if_chain(c, th, el, body_head, sb, src, a, indent, decls, tparam)
-        s = nx
-      }
-      Stmt::Match(scrut, arms_head, nx) => {
-        ## a STATEMENT-match: its arm bodies are BRACED statement blocks (that is what made the parser
-        ## classify it a statement, not an expression), so it renders MULTI-LINE — the inline
-        ## `emit_fmt_arms` (value-match, bare arms) would fail-loud on the braced bodies.
-        emit_indent(sb, indent)
-        push_str(sb, "match ")
-        emit_fmt_expr(scrut, sb, src, a, decls)
-        push_str(sb, " {\n")
-        emit_fmt_stmt_match_arms(arms_head, body_head, sb, src, a, decls, indent, tparam)
-        emit_indent(sb, indent)
-        push_str(sb, "}\n")
-        s = nx
-      }
-      Stmt::CompMatch(cmsc, cmah, nx) => {
-        emit_indent(sb, indent)
-        push_str(sb, "comptime match ")
-        emit_fmt_expr(cmsc, sb, src, a, decls)
-        push_str(sb, " {\n")
-        emit_fmt_comptime_arms(cmah, cmsc, sb, src, a, decls, indent + 1, tparam)
-        emit_indent(sb, indent)
-        push_str(sb, "}\n")
-        s = nx
-      }
-      Stmt::CompIf(cc, cthen, celse, nx) => {
-        emit_indent(sb, indent)
-        push_str(sb, "comptime if ")
-        emit_fmt_expr(cc, sb, src, a, decls)
-        push_str(sb, " {\n")
-        emit_fmt_stmts(cthen, body_head, sb, src, a, indent + 1, decls, tparam)
-        emit_indent(sb, indent)
-        if celse == 0 { push_str(sb, "}\n") } else {
-          push_str(sb, "} else {\n")
-          emit_fmt_stmts(celse, body_head, sb, src, a, indent + 1, decls, tparam)
-          emit_indent(sb, indent)
-          push_str(sb, "}\n")
-        }
-        s = nx
-      }
-      Stmt::CompFor(cvs, cvl, is_variants, cbody, nx) => {
-        ## `comptime for <var> in typeinfo(<T>).fields|variants { body }` — the iterable is IMPLICIT in
-        ## the node (only `is_variants` is stored); `T` is the enclosing fn's type-parameter, threaded
-        ## in as `tparam`. Fail-loud if no type-param is in scope (can't reconstruct the iterable).
-        ## The iterated type is recovered from the header text (`fmt_compfor_iter_arg`); the enclosing
-        ## fn's type-param is only a FALLBACK, and when neither is available fmt refuses.
-        mut cts : usize = 0
-        ctl := fmt_compfor_iter_arg(src, cvs, cvl, ptr(cts))
-        if ctl == 0 and tparam == "" { panic("selfhost: fmt — comptime for whose `typeinfo(...)` argument cannot be recovered and with no type-param in scope") }
-        emit_indent(sb, indent)
-        push_str(sb, "comptime for ")
-        push_str(sb, str_at((src + cvs), cvl))
-        push_str(sb, " in typeinfo(")
-        if ctl != 0 { push_str(sb, str_at((src + cts), ctl)) }
-        if ctl == 0 { push_str(sb, tparam) }
-        push_str(sb, ")")
-        if is_variants == 1 { push_str(sb, ".variants") } else { push_str(sb, ".fields") }
-        push_str(sb, " {\n")
-        emit_fmt_stmts(cbody, body_head, sb, src, a, indent + 1, decls, tparam)
-        emit_indent(sb, indent)
-        push_str(sb, "}\n")
-        s = nx
-      }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rbody, nx) => {
-        emit_indent(sb, indent)
-        push_str(sb, "comptime for ")
-        push_str(sb, str_at((src + rvs), rvl))
-        push_str(sb, " in ")
-        emit_fmt_expr(rlo, sb, src, a, decls)
-        ## a NULL hi is the pack-mode marker (`comptime for v in <pack>`, Functions §7.1) — no `.. hi`.
-        if unchecked bitcast(usize, rhi) != 0 {
-          push_str(sb, "..")
-          emit_fmt_expr(rhi, sb, src, a, decls)
-        }
-        push_str(sb, " {\n")
-        emit_fmt_stmts(rbody, body_head, sb, src, a, indent + 1, decls, tparam)
-        emit_indent(sb, indent)
-        push_str(sb, "}\n")
-        s = nx
-      }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-        emit_indent(sb, indent)
-        emit_fmt_label(stmt_label_span(s), sb, src)
-        push_str(sb, "for ")
-        push_str(sb, str_at((src + fns), fnl))
-        push_str(sb, " in ")
-        emit_fmt_expr(flo, sb, src, a, decls)
-        ## RANGE form `for i in lo .. hi` has a non-null `hi`; the ITERABLE form `for x in <slice>` has
-        ## `hi == 0` (`lo` is the iterable) — mirrors the parser's two For shapes.
-        if unchecked bitcast(usize, fhi) != 0 {
-          push_str(sb, "..")
-          emit_fmt_expr(fhi, sb, src, a, decls)
-        }
-        push_str(sb, " {\n")
-        emit_fmt_stmts(fb, body_head, sb, src, a, indent + 1, decls, tparam)
-        emit_indent(sb, indent)
-        push_str(sb, "}\n")
-        s = nx
-      }
-      Stmt::DerefAssign(dp, dv, nx) => {
-        ## `deref(<ptr>) = <value>` — the store dual of the `Deref` read (the node carries the inner
-        ## pointer expr, not the `deref(...)` wrapper, so re-add it).
-        emit_indent(sb, indent)
-        push_str(sb, "deref(")
-        emit_fmt_expr(dp, sb, src, a, decls)
-        push_str(sb, ") = ")
-        emit_fmt_expr(dv, sb, src, a, decls)
-        push_str(sb, "\n")
-        s = nx
-      }
-      Stmt::IndexAssign(ib, ii, iv, nx) => {
-        ## `<base>[<index>] = <value>` — an array/nested-place element write; `base` is a `Var` or a
-        ## `Field` place, both handled by `emit_fmt_expr`. A tuple-component write `t.N = v` /
-        ## `t.N.M = v` lands here too, with the SAME node shape — `fmt_sep_is_dot` recovers which
-        ## separator the source wrote (`t[1][0] = 20` is not a form the parser accepts back).
-        emit_indent(sb, indent)
-        emit_fmt_expr(ib, sb, src, a, decls)
-        if fmt_sep_is_dot(ib, ii, src) {
-          push_str(sb, ".")
-          emit_fmt_expr(ii, sb, src, a, decls)
-          push_str(sb, " = ")
-        } else {
-          push_str(sb, "[")
-          emit_fmt_expr(ii, sb, src, a, decls)
-          push_str(sb, "] = ")
-        }
-        emit_fmt_expr(iv, sb, src, a, decls)
-        push_str(sb, "\n")
-        s = nx
-      }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
-        ## `<base>[<index>].<field> = <value>` — an array-of-struct element-field write (or the tuple
-        ## form `t.N.<field> = v`, hence the same separator recovery as `Stmt::IndexAssign`).
-        emit_indent(sb, indent)
-        emit_fmt_expr(fia, sb, src, a, decls)
-        if fmt_sep_is_dot(fia, fii, src) {
-          push_str(sb, ".")
-          emit_fmt_expr(fii, sb, src, a, decls)
-          push_str(sb, ".")
-        } else {
-          push_str(sb, "[")
-          emit_fmt_expr(fii, sb, src, a, decls)
-          push_str(sb, "].")
-        }
-        push_str(sb, str_at((src + ifs), ifl))
-        push_str(sb, " = ")
-        emit_fmt_expr(fiv, sb, src, a, decls)
-        push_str(sb, "\n")
-        s = nx
-      }
-      Stmt::FieldPathAssign(pl, pv, nx) => {
-        ## `<place> = <value>` — a nested-field mutation `o.i.v = e`; the place is a nested `Field`
-        ## expression that `emit_fmt_expr` renders in full.
-        emit_indent(sb, indent)
-        emit_fmt_expr(pl, sb, src, a, decls)
-        push_str(sb, " = ")
-        emit_fmt_expr(pv, sb, src, a, decls)
-        push_str(sb, "\n")
-        s = nx
-      }
-      Stmt::Loop(lb, nx) => {
-        emit_indent(sb, indent)
-        emit_fmt_label(stmt_label_span(s), sb, src)
-        push_str(sb, "loop {\n")
-        emit_fmt_stmts(lb, body_head, sb, src, a, indent + 1, decls, tparam)
-        emit_indent(sb, indent)
-        push_str(sb, "}\n")
-        s = nx
-      }
-      Stmt::Break(bv, _bd, nx) => {
-        emit_indent(sb, indent)
-        push_str(sb, "break")
-        label := stmt_label_span(s)
-        bvu := unchecked bitcast(usize, bv)
-        if label.n != 0 {
-          push_str(sb, " ")
-          push_str(sb, str_at((src + label.s), label.n))
-        }
-        if bvu != 0 {
-          push_str(sb, " ")
-          emit_fmt_expr(bv, sb, src, a, decls)
-        }
-        push_str(sb, "\n")
-        s = nx
-      }
-      Stmt::Continue(_cd, nx) => {
-        emit_indent(sb, indent)
-        push_str(sb, "continue")
-        label := stmt_label_span(s)
-        if label.n != 0 {
-          push_str(sb, " ")
-          push_str(sb, str_at((src + label.s), label.n))
-        }
-        push_str(sb, "\n")
-        s = nx
-      }
-      Stmt::Unchecked(ub, nx) => {
-        emit_indent(sb, indent)
-        push_str(sb, "unchecked {\n")
-        emit_fmt_stmts(ub, body_head, sb, src, a, indent + 1, decls, tparam)
-        emit_indent(sb, indent)
-        push_str(sb, "}\n")
-        s = nx
-      }
-      Stmt::AllocWith(ae, awb, nx) => {
-        emit_indent(sb, indent)
-        push_str(sb, "alloc::with(")
-        emit_fmt_expr(ae, sb, src, a, decls)
-        push_str(sb, ") {\n")
-        emit_fmt_stmts(awb, body_head, sb, src, a, indent + 1, decls, tparam)
-        emit_indent(sb, indent)
-        push_str(sb, "}\n")
-        s = nx
-      }
+      None => { break }
     }
   }
 }

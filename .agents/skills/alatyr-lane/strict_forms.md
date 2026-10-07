@@ -25,7 +25,7 @@ issue in the marker's reason. Do not quietly route around it.
 
 | § | form | defect class it retires | held by |
 |---|---|---|---|
-| 1 | absence is `Option(ptr(T))` walked with `match`, not a sentinel | 0 as null, −1 as "not found", 255 as "poisoned" | `strict_forms_check.sh` `null` (typed + lexical); the transitional marker names its blocker (#809, #792) |
+| 1 | absence is `Option(ptr(T))` walked with `match`, not a sentinel | 0 as null, −1 as "not found", 255 as "poisoned" | `strict_forms_check.sh` `null` (typed + lexical); the transitional marker names an open blocker (the historical #809 and #792 are closed) |
 | 2 | a kind is an enum, not an integer; flags are not packed into it | #583 (134 literal `.tag` sites), #626, `+128` mut flag | `strict_forms_check.sh` `kind-literal` |
 | 3 | decide with an exhaustive `match` on the value | #544 (249 blind wildcard arms), #716, #464 | `wildcard_arm_check.sh`; the rest by review |
 | 4 | one decision, one place | the #540 family, #539 | `idiom_gate.sh` (for the shapes it knows) |
@@ -110,12 +110,12 @@ typed form cannot be written in these shapes yet:
 - #792: an enum-typed or `Option(u64)` field read through a pointer (`deref(p).f`) is a wrong value
   or a SIGSEGV. Bind the record first (`rv : Rec = deref(p) ; rv.f`).
 
-Where neither workaround reaches (the AST's own lists still end in a raw null `next`, and converting
-them is §9 step 2), spell the null explicitly (§6). The marker's reason must name the **blocking
-issue**, not only the structure:
+Where neither workaround reaches (every AST list is now `Option(ptr(mut T))`, so this is for a
+shape the typed form still cannot express), spell the null explicitly (§6). The marker's reason
+must name the **blocking issue**, not only the structure:
 
 ```alatyr
-## null-ok: #809 — Stmt.next ends in a null link; the AST's lists are not Option(ptr(Stmt)) yet (§9)
+## null-ok: #809 — <the field> is read through a mutable global and cannot be matched in place
 while unchecked bitcast(usize, s) != 0 { ... }
 ```
 

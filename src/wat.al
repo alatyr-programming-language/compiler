@@ -49,6 +49,9 @@ arg_p := ast::arg_p
 arg_at := ast::arg_at
 arg_any := ast::arg_any
 stmt_p := ast::stmt_p
+stmt_same := ast::stmt_same
+stmt_any := ast::stmt_any
+stmt_next := ast::stmt_next
 stmt_label_span := ast::stmt_label_span
 local_is_comptime := ast::binding_is_comptime
 (push_str, push_int) := rt
@@ -223,42 +226,48 @@ wat_extern_symbol := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WSpan 
 ## initialised `false` / `""` IS the answer and the always-signed `i64` default still covers it. A new
 ## `Expr` variant reaching this band is a compile error at each of its group arms; what the author
 ## then has to decide is only whether that form can CARRY signedness, and the safe answer is "no".
-wat_local_ann_signed := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d := lower_layout::local_decl_assign(head, src, ns, nl)
+wat_local_ann_signed := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
   mut r := false
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { if ann_scan_signed(src, ans + anl) { r = true } }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => { if ann_scan_signed(src, ans + anl) { r = true } }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
     }
+    None => {}
   }
   r
 }
 ## The `:=` RHS expr of a top-level local (0 if not found) — recovers an un-annotated `b := shr(s, 1)`'s
 ## signed type from the shift RHS (OP-6: shl/shr/rotl/rotr return the left operand's type). Without this the
 ## annotation-only signedness read chose `i64.div_u` for `b / 2` → a silent WAT miscompile.
-wat_local_rhs := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> ptr(Expr) {
-  d := lower_layout::local_decl_assign(head, src, ns, nl)
+wat_local_rhs := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> ptr(Expr) {
+  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
   mut r := unchecked bitcast(ptr(Expr), 0)
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { r = v }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => { r = v }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
     }
+    None => {}
   }
   r
 }
-wat_shift_call_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+wat_shift_call_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
   mut r := false
   match deref(v) {
     Expr::Call(cs, cl, na, ah) => {
@@ -290,7 +299,7 @@ wat_shift_call_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)),
 ## COMPARISONS are excluded there for the same reason — they yield `bool`, not the operand type.
 ## One-directional like every predicate in this family: it can only move an operand from the
 ## UNSIGNED default to signed, never the reverse.
-wat_bin_init_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+wat_bin_init_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
   mut r := false
   match deref(v) {
     Expr::Bin(op, bl, br) => {
@@ -312,7 +321,7 @@ wat_bin_init_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), b
 
 ## The signedness oracle every `/`, `%`, `shr` and checked `+`/`-`/`*` site reads. Unchanged
 ## signature; the recursion `wat_bin_init_signed` introduces is bounded by `_dep` below.
-wat_operand_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
+wat_operand_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
   wat_operand_signed_dep(e, params_head, body_head, src, a, 0)
 }
 
@@ -323,7 +332,7 @@ wat_operand_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), bo
 ## b = a + 1`). Without the cap that pair walks forever. Exhausting it answers "not proven", which is
 ## the pre-existing unsigned default and never a wrong type. Same shape and same cap as
 ## `wat_is_float_local`.
-wat_operand_signed_dep := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+wat_operand_signed_dep := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
   if dep > 24 { return false }
   mut r := false
   match deref(e) {
@@ -354,19 +363,22 @@ wat_operand_signed_dep := fn(e : ptr(Expr), params_head : Option(ptr(mut Param))
   r
 }
 
-wat_local_ann_unsigned := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d := lower_layout::local_decl_assign(head, src, ns, nl)
+wat_local_ann_unsigned := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
   mut r := false
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { if ann_scan_unsigned(src, ans + anl) { r = true } }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => { if ann_scan_unsigned(src, ans + anl) { r = true } }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
     }
+    None => {}
   }
   r
 }
@@ -376,7 +388,7 @@ wat_local_ann_unsigned := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl
 ## init participates; every other inferred init stays untyped exactly as before. (x86_64's dual is the
 ## `Expr::Unchecked` arm of `lower::infer_local_scalar_type`, filtered by `unsigned_ty_only`; here the
 ## predicate is already proof-only, so the filter is structural rather than a type-name test.)
-wat_unchecked_init_unsigned := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
+wat_unchecked_init_unsigned := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
   mut r := false
   match deref(v) {
     Expr::Unchecked(inner) => { r = wat_operand_unsigned(inner, params_head, body_head, src, a) }
@@ -400,7 +412,7 @@ wat_unchecked_init_unsigned := fn(v : ptr(Expr), params_head : Option(ptr(mut Pa
 ## type and which needs `decls` — not a parameter of this predicate; and a module-level GLOBAL array,
 ## for which no backend retains a declared type span at all. This family only ever moves an operand
 ## signed -> unsigned on PROOF, so an unrecovered base must stay signed.
-wat_index_elem_unsigned := fn(bse : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
+wat_index_elem_unsigned := fn(bse : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
   bs := ex_var_ns(bse)
   bn := ex_var_nl(bse)
   mut r := false
@@ -430,7 +442,7 @@ wat_index_elem_unsigned := fn(bse : ptr(Expr), params_head : Option(ptr(mut Para
   }
   r
 }
-wat_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
+wat_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
   mut r := false
   match deref(e) {
     Expr::Var(s, n) => {
@@ -501,7 +513,7 @@ wat_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
 ## unsigned renderer and its exact previous bytes, and so does every hole none of the three shapes
 ## matches: float, `str` and aggregate holes still reach the one integer renderer here, unchanged and
 ## still out of scope.
-wat_hole_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+wat_hole_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
   if wat_operand_signed(e, params_head, body_head, src, a) { return true }
   if wat_operand_unsigned(e, params_head, body_head, src, a) { return false }
   mut r := false
@@ -519,7 +531,7 @@ wat_hole_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_
 }
 ## `arr[0]` — the base local's DECLARED array type, then that type's element name: `arr : [i64; 3]`
 ## → `i64` → signed. A non-Var base, an un-annotated array local, or a non-scalar element answers no.
-wat_hole_index_signed := fn(bse : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
+wat_hole_index_signed := fn(bse : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
   bs := ex_var_ns(bse)
   bn := ex_var_nl(bse)
   mut r := false
@@ -529,7 +541,7 @@ wat_hole_index_signed := fn(bse : ptr(Expr), body_head : ptr(mut Stmt), src : pt
 ## `inferred := 0 - 5` — an UN-ANNOTATED local, whose `:=` initialiser is the only type evidence
 ## there is; literal arithmetic there is §7.1's default `i64`. An ANNOTATED local never reaches here:
 ## the two operand oracles above answer it first, in whichever direction its annotation says.
-wat_hole_local_init_signed := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+wat_hole_local_init_signed := fn(body_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   rhs := wat_local_rhs(body_head, src, ns, nl, a)
   mut r := false
   if unchecked bitcast(usize, rhs) != 0 { if lit_arith_i64(rhs, src) { r = true } }
@@ -547,7 +559,7 @@ wat_hole_local_init_signed := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : 
 ## as a proof of that operand's unsignedness and then feeds the SAME both-or-literal rule below,
 ## unchanged. `0` — no erased bitcast, or an inner shape this scan declines — leaves the predicate
 ## byte-for-byte the one it was.
-wat_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
+wat_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
   bl := cmp_operand_bitcast_kind(l, src)
   br := cmp_operand_bitcast_kind(r, src)
   if bl == 1 or br == 1 { return false }
@@ -558,11 +570,11 @@ wat_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : Option(ptr(mu
   if ur and ex_is_num_lit(l) { return true }
   false
 }
-wat_local_narrow := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> str {
+wat_local_narrow := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> str {
   ## The annotation's sub-word name, or an unannotated `x := xs[i]`'s element — `lower_layout` owns it.
   lower_layout::local_narrow(head, src, ns, nl)
 }
-wat_operand_narrow := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> str {
+wat_operand_narrow := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> str {
   mut r := ""
   match deref(e) {
     Expr::Var(s, n) => {
@@ -756,66 +768,75 @@ wat_float_global_init_ok := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, 
 }
 ## Does the LOCAL `[ns,nl)` name a float ARRAY (`xs := [<FloatLit>, …]`)? First element float via the
 ## shared detector; `done` set only on the array-lit match (mirrors is_array_local).
-wat_array_is_float := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, params_head : Option(ptr(mut Param)), decls : ptr(rt::Vec)) -> bool {
-  mut s := body_head ; mut r := false ; mut done := false
-  while s != 0 and (not done) {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) and ex_is_array_lit(v) {
-          eh := ex_array_lit_ehead(v)
-          match eh { Some(ehq) => { fe := arg_p(ehq) ; if wat_is_float_expr(deref(fe).e, body_head, src, a, params_head, decls, 0) { r = true } }; None => {} }
-          done = true
+wat_array_is_float := fn(body_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, params_head : Option(ptr(mut Param)), decls : ptr(rt::Vec)) -> bool {
+  mut s : Option(ptr(mut Stmt)) = body_head ; mut r := false ; mut done := false
+  loop {
+    match s {
+      Some(sq) => {
+        if not ((not done)) { break }
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ans, anl, v, nx) => {
+            if streq(src, ans, anl, ns, nl) and ex_is_array_lit(v) {
+              eh := ex_array_lit_ehead(v)
+              match eh { Some(ehq) => { fe := arg_p(ehq) ; if wat_is_float_expr(deref(fe).e, body_head, src, a, params_head, decls, 0) { r = true } }; None => {} }
+              done = true
+            }
+            ## a slice-VIEW binding (`fv := base[lo..hi]`) inherits its backing array's element float-ness —
+            ## recurse on the slice base so `fv[i]` reads via the float path (else it mis-reads the bits as int).
+            if streq(src, ans, anl, ns, nl) and ex_is_slice(v) {
+              bn2 := expr_var_name(ex_slice_base(v))
+              if wat_array_is_float(body_head, src, bn2.s, bn2.n, a, params_head, decls) { r = true }
+              done = true
+            }
+            s = nx
+          }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+          Stmt::CompIf(cc, th, el, nx) => { s = nx }
+          Stmt::Loop(lb, lnx) => { s = lnx }
+          Stmt::Unchecked(ub, unx) => { s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
+          ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::Match | Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
         }
-        ## a slice-VIEW binding (`fv := base[lo..hi]`) inherits its backing array's element float-ness —
-        ## recurse on the slice base so `fv[i]` reads via the float path (else it mis-reads the bits as int).
-        if streq(src, ans, anl, ns, nl) and ex_is_slice(v) {
-          bn2 := expr_var_name(ex_slice_base(v))
-          if wat_array_is_float(body_head, src, bn2.s, bn2.n, a, params_head, decls) { r = true }
-          done = true
-        }
-        s = nx
       }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
-      Stmt::CompIf(cc, th, el, nx) => { s = nx }
-      Stmt::Loop(lb, lnx) => { s = lnx }
-      Stmt::Unchecked(ub, unx) => { s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
-      ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+      None => { break }
     }
   }
   r
 }
-wat_is_float_local := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, params_head : Option(ptr(mut Param)), decls : ptr(rt::Vec), dep : i64) -> bool {
+wat_is_float_local := fn(body_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, params_head : Option(ptr(mut Param)), decls : ptr(rt::Vec), dep : i64) -> bool {
   if dep > 24 { return false }
   mut r := false
-  d := lower_layout::local_decl_assign(body_head, src, ns, nl)
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if ann_scan_float(src, ans + anl) { r = true }
-        if wat_is_float_expr(v, body_head, src, a, params_head, decls, dep + 1) { r = true }
+  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(body_head, src, ns, nl)
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => {
+          if ann_scan_float(src, ans + anl) { r = true }
+          if wat_is_float_expr(v, body_head, src, a, params_head, decls, dep + 1) { r = true }
+        }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
       }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
+    None => {}
   }
   r
 }
@@ -861,7 +882,7 @@ wat_int_const_expr := fn(e : ptr(Expr)) -> bool {
   }
   r
 }
-wat_direct_float_num := fn(e : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec), body_head : ptr(mut Stmt), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, bind_head : Option(ptr(mut Bind))) -> bool {
+wat_direct_float_num := fn(e : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec), body_head : Option(ptr(mut Stmt)), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, bind_head : Option(ptr(mut Bind))) -> bool {
   mut r := false
   if ann_scan_float(src, ns + nl) == false { return r }
   if wat_int_const_expr(e) { return true }
@@ -892,7 +913,7 @@ wat_direct_float_num := fn(e : ptr(Expr), src : ptr(u8), ns : usize, nl : usize,
   if unchecked bitcast(usize, cv) != 0 { if wat_int_const_expr(cv) { r = true } }
   r
 }
-wat_is_float_expr := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, params_head : Option(ptr(mut Param)), decls : ptr(rt::Vec), dep : i64) -> bool {
+wat_is_float_expr := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, params_head : Option(ptr(mut Param)), decls : ptr(rt::Vec), dep : i64) -> bool {
   if dep > 24 { return false }
   mut r := false
   match deref(e) {
@@ -1564,7 +1585,7 @@ callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
 ##
 ## A FIELD (`h.p`) and an INDEX feed are still not matched: those already FAIL LOUD on every backend
 ## (measured 134 on wasm and x86_64, 133 on aarch64 and riscv64), so there is no silent width to fix.
-wat_addr_enum_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
+wat_addr_enum_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
   match deref(v) {
     Expr::Call(cs, cl, _nn, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a, false) }
     Expr::Var(vs, vn) => {
@@ -1582,7 +1603,7 @@ wat_addr_enum_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), bo
 ## The tryable ENUM type span of a WAT `?` operand. Calls use their declared enum return type; enum
 ## locals use the same PARAM/LOCAL resolver as value-position `match`. The wrappers preserve the
 ## expression's type while the emitter handles the actual early return.
-wat_try_enum_type := fn(inner : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_try_enum_type := fn(inner : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   match deref(inner) {
     Expr::Var(vs, vn) => { return base_enum_type(params_head, fn_head, src, vs, vn, a, decls, false) }
     Expr::Call(cs, cl, nargs, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a, false) }
@@ -1704,42 +1725,48 @@ param_find := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize
 ## value-returning recursion — no early return inside a match arm, no ptr(mut) (both mis-lower /
 ## are UB in the lean lower; see build-env memory). Each distinct name → one such handle, so
 ## `first_assign_handle(fn_head, name) == s` gives every name ONE WASM slot tree-wide.
-first_assign_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> usize {
-  mut s := list
-  mut res := 0
-  while s != 0 and res == 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { if (not local_is_comptime(src, ans)) and streq(src, ans, anl, ns, nl) { res = unchecked bitcast(usize, s) } ; s = nx }
-      Stmt::While(c, b, nx) => { res = first_assign_handle(b, ns, nl, src, a) ; s = nx }
-      Stmt::If(c, th, el, nx) => { res = first_assign_handle(th, ns, nl, src, a) ; if res == 0 { res = first_assign_handle(el, ns, nl, src, a) } ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { if not (res == 0) { break }; am := deref(arm_p(armq)) ; res = first_assign_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next }; None => { break } } } ; s = mnx }
-      ## a `for i in lo..hi` DECLARES the loop var `i`: this For is its first handle; otherwise recurse the body.
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if streq(src, fns, fnl, ns, nl) { res = unchecked bitcast(usize, s) } else { res = first_assign_handle(fb, ns, nl, src, a) } ; s = nx }
-      ## a `comptime for i in lo..hi` DECLARES the loop var `i` (like a range `for`): this CompForRange is
-      ## its first handle; otherwise recurse the body. CONTINUE past (a `_ => s = 0` would mis-resolve a
-      ## local declared after the unrolled loop → silent miscompile).
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if streq(src, rvs, rvl, ns, nl) { res = unchecked bitcast(usize, s) } else { res = first_assign_handle(rb, ns, nl, src, a) } ; s = nx }
-      ## a `comptime if` folds to ONE branch but its locals live in the fn frame — recurse BOTH branches
-      ## (mirroring local_slot_scan's both-branch scan) and CONTINUE past it, so a local declared after a
-      ## CompIf is still found (a `_ => s = 0` would stop the scan and mis-resolve it → silent miscompile).
-      Stmt::CompIf(cc, th, el, nx) => { res = first_assign_handle(th, ns, nl, src, a) ; if res == 0 { res = first_assign_handle(el, ns, nl, src, a) } ; s = nx }
-      Stmt::Loop(lb, lnx) => { res = first_assign_handle(lb, ns, nl, src, a) ; s = lnx }
-      Stmt::Unchecked(ub, unx) => { res = first_assign_handle(ub, ns, nl, src, a) ; s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      ## an index assign declares no local but MUST NOT terminate the scan (a leading `TABLE[2] = …`
-      ## before the `mut` locals would otherwise hide them).
-      Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
-      ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
-      ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+first_assign_handle := fn(list : Option(ptr(mut Stmt)), ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> Option(ptr(mut Stmt)) {
+  mut s : Option(ptr(mut Stmt)) = list
+  mut res : Option(ptr(mut Stmt)) = Option.None
+  loop {
+    match s {
+      Some(sq) => {
+        if stmt_any(res) { break }
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ans, anl, v, nx) => { if (not local_is_comptime(src, ans)) and streq(src, ans, anl, ns, nl) { res = Option.Some(sq) } ; s = nx }
+          Stmt::While(c, b, nx) => { res = first_assign_handle(b, ns, nl, src, a) ; s = nx }
+          Stmt::If(c, th, el, nx) => { res = first_assign_handle(th, ns, nl, src, a) ; if not stmt_any(res) { res = first_assign_handle(el, ns, nl, src, a) } ; s = nx }
+          Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { if stmt_any(res) { break }; am := deref(arm_p(armq)) ; res = first_assign_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next }; None => { break } } } ; s = mnx }
+          ## a `for i in lo..hi` DECLARES the loop var `i`: this For is its first handle; otherwise recurse the body.
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if streq(src, fns, fnl, ns, nl) { res = Option.Some(sq) } else { res = first_assign_handle(fb, ns, nl, src, a) } ; s = nx }
+          ## a `comptime for i in lo..hi` DECLARES the loop var `i` (like a range `for`): this CompForRange is
+          ## its first handle; otherwise recurse the body. CONTINUE past (a `_ => s = 0` would mis-resolve a
+          ## local declared after the unrolled loop → silent miscompile).
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if streq(src, rvs, rvl, ns, nl) { res = Option.Some(sq) } else { res = first_assign_handle(rb, ns, nl, src, a) } ; s = nx }
+          ## a `comptime if` folds to ONE branch but its locals live in the fn frame — recurse BOTH branches
+          ## (mirroring local_slot_scan's both-branch scan) and CONTINUE past it, so a local declared after a
+          ## CompIf is still found (a `_ => s = 0` would stop the scan and mis-resolve it → silent miscompile).
+          Stmt::CompIf(cc, th, el, nx) => { res = first_assign_handle(th, ns, nl, src, a) ; if not stmt_any(res) { res = first_assign_handle(el, ns, nl, src, a) } ; s = nx }
+          Stmt::Loop(lb, lnx) => { res = first_assign_handle(lb, ns, nl, src, a) ; s = lnx }
+          Stmt::Unchecked(ub, unx) => { res = first_assign_handle(ub, ns, nl, src, a) ; s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          ## an index assign declares no local but MUST NOT terminate the scan (a leading `TABLE[2] = …`
+          ## before the `mut` locals would otherwise hide them).
+          Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
+          ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
+          ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
+        }
+      }
+      None => { break }
     }
   }
   res
@@ -1751,124 +1778,130 @@ first_assign_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : pt
 ## the non-negative running count after this whole subtree. Value-returning recursion with a `found`
 ## flag (loop exits on `not found`) — NO early return inside an arm, NO ptr(mut). With `target == 0`
 ## (no real handle) nothing is ever found, so it returns the TOTAL distinct-local count (count_locals).
-local_slot_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : usize, before : i64, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
-  mut s := list
+local_slot_scan := fn(list : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut Stmt)), target : Option(ptr(mut Stmt)), before : i64, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+  mut s : Option(ptr(mut Stmt)) = list
   mut b := before
   mut found := false
   mut result := 0
-  while s != 0 and (not found) {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if local_is_comptime(src, ans) { s = nx }
-        else if s == target { result = 0 - (b + 1) ; found = true }
-        else {
-          if first_assign_handle(fn_head, ans, anl, src, a) == s and (not is_global(decls, src, ans, anl, a)) { b = b + 1 }
-          s = nx
-        }
-      }
-      Stmt::While(c, body, nx) => {
-        r := local_slot_scan(body, fn_head, target, b, src, a, decls)
-        if r < 0 { result = r ; found = true } else { b = r ; s = nx }
-      }
-      Stmt::If(c, th, el, nx) => {
-        r := local_slot_scan(th, fn_head, target, b, src, a, decls)
-        if r < 0 { result = r ; found = true }
-        else {
-          r2 := local_slot_scan(el, fn_head, target, r, src, a, decls)
-          if r2 < 0 { result = r2 ; found = true } else { b = r2 ; s = nx }
-        }
-      }
-      Stmt::Match(msc, mah, mnx) => {
-        mut arm : Option(ptr(mut Arm)) = mah
-        loop {
-          match arm {
-            Some(armq) => {
-              if not ((not found)) { break }
-              am := deref(arm_p(armq))
-              r := local_slot_scan(am.body_stmts, fn_head, target, b, src, a, decls)
-              if r < 0 { result = r ; found = true } else { b = r ; arm = am.next }
+  loop {
+    match s {
+      Some(sq) => {
+        if not ((not found)) { break }
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ans, anl, v, nx) => {
+            if local_is_comptime(src, ans) { s = nx }
+            else if stmt_same(Option.Some(sq), target) { result = 0 - (b + 1) ; found = true }
+            else {
+              if stmt_same(first_assign_handle(fn_head, ans, anl, src, a), Option.Some(sq)) and (not is_global(decls, src, ans, anl, a)) { b = b + 1 }
+              s = nx
             }
-            None => { break }
           }
+          Stmt::While(c, body, nx) => {
+            r := local_slot_scan(body, fn_head, target, b, src, a, decls)
+            if r < 0 { result = r ; found = true } else { b = r ; s = nx }
+          }
+          Stmt::If(c, th, el, nx) => {
+            r := local_slot_scan(th, fn_head, target, b, src, a, decls)
+            if r < 0 { result = r ; found = true }
+            else {
+              r2 := local_slot_scan(el, fn_head, target, r, src, a, decls)
+              if r2 < 0 { result = r2 ; found = true } else { b = r2 ; s = nx }
+            }
+          }
+          Stmt::Match(msc, mah, mnx) => {
+            mut arm : Option(ptr(mut Arm)) = mah
+            loop {
+              match arm {
+                Some(armq) => {
+                  if not ((not found)) { break }
+                  am := deref(arm_p(armq))
+                  r := local_slot_scan(am.body_stmts, fn_head, target, b, src, a, decls)
+                  if r < 0 { result = r ; found = true } else { b = r ; arm = am.next }
+                }
+                None => { break }
+              }
+            }
+            if (not found) { s = mnx }
+          }
+          ## a `for … in …` loop var: a RANGE `for i in lo..hi` occupies ONE slot; an ITERABLE `for x in xs`
+          ## (null `fhi`) occupies TWO — the element var PLUS a hidden index at var-slot+1. First-occurrence
+          ## at this For; then scan the body.
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+            if stmt_same(Option.Some(sq), target) { result = 0 - (b + 1) ; found = true }
+            else {
+              if stmt_same(first_assign_handle(fn_head, fns, fnl, src, a), Option.Some(sq)) { if unchecked bitcast(usize, fhi) == 0 { b = b + 2 } else { b = b + 1 } }
+              r := local_slot_scan(fb, fn_head, target, b, src, a, decls)
+              if r < 0 { result = r ; found = true } else { b = r ; s = nx }
+            }
+          }
+          ## a `comptime for i in lo..hi` DECLARES a scalar loop var `i` = ONE slot (like a RANGE for), reserved
+          ## at its first-handle; then scan the body (emitted once per unroll iteration into these same slots).
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
+            if stmt_same(Option.Some(sq), target) { result = 0 - (b + 1) ; found = true }
+            else {
+              if stmt_same(first_assign_handle(fn_head, rvs, rvl, src, a), Option.Some(sq)) { b = b + 1 }
+              r := local_slot_scan(rb, fn_head, target, b, src, a, decls)
+              if r < 0 { result = r ; found = true } else { b = r ; s = nx }
+            }
+          }
+          ## `loop { }` / `unchecked { }` body scanned like a while body (function-frame locals at the running
+          ## offset); `break`/`continue` declare nothing (skip).
+          Stmt::Loop(lb, lnx) => {
+            r := local_slot_scan(lb, fn_head, target, b, src, a, decls)
+            if r < 0 { result = r ; found = true } else { b = r ; s = lnx }
+          }
+          Stmt::Unchecked(ub, unx) => {
+            r := local_slot_scan(ub, fn_head, target, b, src, a, decls)
+            if r < 0 { result = r ; found = true } else { b = r ; s = unx }
+          }
+          ## a `comptime if` folds to ONE branch but its locals live in the fn frame — scan BOTH branches
+          ## sequentially (a safe superset; consistent with first_assign_handle's both-branch order) and
+          ## CONTINUE past it, so a local declared after a CompIf still gets a slot (no silent miscompile).
+          Stmt::CompIf(cc, th, el, nx) => {
+            r := local_slot_scan(th, fn_head, target, b, src, a, decls)
+            if r < 0 { result = r ; found = true }
+            else {
+              r2 := local_slot_scan(el, fn_head, target, r, src, a, decls)
+              if r2 < 0 { result = r2 ; found = true } else { b = r2 ; s = nx }
+            }
+          }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          ## an index assign declares no local but MUST advance the scan (see first_assign_handle).
+          Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
+          ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
+          ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
         }
-        if (not found) { s = mnx }
       }
-      ## a `for … in …` loop var: a RANGE `for i in lo..hi` occupies ONE slot; an ITERABLE `for x in xs`
-      ## (null `fhi`) occupies TWO — the element var PLUS a hidden index at var-slot+1. First-occurrence
-      ## at this For; then scan the body.
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-        if s == target { result = 0 - (b + 1) ; found = true }
-        else {
-          if first_assign_handle(fn_head, fns, fnl, src, a) == s { if unchecked bitcast(usize, fhi) == 0 { b = b + 2 } else { b = b + 1 } }
-          r := local_slot_scan(fb, fn_head, target, b, src, a, decls)
-          if r < 0 { result = r ; found = true } else { b = r ; s = nx }
-        }
-      }
-      ## a `comptime for i in lo..hi` DECLARES a scalar loop var `i` = ONE slot (like a RANGE for), reserved
-      ## at its first-handle; then scan the body (emitted once per unroll iteration into these same slots).
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
-        if s == target { result = 0 - (b + 1) ; found = true }
-        else {
-          if first_assign_handle(fn_head, rvs, rvl, src, a) == s { b = b + 1 }
-          r := local_slot_scan(rb, fn_head, target, b, src, a, decls)
-          if r < 0 { result = r ; found = true } else { b = r ; s = nx }
-        }
-      }
-      ## `loop { }` / `unchecked { }` body scanned like a while body (function-frame locals at the running
-      ## offset); `break`/`continue` declare nothing (skip).
-      Stmt::Loop(lb, lnx) => {
-        r := local_slot_scan(lb, fn_head, target, b, src, a, decls)
-        if r < 0 { result = r ; found = true } else { b = r ; s = lnx }
-      }
-      Stmt::Unchecked(ub, unx) => {
-        r := local_slot_scan(ub, fn_head, target, b, src, a, decls)
-        if r < 0 { result = r ; found = true } else { b = r ; s = unx }
-      }
-      ## a `comptime if` folds to ONE branch but its locals live in the fn frame — scan BOTH branches
-      ## sequentially (a safe superset; consistent with first_assign_handle's both-branch order) and
-      ## CONTINUE past it, so a local declared after a CompIf still gets a slot (no silent miscompile).
-      Stmt::CompIf(cc, th, el, nx) => {
-        r := local_slot_scan(th, fn_head, target, b, src, a, decls)
-        if r < 0 { result = r ; found = true }
-        else {
-          r2 := local_slot_scan(el, fn_head, target, r, src, a, decls)
-          if r2 < 0 { result = r2 ; found = true } else { b = r2 ; s = nx }
-        }
-      }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      ## an index assign declares no local but MUST advance the scan (see first_assign_handle).
-      Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
-      ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
-      ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+      None => { break }
     }
   }
   if found { result } else { b }
 }
 
 ## Total number of distinct non-global local names in the fn tree (how many `(local i64)` to declare).
-count_locals := fn(fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
-  local_slot_scan(fn_head, fn_head, 0, 0, src, a, decls)
+count_locals := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+  local_slot_scan(fn_head, fn_head, Option.None, 0, src, a, decls)
 }
 
 ## Is the assign at handle `target` the FIRST occurrence of its name anywhere in the fn tree?
-is_first_occ := fn(body_head : ptr(mut Stmt), target : usize, ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> bool {
-  first_assign_handle(body_head, ns, nl, src, a) == target
+is_first_occ := fn(body_head : Option(ptr(mut Stmt)), target : Option(ptr(mut Stmt)), ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> bool {
+  stmt_same(first_assign_handle(body_head, ns, nl, src, a), target)
 }
 
 ## WASM local index of the local `[ns, ns+nl)` (tree-wide, incl. nested scopes): params 0..pcount-1,
 ## then distinct non-global local names in pre-order of first occurrence (`:=` and every later `=`, and
 ## any nested occurrence of the same name, share ONE slot). Uses local_slot_scan (value recursion, no
 ## ptr(mut), no early-return-in-arm). Falls back to `pcount` if the name is unresolved.
-name_local_index := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+name_local_index := fn(body_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   target := first_assign_handle(body_head, ns, nl, src, a)
   r := local_slot_scan(body_head, body_head, target, 0, src, a, decls)
   mut result := pcount
@@ -1878,8 +1911,8 @@ name_local_index := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
 
 ## Is `[ns, ns+nl)` a local ANYWHERE in the fn tree (a `:=`/`=` in any scope — top-level or nested)?
 ## (Was TOP-LEVEL only; now tree-wide, so a nested local resolves as a local rather than trapping.)
-is_toplevel_local := fn(fn_head : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> bool {
-  first_assign_handle(fn_head, ns, nl, src, a) != 0
+is_toplevel_local := fn(fn_head : Option(ptr(mut Stmt)), ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> bool {
+  stmt_any(first_assign_handle(fn_head, ns, nl, src, a))
 }
 
 ## A source span (a struct type name), or {0,0} for "none".
@@ -1932,49 +1965,55 @@ expr_enum_variant := fn(v : ptr(Expr)) -> WSpan {
 
 ## The enum-type name of the LOCAL `[ns, ns+nl)` — from its `:=` EnumLit init (`e := E.V(…)`), else
 ## {0,0}. Lets a `match e { … }` resolve the scrutinee's variant discriminants.
-local_enum_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> WSpan {
-  mut s := fn_head
+local_enum_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> WSpan {
+  mut s : Option(ptr(mut Stmt)) = fn_head
   mut rs := 0
   mut rn := 0
   mut done := false
-  while s != 0 and (not done) {
-    stmt := deref(stmt_p(Stmt, s))
-    match stmt {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) {
-          en := expr_enum_name(v)
-          if en.n != 0 { rs = en.s ; rn = en.n ; done = true }
-          ## a local bound to an enum-returning CALL (`o := make_opt()`) is an enum local — its slot
-          ## holds the returned base address (the callee built it in the `$__sp` bump region).
-          if en.n == 0 {
-            cn := expr_call_name(v)
-            if cn.n != 0 {
-              cr := callee_ret_enum(decls, src, cn.s, cn.n, ex_call_argh(v), a, allow_union)
-              if cr.n != 0 { rs = cr.s ; rn = cr.n ; done = true }
+  loop {
+    match s {
+      Some(sq) => {
+        if not ((not done)) { break }
+        stmt := deref(stmt_p(Stmt, sq))
+        match stmt {
+          Stmt::Assign(ans, anl, v, nx) => {
+            if streq(src, ans, anl, ns, nl) {
+              en := expr_enum_name(v)
+              if en.n != 0 { rs = en.s ; rn = en.n ; done = true }
+              ## a local bound to an enum-returning CALL (`o := make_opt()`) is an enum local — its slot
+              ## holds the returned base address (the callee built it in the `$__sp` bump region).
+              if en.n == 0 {
+                cn := expr_call_name(v)
+                if cn.n != 0 {
+                  cr := callee_ret_enum(decls, src, cn.s, cn.n, ex_call_argh(v), a, allow_union)
+                  if cr.n != 0 { rs = cr.s ; rn = cr.n ; done = true }
+                }
+              }
             }
+            s = nx
           }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+          Stmt::CompIf(cc, th, el, nx) => { s = nx }
+          Stmt::Loop(lb, lnx) => { s = lnx }
+          Stmt::Unchecked(ub, unx) => { s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          Stmt::Match(msc, mah, mnx) => { s = mnx }
+          ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
+          ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
         }
-        s = nx
       }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
-      Stmt::CompIf(cc, th, el, nx) => { s = nx }
-      Stmt::Loop(lb, lnx) => { s = lnx }
-      Stmt::Unchecked(ub, unx) => { s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { s = mnx }
-      ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
-      ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+      None => { break }
     }
   }
   WSpan(s = rs, n = rn)
@@ -2101,7 +2140,7 @@ wat_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
 ## Is `e` a bare `Var` that names a STRUCT param/local? Such a value is a memory address, so it must
 ## not feed a scalar arithmetic `Bin` (that would add addresses) — the Bin arm traps on it (a user
 ## operator-overload `p + q` over a struct is not modelled).
-expr_is_struct_var := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+expr_is_struct_var := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   vn := expr_var_name(e)
   if vn.n == 0 { return false }
   st := base_struct_type(params_head, fn_head, src, vn.s, vn.n, a, decls)
@@ -2121,7 +2160,7 @@ expr_is_struct_var := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), fn
 ## slipped past that guard into the scalar compare below. Nearly Var-only by construction: an
 ## INDEX/FIELD operand (`xs[0] == ys[0]`, `p.x == q.x`) normally yields a loaded SCALAR and must keep
 ## comparing — ISSUE #449 is the one field type for which that is false, see `wat_field_enum_type`.
-wat_is_agg_place := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+wat_is_agg_place := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   if expr_is_struct_var(e, params_head, body_head, src, a, decls) { return true }
   ## ISSUE #449: an ENUM-typed FIELD read (`h.t`) loads a by-reference BLOCK ADDRESS, not a scalar.
   fe := wat_field_enum_type(e, params_head, body_head, src, a, decls)
@@ -2142,7 +2181,7 @@ wat_is_agg_place := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body
 ## arithmetic op over one is a user operator call. `expr_is_struct_var` alone saw only a NAMED struct
 ## local, so a struct LITERAL or a struct-returning CALL (`S(a = 40) + 2`) reached the scalar `i64.add`
 ## and added a block address: x86_64 answers 42, wasm answered 2.
-wat_operand_is_aggregate := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+wat_operand_is_aggregate := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   if expr_is_struct_var(e, params_head, body_head, src, a, decls) { return true }
   match deref(e) {
     Expr::StructLit => { return true }
@@ -2166,7 +2205,7 @@ wat_operand_is_aggregate := fn(e : ptr(Expr), params_head : Option(ptr(mut Param
 ## — a valid module, a normal exit, a value no variant carries. The field read ITSELF is sound (handing
 ## `h.t` to a `fn(v : Tag)` and dispatching there already answers on wasm); it is this one operand
 ## classification that was wrong, which is why the fix is here and not in the field or literal emit.
-wat_field_enum_type := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_field_enum_type := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   mut rs := 0
   mut rn := 0
   if ex_is_field(e) {
@@ -2190,37 +2229,43 @@ wat_field_enum_type := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), b
 ## resolution, which is a different shape and a different issue (#396/#448). The statement walk mirrors
 ## `local_enum_type`'s — every carrier arm steps to `nx`, because a `_ => s = 0` there would hide every
 ## local declared after an unmodelled statement.
-wat_local_enum_field_init := fn(params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
-  mut s := fn_head
+wat_local_enum_field_init := fn(params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+  mut s : Option(ptr(mut Stmt)) = fn_head
   mut r := false
   mut done := false
-  while s != 0 and (not done) {
-    stmt := deref(stmt_p(Stmt, s))
-    match stmt {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) {
-          fe := wat_field_enum_type(v, params_head, fn_head, src, a, decls)
-          if fe.n != 0 { r = true ; done = true }
+  loop {
+    match s {
+      Some(sq) => {
+        if not ((not done)) { break }
+        stmt := deref(stmt_p(Stmt, sq))
+        match stmt {
+          Stmt::Assign(ans, anl, v, nx) => {
+            if streq(src, ans, anl, ns, nl) {
+              fe := wat_field_enum_type(v, params_head, fn_head, src, a, decls)
+              if fe.n != 0 { r = true ; done = true }
+            }
+            s = nx
+          }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+          Stmt::CompIf(cc, th, el, nx) => { s = nx }
+          Stmt::Loop(lb, lnx) => { s = lnx }
+          Stmt::Unchecked(ub, unx) => { s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          Stmt::Match(msc, mah, mnx) => { s = mnx }
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
         }
-        s = nx
       }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
-      Stmt::CompIf(cc, th, el, nx) => { s = nx }
-      Stmt::Loop(lb, lnx) => { s = lnx }
-      Stmt::Unchecked(ub, unx) => { s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { s = mnx }
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+      None => { break }
     }
   }
   r
@@ -2230,7 +2275,7 @@ wat_local_enum_field_init := fn(params_head : Option(ptr(mut Param)), fn_head : 
 ## elements read UNEQUAL. Kept separate from `wat_is_agg_place`'s Var scan because the base name has
 ## to be peeled off the Index first; a SCALAR-element array (`xs[0] == ys[0]`) yields a loaded value
 ## and stays on the ordinary compare.
-wat_is_agg_index := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+wat_is_agg_index := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   if not ex_is_index(e) { return false }
   bn := expr_var_name(ex_index_base(e))
   if bn.n == 0 { return false }
@@ -2362,44 +2407,49 @@ wat_ct_record := fn(ns : usize, nl : usize, v : ptr(Expr), kind : u8) {
 
 ## Collect every binding event in a function's statement tree. Assignment is the only AST form that
 ## can introduce a local; all other arms merely recurse to keep nested branch/loop declarations visible.
-wat_ct_collect := fn(head : ptr(mut Stmt), src : ptr(u8)) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => {
-        if local_is_comptime(src, ns) { wat_ct_record(ns, nl, v, 1) }
-        else { wat_ct_record(ns, nl, unchecked bitcast(ptr(Expr), 0), 2) }
-        s = nx
+wat_ct_collect := fn(head : Option(ptr(mut Stmt)), src : ptr(u8)) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => {
+            if local_is_comptime(src, ns) { wat_ct_record(ns, nl, v, 1) }
+            else { wat_ct_record(ns, nl, unchecked bitcast(ptr(Expr), 0), 2) }
+            s = nx
+          }
+          Stmt::While(c, b, nx) => { wat_ct_collect(b, src) ; s = nx }
+          Stmt::If(c, th, el, nx) => { wat_ct_collect(th, src) ; wat_ct_collect(el, src) ; s = nx }
+          Stmt::Match(msc, mah, nx) => {
+            mut arm : Option(ptr(mut Arm)) = mah
+            loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; wat_ct_collect(am.body_stmts, src) ; arm = am.next }; None => { break } } }
+            s = nx
+          }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { wat_ct_collect(fb, src) ; s = nx }
+          Stmt::CompFor(cvs, cvl, cisvar, cb, nx) => { wat_ct_collect(cb, src) ; s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { wat_ct_collect(rb, src) ; s = nx }
+          Stmt::CompIf(cc, th, el, nx) => { wat_ct_collect(th, src) ; wat_ct_collect(el, src) ; s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => {
+            mut arm : Option(ptr(mut Arm)) = cmah
+            loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; wat_ct_collect(am.body_stmts, src) ; arm = am.next }; None => { break } } }
+            s = nx
+          }
+          Stmt::Loop(b, nx) => { wat_ct_collect(b, src) ; s = nx }
+          Stmt::Unchecked(b, nx) => { wat_ct_collect(b, src) ; s = nx }
+          Stmt::AllocWith(al, b, nx) => { wat_ct_collect(b, src) ; s = nx }
+          Stmt::DerefAssign(p, v, nx) => { s = nx }
+          Stmt::IndexAssign(b, i, v, nx) => { s = nx }
+          Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { s = nx }
+          Stmt::FieldPathAssign(fp, v, nx) => { s = nx }
+          Stmt::Break(v, d, nx) => { s = nx }
+          Stmt::Continue(d, nx) => { s = nx }
+          Stmt::Return(v, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+        }
       }
-      Stmt::While(c, b, nx) => { wat_ct_collect(b, src) ; s = nx }
-      Stmt::If(c, th, el, nx) => { wat_ct_collect(th, src) ; wat_ct_collect(el, src) ; s = nx }
-      Stmt::Match(msc, mah, nx) => {
-        mut arm : Option(ptr(mut Arm)) = mah
-        loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; wat_ct_collect(am.body_stmts, src) ; arm = am.next }; None => { break } } }
-        s = nx
-      }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { wat_ct_collect(fb, src) ; s = nx }
-      Stmt::CompFor(cvs, cvl, cisvar, cb, nx) => { wat_ct_collect(cb, src) ; s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { wat_ct_collect(rb, src) ; s = nx }
-      Stmt::CompIf(cc, th, el, nx) => { wat_ct_collect(th, src) ; wat_ct_collect(el, src) ; s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => {
-        mut arm : Option(ptr(mut Arm)) = cmah
-        loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; wat_ct_collect(am.body_stmts, src) ; arm = am.next }; None => { break } } }
-        s = nx
-      }
-      Stmt::Loop(b, nx) => { wat_ct_collect(b, src) ; s = nx }
-      Stmt::Unchecked(b, nx) => { wat_ct_collect(b, src) ; s = nx }
-      Stmt::AllocWith(al, b, nx) => { wat_ct_collect(b, src) ; s = nx }
-      Stmt::DerefAssign(p, v, nx) => { s = nx }
-      Stmt::IndexAssign(b, i, v, nx) => { s = nx }
-      Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { s = nx }
-      Stmt::FieldPathAssign(fp, v, nx) => { s = nx }
-      Stmt::Break(v, d, nx) => { s = nx }
-      Stmt::Continue(d, nx) => { s = nx }
-      Stmt::Return(v, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
+      None => { break }
     }
   }
 }
@@ -2763,31 +2813,37 @@ wat_param_shadow_active := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
 ## Does THIS statement list bind `[ns, ns+nl)` at its OWN level? Nested lists are deliberately not
 ## walked (their bindings belong to their own scope) and a `for` loop variable is deliberately not a
 ## binding of this list (it belongs to the loop body).
-wat_list_binds := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8)) -> bool {
-  mut s := list
+wat_list_binds := fn(list : Option(ptr(mut Stmt)), ns : usize, nl : usize, src : ptr(u8)) -> bool {
+  mut s : Option(ptr(mut Stmt)) = list
   mut r := false
-  while s != 0 and (not r) {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ans, anl, av, nx) => { if (not local_is_comptime(src, ans)) and streq(src, ans, anl, ns, nl) { r = true } ; s = nx }
-      Stmt::While(wc, wb, wnx) => { s = wnx }
-      Stmt::If(ic, ith, iel, inx) => { s = inx }
-      Stmt::Match(msc, mah, mnx) => { s = mnx }
-      Stmt::For(fns, fnl, flo, fhi, fb, fnx) => { s = fnx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, rnx) => { s = rnx }
-      Stmt::CompIf(cc, cth, cel, cnx) => { s = cnx }
-      Stmt::Loop(lb, lnx) => { s = lnx }
-      Stmt::Unchecked(ub, unx) => { s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx2) => { s = cnx2 }
-      Stmt::Return(rv, rnx) => { s = rnx }
-      Stmt::ExprStmt(ee, enx) => { s = enx }
-      Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, fanx) => { s = fanx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      Stmt::IndexAssign(ib, ii, iv, ianx) => { s = ianx }
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+  loop {
+    match s {
+      Some(sq) => {
+        if not ((not r)) { break }
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ans, anl, av, nx) => { if (not local_is_comptime(src, ans)) and streq(src, ans, anl, ns, nl) { r = true } ; s = nx }
+          Stmt::While(wc, wb, wnx) => { s = wnx }
+          Stmt::If(ic, ith, iel, inx) => { s = inx }
+          Stmt::Match(msc, mah, mnx) => { s = mnx }
+          Stmt::For(fns, fnl, flo, fhi, fb, fnx) => { s = fnx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, rnx) => { s = rnx }
+          Stmt::CompIf(cc, cth, cel, cnx) => { s = cnx }
+          Stmt::Loop(lb, lnx) => { s = lnx }
+          Stmt::Unchecked(ub, unx) => { s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx2) => { s = cnx2 }
+          Stmt::Return(rv, rnx) => { s = rnx }
+          Stmt::ExprStmt(ee, enx) => { s = enx }
+          Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, fanx) => { s = fanx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          Stmt::IndexAssign(ib, ii, iv, ianx) => { s = ianx }
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
+        }
+      }
+      None => { break }
     }
   }
   r
@@ -2798,7 +2854,7 @@ wat_list_binds := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8)
 ## (see below) and one that is also a module GLOBAL, because a global name never gets a local slot and
 ## `name_local_index` would have nothing to seed. The caller restores `WAT_PSH_N` on the way out; the
 ## depth bound is a fail-loud boundary, not a budget.
-wat_param_shadow_enter := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) {
+wat_param_shadow_enter := fn(list : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) {
   mut p := params_head
   mut pi := 0
   loop {
@@ -3022,7 +3078,7 @@ wat_slice_param_enum_span := fn(params_head : Option(ptr(mut Param)), src : ptr(
 }
 
 ## Is the `.len()` receiver a slice this backend can read — a scalar `Slice(E)` PARAM or a local slice VIEW?
-wat_len_recv_slice := fn(recv : ptr(Expr), params_head : Option(ptr(mut Param)), src : ptr(u8), body_head : ptr(mut Stmt), decls : ptr(rt::Vec), a : rt::Arena) -> bool {
+wat_len_recv_slice := fn(recv : ptr(Expr), params_head : Option(ptr(mut Param)), src : ptr(u8), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), a : rt::Arena) -> bool {
   rn := expr_var_name(recv)
   mut r := false
   if rn.n != 0 {
@@ -3034,25 +3090,28 @@ wat_len_recv_slice := fn(recv : ptr(Expr), params_head : Option(ptr(mut Param)),
 
 ## Is the LOCAL `[ns, ns+nl)` an ARRAY (its `:=` init is an ArrayLit)? An array local holds the base
 ## address of its elements in linear memory; `a[i]` loads word `i` (scalar elements, stride 8).
-is_array_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d := lower_layout::local_decl_assign(fn_head, src, ns, nl)
+is_array_local := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(fn_head, src, ns, nl)
   mut r := false
-  if unchecked bitcast(usize, d) != 0 {
-    stmt := deref(stmt_p(Stmt, d))
-    match stmt {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if ex_is_array_lit(v) { r = true }
-        if (not r) and wat_call_ret_tuple_words(v, wat_decls(), src, a) > 0 { r = true }
-        ## `mut xs : [E; N]` — an explicitly UNINITIALIZED fixed-array local. The parser plants a
-        ## Num(0) sentinel, so its array-ness lives only in the source annotation.
-        if (not r) and wat_ann_arr_nel(src, ans, anl, v) > 0 { r = true }
+  match d {
+    Some(dq) => {
+      stmt := deref(stmt_p(Stmt, dq))
+      match stmt {
+        Stmt::Assign(ans, anl, v, nx) => {
+          if ex_is_array_lit(v) { r = true }
+          if (not r) and wat_call_ret_tuple_words(v, wat_decls(), src, a) > 0 { r = true }
+          ## `mut xs : [E; N]` — an explicitly UNINITIALIZED fixed-array local. The parser plants a
+          ## Num(0) sentinel, so its array-ness lives only in the source annotation.
+          if (not r) and wat_ann_arr_nel(src, ans, anl, v) > 0 { r = true }
+        }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
       }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
+    None => {}
   }
   r
 }
@@ -3060,34 +3119,40 @@ is_array_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : us
 ## The element COUNT of the array LOCAL `[ns,nl]` (its `:=` ArrayLit length), 0 if none — the static
 ## bound for a `verify.checked` index guard (the WASM analogue of x86_64's `ent.snl`). Same scan shape
 ## as `is_array_local`.
-array_local_nel := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
-  mut s := fn_head
+array_local_nel := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
+  mut s : Option(ptr(mut Stmt)) = fn_head
   mut r := 0
   mut done := false
-  while s != 0 and (not done) {
-    stmt := deref(stmt_p(Stmt, s))
-    match stmt {
-      ## `mut xs : [E; N]` — the UNINITIALIZED form: the static bound comes from the annotation.
-      Stmt::Assign(ans, anl, v, nx) => { if streq(src, ans, anl, ns, nl) { if ex_is_array_lit(v) { r = array_lit_nel(v) } else { tw := wat_call_ret_tuple_words(v, wat_decls(), src, a) ; if tw > 0 { r = usize(tw) } else { an := wat_ann_arr_nel(src, ans, anl, v) ; if an > 0 { r = usize(an) } } } ; done = true } ; s = nx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
-      Stmt::CompIf(cc, th, el, nx) => { s = nx }
-      Stmt::Loop(lb, lnx) => { s = lnx }
-      Stmt::Unchecked(ub, unx) => { s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { s = mnx }
-      ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
-      ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+  loop {
+    match s {
+      Some(sq) => {
+        if not ((not done)) { break }
+        stmt := deref(stmt_p(Stmt, sq))
+        match stmt {
+          ## `mut xs : [E; N]` — the UNINITIALIZED form: the static bound comes from the annotation.
+          Stmt::Assign(ans, anl, v, nx) => { if streq(src, ans, anl, ns, nl) { if ex_is_array_lit(v) { r = array_lit_nel(v) } else { tw := wat_call_ret_tuple_words(v, wat_decls(), src, a) ; if tw > 0 { r = usize(tw) } else { an := wat_ann_arr_nel(src, ans, anl, v) ; if an > 0 { r = usize(an) } } } ; done = true } ; s = nx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+          Stmt::CompIf(cc, th, el, nx) => { s = nx }
+          Stmt::Loop(lb, lnx) => { s = lnx }
+          Stmt::Unchecked(ub, unx) => { s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          Stmt::Match(msc, mah, mnx) => { s = mnx }
+          ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
+          ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
+        }
+      }
+      None => { break }
     }
   }
   r
@@ -3116,45 +3181,51 @@ array_lit_stride := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(
   w
 }
 ## Element WORD stride of the array LOCAL `[ns,nl]` via its `:=` ArrayLit — 1 for a scalar/unknown base.
-array_local_stride := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
-  mut s := fn_head
+array_local_stride := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+  mut s : Option(ptr(mut Stmt)) = fn_head
   mut r := 1
   mut done := false
-  while s != 0 and (not done) {
-    stmt := deref(stmt_p(Stmt, s))
-    match stmt {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) {
-          if ex_is_array_lit(v) { r = array_lit_stride(v, src, a, decls) ; done = true }
-          ## a slice VIEW `s := base[lo..hi]` inherits the base ARRAY's element stride.
-          if ex_is_slice(v) { bn := expr_var_name(ex_slice_base(v)) ; r = array_local_stride(fn_head, src, bn.s, bn.n, a, decls) ; done = true }
-          ## `mut xs : [E; N]` — the UNINITIALIZED form: the stride is the DECLARED element's word width.
-          if not done {
-            ae := wat_ann_arr_elem(src, ans, anl, v)
-            if ae.n != 0 { aw := wat_tyname_words(src, ae.s, ae.n, a, decls) ; if aw > 0 { r = aw ; done = true } }
+  loop {
+    match s {
+      Some(sq) => {
+        if not ((not done)) { break }
+        stmt := deref(stmt_p(Stmt, sq))
+        match stmt {
+          Stmt::Assign(ans, anl, v, nx) => {
+            if streq(src, ans, anl, ns, nl) {
+              if ex_is_array_lit(v) { r = array_lit_stride(v, src, a, decls) ; done = true }
+              ## a slice VIEW `s := base[lo..hi]` inherits the base ARRAY's element stride.
+              if ex_is_slice(v) { bn := expr_var_name(ex_slice_base(v)) ; r = array_local_stride(fn_head, src, bn.s, bn.n, a, decls) ; done = true }
+              ## `mut xs : [E; N]` — the UNINITIALIZED form: the stride is the DECLARED element's word width.
+              if not done {
+                ae := wat_ann_arr_elem(src, ans, anl, v)
+                if ae.n != 0 { aw := wat_tyname_words(src, ae.s, ae.n, a, decls) ; if aw > 0 { r = aw ; done = true } }
+              }
+            }
+            s = nx
           }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+          Stmt::CompIf(cc, th, el, nx) => { s = nx }
+          Stmt::Loop(lb, lnx) => { s = lnx }
+          Stmt::Unchecked(ub, unx) => { s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          Stmt::Match(msc, mah, mnx) => { s = mnx }
+          ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
+          ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
         }
-        s = nx
       }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
-      Stmt::CompIf(cc, th, el, nx) => { s = nx }
-      Stmt::Loop(lb, lnx) => { s = lnx }
-      Stmt::Unchecked(ub, unx) => { s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { s = mnx }
-      ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
-      ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+      None => { break }
     }
   }
   ## not a body local — a struct/enum-element `Slice(E)` PARAM base has its stride from the param annotation.
@@ -3163,49 +3234,55 @@ array_local_stride := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
 }
 ## The element STRUCT span of the array LOCAL `[ns,nl]` (or a slice VIEW over one) — its first ArrayLit
 ## element's StructLit name — or {0,0}. Types an aggregate for-loop var so `p.field` reads resolve.
-arr_elem_struct_span := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
-  mut s := fn_head
+arr_elem_struct_span := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
+  mut s : Option(ptr(mut Stmt)) = fn_head
   mut r := WSpan(s = 0, n = 0)
   mut done := false
-  while s != 0 and (not done) {
-    stmt := deref(stmt_p(Stmt, s))
-    match stmt {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) {
-          if ex_is_array_lit(v) {
-            r = wat_arr_lit_elem_struct(v, src)
-            done = true
+  loop {
+    match s {
+      Some(sq) => {
+        if not ((not done)) { break }
+        stmt := deref(stmt_p(Stmt, sq))
+        match stmt {
+          Stmt::Assign(ans, anl, v, nx) => {
+            if streq(src, ans, anl, ns, nl) {
+              if ex_is_array_lit(v) {
+                r = wat_arr_lit_elem_struct(v, src)
+                done = true
+              }
+              if ex_is_slice(v) { bn := expr_var_name(ex_slice_base(v)) ; r = arr_elem_struct_span(fn_head, src, bn.s, bn.n, a) ; done = true }
+              ## `mut xs : [E; N]` — the UNINITIALIZED form: the element struct comes from the annotation.
+              ## Only a real STRUCT element is reported (this resolver's contract); a scalar-element array
+              ## keeps {0,0} so nothing types a `u64` element as an aggregate.
+              if not done {
+                ae := wat_ann_arr_elem(src, ans, anl, v)
+                if ae.n != 0 { if struct_decl_of(wat_decls(), src, ae.s, ae.n) >= 0 { r = ae ; done = true } }
+              }
+            }
+            s = nx
           }
-          if ex_is_slice(v) { bn := expr_var_name(ex_slice_base(v)) ; r = arr_elem_struct_span(fn_head, src, bn.s, bn.n, a) ; done = true }
-          ## `mut xs : [E; N]` — the UNINITIALIZED form: the element struct comes from the annotation.
-          ## Only a real STRUCT element is reported (this resolver's contract); a scalar-element array
-          ## keeps {0,0} so nothing types a `u64` element as an aggregate.
-          if not done {
-            ae := wat_ann_arr_elem(src, ans, anl, v)
-            if ae.n != 0 { if struct_decl_of(wat_decls(), src, ae.s, ae.n) >= 0 { r = ae ; done = true } }
-          }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+          Stmt::CompIf(cc, th, el, nx) => { s = nx }
+          Stmt::Loop(lb, lnx) => { s = lnx }
+          Stmt::Unchecked(ub, unx) => { s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          Stmt::Match(msc, mah, mnx) => { s = mnx }
+          ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
+          ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
         }
-        s = nx
       }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
-      Stmt::CompIf(cc, th, el, nx) => { s = nx }
-      Stmt::Loop(lb, lnx) => { s = lnx }
-      Stmt::Unchecked(ub, unx) => { s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { s = mnx }
-      ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
-      ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+      None => { break }
     }
   }
   ## not a body local — a struct-element `Slice(P)` PARAM base takes its element struct from the annotation.
@@ -3219,7 +3296,7 @@ arr_elem_struct_span := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
 ## — an array LOCAL, a range-slice VIEW local, an array GLOBAL, and a `Slice(S)` PARAM — so the Index /
 ## Field / Assign / IndexAssign arms all key off one predicate. ---
 ## The element STRUCT span of the ARRAY-ish place named `[ns,nl]`, else {0,0}.
-wat_arr_elem_struct := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_arr_elem_struct := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   mut r := WSpan(s = 0, n = 0)
   if nl == 0 { return r }
   if is_array_local(fn_head, src, ns, nl, a) { return arr_elem_struct_span(fn_head, src, ns, nl, a) }
@@ -3231,7 +3308,7 @@ wat_arr_elem_struct := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl
 ## The element WORD stride of the ARRAY-ish place named `[ns,nl]` — 1 when unknown/scalar. An array
 ## GLOBAL reads its ArrayLit; everything else routes through array_local_stride (which itself falls back
 ## to the slice-PARAM annotation).
-wat_arr_elem_stride := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+wat_arr_elem_stride := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if nl == 0 { return 1 }
   if wat_is_array_global(decls, src, ns, nl, a) { return wat_array_global_stride(decls, src, ns, nl, a) }
   return array_local_stride(fn_head, src, ns, nl, a, decls)
@@ -3401,26 +3478,29 @@ wat_ann_arr_words := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr), a 
 ## The `: T` annotation at the DECLARATION SITE of the LOCAL `[ns,nl]` (an `Expr::Var` carries the span
 ## of its USE, not of the binding), or {0,0}. Same scan shape as `is_array_local` — every Stmt kind is
 ## walked past, so a local declared after any statement is still found.
-wat_local_ann_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
+wat_local_ann_span := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
   mut r := WSpan(s = 0, n = 0)
-  d := lower_layout::local_decl_assign(head, src, ns, nl)
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { r = wat_ann_span(src, ans, anl) }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => { r = wat_ann_span(src, ans, anl) }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
     }
+    None => {}
   }
   r
 }
 
 ## The DECLARED fixed-array type span of the local `[ns,nl]` (`mut xs : [Cell; 3]` → `[Cell; 3]`), or
 ## {0,0}. This is the only place a LOCAL's array TYPE (rather than its literal) is recovered.
-wat_local_arrty_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
+wat_local_arrty_span := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
   mut r := WSpan(s = 0, n = 0)
   an := wat_local_ann_span(head, src, ns, nl, a)
   if an.n == 0 { return r }
@@ -3453,7 +3533,7 @@ wat_local_arrty_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
 ## (`std_struct_is_byte_writable`), plus `field_word_offset * 8` for a word-granular child, where the
 ## two models coincide anyway. A child in neither set has NO answer (-1) and its consumer stays
 ## fail-loud, which is what the unconditional `standard_field_byte_offset` this replaced got wrong.
-wat_std_path_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_std_path_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   mut r := WSpan(s = 0, n = 0)
   if ex_is_field(e) {
     bt := wat_std_path_ty(expr_field_base(e), body_head, src, a, decls)
@@ -3469,7 +3549,7 @@ wat_std_path_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a
   r
 }
 
-wat_std_path_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+wat_std_path_ok := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   if not ex_is_field(e) { return false }
   base := expr_field_base(e)
   bt := wat_std_path_ty(base, body_head, src, a, decls)
@@ -3477,7 +3557,7 @@ wat_std_path_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a
   layout_field_offset_bytes(decls, src, bt.s, bt.n, expr_field_span(e).s, expr_field_span(e).n, a) >= 0
 }
 
-wat_std_path_bo := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+wat_std_path_bo := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if not wat_std_path_ok(e, body_head, src, a, decls) { return 0 - 1 }
   base := expr_field_base(e)
   mut pbo := i64(0)
@@ -3486,7 +3566,7 @@ wat_std_path_bo := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a
   pbo + layout_field_offset_bytes(decls, src, bt.s, bt.n, expr_field_span(e).s, expr_field_span(e).n, a)
 }
 
-wat_std_path_root_idx := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+wat_std_path_root_idx := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if not wat_std_path_ok(e, body_head, src, a, decls) { return 0 - 1 }
   base := expr_field_base(e)
   if ex_is_field(base) { return wat_std_path_root_idx(base, body_head, src, pcount, a, decls) }
@@ -3548,7 +3628,7 @@ wat_std_param_path_idx := fn(e : ptr(Expr), params_head : Option(ptr(mut Param))
 ## STANDARD BYTE-LAYOUT ARRAY-ELEMENT path. Its root is an Index into a supported byte-tier struct
 ## array; every following Field hop is resolved with the shared byte-offset oracle. Keeping this
 ## separate from wat_std_path preserves the fixed frame-local path and its historical emission.
-wat_std_idx_path_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_std_idx_path_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   mut r := WSpan(s = 0, n = 0)
   if ex_is_index(e) {
     bt := wat_place_ty(ex_index_base(e), body_head, src, a, decls)
@@ -3570,7 +3650,7 @@ wat_std_idx_path_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8
   r
 }
 
-wat_std_idx_path_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+wat_std_idx_path_ok := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   if not ex_is_index(e) and not ex_is_field(e) { return false }
   wat_std_idx_path_ty(e, body_head, src, a, decls).n != 0
 }
@@ -3579,7 +3659,7 @@ wat_std_idx_path_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8
 ## The TYPE span of the place `e` — a struct name, a `[E; N]` array-type span, or a scalar type name.
 ## A root Var takes its LOCAL's struct type, else its DECLARED fixed-array type; a Field hop takes the
 ## field's type within its (plain struct) base; an Index hop takes its base array type's element.
-wat_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_place_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   ## ONE `mut` accumulator + a bare `return r`, never `return <nested-call>` for a struct result: that
   ## shape is the lean lower's documented mis-lower.
   mut r := WSpan(s = 0, n = 0)
@@ -3613,7 +3693,7 @@ wat_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : 
 ## form, and E's word width known.) The INDEX-hop half of wat_place_ok, split out so the statement
 ## forms — which carry the base and the index as SEPARATE fields, with no `Expr::Index` node to pass —
 ## can ask the same question.
-wat_place_idx_ok := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+wat_place_idx_ok := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   mut r := false
   if not wat_place_ok(base, body_head, src, params_head, pcount, a, decls) { return r }
   bt := wat_place_ty(base, body_head, src, a, decls)
@@ -3626,7 +3706,7 @@ wat_place_idx_ok := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8
 }
 
 ## The ELEMENT type span of `base[…]`, else {0,0} — the statement-form twin of wat_place_ty's Index hop.
-wat_place_idx_ty := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_place_idx_ty := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   mut r := WSpan(s = 0, n = 0)
   bt := wat_place_ty(base, body_head, src, a, decls)
   if bt.n != 0 { r = wat_arrty_elem(src, bt.s, bt.n) }
@@ -3635,7 +3715,7 @@ wat_place_idx_ty := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8
 
 ## Is EVERY hop of the place `e` resolvable, with a frame-LOCAL root? A param / match-binding / global
 ## root is rejected (their storage is by-reference or label-based, addressed by the existing paths).
-wat_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+wat_place_ok := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   mut r := false
   if unchecked bitcast(usize, e) == 0 { return r }
   if ex_is_field(e) {
@@ -3679,7 +3759,7 @@ wat_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), para
 ## Is the place `e` a fully-composable DEEP place with a ONE-WORD SCALAR leaf? The single gate every deep
 ## read/write site shares. An aggregate leaf (a whole struct/array through a deep chain) stays fail-loud
 ## — it needs multi-word delivery, not an `i64.load`/`i64.store`.
-wat_deep_scalar_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+wat_deep_scalar_ok := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   mut r := false
   if not wat_place_ok(e, body_head, src, params_head, pcount, a, decls) { return r }
   ty := wat_place_ty(e, body_head, src, a, decls)
@@ -3689,7 +3769,7 @@ wat_deep_scalar_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8)
 }
 
 ## Is `base[idx]` a composable DEEP index whose ELEMENT is a one-word scalar? (`xs[i].arr[j]`.)
-wat_deep_idx_scalar_ok := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+wat_deep_idx_scalar_ok := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   mut r := false
   ety := wat_place_idx_ty(base, body_head, src, a, decls)
   if ety.n == 0 { return r }
@@ -3725,13 +3805,14 @@ mut WAT_BRK_VALUE := false
 ## more than 64 simultaneously-live defers overflows the stack; the push then fail-louds (see
 ## wat_defer_push) rather than silently dropping a cleanup.
 mut WAT_DEF_E : [usize; 64] = [0; 64]
+mut WAT_DEF_BH : [Option(ptr(mut Stmt)); 64] = [Option.None; 64]
 mut WAT_DEF_BLOCK : [bool; 64] = [false; 64]
 mut WAT_DEF_N := 0
 mut WAT_DEF_OVF := false
-## When non-zero, emit_wat_stmts stops BEFORE this statement handle. A block defer's linked list
+## When `Some`, emit_wat_stmts stops BEFORE this statement. A block defer's linked list
 ## continues through its __deferblkend marker into the enclosing list, so the drain temporarily sets
 ## this stop to keep the deferred unit together and avoid re-emitting the enclosing statements.
-mut WAT_DEF_STOP := 0
+mut WAT_DEF_STOP : Option(ptr(mut Stmt)) = Option.None
 ## The defer-stack depth at the ENTRY of the nearest enclosing loop body — `break`/`continue` replay
 ## down to it (exactly the actions registered inside that body). Saved/restored around each loop
 ## alongside WAT_BRK/WAT_CONT, so a nested loop drains only its own.
@@ -3841,7 +3922,7 @@ wat_break_integer_type := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 
 ## Whether a scalar function call has an integer return. Conversions are admitted only with an admitted
 ## scalar operand; user calls require an explicit signed/unsigned integer return annotation.
-wat_break_scalar_call := fn(cs : usize, cl : usize, ah : Option(ptr(mut Arg)), params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
+wat_break_scalar_call := fn(cs : usize, cl : usize, ah : Option(ptr(mut Arg)), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
   nm := str_at((src + cs), cl)
   if scalar_name_is_int_conv(nm) {
     if not arg_any(ah) { return false }
@@ -3860,7 +3941,7 @@ wat_break_scalar_call := fn(cs : usize, cl : usize, ah : Option(ptr(mut Arg)), p
 
 ## A Var is admitted only when its declaration/parameter/global or recursively recovered inferred RHS is
 ## a scalar integer. The recursive fallback is bounded and poison-tolerant: a missing type is a reject.
-wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
+wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
   if dep > 24 { return false }
   mut p := params_head
   loop {
@@ -3896,7 +3977,7 @@ wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : Option(ptr(mut 
 ## expressions that emit as one i64 word; aggregate constructors/places, bool/float, nested value loops,
 ## and unknown forms remain fail-loud. `If` branches are checked; its condition is
 ## already independently type-checked and an unsupported condition still emits its own trap.
-wat_break_scalar_expr := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
+wat_break_scalar_expr := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
   if dep > 24 { return false }
   mut explicit_bitcast := false
   match deref(e) {
@@ -3949,106 +4030,111 @@ wat_break_scalar_expr := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)),
 ## Scan the body of an Expr::Loop at lexical loop depth `depth`. Result 0 means no value-break reaches
 ## that loop, 1 means every such break is a proven scalar integer, and 2 means at least one reaches it
 ## with an unsupported/non-scalar value. Statement loop recursion increments depth, while branches keep it.
-wat_loop_scalar_code := fn(head : ptr(mut Stmt), depth : usize, params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+wat_loop_scalar_code := fn(head : Option(ptr(mut Stmt)), depth : usize, params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   mut code : i64 = 0
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Break(v, d, nx) => {
-        if d == depth and unchecked bitcast(usize, v) != 0 {
-          ok := wat_break_scalar_expr(v, params_head, fn_head, src, a, decls, 0)
-          if not ok { code = 2 }
-          else if code == 0 { code = 1 }
-        }
-        s = nx
-      }
-      Stmt::While(_c, b, nx) => {
-        sub := wat_loop_scalar_code(b, depth + 1, params_head, fn_head, src, a, decls)
-        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-        s = nx
-      }
-      Stmt::For(_ns, _nl, _lo, _hi, b, nx) => {
-        sub := wat_loop_scalar_code(b, depth + 1, params_head, fn_head, src, a, decls)
-        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-        s = nx
-      }
-      Stmt::Loop(b, nx) => {
-        sub := wat_loop_scalar_code(b, depth + 1, params_head, fn_head, src, a, decls)
-        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-        s = nx
-      }
-      Stmt::If(_c, th, el, nx) => {
-        a0 := wat_loop_scalar_code(th, depth, params_head, fn_head, src, a, decls)
-        a1 := wat_loop_scalar_code(el, depth, params_head, fn_head, src, a, decls)
-        if a0 == 2 or a1 == 2 { code = 2 } else if (a0 == 1 or a1 == 1) and code == 0 { code = 1 }
-        s = nx
-      }
-      Stmt::Match(_c, ah, nx) => {
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              sub := wat_loop_scalar_code(am.body_stmts, depth, params_head, fn_head, src, a, decls)
-              if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-              arm = am.next
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Break(v, d, nx) => {
+            if d == depth and unchecked bitcast(usize, v) != 0 {
+              ok := wat_break_scalar_expr(v, params_head, fn_head, src, a, decls, 0)
+              if not ok { code = 2 }
+              else if code == 0 { code = 1 }
             }
-            None => { break }
+            s = nx
           }
-        }
-        s = nx
-      }
-      Stmt::CompIf(_c, th, el, nx) => {
-        a0 := wat_loop_scalar_code(th, depth, params_head, fn_head, src, a, decls)
-        a1 := wat_loop_scalar_code(el, depth, params_head, fn_head, src, a, decls)
-        if a0 == 2 or a1 == 2 { code = 2 } else if (a0 == 1 or a1 == 1) and code == 0 { code = 1 }
-        s = nx
-      }
-      Stmt::CompFor(_ns, _nl, _iv, b, nx) => {
-        sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
-        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-        s = nx
-      }
-      Stmt::CompMatch(_c, ah, nx) => {
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              sub := wat_loop_scalar_code(am.body_stmts, depth, params_head, fn_head, src, a, decls)
-              if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-              arm = am.next
+          Stmt::While(_c, b, nx) => {
+            sub := wat_loop_scalar_code(b, depth + 1, params_head, fn_head, src, a, decls)
+            if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+            s = nx
+          }
+          Stmt::For(_ns, _nl, _lo, _hi, b, nx) => {
+            sub := wat_loop_scalar_code(b, depth + 1, params_head, fn_head, src, a, decls)
+            if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+            s = nx
+          }
+          Stmt::Loop(b, nx) => {
+            sub := wat_loop_scalar_code(b, depth + 1, params_head, fn_head, src, a, decls)
+            if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+            s = nx
+          }
+          Stmt::If(_c, th, el, nx) => {
+            a0 := wat_loop_scalar_code(th, depth, params_head, fn_head, src, a, decls)
+            a1 := wat_loop_scalar_code(el, depth, params_head, fn_head, src, a, decls)
+            if a0 == 2 or a1 == 2 { code = 2 } else if (a0 == 1 or a1 == 1) and code == 0 { code = 1 }
+            s = nx
+          }
+          Stmt::Match(_c, ah, nx) => {
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  sub := wat_loop_scalar_code(am.body_stmts, depth, params_head, fn_head, src, a, decls)
+                  if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+                  arm = am.next
+                }
+                None => { break }
+              }
             }
-            None => { break }
+            s = nx
           }
+          Stmt::CompIf(_c, th, el, nx) => {
+            a0 := wat_loop_scalar_code(th, depth, params_head, fn_head, src, a, decls)
+            a1 := wat_loop_scalar_code(el, depth, params_head, fn_head, src, a, decls)
+            if a0 == 2 or a1 == 2 { code = 2 } else if (a0 == 1 or a1 == 1) and code == 0 { code = 1 }
+            s = nx
+          }
+          Stmt::CompFor(_ns, _nl, _iv, b, nx) => {
+            sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
+            if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+            s = nx
+          }
+          Stmt::CompMatch(_c, ah, nx) => {
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  sub := wat_loop_scalar_code(am.body_stmts, depth, params_head, fn_head, src, a, decls)
+                  if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+                  arm = am.next
+                }
+                None => { break }
+              }
+            }
+            s = nx
+          }
+          Stmt::CompForRange(_ns, _nl, _lo, _hi, b, nx) => {
+            sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
+            if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+            s = nx
+          }
+          Stmt::Unchecked(b, nx) => {
+            sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
+            if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+            s = nx
+          }
+          Stmt::AllocWith(_ae, b, nx) => {
+            sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
+            if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+            s = nx
+          }
+          Stmt::Assign(_ns, _nl, _v, nx) => { s = nx }
+          Stmt::FieldAssign(_bns, _bnl, _fns, _fnl, _v, nx) => { s = nx }
+          Stmt::Return(_v, nx) => { s = nx }
+          Stmt::DerefAssign(_p, _v, nx) => { s = nx }
+          Stmt::IndexAssign(_b, _i, _v, nx) => { s = nx }
+          Stmt::IndexFieldAssign(_b, _i, _fs, _fl, _v, nx) => { s = nx }
+          Stmt::FieldPathAssign(_p, _v, nx) => { s = nx }
+          Stmt::Continue(_d, nx) => { s = nx }
+          Stmt::ExprStmt(_e, nx) => { s = nx }
         }
-        s = nx
       }
-      Stmt::CompForRange(_ns, _nl, _lo, _hi, b, nx) => {
-        sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
-        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-        s = nx
-      }
-      Stmt::Unchecked(b, nx) => {
-        sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
-        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-        s = nx
-      }
-      Stmt::AllocWith(_ae, b, nx) => {
-        sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
-        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-        s = nx
-      }
-      Stmt::Assign(_ns, _nl, _v, nx) => { s = nx }
-      Stmt::FieldAssign(_bns, _bnl, _fns, _fnl, _v, nx) => { s = nx }
-      Stmt::Return(_v, nx) => { s = nx }
-      Stmt::DerefAssign(_p, _v, nx) => { s = nx }
-      Stmt::IndexAssign(_b, _i, _v, nx) => { s = nx }
-      Stmt::IndexFieldAssign(_b, _i, _fs, _fl, _v, nx) => { s = nx }
-      Stmt::FieldPathAssign(_p, _v, nx) => { s = nx }
-      Stmt::Continue(_d, nx) => { s = nx }
-      Stmt::ExprStmt(_e, nx) => { s = nx }
+      None => { break }
     }
   }
   code
@@ -4061,87 +4147,93 @@ mut WAT_LSD := 0
 
 ## The struct-type name of the LOCAL `[ns, ns+nl)` — found from its `:=` StructLit initializer in the
 ## fn's top-level body (`p := Pt(…)`), else {0,0}. Lets a `p.field` read resolve the field offset.
-local_struct_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
-  mut s := fn_head
+local_struct_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+  mut s : Option(ptr(mut Stmt)) = fn_head
   mut rs := 0
   mut rn := 0
   mut done := false
-  while s != 0 and (not done) {
-    stmt := deref(stmt_p(Stmt, s))
-    match stmt {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) {
-          sp := expr_struct_name(v)
-          if sp.n != 0 { rs = sp.s ; rn = sp.n ; done = true }
-          ## a local bound to a struct-returning CALL (`p := make()`) is a struct local — its slot
-          ## holds the returned base address (the callee built it in the `$__sp` bump region).
-          if sp.n == 0 {
-            cn := expr_call_name(v)
-            if cn.n != 0 {
-              cr := callee_ret_struct(decls, src, cn.s, cn.n, ex_call_argh(v), a)
-              if cr.n != 0 { rs = cr.s ; rn = cr.n ; done = true }
+  loop {
+    match s {
+      Some(sq) => {
+        if not ((not done)) { break }
+        stmt := deref(stmt_p(Stmt, sq))
+        match stmt {
+          Stmt::Assign(ans, anl, v, nx) => {
+            if streq(src, ans, anl, ns, nl) {
+              sp := expr_struct_name(v)
+              if sp.n != 0 { rs = sp.s ; rn = sp.n ; done = true }
+              ## a local bound to a struct-returning CALL (`p := make()`) is a struct local — its slot
+              ## holds the returned base address (the callee built it in the `$__sp` bump region).
+              if sp.n == 0 {
+                cn := expr_call_name(v)
+                if cn.n != 0 {
+                  cr := callee_ret_struct(decls, src, cn.s, cn.n, ex_call_argh(v), a)
+                  if cr.n != 0 { rs = cr.s ; rn = cr.n ; done = true }
+                }
+              }
+              ## `x := arr[i]` over an AGGREGATE-element array/slice: x is a fresh copy of the element
+              ## struct, so its slot holds a base address of that struct type.
+              if rn == 0 and ex_is_index(v) {
+                ibn := expr_var_name(ex_index_base(v))
+                es := wat_arr_elem_struct(fn_head, src, ibn.s, ibn.n, a, decls)
+                if es.n != 0 { rs = es.s ; rn = es.n ; done = true }
+              }
+              ## `q := p` — a whole-aggregate COPY from a struct VAR (local or param): q takes p's type.
+              ## Depth-capped (WAT_LSD) because base_struct_type can re-enter this resolver.
+              if rn == 0 and WAT_LSD < 6 {
+                vn := expr_var_name(v)
+                if vn.n != 0 {
+                  WAT_LSD = WAT_LSD + 1
+                  bs := base_struct_type(wat_params(), fn_head, src, vn.s, vn.n, a, decls)
+                  WAT_LSD = WAT_LSD - 1
+                  if bs.n != 0 { rs = bs.s ; rn = bs.n ; done = true }
+                }
+              }
+              ## a standard-byte aggregate field copy `q := p.inner` takes the leaf struct type. The source
+              ## address/byte offset is handled by the Assign emitter; this scan only types q's own slot.
+              if rn == 0 and ex_is_field(v) {
+                sfp := wat_std_path_ty(v, fn_head, src, a, decls)
+                if wat_std_path_ok(v, fn_head, src, a, decls) and sfp.n != 0 {
+                  sbn := base_type_name(src, sfp.s, sfp.n)
+                  if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 { rs = sbn.s ; rn = sbn.n ; done = true }
+                }
+              }
             }
+            s = nx
           }
-          ## `x := arr[i]` over an AGGREGATE-element array/slice: x is a fresh copy of the element
-          ## struct, so its slot holds a base address of that struct type.
-          if rn == 0 and ex_is_index(v) {
-            ibn := expr_var_name(ex_index_base(v))
-            es := wat_arr_elem_struct(fn_head, src, ibn.s, ibn.n, a, decls)
-            if es.n != 0 { rs = es.s ; rn = es.n ; done = true }
-          }
-          ## `q := p` — a whole-aggregate COPY from a struct VAR (local or param): q takes p's type.
-          ## Depth-capped (WAT_LSD) because base_struct_type can re-enter this resolver.
-          if rn == 0 and WAT_LSD < 6 {
-            vn := expr_var_name(v)
-            if vn.n != 0 {
-              WAT_LSD = WAT_LSD + 1
-              bs := base_struct_type(wat_params(), fn_head, src, vn.s, vn.n, a, decls)
-              WAT_LSD = WAT_LSD - 1
-              if bs.n != 0 { rs = bs.s ; rn = bs.n ; done = true }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+            ## an ITERABLE for over a struct-element array types its loop var as the element struct, so
+            ## `p.field` reads resolve through it (the loop var holds `&a[i]` — a pointer to the element).
+            if streq(src, fns, fnl, ns, nl) and unchecked bitcast(usize, fhi) == 0 {
+              bn := expr_var_name(flo)
+              es := arr_elem_struct_span(fn_head, src, bn.s, bn.n, a)
+              if es.n != 0 { rs = es.s ; rn = es.n ; done = true }
             }
+            s = nx
           }
-          ## a standard-byte aggregate field copy `q := p.inner` takes the leaf struct type. The source
-          ## address/byte offset is handled by the Assign emitter; this scan only types q's own slot.
-          if rn == 0 and ex_is_field(v) {
-            sfp := wat_std_path_ty(v, fn_head, src, a, decls)
-            if wat_std_path_ok(v, fn_head, src, a, decls) and sfp.n != 0 {
-              sbn := base_type_name(src, sfp.s, sfp.n)
-              if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 { rs = sbn.s ; rn = sbn.n ; done = true }
-            }
-          }
+          ## comptime-for/if loop vars are scalar / their locals are fn-frame level — a struct-element type
+          ## scan just advances past them (matching the `for`/`if` arms above; no top-level local is hidden).
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+          Stmt::CompIf(cc, cth, cel, cnx) => { s = cnx }
+          Stmt::Loop(lb, lnx) => { s = lnx }
+          Stmt::Unchecked(ub, unx) => { s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          Stmt::Match(msc, mah, mnx) => { s = mnx }
+          ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
+          ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
         }
-        s = nx
       }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-        ## an ITERABLE for over a struct-element array types its loop var as the element struct, so
-        ## `p.field` reads resolve through it (the loop var holds `&a[i]` — a pointer to the element).
-        if streq(src, fns, fnl, ns, nl) and unchecked bitcast(usize, fhi) == 0 {
-          bn := expr_var_name(flo)
-          es := arr_elem_struct_span(fn_head, src, bn.s, bn.n, a)
-          if es.n != 0 { rs = es.s ; rn = es.n ; done = true }
-        }
-        s = nx
-      }
-      ## comptime-for/if loop vars are scalar / their locals are fn-frame level — a struct-element type
-      ## scan just advances past them (matching the `for`/`if` arms above; no top-level local is hidden).
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
-      Stmt::CompIf(cc, cth, cel, cnx) => { s = cnx }
-      Stmt::Loop(lb, lnx) => { s = lnx }
-      Stmt::Unchecked(ub, unx) => { s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { s = mnx }
-      ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
-      ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+      None => { break }
     }
   }
   WSpan(s = rs, n = rn)
@@ -4182,7 +4274,7 @@ wat_ty_is_scalar_name := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 
 ## The struct-type name of a base place named `[ns, ns+nl)` — a struct PARAM (by annotation) or a
 ## struct LOCAL (by its StructLit init), else {0,0}.
-base_struct_type := fn(params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+base_struct_type := fn(params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   ps := param_struct_type(params_head, src, ns, nl, a)
   if ps.n != 0 { return ps }
   return local_struct_type(fn_head, src, ns, nl, a, decls)
@@ -4206,7 +4298,7 @@ struct_field_type := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
 ## recursively). {0,0} for anything else. A nested struct field is stored BY REFERENCE (word holds the
 ## inner base address), so `o.i` as a value already yields the inner base — the Field arm then loads
 ## the sub-field from it. Value-returning recursion (no ptr(mut)); `match deref(e)` inline (seed-safe).
-expr_struct_type_of := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+expr_struct_type_of := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   mut rs := 0
   mut rn := 0
   match deref(e) {
@@ -4240,7 +4332,7 @@ expr_struct_type_of := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), b
 ## aggregate-element array/slice — else {0,0}. A place is LIVE STORAGE someone else owns, so binding or
 ## storing from it must COPY its words, not alias its base address (`q := p` then `p.x = …` must not
 ## move `q.x`). StructLit/call RHSs are deliberately EXCLUDED: those already own a fresh block.
-wat_place_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_place_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   if ex_is_index(v) {
     ibn := expr_var_name(ex_index_base(v))
     return wat_arr_elem_struct(fn_head, src, ibn.s, ibn.n, a, decls)
@@ -4277,7 +4369,7 @@ wat_place_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn
 ## The STRUCT span an aggregate-valued RHS delivers: a place (above), a struct LITERAL, or a
 ## struct-returning CALL. Every one of those evaluates to a linear-memory BASE ADDRESS, so a
 ## whole-element store can copy `struct_words` words from it. {0,0} = not an aggregate RHS → fail-loud.
-wat_rhs_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_rhs_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   sn := expr_struct_name(v)
   if sn.n != 0 { return sn }
   cn := expr_call_name(v)
@@ -4309,7 +4401,7 @@ param_enum_type := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : 
 
 ## The enum-type name of a scrutinee place `[ns, ns+nl)` — an enum PARAM (by annotation) or an enum
 ## LOCAL (by its EnumLit init), else {0,0}.
-base_enum_type := fn(params_head : Option(ptr(mut Param)), fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> WSpan {
+base_enum_type := fn(params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> WSpan {
   pe := param_enum_type(params_head, src, ns, nl, a, decls)
   if pe.n != 0 { return pe }
   return local_enum_type(fn_head, src, ns, nl, a, decls, allow_union)
@@ -4451,7 +4543,7 @@ wat_std_copy := fn(ts : usize, tl : usize, sidx : i64, sbo : i64, didx : i64, in
   }
 }
 
-wat_std_store_expr := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+wat_std_store_expr := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   width := scalar_byte_size(src, ts, tl)
   if width == 1 { push_str(sb, "    (i64.store8 ") ; emit_wat_addr(sb, bidx, off) ; push_str(sb, " ") ; emit_wat_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) ; push_str(sb, ")\n") }
   if width == 2 { push_str(sb, "    (i64.store16 ") ; emit_wat_addr(sb, bidx, off) ; push_str(sb, " ") ; emit_wat_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) ; push_str(sb, ")\n") }
@@ -4460,7 +4552,7 @@ wat_std_store_expr := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl :
   if width != 1 and width != 2 and width != 4 and width != 8 { push_str(sb, "    (unreachable) (; unsupported standard scalar width ;)\n") }
 }
 
-wat_std_store_value := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
+wat_std_store_value := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   es := wat_arrty_elem(src, ts, tl)
   if es.n != 0 {
     mut bytearr := false
@@ -4507,7 +4599,7 @@ wat_std_store_value := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl 
   i64(standard_type_byte_size(decls, src, ts, tl, wsize, a))
 }
 
-wat_std_store_struct := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
+wat_std_store_struct := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   sn := expr_struct_name(pe)
   di := struct_decl_of(decls, src, sn.s, sn.n)
   if di < 0 { push_str(sb, "    (unreachable) (; unknown standard struct literal ;)\n") ; return 0 }
@@ -4547,7 +4639,7 @@ emit_wat_tmp_addr := fn(in out sb : rt::StrBuf, byte_off : i64) {
 
 ## Materialize the bounded native `{u8, u8}` expression literal in `$__tmp` using its standard byte
 ## image. The generic expression writer below remains word-granular for every other struct shape.
-wat_std_store_tmp_u8_pair := fn(pe : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
+wat_std_store_tmp_u8_pair := fn(pe : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   sn := expr_struct_name(pe)
   di := struct_decl_of(decls, src, sn.s, sn.n)
   if di < 0 { push_str(sb, "(unreachable) (; unknown native u8-pair literal ;)\n") ; return 0 }
@@ -4588,7 +4680,7 @@ wat_std_store_tmp_u8_pair := fn(pe : ptr(Expr), in out sb : rt::StrBuf, a : rt::
 ## variant arm `E.V => body` tests `disc == variant_index(V)`. The active arm's payload bindings are
 ## pushed while its body is emitted, so a nested match can still see an outer scalar binding. An
 ## exhausted chain (no arm matched) traps.
-emit_wat_match_arms := fn(arm : Option(ptr(mut Arm)), es : usize, en : usize, sidx : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec)) {
+emit_wat_match_arms := fn(arm : Option(ptr(mut Arm)), es : usize, en : usize, sidx : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec)) {
   match arm {
     None => {
       push_str(sb, "(unreachable) (; no matching arm ;)\n")
@@ -4774,7 +4866,7 @@ emit_print_nl := fn(in out sb : rt::StrBuf) {
 ## rendering, the three shapes that oracle cannot prove and must not be taught (#457: an `[i64; N]`
 ## element, a declared `i64` return, literal arithmetic). Anything neither layer proves signed keeps
 ## $__itoa and its exact previous bytes.
-emit_print_int := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+emit_print_int := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   if wat_hole_signed(e, params_head, body_head, decls, src, a) { WAT_PRINT_I64 = true ; push_str(sb, "    (i32.store (i32.const 4) (call $__itoa_s ") } else { push_str(sb, "    (i32.store (i32.const 4) (call $__itoa ") }
   emit_wat_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   push_str(sb, "))\n    (i32.store (i32.const 0) (global.get $__istart))\n    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))\n")
@@ -4784,7 +4876,7 @@ emit_print_int := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src :
 ## whole string's data segment — the `{}` bytes are skipped) and itoa+print each hole's argument (the
 ## args after the format string). println appends a newline. Escapes are decoded into the data segment,
 ## and the raw scanner advances four bytes for `\xHH`.
-emit_print_template := fn(pi : PInfo, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+emit_print_template := fn(pi : PInfo, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ## scan the RAW format bytes but track the DECODED offset (dpos) into the data segment — an escape
   ## is 2 raw bytes → 1 decoded byte (or 4 for `\xHH`), so run offsets (which index the decoded data
   ## segment) advance by decoded count. A `{}` hole occupies 2 decoded bytes (both braces are literal decoded chars) that
@@ -4830,7 +4922,7 @@ emit_print_template := fn(pi : PInfo, in out sb : rt::StrBuf, a : rt::Arena, src
 ## PARAM), or the fixed `.data` offset (array GLOBAL). Under `verify.checked` the index is stashed in the
 ## scratch local and range-tested first — against the static element count (array local/global) or the
 ## runtime len in word1 (slice); `i64.ge_u` so a negative index traps too.
-emit_wat_agg_elem_addr := fn(ibase : ptr(Expr), iidx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+emit_wat_agg_elem_addr := fn(ibase : ptr(Expr), iidx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   bn := expr_var_name(ibase)
   stride := wat_arr_elem_stride(body_head, src, bn.s, bn.n, a, decls)
   mut strideb := stride * 8
@@ -4880,7 +4972,7 @@ emit_wat_agg_elem_addr := fn(ibase : ptr(Expr), iidx : ptr(Expr), in out sb : rt
 ## as a huge unsigned), dropped under `unchecked` (CG-7). NESTING IS SAFE: WASM evaluates operands
 ## left-to-right, so an outer hop's guarded index is already consumed onto the operand stack before an
 ## inner hop's guard overwrites the shared scratch local.
-emit_wat_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+emit_wat_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   bt := wat_place_ty(base, body_head, src, a, decls)
   et := wat_arrty_elem(src, bt.s, bt.n)
   mut estride := wat_arr_elem_stride_bytes(src, et.s, et.n, a, decls)
@@ -4909,7 +5001,7 @@ emit_wat_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt:
 ## Emit the linear-memory ADDRESS (an i64 VALUE) of the DEEP place `e` (assumes wat_place_ok). Flat
 ## standalone ifs — an if/else-if chain as a fn body reads as a tail value-if under the lean lower.
 ## The ROOT is a frame local whose WASM local already HOLDS the block's base address.
-emit_wat_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+emit_wat_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   isf := ex_is_field(e)
   isi := ex_is_index(e)
   if isf {
@@ -4939,7 +5031,7 @@ emit_wat_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
 ## wider one, so this replaces it ONLY where the aggregate has a multi-word field (an all-scalar
 ## aggregate keeps the byte-identical positional emit). `bidx` may be the negative CONSTANT-base
 ## encoding `emit_wat_addr` understands.
-emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
+emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   sn := expr_struct_name(pe)
   if sn.n != 0 {
     mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(pe)
@@ -5080,7 +5172,7 @@ emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb
 ## shared enum resolver for unions is exactly what regressed the union place feed while #491 was fixed.
 ## The consequence is recorded on the issue: a WIDE-member union delivered by a CALL (`q = mkw()`, and a
 ## local bound to one) is not named here and keeps its parent behaviour.
-wat_store_union_span := fn(pe : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
+wat_store_union_span := fn(pe : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
   match deref(pe) {
     Expr::Call(cs, cl, _nn, ah) => {
       cr := callee_ret_enum(decls, src, cs, cl, ah, a, true)
@@ -5119,7 +5211,7 @@ wat_store_union_span := fn(pe : ptr(Expr), params_head : Option(ptr(mut Param)),
 ## Reading a union member back is a separate, already-LOUD surface on this backend (measured 134 for
 ## `u.m` and for `s.p.m`), so this fix is observable through the NEIGHBOURING field, which is where the
 ## corruption was.
-emit_wat_store_union_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
+emit_wat_store_union_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   uen := expr_enum_name(pe)
   if uen.n != 0 {
     if not lower_layout::is_union_decl(decls, src, uen.s, uen.n) { return 0 }
@@ -5179,23 +5271,26 @@ wat_emit_lambda_label := fn(in out sb : rt::StrBuf, src : ptr(u8), ms : usize, m
   push_int(sb, i64(fnpos))
 }
 
-wat_bound_lambda := fn(body : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> i64 {
+wat_bound_lambda := fn(body : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> i64 {
   mut fnpos : usize = 0
   mut found := false
   mut rhs := unchecked bitcast(ptr(Expr), 0)
-  bind := lower_layout::local_decl_assign(body, src, ns, nl)
-  if unchecked bitcast(usize, bind) != 0 {
-    st := deref(stmt_p(Stmt, bind))
-    match st {
-      Stmt::Assign(as, al, v, nx) => {
-        rhs = v
+  bind : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(body, src, ns, nl)
+  match bind {
+    Some(bindq) => {
+      st := deref(stmt_p(Stmt, bindq))
+      match st {
+        Stmt::Assign(as, al, v, nx) => {
+          rhs = v
+        }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
       }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
+    None => {}
   }
   if unchecked bitcast(usize, rhs) != 0 {
     fr := lower::fnref_info(rhs)
@@ -5227,7 +5322,7 @@ wat_bound_lambda := fn(body : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
 ## writable against the frozen seed, which is what builds `src/`. Verified rather than assumed: the
 ## frozen seed checks AND builds this tree, rc 0 both.
 ## See the census note above `wat_local_ann_signed`.
-emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   match deref(e) {
     Expr::FnRef(fnpos, fms, fml) => {
       push_str(sb, "(unreachable) (; FnRef value unsupported on WAT ;)")
@@ -6504,36 +6599,6 @@ exprstmt_needs_drop := fn(e : ptr(Expr), src : ptr(u8), decls : ptr(rt::Vec), a 
   r
 }
 
-## The next statement handle of an arena-linked Stmt. Defer blocks are physically linked into their
-## enclosing list, so the WAT emitter needs the same exhaustive chain walk as the parser and native
-## lowerers when it skips a consumed block. Keep this exhaustive: a new Stmt variant must not silently
-## truncate the scan at the first statement after it.
-wat_stmt_next := fn(h : usize) -> usize {
-  st := deref(stmt_p(Stmt, h))
-  match st {
-    Stmt::Assign(ns, nl, v, nx) => { nx }
-    Stmt::While(c, b, nx) => { nx }
-    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { nx }
-    Stmt::Return(rv, nx) => { nx }
-    Stmt::If(c, th, el, nx) => { nx }
-    Stmt::Match(sc, ah, nx) => { nx }
-    Stmt::For(fns, fnl, flo, fhi, fb, nx) => { nx }
-    Stmt::DerefAssign(p, v, nx) => { nx }
-    Stmt::IndexAssign(b, i, v, nx) => { nx }
-    Stmt::Loop(b, nx) => { nx }
-    Stmt::Unchecked(b, nx) => { nx }
-    Stmt::AllocWith(ae, b, nx) => { nx }
-    Stmt::Break(bv, bd, nx) => { nx }
-    Stmt::Continue(cd, nx) => { nx }
-    Stmt::ExprStmt(e, nx) => { nx }
-    Stmt::CompIf(c, th, el, nx) => { nx }
-    Stmt::CompFor(vs, vl, iv, b, nx) => { nx }
-    Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { nx }
-    Stmt::CompMatch(sc, ah, nx) => { nx }
-    Stmt::FieldPathAssign(pl, pv, nx) => { nx }
-    Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { nx }
-  }
-}
 
 ## The ACTION expression of a `defer` marker statement — the single argument of the synthetic
 ## `__defer(<expr>)` call the parser desugars `defer <expr>` to — else a NULL pointer (not a defer).
@@ -6586,20 +6651,26 @@ wat_is_defer_blk_end := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
 
 ## Find the `__deferblkend()` marker belonging to a block head. A missing marker violates the parser's
 ## pairing invariant; return 0 so the emitter can fail loud rather than register a truncated cleanup.
-wat_defer_blk_end := fn(start : usize, src : ptr(u8)) -> usize {
-  mut s := start
-  mut r := 0
-  while s != 0 and r == 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::ExprStmt(e, nx) => {
-        if wat_is_defer_blk_end(e, src) { r = s } else { s = wat_stmt_next(s) }
+wat_defer_blk_end := fn(start : Option(ptr(mut Stmt)), src : ptr(u8)) -> Option(ptr(mut Stmt)) {
+  mut s : Option(ptr(mut Stmt)) = start
+  mut r : Option(ptr(mut Stmt)) = Option.None
+  loop {
+    match s {
+      Some(sq) => {
+        if stmt_any(r) { break }
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::ExprStmt(e, nx) => {
+            if wat_is_defer_blk_end(e, src) { r = Option.Some(sq) } else { s = stmt_next(sq) }
+          }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match
+            | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+            | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::CompIf
+            | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { s = stmt_next(sq) }
+        }
       }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match
-        | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
-        | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::CompIf
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { s = wat_stmt_next(s) }
+      None => { break }
     }
   }
   r
@@ -6614,29 +6685,30 @@ wat_defer_push := fn(e : ptr(Expr)) {
 
 ## Register a whole `defer { … }` chain as ONE pending unit. The block statements run together at this
 ## entry's LIFO position, rather than becoming separate deferred actions.
-wat_defer_push_block := fn(head : usize) {
-  if WAT_DEF_N < 64 { WAT_DEF_E[WAT_DEF_N] = head ; WAT_DEF_BLOCK[WAT_DEF_N] = true ; WAT_DEF_N = WAT_DEF_N + 1 }
+wat_defer_push_block := fn(head : Option(ptr(mut Stmt))) {
+  if WAT_DEF_N < 64 { WAT_DEF_BH[WAT_DEF_N] = head ; WAT_DEF_BLOCK[WAT_DEF_N] = true ; WAT_DEF_N = WAT_DEF_N + 1 }
   else { WAT_DEF_OVF = true }
 }
 
 ## Replay the pending defer actions with stack index in [base, top), LIFO (highest index first) — the
 ## cleanup emission shared by every exit path. Emission ONLY: the caller decides whether the entries
 ## are popped (a scope end) or kept (a jump — the fall-through path still owes them).
-wat_defer_drain := fn(top : i64, base : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, fn_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+wat_defer_drain := fn(top : i64, base : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, fn_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   if WAT_DEF_OVF { push_str(sb, "    (unreachable) (; defer stack overflow (wasm: >64 live defers) ;)\n") }
   mut k := top
   while k > base {
     k = k - 1
     if WAT_DEF_BLOCK[k] {
-      bh := WAT_DEF_E[k]
-      bend := wat_defer_blk_end(bh, src)
-      if bend == 0 {
-        push_str(sb, "    (unreachable) (; defer block end marker missing ;)\n")
-      } else {
-        ostop := WAT_DEF_STOP
-        WAT_DEF_STOP = bend
-        emit_wat_stmts(bh, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-        WAT_DEF_STOP = ostop
+      bh := WAT_DEF_BH[k]
+      bend : Option(ptr(mut Stmt)) = wat_defer_blk_end(bh, src)
+      match bend {
+        Some(_bq) => {
+          ostop := WAT_DEF_STOP
+          WAT_DEF_STOP = bend
+          emit_wat_stmts(bh, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+          WAT_DEF_STOP = ostop
+        }
+        None => { push_str(sb, "    (unreachable) (; defer block end marker missing ;)\n") }
       }
     } else {
       de := unchecked bitcast(ptr(Expr), WAT_DEF_E[k])
@@ -6652,43 +6724,49 @@ wat_defer_drain := fn(top : i64, base : i64, in out sb : rt::StrBuf, a : rt::Are
 ## local emit_wat_body declares, past the bounds / element-base / copy-source scratches). A `return e`
 ## (or a tail value) reached with pending defers must evaluate `e` BEFORE the cleanups run — mirroring
 ## the x86 lower preserving the return registers across the drain — so the value parks here meanwhile.
-wat_defer_scratch := fn(pcount : i64, fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+wat_defer_scratch := fn(pcount : i64, fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   return pcount + count_locals(fn_head, src, a, decls) + 3
 }
 
 ## If `bs` is a statement list consisting of exactly ONE bare-expression statement (`{ expr }` — a
 ## braced match arm whose value is that expr), return the expr pointer; else a null pointer. Returns
 ## ptr(Expr) (NOT a new struct — the frozen seed miscompiles a new struct return type).
-arm_single_expr := fn(bs : usize, a : rt::Arena) -> ptr(Expr) {
+arm_single_expr := fn(bs : Option(ptr(mut Stmt)), a : rt::Arena) -> ptr(Expr) {
   mut r := unchecked bitcast(ptr(Expr), 0)
-  if bs != 0 {
-    st := deref(stmt_p(Stmt, bs))
-    match st {
-      Stmt::ExprStmt(e, nx) => { if nx == 0 { r = e } }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match
-        | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
-        | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::CompIf
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+  match bs {
+    Some(bq) => {
+      st := deref(stmt_p(Stmt, bq))
+      match st {
+        Stmt::ExprStmt(e, nx) => { if not stmt_any(nx) { r = e } }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match
+          | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+          | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::CompIf
+          | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
     }
+    None => {}
   }
   r
 }
 
 ## Is the fn body a SINGLE tail `Stmt::Match` (the whole body is `match … { … }`)? Such a match in a
 ## value-returning fn yields the fn's value (each braced arm's tail expr is the result).
-body_is_single_match := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
+body_is_single_match := fn(head : Option(ptr(mut Stmt)), a : rt::Arena) -> bool {
   mut r := false
-  if head != 0 {
-    st := deref(stmt_p(Stmt, head))
-    match st {
-      Stmt::Match(msc, mah, mnx) => { if mnx == 0 { r = true } }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+  match head {
+    Some(hq) => {
+      st := deref(stmt_p(Stmt, hq))
+      match st {
+        Stmt::Match(msc, mah, mnx) => { if not stmt_any(mnx) { r = true } }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
     }
+    None => {}
   }
   r
 }
@@ -6696,7 +6774,7 @@ body_is_single_match := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
 ## Emit one match-arm body. In a VALUE-yielding match (`vyield`), a single-expression arm `{ e }`
 ## delivers the fn value via `(return e)`; a multi-statement value arm is not modelled (trap). In a
 ## statement (side-effect) match, run the body normally via emit_wat_stmts.
-emit_wat_arm_body := fn(bs : usize, vyield : bool, fn_head : ptr(mut Stmt), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+emit_wat_arm_body := fn(bs : Option(ptr(mut Stmt)), vyield : bool, fn_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ## `vyield` IS the arm body's tail_value: with it set, emit_wat_stmts turns the arm's trailing
   ## expression statement into `(return …)` — handling single-expr AND multi-statement value arms.
   emit_wat_stmts(bs, fn_head, true, vyield, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
@@ -6705,7 +6783,7 @@ emit_wat_arm_body := fn(bs : usize, vyield : bool, fn_head : ptr(mut Stmt), in o
 ## Statement-position match dispatch: a nested value-less WASM `if` chain on the scrutinee's
 ## discriminant (word 0 at local `sidx`). `vyield` = the match is in fn-value position (each arm
 ## returns its tail expr). Mutually recursive with emit_wat_stmts.
-emit_wat_stmt_match := fn(arm : Option(ptr(mut Arm)), es : usize, en : usize, sidx : i64, fn_head : ptr(mut Stmt), vyield : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec)) {
+emit_wat_stmt_match := fn(arm : Option(ptr(mut Arm)), es : usize, en : usize, sidx : i64, fn_head : Option(ptr(mut Stmt)), vyield : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec)) {
   match arm {
     None => {
     }
@@ -6788,7 +6866,7 @@ emit_wat_stmt_match := fn(arm : Option(ptr(mut Arm)), es : usize, en : usize, si
 ## in the supplied scratch local; literal arms compare that local and wildcard arms run unconditionally.
 ## This is separate from emit_wat_stmt_match because enum arms load a discriminant from linear memory,
 ## while scalar matches have no aggregate address or payload-binding context.
-emit_wat_scalar_stmt_match := fn(arm : Option(ptr(mut Arm)), sidx : i64, fn_head : ptr(mut Stmt), vyield : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec)) {
+emit_wat_scalar_stmt_match := fn(arm : Option(ptr(mut Arm)), sidx : i64, fn_head : Option(ptr(mut Stmt)), vyield : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec)) {
   match arm {
     None => {
       push_str(sb, "    (unreachable) (; no matching scalar arm ;)\n")
@@ -6817,7 +6895,7 @@ emit_wat_scalar_stmt_match := fn(arm : Option(ptr(mut Arm)), sidx : i64, fn_head
 ## local/global as at top level. Return→WASM `return`; While→block/loop+br_if; If→value-less WASM if;
 ## ExprStmt→the expr (dropping a non-void result). A nested NEW `:=` (name not top-level, not a global)
 ## traps rather than colliding with a slot.
-emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, tail_value : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+emit_wat_stmts := fn(list_head : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut Stmt)), nested : bool, tail_value : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ## DEFER (§9.3): this list IS a scope. Record the pending-cleanup depth on entry; a `defer` inside
   ## pushes above it and the FALL-THROUGH end of the list replays + POPS everything back down to it.
   ## The FUNCTION-body list (`nested` false) is the exception — its drain belongs AFTER the tail
@@ -6828,1246 +6906,1255 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
   ## and push the name on the way in; the restore below pops it, which puts the parameter back in
   ## scope for everything that follows the block.
   pshadow_n := WAT_PSH_N
-  if nested { wat_param_shadow_enter(unchecked bitcast(ptr(mut Stmt), list_head), fn_head, sb, src, params_head, pcount, a, decls) }
-  mut s := list_head
-  while s != 0 and s != WAT_DEF_STOP {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => {
-        if local_is_comptime(src, ns) { s = nx }
-        else {
-        slit := expr_struct_name(v)
-        elit := expr_enum_name(v)
-        ## the struct span of an aggregate PLACE RHS (`q := p` / `x := arr[i]`) — a whole-aggregate COPY.
-        cpsp := wat_place_agg_span(v, params_head, fn_head, src, a, decls)
-        lami := wat_bound_lambda(fn_head, src, ns, nl, decls)
-        if lami >= 0 {
-          idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
-          push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (i64.const 0))\n")
-          s = nx
-        } else if wat_is_float_global(decls, src, ns, nl) {
-          ## a float module global WRITE: the RHS yields i64 bits (value model) → reinterpret to f64
-          ## for the `(mut f64)` cell. When the init text is not recoverable (cell never emitted) → TRAP.
-          if wat_float_global_init_ok(decls, src, ns, nl) {
-            push_str(sb, "    (global.set $")
-            push_str(sb, str_at((src + ns), nl))
-            push_str(sb, " (f64.reinterpret_i64 ")
-            emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, "))\n")
-          } else {
-            push_str(sb, "    (unreachable) (; float module global assign (wasm: no init) ;)\n")
-          }
-          s = nx
-        } else if is_global(decls, src, ns, nl, a) {
-          gname := str_at((src + ns), nl)
-          push_str(sb, "    (global.set $")
-          push_str(sb, gname)
-          push_str(sb, " ")
-          if wat_direct_float_num(v, src, ns, nl, decls, fn_head, params_head, pcount, a, bind_head) {
-            push_str(sb, "(i64.reinterpret_f64 (f64.convert_i64_s ")
-            emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, "))")
-          } else { emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-          push_str(sb, ")\n")
-          s = nx
-        } else if slit.n != 0 {
-          ## struct construction `p := S(f0=v0, …)`: bump-allocate `struct_words*8` bytes in linear
-          ## memory, put the base address in p's local, store each (positional) field value.
-          idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
-          if layout_kind_is_byte(layout_kind(decls, src, slit.s, slit.n, a)) {
-            ## Standard §6.1 construction: reserve the rounded byte size and write every field at its
-            ## shared byte offset. This is distinct from the legacy word-addressed constructor below.
-            szb := standard_type_byte_size(decls, src, slit.s, slit.n, 1, a)
-            push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
-            push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ") ; push_int(sb, i64(szb)) ; push_str(sb, ")))\n")
-            _stdw := wat_std_store_struct(v, idx, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            s = nx
-          } else if struct_all_scalar(decls, src, slit.s, slit.n, a) {
-            sz := struct_words(decls, src, slit.s, slit.n, a)
-            push_str(sb, "    (local.set ")
-            push_int(sb, idx)
-            push_str(sb, " (global.get $__sp))\n")
-            push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ")
-            push_int(sb, i64(sz) * 8)
-            push_str(sb, ")))\n")
-            ## store each positional field value at base + k*8 (scalar fields → one word each)
-            mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(v)
-            mut k := 0
-            loop {
-              match g {
-                Some(gq) => {
-                  ga := deref(arg_p(gq))
-                  push_str(sb, "    (i64.store ")
-                  emit_wat_addr(sb, idx, i64(k) * 8)
-                  push_str(sb, " ")
-                  emit_wat_expr(ga.e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-                  push_str(sb, ")\n")
-                  k += 1
-                  g = ga.next
-                }
-                None => { break }
-              }
-            }
-            s = nx
-          } else if struct_plain(decls, src, slit.s, slit.n) {
-            ## a struct with a MULTI-WORD field (a nested struct, an inline `[T; N]`, an enum): reserve the
-            ## FLATTENED width and write the literal through the flattened writer, so every nested value
-            ## lands INLINE at the cumulative offset `field_word_offset` reports (what the deep-place
-            ## composition walks). The all-scalar branch above is untouched, so its positional emit — and
-            ## its one-word BY-REFERENCE nested field — stays byte-identical.
-            szf := struct_words(decls, src, slit.s, slit.n, a)
-            push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
-            push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ") ; push_int(sb, i64(szf) * 8) ; push_str(sb, ")))\n")
-            wf := emit_wat_store_payload_at(v, idx, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            s = nx
-          } else {
-            push_str(sb, "    (unreachable) (; unsupported non-scalar struct ;)\n")
-            s = 0
-          }
-        } else if elit.n != 0 {
-          ## enum construction `e := E.V(payload…)`: bump-allocate 1 (disc) + enum_max_arity payload
-          ## words, store the variant index at word 0, then each scalar payload at words 1,2,…
-          idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
-          sz := 1 + enum_max_arity(decls, src, elit.s, elit.n, a)
-          evar := expr_enum_variant(v)
-          vidx := variant_index(decls, src, elit.s, elit.n, evar.s, evar.n, a)
-          push_str(sb, "    (local.set ")
-          push_int(sb, idx)
-          push_str(sb, " (global.get $__sp))\n")
-          push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ")
-          push_int(sb, i64(sz) * 8)
-          push_str(sb, ")))\n")
-          push_str(sb, "    (i64.store ")
-          emit_wat_addr(sb, idx, 0)
-          push_str(sb, " (i64.const ")
-          push_int(sb, vidx)
-          push_str(sb, "))\n")
-          mut g : Option(ptr(mut Arg)) = ex_enum_lit_args(v)
-          mut k := 1
-          loop {
-            match g {
-              Some(gq) => {
-                ga := deref(arg_p(gq))
-                push_str(sb, "    (i64.store ")
-                emit_wat_addr(sb, idx, i64(k) * 8)
-                push_str(sb, " ")
-                emit_wat_expr(ga.e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-                push_str(sb, ")\n")
-                k += 1
-                g = ga.next
-              }
-              None => { break }
-            }
-          }
-          s = nx
-        } else if ex_is_array_lit(v) and wat_array_lit_standard_byte_fence(v, decls, src, a) {
-          ## The WAT array literal writer still has word-positioned struct stores for this tier. Trap
-          ## at the construction site rather than let the byte-strided indexed reader observe garbage.
-          push_str(sb, "    (unreachable) (; unsupported standard-byte struct array literal ;)\n")
-          s = nx
-        } else if ex_is_array_lit(v) {
-          ## array construction `a := [e0, …]`: bump nel*estride words, store each element at base +
-          ## k*estride*8. A SCALAR element (estride 1) is one word; a STRUCT element (a StructLit, estride
-          ## = struct_words) stores each positional field at base + (k*estride + fk)*8 (the aggregate-array
-          ## layout — x86's stride). The local holds the region base (elements are by-reference words).
-          idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
-          anel := array_lit_nel(v)
-          estrideA := array_lit_stride(v, src, a, decls)
-          push_str(sb, "    (local.set ")
-          push_int(sb, idx)
-          push_str(sb, " (global.get $__sp))\n")
-          push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ")
-          push_int(sb, i64(anel) * estrideA * 8)
-          push_str(sb, ")))\n")
-          mut g : Option(ptr(mut Arg)) = ex_array_lit_ehead(v)
-          mut k := 0
-          loop {
-            match g {
-              Some(gq) => {
-                ga := deref(arg_p(gq))
-                sp := expr_struct_name(ga.e)
-                ep := expr_enum_name(ga.e)
-                if sp.n != 0 {
-                  ## a NESTED-AGGREGATE element struct goes through the FLATTENED writer (positional
-                  ## one-word-per-argument stores would keep only word 0 of a multi-word field and misalign
-                  ## every field after it); an ALL-SCALAR element keeps the byte-identical positional emit.
-                  mut flatel := false
-                  if struct_plain(decls, src, sp.s, sp.n) { if not struct_all_scalar(decls, src, sp.s, sp.n, a) { flatel = true } }
-                  if flatel {
-                    wfe := emit_wat_store_payload_at(ga.e, idx, i64(k) * estrideA * 8, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-                  } else {
-                    mut fg : Option(ptr(mut Arg)) = ex_struct_lit_args(ga.e)
-                    mut fk := 0
-                    loop {
-                      match fg {
-                        Some(fgq) => {
-                          fga := deref(arg_p(fgq))
-                          push_str(sb, "    (i64.store ")
-                          emit_wat_addr(sb, idx, (i64(k) * estrideA + fk) * 8)
-                          push_str(sb, " ")
-                          emit_wat_expr(fga.e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-                          push_str(sb, ")\n")
-                          fk += 1
-                          fg = fga.next
-                        }
-                        None => { break }
-                      }
-                    }
-                  }
-                }
-                if ep.n != 0 {
-                  evar := expr_enum_variant(ga.e)
-                  evx := variant_index(decls, src, ep.s, ep.n, evar.s, evar.n, a)
-                  push_str(sb, "    (i64.store ")
-                  emit_wat_addr(sb, idx, i64(k) * estrideA * 8)
-                  push_str(sb, " (i64.const ") ; push_int(sb, evx) ; push_str(sb, "))\n")
-                  mut pg : Option(ptr(mut Arg)) = ex_enum_lit_args(ga.e)
-                  mut pk := 1
-                  loop {
-                    match pg {
-                      Some(pgq) => {
-                        pga := deref(arg_p(pgq))
-                        push_str(sb, "    (i64.store ")
-                        emit_wat_addr(sb, idx, (i64(k) * estrideA + pk) * 8)
-                        push_str(sb, " ")
-                        emit_wat_expr(pga.e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-                        push_str(sb, ")\n")
-                        pk += 1
-                        pg = pga.next
-                      }
-                      None => { break }
-                    }
-                  }
-                }
-                if sp.n == 0 and ep.n == 0 {
-                  push_str(sb, "    (i64.store ")
-                  emit_wat_addr(sb, idx, i64(k) * estrideA * 8)
-                  push_str(sb, " ")
-                  emit_wat_expr(ga.e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-                  push_str(sb, ")\n")
-                }
-                k += 1
-                g = ga.next
-              }
-              None => { break }
-            }
-          }
-          s = nx
-        } else if ex_is_slice(v) {
-          ## range-slice binding `s := base[lo..hi]` — a 2-word {ptr, len} view in the `$__sp` region
-          ## (like a struct): word0 = &base[lo] = base-array pointer + lo*8; word1 = hi - lo. Only a
-          ## scalar array-local base is supported; anything else is fail-loud (`unreachable`).
-          idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
-          bn := expr_var_name(ex_slice_base(v))
-          bidx := name_local_index(fn_head, src, bn.s, bn.n, pcount, a, decls)
-          mut sliceok := false
-          if bn.n != 0 { if is_array_local(fn_head, src, bn.s, bn.n, a) { if bidx >= 0 { sliceok = true } } }
-          if sliceok {
-            ## element stride of the base array (1 for scalar → lo*8, byte-identical; struct/enum → lo*stride*8).
-            estrideS := array_local_stride(fn_head, src, bn.s, bn.n, a, decls)
-            push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
-            push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const 16)))\n")
-            ## word0 = &base[lo] = base-array pointer + lo*estride*8
-            push_str(sb, "    (i64.store ") ; emit_wat_addr(sb, idx, 0)
-            push_str(sb, " (i64.add (local.get ") ; push_int(sb, bidx) ; push_str(sb, ") (i64.mul ")
-            emit_wat_expr(ex_slice_lo(v), sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, " (i64.const ") ; push_int(sb, estrideS * 8) ; push_str(sb, "))))\n")
-            ## word1 = hi - lo
-            push_str(sb, "    (i64.store ") ; emit_wat_addr(sb, idx, 8)
-            push_str(sb, " (i64.sub ")
-            emit_wat_expr(ex_slice_hi(v), sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, " ")
-            emit_wat_expr(ex_slice_lo(v), sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, "))\n")
-          }
-          if not sliceok { push_str(sb, "    (unreachable) (; unsupported slice binding ;)\n") }
-          s = nx
-        } else if cpsp.n != 0 {
-          ## whole-aggregate COPY `q := p` / `x := arr[i]`: the RHS is a PLACE someone else owns, so the
-          ## binding gets its OWN `$__sp` block and the struct's words are copied into it (aliasing the
-          ## source would make a later write to either show through the other). The source base address is
-          ## stashed in the 3rd scratch local FIRST — evaluating it can bump `$__sp` itself.
-          idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
-          sc3 := pcount + count_locals(fn_head, src, a, decls) + 2
-          ## `struct_words` is the FLATTENED width and the copy is word-wise, so a NESTED-AGGREGATE field
-          ## rides along correctly — only a PLAIN (arity-0) decl is required, not an all-scalar one.
-          ## CLAYOUT S3(b) — EXCEPT when the place is a FIELD of a standard byte-layout root, which
-          ## `wat_place_agg_span` resolves through `wat_std_path_*`: there the SOURCE is a byte-precise
-          ## sub-place while the destination block is read back at WORD offsets, so a word-wise copy is
-          ## only right for a WORD-GRANULAR child. S3(b) made a sub-word child constructible and thereby
-          ## put one in front of this copy for the first time: measured without the guard,
-          ## `copy := o.inner` over `struct { data : [u8;8], inner : struct { a : u16, b : u16 } }`
-          ## returned exit 1 (`copy.a` read 0) where the pre-S3(b) compiler trapped — a wrong value
-          ## where there was a trap, which I11 forbids. A whole-struct copy `q := o` of the byte-layout
-          ## ROOT itself is untouched: source and destination have the same layout there, so the guard
-          ## is restricted to the FIELD place. The byte-precise COPIER is its own consumer (audit S3).
-          mut cpwg := true
-          if ex_is_field(v) and (not std_struct_is_word_granular(decls, src, cpsp.s, cpsp.n, a)) { cpwg = false }
-          ## CLAYOUT S3(c) — THE BYTE-PRECISE COPIER takes exactly what the word copy above cannot.
-          ## `std_copy_kind` (shared, `lower_layout`) decides whether this child has a byte-precise copy
-          ## and of which shape; the SOURCE address is the root's base local plus the path's §6.1 byte
-          ## offset (`wat_std_path_root_idx` + `wat_std_path_bo`) rather than `emit_wat_expr`, which has
-          ## no aggregate-field load at all and would emit an `(unreachable)`. A child OUTSIDE the
-          ## copier's domain keeps the located trap below.
-          mut cpbc := 0
-          mut cpsidx := i64(0) - 1
-          mut cpsbo := i64(0) - 1
-          if (not cpwg) {
-            cpbc = std_copy_kind(decls, src, cpsp.s, cpsp.n, a)
-            cpsidx = wat_std_path_root_idx(v, fn_head, src, pcount, a, decls)
-            cpsbo = wat_std_path_bo(v, fn_head, src, a, decls)
-          }
-          mut cpbok := false
-          if cpbc != 0 and cpsidx >= 0 and cpsbo >= 0 { cpbok = true }
-          if cpbok {
-            cpwb := i64(struct_words(decls, src, cpsp.s, cpsp.n, a))
-            push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
-            push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ") ; push_int(sb, cpwb * 8) ; push_str(sb, ")))\n")
-            wat_std_copy(cpsp.s, cpsp.n, cpsidx, cpsbo, idx, sb, decls, src, a)
-          }
-          if (not cpbok) and cpwg and (struct_all_scalar(decls, src, cpsp.s, cpsp.n, a) or struct_plain(decls, src, cpsp.s, cpsp.n)) {
-            cpw := i64(struct_words(decls, src, cpsp.s, cpsp.n, a))
-            push_str(sb, "    (local.set ") ; push_int(sb, sc3) ; push_str(sb, " ")
-            emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, ")\n")
-            push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
-            push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ") ; push_int(sb, cpw * 8) ; push_str(sb, ")))\n")
-            emit_wat_word_copy(sb, idx, sc3, cpw)
-          }
-          if (not cpbok) and (not (cpwg and (struct_all_scalar(decls, src, cpsp.s, cpsp.n, a) or struct_plain(decls, src, cpsp.s, cpsp.n)))) {
-            push_str(sb, "    (unreachable) (; aggregate copy: non-scalar-field, or a byte-layout field extract outside the byte-precise copier's domain ;)\n")
-          }
-          s = nx
-        } else if wat_ann_arr_words(src, ns, nl, v, a, decls) > 0 {
-          ## `mut xs : [E; N]` — an explicitly UNINITIALIZED fixed-array local. The parser plants a Num(0)
-          ## SENTINEL value, so the array's storage exists only in the source annotation; the `(local.set
-          ## idx (i64.const 0))` fall-through below gave the slot NO block at all and every access trapped.
-          ## Reserve N*width(E) words in the `$__sp` bump region and put the base in the slot, exactly as an
-          ## array LITERAL declaration does — the elements are then written by `xs[i] = …`.
-          idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
-          annw := wat_ann_arr_words(src, ns, nl, v, a, decls)
-          push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
-          push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ") ; push_int(sb, annw * 8) ; push_str(sb, ")))\n")
-          s = nx
-        } else {
-          idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
-          push_str(sb, "    (local.set ")
-          push_int(sb, idx)
-          push_str(sb, " ")
-          if wat_direct_float_num(v, src, ns, nl, decls, fn_head, params_head, pcount, a, bind_head) {
-            push_str(sb, "(i64.reinterpret_f64 (f64.convert_i64_s ")
-            emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, "))")
-          } else { emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-          push_str(sb, ")\n")
-          s = nx
-        }
-        }
-      }
-      Stmt::Return(rv, nx) => {
-        ## DEFER (§9.3): a `return` drains the WHOLE pending stack (every enclosing scope, innermost
-        ## first) on the way out. The return value is evaluated FIRST and parked in the defer scratch
-        ## local, so a cleanup that mutates the value's inputs cannot change what is returned (the x86
-        ## lower's "preserve the return registers across the drain"). No pending defers → byte-identical.
-        if WAT_DEF_N > 0 and (not ex_is_no_tail(rv)) {
-          dsc := wat_defer_scratch(pcount, fn_head, src, a, decls)
-          push_str(sb, "    (local.set ")
-          push_int(sb, dsc)
-          push_str(sb, " ")
-          emit_wat_expr(rv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-          wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, "    (return (local.get ")
-          push_int(sb, dsc)
-          push_str(sb, "))\n")
-        } else {
-          if WAT_DEF_N > 0 { wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-          push_str(sb, "    (return ")
-          emit_wat_expr(rv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        }
-        s = nx
-      }
-      Stmt::ExprStmt(e, nx) => {
-        ## DEFER (§9.3): `defer <expr>` arrives as the marker call `__defer(<expr>)`. REGISTER the action
-        ## (emitting NOTHING here) — it is replayed at the exits of THIS scope. Checked before every other
-        ## ExprStmt shape (incl. the tail-value one), since a marker is never the block's value.
-        dact := wat_defer_action(e, src, a)
-        pi := print_call_info(e, src, a)
-        mut dstop := false
-        mut dnext := nx
-        if unchecked bitcast(usize, dact) != 0 {
-          wat_defer_push(dact)
-        } else if wat_is_defer_blk(e, src) {
-          ## Register the whole linked chain and jump over its inline body. The body is emitted only by
-          ## wat_defer_drain, at the cleanup's LIFO position; a malformed chain remains fail-loud.
-          bh := unchecked bitcast(usize, nx)
-          bend := wat_defer_blk_end(bh, src)
-          if bend == 0 {
-            push_str(sb, "    (unreachable) (; defer block end marker missing ;)\n")
-            dstop = true
-          } else {
-            wat_defer_push_block(bh)
-            dnext = unchecked bitcast(ptr(mut Stmt), wat_stmt_next(bend))
-          }
-        } else if pi.ok {
-          if has_hole(src, pi.ss, pi.sl, a) { emit_print_template(pi, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-          else { emit_print(sb, pi) }
-        } else if tail_value and nx == 0 and exprstmt_needs_drop(e, src, decls, a) {
-          ## the fn/arm's TAIL expression statement in value position → it IS the result: return it
-          ## (exprstmt_needs_drop true = the expr yields a value; a void call is not returnable).
-          ## DEFER: with pending cleanups the value is parked in the scratch local first, the stack
-          ## drains LIFO, then the parked value is returned (evaluate-then-clean-then-return).
-          if WAT_DEF_N > 0 {
-            dsc := wat_defer_scratch(pcount, fn_head, src, a, decls)
-            push_str(sb, "    (local.set ")
-            push_int(sb, dsc)
-            push_str(sb, " ")
-            emit_wat_expr(e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, ")\n")
-            wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, "    (return (local.get ")
-            push_int(sb, dsc)
-            push_str(sb, "))\n")
-          } else {
-            push_str(sb, "    (return ")
-            emit_wat_expr(e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, ")\n")
-          }
-        } else {
-          push_str(sb, "    ")
-          emit_wat_expr(e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          if exprstmt_needs_drop(e, src, decls, a) { push_str(sb, " (drop)") }
-          push_str(sb, "\n")
-        }
-        if dstop { s = 0 } else { s = dnext }
-      }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
-        ## `p.field = v` for a struct PARAM or LOCAL p: i64.store v at (p's base + field offset).
-        gagg := agg_global_base(decls, src, bns, bnl, a)
-        gstyp := global_struct_type(decls, src, bns, bnl, a)
-        styp := base_struct_type(params_head, fn_head, src, bns, bnl, a, decls)
-        bpidx := param_find(params_head, src, bns, bnl, a)
-        isloc := is_toplevel_local(fn_head, bns, bnl, src, a)
-        mut stdhandled := false
-        if isloc and styp.n != 0 and layout_kind_is_byte(layout_kind(decls, src, styp.s, styp.n, a)) {
-          sbo := standard_field_byte_offset(decls, src, styp.s, styp.n, fns, fnl, a)
-          sft := struct_field_type(decls, src, styp.s, styp.n, fns, fnl, a)
-          bidxS := name_local_index(fn_head, src, bns, bnl, pcount, a, decls)
-          if sbo >= 0 and sft.n != 0 {
-            if std_ty_aggregate(sft.s, sft.n, decls, src) {
-              if expr_struct_name(fv).n != 0 { _stdw := wat_std_store_struct(fv, bidxS, sbo, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-              if expr_struct_name(fv).n == 0 { push_str(sb, "    (unreachable) (; unsupported standard aggregate field assign ;)\n") }
-              stdhandled = true
-            }
-            if not std_ty_aggregate(sft.s, sft.n, decls, src) {
-              wat_std_store_expr(fv, bidxS, sbo, sft.s, sft.n, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-              stdhandled = true
-            }
-          }
-        }
-        if (not stdhandled) and gagg >= 0 and gstyp.n != 0 and struct_all_scalar(decls, src, gstyp.s, gstyp.n, a) {
-          woff := field_word_offset(decls, src, gstyp.s, gstyp.n, fns, fnl, a)
-          push_str(sb, "    (i64.store ")
-          emit_wat_addr(sb, 0 - (gagg + 1), woff * 8)
-          push_str(sb, " ")
-          emit_wat_expr(fv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        } else if (not stdhandled) and styp.n != 0 and struct_all_scalar(decls, src, styp.s, styp.n, a) and (bpidx >= 0 or isloc) {
-          woff := field_word_offset(decls, src, styp.s, styp.n, fns, fnl, a)
-          mut bidx := bpidx
-          if bpidx < 0 { bidx = name_local_index(fn_head, src, bns, bnl, pcount, a, decls) }
-          push_str(sb, "    (i64.store ")
-          emit_wat_addr(sb, bidx, woff * 8)
-          push_str(sb, " ")
-          emit_wat_expr(fv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        } else if not stdhandled {
-          push_str(sb, "    (unreachable) (; unsupported field assign ;)\n")
-        }
-        s = nx
-      }
-      Stmt::IndexAssign(ibase, iidx, ival, nx) => {
-        ## `a[i] = v` (ARRAY local) / `s[i] = v` (range-SLICE view): i64.store v at the element address.
-        ## Array base = the local's pointer; slice base = word0 (data ptr, i64.load at s-base). Bounds
-        ## (WAT_CHK): stash i in the scratch local, trap (unreachable) if i >= the count — a static N for
-        ## an array, the runtime len (word1) for a slice; i64.ge_u so a negative index also traps.
-        bn := expr_var_name(ibase)
-        mut isslice := false
-        if bn.n != 0 { if is_slice_local(fn_head, src, bn.s, bn.n, a) { isslice = true } }
-        isarr := bn.n != 0 and is_array_local(fn_head, src, bn.s, bn.n, a)
-        sc := pcount + count_locals(fn_head, src, a, decls)
-        ## AGGREGATE element (`arr[i] = <struct>`): the element is `stride` words wide, so the single
-        ## stride-8 `i64.store` below would keep only word 0 and drop the rest. Copy every word from the
-        ## RHS aggregate's base instead. Both bases are stashed in scratch locals first (evaluating either
-        ## can bump `$__sp`), then copied ascending. Tested BEFORE the scalar paths; anything not
-        ## resolvable — a non-scalar-field element, a non-aggregate RHS, a mismatched width, or a
-        ## multi-word NON-struct element — traps rather than storing a partial/aliased element.
-        aggel := wat_arr_elem_struct(fn_head, src, bn.s, bn.n, a, decls)
-        aggstride := if aggel.n == 0 { wat_arr_elem_stride(fn_head, src, bn.s, bn.n, a, decls) } else { 1 }
-        ## #169: the all-scalar standard-byte element path below still materializes a value as one
-        ## word per field and then copies word-sized cells, while its array stride is the real §6.1
-        ## byte stride. That turns `T { a:u8, b:u8 }` into a silent partial write (the second field
-        ## is lost). The dedicated byte-array/nested writer has its own correct path, so fence only
-        ## this exact word-copy shape until array-element ABI storage is widened consistently.
-        mut byte_word_copy := false
-        if aggel.n != 0 and struct_all_scalar(decls, src, aggel.s, aggel.n, a) {
-          if wat_standard_byte_abi_fence(decls, src, aggel.s, aggel.n, a, false) { byte_word_copy = true }
-        }
-        if byte_word_copy {
-          push_str(sb, "    (unreachable) (; unsupported standard-byte aggregate element write (#169) ;)\n")
-        } else if aggel.n != 0 {
-          rhsp := wat_rhs_agg_span(ival, params_head, fn_head, src, a, decls)
-          sc2 := sc + 1
-          sc3 := sc + 2
-          mut wok := false
-          if rhsp.n != 0 and struct_all_scalar(decls, src, aggel.s, aggel.n, a) and struct_all_scalar(decls, src, rhsp.s, rhsp.n, a) {
-            if struct_words(decls, src, rhsp.s, rhsp.n, a) == struct_words(decls, src, aggel.s, aggel.n, a) { wok = true }
-          }
-          ## a NESTED-AGGREGATE element written from a struct LITERAL (`xs[i] = Cell(pad=…, inner=Leaf(…),
-          ## z=…)`): the FLATTENED writer lays the literal out INLINE at the element address, so a nested
-          ## struct / `[T; N]` field lands in FULL and the fields after it stay aligned. The word-COPY path
-          ## above cannot serve it — a nested struct literal has no linear-memory image to copy FROM (the
-          ## StructLit expression arm is itself all-scalar-only). The element address is stashed in the
-          ## scratch local FIRST, since the field value emits can bump `$__sp`.
-          mut lok := false
-          if (not wok) and expr_struct_name(ival).n != 0 {
-            if struct_plain(decls, src, aggel.s, aggel.n) {
-              esn := expr_struct_name(ival)
-              if streq(src, esn.s, esn.n, aggel.s, aggel.n) { lok = true }
-            }
-          }
-          if lok {
-            push_str(sb, "    (local.set ") ; push_int(sb, sc2) ; push_str(sb, " ")
-            emit_wat_agg_elem_addr(ibase, iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, ")\n")
-            if std_array_elem_byte_tier(decls, src, aggel.s, aggel.n, a) { wle := wat_std_store_struct(ival, sc2, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-            if not std_array_elem_byte_tier(decls, src, aggel.s, aggel.n, a) { wle := emit_wat_store_payload_at(ival, sc2, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-          } else if wok {
-            ew := i64(struct_words(decls, src, aggel.s, aggel.n, a))
-            push_str(sb, "    (local.set ") ; push_int(sb, sc3) ; push_str(sb, " ")
-            emit_wat_expr(ival, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, ")\n")
-            push_str(sb, "    (local.set ") ; push_int(sb, sc2) ; push_str(sb, " ")
-            emit_wat_agg_elem_addr(ibase, iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, ")\n")
-            emit_wat_word_copy(sb, sc2, sc3, ew)
-          } else {
-            push_str(sb, "    (unreachable) (; unsupported aggregate element assign ;)\n")
-          }
-        } else if aggstride > 1 {
-          push_str(sb, "    (unreachable) (; multi-word non-struct array element assign ;)\n")
-        } else if isslice {
-          bidx := name_local_index(fn_head, src, bn.s, bn.n, pcount, a, decls)
-          push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add (i64.load ")
-          emit_wat_addr(sb, bidx, 0)
-          push_str(sb, ") (i64.mul ")
-          if WAT_CHK {
-            push_str(sb, "(block (result i64) (local.set ")
-            push_int(sb, sc)
-            push_str(sb, " ")
-            emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, ") (if (i64.ge_u (local.get ")
-            push_int(sb, sc)
-            push_str(sb, ") (i64.load ")
-            emit_wat_addr(sb, bidx, 8)
-            push_str(sb, ")) (then (unreachable))) (local.get ")
-            push_int(sb, sc)
-            push_str(sb, "))")
-          } else {
-            emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          }
-          push_str(sb, " (i64.const 8)))) ")
-          emit_wat_expr(ival, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        } else if isarr {
-          bidx := name_local_index(fn_head, src, bn.s, bn.n, pcount, a, decls)
-          wnel := array_local_nel(fn_head, src, bn.s, bn.n, a)
-          push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add (local.get ")
-          push_int(sb, bidx)
-          push_str(sb, ") (i64.mul ")
-          if WAT_CHK and wnel > 0 {
-            push_str(sb, "(block (result i64) (local.set ")
-            push_int(sb, sc)
-            push_str(sb, " ")
-            emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, ") (if (i64.ge_u (local.get ")
-            push_int(sb, sc)
-            push_str(sb, ") (i64.const ")
-            push_int(sb, i64(wnel))
-            push_str(sb, ")) (then (unreachable))) (local.get ")
-            push_int(sb, sc)
-            push_str(sb, "))")
-          } else {
-            emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          }
-          push_str(sb, " (i64.const 8)))) ")
-          emit_wat_expr(ival, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        } else if bn.n != 0 and wat_is_array_global(decls, src, bn.s, bn.n, a) {
-          ## `TABLE[i] = v` on an ARRAY GLOBAL: store v at the fixed base + i*8. Bounds vs the static
-          ## count via the scratch local (WAT_CHK); i64.ge_u so a negative index also traps.
-          gbase := agg_global_base(decls, src, bn.s, bn.n, a)
-          wnelg := wat_array_global_nel(decls, src, bn.s, bn.n, a)
-          push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add (i64.const ")
-          push_int(sb, gbase)
-          push_str(sb, ") (i64.mul ")
-          if WAT_CHK and wnelg > 0 {
-            push_str(sb, "(block (result i64) (local.set ") ; push_int(sb, sc) ; push_str(sb, " ")
-            emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, ") (if (i64.ge_u (local.get ") ; push_int(sb, sc) ; push_str(sb, ") (i64.const ") ; push_int(sb, wnelg) ; push_str(sb, ")) (then (unreachable))) (local.get ") ; push_int(sb, sc) ; push_str(sb, "))")
-          } else {
-            emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          }
-          push_str(sb, " (i64.const 8)))) ")
-          emit_wat_expr(ival, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        } else if wat_deep_idx_scalar_ok(ibase, fn_head, src, params_head, pcount, a, decls) {
-          ## `xs[i].arr[j] = v` — a DEEP element WRITE (the base is a FIELD, not a bare Var, so no closed
-          ## formula exists). WASM evaluates the store's ADDRESS operand before its VALUE operand, so the
-          ## composed address is already on the stack when the value emit reuses the shared scratch local.
-          dity := wat_place_idx_ty(ibase, fn_head, src, a, decls)
-          diw := scalar_byte_size(src, dity.s, dity.n)
-          if wat_std_idx_path_ok(ibase, fn_head, src, a, decls) {
-            if diw == 1 { push_str(sb, "    (i64.store8 (i32.wrap_i64 ") }
-            if diw == 2 { push_str(sb, "    (i64.store16 (i32.wrap_i64 ") }
-            if diw == 4 { push_str(sb, "    (i64.store32 (i32.wrap_i64 ") }
-            if diw == 8 { push_str(sb, "    (i64.store (i32.wrap_i64 ") }
-          }
-          if not wat_std_idx_path_ok(ibase, fn_head, src, a, decls) { push_str(sb, "    (i64.store (i32.wrap_i64 ") }
-          emit_wat_place_idx_addr(ibase, iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ") ")
-          emit_wat_expr(ival, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        } else {
-          push_str(sb, "    (unreachable) (; unsupported index assign ;)\n")
-        }
-        s = nx
-      }
-      ## `xs[i].f = v` / `b.cells[i].m = v` — a scalar FIELD write into an ELEMENT of a fixed array. The
-      ## wat backend had NO arm for this statement at all (it fell to the `_` default, which both trapped
-      ## AND stopped emitting the rest of the list). The element address is COMPOSED (the indexed base may
-      ## itself be an inline `[Struct; N]` FIELD) and the scalar field stored at its word offset within the
-      ## element; the field must be a genuine ONE-WORD scalar, so an aggregate field stays fail-loud.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => {
-        difty := wat_place_idx_ty(ifb, fn_head, src, a, decls)
-        mut deepif := false
-        if difty.n != 0 {
-          if struct_decl_of(decls, src, difty.s, difty.n) >= 0 {
-            if struct_plain(decls, src, difty.s, difty.n) {
-              dft := struct_field_type(decls, src, difty.s, difty.n, iffs, iffl, a)
-              if wat_ty_word_scalar(src, dft.s, dft.n, a, decls) {
-                if wat_place_idx_ok(ifb, fn_head, src, params_head, pcount, a, decls) { deepif = true }
-              }
-            }
-          }
-        }
-        if deepif {
-          mut dboff := i64(field_word_offset(decls, src, difty.s, difty.n, iffs, iffl, a)) * 8
-          mut difbyte := false
-          if std_array_elem_byte_tier(decls, src, difty.s, difty.n, a) { dboff = layout_field_offset_bytes(decls, src, difty.s, difty.n, iffs, iffl, a) ; difbyte = true }
-          dft := struct_field_type(decls, src, difty.s, difty.n, iffs, iffl, a)
-          dfw := scalar_byte_size(src, dft.s, dft.n)
-          if difbyte {
-            if dfw == 1 { push_str(sb, "    (i64.store8 (i32.wrap_i64 (i64.add ") }
-            if dfw == 2 { push_str(sb, "    (i64.store16 (i32.wrap_i64 (i64.add ") }
-            if dfw == 4 { push_str(sb, "    (i64.store32 (i32.wrap_i64 (i64.add ") }
-            if dfw == 8 { push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add ") }
-          }
-          if not difbyte { push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add ") }
-          emit_wat_place_idx_addr(ifb, ifi, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, " (i64.const ") ; push_int(sb, dboff) ; push_str(sb, "))) ")
-          emit_wat_expr(ifv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        } else {
-          push_str(sb, "    (unreachable) (; unsupported index-field assign ;)\n")
-        }
-        s = ifnx
-      }
-      Stmt::FieldPathAssign(place, val, nx) => {
-        ## NESTED field write `o.i.v = e`: the place is a `Field` chain. Store `e` at
-        ## (base-of-`o.i` + field `v`'s offset); the base emitted as a value yields the inner
-        ## struct's base (nested structs are by-reference). Mirrors the nested field READ. The
-        ## base/field are extracted via single-level-match helpers (no inline nested match).
-        base := expr_field_base(place)
-        fsp := expr_field_span(place)
-        stdft := wat_std_path_ty(place, fn_head, src, a, decls)
-        stdfpok := wat_std_path_ok(place, fn_head, src, a, decls) and stdft.n != 0 and (not std_ty_aggregate(stdft.s, stdft.n, decls, src))
-        if stdfpok {
-          sidx := wat_std_path_root_idx(place, fn_head, src, pcount, a, decls)
-          sbo := wat_std_path_bo(place, fn_head, src, a, decls)
-          wat_std_store_expr(val, sidx, sbo, stdft.s, stdft.n, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-        }
-        ## First try a NESTED struct-GLOBAL chain (`STATE.a.b.c = e`): store at the const address
-        ## (root global base + cumulative-word-offset*8), nested structs FLATTENED.
-        groot := wat_gchain_root(place)
-        gbase := agg_global_base(decls, src, groot.s, groot.n, a)
-        gtype := wat_gchain_type(place, decls, src, a)
-        gwoff := wat_gchain_woff(place, decls, src, a)
-        gchainok := gbase >= 0 and gwoff >= 0 and gtype.n != 0 and ty_is_scalar(gtype.s, gtype.n, decls, src)
-        btype := expr_struct_type_of(base, params_head, fn_head, src, a, decls)
-        if (not stdfpok) and gchainok {
-          push_str(sb, "    (i64.store ")
-          emit_wat_addr(sb, 0 - (gbase + 1), gwoff * 8)
-          push_str(sb, " ")
-          emit_wat_expr(val, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        } else if (not stdfpok) and wat_deep_scalar_ok(place, fn_head, src, params_head, pcount, a, decls) {
-          ## `xs[i].b.c.cx = v` / `xs[i].inner.x = v` — the DEEP dual of the composed field READ: the chain
-          ## is rooted at an array ELEMENT (a RUNTIME address), so no cumulative frame offset exists.
-          ## Address operand first (WASM evaluates it before the value), then the one-word store. Tried
-          ## BEFORE the by-reference nested-field path below, under the same FLATTENED-STORAGE guard.
-          dpty := wat_place_ty(place, fn_head, src, a, decls)
-          dpw := scalar_byte_size(src, dpty.s, dpty.n)
-          if wat_std_idx_path_ok(place, fn_head, src, a, decls) {
-            if dpw == 1 { push_str(sb, "    (i64.store8 (i32.wrap_i64 ") }
-            if dpw == 2 { push_str(sb, "    (i64.store16 (i32.wrap_i64 ") }
-            if dpw == 4 { push_str(sb, "    (i64.store32 (i32.wrap_i64 ") }
-            if dpw == 8 { push_str(sb, "    (i64.store (i32.wrap_i64 ") }
-          }
-          if not wat_std_idx_path_ok(place, fn_head, src, a, decls) { push_str(sb, "    (i64.store (i32.wrap_i64 ") }
-          emit_wat_place_addr(place, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ") ")
-          emit_wat_expr(val, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        } else if (not stdfpok) and fsp.n != 0 and btype.n != 0 and struct_all_scalar(decls, src, btype.s, btype.n, a) {
-          ## NESTED field write on a LOCAL: the base emitted as a value yields the inner struct's base
-          ## (nested structs are by-reference). Mirrors the nested field READ.
-          woff := field_word_offset(decls, src, btype.s, btype.n, fsp.s, fsp.n, a)
-          push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add ")
-          emit_wat_expr(base, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, " (i64.const ")
-          push_int(sb, woff * 8)
-          push_str(sb, "))) ")
-          emit_wat_expr(val, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-        } else if not stdfpok {
-          push_str(sb, "    (unreachable) (; unsupported field-path assign ;)\n")
-        }
-        s = nx
-      }
-      Stmt::While(c, b, nx) => {
-        id := wat_next_label()
-        ob := WAT_BRK
-        oc := WAT_CONT
-        obv := WAT_BRK_VALUE
-        odb := WAT_BRK_DB
-        odc := WAT_CONT_DB
-        WAT_BRK = id
-        WAT_CONT = id
-        WAT_BRK_VALUE = false
-        ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
-        WAT_BRK_DB = WAT_DEF_N
-        WAT_CONT_DB = WAT_DEF_N
-        wat_loop_push(id, id, false, false, WAT_DEF_N)
-        push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
-        push_str(sb, "      (br_if 1 (i32.eqz (i32.wrap_i64 ")
-        emit_wat_expr(c, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-        push_str(sb, ")))\n")
-        ## `continue` target: exit this inner block → fall through to the `(br 0)` back-edge (re-eval cond).
-        push_str(sb, "      (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
-        emit_wat_stmts(b, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-        push_str(sb, "      )\n")
-        push_str(sb, "      (br 0)\n    ))\n")
-        WAT_BRK = ob
-        WAT_CONT = oc
-        WAT_BRK_VALUE = obv
-        WAT_BRK_DB = odb
-        WAT_CONT_DB = odc
-        wat_loop_pop()
-        s = nx
-      }
-      Stmt::If(c, th, el, nx) => {
-        push_str(sb, "    (if (i32.wrap_i64 ")
-        emit_wat_expr(c, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-        push_str(sb, ") (then\n")
-        emit_wat_stmts(th, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-        push_str(sb, "    ) (else\n")
-        emit_wat_stmts(el, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-        push_str(sb, "    ))\n")
-        s = nx
-      }
-      Stmt::Match(scrut, arms_head, nx) => {
-        ## value-yielding when this match is the fn's TAIL statement (tail_value) and last (nx==0) —
-        ## each arm returns its braced tail expr; else a side-effect match.
-        vy := tail_value and nx == 0
-        sn := expr_var_name(scrut)
-        agg := agg_global_base(decls, src, sn.s, sn.n, a)
-        etype0 := base_enum_type(params_head, fn_head, src, sn.s, sn.n, a, decls, false)
-        ## GENERICS (§8): a `match v` where `v : T` is an enum PARAM in a mono instance — resolve the
-        ## instance enum type (T → E) so the comptime-variant unroll has a concrete enum. Only kicks in
-        ## when the raw annotation didn't already name an enum (byte-identical for a non-generic match).
-        esub := wat_param_enum_span(params_head, src, sn.s, sn.n, a, decls)
-        mut etype := etype0
-        if etype.n == 0 { etype = esub }
-        spidx := param_find(params_head, src, sn.s, sn.n, a)
-        isloc := is_toplevel_local(fn_head, sn.s, sn.n, src, a)
-        ## `match s[i]` on an enum `Slice(E)` PARAM: the by-reference element address (block.word0 data ptr +
-        ## i*stride*8) is placed in the MATCH scratch local (index pcount+nloc+1); the match then reads disc +
-        ## payload through it (emit_wat_stmt_match keys off a base local). Bounds vs word1 via the sc scratch.
-        mut idxmatch := false
-        if ex_is_index(scrut) {
-          ibn := expr_var_name(ex_index_base(scrut))
-          ipidx := param_find(params_head, src, ibn.s, ibn.n, a)
-          ees := wat_slice_param_enum_span(params_head, src, ibn.s, ibn.n, decls)
-          if ipidx >= 0 and ees.n != 0 {
-            idxmatch = true
-            stride := wat_slice_param_agg_stride(params_head, src, ibn.s, ibn.n, a, decls)
-            nloc := count_locals(fn_head, src, a, decls)
-            sc := pcount + nloc
-            msc := pcount + nloc + 1
-            push_str(sb, "    (local.set ") ; push_int(sb, msc) ; push_str(sb, " (i64.add (i64.load ")
-            emit_wat_addr(sb, ipidx, 0)
-            push_str(sb, ") (i64.mul ")
-            if WAT_CHK {
-              push_str(sb, "(block (result i64) (local.set ") ; push_int(sb, sc) ; push_str(sb, " ")
-              emit_wat_expr(ex_index_idx(scrut), sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-              push_str(sb, ") (if (i64.ge_u (local.get ") ; push_int(sb, sc) ; push_str(sb, ") (i64.load ")
-              emit_wat_addr(sb, ipidx, 8)
-              push_str(sb, ")) (then (unreachable))) (local.get ") ; push_int(sb, sc) ; push_str(sb, "))")
-            } else {
-              emit_wat_expr(ex_index_idx(scrut), sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            }
-            push_str(sb, " (i64.const ") ; push_int(sb, stride * 8) ; push_str(sb, "))))\n")
-            emit_wat_stmt_match(arms_head, ees.s, ees.n, msc, fn_head, vy, sb, a, src, params_head, pcount, decls)
-          }
-        }
-        if (not idxmatch) and agg >= 0 {
-          gtype := global_enum_type(decls, src, sn.s, sn.n, a)
-          if gtype.n != 0 { emit_wat_stmt_match(arms_head, gtype.s, gtype.n, 0 - (agg + 1), fn_head, vy, sb, a, src, params_head, pcount, decls) }
-          else { push_str(sb, "    (unreachable) (; non-enum agg global match ;)\n") }
-        } else if (not idxmatch) and sn.n != 0 and etype.n != 0 and (spidx >= 0 or isloc) {
-          mut sidx := spidx
-          if spidx < 0 { sidx = name_local_index(fn_head, src, sn.s, sn.n, pcount, a, decls) }
-          emit_wat_stmt_match(arms_head, etype.s, etype.n, sidx, fn_head, vy, sb, a, src, params_head, pcount, decls)
-        } else if not idxmatch {
-          mut scalar_shape := true
-          mut scalar_arm : Option(ptr(mut Arm)) = arms_head
-          loop {
-            match scalar_arm {
-              Some(scalar_armq) => {
-                sam := deref(arm_p(scalar_armq))
-                if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
-                scalar_arm = sam.next
-              }
-              None => { break }
-            }
-          }
-          if scalar_shape {
-            ## Scalar statement match: park the value in the first per-function scratch local so arm
-            ## comparisons survive body emission. The scratch is reused by nested bodies only after the
-            ## outer comparison has selected an arm.
-            nloc := count_locals(fn_head, src, a, decls)
-            sidx := pcount + nloc
-            push_str(sb, "    (local.set ") ; push_int(sb, sidx) ; push_str(sb, " ")
-            emit_wat_expr(scrut, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, ")\n")
-            emit_wat_scalar_stmt_match(arms_head, sidx, fn_head, vy, sb, a, src, params_head, pcount, decls)
-          } else {
-            push_str(sb, "    (unreachable) (; unsupported non-scalar statement match ;)\n")
-          }
-        }
-        s = nx
-      }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-        ## RANGE `for i in lo..hi { … }`: `i` is a WASM local (name_local_index). i := lo; `(block (loop …))`
-        ## exits (br_if 1) when i >= hi (SIGNED, x86 parity via setl); body; i += 1; `(br 0)` back-edge.
-        if unchecked bitcast(usize, fhi) == 0 {
-          ## ITERABLE `for x in <arr/slice-view> { … }`: `x` binds each ELEMENT. `x` is a WASM local
-          ## (name_local_index); a hidden index rides the NEXT local (var-slot+1 — the local scan reserves
-          ## TWO for an iterable For). Bound: an INLINE scalar/float array (base @ its local, static count)
-          ## or a scalar slice VIEW (word0 = data ptr, word1 = runtime len, in its bump region; element at
-          ## ptr+i*8). Element word copied BY VALUE (a float rides its bits). Anything else traps loud.
-          idF := wat_next_label()
-          obF := WAT_BRK
-          ocF := WAT_CONT
-          obvF := WAT_BRK_VALUE
-          odbF := WAT_BRK_DB
-          odcF := WAT_CONT_DB
-          WAT_BRK = idF
-          WAT_CONT = idF
-          WAT_BRK_VALUE = false
-          ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
-          WAT_BRK_DB = WAT_DEF_N
-          WAT_CONT_DB = WAT_DEF_N
-          wat_loop_push(idF, idF, false, false, WAT_DEF_N)
-          bn := expr_var_name(flo)
-          varidx := name_local_index(fn_head, src, fns, fnl, pcount, a, decls)
-          ididx := varidx + 1
-          mut isslice := false
-          if bn.n != 0 { if is_slice_local(fn_head, src, bn.s, bn.n, a) { isslice = true } }
-          mut isarr := false
-          if (not isslice) and bn.n != 0 { if is_array_local(fn_head, src, bn.s, bn.n, a) { isarr = true } }
-          ## `for x in s` over a scalar `Slice(E)` PARAM: identical to a VIEW (the param local holds the block
-          ## base; word0 = ptr, word1 = len). Base local from `param_find` (the param IS a WASM local).
-          pidxF := param_find(params_head, src, bn.s, bn.n, a)
-          mut isparamslice := false
-          if (not isslice) and (not isarr) and pidxF >= 0 { if wat_slice_param_scalar(params_head, src, bn.s, bn.n, a, decls) { isparamslice = true } }
-          ## AGGREGATE (struct-element) iteration over an ARRAY local or a slice VIEW of one: the loop var
-          ## holds `&elem[i]` = dataptr + i*stride*8 (an ADDRESS, not a loaded word); `p.field` reads through
-          ## it as a struct pointer (localok). No per-element copy — WASM aggregates are by-reference. Data
-          ## pointer: ARRAY = the local (region base); VIEW = word0 of its region. Count: ARRAY = static nel;
-          ## VIEW = word1.
-          mut estrideF := 1
-          if isarr { estrideF = array_local_stride(fn_head, src, bn.s, bn.n, a, decls) }
-          if isslice { estrideF = array_local_stride(fn_head, src, bn.s, bn.n, a, decls) }
-          ## a struct/enum-element `Slice(E)` PARAM base: in WASM it has the SAME shape as a VIEW (the param
-          ## local holds the block base; word0 = data ptr, word1 = count), so it shares the VIEW emit with
-          ## bidx = the param's local. estrideF from the param annotation.
-          mut isaggparam := false
-          if (not isslice) and (not isarr) and pidxF >= 0 { pstr := wat_slice_param_agg_stride(params_head, src, bn.s, bn.n, a, decls) ; if pstr > 1 { isaggparam = true ; estrideF = pstr } }
-          mut isaggarr := false
-          if isarr and estrideF > 1 { isaggarr = true }
-          mut isaggview := false
-          if isslice and estrideF > 1 { isaggview = true }
-          if isaggarr or isaggview or isaggparam {
-            mut bidx := pidxF
-            if isaggarr or isaggview { bidx = name_local_index(fn_head, src, bn.s, bn.n, pcount, a, decls) }
-            push_str(sb, "    (local.set ") ; push_int(sb, ididx) ; push_str(sb, " (i64.const 0))\n")
-            push_str(sb, "    (block $brk") ; push_int(sb, idF) ; push_str(sb, " (loop $lp") ; push_int(sb, idF) ; push_str(sb, "\n")
-            push_str(sb, "      (br_if 1 (i64.ge_s (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") ")
-            if isaggarr { push_str(sb, "(i64.const ") ; push_int(sb, i64(array_local_nel(fn_head, src, bn.s, bn.n, a))) ; push_str(sb, ")") }
-            if isaggview or isaggparam { push_str(sb, "(i64.load ") ; emit_wat_addr(sb, bidx, 8) ; push_str(sb, ")") }
-            push_str(sb, "))\n")
-            ## p = dataptr + i*(estride*8)
-            push_str(sb, "      (local.set ") ; push_int(sb, varidx) ; push_str(sb, " (i64.add ")
-            if isaggarr { push_str(sb, "(local.get ") ; push_int(sb, bidx) ; push_str(sb, ")") }
-            if isaggview or isaggparam { push_str(sb, "(i64.load ") ; emit_wat_addr(sb, bidx, 0) ; push_str(sb, ")") }
-            push_str(sb, " (i64.mul (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") (i64.const ") ; push_int(sb, estrideF * 8) ; push_str(sb, "))))\n")
-            push_str(sb, "      (block $cont") ; push_int(sb, idF) ; push_str(sb, "\n")
-            emit_wat_stmts(fb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-            push_str(sb, "      )\n")
-            push_str(sb, "      (local.set ") ; push_int(sb, ididx) ; push_str(sb, " (i64.add (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") (i64.const 1)))\n")
-            push_str(sb, "      (br 0)\n    ))\n")
-          } else if isslice or isarr or isparamslice {
-            mut bidx := pidxF
-            if isslice or isarr { bidx = name_local_index(fn_head, src, bn.s, bn.n, pcount, a, decls) }
-            push_str(sb, "    (local.set ") ; push_int(sb, ididx) ; push_str(sb, " (i64.const 0))\n")
-            push_str(sb, "    (block $brk") ; push_int(sb, idF) ; push_str(sb, " (loop $lp") ; push_int(sb, idF) ; push_str(sb, "\n")
-            push_str(sb, "      (br_if 1 (i64.ge_s (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") ")
-            if isslice or isparamslice { push_str(sb, "(i64.load ") ; emit_wat_addr(sb, bidx, 8) ; push_str(sb, ")") }
-            else { push_str(sb, "(i64.const ") ; push_int(sb, i64(array_local_nel(fn_head, src, bn.s, bn.n, a))) ; push_str(sb, ")") }
-            push_str(sb, "))\n")
-            push_str(sb, "      (local.set ") ; push_int(sb, varidx) ; push_str(sb, " (i64.load (i32.wrap_i64 (i64.add ")
-            if isslice or isparamslice { push_str(sb, "(i64.load ") ; emit_wat_addr(sb, bidx, 0) ; push_str(sb, ")") }
-            else { push_str(sb, "(local.get ") ; push_int(sb, bidx) ; push_str(sb, ")") }
-            push_str(sb, " (i64.mul (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") (i64.const 8))))))\n")
-            push_str(sb, "      (block $cont") ; push_int(sb, idF) ; push_str(sb, "\n")
-            emit_wat_stmts(fb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-            push_str(sb, "      )\n")
-            push_str(sb, "      (local.set ") ; push_int(sb, ididx) ; push_str(sb, " (i64.add (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") (i64.const 1)))\n")
-            push_str(sb, "      (br 0)\n    ))\n")
-          } else {
-            push_str(sb, "    (unreachable) (; unsupported for-in-iterable ;)\n")
-          }
-          WAT_BRK = obF
-          WAT_CONT = ocF
-          WAT_BRK_VALUE = obvF
-          WAT_BRK_DB = odbF
-          WAT_CONT_DB = odcF
-          wat_loop_pop()
-        } else {
-          idx := name_local_index(fn_head, src, fns, fnl, pcount, a, decls)
-          id := wat_next_label()
-          ob := WAT_BRK
-          oc := WAT_CONT
-          obvR := WAT_BRK_VALUE
-          odbR := WAT_BRK_DB
-          odcR := WAT_CONT_DB
-          WAT_BRK = id
-          WAT_CONT = id
-          WAT_BRK_VALUE = false
-          ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
-          WAT_BRK_DB = WAT_DEF_N
-          WAT_CONT_DB = WAT_DEF_N
-          wat_loop_push(id, id, false, false, WAT_DEF_N)
-          push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " ")
-          emit_wat_expr(flo, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-          push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
-          push_str(sb, "      (br_if 1 (i64.ge_s (local.get ") ; push_int(sb, idx) ; push_str(sb, ") ")
-          emit_wat_expr(fhi, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, "))\n")
-          ## `continue` target: exit this inner block → fall through to the increment below.
-          push_str(sb, "      (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
-          emit_wat_stmts(fb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-          push_str(sb, "      )\n")
-          push_str(sb, "      (local.set ") ; push_int(sb, idx) ; push_str(sb, " (i64.add (local.get ") ; push_int(sb, idx) ; push_str(sb, ") (i64.const 1)))\n")
-          push_str(sb, "      (br 0)\n    ))\n")
-          WAT_BRK = ob
-          WAT_CONT = oc
-          WAT_BRK_VALUE = obvR
-          WAT_BRK_DB = odbR
-          WAT_CONT_DB = odcR
-          wat_loop_pop()
-        }
-        s = nx
-      }
-      ## Infinite `loop { body }`: `(block $brk (loop $lp (block $cont <body>) (br 0)))`. `continue` exits
-      ## `$cont` → falls to the `(br 0)` back-edge (re-iterate); `break` exits `$brk`.
-      Stmt::Loop(lb, lnx) => {
-        id := wat_next_label()
-        ob := WAT_BRK
-        oc := WAT_CONT
-        obvL := WAT_BRK_VALUE
-        odbL := WAT_BRK_DB
-        odcL := WAT_CONT_DB
-        WAT_BRK = id
-        WAT_CONT = id
-        WAT_BRK_VALUE = false
-        ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
-        WAT_BRK_DB = WAT_DEF_N
-        WAT_CONT_DB = WAT_DEF_N
-        wat_loop_push(id, id, false, false, WAT_DEF_N)
-        push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
-        push_str(sb, "      (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
-        emit_wat_stmts(lb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-        push_str(sb, "      )\n")
-        push_str(sb, "      (br 0)\n    ))\n")
-        WAT_BRK = ob
-        WAT_CONT = oc
-        WAT_BRK_VALUE = obvL
-        WAT_BRK_DB = odbL
-        WAT_CONT_DB = odcL
-        wat_loop_pop()
-        s = lnx
-      }
-      ## `break`: bare breaks target the nearest loop (WAT_BRK), while a named break uses the parallel
-      ## loop-frame stack to reach its parsed nesting depth. A value-bearing target is admitted only when
-      ## its frame was proven scalar-integer by wat_loop_scalar_code; aggregate and unknown values stay
-      ## explicit fail-loud paths.
-      Stmt::Break(bv, bd, bnx) => {
-        if bd != 0 {
-          if WAT_LOOP_OVF or bd >= WAT_LOOP_SP { push_str(sb, "    (unreachable) (; labeled break target unavailable ;)\n") }
-          else {
-            target := WAT_LOOP_SP - 1 - bd
-            if unchecked bitcast(usize, bv) == 0 {
-              if WAT_LOOP_VALUE[target] { push_str(sb, "    (unreachable) (; labeled bare break from WAT loop expression ;)\n") }
-              else {
-                ## A bare named break remains valid for a statement loop. It leaves all intervening loop
-                ## bodies and therefore drains to the target frame's entry boundary before branching.
-                if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-                push_str(sb, "    (br $brk") ; push_int(sb, WAT_LOOP_BRK[target]) ; push_str(sb, ")\n")
-              }
-            } else if not WAT_LOOP_VALUE[target] {
-              push_str(sb, "    (unreachable) (; labeled break value targets statement-only loop ;)\n")
-            } else if wat_loop_value_between(target) {
-              push_str(sb, "    (unreachable) (; labeled break crosses a value loop ;)\n")
-            } else if not WAT_LOOP_SCALAR[target] {
-              push_str(sb, "    (unreachable) (; labeled break value is not scalar integer ;)\n")
-            } else {
-              ## Evaluate the scalar result before leaving, then replay every pending body cleanup down
-              ## to the TARGET loop's entry boundary. This keeps value evaluation ahead of the LIFO drain.
-              push_str(sb, "    ")
-              emit_wat_expr(bv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-              push_str(sb, "\n")
-              if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-              push_str(sb, "    (br $brk") ; push_int(sb, WAT_LOOP_BRK[target]) ; push_str(sb, ")\n")
-            }
-          }
-        }
-        else if unchecked bitcast(usize, bv) != 0 {
-          if not WAT_BRK_VALUE { push_str(sb, "    (unreachable) (; break value outside WAT loop expression ;)\n") }
-          else {
-            push_str(sb, "    ")
-            emit_wat_expr(bv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-            push_str(sb, "\n")
-            ## Evaluate the value first; then replay pending body cleanups without popping their stack
-            ## entries, so the break value remains the result consumed by the outer block.
-            if WAT_DEF_N > WAT_BRK_DB { wat_defer_drain(WAT_DEF_N, WAT_BRK_DB, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-            push_str(sb, "    (br $brk") ; push_int(sb, WAT_BRK) ; push_str(sb, ")\n")
-          }
-        }
-        else if WAT_BRK_VALUE {
-          ## A bare break has no result to satisfy the value block. The language accepts this as a
-          ## diverging exit for type consistency, but this backend slice does not model that path;
-          ## keep it an explicit runtime trap instead of emitting an invalid branch stack.
-          push_str(sb, "    (unreachable) (; bare break from WAT loop expression ;)\n")
-        }
-        else {
-          ## DEFER (§9.3): leaving the loop body runs the cleanups registered INSIDE it (down to the
-          ## body's entry depth WAT_BRK_DB), LIFO, before the branch. Replay only — the fall-through
-          ## path out of the same body still owes them, so nothing is popped here.
-          if WAT_DEF_N > WAT_BRK_DB { wat_defer_drain(WAT_DEF_N, WAT_BRK_DB, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-          push_str(sb, "    (br $brk") ; push_int(sb, WAT_BRK) ; push_str(sb, ")\n")
-        }
-        s = bnx
-      }
-      Stmt::Continue(cd, cnx) => {
-        ## The parser stores a named target's source span separately because the nearest named target
-        ## has the same depth (0) as a bare continue. Keep that distinction: a named continue to a
-        ## scalar value-bearing loop is valid, while unsupported value-loop paths remain fail-loud.
-        named_continue := stmt_label_span(stmt_p(Stmt, s)).n != 0
-        if cd != 0 or named_continue {
-          if WAT_LOOP_OVF or cd >= WAT_LOOP_SP { push_str(sb, "    (unreachable) (; labeled continue target unavailable ;)\n") }
-          else {
-            target := WAT_LOOP_SP - 1 - cd
-            if WAT_LOOP_VALUE[target] {
-              if wat_loop_value_between(target) { push_str(sb, "    (unreachable) (; labeled continue crosses a value loop ;)\n") }
-              else if not WAT_LOOP_SCALAR[target] { push_str(sb, "    (unreachable) (; labeled continue from non-scalar WAT loop expression ;)\n") }
-              else {
-                ## DEFER (§9.3): a named continue to a value loop leaves every statement-only loop
-                ## between the site and its target, plus the target body itself. Replay all crossed
-                ## cleanups down to the TARGET loop's entry boundary before its next-iteration edge.
-                if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-                push_str(sb, "    (br $cont") ; push_int(sb, WAT_LOOP_CONT[target]) ; push_str(sb, ")\n")
-              }
-            } else {
-              ## DEFER (§9.3): a named continue leaves every loop between the site and its target, so
-              ## replay all pending body cleanups down to the TARGET loop's entry boundary before its
-              ## next-iteration edge. Replay does not pop the compile-time ledger; the fall-through
-              ## path remains emitted from the same source scope and needs the same ledger.
-              if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-              push_str(sb, "    (br $cont") ; push_int(sb, WAT_LOOP_CONT[target]) ; push_str(sb, ")\n")
-            }
-          }
-        }
-        else {
-          ## DEFER (§9.3): `continue` ends THIS ITERATION of the body — its cleanups run per iteration.
-          if WAT_DEF_N > WAT_CONT_DB { wat_defer_drain(WAT_DEF_N, WAT_CONT_DB, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
-          push_str(sb, "    (br $cont") ; push_int(sb, WAT_CONT) ; push_str(sb, ")\n")
-        }
-        s = cnx
-      }
-      ## `unchecked { body }` (Grammar §130 statement form): lower the body with checked verification OFF,
-      ## then restore. Mirrors the `Expr::Unchecked` toggle + x86 lower.
-      Stmt::Unchecked(ub, unx) => {
-        ov := WAT_CHK
-        WAT_CHK = false
-        emit_wat_stmts(ub, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-        WAT_CHK = ov
-        s = unx
-      }
-      ## `comptime if <cond> { then } else { else }` — fold the condition and emit ONLY the taken branch's
-      ## statements INLINE (arch/verify predicates; no runtime `(if …)`, the condition is erased). Conforms
-      ## to the x86 lower: `target.arch == Arch.x86_64` folds TRUE. The taken branch inherits THIS CompIf's
-      ## `nested` and is tail-valued only when the CompIf is itself the tail (`tail_value and nx == 0`),
-      ## mirroring the x86 `cx.tail = ov_tail and nx == 0`. An unfoldable condition (a `match typeinfo(T)`
-      ## — needs the mono context the wat path lacks) emits a fail-loud `(unreachable)` (never silent).
-      Stmt::CompIf(cc, th, el, nx) => {
-        cv := wat_comp_cond_fold(cc, src)
-        if cv == 1 { emit_wat_stmts(th, fn_head, nested, tail_value and nx == 0, sb, a, src, params_head, pcount, decls, bind_head, bind_base) }
-        if cv == 0 { emit_wat_stmts(el, fn_head, nested, tail_value and nx == 0, sb, a, src, params_head, pcount, decls, bind_head, bind_base) }
-        if cv < 0 { push_str(sb, "    (unreachable) (; comptime-if: unfoldable condition (needs mono context) ;)\n") }
-        s = nx
-      }
-      ## `comptime for i in lo .. hi { body }` — UNROLL at emit time: for each constant k in [lo, hi), set
-      ## the loop var's WASM local to k then emit the body (no runtime loop; the control flow is erased).
-      ## Bounds are compile-time integer constants (wat_comp_range_bound: literal / module const). Mirrors
-      ## the x86 lower's CompForRange numeric unroll. A null hi (the §7.1 pack form) is unsupported here.
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
-        if unchecked bitcast(usize, rhi) == 0 { push_str(sb, "    (unreachable) (; comptime-for pack unroll unsupported ;)\n") }
-        else {
-          vidx := name_local_index(fn_head, src, rvs, rvl, pcount, a, decls)
-          if vidx < 0 { push_str(sb, "    (unreachable) (; comptime-for loop var unresolved ;)\n") }
-          else {
-            lo := wat_comp_range_bound(rlo, decls, src)
-            hi := wat_comp_range_bound(rhi, decls, src)
-            if hi - lo > 100000 { push_str(sb, "    (unreachable) (; comptime-for range exceeds the unroll budget ;)\n") }
+  if nested { wat_param_shadow_enter(list_head, fn_head, sb, src, params_head, pcount, a, decls) }
+  mut s : Option(ptr(mut Stmt)) = list_head
+  loop {
+    match s {
+      Some(sq) => {
+        if stmt_same(s, WAT_DEF_STOP) { break }
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => {
+            if local_is_comptime(src, ns) { s = nx }
             else {
-              ## The counter is `i64` and, since #602 folds a written negative literal, `lo` is now
-              ## reachably NEGATIVE — `comptime for i in -2..2` used to fold to 0 here and unroll the
-              ## wrong iteration set (#638). #648's `unchecked` bypass on the increment is GONE: the
-              ## lower now records this local's `i64` annotation even though the name owns an older
-              ## untyped slot in this function, so `k + 1` takes the SIGNED overflow guard that
-              ## matches the SIGNED `<` beside it (#646). Both read `k = -1` the same way.
-              mut k : i64 = lo
-              while k < hi {
-                push_str(sb, "    (local.set ") ; push_int(sb, vidx) ; push_str(sb, " (i64.const ") ; push_int(sb, k) ; push_str(sb, "))\n")
-                emit_wat_stmts(rb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-                k = k + 1
+            slit := expr_struct_name(v)
+            elit := expr_enum_name(v)
+            ## the struct span of an aggregate PLACE RHS (`q := p` / `x := arr[i]`) — a whole-aggregate COPY.
+            cpsp := wat_place_agg_span(v, params_head, fn_head, src, a, decls)
+            lami := wat_bound_lambda(fn_head, src, ns, nl, decls)
+            if lami >= 0 {
+              idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
+              push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (i64.const 0))\n")
+              s = nx
+            } else if wat_is_float_global(decls, src, ns, nl) {
+              ## a float module global WRITE: the RHS yields i64 bits (value model) → reinterpret to f64
+              ## for the `(mut f64)` cell. When the init text is not recoverable (cell never emitted) → TRAP.
+              if wat_float_global_init_ok(decls, src, ns, nl) {
+                push_str(sb, "    (global.set $")
+                push_str(sb, str_at((src + ns), nl))
+                push_str(sb, " (f64.reinterpret_i64 ")
+                emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, "))\n")
+              } else {
+                push_str(sb, "    (unreachable) (; float module global assign (wasm: no init) ;)\n")
               }
-            }
-          }
-        }
-        s = nx
-      }
-      ## `comptime match typeinfo(T) { <Kind>(_) => …, _ => … }` (§8 mono) — fold on T's KIND inside a
-      ## mono INSTANCE (WAT_SUB active) and emit ONLY the matching arm's statements (or the `_` arm). An
-      ## inner `comptime match <scalar-kind>` keys off the SAME instance type (its scrutinee is ignored).
-      ## Outside an instance it is a fail-loud `(unreachable)` (never silent). Mirrors emit_a64_stmts.
-      Stmt::CompMatch(cmsc, cmah, cmnx) => {
-        if WAT_SUB_ITL == 0 { push_str(sb, "    (unreachable) (; comptime-match: needs mono context ;)\n") }
-        else {
-          kind := ct_type_kind(WAT_SUB_ITS, WAT_SUB_ITL, decls, src)
-          nkind := ct_scalar_num_kind(WAT_SUB_ITS, WAT_SUB_ITL, src)
-          mut chosen : Option(ptr(mut Arm)) = Option.None
-          mut cwild : Option(ptr(mut Arm)) = Option.None
-          mut carm : Option(ptr(mut Arm)) = cmah
-          loop {
-            match carm {
-              Some(carmq) => {
-                cam := deref(arm_p(carmq))
-                if cam.wild != 0 { cwild = Option.Some(carmq) }
-                else if ct_kind_of_name(src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
-                else if ct_num_kind_of_name(src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
-                carm = cam.next
-              }
-              None => { break }
-            }
-          }
-          chosen = ast::arm_or(chosen, cwild)
-          match chosen {
-            Some(chosenq) => {
-              cam2 := deref(arm_p(chosenq))
-              emit_wat_stmts(cam2.body_stmts, fn_head, nested, tail_value and cmnx == 0, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-            }
-            None => {}
-          }
-        }
-        s = cmnx
-      }
-      ## `comptime for f in typeinfo(T).fields { body }` (§8 field-derive core) — UNROLL over the concrete
-      ## target struct's fields (from the explicit typeinfo argument, or a mono substitution): for each field, bind the comptime loop
-      ## context (WAT_CF_* = loop-var name / field name / field type) then emit the body once. Inside,
-      ## `v.(f)` (Expr::CompField) resolves to a field READ and `f.type` (a type-arg) to the field type.
-      ## Only for a STRUCT target (cisvar 1 = `.variants`, the match-arm unroll's job; tuple/array/
-      ## unresolved target stays fail-loud). Saved/restored (single-level). Mirrors emit_a64_stmts.
-      Stmt::CompFor(cvs, cvl, cisvar, cbody, cnx) => {
-        mut cfdone := false
-        mut cts := WAT_SUB_ITS
-        mut ctl := WAT_SUB_ITL
-        cia := compfor_iter_arg(src, cvs, cvl)
-        if cia.n != 0 {
-          cts = cia.s
-          ctl = cia.n
-          if WAT_SUB_GPL != 0 and streq(src, cts, ctl, WAT_SUB_GPS, WAT_SUB_GPL) { cts = WAT_SUB_ITS ; ctl = WAT_SUB_ITL }
-          else if WAT_SUB_GPL2 != 0 and streq(src, cts, ctl, WAT_SUB_GPS2, WAT_SUB_GPL2) { cts = WAT_SUB_ITS2 ; ctl = WAT_SUB_ITL2 }
-          else if WAT_SUB_GPL3 != 0 and streq(src, cts, ctl, WAT_SUB_GPS3, WAT_SUB_GPL3) { cts = WAT_SUB_ITS3 ; ctl = WAT_SUB_ITL3 }
-        }
-        if ctl != 0 and cisvar == 0 {
-          cbn := base_type_name(src, cts, ctl)
-          csdi := struct_decl_of(decls, src, cbn.s, cbn.n)
-          if csdi >= 0 {
-            csd := deref(decl_get(decls, usize(csdi)))
-            ov_vs := WAT_CF_VAR_S ; ov_vl := WAT_CF_VAR_L
-            ov_fs := WAT_CF_FLD_S ; ov_fl := WAT_CF_FLD_L
-            ov_ts := WAT_CF_TY_S ; ov_tl := WAT_CF_TY_L
-            mut cfd := csd.fields_head
-            loop {
-              match cfd {
-                Some(cfdq) => {
-                  cfdd := deref(fld_p(cfdq))
-                  WAT_CF_VAR_S = cvs ; WAT_CF_VAR_L = cvl
-                  WAT_CF_FLD_S = cfdd.ns ; WAT_CF_FLD_L = cfdd.nl
-                  WAT_CF_TY_S = cfdd.ts ; WAT_CF_TY_L = cfdd.tl
-                  emit_wat_stmts(cbody, fn_head, nested, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-                  cfd = cfdd.next
+              s = nx
+            } else if is_global(decls, src, ns, nl, a) {
+              gname := str_at((src + ns), nl)
+              push_str(sb, "    (global.set $")
+              push_str(sb, gname)
+              push_str(sb, " ")
+              if wat_direct_float_num(v, src, ns, nl, decls, fn_head, params_head, pcount, a, bind_head) {
+                push_str(sb, "(i64.reinterpret_f64 (f64.convert_i64_s ")
+                emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, "))")
+              } else { emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+              push_str(sb, ")\n")
+              s = nx
+            } else if slit.n != 0 {
+              ## struct construction `p := S(f0=v0, …)`: bump-allocate `struct_words*8` bytes in linear
+              ## memory, put the base address in p's local, store each (positional) field value.
+              idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
+              if layout_kind_is_byte(layout_kind(decls, src, slit.s, slit.n, a)) {
+                ## Standard §6.1 construction: reserve the rounded byte size and write every field at its
+                ## shared byte offset. This is distinct from the legacy word-addressed constructor below.
+                szb := standard_type_byte_size(decls, src, slit.s, slit.n, 1, a)
+                push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
+                push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ") ; push_int(sb, i64(szb)) ; push_str(sb, ")))\n")
+                _stdw := wat_std_store_struct(v, idx, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                s = nx
+              } else if struct_all_scalar(decls, src, slit.s, slit.n, a) {
+                sz := struct_words(decls, src, slit.s, slit.n, a)
+                push_str(sb, "    (local.set ")
+                push_int(sb, idx)
+                push_str(sb, " (global.get $__sp))\n")
+                push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ")
+                push_int(sb, i64(sz) * 8)
+                push_str(sb, ")))\n")
+                ## store each positional field value at base + k*8 (scalar fields → one word each)
+                mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(v)
+                mut k := 0
+                loop {
+                  match g {
+                    Some(gq) => {
+                      ga := deref(arg_p(gq))
+                      push_str(sb, "    (i64.store ")
+                      emit_wat_addr(sb, idx, i64(k) * 8)
+                      push_str(sb, " ")
+                      emit_wat_expr(ga.e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                      push_str(sb, ")\n")
+                      k += 1
+                      g = ga.next
+                    }
+                    None => { break }
+                  }
                 }
-                None => { break }
+                s = nx
+              } else if struct_plain(decls, src, slit.s, slit.n) {
+                ## a struct with a MULTI-WORD field (a nested struct, an inline `[T; N]`, an enum): reserve the
+                ## FLATTENED width and write the literal through the flattened writer, so every nested value
+                ## lands INLINE at the cumulative offset `field_word_offset` reports (what the deep-place
+                ## composition walks). The all-scalar branch above is untouched, so its positional emit — and
+                ## its one-word BY-REFERENCE nested field — stays byte-identical.
+                szf := struct_words(decls, src, slit.s, slit.n, a)
+                push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
+                push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ") ; push_int(sb, i64(szf) * 8) ; push_str(sb, ")))\n")
+                wf := emit_wat_store_payload_at(v, idx, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                s = nx
+              } else {
+                push_str(sb, "    (unreachable) (; unsupported non-scalar struct ;)\n")
+                s = Option.None
+              }
+            } else if elit.n != 0 {
+              ## enum construction `e := E.V(payload…)`: bump-allocate 1 (disc) + enum_max_arity payload
+              ## words, store the variant index at word 0, then each scalar payload at words 1,2,…
+              idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
+              sz := 1 + enum_max_arity(decls, src, elit.s, elit.n, a)
+              evar := expr_enum_variant(v)
+              vidx := variant_index(decls, src, elit.s, elit.n, evar.s, evar.n, a)
+              push_str(sb, "    (local.set ")
+              push_int(sb, idx)
+              push_str(sb, " (global.get $__sp))\n")
+              push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ")
+              push_int(sb, i64(sz) * 8)
+              push_str(sb, ")))\n")
+              push_str(sb, "    (i64.store ")
+              emit_wat_addr(sb, idx, 0)
+              push_str(sb, " (i64.const ")
+              push_int(sb, vidx)
+              push_str(sb, "))\n")
+              mut g : Option(ptr(mut Arg)) = ex_enum_lit_args(v)
+              mut k := 1
+              loop {
+                match g {
+                  Some(gq) => {
+                    ga := deref(arg_p(gq))
+                    push_str(sb, "    (i64.store ")
+                    emit_wat_addr(sb, idx, i64(k) * 8)
+                    push_str(sb, " ")
+                    emit_wat_expr(ga.e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                    push_str(sb, ")\n")
+                    k += 1
+                    g = ga.next
+                  }
+                  None => { break }
+                }
+              }
+              s = nx
+            } else if ex_is_array_lit(v) and wat_array_lit_standard_byte_fence(v, decls, src, a) {
+              ## The WAT array literal writer still has word-positioned struct stores for this tier. Trap
+              ## at the construction site rather than let the byte-strided indexed reader observe garbage.
+              push_str(sb, "    (unreachable) (; unsupported standard-byte struct array literal ;)\n")
+              s = nx
+            } else if ex_is_array_lit(v) {
+              ## array construction `a := [e0, …]`: bump nel*estride words, store each element at base +
+              ## k*estride*8. A SCALAR element (estride 1) is one word; a STRUCT element (a StructLit, estride
+              ## = struct_words) stores each positional field at base + (k*estride + fk)*8 (the aggregate-array
+              ## layout — x86's stride). The local holds the region base (elements are by-reference words).
+              idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
+              anel := array_lit_nel(v)
+              estrideA := array_lit_stride(v, src, a, decls)
+              push_str(sb, "    (local.set ")
+              push_int(sb, idx)
+              push_str(sb, " (global.get $__sp))\n")
+              push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ")
+              push_int(sb, i64(anel) * estrideA * 8)
+              push_str(sb, ")))\n")
+              mut g : Option(ptr(mut Arg)) = ex_array_lit_ehead(v)
+              mut k := 0
+              loop {
+                match g {
+                  Some(gq) => {
+                    ga := deref(arg_p(gq))
+                    sp := expr_struct_name(ga.e)
+                    ep := expr_enum_name(ga.e)
+                    if sp.n != 0 {
+                      ## a NESTED-AGGREGATE element struct goes through the FLATTENED writer (positional
+                      ## one-word-per-argument stores would keep only word 0 of a multi-word field and misalign
+                      ## every field after it); an ALL-SCALAR element keeps the byte-identical positional emit.
+                      mut flatel := false
+                      if struct_plain(decls, src, sp.s, sp.n) { if not struct_all_scalar(decls, src, sp.s, sp.n, a) { flatel = true } }
+                      if flatel {
+                        wfe := emit_wat_store_payload_at(ga.e, idx, i64(k) * estrideA * 8, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                      } else {
+                        mut fg : Option(ptr(mut Arg)) = ex_struct_lit_args(ga.e)
+                        mut fk := 0
+                        loop {
+                          match fg {
+                            Some(fgq) => {
+                              fga := deref(arg_p(fgq))
+                              push_str(sb, "    (i64.store ")
+                              emit_wat_addr(sb, idx, (i64(k) * estrideA + fk) * 8)
+                              push_str(sb, " ")
+                              emit_wat_expr(fga.e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                              push_str(sb, ")\n")
+                              fk += 1
+                              fg = fga.next
+                            }
+                            None => { break }
+                          }
+                        }
+                      }
+                    }
+                    if ep.n != 0 {
+                      evar := expr_enum_variant(ga.e)
+                      evx := variant_index(decls, src, ep.s, ep.n, evar.s, evar.n, a)
+                      push_str(sb, "    (i64.store ")
+                      emit_wat_addr(sb, idx, i64(k) * estrideA * 8)
+                      push_str(sb, " (i64.const ") ; push_int(sb, evx) ; push_str(sb, "))\n")
+                      mut pg : Option(ptr(mut Arg)) = ex_enum_lit_args(ga.e)
+                      mut pk := 1
+                      loop {
+                        match pg {
+                          Some(pgq) => {
+                            pga := deref(arg_p(pgq))
+                            push_str(sb, "    (i64.store ")
+                            emit_wat_addr(sb, idx, (i64(k) * estrideA + pk) * 8)
+                            push_str(sb, " ")
+                            emit_wat_expr(pga.e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                            push_str(sb, ")\n")
+                            pk += 1
+                            pg = pga.next
+                          }
+                          None => { break }
+                        }
+                      }
+                    }
+                    if sp.n == 0 and ep.n == 0 {
+                      push_str(sb, "    (i64.store ")
+                      emit_wat_addr(sb, idx, i64(k) * estrideA * 8)
+                      push_str(sb, " ")
+                      emit_wat_expr(ga.e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                      push_str(sb, ")\n")
+                    }
+                    k += 1
+                    g = ga.next
+                  }
+                  None => { break }
+                }
+              }
+              s = nx
+            } else if ex_is_slice(v) {
+              ## range-slice binding `s := base[lo..hi]` — a 2-word {ptr, len} view in the `$__sp` region
+              ## (like a struct): word0 = &base[lo] = base-array pointer + lo*8; word1 = hi - lo. Only a
+              ## scalar array-local base is supported; anything else is fail-loud (`unreachable`).
+              idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
+              bn := expr_var_name(ex_slice_base(v))
+              bidx := name_local_index(fn_head, src, bn.s, bn.n, pcount, a, decls)
+              mut sliceok := false
+              if bn.n != 0 { if is_array_local(fn_head, src, bn.s, bn.n, a) { if bidx >= 0 { sliceok = true } } }
+              if sliceok {
+                ## element stride of the base array (1 for scalar → lo*8, byte-identical; struct/enum → lo*stride*8).
+                estrideS := array_local_stride(fn_head, src, bn.s, bn.n, a, decls)
+                push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
+                push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const 16)))\n")
+                ## word0 = &base[lo] = base-array pointer + lo*estride*8
+                push_str(sb, "    (i64.store ") ; emit_wat_addr(sb, idx, 0)
+                push_str(sb, " (i64.add (local.get ") ; push_int(sb, bidx) ; push_str(sb, ") (i64.mul ")
+                emit_wat_expr(ex_slice_lo(v), sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, " (i64.const ") ; push_int(sb, estrideS * 8) ; push_str(sb, "))))\n")
+                ## word1 = hi - lo
+                push_str(sb, "    (i64.store ") ; emit_wat_addr(sb, idx, 8)
+                push_str(sb, " (i64.sub ")
+                emit_wat_expr(ex_slice_hi(v), sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, " ")
+                emit_wat_expr(ex_slice_lo(v), sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, "))\n")
+              }
+              if not sliceok { push_str(sb, "    (unreachable) (; unsupported slice binding ;)\n") }
+              s = nx
+            } else if cpsp.n != 0 {
+              ## whole-aggregate COPY `q := p` / `x := arr[i]`: the RHS is a PLACE someone else owns, so the
+              ## binding gets its OWN `$__sp` block and the struct's words are copied into it (aliasing the
+              ## source would make a later write to either show through the other). The source base address is
+              ## stashed in the 3rd scratch local FIRST — evaluating it can bump `$__sp` itself.
+              idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
+              sc3 := pcount + count_locals(fn_head, src, a, decls) + 2
+              ## `struct_words` is the FLATTENED width and the copy is word-wise, so a NESTED-AGGREGATE field
+              ## rides along correctly — only a PLAIN (arity-0) decl is required, not an all-scalar one.
+              ## CLAYOUT S3(b) — EXCEPT when the place is a FIELD of a standard byte-layout root, which
+              ## `wat_place_agg_span` resolves through `wat_std_path_*`: there the SOURCE is a byte-precise
+              ## sub-place while the destination block is read back at WORD offsets, so a word-wise copy is
+              ## only right for a WORD-GRANULAR child. S3(b) made a sub-word child constructible and thereby
+              ## put one in front of this copy for the first time: measured without the guard,
+              ## `copy := o.inner` over `struct { data : [u8;8], inner : struct { a : u16, b : u16 } }`
+              ## returned exit 1 (`copy.a` read 0) where the pre-S3(b) compiler trapped — a wrong value
+              ## where there was a trap, which I11 forbids. A whole-struct copy `q := o` of the byte-layout
+              ## ROOT itself is untouched: source and destination have the same layout there, so the guard
+              ## is restricted to the FIELD place. The byte-precise COPIER is its own consumer (audit S3).
+              mut cpwg := true
+              if ex_is_field(v) and (not std_struct_is_word_granular(decls, src, cpsp.s, cpsp.n, a)) { cpwg = false }
+              ## CLAYOUT S3(c) — THE BYTE-PRECISE COPIER takes exactly what the word copy above cannot.
+              ## `std_copy_kind` (shared, `lower_layout`) decides whether this child has a byte-precise copy
+              ## and of which shape; the SOURCE address is the root's base local plus the path's §6.1 byte
+              ## offset (`wat_std_path_root_idx` + `wat_std_path_bo`) rather than `emit_wat_expr`, which has
+              ## no aggregate-field load at all and would emit an `(unreachable)`. A child OUTSIDE the
+              ## copier's domain keeps the located trap below.
+              mut cpbc := 0
+              mut cpsidx := i64(0) - 1
+              mut cpsbo := i64(0) - 1
+              if (not cpwg) {
+                cpbc = std_copy_kind(decls, src, cpsp.s, cpsp.n, a)
+                cpsidx = wat_std_path_root_idx(v, fn_head, src, pcount, a, decls)
+                cpsbo = wat_std_path_bo(v, fn_head, src, a, decls)
+              }
+              mut cpbok := false
+              if cpbc != 0 and cpsidx >= 0 and cpsbo >= 0 { cpbok = true }
+              if cpbok {
+                cpwb := i64(struct_words(decls, src, cpsp.s, cpsp.n, a))
+                push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
+                push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ") ; push_int(sb, cpwb * 8) ; push_str(sb, ")))\n")
+                wat_std_copy(cpsp.s, cpsp.n, cpsidx, cpsbo, idx, sb, decls, src, a)
+              }
+              if (not cpbok) and cpwg and (struct_all_scalar(decls, src, cpsp.s, cpsp.n, a) or struct_plain(decls, src, cpsp.s, cpsp.n)) {
+                cpw := i64(struct_words(decls, src, cpsp.s, cpsp.n, a))
+                push_str(sb, "    (local.set ") ; push_int(sb, sc3) ; push_str(sb, " ")
+                emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, ")\n")
+                push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
+                push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ") ; push_int(sb, cpw * 8) ; push_str(sb, ")))\n")
+                emit_wat_word_copy(sb, idx, sc3, cpw)
+              }
+              if (not cpbok) and (not (cpwg and (struct_all_scalar(decls, src, cpsp.s, cpsp.n, a) or struct_plain(decls, src, cpsp.s, cpsp.n)))) {
+                push_str(sb, "    (unreachable) (; aggregate copy: non-scalar-field, or a byte-layout field extract outside the byte-precise copier's domain ;)\n")
+              }
+              s = nx
+            } else if wat_ann_arr_words(src, ns, nl, v, a, decls) > 0 {
+              ## `mut xs : [E; N]` — an explicitly UNINITIALIZED fixed-array local. The parser plants a Num(0)
+              ## SENTINEL value, so the array's storage exists only in the source annotation; the `(local.set
+              ## idx (i64.const 0))` fall-through below gave the slot NO block at all and every access trapped.
+              ## Reserve N*width(E) words in the `$__sp` bump region and put the base in the slot, exactly as an
+              ## array LITERAL declaration does — the elements are then written by `xs[i] = …`.
+              idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
+              annw := wat_ann_arr_words(src, ns, nl, v, a, decls)
+              push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (global.get $__sp))\n")
+              push_str(sb, "    (global.set $__sp (i64.add (global.get $__sp) (i64.const ") ; push_int(sb, annw * 8) ; push_str(sb, ")))\n")
+              s = nx
+            } else {
+              idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
+              push_str(sb, "    (local.set ")
+              push_int(sb, idx)
+              push_str(sb, " ")
+              if wat_direct_float_num(v, src, ns, nl, decls, fn_head, params_head, pcount, a, bind_head) {
+                push_str(sb, "(i64.reinterpret_f64 (f64.convert_i64_s ")
+                emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, "))")
+              } else { emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+              push_str(sb, ")\n")
+              s = nx
+            }
+            }
+          }
+          Stmt::Return(rv, nx) => {
+            ## DEFER (§9.3): a `return` drains the WHOLE pending stack (every enclosing scope, innermost
+            ## first) on the way out. The return value is evaluated FIRST and parked in the defer scratch
+            ## local, so a cleanup that mutates the value's inputs cannot change what is returned (the x86
+            ## lower's "preserve the return registers across the drain"). No pending defers → byte-identical.
+            if WAT_DEF_N > 0 and (not ex_is_no_tail(rv)) {
+              dsc := wat_defer_scratch(pcount, fn_head, src, a, decls)
+              push_str(sb, "    (local.set ")
+              push_int(sb, dsc)
+              push_str(sb, " ")
+              emit_wat_expr(rv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+              wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, "    (return (local.get ")
+              push_int(sb, dsc)
+              push_str(sb, "))\n")
+            } else {
+              if WAT_DEF_N > 0 { wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+              push_str(sb, "    (return ")
+              emit_wat_expr(rv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            }
+            s = nx
+          }
+          Stmt::ExprStmt(e, nx) => {
+            ## DEFER (§9.3): `defer <expr>` arrives as the marker call `__defer(<expr>)`. REGISTER the action
+            ## (emitting NOTHING here) — it is replayed at the exits of THIS scope. Checked before every other
+            ## ExprStmt shape (incl. the tail-value one), since a marker is never the block's value.
+            dact := wat_defer_action(e, src, a)
+            pi := print_call_info(e, src, a)
+            mut dstop := false
+            mut dnext : Option(ptr(mut Stmt)) = nx
+            if unchecked bitcast(usize, dact) != 0 {
+              wat_defer_push(dact)
+            } else if wat_is_defer_blk(e, src) {
+              ## Register the whole linked chain and jump over its inline body. The body is emitted only by
+              ## wat_defer_drain, at the cleanup's LIFO position; a malformed chain remains fail-loud.
+              bh : Option(ptr(mut Stmt)) = nx
+              bend : Option(ptr(mut Stmt)) = wat_defer_blk_end(bh, src)
+              match bend {
+                Some(bq) => {
+                  wat_defer_push_block(bh)
+                  dnext = stmt_next(bq)
+                }
+                None => {
+                  push_str(sb, "    (unreachable) (; defer block end marker missing ;)\n")
+                  dstop = true
+                }
+              }
+            } else if pi.ok {
+              if has_hole(src, pi.ss, pi.sl, a) { emit_print_template(pi, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+              else { emit_print(sb, pi) }
+            } else if tail_value and not stmt_any(nx) and exprstmt_needs_drop(e, src, decls, a) {
+              ## the fn/arm's TAIL expression statement in value position → it IS the result: return it
+              ## (exprstmt_needs_drop true = the expr yields a value; a void call is not returnable).
+              ## DEFER: with pending cleanups the value is parked in the scratch local first, the stack
+              ## drains LIFO, then the parked value is returned (evaluate-then-clean-then-return).
+              if WAT_DEF_N > 0 {
+                dsc := wat_defer_scratch(pcount, fn_head, src, a, decls)
+                push_str(sb, "    (local.set ")
+                push_int(sb, dsc)
+                push_str(sb, " ")
+                emit_wat_expr(e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, ")\n")
+                wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, "    (return (local.get ")
+                push_int(sb, dsc)
+                push_str(sb, "))\n")
+              } else {
+                push_str(sb, "    (return ")
+                emit_wat_expr(e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, ")\n")
+              }
+            } else {
+              push_str(sb, "    ")
+              emit_wat_expr(e, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              if exprstmt_needs_drop(e, src, decls, a) { push_str(sb, " (drop)") }
+              push_str(sb, "\n")
+            }
+            if dstop { s = Option.None } else { s = dnext }
+          }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
+            ## `p.field = v` for a struct PARAM or LOCAL p: i64.store v at (p's base + field offset).
+            gagg := agg_global_base(decls, src, bns, bnl, a)
+            gstyp := global_struct_type(decls, src, bns, bnl, a)
+            styp := base_struct_type(params_head, fn_head, src, bns, bnl, a, decls)
+            bpidx := param_find(params_head, src, bns, bnl, a)
+            isloc := is_toplevel_local(fn_head, bns, bnl, src, a)
+            mut stdhandled := false
+            if isloc and styp.n != 0 and layout_kind_is_byte(layout_kind(decls, src, styp.s, styp.n, a)) {
+              sbo := standard_field_byte_offset(decls, src, styp.s, styp.n, fns, fnl, a)
+              sft := struct_field_type(decls, src, styp.s, styp.n, fns, fnl, a)
+              bidxS := name_local_index(fn_head, src, bns, bnl, pcount, a, decls)
+              if sbo >= 0 and sft.n != 0 {
+                if std_ty_aggregate(sft.s, sft.n, decls, src) {
+                  if expr_struct_name(fv).n != 0 { _stdw := wat_std_store_struct(fv, bidxS, sbo, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+                  if expr_struct_name(fv).n == 0 { push_str(sb, "    (unreachable) (; unsupported standard aggregate field assign ;)\n") }
+                  stdhandled = true
+                }
+                if not std_ty_aggregate(sft.s, sft.n, decls, src) {
+                  wat_std_store_expr(fv, bidxS, sbo, sft.s, sft.n, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                  stdhandled = true
+                }
               }
             }
-            WAT_CF_VAR_S = ov_vs ; WAT_CF_VAR_L = ov_vl
-            WAT_CF_FLD_S = ov_fs ; WAT_CF_FLD_L = ov_fl
-            WAT_CF_TY_S = ov_ts ; WAT_CF_TY_L = ov_tl
-            cfdone = true
+            if (not stdhandled) and gagg >= 0 and gstyp.n != 0 and struct_all_scalar(decls, src, gstyp.s, gstyp.n, a) {
+              woff := field_word_offset(decls, src, gstyp.s, gstyp.n, fns, fnl, a)
+              push_str(sb, "    (i64.store ")
+              emit_wat_addr(sb, 0 - (gagg + 1), woff * 8)
+              push_str(sb, " ")
+              emit_wat_expr(fv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            } else if (not stdhandled) and styp.n != 0 and struct_all_scalar(decls, src, styp.s, styp.n, a) and (bpidx >= 0 or isloc) {
+              woff := field_word_offset(decls, src, styp.s, styp.n, fns, fnl, a)
+              mut bidx := bpidx
+              if bpidx < 0 { bidx = name_local_index(fn_head, src, bns, bnl, pcount, a, decls) }
+              push_str(sb, "    (i64.store ")
+              emit_wat_addr(sb, bidx, woff * 8)
+              push_str(sb, " ")
+              emit_wat_expr(fv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            } else if not stdhandled {
+              push_str(sb, "    (unreachable) (; unsupported field assign ;)\n")
+            }
+            s = nx
           }
+          Stmt::IndexAssign(ibase, iidx, ival, nx) => {
+            ## `a[i] = v` (ARRAY local) / `s[i] = v` (range-SLICE view): i64.store v at the element address.
+            ## Array base = the local's pointer; slice base = word0 (data ptr, i64.load at s-base). Bounds
+            ## (WAT_CHK): stash i in the scratch local, trap (unreachable) if i >= the count — a static N for
+            ## an array, the runtime len (word1) for a slice; i64.ge_u so a negative index also traps.
+            bn := expr_var_name(ibase)
+            mut isslice := false
+            if bn.n != 0 { if is_slice_local(fn_head, src, bn.s, bn.n, a) { isslice = true } }
+            isarr := bn.n != 0 and is_array_local(fn_head, src, bn.s, bn.n, a)
+            sc := pcount + count_locals(fn_head, src, a, decls)
+            ## AGGREGATE element (`arr[i] = <struct>`): the element is `stride` words wide, so the single
+            ## stride-8 `i64.store` below would keep only word 0 and drop the rest. Copy every word from the
+            ## RHS aggregate's base instead. Both bases are stashed in scratch locals first (evaluating either
+            ## can bump `$__sp`), then copied ascending. Tested BEFORE the scalar paths; anything not
+            ## resolvable — a non-scalar-field element, a non-aggregate RHS, a mismatched width, or a
+            ## multi-word NON-struct element — traps rather than storing a partial/aliased element.
+            aggel := wat_arr_elem_struct(fn_head, src, bn.s, bn.n, a, decls)
+            aggstride := if aggel.n == 0 { wat_arr_elem_stride(fn_head, src, bn.s, bn.n, a, decls) } else { 1 }
+            ## #169: the all-scalar standard-byte element path below still materializes a value as one
+            ## word per field and then copies word-sized cells, while its array stride is the real §6.1
+            ## byte stride. That turns `T { a:u8, b:u8 }` into a silent partial write (the second field
+            ## is lost). The dedicated byte-array/nested writer has its own correct path, so fence only
+            ## this exact word-copy shape until array-element ABI storage is widened consistently.
+            mut byte_word_copy := false
+            if aggel.n != 0 and struct_all_scalar(decls, src, aggel.s, aggel.n, a) {
+              if wat_standard_byte_abi_fence(decls, src, aggel.s, aggel.n, a, false) { byte_word_copy = true }
+            }
+            if byte_word_copy {
+              push_str(sb, "    (unreachable) (; unsupported standard-byte aggregate element write (#169) ;)\n")
+            } else if aggel.n != 0 {
+              rhsp := wat_rhs_agg_span(ival, params_head, fn_head, src, a, decls)
+              sc2 := sc + 1
+              sc3 := sc + 2
+              mut wok := false
+              if rhsp.n != 0 and struct_all_scalar(decls, src, aggel.s, aggel.n, a) and struct_all_scalar(decls, src, rhsp.s, rhsp.n, a) {
+                if struct_words(decls, src, rhsp.s, rhsp.n, a) == struct_words(decls, src, aggel.s, aggel.n, a) { wok = true }
+              }
+              ## a NESTED-AGGREGATE element written from a struct LITERAL (`xs[i] = Cell(pad=…, inner=Leaf(…),
+              ## z=…)`): the FLATTENED writer lays the literal out INLINE at the element address, so a nested
+              ## struct / `[T; N]` field lands in FULL and the fields after it stay aligned. The word-COPY path
+              ## above cannot serve it — a nested struct literal has no linear-memory image to copy FROM (the
+              ## StructLit expression arm is itself all-scalar-only). The element address is stashed in the
+              ## scratch local FIRST, since the field value emits can bump `$__sp`.
+              mut lok := false
+              if (not wok) and expr_struct_name(ival).n != 0 {
+                if struct_plain(decls, src, aggel.s, aggel.n) {
+                  esn := expr_struct_name(ival)
+                  if streq(src, esn.s, esn.n, aggel.s, aggel.n) { lok = true }
+                }
+              }
+              if lok {
+                push_str(sb, "    (local.set ") ; push_int(sb, sc2) ; push_str(sb, " ")
+                emit_wat_agg_elem_addr(ibase, iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, ")\n")
+                if std_array_elem_byte_tier(decls, src, aggel.s, aggel.n, a) { wle := wat_std_store_struct(ival, sc2, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+                if not std_array_elem_byte_tier(decls, src, aggel.s, aggel.n, a) { wle := emit_wat_store_payload_at(ival, sc2, 0, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+              } else if wok {
+                ew := i64(struct_words(decls, src, aggel.s, aggel.n, a))
+                push_str(sb, "    (local.set ") ; push_int(sb, sc3) ; push_str(sb, " ")
+                emit_wat_expr(ival, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, ")\n")
+                push_str(sb, "    (local.set ") ; push_int(sb, sc2) ; push_str(sb, " ")
+                emit_wat_agg_elem_addr(ibase, iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, ")\n")
+                emit_wat_word_copy(sb, sc2, sc3, ew)
+              } else {
+                push_str(sb, "    (unreachable) (; unsupported aggregate element assign ;)\n")
+              }
+            } else if aggstride > 1 {
+              push_str(sb, "    (unreachable) (; multi-word non-struct array element assign ;)\n")
+            } else if isslice {
+              bidx := name_local_index(fn_head, src, bn.s, bn.n, pcount, a, decls)
+              push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add (i64.load ")
+              emit_wat_addr(sb, bidx, 0)
+              push_str(sb, ") (i64.mul ")
+              if WAT_CHK {
+                push_str(sb, "(block (result i64) (local.set ")
+                push_int(sb, sc)
+                push_str(sb, " ")
+                emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, ") (if (i64.ge_u (local.get ")
+                push_int(sb, sc)
+                push_str(sb, ") (i64.load ")
+                emit_wat_addr(sb, bidx, 8)
+                push_str(sb, ")) (then (unreachable))) (local.get ")
+                push_int(sb, sc)
+                push_str(sb, "))")
+              } else {
+                emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              }
+              push_str(sb, " (i64.const 8)))) ")
+              emit_wat_expr(ival, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            } else if isarr {
+              bidx := name_local_index(fn_head, src, bn.s, bn.n, pcount, a, decls)
+              wnel := array_local_nel(fn_head, src, bn.s, bn.n, a)
+              push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add (local.get ")
+              push_int(sb, bidx)
+              push_str(sb, ") (i64.mul ")
+              if WAT_CHK and wnel > 0 {
+                push_str(sb, "(block (result i64) (local.set ")
+                push_int(sb, sc)
+                push_str(sb, " ")
+                emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, ") (if (i64.ge_u (local.get ")
+                push_int(sb, sc)
+                push_str(sb, ") (i64.const ")
+                push_int(sb, i64(wnel))
+                push_str(sb, ")) (then (unreachable))) (local.get ")
+                push_int(sb, sc)
+                push_str(sb, "))")
+              } else {
+                emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              }
+              push_str(sb, " (i64.const 8)))) ")
+              emit_wat_expr(ival, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            } else if bn.n != 0 and wat_is_array_global(decls, src, bn.s, bn.n, a) {
+              ## `TABLE[i] = v` on an ARRAY GLOBAL: store v at the fixed base + i*8. Bounds vs the static
+              ## count via the scratch local (WAT_CHK); i64.ge_u so a negative index also traps.
+              gbase := agg_global_base(decls, src, bn.s, bn.n, a)
+              wnelg := wat_array_global_nel(decls, src, bn.s, bn.n, a)
+              push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add (i64.const ")
+              push_int(sb, gbase)
+              push_str(sb, ") (i64.mul ")
+              if WAT_CHK and wnelg > 0 {
+                push_str(sb, "(block (result i64) (local.set ") ; push_int(sb, sc) ; push_str(sb, " ")
+                emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, ") (if (i64.ge_u (local.get ") ; push_int(sb, sc) ; push_str(sb, ") (i64.const ") ; push_int(sb, wnelg) ; push_str(sb, ")) (then (unreachable))) (local.get ") ; push_int(sb, sc) ; push_str(sb, "))")
+              } else {
+                emit_wat_expr(iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              }
+              push_str(sb, " (i64.const 8)))) ")
+              emit_wat_expr(ival, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            } else if wat_deep_idx_scalar_ok(ibase, fn_head, src, params_head, pcount, a, decls) {
+              ## `xs[i].arr[j] = v` — a DEEP element WRITE (the base is a FIELD, not a bare Var, so no closed
+              ## formula exists). WASM evaluates the store's ADDRESS operand before its VALUE operand, so the
+              ## composed address is already on the stack when the value emit reuses the shared scratch local.
+              dity := wat_place_idx_ty(ibase, fn_head, src, a, decls)
+              diw := scalar_byte_size(src, dity.s, dity.n)
+              if wat_std_idx_path_ok(ibase, fn_head, src, a, decls) {
+                if diw == 1 { push_str(sb, "    (i64.store8 (i32.wrap_i64 ") }
+                if diw == 2 { push_str(sb, "    (i64.store16 (i32.wrap_i64 ") }
+                if diw == 4 { push_str(sb, "    (i64.store32 (i32.wrap_i64 ") }
+                if diw == 8 { push_str(sb, "    (i64.store (i32.wrap_i64 ") }
+              }
+              if not wat_std_idx_path_ok(ibase, fn_head, src, a, decls) { push_str(sb, "    (i64.store (i32.wrap_i64 ") }
+              emit_wat_place_idx_addr(ibase, iidx, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ") ")
+              emit_wat_expr(ival, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            } else {
+              push_str(sb, "    (unreachable) (; unsupported index assign ;)\n")
+            }
+            s = nx
+          }
+          ## `xs[i].f = v` / `b.cells[i].m = v` — a scalar FIELD write into an ELEMENT of a fixed array. The
+          ## wat backend had NO arm for this statement at all (it fell to the `_` default, which both trapped
+          ## AND stopped emitting the rest of the list). The element address is COMPOSED (the indexed base may
+          ## itself be an inline `[Struct; N]` FIELD) and the scalar field stored at its word offset within the
+          ## element; the field must be a genuine ONE-WORD scalar, so an aggregate field stays fail-loud.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => {
+            difty := wat_place_idx_ty(ifb, fn_head, src, a, decls)
+            mut deepif := false
+            if difty.n != 0 {
+              if struct_decl_of(decls, src, difty.s, difty.n) >= 0 {
+                if struct_plain(decls, src, difty.s, difty.n) {
+                  dft := struct_field_type(decls, src, difty.s, difty.n, iffs, iffl, a)
+                  if wat_ty_word_scalar(src, dft.s, dft.n, a, decls) {
+                    if wat_place_idx_ok(ifb, fn_head, src, params_head, pcount, a, decls) { deepif = true }
+                  }
+                }
+              }
+            }
+            if deepif {
+              mut dboff := i64(field_word_offset(decls, src, difty.s, difty.n, iffs, iffl, a)) * 8
+              mut difbyte := false
+              if std_array_elem_byte_tier(decls, src, difty.s, difty.n, a) { dboff = layout_field_offset_bytes(decls, src, difty.s, difty.n, iffs, iffl, a) ; difbyte = true }
+              dft := struct_field_type(decls, src, difty.s, difty.n, iffs, iffl, a)
+              dfw := scalar_byte_size(src, dft.s, dft.n)
+              if difbyte {
+                if dfw == 1 { push_str(sb, "    (i64.store8 (i32.wrap_i64 (i64.add ") }
+                if dfw == 2 { push_str(sb, "    (i64.store16 (i32.wrap_i64 (i64.add ") }
+                if dfw == 4 { push_str(sb, "    (i64.store32 (i32.wrap_i64 (i64.add ") }
+                if dfw == 8 { push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add ") }
+              }
+              if not difbyte { push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add ") }
+              emit_wat_place_idx_addr(ifb, ifi, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, " (i64.const ") ; push_int(sb, dboff) ; push_str(sb, "))) ")
+              emit_wat_expr(ifv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            } else {
+              push_str(sb, "    (unreachable) (; unsupported index-field assign ;)\n")
+            }
+            s = ifnx
+          }
+          Stmt::FieldPathAssign(place, val, nx) => {
+            ## NESTED field write `o.i.v = e`: the place is a `Field` chain. Store `e` at
+            ## (base-of-`o.i` + field `v`'s offset); the base emitted as a value yields the inner
+            ## struct's base (nested structs are by-reference). Mirrors the nested field READ. The
+            ## base/field are extracted via single-level-match helpers (no inline nested match).
+            base := expr_field_base(place)
+            fsp := expr_field_span(place)
+            stdft := wat_std_path_ty(place, fn_head, src, a, decls)
+            stdfpok := wat_std_path_ok(place, fn_head, src, a, decls) and stdft.n != 0 and (not std_ty_aggregate(stdft.s, stdft.n, decls, src))
+            if stdfpok {
+              sidx := wat_std_path_root_idx(place, fn_head, src, pcount, a, decls)
+              sbo := wat_std_path_bo(place, fn_head, src, a, decls)
+              wat_std_store_expr(val, sidx, sbo, stdft.s, stdft.n, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+            }
+            ## First try a NESTED struct-GLOBAL chain (`STATE.a.b.c = e`): store at the const address
+            ## (root global base + cumulative-word-offset*8), nested structs FLATTENED.
+            groot := wat_gchain_root(place)
+            gbase := agg_global_base(decls, src, groot.s, groot.n, a)
+            gtype := wat_gchain_type(place, decls, src, a)
+            gwoff := wat_gchain_woff(place, decls, src, a)
+            gchainok := gbase >= 0 and gwoff >= 0 and gtype.n != 0 and ty_is_scalar(gtype.s, gtype.n, decls, src)
+            btype := expr_struct_type_of(base, params_head, fn_head, src, a, decls)
+            if (not stdfpok) and gchainok {
+              push_str(sb, "    (i64.store ")
+              emit_wat_addr(sb, 0 - (gbase + 1), gwoff * 8)
+              push_str(sb, " ")
+              emit_wat_expr(val, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            } else if (not stdfpok) and wat_deep_scalar_ok(place, fn_head, src, params_head, pcount, a, decls) {
+              ## `xs[i].b.c.cx = v` / `xs[i].inner.x = v` — the DEEP dual of the composed field READ: the chain
+              ## is rooted at an array ELEMENT (a RUNTIME address), so no cumulative frame offset exists.
+              ## Address operand first (WASM evaluates it before the value), then the one-word store. Tried
+              ## BEFORE the by-reference nested-field path below, under the same FLATTENED-STORAGE guard.
+              dpty := wat_place_ty(place, fn_head, src, a, decls)
+              dpw := scalar_byte_size(src, dpty.s, dpty.n)
+              if wat_std_idx_path_ok(place, fn_head, src, a, decls) {
+                if dpw == 1 { push_str(sb, "    (i64.store8 (i32.wrap_i64 ") }
+                if dpw == 2 { push_str(sb, "    (i64.store16 (i32.wrap_i64 ") }
+                if dpw == 4 { push_str(sb, "    (i64.store32 (i32.wrap_i64 ") }
+                if dpw == 8 { push_str(sb, "    (i64.store (i32.wrap_i64 ") }
+              }
+              if not wat_std_idx_path_ok(place, fn_head, src, a, decls) { push_str(sb, "    (i64.store (i32.wrap_i64 ") }
+              emit_wat_place_addr(place, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ") ")
+              emit_wat_expr(val, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            } else if (not stdfpok) and fsp.n != 0 and btype.n != 0 and struct_all_scalar(decls, src, btype.s, btype.n, a) {
+              ## NESTED field write on a LOCAL: the base emitted as a value yields the inner struct's base
+              ## (nested structs are by-reference). Mirrors the nested field READ.
+              woff := field_word_offset(decls, src, btype.s, btype.n, fsp.s, fsp.n, a)
+              push_str(sb, "    (i64.store (i32.wrap_i64 (i64.add ")
+              emit_wat_expr(base, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, " (i64.const ")
+              push_int(sb, woff * 8)
+              push_str(sb, "))) ")
+              emit_wat_expr(val, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+            } else if not stdfpok {
+              push_str(sb, "    (unreachable) (; unsupported field-path assign ;)\n")
+            }
+            s = nx
+          }
+          Stmt::While(c, b, nx) => {
+            id := wat_next_label()
+            ob := WAT_BRK
+            oc := WAT_CONT
+            obv := WAT_BRK_VALUE
+            odb := WAT_BRK_DB
+            odc := WAT_CONT_DB
+            WAT_BRK = id
+            WAT_CONT = id
+            WAT_BRK_VALUE = false
+            ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
+            WAT_BRK_DB = WAT_DEF_N
+            WAT_CONT_DB = WAT_DEF_N
+            wat_loop_push(id, id, false, false, WAT_DEF_N)
+            push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
+            push_str(sb, "      (br_if 1 (i32.eqz (i32.wrap_i64 ")
+            emit_wat_expr(c, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+            push_str(sb, ")))\n")
+            ## `continue` target: exit this inner block → fall through to the `(br 0)` back-edge (re-eval cond).
+            push_str(sb, "      (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
+            emit_wat_stmts(b, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+            push_str(sb, "      )\n")
+            push_str(sb, "      (br 0)\n    ))\n")
+            WAT_BRK = ob
+            WAT_CONT = oc
+            WAT_BRK_VALUE = obv
+            WAT_BRK_DB = odb
+            WAT_CONT_DB = odc
+            wat_loop_pop()
+            s = nx
+          }
+          Stmt::If(c, th, el, nx) => {
+            push_str(sb, "    (if (i32.wrap_i64 ")
+            emit_wat_expr(c, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+            push_str(sb, ") (then\n")
+            emit_wat_stmts(th, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+            push_str(sb, "    ) (else\n")
+            emit_wat_stmts(el, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+            push_str(sb, "    ))\n")
+            s = nx
+          }
+          Stmt::Match(scrut, arms_head, nx) => {
+            ## value-yielding when this match is the fn's TAIL statement (tail_value) and last (nx==0) —
+            ## each arm returns its braced tail expr; else a side-effect match.
+            vy := tail_value and not stmt_any(nx)
+            sn := expr_var_name(scrut)
+            agg := agg_global_base(decls, src, sn.s, sn.n, a)
+            etype0 := base_enum_type(params_head, fn_head, src, sn.s, sn.n, a, decls, false)
+            ## GENERICS (§8): a `match v` where `v : T` is an enum PARAM in a mono instance — resolve the
+            ## instance enum type (T → E) so the comptime-variant unroll has a concrete enum. Only kicks in
+            ## when the raw annotation didn't already name an enum (byte-identical for a non-generic match).
+            esub := wat_param_enum_span(params_head, src, sn.s, sn.n, a, decls)
+            mut etype := etype0
+            if etype.n == 0 { etype = esub }
+            spidx := param_find(params_head, src, sn.s, sn.n, a)
+            isloc := is_toplevel_local(fn_head, sn.s, sn.n, src, a)
+            ## `match s[i]` on an enum `Slice(E)` PARAM: the by-reference element address (block.word0 data ptr +
+            ## i*stride*8) is placed in the MATCH scratch local (index pcount+nloc+1); the match then reads disc +
+            ## payload through it (emit_wat_stmt_match keys off a base local). Bounds vs word1 via the sc scratch.
+            mut idxmatch := false
+            if ex_is_index(scrut) {
+              ibn := expr_var_name(ex_index_base(scrut))
+              ipidx := param_find(params_head, src, ibn.s, ibn.n, a)
+              ees := wat_slice_param_enum_span(params_head, src, ibn.s, ibn.n, decls)
+              if ipidx >= 0 and ees.n != 0 {
+                idxmatch = true
+                stride := wat_slice_param_agg_stride(params_head, src, ibn.s, ibn.n, a, decls)
+                nloc := count_locals(fn_head, src, a, decls)
+                sc := pcount + nloc
+                msc := pcount + nloc + 1
+                push_str(sb, "    (local.set ") ; push_int(sb, msc) ; push_str(sb, " (i64.add (i64.load ")
+                emit_wat_addr(sb, ipidx, 0)
+                push_str(sb, ") (i64.mul ")
+                if WAT_CHK {
+                  push_str(sb, "(block (result i64) (local.set ") ; push_int(sb, sc) ; push_str(sb, " ")
+                  emit_wat_expr(ex_index_idx(scrut), sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                  push_str(sb, ") (if (i64.ge_u (local.get ") ; push_int(sb, sc) ; push_str(sb, ") (i64.load ")
+                  emit_wat_addr(sb, ipidx, 8)
+                  push_str(sb, ")) (then (unreachable))) (local.get ") ; push_int(sb, sc) ; push_str(sb, "))")
+                } else {
+                  emit_wat_expr(ex_index_idx(scrut), sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                }
+                push_str(sb, " (i64.const ") ; push_int(sb, stride * 8) ; push_str(sb, "))))\n")
+                emit_wat_stmt_match(arms_head, ees.s, ees.n, msc, fn_head, vy, sb, a, src, params_head, pcount, decls)
+              }
+            }
+            if (not idxmatch) and agg >= 0 {
+              gtype := global_enum_type(decls, src, sn.s, sn.n, a)
+              if gtype.n != 0 { emit_wat_stmt_match(arms_head, gtype.s, gtype.n, 0 - (agg + 1), fn_head, vy, sb, a, src, params_head, pcount, decls) }
+              else { push_str(sb, "    (unreachable) (; non-enum agg global match ;)\n") }
+            } else if (not idxmatch) and sn.n != 0 and etype.n != 0 and (spidx >= 0 or isloc) {
+              mut sidx := spidx
+              if spidx < 0 { sidx = name_local_index(fn_head, src, sn.s, sn.n, pcount, a, decls) }
+              emit_wat_stmt_match(arms_head, etype.s, etype.n, sidx, fn_head, vy, sb, a, src, params_head, pcount, decls)
+            } else if not idxmatch {
+              mut scalar_shape := true
+              mut scalar_arm : Option(ptr(mut Arm)) = arms_head
+              loop {
+                match scalar_arm {
+                  Some(scalar_armq) => {
+                    sam := deref(arm_p(scalar_armq))
+                    if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
+                    scalar_arm = sam.next
+                  }
+                  None => { break }
+                }
+              }
+              if scalar_shape {
+                ## Scalar statement match: park the value in the first per-function scratch local so arm
+                ## comparisons survive body emission. The scratch is reused by nested bodies only after the
+                ## outer comparison has selected an arm.
+                nloc := count_locals(fn_head, src, a, decls)
+                sidx := pcount + nloc
+                push_str(sb, "    (local.set ") ; push_int(sb, sidx) ; push_str(sb, " ")
+                emit_wat_expr(scrut, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, ")\n")
+                emit_wat_scalar_stmt_match(arms_head, sidx, fn_head, vy, sb, a, src, params_head, pcount, decls)
+              } else {
+                push_str(sb, "    (unreachable) (; unsupported non-scalar statement match ;)\n")
+              }
+            }
+            s = nx
+          }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+            ## RANGE `for i in lo..hi { … }`: `i` is a WASM local (name_local_index). i := lo; `(block (loop …))`
+            ## exits (br_if 1) when i >= hi (SIGNED, x86 parity via setl); body; i += 1; `(br 0)` back-edge.
+            if unchecked bitcast(usize, fhi) == 0 {
+              ## ITERABLE `for x in <arr/slice-view> { … }`: `x` binds each ELEMENT. `x` is a WASM local
+              ## (name_local_index); a hidden index rides the NEXT local (var-slot+1 — the local scan reserves
+              ## TWO for an iterable For). Bound: an INLINE scalar/float array (base @ its local, static count)
+              ## or a scalar slice VIEW (word0 = data ptr, word1 = runtime len, in its bump region; element at
+              ## ptr+i*8). Element word copied BY VALUE (a float rides its bits). Anything else traps loud.
+              idF := wat_next_label()
+              obF := WAT_BRK
+              ocF := WAT_CONT
+              obvF := WAT_BRK_VALUE
+              odbF := WAT_BRK_DB
+              odcF := WAT_CONT_DB
+              WAT_BRK = idF
+              WAT_CONT = idF
+              WAT_BRK_VALUE = false
+              ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
+              WAT_BRK_DB = WAT_DEF_N
+              WAT_CONT_DB = WAT_DEF_N
+              wat_loop_push(idF, idF, false, false, WAT_DEF_N)
+              bn := expr_var_name(flo)
+              varidx := name_local_index(fn_head, src, fns, fnl, pcount, a, decls)
+              ididx := varidx + 1
+              mut isslice := false
+              if bn.n != 0 { if is_slice_local(fn_head, src, bn.s, bn.n, a) { isslice = true } }
+              mut isarr := false
+              if (not isslice) and bn.n != 0 { if is_array_local(fn_head, src, bn.s, bn.n, a) { isarr = true } }
+              ## `for x in s` over a scalar `Slice(E)` PARAM: identical to a VIEW (the param local holds the block
+              ## base; word0 = ptr, word1 = len). Base local from `param_find` (the param IS a WASM local).
+              pidxF := param_find(params_head, src, bn.s, bn.n, a)
+              mut isparamslice := false
+              if (not isslice) and (not isarr) and pidxF >= 0 { if wat_slice_param_scalar(params_head, src, bn.s, bn.n, a, decls) { isparamslice = true } }
+              ## AGGREGATE (struct-element) iteration over an ARRAY local or a slice VIEW of one: the loop var
+              ## holds `&elem[i]` = dataptr + i*stride*8 (an ADDRESS, not a loaded word); `p.field` reads through
+              ## it as a struct pointer (localok). No per-element copy — WASM aggregates are by-reference. Data
+              ## pointer: ARRAY = the local (region base); VIEW = word0 of its region. Count: ARRAY = static nel;
+              ## VIEW = word1.
+              mut estrideF := 1
+              if isarr { estrideF = array_local_stride(fn_head, src, bn.s, bn.n, a, decls) }
+              if isslice { estrideF = array_local_stride(fn_head, src, bn.s, bn.n, a, decls) }
+              ## a struct/enum-element `Slice(E)` PARAM base: in WASM it has the SAME shape as a VIEW (the param
+              ## local holds the block base; word0 = data ptr, word1 = count), so it shares the VIEW emit with
+              ## bidx = the param's local. estrideF from the param annotation.
+              mut isaggparam := false
+              if (not isslice) and (not isarr) and pidxF >= 0 { pstr := wat_slice_param_agg_stride(params_head, src, bn.s, bn.n, a, decls) ; if pstr > 1 { isaggparam = true ; estrideF = pstr } }
+              mut isaggarr := false
+              if isarr and estrideF > 1 { isaggarr = true }
+              mut isaggview := false
+              if isslice and estrideF > 1 { isaggview = true }
+              if isaggarr or isaggview or isaggparam {
+                mut bidx := pidxF
+                if isaggarr or isaggview { bidx = name_local_index(fn_head, src, bn.s, bn.n, pcount, a, decls) }
+                push_str(sb, "    (local.set ") ; push_int(sb, ididx) ; push_str(sb, " (i64.const 0))\n")
+                push_str(sb, "    (block $brk") ; push_int(sb, idF) ; push_str(sb, " (loop $lp") ; push_int(sb, idF) ; push_str(sb, "\n")
+                push_str(sb, "      (br_if 1 (i64.ge_s (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") ")
+                if isaggarr { push_str(sb, "(i64.const ") ; push_int(sb, i64(array_local_nel(fn_head, src, bn.s, bn.n, a))) ; push_str(sb, ")") }
+                if isaggview or isaggparam { push_str(sb, "(i64.load ") ; emit_wat_addr(sb, bidx, 8) ; push_str(sb, ")") }
+                push_str(sb, "))\n")
+                ## p = dataptr + i*(estride*8)
+                push_str(sb, "      (local.set ") ; push_int(sb, varidx) ; push_str(sb, " (i64.add ")
+                if isaggarr { push_str(sb, "(local.get ") ; push_int(sb, bidx) ; push_str(sb, ")") }
+                if isaggview or isaggparam { push_str(sb, "(i64.load ") ; emit_wat_addr(sb, bidx, 0) ; push_str(sb, ")") }
+                push_str(sb, " (i64.mul (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") (i64.const ") ; push_int(sb, estrideF * 8) ; push_str(sb, "))))\n")
+                push_str(sb, "      (block $cont") ; push_int(sb, idF) ; push_str(sb, "\n")
+                emit_wat_stmts(fb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+                push_str(sb, "      )\n")
+                push_str(sb, "      (local.set ") ; push_int(sb, ididx) ; push_str(sb, " (i64.add (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") (i64.const 1)))\n")
+                push_str(sb, "      (br 0)\n    ))\n")
+              } else if isslice or isarr or isparamslice {
+                mut bidx := pidxF
+                if isslice or isarr { bidx = name_local_index(fn_head, src, bn.s, bn.n, pcount, a, decls) }
+                push_str(sb, "    (local.set ") ; push_int(sb, ididx) ; push_str(sb, " (i64.const 0))\n")
+                push_str(sb, "    (block $brk") ; push_int(sb, idF) ; push_str(sb, " (loop $lp") ; push_int(sb, idF) ; push_str(sb, "\n")
+                push_str(sb, "      (br_if 1 (i64.ge_s (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") ")
+                if isslice or isparamslice { push_str(sb, "(i64.load ") ; emit_wat_addr(sb, bidx, 8) ; push_str(sb, ")") }
+                else { push_str(sb, "(i64.const ") ; push_int(sb, i64(array_local_nel(fn_head, src, bn.s, bn.n, a))) ; push_str(sb, ")") }
+                push_str(sb, "))\n")
+                push_str(sb, "      (local.set ") ; push_int(sb, varidx) ; push_str(sb, " (i64.load (i32.wrap_i64 (i64.add ")
+                if isslice or isparamslice { push_str(sb, "(i64.load ") ; emit_wat_addr(sb, bidx, 0) ; push_str(sb, ")") }
+                else { push_str(sb, "(local.get ") ; push_int(sb, bidx) ; push_str(sb, ")") }
+                push_str(sb, " (i64.mul (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") (i64.const 8))))))\n")
+                push_str(sb, "      (block $cont") ; push_int(sb, idF) ; push_str(sb, "\n")
+                emit_wat_stmts(fb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+                push_str(sb, "      )\n")
+                push_str(sb, "      (local.set ") ; push_int(sb, ididx) ; push_str(sb, " (i64.add (local.get ") ; push_int(sb, ididx) ; push_str(sb, ") (i64.const 1)))\n")
+                push_str(sb, "      (br 0)\n    ))\n")
+              } else {
+                push_str(sb, "    (unreachable) (; unsupported for-in-iterable ;)\n")
+              }
+              WAT_BRK = obF
+              WAT_CONT = ocF
+              WAT_BRK_VALUE = obvF
+              WAT_BRK_DB = odbF
+              WAT_CONT_DB = odcF
+              wat_loop_pop()
+            } else {
+              idx := name_local_index(fn_head, src, fns, fnl, pcount, a, decls)
+              id := wat_next_label()
+              ob := WAT_BRK
+              oc := WAT_CONT
+              obvR := WAT_BRK_VALUE
+              odbR := WAT_BRK_DB
+              odcR := WAT_CONT_DB
+              WAT_BRK = id
+              WAT_CONT = id
+              WAT_BRK_VALUE = false
+              ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
+              WAT_BRK_DB = WAT_DEF_N
+              WAT_CONT_DB = WAT_DEF_N
+              wat_loop_push(id, id, false, false, WAT_DEF_N)
+              push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " ")
+              emit_wat_expr(flo, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, ")\n")
+              push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
+              push_str(sb, "      (br_if 1 (i64.ge_s (local.get ") ; push_int(sb, idx) ; push_str(sb, ") ")
+              emit_wat_expr(fhi, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, "))\n")
+              ## `continue` target: exit this inner block → fall through to the increment below.
+              push_str(sb, "      (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
+              emit_wat_stmts(fb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+              push_str(sb, "      )\n")
+              push_str(sb, "      (local.set ") ; push_int(sb, idx) ; push_str(sb, " (i64.add (local.get ") ; push_int(sb, idx) ; push_str(sb, ") (i64.const 1)))\n")
+              push_str(sb, "      (br 0)\n    ))\n")
+              WAT_BRK = ob
+              WAT_CONT = oc
+              WAT_BRK_VALUE = obvR
+              WAT_BRK_DB = odbR
+              WAT_CONT_DB = odcR
+              wat_loop_pop()
+            }
+            s = nx
+          }
+          ## Infinite `loop { body }`: `(block $brk (loop $lp (block $cont <body>) (br 0)))`. `continue` exits
+          ## `$cont` → falls to the `(br 0)` back-edge (re-iterate); `break` exits `$brk`.
+          Stmt::Loop(lb, lnx) => {
+            id := wat_next_label()
+            ob := WAT_BRK
+            oc := WAT_CONT
+            obvL := WAT_BRK_VALUE
+            odbL := WAT_BRK_DB
+            odcL := WAT_CONT_DB
+            WAT_BRK = id
+            WAT_CONT = id
+            WAT_BRK_VALUE = false
+            ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
+            WAT_BRK_DB = WAT_DEF_N
+            WAT_CONT_DB = WAT_DEF_N
+            wat_loop_push(id, id, false, false, WAT_DEF_N)
+            push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
+            push_str(sb, "      (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
+            emit_wat_stmts(lb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+            push_str(sb, "      )\n")
+            push_str(sb, "      (br 0)\n    ))\n")
+            WAT_BRK = ob
+            WAT_CONT = oc
+            WAT_BRK_VALUE = obvL
+            WAT_BRK_DB = odbL
+            WAT_CONT_DB = odcL
+            wat_loop_pop()
+            s = lnx
+          }
+          ## `break`: bare breaks target the nearest loop (WAT_BRK), while a named break uses the parallel
+          ## loop-frame stack to reach its parsed nesting depth. A value-bearing target is admitted only when
+          ## its frame was proven scalar-integer by wat_loop_scalar_code; aggregate and unknown values stay
+          ## explicit fail-loud paths.
+          Stmt::Break(bv, bd, bnx) => {
+            if bd != 0 {
+              if WAT_LOOP_OVF or bd >= WAT_LOOP_SP { push_str(sb, "    (unreachable) (; labeled break target unavailable ;)\n") }
+              else {
+                target := WAT_LOOP_SP - 1 - bd
+                if unchecked bitcast(usize, bv) == 0 {
+                  if WAT_LOOP_VALUE[target] { push_str(sb, "    (unreachable) (; labeled bare break from WAT loop expression ;)\n") }
+                  else {
+                    ## A bare named break remains valid for a statement loop. It leaves all intervening loop
+                    ## bodies and therefore drains to the target frame's entry boundary before branching.
+                    if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+                    push_str(sb, "    (br $brk") ; push_int(sb, WAT_LOOP_BRK[target]) ; push_str(sb, ")\n")
+                  }
+                } else if not WAT_LOOP_VALUE[target] {
+                  push_str(sb, "    (unreachable) (; labeled break value targets statement-only loop ;)\n")
+                } else if wat_loop_value_between(target) {
+                  push_str(sb, "    (unreachable) (; labeled break crosses a value loop ;)\n")
+                } else if not WAT_LOOP_SCALAR[target] {
+                  push_str(sb, "    (unreachable) (; labeled break value is not scalar integer ;)\n")
+                } else {
+                  ## Evaluate the scalar result before leaving, then replay every pending body cleanup down
+                  ## to the TARGET loop's entry boundary. This keeps value evaluation ahead of the LIFO drain.
+                  push_str(sb, "    ")
+                  emit_wat_expr(bv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                  push_str(sb, "\n")
+                  if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+                  push_str(sb, "    (br $brk") ; push_int(sb, WAT_LOOP_BRK[target]) ; push_str(sb, ")\n")
+                }
+              }
+            }
+            else if unchecked bitcast(usize, bv) != 0 {
+              if not WAT_BRK_VALUE { push_str(sb, "    (unreachable) (; break value outside WAT loop expression ;)\n") }
+              else {
+                push_str(sb, "    ")
+                emit_wat_expr(bv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+                push_str(sb, "\n")
+                ## Evaluate the value first; then replay pending body cleanups without popping their stack
+                ## entries, so the break value remains the result consumed by the outer block.
+                if WAT_DEF_N > WAT_BRK_DB { wat_defer_drain(WAT_DEF_N, WAT_BRK_DB, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+                push_str(sb, "    (br $brk") ; push_int(sb, WAT_BRK) ; push_str(sb, ")\n")
+              }
+            }
+            else if WAT_BRK_VALUE {
+              ## A bare break has no result to satisfy the value block. The language accepts this as a
+              ## diverging exit for type consistency, but this backend slice does not model that path;
+              ## keep it an explicit runtime trap instead of emitting an invalid branch stack.
+              push_str(sb, "    (unreachable) (; bare break from WAT loop expression ;)\n")
+            }
+            else {
+              ## DEFER (§9.3): leaving the loop body runs the cleanups registered INSIDE it (down to the
+              ## body's entry depth WAT_BRK_DB), LIFO, before the branch. Replay only — the fall-through
+              ## path out of the same body still owes them, so nothing is popped here.
+              if WAT_DEF_N > WAT_BRK_DB { wat_defer_drain(WAT_DEF_N, WAT_BRK_DB, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+              push_str(sb, "    (br $brk") ; push_int(sb, WAT_BRK) ; push_str(sb, ")\n")
+            }
+            s = bnx
+          }
+          Stmt::Continue(cd, cnx) => {
+            ## The parser stores a named target's source span separately because the nearest named target
+            ## has the same depth (0) as a bare continue. Keep that distinction: a named continue to a
+            ## scalar value-bearing loop is valid, while unsupported value-loop paths remain fail-loud.
+            named_continue := stmt_label_span(stmt_p(Stmt, sq)).n != 0
+            if cd != 0 or named_continue {
+              if WAT_LOOP_OVF or cd >= WAT_LOOP_SP { push_str(sb, "    (unreachable) (; labeled continue target unavailable ;)\n") }
+              else {
+                target := WAT_LOOP_SP - 1 - cd
+                if WAT_LOOP_VALUE[target] {
+                  if wat_loop_value_between(target) { push_str(sb, "    (unreachable) (; labeled continue crosses a value loop ;)\n") }
+                  else if not WAT_LOOP_SCALAR[target] { push_str(sb, "    (unreachable) (; labeled continue from non-scalar WAT loop expression ;)\n") }
+                  else {
+                    ## DEFER (§9.3): a named continue to a value loop leaves every statement-only loop
+                    ## between the site and its target, plus the target body itself. Replay all crossed
+                    ## cleanups down to the TARGET loop's entry boundary before its next-iteration edge.
+                    if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+                    push_str(sb, "    (br $cont") ; push_int(sb, WAT_LOOP_CONT[target]) ; push_str(sb, ")\n")
+                  }
+                } else {
+                  ## DEFER (§9.3): a named continue leaves every loop between the site and its target, so
+                  ## replay all pending body cleanups down to the TARGET loop's entry boundary before its
+                  ## next-iteration edge. Replay does not pop the compile-time ledger; the fall-through
+                  ## path remains emitted from the same source scope and needs the same ledger.
+                  if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+                  push_str(sb, "    (br $cont") ; push_int(sb, WAT_LOOP_CONT[target]) ; push_str(sb, ")\n")
+                }
+              }
+            }
+            else {
+              ## DEFER (§9.3): `continue` ends THIS ITERATION of the body — its cleanups run per iteration.
+              if WAT_DEF_N > WAT_CONT_DB { wat_defer_drain(WAT_DEF_N, WAT_CONT_DB, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+              push_str(sb, "    (br $cont") ; push_int(sb, WAT_CONT) ; push_str(sb, ")\n")
+            }
+            s = cnx
+          }
+          ## `unchecked { body }` (Grammar §130 statement form): lower the body with checked verification OFF,
+          ## then restore. Mirrors the `Expr::Unchecked` toggle + x86 lower.
+          Stmt::Unchecked(ub, unx) => {
+            ov := WAT_CHK
+            WAT_CHK = false
+            emit_wat_stmts(ub, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+            WAT_CHK = ov
+            s = unx
+          }
+          ## `comptime if <cond> { then } else { else }` — fold the condition and emit ONLY the taken branch's
+          ## statements INLINE (arch/verify predicates; no runtime `(if …)`, the condition is erased). Conforms
+          ## to the x86 lower: `target.arch == Arch.x86_64` folds TRUE. The taken branch inherits THIS CompIf's
+          ## `nested` and is tail-valued only when the CompIf is itself the tail (`tail_value and nx == 0`),
+          ## mirroring the x86 `cx.tail = ov_tail and nx == 0`. An unfoldable condition (a `match typeinfo(T)`
+          ## — needs the mono context the wat path lacks) emits a fail-loud `(unreachable)` (never silent).
+          Stmt::CompIf(cc, th, el, nx) => {
+            cv := wat_comp_cond_fold(cc, src)
+            if cv == 1 { emit_wat_stmts(th, fn_head, nested, tail_value and not stmt_any(nx), sb, a, src, params_head, pcount, decls, bind_head, bind_base) }
+            if cv == 0 { emit_wat_stmts(el, fn_head, nested, tail_value and not stmt_any(nx), sb, a, src, params_head, pcount, decls, bind_head, bind_base) }
+            if cv < 0 { push_str(sb, "    (unreachable) (; comptime-if: unfoldable condition (needs mono context) ;)\n") }
+            s = nx
+          }
+          ## `comptime for i in lo .. hi { body }` — UNROLL at emit time: for each constant k in [lo, hi), set
+          ## the loop var's WASM local to k then emit the body (no runtime loop; the control flow is erased).
+          ## Bounds are compile-time integer constants (wat_comp_range_bound: literal / module const). Mirrors
+          ## the x86 lower's CompForRange numeric unroll. A null hi (the §7.1 pack form) is unsupported here.
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
+            if unchecked bitcast(usize, rhi) == 0 { push_str(sb, "    (unreachable) (; comptime-for pack unroll unsupported ;)\n") }
+            else {
+              vidx := name_local_index(fn_head, src, rvs, rvl, pcount, a, decls)
+              if vidx < 0 { push_str(sb, "    (unreachable) (; comptime-for loop var unresolved ;)\n") }
+              else {
+                lo := wat_comp_range_bound(rlo, decls, src)
+                hi := wat_comp_range_bound(rhi, decls, src)
+                if hi - lo > 100000 { push_str(sb, "    (unreachable) (; comptime-for range exceeds the unroll budget ;)\n") }
+                else {
+                  ## The counter is `i64` and, since #602 folds a written negative literal, `lo` is now
+                  ## reachably NEGATIVE — `comptime for i in -2..2` used to fold to 0 here and unroll the
+                  ## wrong iteration set (#638). #648's `unchecked` bypass on the increment is GONE: the
+                  ## lower now records this local's `i64` annotation even though the name owns an older
+                  ## untyped slot in this function, so `k + 1` takes the SIGNED overflow guard that
+                  ## matches the SIGNED `<` beside it (#646). Both read `k = -1` the same way.
+                  mut k : i64 = lo
+                  while k < hi {
+                    push_str(sb, "    (local.set ") ; push_int(sb, vidx) ; push_str(sb, " (i64.const ") ; push_int(sb, k) ; push_str(sb, "))\n")
+                    emit_wat_stmts(rb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+                    k = k + 1
+                  }
+                }
+              }
+            }
+            s = nx
+          }
+          ## `comptime match typeinfo(T) { <Kind>(_) => …, _ => … }` (§8 mono) — fold on T's KIND inside a
+          ## mono INSTANCE (WAT_SUB active) and emit ONLY the matching arm's statements (or the `_` arm). An
+          ## inner `comptime match <scalar-kind>` keys off the SAME instance type (its scrutinee is ignored).
+          ## Outside an instance it is a fail-loud `(unreachable)` (never silent). Mirrors emit_a64_stmts.
+          Stmt::CompMatch(cmsc, cmah, cmnx) => {
+            if WAT_SUB_ITL == 0 { push_str(sb, "    (unreachable) (; comptime-match: needs mono context ;)\n") }
+            else {
+              kind := ct_type_kind(WAT_SUB_ITS, WAT_SUB_ITL, decls, src)
+              nkind := ct_scalar_num_kind(WAT_SUB_ITS, WAT_SUB_ITL, src)
+              mut chosen : Option(ptr(mut Arm)) = Option.None
+              mut cwild : Option(ptr(mut Arm)) = Option.None
+              mut carm : Option(ptr(mut Arm)) = cmah
+              loop {
+                match carm {
+                  Some(carmq) => {
+                    cam := deref(arm_p(carmq))
+                    if cam.wild != 0 { cwild = Option.Some(carmq) }
+                    else if ct_kind_of_name(src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
+                    else if ct_num_kind_of_name(src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
+                    carm = cam.next
+                  }
+                  None => { break }
+                }
+              }
+              chosen = ast::arm_or(chosen, cwild)
+              match chosen {
+                Some(chosenq) => {
+                  cam2 := deref(arm_p(chosenq))
+                  emit_wat_stmts(cam2.body_stmts, fn_head, nested, tail_value and not stmt_any(cmnx), sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+                }
+                None => {}
+              }
+            }
+            s = cmnx
+          }
+          ## `comptime for f in typeinfo(T).fields { body }` (§8 field-derive core) — UNROLL over the concrete
+          ## target struct's fields (from the explicit typeinfo argument, or a mono substitution): for each field, bind the comptime loop
+          ## context (WAT_CF_* = loop-var name / field name / field type) then emit the body once. Inside,
+          ## `v.(f)` (Expr::CompField) resolves to a field READ and `f.type` (a type-arg) to the field type.
+          ## Only for a STRUCT target (cisvar 1 = `.variants`, the match-arm unroll's job; tuple/array/
+          ## unresolved target stays fail-loud). Saved/restored (single-level). Mirrors emit_a64_stmts.
+          Stmt::CompFor(cvs, cvl, cisvar, cbody, cnx) => {
+            mut cfdone := false
+            mut cts := WAT_SUB_ITS
+            mut ctl := WAT_SUB_ITL
+            cia := compfor_iter_arg(src, cvs, cvl)
+            if cia.n != 0 {
+              cts = cia.s
+              ctl = cia.n
+              if WAT_SUB_GPL != 0 and streq(src, cts, ctl, WAT_SUB_GPS, WAT_SUB_GPL) { cts = WAT_SUB_ITS ; ctl = WAT_SUB_ITL }
+              else if WAT_SUB_GPL2 != 0 and streq(src, cts, ctl, WAT_SUB_GPS2, WAT_SUB_GPL2) { cts = WAT_SUB_ITS2 ; ctl = WAT_SUB_ITL2 }
+              else if WAT_SUB_GPL3 != 0 and streq(src, cts, ctl, WAT_SUB_GPS3, WAT_SUB_GPL3) { cts = WAT_SUB_ITS3 ; ctl = WAT_SUB_ITL3 }
+            }
+            if ctl != 0 and cisvar == 0 {
+              cbn := base_type_name(src, cts, ctl)
+              csdi := struct_decl_of(decls, src, cbn.s, cbn.n)
+              if csdi >= 0 {
+                csd := deref(decl_get(decls, usize(csdi)))
+                ov_vs := WAT_CF_VAR_S ; ov_vl := WAT_CF_VAR_L
+                ov_fs := WAT_CF_FLD_S ; ov_fl := WAT_CF_FLD_L
+                ov_ts := WAT_CF_TY_S ; ov_tl := WAT_CF_TY_L
+                mut cfd := csd.fields_head
+                loop {
+                  match cfd {
+                    Some(cfdq) => {
+                      cfdd := deref(fld_p(cfdq))
+                      WAT_CF_VAR_S = cvs ; WAT_CF_VAR_L = cvl
+                      WAT_CF_FLD_S = cfdd.ns ; WAT_CF_FLD_L = cfdd.nl
+                      WAT_CF_TY_S = cfdd.ts ; WAT_CF_TY_L = cfdd.tl
+                      emit_wat_stmts(cbody, fn_head, nested, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+                      cfd = cfdd.next
+                    }
+                    None => { break }
+                  }
+                }
+                WAT_CF_VAR_S = ov_vs ; WAT_CF_VAR_L = ov_vl
+                WAT_CF_FLD_S = ov_fs ; WAT_CF_FLD_L = ov_fl
+                WAT_CF_TY_S = ov_ts ; WAT_CF_TY_L = ov_tl
+                cfdone = true
+              }
+            }
+            if not cfdone { push_str(sb, "    (unreachable) (; comptime-for fields: needs a struct mono instance ;)\n") }
+            s = cnx
+          }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::AllocWith => { push_str(sb, "    (unreachable) (; unsupported stmt ;)\n") ; s = Option.None }
         }
-        if not cfdone { push_str(sb, "    (unreachable) (; comptime-for fields: needs a struct mono instance ;)\n") }
-        s = cnx
       }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::AllocWith => { push_str(sb, "    (unreachable) (; unsupported stmt ;)\n") ; s = 0 }
+      None => { break }
     }
   }
   ## DEFER (§9.3): the scope's FALL-THROUGH exit — replay the cleanups registered in THIS list, LIFO,
@@ -8084,7 +8171,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
 ## Emit a fn body: declare one `(local i64)` per DISTINCT top-level `:=` name that is NOT a global,
 ## emit the statements, and — for a value-returning fn with no explicit top-level `return` — leave the
 ## tail expression on the stack as the `(result i64)`. A void fn emits no tail.
-emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec)) {
+emit_wat_body := fn(head : Option(ptr(mut Stmt)), tail : ptr(Expr), void : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec)) {
   ## WAT branch labels are local to one function. Reset both the allocator and the saved nearest-loop
   ## targets so a prior function (or a prior generic instance) cannot leak stale IDs.
   WAT_LABEL_NEXT = 0
@@ -8095,7 +8182,7 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   WAT_CONT_DB = 0
   WAT_LOOP_SP = 0
   WAT_LOOP_OVF = false
-  WAT_DEF_STOP = 0
+  WAT_DEF_STOP = Option.None
   WAT_BIND_DEPTH = 0
   WAT_PSH_N = 0
   ## collect local comptime values before slot counting and emission; their names must never consume
@@ -8123,30 +8210,35 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   }
   ## does the body have an explicit top-level return?
   mut has_ret := false
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Return(rv, nx) => { has_ret = true ; s = nx }
-      Stmt::Assign(ns, nl, v, nx) => { s = nx }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
-      Stmt::CompIf(cc, th, el, nx) => { s = nx }
-      Stmt::Loop(lb, lnx) => { s = lnx }
-      Stmt::Unchecked(ub, unx) => { s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { s = mnx }
-      ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
-      ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Return(rv, nx) => { has_ret = true ; s = nx }
+          Stmt::Assign(ns, nl, v, nx) => { s = nx }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+          Stmt::CompIf(cc, th, el, nx) => { s = nx }
+          Stmt::Loop(lb, lnx) => { s = lnx }
+          Stmt::Unchecked(ub, unx) => { s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          Stmt::Match(msc, mah, mnx) => { s = mnx }
+          ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
+          ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
+        }
+      }
+      None => { break }
     }
   }
   ## DEFER (§9.3): the pending-cleanup stack is PER FUNCTION — start empty (a previous fn's leftovers
@@ -8167,7 +8259,7 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   ## arm. The three native backends need no flag: they evaluate the statement into the result register
   ## and the tail expression overwrites it (aarch64 emit_a64_fn / riscv64 emit_rv_fn: statements, then
   ## `if (not void) and has_tail { emit …(d.value) }`).
-  emit_wat_stmts(unchecked bitcast(usize, head), head, false, (not void) and (not has_ret) and ex_is_no_tail(tail), sb, a, src, params_head, pcount, decls, Option.None, 0)
+  emit_wat_stmts(head, head, false, (not void) and (not has_ret) and ex_is_no_tail(tail), sb, a, src, params_head, pcount, decls, Option.None, 0)
   if (not void) and (not has_ret) {
     if ex_is_no_tail(tail) {
       ## no tail EXPRESSION: either a tail value-match just returned in every arm (this caps the
@@ -8264,31 +8356,36 @@ emit_agg_global_data := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   }
 }
 
-emit_wat_str_data_stmts := fn(head : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::ExprStmt(e, nx) => { pi := print_call_info(e, src, a) ; if pi.ok { emit_str_data_seg(sb, src, pi.ss, pi.sl, pi.lbl, pi.nl, a) } ; s = nx }
-      Stmt::While(c, b, nx) => { emit_wat_str_data_stmts(b, sb, src, a) ; s = nx }
-      Stmt::If(c, th, el, nx) => { emit_wat_str_data_stmts(th, sb, src, a) ; emit_wat_str_data_stmts(el, sb, src, a) ; s = nx }
-      Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if ast::arm_body_first_use(ah, armq) { emit_wat_str_data_stmts(am.body_stmts, sb, src, a) } ; arm = am.next }; None => { break } } } ; s = nx }
-      Stmt::Assign(ns, nl, v, nx) => { s = nx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { emit_wat_str_data_stmts(fb, sb, src, a) ; s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { emit_wat_str_data_stmts(rb, sb, src, a) ; s = nx }
-      Stmt::CompIf(cc, th, el, nx) => { emit_wat_str_data_stmts(th, sb, src, a) ; emit_wat_str_data_stmts(el, sb, src, a) ; s = nx }
-      Stmt::Loop(lb, lnx) => { emit_wat_str_data_stmts(lb, sb, src, a) ; s = lnx }
-      Stmt::Unchecked(ub, unx) => { emit_wat_str_data_stmts(ub, sb, src, a) ; s = unx }
-      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
-      Stmt::Continue(_cd, cnx) => { s = cnx }
-      ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
-      ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
+emit_wat_str_data_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::ExprStmt(e, nx) => { pi := print_call_info(e, src, a) ; if pi.ok { emit_str_data_seg(sb, src, pi.ss, pi.sl, pi.lbl, pi.nl, a) } ; s = nx }
+          Stmt::While(c, b, nx) => { emit_wat_str_data_stmts(b, sb, src, a) ; s = nx }
+          Stmt::If(c, th, el, nx) => { emit_wat_str_data_stmts(th, sb, src, a) ; emit_wat_str_data_stmts(el, sb, src, a) ; s = nx }
+          Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if ast::arm_body_first_use(ah, armq) { emit_wat_str_data_stmts(am.body_stmts, sb, src, a) } ; arm = am.next }; None => { break } } } ; s = nx }
+          Stmt::Assign(ns, nl, v, nx) => { s = nx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { emit_wat_str_data_stmts(fb, sb, src, a) ; s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { emit_wat_str_data_stmts(rb, sb, src, a) ; s = nx }
+          Stmt::CompIf(cc, th, el, nx) => { emit_wat_str_data_stmts(th, sb, src, a) ; emit_wat_str_data_stmts(el, sb, src, a) ; s = nx }
+          Stmt::Loop(lb, lnx) => { emit_wat_str_data_stmts(lb, sb, src, a) ; s = lnx }
+          Stmt::Unchecked(ub, unx) => { emit_wat_str_data_stmts(ub, sb, src, a) ; s = unx }
+          Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+          Stmt::Continue(_cd, cnx) => { s = cnx }
+          ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
+          ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = Option.None }
+        }
+      }
+      None => { break }
     }
   }
 }

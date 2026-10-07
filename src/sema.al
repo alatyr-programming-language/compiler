@@ -36,6 +36,10 @@ arg_p := ast::arg_p
 arg_at := ast::arg_at
 arg_any := ast::arg_any
 stmt_p := ast::stmt_p
+stmt_at := ast::stmt_at
+stmt_any := ast::stmt_any
+stmt_next := ast::stmt_next
+stmt_last := ast::stmt_last
 stmt_label_span := ast::stmt_label_span
 ## Decl-layout primitives (shared with `lower`) for the generic when-GUARD located reject: sema folds a
 ## `size(T)`/is-KIND/field-COUNT/named-predicate guard against a concrete type-arg using the SAME functions
@@ -428,7 +432,7 @@ ty_kind_eq := fn(a : TyKind, b : TyKind) -> bool {
 ## Are two type TAGS compatible? Unknown (0) is compatible with anything (poison-tolerant). Equal
 ## tags match. The int(1)↔pointer(5) pair is compatible in BOTH directions: the self-host models an
 ## AST/allocator HANDLE as a bare `usize` in some signatures (`stmt_p(Stmt, h : usize)`,
-## `d_next_stmt(h : usize, …) -> usize`) and a typed `ptr(T)` in others (`head : ptr(mut Stmt)`), and
+## `d_next_stmt(h : usize, …) -> usize`) and a typed `ptr(T)` in others (`head : Option(ptr(mut Stmt))`), and
 ## flows one into the other freely — the usize↔ptr seam the lower already lowers identically (MEM-7/8,
 ## I11, D-usize→ptr). Accepting it here is monotonic (teaches `check` to accept what `build` compiles);
 ## the `ptr(X)`-vs-`ptr(Y)` pointee discrimination (two tag-5 with distinct known pointees) is UNAFFECTED
@@ -4553,13 +4557,13 @@ expr_if_parts := fn(e : ptr(Expr)) -> IfParts {
   }
 }
 
-expr_loop_body := fn(e : ptr(Expr)) -> ptr(mut Stmt) {
+expr_loop_body := fn(e : ptr(Expr)) -> Option(ptr(mut Stmt)) {
   match deref(e) {
     Expr::Loop(b) => { b }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
-      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast => { unchecked bitcast(ptr(mut Stmt), 0) }
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast => { Option.None }
   }
 }
 
@@ -5575,11 +5579,14 @@ sema_wrapper_payload_sink_err := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : 
 ## Scan all ordinary return statements for the same direct wrapper-to-concrete-sink mismatch. This
 ## mirrors the existing return-sink walkers so an early return in control flow receives the same fence
 ## as a function's tail expression. The first mismatch is retained for a located diagnostic.
-sema_wrapper_payload_returns_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
-  mut cur := head
+sema_wrapper_payload_returns_err := fn(head : Option(ptr(mut Stmt)), rts : usize, rtl : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut got : CheckErr = 0
-  while cur != 0 and got == 0 {
-    st := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (got == 0) { break }
+        st := deref(stmt_p(Stmt, curq))
     match st {
       Stmt::Return(rv, nx) => { got = sema_wrapper_payload_sink_err(rv, decls, upto, src, locals, nloc, rts, rtl, a) }
       Stmt::If(c, th, el, nx) => {
@@ -5609,7 +5616,10 @@ sema_wrapper_payload_returns_err := fn(head : ptr(mut Stmt), rts : usize, rtl : 
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
         | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    cur = stmt_next_at(cur, a)
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   got
 }
@@ -5984,11 +5994,14 @@ s3a_expr_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
 
 ## Statement companion for `s3a_expr_bad`; it reaches expression positions the ordinary `check_expr_da`
 ## wrapper does not receive (notably a FieldPathAssign's PLACE) and follows nested control-flow bodies.
-s3a_stmts_bad := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> usize {
-  mut cur := head
+s3a_stmts_bad := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> usize {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut bad := 0
-  while cur != 0 and bad == 0 {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (bad == 0) { break }
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::Assign(ns, nl, v, nx) => { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
       Stmt::While(c, b, nx) => {
@@ -6061,7 +6074,10 @@ s3a_stmts_bad := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, sr
       }
       Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
     }
-    cur = stmt_next_at(cur, a)
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   bad
 }
@@ -6780,11 +6796,13 @@ sema_standard_tuple_global_bad := fn(d : Decl, src : ptr(u8)) -> bool {
 ## offending sub-expression to point at. Issue #299's brand class DOES have one, so it travels as its
 ## own located code through the same channel rather than through a second copy of this recursion.
 RET_SINK_AGG : CheckErr = 1
-ret_sink_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
-  mut cur := head
+ret_sink_err := fn(head : Option(ptr(mut Stmt)), rts : usize, rtl : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut res : CheckErr = 0
-  while cur != 0 {
-    st := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        st := deref(stmt_p(Stmt, curq))
     match st {
       ## …and Types §9.1 REPRESENTABILITY in the DECLARED RETURN type, which is likewise the context
       ## the returned literal takes its type from (Declarations §3.4): `g := fn() -> u8 { return 300 }`
@@ -6826,7 +6844,10 @@ ret_sink_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(r
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
         | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    cur = stmt_next_at(cur, a)
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -6835,10 +6856,12 @@ ret_sink_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(r
 ## declares `-> T`. Reuse the same checked-comptime walker as annotated/module bindings so a literal
 ## overflow (or a previously-resolved constant expression) is diagnosed at its arithmetic site. This
 ## deliberately does not type/evaluate runtime returns, and `ct_check` preserves `unchecked` wrapping.
-ct_return_guard_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> CheckErr {
-  mut cur := head
-  while cur != 0 {
-    st := deref(stmt_p(Stmt, cur))
+ct_return_guard_err := fn(head : Option(ptr(mut Stmt)), rts : usize, rtl : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> CheckErr {
+  mut cur : Option(ptr(mut Stmt)) = head
+  loop {
+    match cur {
+      Some(curq) => {
+        st := deref(stmt_p(Stmt, curq))
     mut got : CheckErr = 0
     match st {
       Stmt::Return(rv, nx) => { got = ct_guard_err(src, rts, rtl, rv, s_of(rv, a), decls, upto) }
@@ -6870,7 +6893,10 @@ ct_return_guard_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls 
         | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     if got != 0 { return got }
-    cur = stmt_next_at(cur, a)
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   0
 }
@@ -8796,56 +8822,60 @@ sema_vty_arms_push := fn(mh : Option(ptr(mut Arm)), t : ir::VTy) {
 }
 ## docs/ir-slice-1.md §2 — a value `loop`'s type is the type of the values its `break`s carry: the first
 ## `break v` that targets it (loop depth `depth` from the statement list `h`) whose value sema typed.
-sema_vty_breaks := fn(h : ptr(mut Stmt), depth : usize) -> ir::VTy { sema_vty_breaks_go(h, depth, ir::vty_unknown(), false) }
+sema_vty_breaks := fn(h : Option(ptr(mut Stmt)), depth : usize) -> ir::VTy { sema_vty_breaks_go(h, depth, ir::vty_unknown(), false) }
 ## `sema_vty_breaks`, and with `push` the context type `t` given to each literal break value instead
 ## (every branch walked): a value `loop` of literal breaks takes its binding's type (Types §2.3/§9.1).
-sema_vty_breaks_go := fn(h : ptr(mut Stmt), depth : usize, t : ir::VTy, push : bool) -> ir::VTy {
+sema_vty_breaks_go := fn(h : Option(ptr(mut Stmt)), depth : usize, t : ir::VTy, push : bool) -> ir::VTy {
   mut lit_seen := false
-  mut s := h
-  ## null-ok: Stmt.next — the AST's statement lists end in a null link (ast.al "0 = end").
-  while unchecked bitcast(usize, s) != 0 {
-    st := deref(stmt_p(Stmt, s))
-    mut r : ir::VTy = ir::vty_unknown()
-    match st {
-      Stmt::Break(bv, bd, nx) => {
-        ## null-ok: Stmt::Break — a valueless `break` carries a null value expression (ast.al).
-        if bd == depth and unchecked bitcast(usize, bv) != 0 {
-          ## a literal `break` value is never checked as an expression (the break-value pass reads its
-          ## tag): it is the literal-only value `check_expr` would record
-          bvt : ir::VTy = ir::sty_get(bv)
-          if not ir::vty_known(bvt) and not ir::vty_is_lit(bvt) and sema_expr_is_num(bv) { ir::sty_put(bv, ir::vty_lit()) }
-          if push { sema_vty_push(bv, t) }
-          r = sema_vty_child(bv)
+  mut s : Option(ptr(mut Stmt)) = h
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        mut r : ir::VTy = ir::vty_unknown()
+        match st {
+          Stmt::Break(bv, bd, nx) => {
+            ## null-ok: Stmt::Break — a valueless `break` carries a null value expression (ast.al).
+            if bd == depth and unchecked bitcast(usize, bv) != 0 {
+              ## a literal `break` value is never checked as an expression (the break-value pass reads its
+              ## tag): it is the literal-only value `check_expr` would record
+              bvt : ir::VTy = ir::sty_get(bv)
+              if not ir::vty_known(bvt) and not ir::vty_is_lit(bvt) and sema_expr_is_num(bv) { ir::sty_put(bv, ir::vty_lit()) }
+              if push { sema_vty_push(bv, t) }
+              r = sema_vty_child(bv)
+            }
+            s = nx
+          }
+          Stmt::If(c, th, el, nx) => { r = sema_vty_breaks_go(th, depth, t, push); if push or not ir::vty_known(r) { r = sema_vty_breaks_go(el, depth, t, push) }; s = nx }
+          Stmt::Unchecked(b, nx) => { r = sema_vty_breaks_go(b, depth, t, push); s = nx }
+          Stmt::While(c, b, nx) => { r = sema_vty_breaks_go(b, depth + 1, t, push); s = nx }
+          Stmt::Loop(b, nx) => { r = sema_vty_breaks_go(b, depth + 1, t, push); s = nx }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { r = sema_vty_breaks_go(b, depth + 1, t, push); s = nx }
+          Stmt::Match(sc, ah, nx) => {
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop { match arm { Some(armq) => { if not push and ir::vty_known(r) { break }; am := deref(arm_p(armq)); r = sema_vty_breaks_go(am.body_stmts, depth, t, push); arm = am.next }; None => { break } } }
+            s = nx
+          }
+          Stmt::Assign(ns, nl, v, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns2, fnl2, fv, nx) => { s = nx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::DerefAssign(p, v2, nx) => { s = nx }
+          Stmt::IndexAssign(b2, i2, v3, nx) => { s = nx }
+          Stmt::IndexFieldAssign(b3, i3, fs, fl, v4, nx) => { s = nx }
+          Stmt::FieldPathAssign(pl, pv, nx) => { s = nx }
+          Stmt::Continue(cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::CompIf(c2, th2, el2, nx) => { s = nx }
+          Stmt::CompFor(vs, vl, iv, b4, nx) => { s = nx }
+          Stmt::CompMatch(sc2, ah2, nx) => { s = nx }
+          Stmt::CompForRange(vs2, vl2, lo2, hi2, b5, nx) => { s = nx }
+          Stmt::AllocWith(ae, b6, nx) => { s = nx }
         }
-        s = nx
+        if ir::vty_is_lit(r) { lit_seen = true }
+        if not push and ir::vty_known(r) { return r }
       }
-      Stmt::If(c, th, el, nx) => { r = sema_vty_breaks_go(th, depth, t, push); if push or not ir::vty_known(r) { r = sema_vty_breaks_go(el, depth, t, push) }; s = nx }
-      Stmt::Unchecked(b, nx) => { r = sema_vty_breaks_go(b, depth, t, push); s = nx }
-      Stmt::While(c, b, nx) => { r = sema_vty_breaks_go(b, depth + 1, t, push); s = nx }
-      Stmt::Loop(b, nx) => { r = sema_vty_breaks_go(b, depth + 1, t, push); s = nx }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { r = sema_vty_breaks_go(b, depth + 1, t, push); s = nx }
-      Stmt::Match(sc, ah, nx) => {
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop { match arm { Some(armq) => { if not push and ir::vty_known(r) { break }; am := deref(arm_p(armq)); r = sema_vty_breaks_go(am.body_stmts, depth, t, push); arm = am.next }; None => { break } } }
-        s = nx
-      }
-      Stmt::Assign(ns, nl, v, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns2, fnl2, fv, nx) => { s = nx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::DerefAssign(p, v2, nx) => { s = nx }
-      Stmt::IndexAssign(b2, i2, v3, nx) => { s = nx }
-      Stmt::IndexFieldAssign(b3, i3, fs, fl, v4, nx) => { s = nx }
-      Stmt::FieldPathAssign(pl, pv, nx) => { s = nx }
-      Stmt::Continue(cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::CompIf(c2, th2, el2, nx) => { s = nx }
-      Stmt::CompFor(vs, vl, iv, b4, nx) => { s = nx }
-      Stmt::CompMatch(sc2, ah2, nx) => { s = nx }
-      Stmt::CompForRange(vs2, vl2, lo2, hi2, b5, nx) => { s = nx }
-      Stmt::AllocWith(ae, b6, nx) => { s = nx }
+      None => { break }
     }
-    if ir::vty_is_lit(r) { lit_seen = true }
-    if not push and ir::vty_known(r) { return r }
   }
   if lit_seen { return ir::vty_lit() }
   ir::vty_unknown()
@@ -10268,8 +10298,8 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   ## Value-loop type inference belongs on the pre-match path for the same bootstrap-dispatch reason as
   ## the other payload-heavy expression helpers. The loop body itself is classified by the established
   ## break walker; no runtime evaluation occurs here.
-  leb0 := expr_loop_body(e)
-  if unchecked bitcast(usize, leb0) != 0 {
+  leb0 : Option(ptr(mut Stmt)) = expr_loop_body(e)
+  if stmt_any(leb0) {
     lcode0 := lbv_stmts(leb0, 0, decls, upto, src, a, locals, nloc)
     if lbv_code_is_conflict(lcode0) { return Result(Ty, CheckErr).Err(mismatch_err(lbv_code_span(lcode0), 0)) }
     ltag0 := lbv_code_kind(lcode0)
@@ -11586,11 +11616,14 @@ ctor_lit_expr_span := fn(e : ptr(Expr), chk : bool, decls : ptr(rt::Vec), upto :
 ## body can hold is judged from one hook per function — a binding or re-assignment value, a place
 ## expression, a loop bound, a condition, a discarded call, a `break` value and every nested block.
 ## `Stmt::Unchecked` flips the mode off for its block (CG-7).
-ctor_lit_stmts_span := fn(head : ptr(mut Stmt), chk : bool, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
-  mut cur := head
+ctor_lit_stmts_span := fn(head : Option(ptr(mut Stmt)), chk : bool, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut res : usize = 0
-  while cur != 0 and res == 0 {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (res == 0) { break }
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::Assign(_ans, _anl, av, _anx) => { res = ctor_lit_expr_span(av, chk, decls, upto, src, a) }
       Stmt::While(wc, wb, _wnx) => {
@@ -11679,7 +11712,10 @@ ctor_lit_stmts_span := fn(head : ptr(mut Stmt), chk : bool, decls : ptr(rt::Vec)
         if res == 0 { res = ctor_lit_stmts_span(ab, chk, decls, upto, src, a) }
       }
     }
-    cur = stmt_next_at(cur, a)
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -12621,12 +12657,14 @@ lbv_expr_conflict := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
 ## VERDICT (0 / 1..7 / 250): because breaks may sit in nested if/match/loop bodies, the sub-walk's
 ## accumulated common type is merged into the running verdict — a conflict is reported by the single
 ## `250` result, so the caller (and the enclosing loop's own accumulation) sees the ill-formed pair.
-lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> usize {
+lbv_stmts := fn(head : Option(ptr(mut Stmt)), c : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> usize {
   mut acc : usize = 0                         ## low byte: 0 = unknown; 1..7 = known tag; 250 = conflict
   mut ec : usize = 0
-  mut st := head
-  while unchecked bitcast(usize, st) != 0 {
-    x := deref(stmt_p(Stmt, st))
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
     match x {
       Stmt::Break(v, d, nx) => {
         if d == c and unchecked bitcast(usize, v) != 0 {
@@ -12785,6 +12823,9 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
           acc = lbv_merge_code(acc, lbv_stmts(b, c, decls, upto, src, a, locals, nloc))
         st = nx
       }
+    }
+  }
+      None => { break }
     }
   }
   acc
@@ -13291,7 +13332,7 @@ expr_discharge_var := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena)) -
 ## (`forget(x)`) or bound in an `Assign` value (`r := strbuf_free(x)` — the corpus's free shape). Stmt
 ## accessors use BOUND-deref (`st := deref(...); match st`); an inline `match deref(node_ptr(Stmt))`
 ## degenerates the `ptr(Expr)` payload extraction (the lean-lower scar).
-stmt_forget_var := fn(h : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> VSpan {
+stmt_forget_var := fn(h : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt::Arena)) -> VSpan {
   mut res := VSpan(s = 0, n = 0)
   st := deref(stmt_p(Stmt, h))
   match st {
@@ -13309,10 +13350,10 @@ stmt_forget_var := fn(h : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> VSpan
 ## statement forms that carry a use (`ExprStmt`/`Return`/`Assign` value); other forms return false
 ## (under-approximation — a false negative is safe, a false positive would wrongly reject).
 ## Walk a statement LIST — does any statement mention `[xs, xl)`? (Recurses via `stmt_mentions_var`.)
-stmts_mention_var := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+stmts_mention_var := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut res := false
-  while cur != 0 { if stmt_mentions_var(cur, src, xs, xl, a) { res = true } ; cur = stmt_next_at(cur, a) }
+  loop { match cur { Some(curq) => { if stmt_mentions_var(curq, src, xs, xl, a) { res = true } ; cur = stmt_next(curq) }; None => { break } } }
   res
 }
 
@@ -13337,7 +13378,7 @@ arms_mention_var := fn(head : Option(ptr(mut Arm)), src : ptr(u8), xs : usize, x
 ## Does statement `h` MENTION the var `[xs, xl)`? Covers the value-bearing statement shapes AND recurses
 ## into nested control-flow blocks (if/while/loop/for/match) — so a use-after-discharge in a BRANCH after
 ## an unconditional `forget(x)` (`forget(x); if c { …x… }`) is caught, not just a same-list use.
-stmt_mentions_var := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+stmt_mentions_var := fn(h : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut res := false
   st := deref(stmt_p(Stmt, h))
   match st {
@@ -13369,11 +13410,13 @@ stmt_mentions_var := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : pt
 ## that name: 1 = use first (unsafe branch escape), 2 = ordinary binding first (safe rebind), 0 = no
 ## relevant event. The direct-binding case is what the bounded comptime lower can prove; a nested
 ## conditional binding is deliberately not treated as a safe rebind and therefore remains fail-closed.
-sema_comptime_cont_state := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> u8 {
-  mut cur := head
-  while cur != 0 {
-    if stmt_mentions_var(unchecked bitcast(usize, cur), src, xs, xl, a) { return 1 }
-    st := deref(stmt_p(Stmt, cur))
+sema_comptime_cont_state := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> u8 {
+  mut cur : Option(ptr(mut Stmt)) = head
+  loop {
+    match cur {
+      Some(curq) => {
+        if stmt_mentions_var(curq, src, xs, xl, a) { return 1 }
+        st := deref(stmt_p(Stmt, curq))
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
         if not assign_is_reassign(src, ns, nl) and not binding_is_comptime(src, ns) and streq(src, ns, nl, xs, xl) { return 2 }
@@ -13383,7 +13426,10 @@ sema_comptime_cont_state := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, 
         | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
-    cur = stmt_next_at(cur, a)
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   0
 }
@@ -13393,11 +13439,14 @@ sema_comptime_cont_state := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, 
 ## to select: a branch may not execute, and a sibling branch may install a different binding. Reject
 ## the escape at the binding rather than letting one textual branch silently win. A direct ordinary
 ## rebind at the start of the continuation re-establishes an unambiguous runtime binding and is allowed.
-sema_comptime_branch_escape_stmts := fn(head : ptr(mut Stmt), cont : ptr(mut Stmt), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
-  mut cur := head
+sema_comptime_branch_escape_stmts := fn(head : Option(ptr(mut Stmt)), cont : Option(ptr(mut Stmt)), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut out := VSpan(s = 0, n = 0)
-  while cur != 0 and out.n == 0 {
-    st := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (out.n == 0) { break }
+        st := deref(stmt_p(Stmt, curq))
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
         if not assign_is_reassign(src, ns, nl) and binding_is_comptime(src, ns) {
@@ -13428,12 +13477,15 @@ sema_comptime_branch_escape_stmts := fn(head : ptr(mut Stmt), cont : ptr(mut Stm
       Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
-    cur = stmt_next_at(cur, a)
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   out
 }
 
-sema_comptime_branch_escape_arms := fn(head : Option(ptr(mut Arm)), cont : ptr(mut Stmt), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
+sema_comptime_branch_escape_arms := fn(head : Option(ptr(mut Arm)), cont : Option(ptr(mut Stmt)), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
   mut arm : Option(ptr(mut Arm)) = head
   mut out := VSpan(s = 0, n = 0)
   loop {
@@ -13476,11 +13528,14 @@ sema_lambda_binds_arms := fn(head : Option(ptr(mut Arm)), src : ptr(u8), xs : us
   hit
 }
 
-sema_lambda_binds_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+sema_lambda_binds_stmts := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut hit := false
-  while cur != 0 and not hit {
-    st := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (not hit) { break }
+        st := deref(stmt_p(Stmt, curq))
     match st {
       Stmt::Assign(ns, nl, v, nx) => { if not assign_is_reassign(src, ns, nl) and streq(src, ns, nl, xs, xl) { hit = true } }
       Stmt::If(c, th, el, nx) => { hit = sema_lambda_binds_stmts(th, src, xs, xl, a); if not hit { hit = sema_lambda_binds_stmts(el, src, xs, xl, a) } }
@@ -13497,12 +13552,15 @@ sema_lambda_binds_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, x
       Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
-    cur = stmt_next_at(cur, a)
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   hit
 }
 
-sema_lambda_binds_name := fn(ph : Option(ptr(mut Param)), bh : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+sema_lambda_binds_name := fn(ph : Option(ptr(mut Param)), bh : Option(ptr(mut Stmt)), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut p := ph
   mut hit := false
   loop {
@@ -13523,7 +13581,7 @@ sema_lambda_binds_name := fn(ph : Option(ptr(mut Param)), bh : ptr(mut Stmt), sr
 ## Return the lambda's `fn` source position if it mentions an enclosing local; otherwise 0. The
 ## existing conservative expression walker is intentional: it recognizes the ordinary value-bearing
 ## lambda forms without expanding closure ABI/dyn or unrelated residual expression cases.
-sema_lambda_capture_span := fn(ph : Option(ptr(mut Param)), bh : ptr(mut Stmt), val : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+sema_lambda_capture_span := fn(ph : Option(ptr(mut Param)), bh : Option(ptr(mut Stmt)), val : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
   mut bad := 0
   mut i := 0
   while i < nloc and bad == 0 {
@@ -13594,18 +13652,28 @@ sema_plain_fn_capture_struct := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
 ## in the same list is a use-after-consume error — poisoned via `mark_failed`. Scoped to one list (a
 ## cross-block use is a safe false negative). Corpus-safe: the compiler's 5 `forget` sites are all
 ## terminal (the handle is never touched after discharge), so this rejects nothing that exists today.
-check_forget_uses := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec)) {
-  mut cur := head
-  while cur != 0 {
-    fv := stmt_forget_var(unchecked bitcast(usize, cur), src, a)
+check_forget_uses := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec)) {
+  mut cur : Option(ptr(mut Stmt)) = head
+  loop {
+    match cur {
+      Some(curq) => {
+        fv := stmt_forget_var(curq, src, a)
     if fv.n != 0 {
-      mut nx := stmt_next_at(cur, a)
-      while nx != 0 {
-        if stmt_mentions_var(nx, src, fv.s, fv.n, a) { mark_failed(locals, unbound_err(fv.s, 0)) }
-        nx = stmt_next_at(nx, a)
+          mut nx : Option(ptr(mut Stmt)) = stmt_next(curq)
+          loop {
+            match nx {
+              Some(nxq) => {
+                if stmt_mentions_var(nxq, src, fv.s, fv.n, a) { mark_failed(locals, unbound_err(fv.s, 0)) }
+                nx = stmt_next(nxq)
+              }
+              None => { break }
       }
     }
-    cur = stmt_next_at(cur, a)
+        }
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
 }
 
@@ -13633,7 +13701,7 @@ mut SEMA_CT_RECORDING : bool = false
 ## How a `comptime for` binds its loop variable for the walk.
 CtVar := enum { CvNone, CvRange(ptr(Expr), ptr(Expr)), CvUntyped }
 ## What one walk checks: a statement list (with the definite-assignment state it threads) or one value.
-CtWalk := enum { WkBody(ptr(mut Stmt), ptr(DA)), WkValue(ptr(Expr)) }
+CtWalk := enum { WkBody(Option(ptr(mut Stmt)), ptr(DA)), WkValue(ptr(Expr)) }
 ## Walk `w` for its records, the loop variable `[vs, vs+vl)` bound as `vk` says (a range carries its
 ## bounds); `at` locates the `#semact` row of a refused walk.
 sema_ct_record := fn(w : CtWalk, vk : CtVar, vs : usize, vl : usize, at : Option(u64), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), cnt : usize) {
@@ -13679,7 +13747,7 @@ sema_ct_record := fn(w : CtWalk, vk : CtVar, vs : usize, vl : usize, at : Option
 }
 ## One statement-list walk of `sema_ct_record`; the definite-assignment state is put back. Answers
 ## whether `check_stmts` refused the list.
-sema_ct_body_refused := fn(body : ptr(mut Stmt), da : ptr(DA), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), n : usize) -> bool {
+sema_ct_body_refused := fn(body : Option(ptr(mut Stmt)), da : ptr(DA), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), n : usize) -> bool {
   old_da := da_copy(da)
   r := check_stmts(body, decls, upto, src, a, locals, n, da)
   da_assign(deref(da), old_da)
@@ -13697,13 +13765,15 @@ sema_ct_value_refused := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, s
 ## `While`'s condition + nested body are checked; `If`/`Match` recurse into their branch/arm
 ## statement lists; `Return`/`FieldAssign` check their value. `nloc` (the length of `locals`)
 ## is threaded by-value; `locals` itself is appended to. Returns the updated local count.
-check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize, da : ptr(DA)) -> Result(usize, CheckErr) {
+check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize, da : ptr(DA)) -> Result(usize, CheckErr) {
   check_forget_uses(head, src, a, locals)
-  mut cur := head
+  mut cur : Option(ptr(mut Stmt)) = head
   mut cnt := nloc
   ret_kind := kind_of_tag(u8(deref((deref(locals)).failed) / 2))
-  while cur != 0 {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::Assign(ns, nl, v, nx) => {
         ## Declarations §1.2 / §10 — a plain re-assignment writes an existing place. The old branch
@@ -14774,6 +14844,9 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
       }
     }
   }
+      None => { break }
+    }
+  }
   Result(usize, CheckErr).Ok(cnt)
 }
 
@@ -14816,11 +14889,13 @@ expr_is_no_tail := fn(e : ptr(Expr)) -> bool {
 
 ## Structural loop-control prepass: `break`/`continue` require an enclosing runtime loop. This is
 ## kept separate from `check_stmts` to avoid widening or reshaping that hot self-host checker path.
-stmts_bad_loop_control := fn(head : ptr(mut Stmt), in_loop : bool, a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+stmts_bad_loop_control := fn(head : Option(ptr(mut Stmt)), in_loop : bool, a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut bad := false
-  while cur != 0 {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::While(c, b, nx) => {
         if stmts_bad_loop_control(b, true, a) { bad = true }
@@ -14893,7 +14968,10 @@ stmts_bad_loop_control := fn(head : ptr(mut Stmt), in_loop : bool, a : ptr(mut r
         cur = nx
       }
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::ExprStmt | Stmt::CompForRange => { cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a)) }
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::ExprStmt | Stmt::CompForRange => { cur = stmt_next(curq) }
+        }
+      }
+      None => { break }
     }
   }
   bad
@@ -14934,12 +15012,15 @@ sema_redecl_candidate := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
 ## Does one of the FIRST `upto` statements of `head` declare the same name? `ns2 != ns` skips the
 ## occurrence being checked: one source declaration can reach the AST as more than one
 ## `Stmt::Assign` node, and a node is never its own duplicate.
-stmts_decl_before := fn(head : ptr(mut Stmt), upto : usize, src : ptr(u8), ns : usize, nl : usize, a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+stmts_decl_before := fn(head : Option(ptr(mut Stmt)), upto : usize, src : ptr(u8), ns : usize, nl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut i := 0
   mut hit := false
-  while cur != 0 and i < upto {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (i < upto) { break }
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::Assign(ns2, nl2, v2, nx2) => {
         if ns2 != ns and sema_redecl_candidate(src, ns2, nl2) and streq(src, ns2, nl2, ns, nl) { hit = true }
@@ -14949,18 +15030,23 @@ stmts_decl_before := fn(head : ptr(mut Stmt), upto : usize, src : ptr(u8), ns : 
         | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { hit = hit }
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
     i += 1
+  }
+      None => { break }
+    }
   }
   hit
 }
 
-stmts_same_scope_redecl := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
-  mut cur := head
+stmts_same_scope_redecl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut idx := 0
   mut bad := 0
-  while cur != 0 {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::Assign(ns, nl, v, nx) => {
         if bad == 0 and sema_redecl_candidate(src, ns, nl) and stmts_decl_before(head, idx, src, ns, nl, a) { bad = ns }
@@ -15009,8 +15095,11 @@ stmts_same_scope_redecl := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut r
       Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => { bad = bad }
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
     idx += 1
+  }
+      None => { break }
+    }
   }
   bad
 }
@@ -15070,16 +15159,19 @@ codepoint_label_add := fn(labels : ptr(mut CodePointLabels), src : ptr(u8), s : 
 codepoint_label_has := fn(labels : ptr(CodePointLabels), src : ptr(u8), s : usize, n : usize) -> bool {
   label_table_has(labels.pts, labels.npts, src, s, n)
 }
-codepoint_collect_stmts := fn(head : ptr(mut Stmt), labels : ptr(mut CodePointLabels), src : ptr(u8), a : ptr(mut rt::Arena)) -> CheckErr {
-  mut cur := head
+codepoint_collect_stmts := fn(head : Option(ptr(mut Stmt)), labels : ptr(mut CodePointLabels), src : ptr(u8), a : ptr(mut rt::Arena)) -> CheckErr {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut err : CheckErr = 0
-  while cur != 0 and err == 0 {
-    st := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (err == 0) { break }
+        st := deref(stmt_p(Stmt, curq))
     match st {
-      Stmt::ExprStmt(e, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.CodePoint) }
-      Stmt::While(c, b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
-      Stmt::For(ns, nl, lo, hi, b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
-      Stmt::Loop(b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
+          Stmt::ExprStmt(e, nx) => { ls := stmt_label_span(curq); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.CodePoint) }
+          Stmt::While(c, b, nx) => { ls := stmt_label_span(curq); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
+          Stmt::For(ns, nl, lo, hi, b, nx) => { ls := stmt_label_span(curq); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
+          Stmt::Loop(b, nx) => { ls := stmt_label_span(curq); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
       Stmt::If(c, th, el, nx) => { err = codepoint_collect_stmts(th, labels, src, a); if err == 0 { err = codepoint_collect_stmts(el, labels, src, a) } }
       Stmt::Match(sc, ah, nx) => {
         mut arm : Option(ptr(mut Arm)) = ah
@@ -15097,15 +15189,21 @@ codepoint_collect_stmts := fn(head : ptr(mut Stmt), labels : ptr(mut CodePointLa
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   err
 }
-codepoint_check_stmts := fn(head : ptr(mut Stmt), labels : ptr(CodePointLabels), src : ptr(u8), a : ptr(mut rt::Arena), unchecked_mode : bool) -> CheckErr {
-  mut cur := head
+codepoint_check_stmts := fn(head : Option(ptr(mut Stmt)), labels : ptr(CodePointLabels), src : ptr(u8), a : ptr(mut rt::Arena), unchecked_mode : bool) -> CheckErr {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut err : CheckErr = 0
-  while cur != 0 and err == 0 {
-    st := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (err == 0) { break }
+        st := deref(stmt_p(Stmt, curq))
     match st {
       Stmt::ExprStmt(e, nx) => {
         if sema_is_direct_jmp(e, src) {
@@ -15136,26 +15234,31 @@ codepoint_check_stmts := fn(head : ptr(mut Stmt), labels : ptr(CodePointLabels),
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   err
 }
 
 ## Whether normal execution of a statement list must finish through `return`. Only the final
 ## statement can establish the property; `if` requires both branches and `match` every arm.
-stmts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
-  if head == 0 { return false }
-  mut last := head
-  mut next := stmt_next_at(unchecked bitcast(usize, last), a)
-  while next != 0 { last = unchecked bitcast(ptr(mut Stmt), next); next = stmt_next_at(unchecked bitcast(usize, last), a) }
+stmts_return := fn(head : Option(ptr(mut Stmt)), a : ptr(mut rt::Arena)) -> bool {
+  match head {
+    Some(hq) => { stmts_return_end(stmt_last(hq), a) }
+    None => { false }
+  }
+}
+stmts_return_end := fn(last : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
   end := deref(stmt_p(Stmt, last))
   match end {
     Stmt::Return(rv, nx) => { true }
-    Stmt::If(c, th, el, nx) => { el != 0 and stmts_return(th, a) and stmts_return(el, a) }
+    Stmt::If(c, th, el, nx) => { stmt_any(el) and stmts_return(th, a) and stmts_return(el, a) }
     ## a `comptime if` folds to exactly ONE branch at compile time; if BOTH branches return, the
     ## taken one returns regardless of which — so it satisfies the missing-return check (mirrors `If`).
     ## A fn whose whole body is a returning `comptime if` (`pick`/`other` in comptime_if) needs this.
-    Stmt::CompIf(c, th, el, nx) => { el != 0 and stmts_return(th, a) and stmts_return(el, a) }
+    Stmt::CompIf(c, th, el, nx) => { stmt_any(el) and stmts_return(th, a) and stmts_return(el, a) }
     Stmt::Match(sc, ah, nx) => {
       if ah == 0 { false }
       else {
@@ -15209,12 +15312,17 @@ stmts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
 ## A parser-produced branch may retain an unreachable trailing sentinel after a direct `return`. This
 ## narrow companion recognizes that common shape without treating an arbitrary conditional return as a
 ## diverging arm; the full return-path helper remains authoritative for ordinary function tails.
-stmt_starts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
-  if head == 0 { return false }
-  st := deref(stmt_p(Stmt, head))
+stmt_starts_return := fn(head : Option(ptr(mut Stmt)), a : ptr(mut rt::Arena)) -> bool {
+  match head {
+    Some(hq) => { stmt_node_starts_return(hq, a) }
+    None => { false }
+  }
+}
+stmt_node_starts_return := fn(hq : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
+  st := deref(stmt_p(Stmt, hq))
   match st {
     Stmt::Return(rv, nx) => { true }
-    Stmt::If(c, th, el, nx) => { el != 0 and stmt_starts_return(th, a) and stmt_starts_return(el, a) }
+    Stmt::If(c, th, el, nx) => { stmt_any(el) and stmt_starts_return(th, a) and stmt_starts_return(el, a) }
     Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Match | Stmt::For | Stmt::DerefAssign
       | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break
       | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
@@ -15225,11 +15333,13 @@ stmt_starts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
 ## Whether the statement list's final statement is an existing lower-supported tail-value carrier.
 ## This keeps the current braced `match` tail mode valid: with `cx.tail`, the final arm `ExprStmt`
 ## delivers the function result through `emit_return_value`.
-stmts_tail_value := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
-  if head == 0 { return false }
-  mut last := head
-  mut next := stmt_next_at(unchecked bitcast(usize, last), a)
-  while next != 0 { last = unchecked bitcast(ptr(mut Stmt), next); next = stmt_next_at(unchecked bitcast(usize, last), a) }
+stmts_tail_value := fn(head : Option(ptr(mut Stmt)), a : ptr(mut rt::Arena)) -> bool {
+  match head {
+    Some(hq) => { stmts_tail_value_end(stmt_last(hq), a) }
+    None => { false }
+  }
+}
+stmts_tail_value_end := fn(last : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
   end := deref(stmt_p(Stmt, last))
   match end {
     Stmt::ExprStmt(e, nx) => { true }
@@ -15251,12 +15361,12 @@ stmts_tail_value := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
         all
       }
     }
-    Stmt::CompIf(c, th, el, nx) => { el != 0 and stmts_tail_value(th, a) and stmts_tail_value(el, a) }
+    Stmt::CompIf(c, th, el, nx) => { stmt_any(el) and stmts_tail_value(th, a) and stmts_tail_value(el, a) }
     ## a trailing `if c { … } else { … }` where BOTH branches carry a tail value IS the fn's result (the
     ## lower delivers the taken branch's value) — the dual of `stmts_return`'s `If` arm. A match ARM whose
     ## body is such an if/else (e.g. `value_is_float`'s `Var` arm) reaches here; without it the enclosing
     ## match failed the missing-result check → "invalid" on every match-of-if-arms fn.
-    Stmt::If(c, th, el, nx) => { el != 0 and stmts_tail_value(th, a) and stmts_tail_value(el, a) }
+    Stmt::If(c, th, el, nx) => { stmt_any(el) and stmts_tail_value(th, a) and stmts_tail_value(el, a) }
     ## a trailing `unchecked { … }` / `@alloc(a) { … }` block delivers the fn's tail value from inside
     ## the block (`addr := fn(…) -> ptr(u8) { unchecked { base + off } }`) — recurse into it.
     Stmt::Unchecked(b, nx) => { stmts_tail_value(b, a) }
@@ -15304,7 +15414,7 @@ sema_bad_typeinfo_field_expr := fn(e : ptr(Expr), src : ptr(u8), vs : usize, vl 
     Expr::Match(sc, ah) => {
       bad = sema_bad_typeinfo_field_expr(sc, src, vs, vl, a)
       mut arm : Option(ptr(mut Arm)) = ah
-      loop { match arm { Some(armq) => { if not (bad == 0) { break }; am := deref(arm_p(armq)); bad = sema_bad_typeinfo_field_expr(am.body, src, vs, vl, a); if bad == 0 and am.body_stmts != 0 { bad = sema_bad_typeinfo_field_stmts(am.body_stmts, src, vs, vl, a) } ; arm = am.next }; None => { break } } }
+      loop { match arm { Some(armq) => { if not (bad == 0) { break }; am := deref(arm_p(armq)); bad = sema_bad_typeinfo_field_expr(am.body, src, vs, vl, a); if bad == 0 and stmt_any(am.body_stmts) { bad = sema_bad_typeinfo_field_stmts(am.body_stmts, src, vs, vl, a) } ; arm = am.next }; None => { break } } }
     }
     Expr::Call(cs, cl, na, ah) => {
       mut arg : Option(ptr(mut Arg)) = ah
@@ -15346,11 +15456,14 @@ sema_bad_typeinfo_field_expr := fn(e : ptr(Expr), src : ptr(u8), vs : usize, vl 
 
 ## Recursive statement companion for `sema_bad_typeinfo_field_expr`; it follows all expression-bearing
 ## statement forms but does not type-check or otherwise change comptime branch selection.
-sema_bad_typeinfo_field_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), vs : usize, vl : usize, a : ptr(mut rt::Arena)) -> usize {
-  mut cur := head
+sema_bad_typeinfo_field_stmts := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), vs : usize, vl : usize, a : ptr(mut rt::Arena)) -> usize {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut bad := 0
-  while cur != 0 and bad == 0 {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (bad == 0) { break }
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::Assign(ns, nl, v, nx) => { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) }
       Stmt::While(c, b, nx) => { bad = sema_bad_typeinfo_field_expr(c, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
@@ -15376,7 +15489,10 @@ sema_bad_typeinfo_field_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), vs : us
       Stmt::AllocWith(e, b, nx) => { bad = sema_bad_typeinfo_field_expr(e, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
       Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   bad
 }
@@ -15459,7 +15575,7 @@ expr_uses_var_cons := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a
 
 ## Does statement `h` USE the var `[xs, xl)` — conservative (unknown form → true). Covers the straight-line
 ## value-bearing statement shapes; a store TARGETED AT the handle (`x.f = …` / an assign to `x`) also counts.
-stmt_uses_var_cons := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+stmt_uses_var_cons := fn(h : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut res := false
   st := deref(stmt_p(Stmt, h))
   match st {
@@ -15488,10 +15604,10 @@ stmt_uses_var_cons := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : p
 }
 
 ## Walk a statement LIST / a `Match`'s arms — does any statement/arm conservatively USE `[xs, xl)`?
-stmts_use_cons := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+stmts_use_cons := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut res := false
-  while cur != 0 { if stmt_uses_var_cons(unchecked bitcast(usize, cur), src, xs, xl, a) { res = true } ; cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a)) }
+  loop { match cur { Some(curq) => { if stmt_uses_var_cons(curq, src, xs, xl, a) { res = true } ; cur = stmt_next(curq) }; None => { break } } }
   res
 }
 
@@ -15514,7 +15630,7 @@ arms_use_cons := fn(head : Option(ptr(mut Arm)), src : ptr(u8), xs : usize, xl :
 
 
 ## The bound name of an `Assign` statement `h` (`x := …` / `x = …`), else `{0,0}`.
-stmt_binding_var := fn(h : usize, a : ptr(mut rt::Arena)) -> VSpan {
+stmt_binding_var := fn(h : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> VSpan {
   mut res := VSpan(s = 0, n = 0)
   st := deref(stmt_p(Stmt, h))
   match st {
@@ -15535,17 +15651,22 @@ stmt_binding_var := fn(h : usize, a : ptr(mut rt::Arena)) -> VSpan {
 ## handle used/discharged in ANY branch is not flagged — only a handle used NOWHERE on any path is a leak
 ## (the "created and totally ignored" case; the per-path "not discharged on SOME branch" case needs full
 ## multi-path obligation tracking and is a safe false-negative here). Corpus-safe (fixpoint confirms).
-check_leaks := fn(head : ptr(mut Stmt), dval : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) {
-  mut cur := head
-  while cur != 0 {
-    bv := stmt_binding_var(unchecked bitcast(usize, cur), a)
+check_leaks := fn(head : Option(ptr(mut Stmt)), dval : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) {
+  mut cur : Option(ptr(mut Stmt)) = head
+  loop {
+    match cur {
+      Some(curq) => {
+        bv := stmt_binding_var(curq, a)
     if bv.n != 0 and local_is_owning(locals, nloc, src, bv.s, bv.n, decls, upto) {
       mut used := expr_uses_var_cons(dval, src, bv.s, bv.n, a)
-      mut nx := stmt_next_at(unchecked bitcast(usize, cur), a)
-      while nx != 0 { if stmt_uses_var_cons(nx, src, bv.s, bv.n, a) { used = true } ; nx = stmt_next_at(nx, a) }
+          mut nx : Option(ptr(mut Stmt)) = stmt_next(curq)
+          loop { match nx { Some(nxq) => { if stmt_uses_var_cons(nxq, src, bv.s, bv.n, a) { used = true } ; nx = stmt_next(nxq) }; None => { break } } }
       if used == false { mark_failed(locals, unbound_err(bv.s, 0)) }
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
 }
 
@@ -15568,11 +15689,13 @@ expr_is_local_addr := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, src : 
 }
 
 ## Does a top-level `return <e>` in the list return the address of a fn-scoped place (a dangling ptr)?
-stmts_return_local_addr := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+stmts_return_local_addr := fn(head : Option(ptr(mut Stmt)), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut res := false
-  while cur != 0 {
-    st := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        st := deref(stmt_p(Stmt, curq))
     match st {
       Stmt::Return(rv, nx) => { if expr_is_local_addr(rv, locals, nloc, src) { res = true } }
       Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
@@ -15580,7 +15703,10 @@ stmts_return_local_addr := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : u
         | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -15766,11 +15892,13 @@ arms_store_escape := fn(head : Option(ptr(mut Arm)), locals : ptr(LVec), nloc : 
 ## if/while/for/match branch is caught too. Conservative + sound: only a bare `ptr(<local>)` stored
 ## into a genuine module mut global (not a same/inner-scope binding) is flagged. (Escape via an `out`
 ## parameter / into an aggregate field is a follow-up.)
-stmts_store_escape := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : Option(ptr(mut Param))) -> bool {
-  mut cur := head
+stmts_store_escape := fn(head : Option(ptr(mut Stmt)), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : Option(ptr(mut Param))) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut res := false
-  while cur != 0 {
-    st := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        st := deref(stmt_p(Stmt, curq))
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
         ## a REASSIGN into an OUTLIVING place — a module mut global (a `static` place) OR an `out`/`in
@@ -15817,7 +15945,10 @@ stmts_store_escape := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : usize,
       Stmt::Return | Stmt::DerefAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
         | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -16814,7 +16945,7 @@ sema_guard_field_count := fn(e : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt::
 sema_guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
   match deref(bs) {
     Stmt::Return(e, next) => {
-      if unchecked bitcast(usize, next) == 0 { return e }
+      if not stmt_any(next) { return e }
       unchecked bitcast(ptr(Expr), 0)
     }
     Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
@@ -16823,9 +16954,9 @@ sema_guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
       | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
-sema_guard_pred_body_expr := fn(bs : ptr(mut Stmt), val : ptr(Expr)) -> ptr(Expr) {
-  if unchecked bitcast(usize, bs) == 0 { return val }
-  sema_guard_stmt_ret_expr(bs)
+sema_guard_pred_body_expr := fn(bs : Option(ptr(mut Stmt)), val : ptr(Expr)) -> ptr(Expr) {
+  if not stmt_any(bs) { return val }
+  sema_guard_stmt_ret_expr(stmt_at(bs, "guard predicate body: empty list"))
 }
 ## Resolve a NAMED-predicate call `[cs,cl)` to the index of the first GENERIC fn declaration whose tail name
 ## matches (or -1). Mirrors how `sema_when_guard_false_span` resolves the OUTER callee (a first-`is_generic`-
@@ -17075,11 +17206,14 @@ duplicate_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)
 ## nested inside an ordinary `if`/`while`/`for`/`loop`/`match` body? Used to enforce the `no_alloc`-style
 ## `no_comptime` LIMIT (I5/I9, FND-10). Advances via `stmt_next_at` (all-variant), so the detection
 ## match may use `_` without truncating the walk. Recurses into structured bodies + match arms.
-stmts_have_comptime := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+stmts_have_comptime := fn(head : Option(ptr(mut Stmt)), a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut result := false
-  while cur != 0 and result == false {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (result == false) { break }
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::CompIf(c, th, el, n) => { result = true }
       Stmt::CompFor(vs, vl, iv, b, n) => { result = true }
@@ -17095,7 +17229,10 @@ stmts_have_comptime := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool 
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   result
 }
@@ -17182,11 +17319,14 @@ expr_is_alloc_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), cnt : usize, src :
 ## through an arbitrary user/library wrapper, or a call nested inside another expression, remains the
 ## documented first-slice false-negative rather than a wrong-reject. `alloc::with` is itself a runtime
 ## allocation scope and is therefore forbidden even when its body happens not to allocate immediately.
-stmts_have_alloc := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+stmts_have_alloc := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), cnt : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut result := false
-  while cur != 0 and result == false {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (result == false) { break }
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::Assign(ns, nl, v, n) => { if expr_is_alloc_call(v, decls, cnt, src) { result = true } }
       Stmt::Return(rv, n) => { if expr_is_alloc_call(rv, decls, cnt, src) { result = true } }
@@ -17202,7 +17342,10 @@ stmts_have_alloc := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize, 
         | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   result
 }
@@ -17274,11 +17417,14 @@ expr_calls_syscall := fn(e : ptr(Expr), decls : ptr(rt::Vec), cnt : usize, src :
 ## Does the statement list make a direct syscall (for the `freestanding` LIMIT)? Same walk shape as
 ## `stmts_have_alloc`. Shallow (direct value-position call); indirect OS use (via a std fn that itself
 ## syscalls) is a documented first-slice gap (false-negative, never a wrong-reject).
-stmts_call_syscall := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+stmts_call_syscall := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), cnt : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut result := false
-  while cur != 0 and result == false {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (result == false) { break }
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::Assign(ns, nl, v, n) => { if expr_calls_syscall(v, decls, cnt, src) { result = true } }
       Stmt::Return(rv, n) => { if expr_calls_syscall(rv, decls, cnt, src) { result = true } }
@@ -17294,7 +17440,10 @@ stmts_call_syscall := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize
         | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   result
 }
@@ -17424,11 +17573,14 @@ expr_has_unchecked := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> bool {
 ## `stmts_have_alloc`, but checks the value expr of EVERY store form (Assign/FieldAssign/Deref/Index/
 ## IndexField/FieldPath) plus conditions/bounds, and recurses ALL structured bodies incl. the comptime
 ## forms (a `comptime`-unrolled body still lowers runtime code). Deep per-expr via `expr_has_unchecked`.
-stmts_have_unchecked := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+stmts_have_unchecked := fn(head : Option(ptr(mut Stmt)), a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut result := false
-  while cur != 0 and result == false {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (result == false) { break }
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::Assign(ns, nl, v, n) => { if expr_has_unchecked(v, a) { result = true } }
       Stmt::FieldAssign(os, ol, fs, fl, v, n) => { if expr_has_unchecked(v, a) { result = true } }
@@ -17462,7 +17614,10 @@ stmts_have_unchecked := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool
       Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_unchecked(b, a) { result = true } }
       Stmt::Continue => {}
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   result
 }
@@ -17545,11 +17700,14 @@ expr_has_abstraction := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena))
 ## control flow (`If`/`While`/`For`/`Loop`/`Match`/`Break`/`Continue`) are forbidden outright; the
 ## value forms (`Assign`/`Return`/`ExprStmt`) are admitted with their expression checked; comptime
 ## constructs are erased (permitted) but their bodies still emit runtime code, so they are recursed.
-stmts_have_abstraction := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
-  mut cur := head
+stmts_have_abstraction := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut result := false
-  while cur != 0 and result == false {
-    s := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (result == false) { break }
+        s := deref(stmt_p(Stmt, curq))
     match s {
       Stmt::Assign(ns, nl, v, n) => { if expr_has_abstraction(v, src, a) { result = true } }
       Stmt::Return(rv, n) => { if unchecked bitcast(usize, rv) != 0 and expr_has_abstraction(rv, src, a) { result = true } }
@@ -17573,7 +17731,10 @@ stmts_have_abstraction := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt
       Stmt::CompMatch(sc, ah, n) => { if arms_have_abstraction(ah, src, a) { result = true } }
       Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_abstraction(b, src, a) { result = true } }
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   result
 }
@@ -19252,10 +19413,12 @@ sema_collect_expr := fn(e : ptr(Expr), locals : ptr(LVec), src : ptr(u8), a : pt
   }
 }
 
-sema_collect_stmts := fn(head : ptr(mut Stmt), locals : ptr(LVec), src : ptr(u8), a : ptr(mut rt::Arena)) {
-  mut cur := head
-  while cur != 0 {
-    st := deref(stmt_p(Stmt, cur))
+sema_collect_stmts := fn(head : Option(ptr(mut Stmt)), locals : ptr(LVec), src : ptr(u8), a : ptr(mut rt::Arena)) {
+  mut cur : Option(ptr(mut Stmt)) = head
+  loop {
+    match cur {
+      Some(curq) => {
+        st := deref(stmt_p(Stmt, curq))
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
         if not assign_is_reassign(src, ns, nl) { sema_collect_name(locals, src, ns, nl) }
@@ -19290,7 +19453,10 @@ sema_collect_stmts := fn(head : ptr(mut Stmt), locals : ptr(LVec), src : ptr(u8)
         loop { match arm { Some(armq) => { am := deref(arm_p(armq)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }; None => { break } } }
       }
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
 }
 
@@ -19655,14 +19821,17 @@ sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto
   }
 }
 
-sema_enum_global_array_value_bad_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+sema_enum_global_array_value_bad_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
   saved_len := deref(locals).len
   saved_pcnt := deref(locals).pcnt
-  mut cur := head
+  mut cur : Option(ptr(mut Stmt)) = head
   mut bad := 0
   mut cnt := nloc
-  while cur != 0 and bad == 0 {
-    st := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (bad == 0) { break }
+        st := deref(stmt_p(Stmt, curq))
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
         ann := local_type_span(src, ns, nl)
@@ -19787,7 +19956,10 @@ sema_enum_global_array_value_bad_stmts := fn(head : ptr(mut Stmt), decls : ptr(r
       }
       Stmt::Continue => {}
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   lvec_truncate(deref(locals), saved_len)
   deref(locals).pcnt = saved_pcnt
@@ -19970,11 +20142,14 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
   }
 }
 
-sema_vis_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
-  mut cur := head
+sema_vis_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+  mut cur : Option(ptr(mut Stmt)) = head
   mut r := 0
-  while cur != 0 and r == 0 {
-    st := deref(stmt_p(Stmt, cur))
+  loop {
+    match cur {
+      Some(curq) => {
+        if not (r == 0) { break }
+        st := deref(stmt_p(Stmt, curq))
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
         if assign_is_reassign(src, ns, nl) and (nloc == 0 or not local_in(locals, nloc, src, ns, nl)) { r = sema_global_ref_bad(decls, src, ns, nl, cs, cl) }
@@ -20012,7 +20187,10 @@ sema_vis_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), 
         loop { match arm { Some(armq) => { if not (r == 0) { break }; am := deref(arm_p(armq)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }; None => { break } } }
       }
     }
-    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
   }
   r
 }

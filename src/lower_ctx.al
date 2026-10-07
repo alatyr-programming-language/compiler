@@ -75,22 +75,25 @@ pub effective_param_count := fn(params_head : Option(ptr(mut Param)), a : rt::Ar
 ## True when the first declaration assignment for `[ns, ns+nl)` in a statement list initializes an
 ## `Expr::Slice`; false when the name is absent or has another initializer. This shape-only detector is
 ## shared by the native and WAT backends; slice typing and emission remain backend-specific.
-pub is_slice_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d := lower_layout::local_decl_assign(fn_head, src, ns, nl)
+pub is_slice_local := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(fn_head, src, ns, nl)
   mut r := false
-  if unchecked bitcast(usize, d) != 0 {
-    stmt := deref(stmt_p(Stmt, d))
-    match stmt {
-      Stmt::Assign(ans, anl, v, nx) => { if lower_layout::ex_is_slice(v) { r = true } }
-      ## #544 stage 1 — a PREDICATE: every other statement form is "not a slice local". This arm kept
-      ## its `_` while the scrutinee's type was invisible to the exhaustiveness check (`stmt :=
-      ## deref(stmt_p(Stmt, d))`); since #680 deleting it is refused at the `match` line, where the
-      ## parent accepted it silently, so the absorbed variants are spelled out (#660).
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+  match d {
+    Some(dq) => {
+      stmt := deref(stmt_p(Stmt, dq))
+      match stmt {
+        Stmt::Assign(ans, anl, v, nx) => { if lower_layout::ex_is_slice(v) { r = true } }
+        ## #544 stage 1 — a PREDICATE: every other statement form is "not a slice local". This arm kept
+        ## its `_` while the scrutinee's type was invisible to the exhaustiveness check (`stmt :=
+        ## deref(stmt_p(Stmt, d))`); since #680 deleting it is refused at the `match` line, where the
+        ## parent accepted it silently, so the absorbed variants are spelled out (#660).
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
     }
+    None => {}
   }
   r
 }
@@ -803,7 +806,7 @@ pub LCtx := struct {
   ## push/pop pairs are balanced so `defer_sp` is 0 at every function boundary either way.
   defer_active : bool,
   defer_n : usize, defer_sp : usize,
-  defer_inner : [usize; 128], defer_blk : [usize; 128],
+  defer_inner : [usize; 128], defer_blk : [usize; 128], defer_blk_head : [Option(ptr(mut Stmt)); 128],
   defer_frame : [usize; 64],
   ## LOOP-TARGET STACK (Control Flow §7.1) — one frame per lexically-enclosing loop of the function
   ## being emitted, mirroring the parser's `P_LOOP_*` label stack so a `break`/`continue` DEPTH
@@ -836,7 +839,7 @@ pub LCtx := struct {
   ## `deferloop` bands and the reader in `stmt`: it is the one global that would otherwise keep
   ## `lower/ir.al` — the cleanest 1 956-line band in the file, with 62 globals nobody else touches —
   ## from being extractable.
-  ir_stop : usize,
+  ir_stop : Option(ptr(mut Stmt)),
   ## FN-6 — the float-ARGUMENT mask of the INDIRECT call whose arguments are about to be lowered
   ## (0 = an ordinary named call / no float argument). It supplies the argument CLASSES the parser
   ## dropped when it kept only the bare `fn` token for a fn-value's type; without them an `f64`

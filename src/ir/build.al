@@ -19,6 +19,8 @@
 arg_p := ast::arg_p
 arg_at := ast::arg_at
 stmt_p := ast::stmt_p
+stmt_any := ast::stmt_any
+stmt_next := ast::stmt_next
 param_p := ast::param_p
 streq := lower_ctx::streq
 
@@ -829,7 +831,7 @@ ib_bx_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), c : ptr(E
 }
 
 ## A value `loop { … break v … }`: the result vreg is assigned at each `break v`.
-ib_bx_value_loop := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), body : ptr(mut Stmt)) -> Option(VRegId) {
+ib_bx_value_loop := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), body : Option(ptr(mut Stmt))) -> Option(VRegId) {
   k := ib_ty(bp, e)?
   res := ib_fresh(bp, a, k)
   ib_bs_loop(bp, a, body, Option(VRegId).Some(res))
@@ -1146,34 +1148,46 @@ ib_callee_decl := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
 ## ── statements ──
 
 ## Build the statement list at `h` in a scope of its own.
-ib_bs_block := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
+ib_bs_block := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : Option(ptr(mut Stmt))) {
   mark := ib_scope_mark(bp)
   ib_bs(bp, a, h)
   ib_scope_drop(bp, mark)
 }
 
-ib_bs := fn(bp : ptr(mut IbB), in out a : rt::Arena, head : ptr(mut Stmt)) {
-  mut h := head
-  while stmt_present(h) and not ib_b_failed(bp) {
-    ## A statement after a terminator is unreachable: dropped, never built (V7).
-    if not ib_b_term(bp) { ib_bs_one(bp, a, h) }
-    h = ib_stmt_next(h)
+ib_bs := fn(bp : ptr(mut IbB), in out a : rt::Arena, head : Option(ptr(mut Stmt))) {
+  mut h : Option(ptr(mut Stmt)) = head
+  loop {
+    match h {
+      Some(hq) => {
+        if ib_b_failed(bp) { break }
+        ## A statement after a terminator is unreachable: dropped, never built (V7).
+        if not ib_b_term(bp) { ib_bs_one(bp, a, hq) }
+        h = stmt_next(hq)
+      }
+      None => { break }
+    }
   }
 }
 ## A function with a result whose body produces it as the value of its LAST statement (a trailing
 ## expression, or an `if`/`unchecked` block whose own last statement does): that statement is built in
 ## tail position, and each value it yields is returned.
-ib_bs_tail := fn(bp : ptr(mut IbB), in out a : rt::Arena, head : ptr(mut Stmt)) {
-  mut h := head
-  while stmt_present(h) and not ib_b_failed(bp) {
-    nx := ib_stmt_next(h)
-    if not ib_b_term(bp) {
-      if stmt_present(nx) { ib_bs_one(bp, a, h) } else { ib_bs_last(bp, a, h) }
+ib_bs_tail := fn(bp : ptr(mut IbB), in out a : rt::Arena, head : Option(ptr(mut Stmt))) {
+  mut h : Option(ptr(mut Stmt)) = head
+  loop {
+    match h {
+      Some(hq) => {
+        if ib_b_failed(bp) { break }
+        nx := stmt_next(hq)
+        if not ib_b_term(bp) {
+          if stmt_any(nx) { ib_bs_one(bp, a, hq) } else { ib_bs_last(bp, a, hq) }
+        }
+        h = nx
+      }
+      None => { break }
     }
-    h = nx
   }
 }
-ib_bs_tail_block := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
+ib_bs_tail_block := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : Option(ptr(mut Stmt))) {
   mark := ib_scope_mark(bp)
   ib_bs_tail(bp, a, h)
   ib_scope_drop(bp, mark)
@@ -1193,7 +1207,7 @@ ib_bs_last := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
   match st {
     Stmt::ExprStmt(e, nx) => { ib_bs_tail_expr(bp, a, e) }
     Stmt::If(c, th, el, nx) => {
-      if stmt_present(el) { ib_bs_tail_if(bp, a, c, th, el) } else { ib_bs_one(bp, a, h) }
+      if stmt_any(el) { ib_bs_tail_if(bp, a, c, th, el) } else { ib_bs_one(bp, a, h) }
     }
     Stmt::Unchecked(b, nx) => {
       ou := ib_b_unch(bp)
@@ -1215,7 +1229,7 @@ ib_bs_tail_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
   match vo { Some(v) => { ib_ret_value(bp, a, v, e) }; None => {} }
 }
 ## A tail `if … else …`: each arm's own tail is returned.
-ib_bs_tail_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), th : ptr(mut Stmt), el : ptr(mut Stmt)) {
+ib_bs_tail_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), th : Option(ptr(mut Stmt)), el : Option(ptr(mut Stmt))) {
   co : Option(VRegId) = ib_bool_operand(bp, a, c)
   match co {
     Some(cv) => {
@@ -1231,21 +1245,6 @@ ib_bs_tail_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), th :
       ib_b_set_term(bp, tt and et)
     }
     None => {}
-  }
-}
-ib_stmt_next := fn(h : ptr(mut Stmt)) -> ptr(mut Stmt) {
-  st := deref(stmt_p(Stmt, h))
-  match st {
-    Stmt::Assign(ns, nl, v, nx) => { nx }; Stmt::While(c, b, nx) => { nx }
-    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { nx }; Stmt::Return(rv, nx) => { nx }
-    Stmt::If(c, th, el, nx) => { nx }; Stmt::Match(sc, ah, nx) => { nx }
-    Stmt::For(fns, fnl, lo, hi, b, nx) => { nx }; Stmt::DerefAssign(p, v, nx) => { nx }
-    Stmt::IndexAssign(b, i, v, nx) => { nx }; Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { nx }
-    Stmt::FieldPathAssign(pl, pv, nx) => { nx }; Stmt::Loop(b, nx) => { nx }
-    Stmt::Break(bv, bd, nx) => { nx }; Stmt::Continue(cd, nx) => { nx }; Stmt::ExprStmt(e, nx) => { nx }
-    Stmt::CompIf(c, th, el, nx) => { nx }; Stmt::CompFor(vs, vl, iv, b, nx) => { nx }
-    Stmt::CompMatch(sc, ah, nx) => { nx }; Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { nx }
-    Stmt::Unchecked(b, nx) => { nx }; Stmt::AllocWith(ae, b, nx) => { nx }
   }
 }
 
@@ -1344,11 +1343,11 @@ ib_bs_return := fn(bp : ptr(mut IbB), in out a : rt::Arena, rv : ptr(Expr)) {
   ib_b_set_term(bp, true)
 }
 
-ib_bs_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), th : ptr(mut Stmt), el : ptr(mut Stmt)) {
+ib_bs_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), th : Option(ptr(mut Stmt)), el : Option(ptr(mut Stmt))) {
   co : Option(VRegId) = ib_bool_operand(bp, a, c)
   match co { Some(cv) => { ib_bs_if_on(bp, a, cv, th, el) }; None => {} }
 }
-ib_bs_if_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, cv : VRegId, th : ptr(mut Stmt), el : ptr(mut Stmt)) {
+ib_bs_if_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, cv : VRegId, th : Option(ptr(mut Stmt)), el : Option(ptr(mut Stmt))) {
   ib_open_if(bp, a, cv)
   ib_b_set_term(bp, false)
   ib_bs_block(bp, a, th)
@@ -1358,11 +1357,11 @@ ib_bs_if_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, cv : VRegId, th : ptr
   ib_bs_block(bp, a, el)
   et := ib_b_term(bp)
   ib_plain(bp, a, Op.OpEnd)
-  ib_b_set_term(bp, tt and et and stmt_present(el))
+  ib_b_set_term(bp, tt and et and stmt_any(el))
 }
 
 ## `while c { body }` = `block X { loop T { if c {} else { br X }; body; br T } }`. `continue` restarts T.
-ib_bs_while := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), body : ptr(mut Stmt)) {
+ib_bs_while := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), body : Option(ptr(mut Stmt))) {
   f := ib_b_f(bp)
   lx := new_label(f)
   lt := new_label(f)
@@ -1371,7 +1370,7 @@ ib_bs_while := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), body :
   co : Option(VRegId) = ib_bool_operand(bp, a, c)
   match co { Some(cv) => { ib_bs_while_on(bp, a, cv, lx, lt, body) }; None => {} }
 }
-ib_bs_while_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, cv : VRegId, lx : LabelId, lt : LabelId, body : ptr(mut Stmt)) {
+ib_bs_while_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, cv : VRegId, lx : LabelId, lt : LabelId, body : Option(ptr(mut Stmt))) {
   ib_open_if(bp, a, cv)
   ib_plain(bp, a, Op.OpElse)
   ib_br(bp, a, lx)
@@ -1388,7 +1387,7 @@ ib_bs_while_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, cv : VRegId, lx : 
 
 ## `loop { body }` = `block X { loop T { body; br T } }`; a value loop carries its result vreg. A loop no
 ## `break` leaves never falls through, so what follows it is unreachable.
-ib_bs_loop := fn(bp : ptr(mut IbB), in out a : rt::Arena, body : ptr(mut Stmt), res : Option(VRegId)) {
+ib_bs_loop := fn(bp : ptr(mut IbB), in out a : rt::Arena, body : Option(ptr(mut Stmt)), res : Option(VRegId)) {
   f := ib_b_f(bp)
   lx := new_label(f)
   lt := new_label(f)
@@ -1408,7 +1407,7 @@ ib_bs_loop := fn(bp : ptr(mut IbB), in out a : rt::Arena, body : ptr(mut Stmt), 
 ##   i = lo; end = hi; block X { loop T { if i >= end { br X }; block C { body }; i = add wrap proven 1; br T } }
 ## `continue` leaves C, so the step still runs. An iterable `for` (no `hi`) is not scalar, and a narrow
 ## induction variable is not built yet.
-ib_bs_for := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, lo : ptr(Expr), hi : ptr(Expr), body : ptr(mut Stmt)) {
+ib_bs_for := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, lo : ptr(Expr), hi : ptr(Expr), body : Option(ptr(mut Stmt))) {
   if not expr_present(hi) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
   bo : Option(IbPair) = ib_for_bounds(bp, a, h, ns, lo, hi)
   match bo { Some(pr) => { ib_bs_for_on(bp, a, ns, nl, pr, body) }; None => {} }
@@ -1428,7 +1427,7 @@ ib_for_bounds := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), 
   ib_mov(bp, a, endv, ev)
   Option(IbPair).Some(IbPair(l = iv, r = endv))
 }
-ib_bs_for_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, ns : usize, nl : usize, pr : IbPair, body : ptr(mut Stmt)) {
+ib_bs_for_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, ns : usize, nl : usize, pr : IbPair, body : Option(ptr(mut Stmt))) {
   f := ib_b_f(bp)
   iv := pr.l
   endv := pr.r
