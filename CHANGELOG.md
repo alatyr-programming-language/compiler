@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A loop nest deeper than 64 leaves through the right loop (x86_64).** The loop-target frames were
+  `[_; 64]` arrays whose push dropped the 65th frame while every pop still popped, so each later
+  `break`/`continue` jumped to another loop's label (#829). They now live in a word table that grows
+  with the nesting (#801's form) and is released with the function. The compiler's own GAS is
+  unchanged.
 - **`ptr(G[i])` of a struct-element array global points at the element (x86_64).** The address took
   the word stride, so reads and writes through the pointer hit an earlier element (#825). It now takes
   the element stride the element read and write use. The compiler's own GAS is unchanged.
