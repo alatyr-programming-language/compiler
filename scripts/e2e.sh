@@ -10643,6 +10643,9 @@ run_x86 issue828_option_ptr_nested_args 42
 run_x86 issue892_deref_store_agg_lit 42
 # #836 — a wide (hidden result pointer) struct or enum returned as a literal keeps its aggregate fields.
 run_x86 issue836_sret_agg_lit 42
+# #861 — a local initialized from an ordinary enum payload's `ptr(S)` binding (`m := deref(q)`, `r := q`)
+# is typed: the struct copy and the typed pointer (both read 0 untyped).
+run_x86 issue861_payload_ptr_local 42
 # #852 — `Option(ptr(T))` as a payload component of another enum's variant: one folded payload word in the
 # local store and the return registers, and the match binding typed as the folded Option.
 run_x86 issue852_option_ptr_enum_payload 42
