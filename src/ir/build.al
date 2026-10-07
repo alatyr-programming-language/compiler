@@ -1236,13 +1236,14 @@ ib_callee_decl := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
 ## sema's: a field read must carry the field's declared type in sema's record, else the function is
 ## refused (`NwDisagree`), which is what types a signed field's division signed (#765).
 ##
-## 3a builds the WORD-tier struct whose every field is a kernel scalar and that carries no layout
-## attribute (`@packed`, `@align`, `@offset`, `@endian` are slice 3e); any other struct is
-## `NotYet(outside)`.
+## 3a builds a WORD- or BYTE-tier struct (`lower_layout::layout_kind`) whose every field is a kernel
+## scalar and that carries no layout attribute (`@packed`, `@align`, `@offset`, `@endian` are slice
+## 3e); any other struct is `NotYet(outside)`.
 
 ## A struct type the builder lays out: its declaration's index, the name span it was named by (the
-## span `lower_layout` resolves), and its byte size.
-IbSt := struct { di : usize, s : usize, n : usize, size : usize }
+## span `lower_layout` resolves), its byte size and its alignment (the values `size(T)`/`align(T)`
+## answer).
+IbSt := struct { di : usize, s : usize, n : usize, size : usize, align : usize }
 ## A field of a struct: its byte offset in the object and its kernel type.
 IbFld := struct { off : ByteOff, ty : Kty, sg : Sgn }
 ## An aggregate value in memory: its frame object, and whether the builder made that object for this
@@ -1263,7 +1264,7 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
   d : Decl = deref(ib_decl_ptr(bv.decls, usize(sdi)))
   if d.is_generic { return Option(IbSt).None }
   lk := lower_layout::layout_kind(bv.decls, bv.src, s, n, a)
-  if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return Option(IbSt).None }
+  if lower_layout::layout_kind_is_packed(lk) { return Option(IbSt).None }
   if lower_layout::struct_align_attr(bv.decls, bv.src, s, n) >= 1 { return Option(IbSt).None }
   mut f := d.fields_head
   mut nf : usize = 0
@@ -1285,7 +1286,11 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
   if nf == 0 { return Option(IbSt).None }
   sz := lower_layout::layout_type_size_bytes(bv.decls, bv.src, s, n, a)
   if sz == 0 { return Option(IbSt).None }
-  Option(IbSt).Some(IbSt(di = usize(sdi), s = s, n = n, size = sz))
+  ## The struct's alignment as `align(T)` answers it: the §6.1 alignment in the BYTE tier, one machine
+  ## word in the WORD tier.
+  mut al : usize = 8
+  if lower_layout::layout_kind_is_byte(lk) { al = lower_layout::standard_struct_align(bv.decls, bv.src, s, n, a) }
+  Option(IbSt).Some(IbSt(di = usize(sdi), s = s, n = n, size = sz, align = al))
 }
 ## The struct type of a struct local bound with declaration `sd` and type span `[ts, ts+tn)`.
 ib_struct_bound := fn(bp : ptr(mut IbB), in out a : rt::Arena, sd : usize, ts : usize, tn : usize) -> Option(IbSt) {
@@ -1343,7 +1348,7 @@ ib_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, fs : usize, f
 }
 
 ## A fresh frame object for one value of struct `st` (§3.3: one object per value, never a pool).
-ib_new_obj := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> FrameId { new_frame(ib_b_f(bp), a, st.size, 8) }
+ib_new_obj := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> FrameId { new_frame(ib_b_f(bp), a, st.size, st.align) }
 ib_store_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId, fd : IbFld, v : VRegId) {
   on := o_none()
   ofr := o_frame(fr)
@@ -1408,7 +1413,7 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
   if ib_b_failed(bp) { return Option(IbObj).None }
   t : VTy = sty_get(e)
   if not ib_vty_is_agg(t) {
-    w : NyWhy = ib_vty_why(t)
+    mut w : NyWhy = ib_vty_why(t)
     if not nywhy_is_gap(w) { w = NyWhy.NwDisagree }
     ib_refuse_expr(bp, e, w)
     return Option(IbObj).None
@@ -1464,7 +1469,7 @@ ib_agg_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : Ib
             flo : Option(IbFld) = ib_field(bp, a, st, fd.ns, fd.nl)
             match flo {
               Some(fld) => {
-                vo : Option(VRegId) = ib_value_at(bp, a, ga.e, IbKS(ty = fld.ty, sg = fld.sg))
+                vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, IbKS(ty = fld.ty, sg = fld.sg))
                 match vo { Some(v) => { ib_store_field(bp, a, fr, fld, v) }; None => { return Option(IbObj).None } }
               }
               None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
@@ -1530,7 +1535,7 @@ ib_bs_field_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut St
           flo : Option(IbFld) = ib_field(bp, a, st, fns, fnl)
           match flo {
             Some(fld) => {
-              vo : Option(VRegId) = ib_value_at(bp, a, fv, IbKS(ty = fld.ty, sg = fld.sg))
+              vo : Option(VRegId) = ib_value_ctx(bp, a, fv, IbKS(ty = fld.ty, sg = fld.sg))
               match vo { Some(v) => { ib_store_field(bp, a, fr, fld, v) }; None => {} }
               return
             }
@@ -1560,8 +1565,7 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
               fo : Option(IbFld) = ib_field(bp, a, st, fs, fl)
               match fo {
                 Some(fld) => {
-                  k := ib_ty(bp, e)?
-                  if not ib_ks_eq(k, IbKS(ty = fld.ty, sg = fld.sg)) { return ib_no(bp, e, NyWhy.NwDisagree) }
+                  if not ib_field_rec_ok(e, fld) { return ib_no(bp, e, NyWhy.NwDisagree) }
                   lv := ib_load_field(bp, a, fr, fld)
                   return Option(VRegId).Some(lv)
                 }
@@ -1581,6 +1585,44 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
       | Expr::Loop => {}
   }
   ib_no(bp, e, NyWhy.NwOutside)
+}
+
+## Does sema's record of the field read `e` agree with the field's declared type? A typed record must
+## be that type exactly. A field read sema leaves untyped (`VcAbsent`/`VcUnknown`: the checker answers a
+## field of a struct local without its type name, `docs/ir-slice-3.md` §3.4) takes the type the field's
+## DECLARATION gives it — the declaration the expression names, never its shape.
+ib_field_rec_ok := fn(e : ptr(Expr), fld : IbFld) -> bool {
+  t : VTy = sty_get(e)
+  c : VCls = t.cls
+  match c {
+    VcAbsent | VcUnknown => { true }
+    VcInt | VcBool | VcPtr => {
+      ko : Option(IbKS) = ib_vty_ks(t)
+      match ko { Some(k) => { ib_ks_eq(k, IbKS(ty = fld.ty, sg = fld.sg)) }; None => { false } }
+    }
+    VcLit | VcFloat | VcAgg => { false }
+  }
+}
+## The value of `e` at the type `k` of the position it initializes (a struct field). A literal-only
+## expression no context typed (`VcLit`) takes that position's type, as Types §2.3 gives it: its exact
+## value as a constant at `k`, refused in a checked scope when `k` cannot hold it (sema accepts only
+## one that fits) and wrapped inside `unchecked`. Anything else is `ib_value_at`.
+ib_value_ctx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), k : IbKS) -> Option(VRegId) {
+  t : VTy = sty_get(e)
+  if vty_is_lit(t) and kty_is_int(k.ty) {
+    fo : Option(i64) = ib_lit_fold(e)
+    match fo {
+      Some(v) => {
+        cv := ib_canon(v, k)
+        fits := cv == v and (v >= 0 or sgn_eq(k.sg, Sgn.SgS))
+        if not fits and not ib_b_unch(bp) { return ib_no(bp, e, NyWhy.NwLit) }
+        d := ib_konst(bp, a, k, cv)
+        return Option(VRegId).Some(d)
+      }
+      None => {}
+    }
+  }
+  ib_value_at(bp, a, e, k)
 }
 
 ## The layout queries `size(T)` and `align(T)` (Types §6), folded to a `const` (§4).
@@ -1608,7 +1650,8 @@ ib_fn_named := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> bool {
 ## enum, an array or view, a generic parameter — is outside 3a. The result is sema's record of the call.
 ib_bx_layout_q := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), q : LayoutQ, ah : Option(ptr(mut Arg))) -> Option(VRegId) {
   a0 := deref(arg_at(ah, "argument list ended early"))
-  match deref(a0.e) {
+  ae : ptr(Expr) = a0.e
+  match deref(ae) {
     Expr::Var(s, n) => {
       bd : IbBind = ib_lookup(bp, s, n)
       match bd { BdNone => {}; BdVal(v) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) } }
@@ -1625,7 +1668,7 @@ ib_bx_layout_q := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), q :
         None => {
           sto : Option(IbSt) = ib_struct_named(bp, a, s, n)
           match sto {
-            Some(st) => { match q { LqSize => { bytes = st.size }; LqAlign => { bytes = 8 } } }
+            Some(st) => { match q { LqSize => { bytes = st.size }; LqAlign => { bytes = st.align } } }
             None => { return ib_no(bp, e, NyWhy.NwOutside) }
           }
         }
