@@ -7467,13 +7467,15 @@ emit_global_agg_store := fn(fv : ptr(Expr), gs : usize, gn : usize, off : i64, t
 ## words, FAIL LOUD (Priority-1). Returns true iff `G` is an aggregate global (the caller then skips the
 ## scalar path); false for a scalar global (unchanged fast path → fixpoint-neutral: every mut global the
 ## compiler itself whole-assigns is a scalar).
-## #892 — an AGGREGATE LITERAL stored at a computed ADDRESS (`deref(p) = S(…)` / `E.V(…)`) is built by
-## the ONE frame writer — `emit_struct_assign` / `emit_enum_assign`, which own every component kind (a
-## folded `Option(ptr(T))`, a nested struct or enum literal, a `str`, a multi-word var, an enum or
-## struct call) — into an agg-temp block, and the block is then copied word by word. The per-component
-## scalar pushes these stores used before stored the `$0` placeholder for every aggregate component and
-## shifted every later word: `deref(p) = E.V(1, Option.Some(q))` stored `None`. The scalar fast paths
-## remain only where every component is provably one word (`slit_scalar_fields`, `elit_word_payloads`).
+## #892 / #836 — an AGGREGATE LITERAL stored at a computed ADDRESS (`deref(p) = S(…)` / `E.V(…)`, a
+## wide struct or enum literal returned through the hidden result pointer) is built by the ONE frame
+## writer — `emit_struct_assign` / `emit_enum_assign`, which own every component kind (a folded
+## `Option(ptr(T))`, a nested struct or enum literal, a `str`, a multi-word var, an enum or struct
+## call) — into an agg-temp block, and the block is then copied word by word. The per-component scalar
+## pushes these stores used before stored the `$0` placeholder for every aggregate component and
+## shifted every later word: `deref(p) = E.V(1, Option.Some(q))` stored `None`, and a wide
+## `W(…, p = P.V(…), …)` return read `PN`. The scalar fast paths remain only where every component is
+## provably one word (`slit_scalar_fields`, `elit_word_payloads`).
 ##
 ## `nw` words starting at the returned block base (word k at slot `base - k`): one `agg_alloc` block,
 ## or several adjacent blocks for a value wider than the scanned block width (`agg_alloc` hands them
@@ -11682,14 +11684,33 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
 emit_struct_to_sret := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(e) {
     Expr::StructLit(cs, cl, nf, fhead) => {
-      for k in 0..nf {
-        fk := arg_expr_at(fhead, k, a)
-        emit_gas(fk, sb, cx, a, nl)                       ## field value on the stack
-        push_str(sb, "  popq %rcx\n  movq -")
+      if lit_word_components(fhead, cx) == false {
+        ## #836 — a field wider than one word (an enum / struct literal, a `str`, a multi-word var) or a
+        ## variant literal: build the whole literal with the frame writer, then copy it through the hidden
+        ## result pointer (`emit_agg_lit_temp`'s note). One push per field stored `$0` for the aggregate
+        ## field and displaced every later field.
+        if std_struct_has_direct_byte_layout(cx.decls, cx.src, cx.ret_ss, cx.ret_sl, deref(cx.mar)) {
+          panic("selfhost: a wide (> 7-word) byte-layout struct returned as a literal with an aggregate field is not lowered — bind it to a local first (`t := S(…)` then `return t`)")
+        }
+        snw := agg_lit_store_words(e, CSpan(s = cx.ret_ss, n = cx.ret_sl), cx, a)
+        if snw == 0 { panic("selfhost: a wide struct literal return whose width does not resolve") }
+        ssave := cx.agg_next
+        sbase := emit_agg_lit_temp(e, snw, sb, cx, a, nl)
+        push_str(sb, "  movq -")
         push_int(sb, i64((cx.sret_slot + 1) * 8))
-        push_str(sb, "(%rbp), %rax\n  movq %rcx, ")
-        push_int(sb, i64(k * 8))
-        push_str(sb, "(%rax)\n")
+        push_str(sb, "(%rbp), %r11\n")
+        emit_frame_words_to_r11(sbase, snw, sb)
+        cx.agg_next = ssave
+      } else {
+        for k in 0..nf {
+          fk := arg_expr_at(fhead, k, a)
+          emit_gas(fk, sb, cx, a, nl)                       ## field value on the stack
+          push_str(sb, "  popq %rcx\n  movq -")
+          push_int(sb, i64((cx.sret_slot + 1) * 8))
+          push_str(sb, "(%rbp), %rax\n  movq %rcx, ")
+          push_int(sb, i64(k * 8))
+          push_str(sb, "(%rax)\n")
+        }
       }
     }
     Expr::Var(s, n) => {
@@ -11835,12 +11856,39 @@ emit_struct_to_sret := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LC
 ## register-staging `emit_enum_value` can't be reused (it tops out at %r11 = 7 words), so words go
 ## STRAIGHT to memory. Handles `return E.V(<struct lit>)` / `E.V(a, b, …)` (EnumLit) and `return v`
 ## (an enum Var); the pointer is reloaded per word (a field value that is a call would clobber it).
+## True iff the wide enum literal `e` has exactly one payload and it is a struct VAR, which the
+## `np == 1` arm of `emit_enum_to_sret` copies whole from its frame words.
+sret_enum_struct_var_payload := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  ef := enum_lit_full(e)
+  if ef.is_e == false { return false }
+  match ef.phead {
+    Some(pq) => {
+      pa := deref(arg_p(pq))
+      match pa.next { Some(nq) => { return false }; None => {} }
+      return var_agg_info(pa.e, cx.slots, cx.src).ek == 2
+    }
+    None => { return false }
+  }
+}
+
 emit_enum_to_sret := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(e) {
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
       disc := variant_index(cx.decls, cx.src, es, el, vs, vl, deref(cx.mar))
       ## payload → words 1.. (emitted BEFORE the disc, which is written last).
-      if np == 1 {
+      if elit_word_payloads(e, cx) == false and sret_enum_struct_var_payload(e, cx) == false {
+        ## #836 / #892 — a payload wider than one word, or a variant literal (a bare `Option.Some(p)`):
+        ## the frame writer builds the whole value, then it is copied through the result pointer.
+        enw := agg_lit_store_words(e, CSpan(s = cx.ret_ss, n = cx.ret_sl), cx, a)
+        if enw == 0 { panic("selfhost: a wide enum literal return whose width does not resolve") }
+        esave := cx.agg_next
+        ebase := emit_agg_lit_temp(e, enw, sb, cx, a, nl)
+        push_str(sb, "  movq -")
+        push_int(sb, i64((cx.sret_slot + 1) * 8))
+        push_str(sb, "(%rbp), %r11\n")
+        emit_frame_words_to_r11(ebase, enw, sb)
+        cx.agg_next = esave
+      } else if np == 1 {
         ga := deref(arg_at(phead, "argument list ended early"))
         psl := struct_lit_info(ga.e)
         va := var_agg_info(ga.e, cx.slots, cx.src)
