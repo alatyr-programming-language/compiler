@@ -89,10 +89,10 @@ g_sys_want := fn() -> str {
 
 ## Refusals: constructs outside the subset, and sema gaps (D6).
 g_notyet_src := fn() -> str {
-  "S := struct { a : u64 }\n## outside the subset: an aggregate parameter, an aggregate value\ntake := fn(s : S) -> u64 { s.a }\npair := fn(x : u64) -> u64 {\n  t := S(a = x)\n  t.a\n}\n## sema gaps, counted and never defaulted (D6): a default argument is filled after sema ran, and sema\n## does not record the statements of a value `loop`'s body\ndflt := fn(x : u64 = 5) -> u64 { x }\nfill := fn() -> u64 { dflt() }\nfirst := fn(n : u64) -> u64 {\n  mut i : u64 = 0\n  r := loop {\n    if i * i > n { break i }\n    i = i + 1\n  }\n  r\n}\n"
+  "S := struct { a : u64 }\n## outside the subset: an aggregate parameter, an aggregate value\ntake := fn(s : S) -> u64 { s.a }\npair := fn(x : u64) -> u64 {\n  t := S(a = x)\n  t.a\n}\n## a sema gap, counted and never defaulted (D6): a default argument is filled after sema ran\n## (a value `loop`'s body is recorded since docs/ir.md §3.8.8, so `first` builds)\ndflt := fn(x : u64 = 5) -> u64 { x }\nfill := fn() -> u64 { dflt() }\nfirst := fn(n : u64) -> u64 {\n  mut i : u64 = 0\n  r := loop {\n    if i * i > n { break i }\n    i = i + 1\n  }\n  r\n}\n"
 }
 g_notyet_want := fn() -> str {
-  "fn ig_notyet::take NotYet(signature (a parameter or result that is not a kernel scalar), ig_notyet.al:3:1)\nfn ig_notyet::pair NotYet(expr StructLit, ig_notyet.al:5:8)\nfn ig_notyet::dflt Built\nfn dflt(%0 : i64 u) -> i64 u {\n  ret %0\n}\nfn ig_notyet::fill NotYet(sema-gap absent: expr Num, ig_notyet.al:10:22)\nfn ig_notyet::first NotYet(sema-gap absent: expr Var, ig_notyet.al:15:8)\nir: functions=5 built=1 notyet=4 sema_gaps=2 verify_failed=0\n"
+  "fn ig_notyet::take NotYet(signature (a parameter or result that is not a kernel scalar), ig_notyet.al:3:1)\nfn ig_notyet::pair NotYet(expr StructLit, ig_notyet.al:5:8)\nfn ig_notyet::dflt Built\nfn dflt(%0 : i64 u) -> i64 u {\n  ret %0\n}\nfn ig_notyet::fill NotYet(sema-gap absent: expr Num, ig_notyet.al:10:22)\nfn ig_notyet::first Built\nfn first(%0 : i64 u) -> i64 u {\n  %1 = const.u i64 0\n  %2 = mov i64 %1\n  block L0 {\n    loop L1 {\n      %4 = mul.chk.u i64 %2, %2 overflow  @8677\n      %5 = cmp.>.u i64 %4, %0\n      if %5 {\n        %3 = mov i64 %2\n        br L0\n      } else {\n      }\n      %6 = const.u i64 1\n      %7 = add.chk.u i64 %2, %6 overflow  @8707\n      %2 = mov i64 %7\n      br L1\n    }\n  }\n  %8 = mov i64 %3\n  ret %8\n}\nir: functions=5 built=2 notyet=3 sema_gaps=1 verify_failed=0\n"
 }
 
 ## ── the runner ──

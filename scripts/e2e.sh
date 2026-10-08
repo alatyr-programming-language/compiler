@@ -982,6 +982,35 @@ check_sema_lib_bodies() {
   fi
 }
 
+# `docs/ir.md` §3.8.8 — sema records the SPELLING of each value's type and reads a field, a pointee, an
+# element, a payload, a generic callee's result and a lambda capture through it. Before it every one of
+# these seven ordering sites had a `#sign sema … ?` row (sema could not type the operand); after it each
+# answers its declared signedness, and with fd 97 open the program emits the GAS of the closed run.
+check_sema_spell_records() {
+  local d="$T/sema_spell_records" rc
+  mkdir -p "$d"
+  printf '%s\n' 'P := struct { x : u64, y : i64 }' 'E := enum { A(u64), B }' 'get := fn(T : type, p : ptr(T)) -> ptr(T) { p }' \
+    'f := fn(xs : [u64; 2], t : (u64, i64)) -> u64 {' '  if xs[1] > 1 { return 1 }' '  if t.1 < 0 { return 2 }' '  0' '}' \
+    'main := fn() -> u64 {' '  mut q := P(x = 5, y = 0 - 3)' '  pp := ptr(mut q)' '  mut r : u64 = 0' \
+    '  if deref(get(P, pp)).x > 3 { r = r + 10 }' '  if deref(pp).y < 0 { r = r + 10 }' '  e := E.A(7)' \
+    '  match e { A(v) => { if v > 6 { r = r + 10 } } B => {} }' '  k := loop { break 9 }' '  if k < 10 { r = r + 10 }' \
+    '  c : u64 = 4' '  g := fn(n : u64) -> u64 { if n > c { return n } c }' '  r = r + g(2) - 4 + f([3, 0], (1, 1))' '  r + 2' '}' > "$d/p.al"
+  "$CC" "$d/p.al" > "$d/open.s" 2>/dev/null 97> "$d/rows"; rc=$?
+  "$CC" "$d/p.al" > "$d/closed.s" 2>/dev/null
+  local miss=0 w
+  for w in 'u |  if xs[1] > 1 ' 's |  if t.1 < 0 ' 'u |  if deref(get(P, pp)).x > 3 ' 's |  if deref(pp).y < 0 ' \
+    'u |  match e { A(v) => { if v > 6 ' 's |  if k < 10 ' 'u |  g := fn(n : u64) -> u64 { if n > c '; do
+    grep -E '^#sign sema [0-9]+ [0-9]+ [0-9]+ ' "$d/rows" | grep -qF -- " $w" || { echo "     missing: $w"; miss=1; }
+  done
+  local got=x
+  if "$CC" -o "$d/p.out" "$d/p.al" >/dev/null 2>&1; then _e2e_exec "$d/p.out" >/dev/null 2>&1; got=$?; fi
+  if [ "$rc" = 0 ] && [ "$miss" = 0 ] && cmp -s "$d/open.s" "$d/closed.s" && [ "$got" = 42 ]; then
+    echo "ok   sema_spell_records: fields, pointees, elements, payloads, generic results and captures carry sema's records"
+  else
+    echo "FAIL sema_spell_records: rc=$rc run=$got"; grep -E '^#sign sema' "$d/rows" | sed 's/^/     /' | head -12; fail=1
+  fi
+}
+
 # `docs/ir.md` §3.8.7 — sema RECORDS the code it does not check: a `comptime for` body (lower unrolls it),
 # a `comptime if` branch (lower selects it) and the receiver of `r.expect(m)` (desugared to
 # `expect(r, m)`, whose implicit type parameter used to swallow it). Before the records walk none of the
@@ -11249,6 +11278,7 @@ check_trap_names
 check_sign_census
 check_sema_lib_bodies
 check_sema_ct_records
+check_sema_spell_records
 check_twin_package
 check_twin_build_flag
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as

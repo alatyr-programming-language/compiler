@@ -5587,35 +5587,35 @@ sema_wrapper_payload_returns_err := fn(head : Option(ptr(mut Stmt)), rts : usize
       Some(curq) => {
         if not (got == 0) { break }
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          Stmt::Return(rv, nx) => { got = sema_wrapper_payload_sink_err(rv, decls, upto, src, locals, nloc, rts, rtl, a) }
-          Stmt::If(c, th, el, nx) => {
-            got = sema_wrapper_payload_returns_err(th, rts, rtl, decls, upto, src, locals, nloc, a)
-            if got == 0 { got = sema_wrapper_payload_returns_err(el, rts, rtl, decls, upto, src, locals, nloc, a) }
-          }
-          Stmt::While(c, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
-          Stmt::Loop(b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
-          Stmt::Unchecked(b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
-          Stmt::AllocWith(ae, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
-          Stmt::Match(sc, ah, nx) => {
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm {
-                Some(armq) => {
-                  if not (got == 0) { break }
-                  am := deref(arm_p(armq))
-                  got = sema_wrapper_payload_returns_err(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a)
-                  arm = am.next
-                }
-                None => { break }
-              }
+    match st {
+      Stmt::Return(rv, nx) => { got = sema_wrapper_payload_sink_err(rv, decls, upto, src, locals, nloc, rts, rtl, a) }
+      Stmt::If(c, th, el, nx) => {
+        got = sema_wrapper_payload_returns_err(th, rts, rtl, decls, upto, src, locals, nloc, a)
+        if got == 0 { got = sema_wrapper_payload_returns_err(el, rts, rtl, decls, upto, src, locals, nloc, a) }
+      }
+      Stmt::While(c, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
+      Stmt::Loop(b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
+      Stmt::Unchecked(b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
+      Stmt::AllocWith(ae, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (got == 0) { break }
+              am := deref(arm_p(armq))
+              got = sema_wrapper_payload_returns_err(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a)
+              arm = am.next
             }
+            None => { break }
           }
-          Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
-            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
-            | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
         }
+      }
+      Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -6002,78 +6002,78 @@ s3a_stmts_bad := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : u
       Some(curq) => {
         if not (bad == 0) { break }
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::Assign(ns, nl, v, nx) => { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
-          Stmt::While(c, b, nx) => {
-            bad = s3a_expr_bad(c, decls, upto, src, a, locals, nloc)
-            if bad == 0 { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
-          }
-          Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
-          Stmt::Return(v, nx) => { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
-          Stmt::If(c, th, el, nx) => {
-            bad = s3a_expr_bad(c, decls, upto, src, a, locals, nloc)
-            if bad == 0 { bad = s3a_stmts_bad(th, decls, upto, src, a, locals, nloc) }
-            if bad == 0 { bad = s3a_stmts_bad(el, decls, upto, src, a, locals, nloc) }
-          }
-          Stmt::Match(sc, ah, nx) => {
-            bad = s3a_expr_bad(sc, decls, upto, src, a, locals, nloc)
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm {
-                Some(armq) => {
-                  if not (bad == 0) { break }
-                  am := deref(arm_p(armq))
-                  bad = s3a_expr_bad(am.body, decls, upto, src, a, locals, nloc)
-                  if bad == 0 { bad = s3a_stmts_bad(am.body_stmts, decls, upto, src, a, locals, nloc) }
-                  arm = am.next
-                }
-                None => { break }
-              }
+    match s {
+      Stmt::Assign(ns, nl, v, nx) => { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
+      Stmt::While(c, b, nx) => {
+        bad = s3a_expr_bad(c, decls, upto, src, a, locals, nloc)
+        if bad == 0 { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
+      }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
+      Stmt::Return(v, nx) => { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
+      Stmt::If(c, th, el, nx) => {
+        bad = s3a_expr_bad(c, decls, upto, src, a, locals, nloc)
+        if bad == 0 { bad = s3a_stmts_bad(th, decls, upto, src, a, locals, nloc) }
+        if bad == 0 { bad = s3a_stmts_bad(el, decls, upto, src, a, locals, nloc) }
+      }
+      Stmt::Match(sc, ah, nx) => {
+        bad = s3a_expr_bad(sc, decls, upto, src, a, locals, nloc)
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (bad == 0) { break }
+              am := deref(arm_p(armq))
+              bad = s3a_expr_bad(am.body, decls, upto, src, a, locals, nloc)
+              if bad == 0 { bad = s3a_stmts_bad(am.body_stmts, decls, upto, src, a, locals, nloc) }
+              arm = am.next
             }
+            None => { break }
           }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => {
-            bad = s3a_expr_bad(lo, decls, upto, src, a, locals, nloc)
-            if bad == 0 and hi != 0 { bad = s3a_expr_bad(hi, decls, upto, src, a, locals, nloc) }
-            if bad == 0 { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
-          }
-          Stmt::DerefAssign(p, v, nx) => {
-            bad = s3a_expr_bad(p, decls, upto, src, a, locals, nloc)
-            if bad == 0 { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
-          }
-          Stmt::IndexAssign(b, i, v, nx) => {
-            bad = s3a_expr_bad(b, decls, upto, src, a, locals, nloc)
-            if bad == 0 { bad = s3a_expr_bad(i, decls, upto, src, a, locals, nloc) }
-            if bad == 0 { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
-          }
-          Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => {
-            bad = s3a_expr_bad(b, decls, upto, src, a, locals, nloc)
-            if bad == 0 { bad = s3a_expr_bad(i, decls, upto, src, a, locals, nloc) }
-            if bad == 0 { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
-          }
-          Stmt::FieldPathAssign(p, v, nx) => {
-            bad = s3a_expr_bad(p, decls, upto, src, a, locals, nloc)
-            if bad == 0 { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
-          }
-          Stmt::Loop(b, nx) => { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
-          Stmt::ExprStmt(v, nx) => { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
-          Stmt::CompIf(c, th, el, nx) => {
-            bad = s3a_expr_bad(c, decls, upto, src, a, locals, nloc)
-            if bad == 0 { bad = s3a_stmts_bad(th, decls, upto, src, a, locals, nloc) }
-            if bad == 0 { bad = s3a_stmts_bad(el, decls, upto, src, a, locals, nloc) }
-          }
-          Stmt::CompFor(cvs, cvl, iv, b, nx) => { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
-          Stmt::CompForRange(rvs, rvl, lo, hi, b, nx) => {
-            bad = s3a_expr_bad(lo, decls, upto, src, a, locals, nloc)
-            if bad == 0 and hi != 0 { bad = s3a_expr_bad(hi, decls, upto, src, a, locals, nloc) }
-            if bad == 0 { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
-          }
-          Stmt::Unchecked(b, nx) => { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
-          Stmt::AllocWith(e, b, nx) => {
-            bad = s3a_expr_bad(e, decls, upto, src, a, locals, nloc)
-            if bad == 0 { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
-          }
-          Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
         }
+      }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => {
+        bad = s3a_expr_bad(lo, decls, upto, src, a, locals, nloc)
+        if bad == 0 and hi != 0 { bad = s3a_expr_bad(hi, decls, upto, src, a, locals, nloc) }
+        if bad == 0 { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
+      }
+      Stmt::DerefAssign(p, v, nx) => {
+        bad = s3a_expr_bad(p, decls, upto, src, a, locals, nloc)
+        if bad == 0 { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
+      }
+      Stmt::IndexAssign(b, i, v, nx) => {
+        bad = s3a_expr_bad(b, decls, upto, src, a, locals, nloc)
+        if bad == 0 { bad = s3a_expr_bad(i, decls, upto, src, a, locals, nloc) }
+        if bad == 0 { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
+      }
+      Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => {
+        bad = s3a_expr_bad(b, decls, upto, src, a, locals, nloc)
+        if bad == 0 { bad = s3a_expr_bad(i, decls, upto, src, a, locals, nloc) }
+        if bad == 0 { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
+      }
+      Stmt::FieldPathAssign(p, v, nx) => {
+        bad = s3a_expr_bad(p, decls, upto, src, a, locals, nloc)
+        if bad == 0 { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
+      }
+      Stmt::Loop(b, nx) => { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
+      Stmt::ExprStmt(v, nx) => { bad = s3a_expr_bad(v, decls, upto, src, a, locals, nloc) }
+      Stmt::CompIf(c, th, el, nx) => {
+        bad = s3a_expr_bad(c, decls, upto, src, a, locals, nloc)
+        if bad == 0 { bad = s3a_stmts_bad(th, decls, upto, src, a, locals, nloc) }
+        if bad == 0 { bad = s3a_stmts_bad(el, decls, upto, src, a, locals, nloc) }
+      }
+      Stmt::CompFor(cvs, cvl, iv, b, nx) => { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
+      Stmt::CompForRange(rvs, rvl, lo, hi, b, nx) => {
+        bad = s3a_expr_bad(lo, decls, upto, src, a, locals, nloc)
+        if bad == 0 and hi != 0 { bad = s3a_expr_bad(hi, decls, upto, src, a, locals, nloc) }
+        if bad == 0 { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
+      }
+      Stmt::Unchecked(b, nx) => { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
+      Stmt::AllocWith(e, b, nx) => {
+        bad = s3a_expr_bad(e, decls, upto, src, a, locals, nloc)
+        if bad == 0 { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
+      }
+      Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -6803,47 +6803,47 @@ ret_sink_err := fn(head : Option(ptr(mut Stmt)), rts : usize, rtl : usize, decls
     match cur {
       Some(curq) => {
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          ## …and Types §9.1 REPRESENTABILITY in the DECLARED RETURN type, which is likewise the context
-          ## the returned literal takes its type from (Declarations §3.4): `g := fn() -> u8 { return 300 }`
-          ## was accepted in silence. Same walker, same span — `[rts, rtl)` IS the return type name.
-          ## Issue #299 rides here too: an early `return <value>` is a concrete value sink, and this is the
-          ## only walker that has BOTH the declared return-type span and the nested-block recursion (a
-          ## `return` inside an `if`/`while`/`for`/`match` arm), which `check_stmts`' bare `ret_tag` lacks.
-          Stmt::Return(rv, nx) => {
-            if agg_scalar_bad(rts, rtl, rv, decls, upto, src, locals, nloc) or ann_lit_range_bad(src, rts, rtl, rv) { res = RET_SINK_AGG }
-            rbe := sema_brand_ret_err(rts, rtl, rv, sema_brand_span(s_of(rv, a), rts), decls, upto, src, locals, nloc, a)
-            if rbe != 0 and res == 0 { res = rbe }
-          }
-          Stmt::If(c, th, el, nx) => {
-            te := ret_sink_err(th, rts, rtl, decls, upto, src, locals, nloc, a)
-            ee := ret_sink_err(el, rts, rtl, decls, upto, src, locals, nloc, a)
-            if te != 0 and res == 0 { res = te }
-            if ee != 0 and res == 0 { res = ee }
-          }
-          Stmt::While(c, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
-          Stmt::Loop(b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
-          Stmt::Unchecked(b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
-          Stmt::AllocWith(ae, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
-          Stmt::Match(sc, ah, nx) => {
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm {
-                Some(armq) => {
-                  am := deref(arm_p(armq))
-                  ae2 := ret_sink_err(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a)
-                  if ae2 != 0 and res == 0 { res = ae2 }
-                  arm = am.next
-                }
-                None => { break }
-              }
+    match st {
+      ## …and Types §9.1 REPRESENTABILITY in the DECLARED RETURN type, which is likewise the context
+      ## the returned literal takes its type from (Declarations §3.4): `g := fn() -> u8 { return 300 }`
+      ## was accepted in silence. Same walker, same span — `[rts, rtl)` IS the return type name.
+      ## Issue #299 rides here too: an early `return <value>` is a concrete value sink, and this is the
+      ## only walker that has BOTH the declared return-type span and the nested-block recursion (a
+      ## `return` inside an `if`/`while`/`for`/`match` arm), which `check_stmts`' bare `ret_tag` lacks.
+      Stmt::Return(rv, nx) => {
+        if agg_scalar_bad(rts, rtl, rv, decls, upto, src, locals, nloc) or ann_lit_range_bad(src, rts, rtl, rv) { res = RET_SINK_AGG }
+        rbe := sema_brand_ret_err(rts, rtl, rv, sema_brand_span(s_of(rv, a), rts), decls, upto, src, locals, nloc, a)
+        if rbe != 0 and res == 0 { res = rbe }
+      }
+      Stmt::If(c, th, el, nx) => {
+        te := ret_sink_err(th, rts, rtl, decls, upto, src, locals, nloc, a)
+        ee := ret_sink_err(el, rts, rtl, decls, upto, src, locals, nloc, a)
+        if te != 0 and res == 0 { res = te }
+        if ee != 0 and res == 0 { res = ee }
+      }
+      Stmt::While(c, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
+      Stmt::Loop(b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
+      Stmt::Unchecked(b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
+      Stmt::AllocWith(ae, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              ae2 := ret_sink_err(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a)
+              if ae2 != 0 and res == 0 { res = ae2 }
+              arm = am.next
             }
+            None => { break }
           }
-          Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
-            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
-            | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
         }
+      }
+      Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -6862,37 +6862,37 @@ ct_return_guard_err := fn(head : Option(ptr(mut Stmt)), rts : usize, rtl : usize
     match cur {
       Some(curq) => {
         st := deref(stmt_p(Stmt, curq))
-        mut got : CheckErr = 0
-        match st {
-          Stmt::Return(rv, nx) => { got = ct_guard_err(src, rts, rtl, rv, s_of(rv, a), decls, upto) }
-          Stmt::If(c, th, el, nx) => {
-            got = ct_return_guard_err(th, rts, rtl, decls, upto, src, a)
-            if got == 0 { got = ct_return_guard_err(el, rts, rtl, decls, upto, src, a) }
-          }
-          Stmt::While(c, b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
-          Stmt::Loop(b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
-          Stmt::Unchecked(b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
-          Stmt::AllocWith(ae, b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
-          Stmt::Match(sc, ah, nx) => {
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm {
-                Some(armq) => {
-                  if not (got == 0) { break }
-                  am := deref(arm_p(armq))
-                  got = ct_return_guard_err(am.body_stmts, rts, rtl, decls, upto, src, a)
-                  arm = am.next
-                }
-                None => { break }
-              }
+    mut got : CheckErr = 0
+    match st {
+      Stmt::Return(rv, nx) => { got = ct_guard_err(src, rts, rtl, rv, s_of(rv, a), decls, upto) }
+      Stmt::If(c, th, el, nx) => {
+        got = ct_return_guard_err(th, rts, rtl, decls, upto, src, a)
+        if got == 0 { got = ct_return_guard_err(el, rts, rtl, decls, upto, src, a) }
+      }
+      Stmt::While(c, b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
+      Stmt::Loop(b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
+      Stmt::Unchecked(b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
+      Stmt::AllocWith(ae, b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (got == 0) { break }
+              am := deref(arm_p(armq))
+              got = ct_return_guard_err(am.body_stmts, rts, rtl, decls, upto, src, a)
+              arm = am.next
             }
+            None => { break }
           }
-          Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
-            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
-            | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
         }
-        if got != 0 { return got }
+      }
+      Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+    }
+    if got != 0 { return got }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -8495,7 +8495,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   r := check_expr_core(e, decls, upto, src, a, locals, nloc)
   if ir::sty_on() {
     match r {
-      Result::Ok(t) => { sema_vty_record(e, t, decls, src); sema_vty_var(e, locals, nloc, src, decls) }
+      Result::Ok(t) => { sema_lambda_record(e, decls, upto, src, a, locals, nloc); sema_vty_record(e, t, decls, src); sema_vty_var(e, locals, nloc, src, decls); sema_spell_record(e, t, locals, nloc, decls, src, a) }
       Result::Err(x) => {}
     }
   }
@@ -8527,28 +8527,102 @@ sema_vty_var := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, src : ptr(u8
   if ir::vty_known(cur) { return }
   lo : Option(u64) = sema_vty_local_ns(locals, nloc, src, vs.s, vs.n)
   mut bt : ir::VTy = ir::vty_unknown()
-  match lo { Some(dns) => { bt = ir::sty_bind_get(usize(dns)) }; None => { bt = sema_vty_global(decls, src, vs.s, vs.n) } }
+  match lo { Some(dns) => { bt = ir::sty_bind_get(usize(dns)); sema_lambda_capture(locals, src, vs.s, vs.n, usize(dns)) }; None => { bt = sema_vty_global(decls, src, vs.s, vs.n) } }
   if ir::vty_known(bt) { ir::sty_put(e, bt) }
+}
+## docs/ir.md §3.8 — the records of code `check_expr` does not walk: a value `loop`'s body, and a
+## lambda's. The checker does not walk a lambda body where it is written
+## (the driver lifts it into a declaration of its own, whose captured names become trailing untyped
+## parameters, each declared at the capture's FIRST use in the body). So when records are wanted the
+## body is walked for its records only (`sema_ct_record`), its parameters bound as declared, and each
+## use of an enclosing local in it records that local's type at the use (`sema_lambda_capture`) — the
+## record the lifted declaration's capture parameter reads.
+mut SEMA_LAMBDA_BASE : usize = 0
+mut SEMA_LAMBDA_ON : bool = false
+sema_lambda_record := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) {
+  match deref(e) {
+    Expr::Lambda(lpos, lph, lrts, lrtl, lbh, lval) => {
+      was_on := SEMA_LAMBDA_ON
+      was_base := SEMA_LAMBDA_BASE
+      SEMA_LAMBDA_ON = true
+      SEMA_LAMBDA_BASE = nloc
+      mut cnt := nloc
+      mut lp : Option(ptr(mut Param)) = lph
+      loop {
+        match lp {
+          Some(lpq) => {
+            lpm : Param = deref(param_p(lpq))
+            lvec_push(deref(locals), Local(ns = lpm.ns, nl = lpm.nl, tag = 0, prov = 0, tns = 0, tnl = 0))
+            sema_spell_bind(lpm.ns, sema_spell_param(lpm, src), decls, src)
+            cnt += 1
+            lp = lpm.next
+          }
+          None => { break }
+        }
+      }
+      mut da := da_new(a, 16)
+      ## null-ok: Expr::Lambda — an expression-bodied lambda carries a null statement list (ast.al).
+      if unchecked bitcast(usize, lbh) != 0 { sema_ct_record(CtWalk.WkBody(lbh, ptr(da)), CtVar.CvNone, 0, 0, Option(u64).Some(u64(lpos)), decls, upto, src, a, locals, cnt) }
+      ## null-ok: Expr::Lambda — a statement-bodied lambda may carry no value expression (ast.al).
+      if unchecked bitcast(usize, lval) != 0 { sema_ct_record(CtWalk.WkValue(lval), CtVar.CvNone, 0, 0, Option(u64).Some(u64(lpos)), decls, upto, src, a, locals, cnt) }
+      lvec_truncate(deref(locals), nloc)
+      SEMA_LAMBDA_ON = was_on
+      SEMA_LAMBDA_BASE = was_base
+    }
+    ## a value `loop`'s body, which `check_expr` types only through its `break` values (#888)
+    Expr::Loop(lb) => {
+      mut lda := da_new(a, 16)
+      sema_ct_record(CtWalk.WkBody(lb, ptr(lda)), CtVar.CvNone, 0, 0, ir::expr_span(e), decls, upto, src, a, locals, nloc)
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::FnRef | Expr::Bitcast => {}
+  }
+}
+## A use `[s, s+n)` inside a lambda body that resolves to the enclosing local declared at `dns` (no
+## lambda local shadows it): record that local's type at the use, the lifted capture parameter's key.
+sema_lambda_capture := fn(locals : ptr(LVec), src : ptr(u8), s : usize, n : usize, dns : usize) {
+  if not SEMA_LAMBDA_ON or dns == s { return }
+  outer : Option(u64) = sema_vty_local_ns(locals, SEMA_LAMBDA_BASE, src, s, n)
+  match outer {
+    Some(ons) => {
+      if usize(ons) != dns { return }
+      ct : ir::VTy = ir::sty_bind_get(dns)
+      if ir::vty_known(ct) { ir::sty_bind_put(s, ct) }
+      csp : ir::TySpell = ir::sty_bind_spell_get(dns)
+      if sema_spell_known(csp) { ir::sty_bind_spell_put(s, csp) }
+    }
+    None => {}
+  }
 }
 ## docs/ir-slice-1.md §2 — the value type of the module-level value binding named `[s, s+n)`: its
 ## annotation, else its initializer's record, where a literal initializer takes the documented default
 ## `i64` (Types §9.1, as an unannotated local's does).
 sema_vty_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ir::VTy {
-  ann := global_type_span(decls, src, s, n)
-  if ann.n != 0 { return sema_vty_name(src, ann.s, ann.n, decls) }
-  cnt := rt::vec_len(deref(decls))
-  mut r : ir::VTy = ir::vty_unknown()
-  mut i : usize = 0
-  while i < cnt {
-    d := deref(decl_get(decls, i))
-    ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
-    if not d.is_fn and unchecked bitcast(usize, d.value) != 0 and streq(src, d.name_start, d.name_len, s, n) {
-      r = ir::sty_get(d.value)
-      if ir::vty_is_lit(r) { r = ir::vty_s(8) }
+  di := sema_rec_decl(decls, src, s, n, false)
+  match di {
+    Some(i) => {
+      d := deref(decl_get(decls, usize(i)))
+      ann := local_type_span(src, d.name_start, d.name_len)
+      if ann.n != 0 { return sema_vty_spell(sema_spell_at(ann.s, ann.n), decls, src) }
+      ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
+      if unchecked bitcast(usize, d.value) == 0 { return ir::vty_unknown() }
+      r : ir::VTy = ir::sty_get(d.value)
+      if ir::vty_is_lit(r) or (not ir::vty_known(r) and sema_expr_is_num(d.value)) { return ir::vty_s(8) }
+      r
     }
-    i += 1
+    None => { ir::vty_unknown() }
   }
-  r
+}
+## Is `e` an integer literal (the initializer a module value can have before any check records it)?
+sema_expr_is_num := fn(e : ptr(Expr)) -> bool {
+  match deref(e) {
+    Expr::Num(v, s, n) => { true }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => { false }
+  }
 }
 ## Record `e`'s value type from the `Ty` `check_expr` answered, and remember it as a census site.
 sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)) {
@@ -8594,25 +8668,25 @@ sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut
 ## Each argument of a call to `d` takes its parameter's declared type as its context (a literal
 ## argument's record becomes that type).
 sema_vty_args_at := fn(d : Decl, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) {
-  mut pp := d.params_head
-  mut g : Option(ptr(mut Arg)) = ah
-  loop {
-    match g {
-      Some(gq) => {
-        ga := deref(arg_p(gq))
-        match pp {
-          Some(pq) => {
-            pm := deref(param_p(pq))
-            sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src)
-            pp = pm.next
+      mut pp := d.params_head
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            match pp {
+              Some(pq) => {
+                pm := deref(param_p(pq))
+                sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src)
+                pp = pm.next
+              }
+              None => { return }
+            }
+            g = ga.next
           }
-          None => { return }
+          None => { break }
         }
-        g = ga.next
       }
-      None => { break }
-    }
-  }
 }
 ## The value class a `Ty`'s kind alone decides: an aggregate (Types §3.2: never an IR value) or a
 ## pointer. A scalar kind says nothing about width or signedness, so it is left to the name and the shape.
@@ -8628,9 +8702,41 @@ sema_vty_kind := fn(k : TyKind) -> ir::VTy {
 sema_vty_name := fn(src : ptr(u8), s : usize, n : usize, decls : ptr(rt::Vec)) -> ir::VTy {
   sv : ir::VTy = sema_vty_scalar(src, s, n)
   if ir::vty_known(sv) { return sv }
-  bu := brand_underlying(decls, src, s, n)
+  bu := sema_brand_underlying(decls, rt::vec_len(deref(decls)), src, s, n)
   if bu.n != 0 { return sema_vty_scalar(src, bu.s, bu.n) }
+  ## a type alias `CheckErr := usize` names its target (an alias of an alias is refused, so one hop)
+  at := sema_rec_alias_target(decls, src, s, n)
+  if at.n != 0 {
+    av : ir::VTy = sema_vty_scalar(src, at.s, at.n)
+    if ir::vty_known(av) { return av }
+    ab := sema_brand_underlying(decls, rt::vec_len(deref(decls)), src, at.s, at.n)
+    if ab.n != 0 { return sema_vty_scalar(src, ab.s, ab.n) }
+  }
   sv
+}
+## The target of the one type alias named `[s, s+n)` (the writing module's Modules §3 rank breaks a
+## tie between modules); `{0,0}` when none, or no single one, answers.
+sema_rec_alias_target := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> VSpan {
+  if n == 0 { return VSpan(s = 0, n = 0) }
+  wm := sema_span_module(decls, src, s)
+  cnt := rt::vec_len(deref(decls))
+  mut rs : usize = 0
+  mut rn : usize = 0
+  mut best : i64 = 0 - 2
+  mut at_best : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == lower_layout::DECL_KIND_VALUE and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, s, n) {
+      mut r : i64 = 0 - 1
+      if wm.found { r = lower_layout::type_mod_rank_from(src, d.mod_start, d.mod_len, wm.s, wm.n) }
+      if r > best { best = r; at_best = 1; rs = d.alias_ts; rn = d.alias_tl }
+      else if r == best { at_best += 1 }
+    }
+    i += 1
+  }
+  if at_best != 1 { return VSpan(s = 0, n = 0) }
+  VSpan(s = rs, n = rn)
 }
 pub sema_vty_scalar := fn(src : ptr(u8), s : usize, n : usize) -> ir::VTy {
   bn := base_type_name(src, s, n)
@@ -8648,6 +8754,12 @@ pub sema_vty_scalar := fn(src : ptr(u8), s : usize, n : usize) -> ir::VTy {
   if tx == "f32" { return ir::vty_float(4) }
   if tx == "f64" { return ir::vty_float(8) }
   if tx == "ptr" { return ir::vty_ptr() }
+  ## a raw bit-block has no arithmetic and no sign: it widens by zero-extension and shifts logically
+  ## (Types §2.2), the unsigned reading of its width
+  if tx == "bits8" { return ir::vty_u(1) }
+  if tx == "bits16" { return ir::vty_u(2) }
+  if tx == "bits32" { return ir::vty_u(4) }
+  if tx == "bits64" { return ir::vty_u(8) }
   ir::vty_unknown()
 }
 ## The value type of `e` from its shape and its children's records (they are typed first).
@@ -8660,15 +8772,65 @@ sema_vty_shape := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::
     Expr::Bitcast(inner, ts, tl) => { sema_vty_name(src, ts, tl, decls) }
     Expr::Call(cs, cl, na, ah) => { sema_vty_call(e, cs, cl, na, ah, decls, src) }
     Expr::If(c, th, el) => { sema_vty_join(th, el) }
+    Expr::Match(sc, mh) => { sema_vty_arms(mh) }
     Expr::Loop(b) => { sema_vty_breaks(b, 0) }
-    Expr::Var | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+    Expr::Var | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref
       | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
       | Expr::Lambda | Expr::FnRef => { ir::vty_unknown() }
   }
 }
+## The arms of a value `match` have one type (the checker agreed them): the first arm value sema typed
+## an integer, which a literal arm takes (Types §2.3), else literal-only when every typed arm is.
+sema_vty_arms := fn(mh : Option(ptr(mut Arm))) -> ir::VTy {
+  mut res : ir::VTy = ir::vty_unknown()
+  mut all_lit := true
+  mut any := false
+  mut arm : Option(ptr(mut Arm)) = mh
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        ## null-ok: Arm.body — an arm with a statement body carries a null value expression (ast.al).
+        if unchecked bitcast(usize, am.body) != 0 {
+          bt : ir::VTy = sema_vty_child(am.body)
+          if ir::vty_is_int(bt) and not ir::vty_is_int(res) { res = bt }
+          if not ir::vty_is_lit(bt) { all_lit = false }
+          any = true
+        }
+        arm = am.next
+      }
+      None => { break }
+    }
+  }
+  if ir::vty_is_int(res) {
+    sema_vty_arms_push(mh, res)
+    return res
+  }
+  if any and all_lit { return ir::vty_lit() }
+  ir::vty_unknown()
+}
+## A context gives a value `match` the type `t`: each literal-only arm value takes it.
+sema_vty_arms_push := fn(mh : Option(ptr(mut Arm)), t : ir::VTy) {
+  mut arm : Option(ptr(mut Arm)) = mh
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        ## null-ok: Arm.body — an arm with a statement body carries a null value expression (ast.al).
+        if unchecked bitcast(usize, am.body) != 0 { sema_vty_push(am.body, t) }
+        arm = am.next
+      }
+      None => { break }
+    }
+  }
+}
 ## docs/ir-slice-1.md §2 — a value `loop`'s type is the type of the values its `break`s carry: the first
 ## `break v` that targets it (loop depth `depth` from the statement list `h`) whose value sema typed.
-sema_vty_breaks := fn(h : Option(ptr(mut Stmt)), depth : usize) -> ir::VTy {
+sema_vty_breaks := fn(h : Option(ptr(mut Stmt)), depth : usize) -> ir::VTy { sema_vty_breaks_go(h, depth, ir::vty_unknown(), false) }
+## `sema_vty_breaks`, and with `push` the context type `t` given to each literal break value instead
+## (every branch walked): a value `loop` of literal breaks takes its binding's type (Types §2.3/§9.1).
+sema_vty_breaks_go := fn(h : Option(ptr(mut Stmt)), depth : usize, t : ir::VTy, push : bool) -> ir::VTy {
+  mut lit_seen := false
   mut s : Option(ptr(mut Stmt)) = h
   loop {
     match s {
@@ -8678,17 +8840,24 @@ sema_vty_breaks := fn(h : Option(ptr(mut Stmt)), depth : usize) -> ir::VTy {
         match st {
           Stmt::Break(bv, bd, nx) => {
             ## null-ok: Stmt::Break — a valueless `break` carries a null value expression (ast.al).
-            if bd == depth and unchecked bitcast(usize, bv) != 0 { r = sema_vty_child(bv) }
+            if bd == depth and unchecked bitcast(usize, bv) != 0 {
+              ## a literal `break` value is never checked as an expression (the break-value pass reads its
+              ## tag): it is the literal-only value `check_expr` would record
+              bvt : ir::VTy = ir::sty_get(bv)
+              if not ir::vty_known(bvt) and not ir::vty_is_lit(bvt) and sema_expr_is_num(bv) { ir::sty_put(bv, ir::vty_lit()) }
+              if push { sema_vty_push(bv, t) }
+              r = sema_vty_child(bv)
+            }
             s = nx
           }
-          Stmt::If(c, th, el, nx) => { r = sema_vty_breaks(th, depth); if not ir::vty_known(r) { r = sema_vty_breaks(el, depth) }; s = nx }
-          Stmt::Unchecked(b, nx) => { r = sema_vty_breaks(b, depth); s = nx }
-          Stmt::While(c, b, nx) => { r = sema_vty_breaks(b, depth + 1); s = nx }
-          Stmt::Loop(b, nx) => { r = sema_vty_breaks(b, depth + 1); s = nx }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => { r = sema_vty_breaks(b, depth + 1); s = nx }
+          Stmt::If(c, th, el, nx) => { r = sema_vty_breaks_go(th, depth, t, push); if push or not ir::vty_known(r) { r = sema_vty_breaks_go(el, depth, t, push) }; s = nx }
+          Stmt::Unchecked(b, nx) => { r = sema_vty_breaks_go(b, depth, t, push); s = nx }
+          Stmt::While(c, b, nx) => { r = sema_vty_breaks_go(b, depth + 1, t, push); s = nx }
+          Stmt::Loop(b, nx) => { r = sema_vty_breaks_go(b, depth + 1, t, push); s = nx }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { r = sema_vty_breaks_go(b, depth + 1, t, push); s = nx }
           Stmt::Match(sc, ah, nx) => {
             mut arm : Option(ptr(mut Arm)) = ah
-            loop { match arm { Some(armq) => { if not (not ir::vty_known(r)) { break }; am := deref(arm_p(armq)); r = sema_vty_breaks(am.body_stmts, depth); arm = am.next }; None => { break } } }
+            loop { match arm { Some(armq) => { if not push and ir::vty_known(r) { break }; am := deref(arm_p(armq)); r = sema_vty_breaks_go(am.body_stmts, depth, t, push); arm = am.next }; None => { break } } }
             s = nx
           }
           Stmt::Assign(ns, nl, v, nx) => { s = nx }
@@ -8706,11 +8875,13 @@ sema_vty_breaks := fn(h : Option(ptr(mut Stmt)), depth : usize) -> ir::VTy {
           Stmt::CompForRange(vs2, vl2, lo2, hi2, b5, nx) => { s = nx }
           Stmt::AllocWith(ae, b6, nx) => { s = nx }
         }
-        if ir::vty_known(r) { return r }
+        if ir::vty_is_lit(r) { lit_seen = true }
+        if not push and ir::vty_known(r) { return r }
       }
       None => { break }
     }
   }
+  if lit_seen { return ir::vty_lit() }
   ir::vty_unknown()
 }
 ## A child's record, `VcUnknown` when sema never typed it.
@@ -8761,6 +8932,16 @@ sema_vty_join := fn(th : ptr(Expr), el : ptr(Expr)) -> ir::VTy {
   if ir::vty_is_lit(tt) and ir::vty_is_lit(et) { return ir::vty_lit() }
   ir::vty_unknown()
 }
+## A range's variable has the bounds' one type (a literal bound takes the other's). Two literal bounds
+## have no context, so they take the documented default, the native signed integer (Types §9.1), as an
+## unannotated binding of a literal does.
+sema_vty_range := fn(lo : ptr(Expr), hi : ptr(Expr)) -> ir::VTy {
+  rj : ir::VTy = sema_vty_join(lo, hi)
+  if not ir::vty_is_lit(rj) { return rj }
+  sema_vty_push(lo, ir::vty_s(8))
+  sema_vty_push(hi, ir::vty_s(8))
+  ir::vty_s(8)
+}
 ## A call: its declared result; the shift/rotate builtins take their first operand's type.
 sema_vty_call := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
   nm := str_at((src + cs), cl)
@@ -8768,9 +8949,12 @@ sema_vty_call := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Opti
     a0 := deref(arg_at(ah, "argument list ended early"))
     return sema_vty_child(a0.e)
   }
-  ct := expr_call_result_ty(e, decls, rt::vec_len(deref(decls)), src)
-  if ct.nl != 0 { return sema_vty_name(src, ct.ns, ct.nl, decls) }
-  sema_vty_syscall(cs, cl, ah, decls, src)
+  ## the declared result through its spelling (docs/ir.md §3.8 item 8); a syscall declaration's literal
+  ## arguments take their parameters' types as well (docs/ir-slice-2.md, `sema_vty_syscall`)
+  r : ir::VTy = sema_vty_spell(sema_spell_call(e, cs, cl, na, decls, src), decls, src)
+  sy : ir::VTy = sema_vty_syscall(cs, cl, ah, decls, src)
+  if ir::vty_known(r) { return r }
+  sy
 }
 ## docs/ir-slice-2.md — the value type of a call to a bodyless `@abi(syscall)` declaration: its declared
 ## result. The checker's `callee_ret_ty` resolves ordinary functions only, so a syscall call's value was
@@ -8802,7 +8986,7 @@ sema_vty_syscall_at := fn(d : Decl, ah : Option(ptr(mut Arg)), decls : ptr(rt::V
   sema_vty_name(src, d.ret_ts, d.ret_tl, decls)
 }
 ## A context gives the literal-only expression `e` the type `t`: rewrite its record, and its literal
-## parts' (an arithmetic operand, an `unchecked` body, a value `if`'s arms).
+## parts' (an arithmetic operand, an `unchecked` body, a value `if`'s or `match`'s arms).
 sema_vty_push := fn(e : ptr(Expr), t : ir::VTy) {
   cur : ir::VTy = ir::sty_get(e)
   if not ir::vty_is_lit(cur) { return }
@@ -8813,9 +8997,11 @@ sema_vty_push := fn(e : ptr(Expr), t : ir::VTy) {
     }
     Expr::Unchecked(inner) => { sema_vty_push(inner, t) }
     Expr::If(c, th, el) => { sema_vty_push(th, t); sema_vty_push(el, t) }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+    Expr::Match(sc, mh) => { sema_vty_arms_push(mh, t) }
+    Expr::Loop(lb) => { pr : ir::VTy = sema_vty_breaks_go(lb, 0, t, true) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Call | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
-      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast => {}
   }
 }
 ## A declared type `[s, s+n)` is the context of `e` (an annotated binding, a `return`, a fn's tail).
@@ -8823,6 +9009,1248 @@ sema_vty_ctx := fn(e : ptr(Expr), s : usize, n : usize, decls : ptr(rt::Vec), sr
   if not ir::sty_on() or n == 0 { return }
   t : ir::VTy = sema_vty_name(src, s, n, decls)
   if ir::vty_is_int(t) { sema_vty_push(e, t) }
+}
+## ── docs/ir.md §3.8 item 8: the spelling of a value's type ─────────────────────────────────────────────
+##
+## `check_expr` answers a `Ty` the checker can afford to be tolerant with: it resolves names among the
+## declarations BEFORE the one being checked (`upto`), leaves a qualified callee's result, a `deref`, an
+## element and a value read through an unknown base UNKNOWN, and keeps a pointer's pointee only when it
+## is a struct or enum. That is the verdict's business and stays as it is. The recorder needs the
+## concrete type wherever the program declares one, so beside each node's value type it records the
+## SPELLING of that type (`ir::TySpell`, the declaration text naming it) and derives the value type from
+## it. Every step reads a declaration through the resolver the checker or the layout already uses —
+## `type_decl_index` (Modules §3 ranking) for a type, the visibility check's module-segment match for a
+## qualified name, `ptr_target_pointee` / `arr_field_elem_span` / `typearg_at` / `param_pos` for the
+## parts of a spelling — over the WHOLE program, since a declaration's position in it is not a scope rule
+## for types or functions. A spelling read inside a generic declaration carries that declaration and
+## the instance it was reached through, so a parameter of it is replaced by the instance's binding
+## (`sema_spell_norm`). Where the type is the checked declaration's own type parameter (only the
+## instance knows it) or no single declaration answers (two equally ranked candidates of different
+## result types), nothing is recorded: `VcUnknown`, never a guess.
+sema_spell_none := fn() -> ir::TySpell { ir::TySpell(s = 0, n = 0, form = ir::SpellForm.SfText, layers = 0, ed = 0, he = 0, call = Option(ptr(Expr)).None) }
+sema_spell_at := fn(s : usize, n : usize) -> ir::TySpell { ir::TySpell(s = s, n = n, form = ir::SpellForm.SfText, layers = 0, ed = 0, he = 0, call = Option(ptr(Expr)).None) }
+sema_spell_bytes_view := fn() -> ir::TySpell { ir::TySpell(s = 0, n = 0, form = ir::SpellForm.SfBytesView, layers = 0, ed = 0, he = 0, call = Option(ptr(Expr)).None) }
+## The native signed integer an unannotated literal defaults to (Types §9.1), which no text spells.
+sema_spell_u8 := fn() -> ir::TySpell { ir::TySpell(s = 0, n = 0, form = ir::SpellForm.SfU8, layers = 0, ed = 0, he = 0, call = Option(ptr(Expr)).None) }
+sema_spell_i64 := fn() -> ir::TySpell { ir::TySpell(s = 0, n = 0, form = ir::SpellForm.SfI64, layers = 0, ed = 0, he = 0, call = Option(ptr(Expr)).None) }
+## The text `[s, s+n)` read in the scope `env` is read in: the same generic declaration and instance.
+sema_spell_in := fn(s : usize, n : usize, env : ir::TySpell) -> ir::TySpell {
+  if n == 0 { return sema_spell_none() }
+  ir::TySpell(s = s, n = n, form = ir::SpellForm.SfText, layers = 0, ed = env.ed, he = env.he, call = env.call)
+}
+## The declared type `[s, s+n)` read in the declaration `decls[di]`, whose instance is the `( … )` group
+## at `he` (after a struct instance's head) or the call `call` (a generic callee).
+sema_spell_of_decl := fn(s : usize, n : usize, di : usize, he : usize, call : Option(ptr(Expr))) -> ir::TySpell {
+  if n == 0 { return sema_spell_none() }
+  ir::TySpell(s = s, n = n, form = ir::SpellForm.SfText, layers = 0, ed = di + 1, he = he, call = call)
+}
+## `sp` wrapped once more: in an array (`[e0, e1, …]` of elements of type `sp`, wrapper 2) or a pointer
+## (`ptr(x)` of an `x` of type `sp`, wrapper 1). Twenty wrappers deep is past any source; none then.
+sema_spell_wrap := fn(sp : ir::TySpell, w : u64) -> ir::TySpell {
+  if not sema_spell_known(sp) or sp.layers >= 1099511627776 { return sema_spell_none() }
+  ir::TySpell(s = sp.s, n = sp.n, form = sp.form, layers = sp.layers * 4 + w, ed = sp.ed, he = sp.he, call = sp.call)
+}
+## `sp` without its outermost wrapper (what `deref` / an element read of a wrapped value reads).
+sema_spell_unwrap := fn(sp : ir::TySpell) -> ir::TySpell {
+  ir::TySpell(s = sp.s, n = sp.n, form = sp.form, layers = sp.layers / 4, ed = sp.ed, he = sp.he, call = sp.call)
+}
+sema_spell_array_of := fn(el : ir::TySpell) -> ir::TySpell { sema_spell_wrap(el, 2) }
+## The text after an optional leading `mut ` qualifier (a `ptr(mut T)` argument reads `mut T`).
+sema_spell_unmut := fn(s : usize, n : usize, src : ptr(u8)) -> VSpan {
+  if n > 4 and str_at((src + s), 4) == "mut " {
+    mut p := s + 4
+    while p < s + n and str_at((src + p), 1) == " " { p += 1 }
+    return VSpan(s = p, n = s + n - p)
+  }
+  VSpan(s = s, n = n)
+}
+## The position of the TYPE parameter named `[s, s+n)` among all parameters of `decls[di]` (a value
+## parameter of the same name is not one), `None` when it names none.
+sema_tparam_pos := fn(decls : ptr(rt::Vec), di : usize, src : ptr(u8), s : usize, n : usize) -> Option(u64) {
+  if n == 0 { return Option(u64).None }
+  d := deref(decl_get(decls, di))
+  mut pp := d.params_head
+  mut i : u64 = 0
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, s, n) and (not d.is_fn or str_at((src + pm.ts), pm.tl) == "type") { return Option(u64).Some(i) }
+        i += 1
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  Option(u64).None
+}
+## Does `sp` mention a type parameter of the generic declaration it is read in (so only an instance's
+## binding of it says what it is)?
+sema_spell_mentions_env := fn(sp : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  if sp.ed == 0 or sp.n == 0 { return false }
+  d := deref(decl_get(decls, sp.ed - 1))
+  sema_spell_mentions_param(d.params_head, src, sp.s, sp.n, not d.is_fn)
+}
+## Is `sp`'s head a type parameter whose binding is not known here — one of the checked declaration's
+## own (`ed == 0`: the instance's), or one of its generic declaration's the instance left unbound?
+sema_spell_head_is_param := fn(sp : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  if not sema_spell_text(sp) { return false }
+  bn := base_type_name(src, sp.s, sp.n)
+  if sp.ed == 0 { return sema_tparam_named(SEMA_DECL_PARAMS, src, bn.s, bn.n) }
+  tp : Option(u64) = sema_tparam_pos(decls, sp.ed - 1, src, bn.s, bn.n)
+  match tp { Some(tpi) => { true }; None => { false } }
+}
+## Is `[s, s+n)` exactly the name of a `T : type` parameter of the list `ph`?
+sema_tparam_named := fn(ph : Option(ptr(mut Param)), src : ptr(u8), s : usize, n : usize) -> bool {
+  mut pp := ph
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, s, n) and str_at((src + pm.ts), pm.tl) == "type" { return true }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+## `sp` with a bare type parameter of its generic declaration replaced by what the instance binds it
+## to, as often as the binding is itself one (bounded: a binding chain is as deep as the source nests).
+sema_spell_norm := fn(sp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  mut sp : ir::TySpell = sp0
+  mut hops : usize = 0
+  while sp.ed != 0 and sp.n != 0 and hops < 8 {
+    f : ir::SpellForm = sp.form
+    match f { SfText => {}; SfBytesView | SfI64 | SfU8 => { return sp } }
+    tp : Option(u64) = sema_tparam_pos(decls, sp.ed - 1, src, sp.s, sp.n)
+    match tp {
+      ## the binding sits inside the wrappers the parameter had
+      Some(pos) => { sp = sema_spell_rewrap(sema_spell_param_arg(sp, usize(pos), decls, src), sp.layers) }
+      None => { return sp }
+    }
+    hops += 1
+  }
+  sp
+}
+## `inner` inside the wrappers `outer` (outermost first, base 4 from the low digit), none when too deep.
+sema_spell_rewrap := fn(inner : ir::TySpell, outer : u64) -> ir::TySpell {
+  if outer == 0 or not sema_spell_known(inner) { return inner }
+  mut scale : u64 = 1
+  mut o := outer
+  while o != 0 { scale = scale * 4; o = o / 4 }
+  if inner.layers >= 1099511627776 / scale { return sema_spell_none() }
+  ir::TySpell(s = inner.s, n = inner.n, form = inner.form, layers = outer + inner.layers * scale, ed = inner.ed, he = inner.he, call = inner.call)
+}
+## What the instance `sp` is read in binds type parameter `pos` of `decls[sp.ed - 1]` to.
+sema_spell_param_arg := fn(sp : ir::TySpell, pos : usize, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  match sp.call {
+    Some(ce) => { return sema_spell_call_targ(ce, sp.ed - 1, pos, decls, src) }
+    None => {
+      ## a struct instance's arguments, written in the reader's own scope (`sema_spell_field` builds an
+      ## instance scope only from a head that mentions no parameter of an enclosing one)
+      ta := typearg_at(src, sp.he, 0, pos)
+      um := sema_spell_unmut(ta.s, ta.n, src)
+      return sema_spell_at(um.s, um.n)
+    }
+  }
+}
+## The spelling of a type written as an argument expression (`T`, `u8`, `ptr(u8)`, `Entry(K, V)`).
+sema_spell_type_expr := fn(e : ptr(Expr), src : ptr(u8)) -> ir::TySpell {
+  match deref(e) {
+    Expr::Var(vs, vl) => { sema_spell_type(vs, vl, src) }
+    Expr::Call(cs, cl, na, ah) => { sema_spell_type(cs, cl, src) }
+    ## `ptr(T)` written as a type argument parses as the address-of form
+    Expr::AddrOf(at) => { sema_spell_wrap(sema_spell_type_expr(at, src), 1) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { sema_spell_none() }
+  }
+}
+## The number of `T : type` parameters of the list `ph`.
+sema_tparam_count := fn(ph : Option(ptr(mut Param)), src : ptr(u8)) -> usize {
+  mut c : usize = 0
+  mut pp := ph
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if str_at((src + pm.ts), pm.tl) == "type" { c += 1 }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  c
+}
+## What the call `ce` binds type parameter `pos` of its callee `decls[di]` to: the argument in that
+## position when every argument is written (Functions: a type argument is an ordinary argument), else —
+## the type arguments omitted, the value arguments in order — the type each value argument's spelling
+## gives the parameter where its declared type names it (`self : Result(T, E)` against a
+## `Result(Handle(u8), AllocError)` binds `T` to `Handle(u8)`).
+sema_spell_call_targ := fn(ce : ptr(Expr), di : usize, pos : usize, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  match deref(ce) {
+    Expr::Call(cs, cl, na, ah) => {
+      d := deref(decl_get(decls, di))
+      ntp := sema_tparam_count(d.params_head, src)
+      ## every argument written in parameter order, or only trailing defaulted ones left out (FN-5)
+      if na == d.arity or (na + ntp != d.arity and na < d.arity and pos < na) {
+        mut g : Option(ptr(mut Arg)) = ah
+        mut k : usize = 0
+        loop {
+          match g {
+            Some(gq) => {
+              ga := deref(arg_p(gq))
+              if k == pos { return sema_spell_type_expr(ga.e, src) }
+              k += 1
+              g = ga.next
+            }
+            None => { break }
+          }
+        }
+        return sema_spell_none()
+      }
+      if na + ntp != d.arity { return sema_spell_none() }
+      ## the parameter's name
+      mut pn_s : usize = 0
+      mut pn_n : usize = 0
+      mut q := d.params_head
+      mut qi : usize = 0
+      loop {
+        match q {
+          Some(qq) => {
+            qm := deref(param_p(qq))
+            if qi == pos { pn_s = qm.ns; pn_n = qm.nl }
+            qi += 1
+            q = qm.next
+          }
+          None => { break }
+        }
+      }
+      if pn_n == 0 { return sema_spell_none() }
+      mut pp := d.params_head
+      mut g2 : Option(ptr(mut Arg)) = ah
+      loop {
+        match pp {
+          Some(pq) => {
+            pm := deref(param_p(pq))
+            if str_at((src + pm.ts), pm.tl) != "type" {
+              match g2 {
+                Some(g2q) => {
+                  ga2 := deref(arg_p(g2q))
+                  pt : ir::TySpell = sema_spell_param(pm, src)
+                  r : ir::TySpell = sema_spell_unify(pt.s, pt.n, pn_s, pn_n, ir::sty_spell_get(ga2.e), decls, src, 0)
+                  if sema_spell_known(r) { return r }
+                  g2 = ga2.next
+                }
+                None => { return sema_spell_none() }
+              }
+            }
+            pp = pm.next
+          }
+          None => { break }
+        }
+      }
+      sema_spell_none()
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => { sema_spell_none() }
+  }
+}
+## The binding of the parameter named `[ps, ps+pn)` that matching the declared type `[ts, ts+tn)` against
+## the spelling `asp0` gives: the parameter itself binds the whole of it; an instance `F(…)` binds
+## through the same argument position of an instance of the same `F`.
+sema_spell_unify := fn(ts : usize, tn : usize, ps : usize, pn : usize, asp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8), depth : usize) -> ir::TySpell {
+  if tn == 0 or depth > 6 { return sema_spell_none() }
+  asp : ir::TySpell = sema_spell_norm(asp0, decls, src)
+  if not sema_spell_known(asp) { return sema_spell_none() }
+  if streq(src, ts, tn, ps, pn) { return asp }
+  if ir::spell_ptr_layer(asp) {
+    ## `ptr(X)` against a pointer to a value: `X` against that value's type
+    pp := lower_layout::ptr_target_pointee_n(src, ts, tn)
+    if pp == 0 { return sema_spell_none() }
+    return sema_spell_unify(lower_layout::ptr_target_pointee_s(src, ts, tn), pp, ps, pn, sema_spell_unwrap(asp), decls, src, depth + 1)
+  }
+  if not sema_spell_text(asp) { return sema_spell_none() }
+  pb := base_type_name(src, ts, tn)
+  ab := base_type_name(src, asp.s, asp.n)
+  if pb.n == tn or ab.n == asp.n or not streq(src, pb.s, pb.n, ab.s, ab.n) { return sema_spell_none() }
+  mut i : usize = 0
+  while i < 8 {
+    pa := typearg_at(src, pb.s, pb.n, i)
+    aa := typearg_at(src, ab.s, ab.n, i)
+    if pa.n == 0 or aa.n == 0 { return sema_spell_none() }
+    pu := sema_spell_unmut(pa.s, pa.n, src)
+    au := sema_spell_unmut(aa.s, aa.n, src)
+    r : ir::TySpell = sema_spell_unify(pu.s, pu.n, ps, pn, sema_spell_in(au.s, au.n, asp), decls, src, depth + 1)
+    if sema_spell_known(r) { return r }
+    i += 1
+  }
+  sema_spell_none()
+}
+## Has sema resolved a type for the value at all (a declaration's text, or a builtin byte view)?
+sema_spell_known := fn(sp : ir::TySpell) -> bool {
+  f : ir::SpellForm = sp.form
+  match f { SfText => { sp.n != 0 or sp.layers != 0 }; SfBytesView | SfI64 | SfU8 => { true } }
+}
+## Is `sp` the bare text `t`?
+sema_spell_text_is := fn(sp : ir::TySpell, t : str, src : ptr(u8)) -> bool {
+  sema_spell_text(sp) and str_at((src + sp.s), sp.n) == t
+}
+## Is `sp` a bare text spelling (no wrapper, not a builtin) that the text helpers can read?
+sema_spell_text := fn(sp : ir::TySpell) -> bool {
+  f : ir::SpellForm = sp.form
+  match f { SfText => { sp.n != 0 and sp.layers == 0 }; SfBytesView | SfI64 | SfU8 => { false } }
+}
+## A declared type's WHOLE spelling. The parser keeps only the head token of some annotations (a
+## parameter's or a field's `ptr(mut T)` is recorded as `ptr`, a generic instance as `Vec`) and leaves
+## the `( … )` group in the source right after it — the recovery `ptr_pointee_span` and `typearg_at`
+## already rely on — so a head followed by `(` is extended over its balanced group.
+sema_spell_type := fn(s : usize, n : usize, src : ptr(u8)) -> ir::TySpell {
+  if n == 0 { return sema_spell_none() }
+  if str_at((src + s + n), 1) != "(" { return sema_spell_at(s, n) }
+  mut p : usize = s + n
+  mut depth : usize = 0
+  loop {
+    c := str_at((src + p), 1)
+    if c == "(" { depth += 1 }
+    else if c == ")" {
+      depth -= 1
+      if depth == 0 { break }
+    }
+    else if c == "\n" or c == "{" or c == "}" { return sema_spell_none() }
+    p += 1
+  }
+  sema_spell_at(s, p + 1 - s)
+}
+## Does the spelling `[s, s+n)` mention a type parameter of the declaration whose parameter list is
+## `ph` — any parameter of a generic type (`any`), only the `T : type` ones of a fn? Such a type is
+## the instance's, not the declaration's.
+sema_spell_mentions_param := fn(ph : Option(ptr(mut Param)), src : ptr(u8), s : usize, n : usize, any : bool) -> bool {
+  mut i : usize = 0
+  while i < n {
+    mut j : usize = i
+    while j < n and sema_gref_ident_byte(src, s + j) { j += 1 }
+    if j > i {
+      mut pp := ph
+      loop {
+        match pp {
+          Some(ppq) => {
+            pm := deref(param_p(ppq))
+            if streq(src, pm.ns, pm.nl, s + i, j - i) and (any or str_at((src + pm.ts), pm.tl) == "type") { return true }
+            pp = pm.next
+          }
+          None => { break }
+        }
+      }
+      i = j
+    } else {
+      i += 1
+    }
+  }
+  false
+}
+## A parameter's declared type as written. The parser keeps a part of some (an array's or a tuple's
+## first element type, a qualified type's last segment), so the text after `name :` is read up to the
+## `,`, `)` or `=` that ends it at nesting depth 0.
+sema_spell_param := fn(pm : Param, src : ptr(u8)) -> ir::TySpell {
+  if pm.tl == 0 { return sema_spell_none() }
+  mut p := pm.ns + pm.nl
+  while str_at((src + p), 1) == " " { p += 1 }
+  if str_at((src + p), 1) != ":" { return sema_spell_type(pm.ts, pm.tl, src) }
+  p += 1
+  while str_at((src + p), 1) == " " { p += 1 }
+  st := p
+  mut depth : usize = 0
+  loop {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" { depth += 1 }
+    else if c == ")" or c == "]" {
+      if depth == 0 { break }
+      depth -= 1
+    }
+    else if (c == "," or c == "=") and depth == 0 { break }
+    else if c == "\n" or c == "{" { return sema_spell_type(pm.ts, pm.tl, src) }
+    p += 1
+  }
+  mut e := p
+  while e > st and str_at((src + e - 1), 1) == " " { e -= 1 }
+  if e <= st { return sema_spell_type(pm.ts, pm.tl, src) }
+  sema_spell_at(st, e - st)
+}
+## A declared type `[s, s+n)` written in the declaration being checked. A type parameter of that
+## declaration stays in it: the record names the instance's type through it (`sema_vty_spell`).
+sema_spell_decl := fn(s : usize, n : usize, src : ptr(u8)) -> ir::TySpell {
+  sema_spell_type(s, n, src)
+}
+## The kernel value type the spelling names: a scalar or a brand's underlying scalar (`sema_vty_name`),
+## else the class its resolved kind decides (an aggregate or a pointer). A type whose head is a type
+## parameter no instance in reach binds is `VcUnknown`: it is the instance's (§3.8.4, never a guess).
+sema_vty_spell := fn(sp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
+  sp : ir::TySpell = sema_spell_norm(sp0, decls, src)
+  if ir::spell_ptr_layer(sp) { return ir::vty_ptr() }
+  if ir::spell_array(sp) or ir::spell_bytes_view(sp) { return ir::vty_agg() }
+  if ir::spell_view_layer(sp) { return ir::vty_agg() }
+  if ir::spell_i64(sp) { return ir::vty_s(8) }
+  if ir::spell_u8(sp) { return ir::vty_u(1) }
+  if not sema_spell_text(sp) { return ir::vty_unknown() }
+  if sema_spell_head_is_param(sp, decls, src) { return ir::vty_unknown() }
+  vt : ir::VTy = sema_vty_name(src, sp.s, sp.n, decls)
+  if ir::vty_known(vt) { return vt }
+  sema_vty_kind(resolve_kind(src, sp.s, sp.n, decls, rt::vec_len(deref(decls))))
+}
+## The one declaration a name `[s, s+n)` written at `s` denotes, of the kind a call or a value read
+## wants (`want_fn`: a fn; else a module-level value binding). A qualified name is matched by its module
+## head (the segment match `sema_vis_pair` applies; a root alias `strbuf := rt` or a path alias
+## `vec := alloc::vec` is followed one hop, as `sema_qual_head_kinds` follows it). A bare name with one
+## candidate is that candidate; with several, the writing module's Modules §3 rank decides
+## (`type_mod_rank_from`, the rule `type_decl_index` applies to a type), and failing that the writing
+## module's own import of the name — a path alias `f := m::g` or a listed projection `(f) := m`, the two
+## shapes `sema_bound_name_in_module` recognises. `None` when nothing answers or two candidates share
+## the best rank — an overload set is not resolved here.
+sema_rec_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, want_fn : bool) -> Option(u64) {
+  if n == 0 { return Option(u64).None }
+  wm := sema_span_module(decls, src, s)
+  g := sema_gref_split(src, s, n)
+  if g.qual { return sema_rec_qual(decls, src, g.ms, g.ml, g.ns, g.nl, wm, want_fn) }
+  direct : Option(u64) = sema_rec_pick(decls, src, s, n, 0, 0, false, wm, want_fn)
+  match direct {
+    Some(di) => { return direct }
+    None => {}
+  }
+  if not wm.found { return Option(u64).None }
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if not d.is_fn and d.kind == lower_layout::DECL_KIND_VALUE and d.arity == 0 and d.ret_tl != 0 and sema_mod_seg_eq(src, d.mod_start, d.mod_len, wm.s, wm.n) {
+      if d.name_len != 0 and streq(src, d.name_start, d.name_len, s, n) {
+        ag := sema_gref_split(src, d.ret_ts, d.ret_tl)
+        if ag.qual { return sema_rec_qual(decls, src, ag.ms, ag.ml, ag.ns, ag.nl, wm, want_fn) }
+        return Option(u64).None
+      }
+      if d.name_len == 0 {
+        pg := sema_projection_head_for(src, d.ret_ts, d.ret_tl, s, n)
+        ## the projection's right-hand side is the module path: a lone head, or `a::b` split at its last `::`
+        if pg.qual and pg.nl == 0 { return sema_rec_qual(decls, src, pg.ms, pg.ml, s, n, wm, want_fn) }
+        if pg.qual { return sema_rec_qual(decls, src, pg.ms, pg.ns + pg.nl - pg.ms, s, n, wm, want_fn) }
+      }
+    }
+    i += 1
+  }
+  Option(u64).None
+}
+## `sema_rec_decl` for the name `[ns, ns+nl)` in the module `[hs, hs+hl)`, the head followed one alias hop.
+sema_rec_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), hs0 : usize, hl0 : usize, ns : usize, nl : usize, wm : SpanMod, want_fn : bool) -> Option(u64) {
+  if nl == 0 or hl0 == 0 { return Option(u64).None }
+  mut hs := hs0
+  mut hl := hl0
+  ## the writing module's own alias of the head shadows a module of that name (`strbuf := rt`)
+  own : ir::TySpell = sema_rec_head_alias_in(decls, src, hs, hl, wm)
+  if own.n != 0 { hs = own.s; hl = own.n }
+  else if not sema_head_is_module(decls, src, hs, hl) {
+    al := sema_rec_head_alias(decls, src, hs, hl)
+    hs = al.s
+    hl = al.n
+    if hl == 0 {
+      ## `Option::unwrap_or` — a type's name as the head names the module that declares the type
+      ti := type_decl_index(decls, rt::vec_len(deref(decls)), src, hs0, hl0)
+      if ti == 0 { return Option(u64).None }
+      td := deref(decl_get(decls, ti - 1))
+      if td.mod_len == 0 { return Option(u64).None }
+      hs = td.mod_start
+      hl = td.mod_len
+    }
+  }
+  sema_rec_pick(decls, src, ns, nl, hs, hl, true, wm, want_fn)
+}
+## The candidates named `[ns, ns+nl)` (in the module `[hs, hs+hl)` when `in_mod`): the only one, or the
+## one the writing module `wm` ranks highest under Modules §3; `None` for none or a tie at the top.
+sema_rec_pick := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, hs : usize, hl : usize, in_mod : bool, wm : SpanMod, want_fn : bool) -> Option(u64) {
+  first : Option(u64) = sema_rec_pick_by(decls, src, ns, nl, hs, hl, in_mod, wm, want_fn, Option(u64).None)
+  match first { Some(fi) => { return first }; None => {} }
+  if not want_fn or SEMA_REC_NA == 0 { return first }
+  ## several fns of that name: the call's argument count tells an overload set's members apart
+  sema_rec_pick_by(decls, src, ns, nl, hs, hl, in_mod, wm, want_fn, Option(u64).Some(u64(SEMA_REC_NA - 1)))
+}
+## The argument count + 1 of the call whose callee `sema_rec_decl` is resolving (0: not a call).
+mut SEMA_REC_NA : usize = 0
+## Does fn `d` take `na` arguments: every parameter written, or every type parameter omitted?
+sema_rec_arity_ok := fn(d : Decl, na : u64, src : ptr(u8)) -> bool {
+  usize(na) == d.arity or usize(na) + sema_tparam_count(d.params_head, src) == d.arity
+}
+## `sema_rec_pick`'s ranking over the candidates of the argument count `na` when one is given. Two fns
+## that tie at the top and share one module and one non-generic result spelling (a target's `when`
+## alternatives) answer the same type, so the first stands for them.
+sema_rec_pick_by := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, hs : usize, hl : usize, in_mod : bool, wm : SpanMod, want_fn : bool, na : Option(u64)) -> Option(u64) {
+  cnt := rt::vec_len(deref(decls))
+  mut found : Option(u64) = Option(u64).None
+  mut hits : usize = 0
+  mut best : i64 = 0 - 2
+  mut at_best : usize = 0
+  mut same_sig := true
+  mut fi0 : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    mut kind_ok := d.kind == lower_layout::DECL_KIND_FN or d.kind == lower_layout::DECL_KIND_SYSCALL
+    if not want_fn { kind_ok = d.kind == lower_layout::DECL_KIND_VALUE and not d.is_fn and d.arity == 0 and d.ret_tl == 0 }
+    match na { Some(nav) => { if kind_ok and not sema_rec_arity_ok(d, nav, src) { kind_ok = false } }; None => {} }
+    if kind_ok and streq(src, d.name_start, d.name_len, ns, nl) and (not in_mod or sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl)) {
+      hits += 1
+      mut r : i64 = 0 - 1
+      if wm.found { r = lower_layout::type_mod_rank_from(src, d.mod_start, d.mod_len, wm.s, wm.n) }
+      if r > best { best = r; at_best = 1; found = Option(u64).Some(u64(i)); fi0 = i; same_sig = true }
+      else if r == best {
+        at_best += 1
+        f0 := deref(decl_get(decls, fi0))
+        if d.is_generic or f0.is_generic or d.ret_tl == 0 or not streq(src, d.ret_ts, d.ret_tl, f0.ret_ts, f0.ret_tl) or not streq(src, d.mod_start, d.mod_len, f0.mod_start, f0.mod_len) { same_sig = false }
+      }
+    }
+    i += 1
+  }
+  if hits == 1 { return found }
+  if hits == 0 or best < 0 { return Option(u64).None }
+  if at_best != 1 and not (want_fn and same_sig) { return Option(u64).None }
+  found
+}
+## Does some declaration live in the module `[hs, hs+hl)` names (by path, `std::fmt` ~ `std__fmt`)?
+sema_head_is_module := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.mod_len != 0 and sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl) { return true }
+    i += 1
+  }
+  false
+}
+## The module path a head ALIAS `[hs, hs+hl)` stands for, in either parser shape `sema_qual_head_kinds`
+## names (a path alias's `ret` span, a root alias's `Var` value), when exactly one alias of that name
+## exists and its target is a module; `{0,0}` otherwise.
+sema_rec_head_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize) -> ir::TySpell {
+  cnt := rt::vec_len(deref(decls))
+  mut ts : usize = 0
+  mut tl : usize = 0
+  mut hits : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if not d.is_fn and d.kind == lower_layout::DECL_KIND_VALUE and d.arity == 0 and streq(src, d.name_start, d.name_len, hs, hl) {
+      if d.ret_tl != 0 { ts = d.ret_ts; tl = d.ret_tl; hits += 1 }
+      ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
+      else if unchecked bitcast(usize, d.value) != 0 {
+        rv := expr_var_span(d.value)
+        if rv.n != 0 { ts = rv.s; tl = rv.n; hits += 1 }
+      }
+    }
+    i += 1
+  }
+  if hits != 1 or not sema_head_is_module(decls, src, ts, tl) { return sema_spell_none() }
+  sema_spell_at(ts, tl)
+}
+## The module path the writing module `wm`'s own head alias `[hs, hs+hl)` stands for (either parser
+## shape `sema_rec_head_alias` reads), `{0,0}` when `wm` declares none or it names no module.
+sema_rec_head_alias_in := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize, wm : SpanMod) -> ir::TySpell {
+  if not wm.found { return sema_spell_none() }
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if not d.is_fn and d.kind == lower_layout::DECL_KIND_VALUE and d.arity == 0 and streq(src, d.name_start, d.name_len, hs, hl) and sema_mod_seg_eq(src, d.mod_start, d.mod_len, wm.s, wm.n) {
+      mut ts : usize = 0
+      mut tl : usize = 0
+      if d.ret_tl != 0 { ts = d.ret_ts; tl = d.ret_tl }
+      ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
+      else if unchecked bitcast(usize, d.value) != 0 {
+        rv := expr_var_span(d.value)
+        ts = rv.s
+        tl = rv.n
+      }
+      if tl != 0 and sema_head_is_module(decls, src, ts, tl) { return sema_spell_at(ts, tl) }
+      return sema_spell_none()
+    }
+    i += 1
+  }
+  sema_spell_none()
+}
+## A call's result type: an integer conversion or a brand constructor is its callee's name (Types §4.3,
+## §4.2); a call of one resolved fn is that fn's `-> R`, read in the callee with this call as the
+## instance that binds its type parameters (`allocate(a, T, …)`'s `Result(Handle(T), AllocError)`).
+sema_spell_call := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  if cl == 0 { return sema_spell_none() }
+  cnt := rt::vec_len(deref(decls))
+  if na == 1 and (sema_builtin_integer_cast_name(str_at((src + cs), cl)) or sema_brand_underlying(decls, cnt, src, cs, cl).n != 0) { return sema_spell_at(cs, cl) }
+  SEMA_REC_NA = na + 1
+  di := sema_rec_decl(decls, src, cs, cl, true)
+  SEMA_REC_NA = 0
+  match di {
+    Some(i) => {
+      d := deref(decl_get(decls, usize(i)))
+      rs : ir::TySpell = sema_spell_type(d.ret_ts, d.ret_tl, src)
+      if rs.n == 0 { return sema_spell_none() }
+      if not sema_spell_mentions_param(d.params_head, src, rs.s, rs.n, false) { return rs }
+      sema_spell_norm(sema_spell_of_decl(rs.s, rs.n, usize(i), cs + cl, Option(ptr(Expr)).Some(e)), decls, src)
+    }
+    None => {
+      ## the Stage-0 string intrinsics the lower emits with no declaration in reach: `str_at(p, n)` is a
+      ## `str`, `bytes(s)` its `[u8]` (Stdlib appendix §3.5, `bytes(in self) -> [u8]`) — one byte view
+      nm := str_at((src + cs), cl)
+      if (na == 2 and nm == "str_at") or (na == 1 and nm == "bytes") { return sema_spell_bytes_view() }
+      sema_spell_none()
+    }
+  }
+}
+## The declared type of field `[fs, fs+fl)` of the struct the spelling `bs` names, or of the struct its
+## `ptr(…)` points at (the checker's own auto-deref): the field's annotation, read in the instance `bs`
+## names when it mentions the struct's type parameters (`Box(u64)`'s `v : T` is `u64`, `Map(K, V)`'s
+## `keys : ptr(K)` is `ptr(K)` with `K` bound by the instance). An instance spelled in terms of an
+## enclosing instance's parameters binds a bare-parameter field only: a nested mention would need both
+## instances at once, and none is recorded rather than one guessed.
+sema_spell_field := fn(bs : ir::TySpell, fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
+  bw : ir::TySpell = sema_spell_norm(bs, decls, src)
+  ## the checker's auto-deref through a `ptr(x)` of a value
+  mut b0 : ir::TySpell = bw
+  if ir::spell_ptr_layer(bw) { b0 = sema_spell_norm(sema_spell_unwrap(bw), decls, src) }
+  ## a view's `ptr` points at its elements (`len` is a `usize`, `sema_vty_builtin`)
+  if sema_spell_is_view(b0, src) {
+    if str_at((src + fs), fl) == "ptr" { return sema_spell_wrap(sema_spell_elem(b0, decls, src), 1) }
+    return sema_spell_none()
+  }
+  if not sema_spell_text(b0) { return sema_spell_none() }
+  mut ts := b0.s
+  mut tn := b0.n
+  pn := lower_layout::ptr_target_pointee_n(src, ts, tn)
+  if pn != 0 { ts = lower_layout::ptr_target_pointee_s(src, ts, tn); tn = pn }
+  b : ir::TySpell = sema_spell_norm(sema_spell_in(ts, tn, b0), decls, src)
+  ## a view's fields are builtin (`sema_vty_builtin`): no declaration text spells them
+  if not sema_spell_text(b) or sema_spell_is_view(b, src) or sema_spell_head_is_param(b, decls, src) { return sema_spell_none() }
+  bn := base_type_name(src, b.s, b.n)
+  if bn.n == 0 { return sema_spell_none() }
+  di := sema_type_decl_q(decls, src, bn.s, bn.n)
+  if di == 0 { return sema_spell_none() }
+  d := deref(decl_get(decls, di - 1))
+  ## a union member read is its payload (Types §6.3)
+  if d.kind == lower_layout::DECL_KIND_ENUM and lower_layout::is_union_decl(decls, src, bn.s, bn.n) { return sema_spell_payload(b, fs, fl, 1, 0, decls, src, a) }
+  if d.kind != lower_layout::DECL_KIND_STRUCT { return sema_spell_none() }
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) {
+          fsp : ir::TySpell = sema_spell_type(fd.ts, fd.tl, src)
+          if not d.is_generic or not sema_spell_mentions_param(d.params_head, src, fsp.s, fsp.n, true) { return fsp }
+          if sema_spell_mentions_env(b, decls, src) {
+            tp : Option(u64) = sema_tparam_pos(decls, di - 1, src, fsp.s, fsp.n)
+            match tp {
+              Some(pos) => {
+                ta := typearg_at(src, bn.s, bn.n, usize(pos))
+                um := sema_spell_unmut(ta.s, ta.n, src)
+                return sema_spell_norm(sema_spell_in(um.s, um.n, b), decls, src)
+              }
+              None => { return sema_spell_none() }
+            }
+          }
+          return sema_spell_norm(sema_spell_of_decl(fsp.s, fsp.n, di - 1, bn.s + bn.n, Option(ptr(Expr)).None), decls, src)
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  sema_spell_none()
+}
+## The declaration (index + 1, 0 = none) a type name `[s, s+n)` names. A qualified `rt::Vec` is the
+## `Vec` of the module its head names (the head followed through an alias, as a qualified call's is);
+## a bare name ranks by Modules §3 (`type_decl_index`).
+sema_type_decl_q := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
+  g := sema_gref_split(src, s, n)
+  if not g.qual { return type_decl_index(decls, rt::vec_len(deref(decls)), src, s, n) }
+  wm := sema_span_module(decls, src, s)
+  mut hs := g.ms
+  mut hl := g.ml
+  own : ir::TySpell = sema_rec_head_alias_in(decls, src, hs, hl, wm)
+  if own.n != 0 { hs = own.s; hl = own.n }
+  else if not sema_head_is_module(decls, src, hs, hl) {
+    al := sema_rec_head_alias(decls, src, hs, hl)
+    if al.n == 0 { return 0 }
+    hs = al.s
+    hl = al.n
+  }
+  cnt := rt::vec_len(deref(decls))
+  mut found : usize = 0
+  mut hits : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if (d.kind == lower_layout::DECL_KIND_STRUCT or d.kind == lower_layout::DECL_KIND_ENUM) and streq(src, d.name_start, d.name_len, g.ns, g.nl) and sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl) { found = i + 1; hits += 1 }
+    i += 1
+  }
+  if hits != 1 { return 0 }
+  found
+}
+## Is `sp` a view spelling — `str` (`[u8]`) or `[T]` — rather than a declared struct (Types §7)?
+sema_spell_is_view := fn(sp : ir::TySpell, src : ptr(u8)) -> bool {
+  if ir::spell_bytes_view(sp) or ir::spell_view_layer(sp) { return true }
+  if not sema_spell_text(sp) { return false }
+  if sp.n > 3 and str_at((src + sp.s), 3) == "..." { return true }
+  if sp.n == 3 and str_at((src + sp.s), 3) == "str" { return true }
+  vb := base_type_name(src, sp.s, sp.n)
+  if vb.n == 5 and vb.n < sp.n and str_at((src + vb.s), 5) == "Slice" { return true }
+  if str_at((src + sp.s), 1) != "[" { return false }
+  mut i : usize = 1
+  while i < sp.n {
+    if str_at((src + sp.s + i), 1) == ";" { return false }
+    i += 1
+  }
+  true
+}
+## What `deref` of a value of type `sp` reads: the pointee inside `ptr(…)`, in `sp`'s scope.
+sema_spell_pointee := fn(sp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  sp : ir::TySpell = sema_spell_norm(sp0, decls, src)
+  if ir::spell_ptr_layer(sp) { return sema_spell_norm(sema_spell_unwrap(sp), decls, src) }
+  if not sema_spell_text(sp) { return sema_spell_none() }
+  ps := lower_layout::ptr_target_pointee_s(src, sp.s, sp.n)
+  pn := lower_layout::ptr_target_pointee_n(src, sp.s, sp.n)
+  sema_spell_norm(sema_spell_in(ps, pn, sp), decls, src)
+}
+## What an element read of a value of type `sp` reads: an array literal's element, `[T; N]`'s and
+## `[T]`'s `T`, `Slice(T)`'s `T`, in `sp`'s scope.
+sema_spell_elem := fn(sp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  sp : ir::TySpell = sema_spell_norm(sp0, decls, src)
+  if ir::spell_array(sp) or ir::spell_view_layer(sp) { return sema_spell_norm(sema_spell_unwrap(sp), decls, src) }
+  if ir::spell_bytes_view(sp) { return sema_spell_u8() }
+  if not sema_spell_text(sp) { return sema_spell_none() }
+  ## a slice-variadic parameter `xs : ...T` is a view of `T` (Functions §7.2)
+  if sp.n > 3 and str_at((src + sp.s), 3) == "..." { return sema_spell_norm(sema_spell_in(sp.s + 3, sp.n - 3, sp), decls, src) }
+  if sema_spell_text_is(sp, "str", src) { return sema_spell_u8() }
+  ae := lower_layout::arr_field_elem_span(src, sp.s, sp.n)
+  if ae.n != 0 { return sema_spell_norm(sema_spell_in(ae.s, ae.n, sp), decls, src) }
+  bn := base_type_name(src, sp.s, sp.n)
+  if bn.n == 5 and str_at((src + bn.s), 5) == "Slice" {
+    ta := typearg_at(src, bn.s, bn.n, 0)
+    return sema_spell_norm(sema_spell_in(ta.s, ta.n, sp), decls, src)
+  }
+  sema_spell_none()
+}
+## What `v?` yields for a `v` of type `sp`: the success payload of `Result(T, E)` / `Option(T)`.
+sema_spell_try := fn(sp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  sp : ir::TySpell = sema_spell_norm(sp0, decls, src)
+  if not sema_spell_text(sp) { return sema_spell_none() }
+  bn := base_type_name(src, sp.s, sp.n)
+  w := str_at((src + bn.s), bn.n)
+  if w == "Result" or w == "Option" {
+    ta := typearg_at(src, bn.s, bn.n, 0)
+    return sema_spell_norm(sema_spell_in(ta.s, ta.n, sp), decls, src)
+  }
+  sema_spell_none()
+}
+## The declared type of the module-level value binding `[s, s+n)`: its annotation, else the type its
+## initializer was recorded with.
+sema_spell_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ir::TySpell {
+  di := sema_rec_decl(decls, src, s, n, false)
+  match di {
+    Some(i) => {
+      d := deref(decl_get(decls, usize(i)))
+      ann := local_type_span(src, d.name_start, d.name_len)
+      if ann.n != 0 { return sema_spell_type(ann.s, ann.n, src) }
+      ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
+      if unchecked bitcast(usize, d.value) != 0 {
+        vsp : ir::TySpell = ir::sty_spell_get(d.value)
+        if sema_spell_known(vsp) { return vsp }
+        return sema_spell_init(d.value, src)
+      }
+      sema_spell_none()
+    }
+    None => { sema_spell_none() }
+  }
+}
+## The spelling a module value's initializer gives it before any check has recorded one: a struct
+## literal's type, an array literal of them, a string literal's byte view.
+sema_spell_init := fn(e : ptr(Expr), src : ptr(u8)) -> ir::TySpell {
+  match deref(e) {
+    Expr::StructLit(scs, scl, snf, sfh) => {
+      st : ir::TySpell = sema_spell_type(scs, scl, src)
+      if st.n > scl and str_at((src + st.s + st.n), 1) == "(" { st } else { sema_spell_at(scs, scl) }
+    }
+    Expr::ArrayLit(an, ah) => {
+      match ah {
+        Some(aq) => { a0 := deref(arg_p(aq)); sema_spell_array_of(sema_spell_init(a0.e, src)) }
+        None => { sema_spell_none() }
+      }
+    }
+    Expr::StrLit(ls, ln, lbl, lps, lpn) => { if lpn == 0 { sema_spell_bytes_view() } else { sema_spell_none() } }
+    ## an unannotated module value's literal has no context: the native signed integer (Types §9.1)
+    Expr::Num(nv, nvs, nvn) => { sema_spell_i64() }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { sema_spell_none() }
+  }
+}
+## The spelling of `e`'s type from its shape and its children's spellings (they are recorded first).
+sema_spell_shape := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
+  match deref(e) {
+    Expr::Var(vs, vl) => {
+      lo : Option(u64) = sema_vty_local_ns(locals, nloc, src, vs, vl)
+      match lo {
+        Some(dns) => { ir::sty_bind_spell_get(usize(dns)) }
+        None => { sema_spell_global(decls, src, vs, vl) }
+      }
+    }
+    Expr::Call(cs, cl, na, ah) => {
+      ## a call of a fn-typed local or parameter: the `-> R` of its `fn(…) -> R` type
+      lf : Option(u64) = sema_vty_local_ns(locals, nloc, src, cs, cl)
+      match lf {
+        Some(lfn) => { sema_spell_fn_result(ir::sty_bind_spell_get(usize(lfn)), src) }
+        None => {
+          sc : ir::TySpell = sema_spell_call(e, cs, cl, na, decls, src)
+          if sema_spell_known(sc) { sc } else { sema_spell_call_more(e, cs, cl, na, ah, decls, src, a) }
+        }
+      }
+    }
+    Expr::Field(b, fs, fl) => { sema_spell_field(sema_spell_child(b, locals, nloc, decls, src, a), fs, fl, decls, src, a) }
+    Expr::Deref(p) => { sema_spell_pointee(sema_spell_child(p, locals, nloc, decls, src, a), decls, src) }
+    Expr::Index(b, i) => {
+      bsp : ir::TySpell = sema_spell_child(b, locals, nloc, decls, src, a)
+      tc : ir::TySpell = sema_spell_tuple_part(bsp, i, decls, src)
+      if sema_spell_known(tc) { tc } else { sema_spell_elem(bsp, decls, src) }
+    }
+    Expr::Try(inner) => { sema_spell_try(sema_spell_child(inner, locals, nloc, decls, src, a), decls, src) }
+    Expr::Unchecked(inner) => { sema_spell_child(inner, locals, nloc, decls, src, a) }
+    Expr::Bitcast(inner, ts, tl) => { sema_spell_decl(ts, tl, src) }
+    ## a generic instance's literal `Box(u64)(v = 1)` spells its type through the first `( … )` group
+    Expr::StructLit(scs, scl, snf, sfh) => {
+      st : ir::TySpell = sema_spell_type(scs, scl, src)
+      if st.n > scl and str_at((src + st.s + st.n), 1) == "(" { st } else { sema_spell_at(scs, scl) }
+    }
+    ## a string literal is a `str`; an `embed(…)` (`pn != 0`) is a `[u8; N]` the checker leaves unknown
+    Expr::StrLit(ls, ln, lbl, lps, lpn) => { if lpn == 0 { sema_spell_bytes_view() } else { sema_spell_none() } }
+    ## a sub-slice of a view is a view of the same element type
+    Expr::Slice(sb, slo, shi) => {
+      bsp : ir::TySpell = sema_spell_norm(sema_spell_child(sb, locals, nloc, decls, src, a), decls, src)
+      if sema_spell_is_view(bsp, src) { bsp }
+      else {
+        ## a sub-slice of an array is a view of its element type
+        sel : ir::TySpell = sema_spell_elem(bsp, decls, src)
+        if sema_spell_known(sel) and (ir::spell_array(bsp) or sema_spell_text(bsp)) { sema_spell_wrap(sel, 3) } else { sema_spell_none() }
+      }
+    }
+    ## an array literal's elements have one type: the first one's
+    Expr::ArrayLit(an, ah) => {
+      match ah {
+        Some(aq) => { a0 := deref(arg_p(aq)); sema_spell_array_of(ir::sty_spell_get(a0.e)) }
+        None => { sema_spell_none() }
+      }
+    }
+    ## both arms of a value `if` have the one type the checker agreed
+    Expr::If(c, th, el) => {
+      tsp : ir::TySpell = ir::sty_spell_get(th)
+      if sema_spell_known(tsp) { tsp } else { ir::sty_spell_get(el) }
+    }
+    Expr::Match(sc, mh) => { sema_spell_arms(mh) }
+    ## `ptr(x)` points at a value of `x`'s type; `E.V(…)` / `Result(u64, E).Ok(…)` has the type its head names
+    Expr::AddrOf(ax) => { sema_spell_wrap(sema_spell_child(ax, locals, nloc, decls, src, a), 1) }
+    Expr::EnumLit(es, el, evs, evl, en, eah) => { sema_spell_type(es, el, src) }
+    ## an arithmetic operator over an aggregate is a call of the operator fn declared for it (`+ := fn(a : W, b : W) -> W`)
+    Expr::Bin(bop, bl, br) => { sema_spell_operator(bop, sema_spell_child(bl, locals, nloc, decls, src, a), decls, src) }
+    Expr::Num | Expr::BoolLit
+      | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { sema_spell_none() }
+  }
+}
+## A value `match`'s spelling: the first arm value that has one (the checker agreed the arms' types).
+## A child's spelling. The checker reads some bases without checking them as expressions (an indexed
+## or projected name it looks up itself), so a name with no record of its own is read here the way
+## `check_expr` would record it.
+sema_spell_child := fn(c : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
+  sp : ir::TySpell = ir::sty_spell_get(c)
+  if sema_spell_known(sp) { return sp }
+  match deref(c) {
+    Expr::Var(vs, vl) => { sema_spell_shape(c, locals, nloc, decls, src, a) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => { sp }
+  }
+}
+## Component `i` of a tuple-typed value (`t.N` parses as `Index(t, Num(N))`): the `N`-th type of the
+## `( … )` its spelling is; none when `sp` is not a tuple or the index not a literal.
+sema_spell_tuple_part := fn(sp0 : ir::TySpell, i : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  sp : ir::TySpell = sema_spell_norm(sp0, decls, src)
+  if sp.n < 2 or not sema_spell_text(sp) or str_at((src + sp.s), 1) != "(" { return sema_spell_none() }
+  match deref(i) {
+    Expr::Num(v, ns, nn) => {
+      if v < 0 { return sema_spell_none() }
+      ta := typearg_at(src, sp.s, 0, usize(v))
+      um := sema_spell_unmut(ta.s, ta.n, src)
+      sema_spell_norm(sema_spell_in(um.s, um.n, sp), decls, src)
+    }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => { sema_spell_none() }
+  }
+}
+## A call `sema_spell_call` found no one declaration for: a method-style call of a fn-typed field of its
+## receiver (`o.f(11)`, desugared `f(o, 11)`); one of several same-named fns told apart by the
+## receiver's type (`r.unwrap()` over a `Result` against `Option`'s `unwrap`); an `atomic::` operation,
+## whose value is the pointee of its pointer operand (Concurrency §6).
+sema_spell_call_more := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
+  if na == 0 { return sema_spell_none() }
+  match ah {
+    Some(aq) => {
+      a0 := deref(arg_p(aq))
+      rsp : ir::TySpell = sema_spell_norm(ir::sty_spell_get(a0.e), decls, src)
+      if cl > 8 and str_at((src + cs), 8) == "atomic::" {
+        nm := str_at((src + cs + 8), cl - 8)
+        if nm == "load" or nm == "swap" or nm == "fetch_add" or nm == "fetch_sub" or nm == "fetch_and" or nm == "fetch_or" or nm == "fetch_xor" {
+          return sema_spell_pointee(rsp, decls, src)
+        }
+        return sema_spell_none()
+      }
+      ## `volatile::load(p)` reads the pointee too (Memory: a volatile access is an ordinary typed one)
+      if cl == 14 and str_at((src + cs), 14) == "volatile::load" { return sema_spell_pointee(rsp, decls, src) }
+      if not sema_spell_known(rsp) { return sema_spell_none() }
+      ff : ir::TySpell = sema_spell_field(rsp, cs, cl, decls, src, a)
+      if sema_spell_known(ff) { return sema_spell_fn_result(ff, src) }
+      ## the same-named fns whose first value parameter has the receiver's type head
+      cnt := rt::vec_len(deref(decls))
+      mut pick : Option(u64) = Option(u64).None
+      mut hits : usize = 0
+      mut i : usize = 0
+      while i < cnt {
+        d := deref(decl_get(decls, i))
+        if d.kind == lower_layout::DECL_KIND_FN and streq(src, d.name_start, d.name_len, cs, cl) and sema_rec_arity_ok(d, u64(na), src) and sema_first_value_param_takes(d, rsp, decls, src) {
+          hits += 1
+          pick = Option(u64).Some(u64(i))
+        }
+        i += 1
+      }
+      if hits != 1 { return sema_spell_none() }
+      match pick {
+        Some(pi) => {
+          d2 := deref(decl_get(decls, usize(pi)))
+          rs : ir::TySpell = sema_spell_type(d2.ret_ts, d2.ret_tl, src)
+          if rs.n == 0 { return sema_spell_none() }
+          if not sema_spell_mentions_param(d2.params_head, src, rs.s, rs.n, false) { return rs }
+          sema_spell_norm(sema_spell_of_decl(rs.s, rs.n, usize(pi), cs + cl, Option(ptr(Expr)).Some(e)), decls, src)
+        }
+        None => { sema_spell_none() }
+      }
+    }
+    None => { sema_spell_none() }
+  }
+}
+## The result type of the one non-generic operator fn for `op` whose first parameter takes `lsp`'s
+## type (Functions: an operator is a fn named by its symbol); none for a scalar operand or no such fn.
+sema_spell_operator := fn(op : u8, lsp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  lsp : ir::TySpell = sema_spell_norm(lsp0, decls, src)
+  if not sema_spell_text(lsp) { return sema_spell_none() }
+  lv : ir::VTy = sema_vty_spell(lsp, decls, src)
+  c : ir::VCls = lv.cls
+  match c { VcAgg => {}; VcAbsent | VcUnknown | VcLit | VcInt | VcBool | VcPtr | VcFloat => { return sema_spell_none() } }
+  sym := sema_op_symbol(op)
+  if sym.len == 0 { return sema_spell_none() }
+  cnt := rt::vec_len(deref(decls))
+  mut hits : usize = 0
+  mut rs : usize = 0
+  mut rn : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == lower_layout::DECL_KIND_FN and not d.is_generic and d.arity == 2 and str_at((src + d.name_start), d.name_len) == sym and sema_first_value_param_takes(d, lsp, decls, src) {
+      hits += 1
+      rs = d.ret_ts
+      rn = d.ret_tl
+    }
+    i += 1
+  }
+  if hits != 1 { return sema_spell_none() }
+  sema_spell_type(rs, rn, src)
+}
+## The element a `for` over a value of type `isp` binds through the iterable protocol (Stdlib appendix
+## §2.4): the one `iter` whose receiver takes that type returns a view `[X]` / `Slice(X)`, and `X` —
+## when it is `iter`'s own type parameter — is what matching the receiver's declared type against
+## `isp` binds it to.
+sema_spell_iter_elem := fn(isp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  isp : ir::TySpell = sema_spell_norm(isp0, decls, src)
+  if not sema_spell_text(isp) { return sema_spell_none() }
+  cnt := rt::vec_len(deref(decls))
+  mut hits : usize = 0
+  mut pick : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == lower_layout::DECL_KIND_FN and d.name_len == 4 and str_at((src + d.name_start), 4) == "iter" and sema_first_value_param_takes(d, isp, decls, src) { hits += 1; pick = i }
+    i += 1
+  }
+  if hits != 1 { return sema_spell_none() }
+  d := deref(decl_get(decls, pick))
+  rs : ir::TySpell = sema_spell_type(d.ret_ts, d.ret_tl, src)
+  el : ir::TySpell = sema_spell_elem(rs, decls, src)
+  if not sema_spell_text(el) { return sema_spell_none() }
+  tp : Option(u64) = sema_tparam_pos(decls, pick, src, el.s, el.n)
+  match tp {
+    Some(tpi) => {}
+    None => {
+      if sema_spell_mentions_param(d.params_head, src, el.s, el.n, false) { return sema_spell_none() }
+      return el
+    }
+  }
+  ## the receiver parameter's declared type, matched against the iterated value's
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if str_at((src + pm.ts), pm.tl) != "type" {
+          pt : ir::TySpell = sema_spell_param(pm, src)
+          return sema_spell_unify(pt.s, pt.n, el.s, el.n, isp, decls, src, 0)
+        }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  sema_spell_none()
+}
+## Does fn `d`'s first value parameter take a value of the type `rsp` names, by head (`Result(T, E)`
+## takes a `Result(u64, E2)`)?
+sema_first_value_param_takes := fn(d : Decl, rsp : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if str_at((src + pm.ts), pm.tl) != "type" {
+          pt : ir::TySpell = sema_spell_param(pm, src)
+          if not sema_spell_text(pt) or not sema_spell_text(rsp) { return false }
+          pb := base_type_name(src, pt.s, pt.n)
+          rb := base_type_name(src, rsp.s, rsp.n)
+          return streq(src, pb.s, pb.n, rb.s, rb.n)
+        }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+## The result type `R` of a function type spelled `fn(…) -> R`, in the scope `sp` is read in.
+sema_spell_fn_result := fn(sp : ir::TySpell, src : ptr(u8)) -> ir::TySpell {
+  if sp.n < 4 or not sema_spell_text(sp) or str_at((src + sp.s), 3) != "fn(" { return sema_spell_none() }
+  mut p := sp.s + 2
+  mut depth : usize = 0
+  e := sp.s + sp.n
+  while p < e {
+    c := str_at((src + p), 1)
+    if c == "(" { depth += 1 }
+    else if c == ")" {
+      depth -= 1
+      if depth == 0 { break }
+    }
+    p += 1
+  }
+  p += 1
+  while p < e and str_at((src + p), 1) == " " { p += 1 }
+  if p + 2 > e or str_at((src + p), 2) != "->" { return sema_spell_none() }
+  p += 2
+  while p < e and str_at((src + p), 1) == " " { p += 1 }
+  if p >= e { return sema_spell_none() }
+  sema_spell_in(p, e - p, sp)
+}
+sema_spell_arms := fn(mh : Option(ptr(mut Arm))) -> ir::TySpell {
+  mut arm : Option(ptr(mut Arm)) = mh
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        ## null-ok: Arm.body — an arm with a statement body carries a null value expression (ast.al).
+        if unchecked bitcast(usize, am.body) != 0 {
+          bsp : ir::TySpell = ir::sty_spell_get(am.body)
+          if sema_spell_known(bsp) { return bsp }
+        }
+        arm = am.next
+      }
+      None => { break }
+    }
+  }
+  sema_spell_none()
+}
+## The declared type of payload component `bi` of the variant `[vs, vs+vl)` (a pattern, possibly
+## qualified `E::V`) of the enum the scrutinee spelling `scs` names — or, with no scrutinee spelling,
+## the enum the pattern's own head names — for an arm binding `nbind` names. The component is read from
+## the variant's `( … )` group in source, as `lower_layout::variant_bind_pointee` reads it, in the
+## instance the scrutinee names when it mentions the enum's type parameters (`sema_spell_field`'s rule).
+## A binding count that differs from the variant's arity binds a tuple, not a component: no spelling.
+sema_spell_payload := fn(scs0 : ir::TySpell, vs : usize, vl : usize, nbind : usize, bi : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
+  if vl == 0 { return sema_spell_none() }
+  scs : ir::TySpell = sema_spell_norm(scs0, decls, src)
+  if (sema_spell_known(scs) and not sema_spell_text(scs)) or sema_spell_head_is_param(scs, decls, src) { return sema_spell_none() }
+  g := sema_gref_split(src, vs, vl)
+  mut es := scs.s
+  mut en := scs.n
+  mut env : ir::TySpell = scs
+  mut vns := vs
+  mut vnl := vl
+  mut qs : usize = 0
+  mut ql : usize = 0
+  if g.qual { vns = g.ns; vnl = g.nl; qs = g.ms; ql = g.ml }
+  else {
+    ## `E.V` — the enum's name and the variant's, split at the last `.`
+    mut k := vl
+    while k > 0 and str_at((src + vs + k - 1), 1) != "." { k -= 1 }
+    if k > 1 { qs = vs; ql = k - 1; vns = vs + k; vnl = vl - k }
+  }
+  if en == 0 and ql != 0 { es = qs; en = ql; env = sema_spell_at(qs, ql) }
+  if en == 0 { return sema_spell_none() }
+  ebn := base_type_name(src, es, en)
+  if ebn.n == 0 { return sema_spell_none() }
+  di := sema_type_decl_q(decls, src, ebn.s, ebn.n)
+  if di == 0 { return sema_spell_none() }
+  d := deref(decl_get(decls, di - 1))
+  if d.kind != lower_layout::DECL_KIND_ENUM { return sema_spell_none() }
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, vns, vnl) {
+          if fd.arity != nbind or bi >= nbind { return sema_spell_none() }
+          mut op := fd.ns + fd.nl
+          while str_at((src + op), 1) == " " { op += 1 }
+          if str_at((src + op), 1) != "(" { return sema_spell_none() }
+          comp := typearg_at(src, op, 0, bi)
+          if comp.n == 0 { return sema_spell_none() }
+          if not d.is_generic or not sema_spell_mentions_param(d.params_head, src, comp.s, comp.n, true) { return sema_spell_at(comp.s, comp.n) }
+          if sema_spell_mentions_env(env, decls, src) {
+            tp : Option(u64) = sema_tparam_pos(decls, di - 1, src, comp.s, comp.n)
+            match tp {
+              Some(pos) => {
+                ta := typearg_at(src, ebn.s, ebn.n, usize(pos))
+                um := sema_spell_unmut(ta.s, ta.n, src)
+                return sema_spell_norm(sema_spell_in(um.s, um.n, env), decls, src)
+              }
+              None => { return sema_spell_none() }
+            }
+          }
+          return sema_spell_norm(sema_spell_of_decl(comp.s, comp.n, di - 1, ebn.s + ebn.n, Option(ptr(Expr)).None), decls, src)
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  sema_spell_none()
+}
+## Bind each payload variable of arm `am` over the scrutinee `sc` with its component's declared type.
+sema_spell_arm_binds := fn(sc : ptr(Expr), am : Arm, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) {
+  if not ir::sty_on() { return }
+  nb := bind_count(am.binds_head)
+  scs : ir::TySpell = ir::sty_spell_get(sc)
+  mut bi : usize = 0
+  mut bd := am.binds_head
+  loop {
+    match bd {
+      Some(bdq) => {
+        sema_spell_bind(bnd_ns(bdq), sema_spell_payload(scs, am.vs, am.vl, nb, bi, decls, src, a), decls, src)
+        bi += 1
+        bd = bnd_next(bdq)
+      }
+      None => { break }
+    }
+  }
+}
+## The value types of the builtin parts no declaration spells: a view's `len` is a `usize` and its
+## `ptr` a pointer (the `Slice(T)` pair, Stdlib appendix §3.5), an array's `len` a `usize`, an element
+## of a byte view a `u8` (`str` is `[u8]`, Types §7), and `size(T)` / `align(T)` a `usize` (Types
+## §3.3) where no declaration of that name is in reach.
+sema_vty_builtin := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
+  match deref(e) {
+    Expr::Field(fb, fs, fl) => {
+      bsp : ir::TySpell = sema_spell_norm(ir::sty_spell_get(fb), decls, src)
+      fname := str_at((src + fs), fl)
+      if ir::spell_array(bsp) or (sema_spell_text(bsp) and lower_layout::arr_field_elem_span(src, bsp.s, bsp.n).n != 0) {
+        if fname == "len" { return ir::vty_u(8) }
+        return ir::vty_unknown()
+      }
+      if not sema_spell_is_view(bsp, src) { return ir::vty_unknown() }
+      if fname == "len" { return ir::vty_u(8) }
+      if fname == "ptr" { return ir::vty_ptr() }
+      ir::vty_unknown()
+    }
+    Expr::Index(ib, ii) => {
+      isp : ir::TySpell = ir::sty_spell_get(ib)
+      if ir::spell_bytes_view(isp) or (sema_spell_text(isp) and isp.n == 3 and str_at((src + isp.s), 3) == "str") { return ir::vty_u(1) }
+      ir::vty_unknown()
+    }
+    Expr::Call(cs, cl, na, ah) => {
+      nm := str_at((src + cs), cl)
+      ## `s.len()` of a byte view, a view or an array where no `len` of that receiver is declared
+      if na == 1 and nm == "len" {
+        match ah {
+          Some(lq) => {
+            l0 := deref(arg_p(lq))
+            lsp : ir::TySpell = sema_spell_norm(ir::sty_spell_get(l0.e), decls, src)
+            if sema_spell_is_view(lsp, src) or ir::spell_array(lsp) {
+              SEMA_REC_NA = 2
+              ld : Option(u64) = sema_rec_decl(decls, src, cs, cl, true)
+              SEMA_REC_NA = 0
+              match ld { Some(ldd) => { return ir::vty_unknown() }; None => { return ir::vty_u(8) } }
+            }
+          }
+          None => {}
+        }
+      }
+      if na == 1 and (nm == "size" or nm == "align") {
+        di : Option(u64) = sema_rec_decl(decls, src, cs, cl, true)
+        match di { Some(dd) => { return ir::vty_unknown() }; None => { return ir::vty_u(8) } }
+      }
+      ir::vty_unknown()
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { ir::vty_unknown() }
+  }
+}
+## Record `e`'s spelling, and the value type it names where the record so far has none.
+sema_spell_record := fn(e : ptr(Expr), t : Ty, locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) {
+  sp0 : ir::TySpell = sema_spell_shape(e, locals, nloc, decls, src, a)
+  ## with no spelling from the node's own parts, the type name the checker answered (its `Ty` keeps a
+  ## pointer's pointee name, so a pointer is a pointer to that)
+  mut sp : ir::TySpell = sp0
+  if not sema_spell_known(sp0) and t.nl != 0 {
+    tk : TyKind = t.kind
+    match tk {
+      TyPtr => { sp = sema_spell_wrap(sema_spell_type(t.ns, t.nl, src), 1) }
+      TyStruct | TyEnum | TyBrand | TyInt | TyBool | TyHiddenStruct | TyHiddenEnum => { sp = sema_spell_type(t.ns, t.nl, src) }
+      TyUnknown | TyStr | TyArray | TyWrapper | TyTupleMark | TyOther => {}
+    }
+  }
+  if not sema_spell_known(sp) {
+    cur0 : ir::VTy = ir::sty_get(e)
+    if ir::vty_known(cur0) or ir::vty_is_lit(cur0) { return }
+    bt : ir::VTy = sema_vty_builtin(e, decls, src)
+    if ir::vty_known(bt) { ir::sty_put(e, bt) }
+    return
+  }
+  ir::sty_spell_put(e, sp)
+  cur : ir::VTy = ir::sty_get(e)
+  if ir::vty_known(cur) or ir::vty_is_lit(cur) { return }
+  mut vt : ir::VTy = sema_vty_spell(sp, decls, src)
+  if not ir::vty_known(vt) { vt = sema_vty_builtin(e, decls, src) }
+  if ir::vty_known(vt) { ir::sty_put(e, vt) }
+}
+## A binding declared with the spelling `sp`: its value type and its spelling, read by each use.
+sema_spell_bind := fn(ns : usize, sp : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) {
+  if not sema_spell_known(sp) and sema_spell_known(ir::sty_bind_spell_get(ns)) { return }
+  ir::sty_bind_spell_put(ns, sp)
+  cur : ir::VTy = ir::sty_bind_get(ns)
+  if ir::vty_known(cur) { return }
+  vt : ir::VTy = sema_vty_spell(sp, decls, src)
+  if ir::vty_known(vt) { ir::sty_bind_put(ns, vt) }
 }
 ## The declared result type of the fn being checked, for `return` contexts.
 mut SEMA_VTY_RET_S : usize = 0
@@ -9396,6 +10824,7 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
                 None => { break }
               }
             }
+            sema_spell_arm_binds(scrut, am, decls, src, a)
             cb := check_expr(am.body, decls, upto, src, a, locals, nl2)?
             lvec_truncate(deref(locals), base)
             nl2 = base
@@ -10233,94 +11662,94 @@ ctor_lit_stmts_span := fn(head : Option(ptr(mut Stmt)), chk : bool, decls : ptr(
       Some(curq) => {
         if not (res == 0) { break }
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::Assign(_ans, _anl, av, _anx) => { res = ctor_lit_expr_span(av, chk, decls, upto, src, a) }
-          Stmt::While(wc, wb, _wnx) => {
-            res = ctor_lit_expr_span(wc, chk, decls, upto, src, a)
-            if res == 0 { res = ctor_lit_stmts_span(wb, chk, decls, upto, src, a) }
-          }
-          Stmt::FieldAssign(_fbs, _fbl, _ffs, _ffl, fv, _fnx) => { res = ctor_lit_expr_span(fv, chk, decls, upto, src, a) }
-          Stmt::Return(rv, _rnx) => { res = ctor_lit_expr_span(rv, chk, decls, upto, src, a) }
-          Stmt::If(ic, ith, iel, _inx) => {
-            res = ctor_lit_expr_span(ic, chk, decls, upto, src, a)
-            if res == 0 { res = ctor_lit_stmts_span(ith, chk, decls, upto, src, a) }
-            if res == 0 { res = ctor_lit_stmts_span(iel, chk, decls, upto, src, a) }
-          }
-          Stmt::Match(msc, mah, _mnx) => {
-            res = ctor_lit_expr_span(msc, chk, decls, upto, src, a)
-            mut arm : Option(ptr(mut Arm)) = mah
-            loop {
-              match arm {
-                Some(armq) => {
-                  if not (res == 0) { break }
-                  am := deref(arm_p(armq))
-                  res = ctor_lit_expr_span(am.body, chk, decls, upto, src, a)
-                  if res == 0 { res = ctor_lit_stmts_span(am.body_stmts, chk, decls, upto, src, a) }
-                  arm = am.next
-                }
-                None => { break }
-              }
+    match s {
+      Stmt::Assign(_ans, _anl, av, _anx) => { res = ctor_lit_expr_span(av, chk, decls, upto, src, a) }
+      Stmt::While(wc, wb, _wnx) => {
+        res = ctor_lit_expr_span(wc, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_stmts_span(wb, chk, decls, upto, src, a) }
+      }
+      Stmt::FieldAssign(_fbs, _fbl, _ffs, _ffl, fv, _fnx) => { res = ctor_lit_expr_span(fv, chk, decls, upto, src, a) }
+      Stmt::Return(rv, _rnx) => { res = ctor_lit_expr_span(rv, chk, decls, upto, src, a) }
+      Stmt::If(ic, ith, iel, _inx) => {
+        res = ctor_lit_expr_span(ic, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_stmts_span(ith, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_stmts_span(iel, chk, decls, upto, src, a) }
+      }
+      Stmt::Match(msc, mah, _mnx) => {
+        res = ctor_lit_expr_span(msc, chk, decls, upto, src, a)
+        mut arm : Option(ptr(mut Arm)) = mah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (res == 0) { break }
+              am := deref(arm_p(armq))
+              res = ctor_lit_expr_span(am.body, chk, decls, upto, src, a)
+              if res == 0 { res = ctor_lit_stmts_span(am.body_stmts, chk, decls, upto, src, a) }
+              arm = am.next
             }
-          }
-          Stmt::For(_fns, _fnl, flo, fhi, fb, _ffnx) => {
-            res = ctor_lit_expr_span(flo, chk, decls, upto, src, a)
-            if res == 0 { res = ctor_lit_expr_span(fhi, chk, decls, upto, src, a) }
-            if res == 0 { res = ctor_lit_stmts_span(fb, chk, decls, upto, src, a) }
-          }
-          Stmt::DerefAssign(dp, dv, _dnx) => {
-            res = ctor_lit_expr_span(dp, chk, decls, upto, src, a)
-            if res == 0 { res = ctor_lit_expr_span(dv, chk, decls, upto, src, a) }
-          }
-          Stmt::IndexAssign(xb, xi, xv, _xnx) => {
-            res = ctor_lit_expr_span(xb, chk, decls, upto, src, a)
-            if res == 0 { res = ctor_lit_expr_span(xi, chk, decls, upto, src, a) }
-            if res == 0 { res = ctor_lit_expr_span(xv, chk, decls, upto, src, a) }
-          }
-          Stmt::IndexFieldAssign(yb, yi, _yfs, _yfl, yv, _ynx) => {
-            res = ctor_lit_expr_span(yb, chk, decls, upto, src, a)
-            if res == 0 { res = ctor_lit_expr_span(yi, chk, decls, upto, src, a) }
-            if res == 0 { res = ctor_lit_expr_span(yv, chk, decls, upto, src, a) }
-          }
-          Stmt::FieldPathAssign(pp, pv, _pnx) => {
-            res = ctor_lit_expr_span(pp, chk, decls, upto, src, a)
-            if res == 0 { res = ctor_lit_expr_span(pv, chk, decls, upto, src, a) }
-          }
-          Stmt::Loop(lb, _lnx) => { res = ctor_lit_stmts_span(lb, chk, decls, upto, src, a) }
-          Stmt::Break(bv, _bd, _bnx) => { res = ctor_lit_expr_span(bv, chk, decls, upto, src, a) }
-          Stmt::Continue(_cd, _cnx) => {}
-          Stmt::ExprStmt(ev, _enx) => { res = ctor_lit_expr_span(ev, chk, decls, upto, src, a) }
-          Stmt::CompIf(cc, cth, cel, _cnx2) => {
-            res = ctor_lit_expr_span(cc, chk, decls, upto, src, a)
-            if res == 0 { res = ctor_lit_stmts_span(cth, chk, decls, upto, src, a) }
-            if res == 0 { res = ctor_lit_stmts_span(cel, chk, decls, upto, src, a) }
-          }
-          Stmt::CompFor(_cvs, _cvl, _civ, cfb, _cfnx) => { res = ctor_lit_stmts_span(cfb, chk, decls, upto, src, a) }
-          Stmt::CompMatch(cmsc, cmah, _cmnx) => {
-            res = ctor_lit_expr_span(cmsc, chk, decls, upto, src, a)
-            mut carm : Option(ptr(mut Arm)) = cmah
-            loop {
-              match carm {
-                Some(carmq) => {
-                  if not (res == 0) { break }
-                  cam := deref(arm_p(carmq))
-                  res = ctor_lit_stmts_span(cam.body_stmts, chk, decls, upto, src, a)
-                  carm = cam.next
-                }
-                None => { break }
-              }
-            }
-          }
-          Stmt::CompForRange(_rvs, _rvl, rlo, rhi, rb, _rnx2) => {
-            res = ctor_lit_expr_span(rlo, chk, decls, upto, src, a)
-            if res == 0 { res = ctor_lit_expr_span(rhi, chk, decls, upto, src, a) }
-            if res == 0 { res = ctor_lit_stmts_span(rb, chk, decls, upto, src, a) }
-          }
-          Stmt::Unchecked(ub, _unx) => { res = ctor_lit_stmts_span(ub, false, decls, upto, src, a) }
-          Stmt::AllocWith(ae, ab, _anx2) => {
-            res = ctor_lit_expr_span(ae, chk, decls, upto, src, a)
-            if res == 0 { res = ctor_lit_stmts_span(ab, chk, decls, upto, src, a) }
+            None => { break }
           }
         }
+      }
+      Stmt::For(_fns, _fnl, flo, fhi, fb, _ffnx) => {
+        res = ctor_lit_expr_span(flo, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(fhi, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_stmts_span(fb, chk, decls, upto, src, a) }
+      }
+      Stmt::DerefAssign(dp, dv, _dnx) => {
+        res = ctor_lit_expr_span(dp, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(dv, chk, decls, upto, src, a) }
+      }
+      Stmt::IndexAssign(xb, xi, xv, _xnx) => {
+        res = ctor_lit_expr_span(xb, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(xi, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_expr_span(xv, chk, decls, upto, src, a) }
+      }
+      Stmt::IndexFieldAssign(yb, yi, _yfs, _yfl, yv, _ynx) => {
+        res = ctor_lit_expr_span(yb, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(yi, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_expr_span(yv, chk, decls, upto, src, a) }
+      }
+      Stmt::FieldPathAssign(pp, pv, _pnx) => {
+        res = ctor_lit_expr_span(pp, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(pv, chk, decls, upto, src, a) }
+      }
+      Stmt::Loop(lb, _lnx) => { res = ctor_lit_stmts_span(lb, chk, decls, upto, src, a) }
+      Stmt::Break(bv, _bd, _bnx) => { res = ctor_lit_expr_span(bv, chk, decls, upto, src, a) }
+      Stmt::Continue(_cd, _cnx) => {}
+      Stmt::ExprStmt(ev, _enx) => { res = ctor_lit_expr_span(ev, chk, decls, upto, src, a) }
+      Stmt::CompIf(cc, cth, cel, _cnx2) => {
+        res = ctor_lit_expr_span(cc, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_stmts_span(cth, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_stmts_span(cel, chk, decls, upto, src, a) }
+      }
+      Stmt::CompFor(_cvs, _cvl, _civ, cfb, _cfnx) => { res = ctor_lit_stmts_span(cfb, chk, decls, upto, src, a) }
+      Stmt::CompMatch(cmsc, cmah, _cmnx) => {
+        res = ctor_lit_expr_span(cmsc, chk, decls, upto, src, a)
+        mut carm : Option(ptr(mut Arm)) = cmah
+        loop {
+          match carm {
+            Some(carmq) => {
+              if not (res == 0) { break }
+              cam := deref(arm_p(carmq))
+              res = ctor_lit_stmts_span(cam.body_stmts, chk, decls, upto, src, a)
+              carm = cam.next
+            }
+            None => { break }
+          }
+        }
+      }
+      Stmt::CompForRange(_rvs, _rvl, rlo, rhi, rb, _rnx2) => {
+        res = ctor_lit_expr_span(rlo, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(rhi, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_stmts_span(rb, chk, decls, upto, src, a) }
+      }
+      Stmt::Unchecked(ub, _unx) => { res = ctor_lit_stmts_span(ub, false, decls, upto, src, a) }
+      Stmt::AllocWith(ae, ab, _anx2) => {
+        res = ctor_lit_expr_span(ae, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_stmts_span(ab, chk, decls, upto, src, a) }
+      }
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -11274,166 +12703,166 @@ lbv_stmts := fn(head : Option(ptr(mut Stmt)), c : usize, decls : ptr(rt::Vec), u
     match st {
       Some(stq) => {
         x := deref(stmt_p(Stmt, stq))
-        match x {
-          Stmt::Break(v, d, nx) => {
-            if d == c and unchecked bitcast(usize, v) != 0 {
-              ## Variables are now resolved from the completed locals table, while unknown expressions remain
-              ## poison-tolerant through `lbv_known_tag`. Do not skip bare Vars: that was the old literal-only
-              ## policy and made `break x` invisible to the consistency check.
-              t := lbv_known_tag(v, decls, upto, src, a, locals, nloc)
-                if not kind_is_unknown(t) { acc = lbv_merge(acc, t, s_of(v, a)) }
+    match x {
+      Stmt::Break(v, d, nx) => {
+        if d == c and unchecked bitcast(usize, v) != 0 {
+          ## Variables are now resolved from the completed locals table, while unknown expressions remain
+          ## poison-tolerant through `lbv_known_tag`. Do not skip bare Vars: that was the old literal-only
+          ## policy and made `break x` invisible to the consistency check.
+          t := lbv_known_tag(v, decls, upto, src, a, locals, nloc)
+            if not kind_is_unknown(t) { acc = lbv_merge(acc, t, s_of(v, a)) }
+        }
+        st = nx
+      }
+      Stmt::Assign(_ns, _nl, v, nx) => {
+        ec = lbv_expr_conflict(v, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        st = nx
+      }
+      Stmt::While(cx, b, nx) => {
+        ec = lbv_expr_conflict(cx, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+          acc = lbv_merge_code(acc, lbv_stmts(b, c + 1, decls, upto, src, a, locals, nloc))
+        st = nx
+      }
+      Stmt::FieldAssign(_bns, _bnl, _fns, _fnl, fv, nx) => {
+        ec = lbv_expr_conflict(fv, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        st = nx
+      }
+      Stmt::Return(rv, nx) => {
+        ec = lbv_expr_conflict(rv, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        st = nx
+      }
+      Stmt::If(cx, th, el, nx) => {
+        ec = lbv_expr_conflict(cx, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+          acc = lbv_merge_code(acc, lbv_stmts(th, c, decls, upto, src, a, locals, nloc))
+          acc = lbv_merge_code(acc, lbv_stmts(el, c, decls, upto, src, a, locals, nloc))
+        st = nx
+      }
+      Stmt::Match(sc, ah, nx) => {
+        ec = lbv_expr_conflict(sc, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+                acc = lbv_merge_code(acc, lbv_stmts(am.body_stmts, c, decls, upto, src, a, locals, nloc))
+              arm = am.next
             }
-            st = nx
-          }
-          Stmt::Assign(_ns, _nl, v, nx) => {
-            ec = lbv_expr_conflict(v, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            st = nx
-          }
-          Stmt::While(cx, b, nx) => {
-            ec = lbv_expr_conflict(cx, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-              acc = lbv_merge_code(acc, lbv_stmts(b, c + 1, decls, upto, src, a, locals, nloc))
-            st = nx
-          }
-          Stmt::FieldAssign(_bns, _bnl, _fns, _fnl, fv, nx) => {
-            ec = lbv_expr_conflict(fv, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            st = nx
-          }
-          Stmt::Return(rv, nx) => {
-            ec = lbv_expr_conflict(rv, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            st = nx
-          }
-          Stmt::If(cx, th, el, nx) => {
-            ec = lbv_expr_conflict(cx, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-              acc = lbv_merge_code(acc, lbv_stmts(th, c, decls, upto, src, a, locals, nloc))
-              acc = lbv_merge_code(acc, lbv_stmts(el, c, decls, upto, src, a, locals, nloc))
-            st = nx
-          }
-          Stmt::Match(sc, ah, nx) => {
-            ec = lbv_expr_conflict(sc, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm {
-                Some(armq) => {
-                  am := deref(arm_p(armq))
-                    acc = lbv_merge_code(acc, lbv_stmts(am.body_stmts, c, decls, upto, src, a, locals, nloc))
-                  arm = am.next
-                }
-                None => { break }
-              }
-            }
-            st = nx
-          }
-          Stmt::For(_fns, _fnl, lo, hi, b, nx) => {
-            ec = lbv_expr_conflict(lo, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            ## a FOR-IN `for x in <iterable>` has a NULL `hi` (the very shape `check_expr` guards against) —
-            ## only the range form `lo .. hi` walks the high bound.
-            if unchecked bitcast(usize, hi) != 0 {
-              ec = lbv_expr_conflict(hi, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            }
-              acc = lbv_merge_code(acc, lbv_stmts(b, c + 1, decls, upto, src, a, locals, nloc))
-            st = nx
-          }
-          Stmt::DerefAssign(p, v, nx) => {
-            ec = lbv_expr_conflict(p, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            ec = lbv_expr_conflict(v, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            st = nx
-          }
-          Stmt::IndexAssign(ib, ii, iv, nx) => {
-            ec = lbv_expr_conflict(ib, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            ec = lbv_expr_conflict(ii, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            ec = lbv_expr_conflict(iv, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            st = nx
-          }
-          Stmt::IndexFieldAssign(fia, fii, _ifs, _ifl, fiv, nx) => {
-            ec = lbv_expr_conflict(fia, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            ec = lbv_expr_conflict(fii, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            ec = lbv_expr_conflict(fiv, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            st = nx
-          }
-          Stmt::FieldPathAssign(pl, fpv, nx) => {
-            ## The left side is a write place, not a value read. DA handles unreadied-place legality;
-            ## break-value consistency only needs to inspect the stored value.
-            ec = lbv_expr_conflict(fpv, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            st = nx
-          }
-          Stmt::Loop(b, nx) => {
-              acc = lbv_merge_code(acc, lbv_stmts(b, c + 1, decls, upto, src, a, locals, nloc))
-            st = nx
-          }
-          Stmt::Continue(_cd, nx) => { st = nx }
-          Stmt::ExprStmt(e, nx) => {
-            ec = lbv_expr_conflict(e, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            st = nx
-          }
-          Stmt::CompIf(cc, cthen, celse, nx) => {
-            ec = lbv_expr_conflict(cc, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-              acc = lbv_merge_code(acc, lbv_stmts(cthen, c, decls, upto, src, a, locals, nloc))
-              acc = lbv_merge_code(acc, lbv_stmts(celse, c, decls, upto, src, a, locals, nloc))
-            st = nx
-          }
-          Stmt::CompFor(_cvs, _cvl, _civ, cb, nx) => {
-              acc = lbv_merge_code(acc, lbv_stmts(cb, c, decls, upto, src, a, locals, nloc))
-            st = nx
-          }
-          Stmt::CompMatch(cmsc, cmah, nx) => {
-            ec = lbv_expr_conflict(cmsc, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            mut cam : Option(ptr(mut Arm)) = cmah
-            loop {
-              match cam {
-                Some(camq) => {
-                  cm := deref(arm_p(camq))
-                    acc = lbv_merge_code(acc, lbv_stmts(cm.body_stmts, c, decls, upto, src, a, locals, nloc))
-                  cam = cm.next
-                }
-                None => { break }
-              }
-            }
-            st = nx
-          }
-          Stmt::CompForRange(_rvs, _rvl, rlo, rhi, rb, nx) => {
-            ec = lbv_expr_conflict(rlo, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            ## a PACK-iter `comptime for a in args` (a no-`..` form) parses to a CompForRange with a NULL
-            ## `rhi` — guard it exactly like the runtime for-in above.
-            if unchecked bitcast(usize, rhi) != 0 {
-              ec = lbv_expr_conflict(rhi, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-            }
-              acc = lbv_merge_code(acc, lbv_stmts(rb, c, decls, upto, src, a, locals, nloc))
-            st = nx
-          }
-          Stmt::Unchecked(b, nx) => {
-              acc = lbv_merge_code(acc, lbv_stmts(b, c, decls, upto, src, a, locals, nloc))
-            st = nx
-          }
-          Stmt::AllocWith(ae, b, nx) => {
-            ec = lbv_expr_conflict(ae, decls, upto, src, a, locals, nloc)
-            if lbv_code_is_conflict(ec) { acc = ec }
-              acc = lbv_merge_code(acc, lbv_stmts(b, c, decls, upto, src, a, locals, nloc))
-            st = nx
+            None => { break }
           }
         }
+        st = nx
       }
+      Stmt::For(_fns, _fnl, lo, hi, b, nx) => {
+        ec = lbv_expr_conflict(lo, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        ## a FOR-IN `for x in <iterable>` has a NULL `hi` (the very shape `check_expr` guards against) —
+        ## only the range form `lo .. hi` walks the high bound.
+        if unchecked bitcast(usize, hi) != 0 {
+          ec = lbv_expr_conflict(hi, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        }
+          acc = lbv_merge_code(acc, lbv_stmts(b, c + 1, decls, upto, src, a, locals, nloc))
+        st = nx
+      }
+      Stmt::DerefAssign(p, v, nx) => {
+        ec = lbv_expr_conflict(p, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        ec = lbv_expr_conflict(v, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        st = nx
+      }
+      Stmt::IndexAssign(ib, ii, iv, nx) => {
+        ec = lbv_expr_conflict(ib, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        ec = lbv_expr_conflict(ii, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        ec = lbv_expr_conflict(iv, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        st = nx
+      }
+      Stmt::IndexFieldAssign(fia, fii, _ifs, _ifl, fiv, nx) => {
+        ec = lbv_expr_conflict(fia, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        ec = lbv_expr_conflict(fii, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        ec = lbv_expr_conflict(fiv, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        st = nx
+      }
+      Stmt::FieldPathAssign(pl, fpv, nx) => {
+        ## The left side is a write place, not a value read. DA handles unreadied-place legality;
+        ## break-value consistency only needs to inspect the stored value.
+        ec = lbv_expr_conflict(fpv, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        st = nx
+      }
+      Stmt::Loop(b, nx) => {
+          acc = lbv_merge_code(acc, lbv_stmts(b, c + 1, decls, upto, src, a, locals, nloc))
+        st = nx
+      }
+      Stmt::Continue(_cd, nx) => { st = nx }
+      Stmt::ExprStmt(e, nx) => {
+        ec = lbv_expr_conflict(e, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        st = nx
+      }
+      Stmt::CompIf(cc, cthen, celse, nx) => {
+        ec = lbv_expr_conflict(cc, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+          acc = lbv_merge_code(acc, lbv_stmts(cthen, c, decls, upto, src, a, locals, nloc))
+          acc = lbv_merge_code(acc, lbv_stmts(celse, c, decls, upto, src, a, locals, nloc))
+        st = nx
+      }
+      Stmt::CompFor(_cvs, _cvl, _civ, cb, nx) => {
+          acc = lbv_merge_code(acc, lbv_stmts(cb, c, decls, upto, src, a, locals, nloc))
+        st = nx
+      }
+      Stmt::CompMatch(cmsc, cmah, nx) => {
+        ec = lbv_expr_conflict(cmsc, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        mut cam : Option(ptr(mut Arm)) = cmah
+        loop {
+          match cam {
+            Some(camq) => {
+              cm := deref(arm_p(camq))
+                acc = lbv_merge_code(acc, lbv_stmts(cm.body_stmts, c, decls, upto, src, a, locals, nloc))
+              cam = cm.next
+            }
+            None => { break }
+          }
+        }
+        st = nx
+      }
+      Stmt::CompForRange(_rvs, _rvl, rlo, rhi, rb, nx) => {
+        ec = lbv_expr_conflict(rlo, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        ## a PACK-iter `comptime for a in args` (a no-`..` form) parses to a CompForRange with a NULL
+        ## `rhi` — guard it exactly like the runtime for-in above.
+        if unchecked bitcast(usize, rhi) != 0 {
+          ec = lbv_expr_conflict(rhi, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+        }
+          acc = lbv_merge_code(acc, lbv_stmts(rb, c, decls, upto, src, a, locals, nloc))
+        st = nx
+      }
+      Stmt::Unchecked(b, nx) => {
+          acc = lbv_merge_code(acc, lbv_stmts(b, c, decls, upto, src, a, locals, nloc))
+        st = nx
+      }
+      Stmt::AllocWith(ae, b, nx) => {
+        ec = lbv_expr_conflict(ae, decls, upto, src, a, locals, nloc)
+        if lbv_code_is_conflict(ec) { acc = ec }
+          acc = lbv_merge_code(acc, lbv_stmts(b, c, decls, upto, src, a, locals, nloc))
+        st = nx
+      }
+    }
+  }
       None => { break }
     }
   }
@@ -12026,15 +13455,15 @@ sema_comptime_cont_state := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), xs :
       Some(curq) => {
         if stmt_mentions_var(curq, src, xs, xl, a) { return 1 }
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          Stmt::Assign(ns, nl, v, nx) => {
-            if not assign_is_reassign(src, ns, nl) and not binding_is_comptime(src, ns) and streq(src, ns, nl, xs, xl) { return 2 }
-          }
-          Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-            | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-            | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-            | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-        }
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if not assign_is_reassign(src, ns, nl) and not binding_is_comptime(src, ns) and streq(src, ns, nl, xs, xl) { return 2 }
+      }
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -12056,36 +13485,36 @@ sema_comptime_branch_escape_stmts := fn(head : Option(ptr(mut Stmt)), cont : Opt
       Some(curq) => {
         if not (out.n == 0) { break }
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          Stmt::Assign(ns, nl, v, nx) => {
-            if not assign_is_reassign(src, ns, nl) and binding_is_comptime(src, ns) {
-              if sema_comptime_cont_state(cont, src, ns, nl, a) == 1 { out = VSpan(s = ns, n = nl) }
-            } else if not assign_is_reassign(src, ns, nl) and sema_local_name_is_comptime(src, locals, nloc, ns, nl) {
-              ## An ordinary binding in this branch can shadow an incoming comptime name. It is equally
-              ## ambiguous after the join unless the continuation first redeclares that name directly.
-              if sema_comptime_cont_state(cont, src, ns, nl, a) == 1 { out = VSpan(s = ns, n = nl) }
-            }
-          }
-          Stmt::If(c, th, el, nx) => {
-            out = sema_comptime_branch_escape_stmts(th, cont, src, locals, nloc, a)
-            if out.n == 0 { out = sema_comptime_branch_escape_stmts(el, cont, src, locals, nloc, a) }
-          }
-          Stmt::While(c, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
-          Stmt::Loop(b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
-          Stmt::For(ns, nl, lo, hi, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
-          Stmt::Match(sc, ah, nx) => { out = sema_comptime_branch_escape_arms(ah, cont, src, locals, nloc, a) }
-          Stmt::CompIf(c, th, el, nx) => {
-            out = sema_comptime_branch_escape_stmts(th, cont, src, locals, nloc, a)
-            if out.n == 0 { out = sema_comptime_branch_escape_stmts(el, cont, src, locals, nloc, a) }
-          }
-          Stmt::CompFor(ns, nl, iv, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
-          Stmt::CompForRange(ns, nl, lo, hi, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
-          Stmt::CompMatch(sc, ah, nx) => { out = sema_comptime_branch_escape_arms(ah, cont, src, locals, nloc, a) }
-          Stmt::Unchecked(b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
-          Stmt::AllocWith(e, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
-          Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if not assign_is_reassign(src, ns, nl) and binding_is_comptime(src, ns) {
+          if sema_comptime_cont_state(cont, src, ns, nl, a) == 1 { out = VSpan(s = ns, n = nl) }
+        } else if not assign_is_reassign(src, ns, nl) and sema_local_name_is_comptime(src, locals, nloc, ns, nl) {
+          ## An ordinary binding in this branch can shadow an incoming comptime name. It is equally
+          ## ambiguous after the join unless the continuation first redeclares that name directly.
+          if sema_comptime_cont_state(cont, src, ns, nl, a) == 1 { out = VSpan(s = ns, n = nl) }
         }
+      }
+      Stmt::If(c, th, el, nx) => {
+        out = sema_comptime_branch_escape_stmts(th, cont, src, locals, nloc, a)
+        if out.n == 0 { out = sema_comptime_branch_escape_stmts(el, cont, src, locals, nloc, a) }
+      }
+      Stmt::While(c, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::Loop(b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::For(ns, nl, lo, hi, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::Match(sc, ah, nx) => { out = sema_comptime_branch_escape_arms(ah, cont, src, locals, nloc, a) }
+      Stmt::CompIf(c, th, el, nx) => {
+        out = sema_comptime_branch_escape_stmts(th, cont, src, locals, nloc, a)
+        if out.n == 0 { out = sema_comptime_branch_escape_stmts(el, cont, src, locals, nloc, a) }
+      }
+      Stmt::CompFor(ns, nl, iv, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::CompForRange(ns, nl, lo, hi, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::CompMatch(sc, ah, nx) => { out = sema_comptime_branch_escape_arms(ah, cont, src, locals, nloc, a) }
+      Stmt::Unchecked(b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::AllocWith(e, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -12145,22 +13574,22 @@ sema_lambda_binds_stmts := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), xs : 
       Some(curq) => {
         if not (not hit) { break }
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          Stmt::Assign(ns, nl, v, nx) => { if not assign_is_reassign(src, ns, nl) and streq(src, ns, nl, xs, xl) { hit = true } }
-          Stmt::If(c, th, el, nx) => { hit = sema_lambda_binds_stmts(th, src, xs, xl, a); if not hit { hit = sema_lambda_binds_stmts(el, src, xs, xl, a) } }
-          Stmt::While(c, b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
-          Stmt::Loop(b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
-          Stmt::For(ns, nl, lo, hi, b, nx) => { if streq(src, ns, nl, xs, xl) { hit = true } else { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) } }
-          Stmt::Match(sc, ah, nx) => { hit = sema_lambda_binds_arms(ah, src, xs, xl, a) }
-          Stmt::CompIf(c, th, el, nx) => { hit = sema_lambda_binds_stmts(th, src, xs, xl, a); if not hit { hit = sema_lambda_binds_stmts(el, src, xs, xl, a) } }
-          Stmt::CompFor(vs, vl, iv, b, nx) => { if streq(src, vs, vl, xs, xl) { hit = true } else { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) } }
-          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if streq(src, vs, vl, xs, xl) { hit = true } else { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) } }
-          Stmt::CompMatch(sc, ah, nx) => { hit = sema_lambda_binds_arms(ah, src, xs, xl, a) }
-          Stmt::Unchecked(b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
-          Stmt::AllocWith(e, b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
-          Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
-        }
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => { if not assign_is_reassign(src, ns, nl) and streq(src, ns, nl, xs, xl) { hit = true } }
+      Stmt::If(c, th, el, nx) => { hit = sema_lambda_binds_stmts(th, src, xs, xl, a); if not hit { hit = sema_lambda_binds_stmts(el, src, xs, xl, a) } }
+      Stmt::While(c, b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
+      Stmt::Loop(b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
+      Stmt::For(ns, nl, lo, hi, b, nx) => { if streq(src, ns, nl, xs, xl) { hit = true } else { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) } }
+      Stmt::Match(sc, ah, nx) => { hit = sema_lambda_binds_arms(ah, src, xs, xl, a) }
+      Stmt::CompIf(c, th, el, nx) => { hit = sema_lambda_binds_stmts(th, src, xs, xl, a); if not hit { hit = sema_lambda_binds_stmts(el, src, xs, xl, a) } }
+      Stmt::CompFor(vs, vl, iv, b, nx) => { if streq(src, vs, vl, xs, xl) { hit = true } else { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) } }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if streq(src, vs, vl, xs, xl) { hit = true } else { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) } }
+      Stmt::CompMatch(sc, ah, nx) => { hit = sema_lambda_binds_arms(ah, src, xs, xl, a) }
+      Stmt::Unchecked(b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
+      Stmt::AllocWith(e, b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -12267,7 +13696,7 @@ check_forget_uses := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), a : ptr(mut
     match cur {
       Some(curq) => {
         fv := stmt_forget_var(curq, src, a)
-        if fv.n != 0 {
+    if fv.n != 0 {
           mut nx : Option(ptr(mut Stmt)) = stmt_next(curq)
           loop {
             match nx {
@@ -12276,8 +13705,8 @@ check_forget_uses := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), a : ptr(mut
                 nx = stmt_next(nxq)
               }
               None => { break }
-            }
-          }
+      }
+    }
         }
         cur = stmt_next(curq)
       }
@@ -12331,8 +13760,7 @@ sema_ct_record := fn(w : CtWalk, vk : CtVar, vs : usize, vl : usize, at : Option
     CvRange(lo, hi) => {
       if sema_ct_value_refused(lo, decls, upto, src, a, locals, n) { refused = true }
       if sema_ct_value_refused(hi, decls, upto, src, a, locals, n) { refused = true }
-      rj : ir::VTy = sema_vty_join(lo, hi)
-      ir::sty_bind_put(vs, rj)
+      ir::sty_bind_put(vs, sema_vty_range(lo, hi))
       lvec_push(deref(locals), Local(ns = vs, nl = vl, tag = tag_of_kind(TyKind.TyInt), prov = 0, tns = 0, tnl = 0))
       n += 1
     }
@@ -12384,1059 +13812,1076 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
     match cur {
       Some(curq) => {
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::Assign(ns, nl, v, nx) => {
-            ## Declarations §1.2 / §10 — a plain re-assignment writes an existing place. The old branch
-            ## treated an unknown `name = value` as a fresh local, so a misspelled target disappeared and
-            ## the program could return a clean wrong value. Keep module mut-globals and known top-level
-            ## bindings on their existing paths; reject only a name proven absent from both scopes.
-            if assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) and not is_mod_mut_global(decls, src, ns, nl) and not declared(decls, upto, src, ns, nl) and not sema_global_name_anywhere(decls, src, ns, nl) {
-              return Result(usize, CheckErr).Err(unbound_err(ns, nl))
-            }
-            ## Issue #298 — a module-level immutable scalar is also a write place. It has no Local record
-            ## and therefore cannot reach the local re-assignment branch below; reject it here while the
-            ## source still identifies the assignment target. Mutable globals remain on their existing path.
-            if assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) {
-              groot := VSpan(s = ns, n = nl)
-              gperm := sema_write_mutability(decls, src, locals, cnt, groot)
-              if gperm == 2 { mark_failed(locals, immutable_err(groot.s)) }
-            }
-            ## Types §8 — reject the initialized local array literal before any lower/backend can apply
-            ## the word-granular array stride to a byte-precise @packed element. Reassignments stay on
-            ## their ordinary path; this is intentionally the exact local-initializer slice only.
-            if not assign_is_reassign(src, ns, nl) {
-              if sema_packed_array_literal(v, decls, src) {
-                return Result(usize, CheckErr).Err(packed_array_err(ns))
-              }
-            }
-            ## `name : T` is represented by the parser as Assign(name, zero-sentinel) to preserve the
-            ## bootstrap-sensitive AST shape. Recover its declared type from source, record the local as
-            ## unreadied, and do not type-check or mark the sentinel as an initializer.
-            if local_is_uninit(src, ns, nl) {
-              ann0 := local_type_span(src, ns, nl)
-              ## Issue #215 bounded fallback: the exact local 2D fixed-array shapes are not yet safely
-              ## lowerable, including a declaration followed by a later initialization. Reject before any
-              ## backend can treat the nested array as a word-strided scalar array.
-              if local_is_mut(src, ns) and sema_local_multidim_array(decls, upto, src, ann0.s, ann0.n) { return Result(usize, CheckErr).Err(local_multidim_array_err(ns)) }
-              dt0 := resolve_ty(src, ann0.s, ann0.n, decls, upto)
-              if kind_is_unknown(dt0.kind) { return Result(usize, CheckErr).Err(located_err(ns)) }
-              mut bt0 : u8 = tag_of_kind(dt0.kind)
-              if local_is_mut(src, ns) { bt0 = tag_with_mut(bt0) }
-              lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = bt0, prov = 0, tns = dt0.ns, tnl = dt0.nl))
-              da_push_root(da, ns, nl)
-              if kind_is_array(dt0.kind) { da_seed_array(deref(da), src, ns, nl, dt0) }
-              cnt += 1
-              cur = nx
-              continue
-            }
-            ## a bound atomic call (`r := atomic::cas_*(…)`) with an illegal ordering (spec ch.110 §2) —
-            ## poison via `mark_failed` (an early `return` mid-arm mis-lowers the arm's later logic).
-            if call_atomic_ordering_bad(v, src, a) { mark_failed(locals, mismatch_err(s_of(v, a), 0)) }
-            if expr_has_unbound(v, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_code(v, decls, upto, src, a, locals, cnt)) }
-            ann := local_type_span(src, ns, nl)
-            ## Issue #697 — an annotation naming no type is a located refusal, never an annotation that
-            ## silently constrains nothing.
-            if not assign_is_reassign(src, ns, nl) and ann.n != 0 {
-              lau := sema_local_ann_type_unknown(SEMA_DECL_PARAMS, decls, src, ann.s, ann.n)
-              if lau != 0 { mark_failed(locals, lau) }
-            }
-            ## Issue #215 bounded fallback: reject the exact direct annotation in the shared semantic pass,
-            ## so `check`, build, and all emit-to-stdout backends cannot accept a silent wrong value/trap.
-            ## Reassignments and every non-local shape remain outside this local declaration fence.
-            if not assign_is_reassign(src, ns, nl) and local_is_mut(src, ns) and sema_local_multidim_array(decls, upto, src, ann.s, ann.n) {
-              return Result(usize, CheckErr).Err(local_multidim_array_err(ns))
-            }
-            ## The lower has one deliberate whole-element consumer for this shape: an inferred local
-            ## binding (`e := GE[i]`). An annotation or a reassignment may select a narrower/existing
-            ## slot, so keep those in the ordinary value-position fence rather than letting the later
-            ## aggregate copy outrun the destination's proven layout.
-            tv := check_expr_da_mode(v, decls, upto, src, a, locals, cnt, da,
-              not assign_is_reassign(src, ns, nl) and ann.n == 0)?
-            ## docs/ir.md §3.8 — the annotation is the literal-only initializer's context (Types §2.3); a
-            ## reassignment's context is the assigned local's declared type (docs/ir-slice-1.md §2).
-            sema_vty_ctx(v, ann.s, ann.n, decls, src)
-            if ir::sty_on() and assign_is_reassign(src, ns, nl) {
-              rbt : ir::VTy = sema_vty_local(locals, cnt, src, ns, nl)
-              if ir::vty_is_int(rbt) { sema_vty_push(v, rbt) }
-            }
-            ## Types §9.1 — with NO context (an unannotated declaration), an integer literal takes the
-            ## documented default, the target's native signed integer: `i64` on every target this compiler
-            ## emits (x86_64, aarch64, riscv64, and wasm, whose kernel words are i64).
-            if ir::sty_on() and not assign_is_reassign(src, ns, nl) and ann.n == 0 { sema_vty_push(v, ir::vty_s(8)) }
-            ## …and the binding's own type, read by each later use of the name (`sema_vty_var`).
-            if ir::sty_on() and not assign_is_reassign(src, ns, nl) {
-              mut bvt : ir::VTy = ir::sty_get(v)
-              if ann.n != 0 { bvt = sema_vty_name(src, ann.s, ann.n, decls) }
-              ir::sty_bind_put(ns, bvt)
-            }
-            ## Comptime §2.2 — the bounded worker slice admits only closed scalar literals/arithmetic and
-            ## nullary user-enum values. The lower erases such bindings, so reject a runtime-dependent or
-            ## otherwise unsupported initializer before it can be mistaken for a normal local slot.
-            if not assign_is_reassign(src, ns, nl) and binding_is_comptime(src, ns) {
-              if kind_is_unknown(comptime_binding_kind(v, decls, upto, src, locals, cnt, ann)) { mark_failed(locals, mismatch_err(ns, 0)) }
-            }
-            ## FN-11 (Functions §1.6) — a `dyn fn(T…)->R` value is the type-erased two-word {code, env} fat
-            ## pair, and the ONLY construction form the spec admits is `dyn_over(ptr(mut <store>))` over a
-            ## NAMED PLACE holding a static closure (the env is explicit storage the `dyn` borrows, I3). Any
-            ## OTHER initializer supplies no environment place — notably a plain fn NAME
-            ## (`d : dyn fn(u64)->u64 = f`), which is the ZERO-CAPTURE case that the thin function-value type
-            ## `fn(T…)->R` (FN-10) already covers. Left unchecked the lower's fat-pair emit went looking for a
-            ## store slot that does not exist, read a bogus lambda index out of the decl vector and the
-            ## COMPILER SIGSEGV'd; reject it here instead, LOCATED, before the lower can fault. `src/`+`lib/`
-            ## declare no `dyn` local, so this never fires on the self-build → fixpoint-neutral.
-            if ann.n != 0 and sema_is_dyn_type(src, ann.s, ann.n) and not sema_is_dyn_over_call(v, src) {
-              mark_failed(locals, mismatch_err(ns, 0))
-            }
-            dt := resolve_ty(src, ann.s, ann.n, decls, upto)
-            ## a re-assignment `=` to an existing local reuses its slot/type — and the new value's
-            ## type must MATCH the local's established type (a `:=` binding fixed it; a later `=`
-            ## with a mismatched type is an error; poison-tolerant via `ty_eq`). A fresh `:=` records
-            ## the value's type. (The parser models both as `Assign`; distinguish by the source glyph.)
-            ## A `:=` RE-BINDING of an already-bound name is legal (Alatyr has function-scoped locals that
-            ## LEAK out of blocks — `if c { x := 5 } … x` sees `x` — and a later `:=` REDECLARES/shadows,
-            ## re-typing the name; the lower compiles both, e.g. two sibling `for` loops each `d := …`). So
-            ## only a `=` (reassign) to an existing local takes the immutable/type-match path; a `:=` (even
-            ## of an existing name) takes the fresh-binding path below, re-pushing the current type (the
-            ## LAST push wins in `local_lookup`). Without this, the second `d :=` false-fired "immutable write".
-            if is_mod_mut_global(decls, src, ns, nl) and assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) {
-              ## a `=` write to a module-level `mut` GLOBAL (`A64_CHK = ov`, `A64_SUB_ITS = …`): a `static`
-              ## place the global's own `mut` authorizes writing — NOT a local. Do not push it as a fake local
-              ## (which made a SECOND write to the same global read as an immutable-local reassign) and do not
-              ## run the local immutable/type-match check. The RHS is already checked above; nothing more here.
-              ## GLOBAL-REASSIGN conformance (TYP-6): `G = <aggregate>` into a scalar global (or the
-              ## REVERSE, a scalar literal into an aggregate global) — the retired `Stmt::Assign` scalar-global
-              ## emit net. Recover `G`'s declared `: T` from source and check it against the RHS.
-              gsp := global_type_span(decls, src, ns, nl)
-              if agg_scalar_bad(gsp.s, gsp.n, v, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(ns, 0)) }
-              if global_nonlit_struct_assign_bad(decls, upto, src, ns, nl, v, tv, locals, cnt) { mark_failed(locals, global_agg_err(ns)) }
-            } else if local_in(locals, cnt, src, ns, nl) and assign_is_reassign(src, ns, nl) {
-              raw := local_lookup(locals, cnt, src, ns, nl)
-              raw_tag : TyKind = raw.ty.kind
-              ## Declarations §3.1 / Memory §1.6 — an existing local without `mut` is a validly typed
-              ## place, but it is not writable. Use the dedicated located diagnostic instead of
-              ## `mismatch_err`: the assignment's type already agrees, and the useful fact is the write
-              ## permission at this source span. The same branch handles plain `=` and every compound
-              ## operator after `assign_is_reassign` has recovered its spelling.
-              if sema_local_name_is_comptime(src, locals, cnt, ns, nl) { mark_failed(locals, immutable_err(ns)) }
-              if not raw.mutable and not raw.poison and not da_has_root(da, src, ns, nl) and not local_is_mut(src, ns) or raw.poison { mark_failed(locals, immutable_err(ns)) }
-              mut xtag := raw_tag
-              ## normalize the HIDDEN aggregate tags (9 struct / 10 enum, set for a StructLit/EnumLit binding)
-              ## back to their real struct(3)/enum(4) tag for the reassign type-match — else `tag_compat(9, 3)`
-              ## false-rejects a valid `mut r := S(...)  … r = <struct value>` (a real tag-3 RHS).
-              if kind_is_hidden_struct(xtag) { xtag = TyKind.TyStruct }
-              if kind_is_hidden_enum(xtag) { xtag = TyKind.TyEnum }
-              xt := Ty(kind = xtag, ns = raw.ty.ns, nl = raw.ty.nl)
-              ptrint_probe_site("REASSIGN", "reassign", true, tv.kind, xt.kind, ns, src)
-              if not kind_compat(xt.kind, tv.kind) { mark_failed(locals, mismatch_err(ns, 0)) }
-              ## Issue #299 — a `=` write to an existing local is the same value sink as its `:=` binding:
-              ## `mut a : A = A(1) ; a = b` must not launder a sibling brand through the slot. `tag_compat`
-              ## above cannot see it (every tag 8 is compatible with every other), and the recorded local
-              ## type is where this sink's declared identity lives.
-              rbe := sema_brand_sink_err(xt, v, sema_brand_span(s_of(v, a), ns), decls, upto, src, locals, cnt, a)
-              if rbe != 0 { mark_failed(locals, rbe) }
-            } else {
-              mut bad_decl := false
-              if ann.n != 0 { ptrint_probe_site("BIND", "annbind", true, tv.kind, dt.kind, ns, src) }
-              ## Issue #563 — Types §9.2 names an annotation as one of the two forms that GIVE a literal its
-              ## type, so a LITERAL meeting a BRAND annotation (`a : A = 41`, `A := brand(u64)`) is not a brand
-              ## crossing and not a tag mismatch: it is judged — kind, format and range — against the kernel
-              ## type the brand bottoms out in, exactly as `A(41)` already is. The literal rules below read
-              ## `lit_ts`/`lit_tl` and `lit_dtag`; for every other annotation those are the annotation's own.
-              ## Measured on the parent: `a : A = 41` refused, `a : A = 1.5` ran to 1, `a : A = "x"` ran.
-              mut lit_ts := ann.s
-              mut lit_tl := ann.n
-              mut lit_dtag : TyKind = dt.kind
-              mut brand_lit := false
-              if ann.n != 0 and kind_is_brand(dt.kind) and (not kind_is_unknown(lbv_lit_tag(v)) or sema_is_float_lit(v)) {
-                bk := sema_brand_kernel_span(decls, upto, src, ann.s, ann.n)
-                if bk.n != 0 and not (bk.s == ann.s and bk.n == ann.n) {
-                  lit_ts = bk.s
-                  lit_tl = bk.n
-                  lit_dtag = resolve_kind(src, bk.s, bk.n, decls, upto)
-                  brand_lit = true
-                }
-              }
-              if ann.n != 0 and not brand_lit { bad_decl = not kind_compat(dt.kind, tv.kind) }
-              ## #299 census hooks (no refusal): an annotated binding is the declared sink; an INFERRED
-              ## binding from a brand constructor is the identity the recorded local type drops.
-              if ann.n != 0 { brand_probe_sink(dt, v, ns, decls, upto, src, locals, cnt, a) }
-              if ann.n == 0 { brand_probe_blind(v, ns, decls, upto, src) }
-              ## Issue #299 — the refusal at the annotated-binding sink. Located at the initializer when the
-              ## AST records its span, else at the binding name, which is where this statement's other
-              ## annotation diagnostics already point.
-              if ann.n != 0 {
-                abe := sema_brand_sink_err(dt, v, sema_brand_span(s_of(v, a), ns), decls, upto, src, locals, cnt, a)
-                if abe != 0 { mark_failed(locals, abe) }
-              }
-              ## Issue #269 — an annotated local is another value sink, not an implicit unwrap boundary.
-              ## Keep this beside the ordinary declaration conformance checks so `check`, build, and every
-              ## emit-to-stdout backend reject the same direct-call/inferred-local wrapper forms before
-              ## lowering can consume the payload-sized slot.
-              if sema_wrapper_payload_binding_bad(v, decls, upto, src, locals, cnt, ann.s, ann.n) { bad_decl = true }
-              ## Declarations §3.1 assignability, on the RELIABLE literal tag (`ann_lit_incompatible`) —
-              ## `tv.tag` above is 0 for a literal whose `check_expr` arm does not dispatch, so the
-              ## annotation constrained nothing. Located at the binding's own name span.
-              if ann.n != 0 and ann_lit_incompatible(lit_dtag, lbv_lit_tag(v)) { bad_decl = true }
-              ## TYP-13: a float-spelled literal is never an integer initializer, while an integer
-              ## literal in f32/f64 context must be exactly representable in that format.
-              if ann.n != 0 and float_lit_into_integer_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
-              if ann.n != 0 and int_lit_into_float_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
-              ## Types §9.1 REPRESENTABILITY, on the annotation's type NAME (the width `dt.tag` collapsed
-              ## away): `x : u8 = 300` / `x : i8 = 200` / `x : u32 = 5_000_000_000` were all accepted in
-              ## silence and truncated at run time.
-              if ann.n != 0 and ann_lit_range_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
-              ## With no annotation the literal takes the target's native SIGNED type (Types §9.1 /
-              ## Declarations §3.4). A negative `Num` payload is the parser's 64-bit representation of a
-              ## written non-negative literal at or above 2^63; reject it before the untyped binding can
-              ## silently preserve the bit pattern as a native word.
-              if ann.n == 0 and default_lit_range_bad(src, v) { bad_decl = true }
-              ## CT-12 / Comptime §2.6 — a failed CHECKED GUARD in the comptime evaluation of this
-              ## initializer is a LOCATED diagnostic at the operation's site, never a deferred trap.
-              cte := ct_guard_err(src, ann.s, ann.n, v, ns, decls, upto)
-              if cte != 0 { mark_failed(locals, cte) }
-              ## CT-12 ARRAY-ELEMENT: recover the integer context from an explicitly typed fixed-array
-              ## annotation and apply the same guard to each element before lowering can emit the array.
-              acte := ct_array_guard_err(src, ann.s, ann.n, v, decls, upto)
-              if acte != 0 { mark_failed(locals, acte) }
-              ## Issue #803 — each element's §9.1 range in the annotation's element type.
-              if ann.n != 0 {
-                alre := array_lit_range_err(src, ann.s, ann.n, v)
-                if alre != 0 { mark_failed(locals, alre) }
-              }
-              ## The same whitelist over a CALL result, whose type comes from the callee's own DECLARED
-              ## return type — the second source reliable enough to reject on (`sole_fn_ret_ty` answers only
-              ## for an unambiguous, non-overloaded name). `g := fn() -> str { … }  x : u64 = g()` used to
-              ## bind a two-word `str` into a word-sized integer and return a silent wrong value.
-              if ann.n != 0 and kind_is_unknown(lbv_lit_tag(v)) {
-                crt := sole_fn_ret_ty(v, decls, upto, src)
-                if ann_lit_incompatible(dt.kind, crt.kind) { bad_decl = true }
-              }
-              if bad_decl { mark_failed(locals, mismatch_err(ns, 0)) }
-              mut bind_tag : TyKind = tv.kind
-              mut bind_prov : u8 = 0
-              ain := expr_addr_inner(v)
-              ## AddrOf is a payload-heavy arm that the frozen bootstrap may skip in check_expr's large
-              ## match, returning UNKNOWN instead of its invariant pointer tag. The dedicated accessor is
-              ## the reliable AST fact: every Expr::AddrOf has type ptr(_), independently of its pointee.
-              if kind_is_unknown(bind_tag) and unchecked bitcast(usize, ain) != 0 { bind_tag = TyKind.TyPtr }
-              if unchecked bitcast(usize, ain) != 0 and expr_field_span(ain).n != 0 { bind_prov = prov_field_ptr() }
-              ## A range-slice local is a view, so its write permission follows the backing place rather
-              ## than the view's own copied pair. `prov_view` names that provenance; its element kind is
-              ## still unproven at this point and is filled in below. This preserves the existing
-              ## `mut ws; w := ws[...]; w[i] = ...` view idiom while rejecting `a := [...]; s := a[...];
-              ## s[i] = ...` from Issue #298. A pointer-field provenance remains higher priority.
-              if bind_prov == 0 {
-                slice_base := sema_slice_base(v)
-                if unchecked bitcast(usize, slice_base) != 0 {
-                  sroot := sema_place_root_var(slice_base)
-                  sperm := sema_write_mutability(decls, src, locals, cnt, sroot)
-                  bind_prov = prov_view(sperm == 1 or sperm == 2, TyKind.TyUnknown)
-                }
-              }
-              ## Issue #429 — record that this binding holds a STRING LITERAL's view, in the provenance byte
-              ## rather than the public type tag. `check_expr`'s `Expr::StrLit` arm is one of the LATER arms
-              ## that do not reliably dispatch under the bootstrap seed (see `lbv_lit_tag`), so `tv.tag` came
-              ## back 0 for `s := "abc"` and every write fence keyed on the recorded type saw an UNKNOWN place
-              ## — that is the hole the indexed store fell through into `.rodata`. Promoting the binding to
-              ## the public tag 6 instead would also re-type it for every arg/return/reassign check at once;
-              ## this marker changes NOTHING but the element-store fence below. Every other consumer asks
-              ## `local_prov` a NAMED question (see the provenance block above `local_prov`), and none of
-              ## them names this concept, so it stays inert there.
-              if bind_prov == 0 and kind_is_str(lbv_lit_tag(v)) { bind_prov = prov_str_view() }
-              ## …and carry it across a bare ALIAS (`t := s`), which reaches the same bytes through a second
-              ## name. The alias binding copies the two-word view, not the run it points at, so the pointee
-              ## permission it inherits is the source's: measured on the parent, `t := s` re-opened the
-              ## SIGSEGV for every spelling of `s` — the literal binding, the annotated local AND a `str`
-              ## parameter, whose own `s[i] = v` the established fence already refused. Transitive by
-              ## construction: `u := t` reads `t`'s marker the same way.
-              if bind_prov == 0 and sema_place_is_str_view(locals, cnt, src, expr_var_span(v)) { bind_prov = prov_str_view() }
-              ## Preserve the homogeneous scalar element kind of an inferred array literal without
-              ## pretending that Local carries a source type span. `prov_lit_array` records 0 for every
-              ## unproven element kind, so this assignment leaves an undecided provenance undecided.
-              if bind_prov == 0 { bind_prov = prov_lit_array(sema_array_literal_elem_tag(v)) }
-              ## The binding's type NAME never comes from `tv`: `check_expr` hands its `Ty` back through the
-              ## PACKED `Result(Ty, CheckErr)` carrier, which preserves only the TAG — `tv.ns`/`tv.nl` are
-              ## STACK GARBAGE (the truncation the tag-5 recovery below already documents, generalized: it is
-              ## a property of the carrier, not of the pointer tag). Seeding `bind_ns`/`bind_nl` with them
-              ## recorded a "type-name span" that is not a `src` offset at all — typically a whole ABSOLUTE
-              ## address. `local_is_owning` then fed it to `type_is_owning` → `streq(src + <absolute addr>,…)`
-              ## and the COMPILER SIGSEGV'd at CHECK time on a valid program (`t := s` where `s : Slice(u64)`
-              ## is a PARAM: `Slice` resolves to a NOMINAL struct decl, so the tag-3 leak probe fires and the
-              ## garbage span is dereferenced). The frozen seed compiles the same program without faulting even
-              ## though its own source snapshot carries this very line — the read is out of bounds there too, it
-              ## just lands on a benign stale word in that binary's frame layout. So this is not a source-level
-              ## regression against the seed but a LAYOUT-DEPENDENT out-of-bounds read that the current tree's
-              ## frames finally aimed at a live absolute address. Start
-              ## from UNKNOWN (0/0 — poison-tolerant everywhere a name is consulted) and let only RELIABLE
-              ## STORAGE fill it in below: the callee's declared return type, a Var-local's RECORDED type,
-              ## the aggregate-literal recovery, or the binding's own `: T` annotation.
-              mut bind_ns := 0
-              mut bind_nl := 0
-              ## Preserve the proven T of an inferred `view := fixed_array[lo..hi]` in the existing local
-              ## payload. The public tag remains UNKNOWN because the value is a Slice(T), not T itself;
-              ## only `sema_direct_index_elem_ty` consumes this span or scalar tag under slice provenance.
-              if prov_is_view(bind_prov) {
-                set := sema_range_slice_elem_ty(v, src, locals, cnt, decls, upto)
-                if not kind_is_unknown(set.kind) {
-                  if set.nl != 0 { bind_ns = set.ns; bind_nl = set.nl }
-                  else { bind_prov = prov_view(prov_view_backing_imm(bind_prov), set.kind) }
-                }
-              }
-              ## RECOVER the un-truncated type-NAME for a call-value binding (`x := f(...)`): `check_expr`'s
-              ## `Result(Ty,…)` keeps the tag but drops ns/nl, so `x` otherwise records no resolvable type name.
-              ## Re-resolve the callee's declared return type directly (`callee_ret_ty`, un-packed). Guarded to
-              ## the SAME tag (never changes the type, only fills the dropped name), unannotated bindings only.
-              ccs := expr_call_callee_span(v)
-              if ccs.n != 0 {
-                crt := callee_ret_ty(decls, upto, src, ccs.s, ccs.n)
-                ## adopt the callee's declared return type DIRECTLY (not via the truncating Result) — restores
-                ## the tag + type-name the packed `Result` dropped. STRUCT-only (tag 3): every `@owning` type is
-                ## a struct, so this suffices for leak-detection while leaving ENUM locals untouched (recording a
-                ## call-created enum's generic return-type name — e.g. `Result(U, E)` — would make the match
-                ## exhaustiveness check mis-resolve its variants and spuriously reject; found via result_and_then).
-                if kind_is_struct(crt.kind) and crt.nl != 0 { bind_tag = crt.kind; bind_ns = crt.ns; bind_nl = crt.nl }
-                ## Issue #269: preserve a separate concrete wrapper marker for the one bounded local form.
-                ## Do not turn it into ordinary enum type information — existing match/exhaustiveness paths
-                ## deliberately remain unaware of generic `Option`/`Result` identities.
-                lvwrap := deref(locals)
-                wrt := sema_wrapper_return_ty(decls, upto, src, ccs.s, ccs.n, expr_call_arity(v), lvwrap.mod_s, lvwrap.mod_l)
-                if kind_is_wrapper(wrt.kind) { bind_tag = wrt.kind; bind_ns = wrt.ns; bind_nl = wrt.nl }
-              }
-              ## POINTER value (tag 5): the pointee NAME drives `ty_compat`'s ptr(X)-vs-ptr(Y) discrimination,
-              ## but `tv.ns/tv.nl` came back through the truncating `Result(Ty,…)` (see above) → GARBAGE. A
-              ## garbage pointee that happens to be nonzero makes a valid `x := <ptr-value>` then `f(x)`
-              ## SPURIOUSLY mismatch against `f`'s real param pointee (found whole-tree: `b := bind_head` then
-              ## `bnd_next(b)`; `inner := e` then `str_lit_info(inner)`). Recover the pointee RELIABLY from
-              ## STORAGE, never the truncated Result: a Var-local RHS → that pointer local's recorded pointee;
-              ## a direct AddrOf(Var-local-struct) → the addressed local's recorded nominal type; otherwise DROP
-              ## to unknown (0/0, poison-tolerant). The AddrOf recovery is intentionally struct-only: it supplies
-              ## the exact fact needed by recursive pointer-field place typing without widening other consumers.
-              if kind_is_ptr(bind_tag) {
-                bind_ns = 0
-                bind_nl = 0
-                rvs := expr_var_span(v)
-                if rvs.n != 0 {
-                  rlt := local_lookup(locals, cnt, src, rvs.s, rvs.n)
-                  rltag : TyKind = rlt.ty.kind
-                  if kind_is_ptr(rltag) { bind_ns = rlt.ty.ns; bind_nl = rlt.ty.nl; bind_prov = local_prov(locals, cnt, src, rvs.s, rvs.n) }
-                }
-                if bind_nl == 0 {
-                  apt := sema_addr_local_struct_ptr_ty(v, src, locals, cnt)
-                  if kind_is_ptr(apt.kind) {
-                    bind_ns = apt.ns
-                    bind_nl = apt.nl
-                  }
-                }
-              }
-              ## Issue #680 — a CALL returning a pointer to an ENUM (`init_e := p_or(pc)`) records the
-              ## callee's declared pointer type, exactly what `init_e : ptr(mut Expr) = p_or(pc)` records, so
-              ## a later `match deref(init_e)` is checked for exhaustiveness. The packed carrier may hand the
-              ## call back as tag 0, so the tag is filled as well as the name. Enum pointees only, as narrow
-              ## as #656's twin: a struct pointee also feeds `ty_compat`'s pointer discrimination.
-              if ann.n == 0 and bind_nl == 0 and (kind_is_unknown(bind_tag) or kind_is_ptr(bind_tag)) and expr_call_callee_span(v).n != 0 {
-                cpt := sema_ptr_expr_ty(v, decls, src, locals, cnt)
-                cpe := sema_enum_pointee(cpt, decls, src)
-                if kind_is_enum(cpe.kind) {
-                  bind_tag = TyKind.TyPtr
-                  bind_ns = cpt.ns
-                  bind_nl = cpt.nl
-                }
-              }
-              if not kind_is_unknown(dt.kind) { bind_tag = dt.kind; bind_ns = dt.ns; bind_nl = dt.nl }
-              ## Issue #656 — the POINTER twin of #557's late enum annotation (below): `p : ptr(E)` where
-              ## `E` is declared in a later-sorted module. Fills only the pointee NAME the `upto` prefix
-              ## could not resolve; the recorded tag is unchanged (see `late_enum_ptr_ty`).
-              if kind_is_ptr(dt.kind) and dt.nl == 0 and ann.n != 0 {
-                lpp := late_enum_ptr_ty(src, ann.s, ann.n, decls, upto)
-                if kind_is_ptr(lpp.kind) { bind_ns = lpp.ns; bind_nl = lpp.nl }
-              }
-              ## Issue #557 — the same late-declared enum annotation, on an annotated local binding.
-              if kind_is_unknown(dt.kind) and ann.n != 0 {
-                lae := late_enum_ann_ty(src, ann.s, ann.n, decls, upto)
-                if kind_is_enum(lae.kind) { bind_tag = TyKind.TyHiddenEnum; bind_ns = lae.ns; bind_nl = lae.nl }
-              }
-              ## RELIABLE aggregate recording (scar #2: StructLit/EnumLit don't dispatch check_expr's big
-              ## match, so `tv.tag` came back 0). Recover the aggregate type NAME + tag straight from the
-              ## literal, so a later use of this local (return / annotated-local / call-arg / field / array-
-              ## element / global sink) is checked against a scalar sink (TYP-6). The Result carrier may
-              ## preserve StructLit's public tag 3 while dropping its name payload; that is still unresolved,
-              ## so recover it exactly like tag 0 instead of recording a nameless struct local. An ARRAY literal
-              ## of SCALAR-LITERAL elements is tagged 7 (scalar-element array) so a whole-aggregate store into
-              ## `xs[i]` is rejected. An annotation / call-return with a reliable payload still wins.
-              ## #726 — `check_expr`'s `EnumLit` arm now answers the public enum tag 4 the same way, and its
-              ## name is lost to the same carrier: a nameless enum local skipped #557's exhaustiveness check
-              ## and #693's raw-union exclusion. Recover it exactly like the nameless struct.
-              ## …and the public array tag `check_expr`'s `ArrayLit` arm answers is not this file's tag-7 local
-              ## marker, which means a SCALAR-literal-element array: recorded as-is it fenced the whole-struct
-              ## store `ps[0] = P(…)` into `mut ps := [P(…), P(…)]`. The literal is re-judged below.
-              if kind_is_unknown(dt.kind) and kind_is_array(bind_tag) and unchecked bitcast(usize, expr_array_first(v)) != 0 { bind_tag = TyKind.TyUnknown }
-              if kind_is_unknown(bind_tag) or ((kind_is_struct(bind_tag) or kind_is_enum(bind_tag)) and bind_nl == 0) {
-                ## HIDDEN tags 9 (struct) / 10 (enum): `value_agg_ty` maps them back, but `check_expr`'s Var
-                ## resolution does NOT surface them, so the overload-naive existing arg checks stay tolerant.
-                ## Covers a StructLit / EnumLit / nullary-enum-variant RHS (and a Var aliasing such a local).
-                vag := value_agg_ty(v, decls, upto, src, locals, cnt)
-                if kind_is_struct(vag.kind) { bind_tag = TyKind.TyHiddenStruct; bind_ns = vag.ns; bind_nl = vag.nl }
-                else if kind_is_enum(vag.kind) { bind_tag = TyKind.TyHiddenEnum; bind_ns = vag.ns; bind_nl = vag.nl }
-                else {
-                  afe := expr_array_first(v)
-                  if unchecked bitcast(usize, afe) != 0 and value_is_scalar_lit(afe) { bind_tag = TyKind.TyArray }
-                }
-              }
-              ## Issue #680 — an unannotated ENUM value bound from a call or a `deref` (`c := g(0)`,
-              ## `x := deref(stmt_p(Stmt, st))`, `x := deref(p)`) recorded no enum name, so every later
-              ## `match x` skipped the exhaustiveness check. Record it under the HIDDEN enum tag 10, the one
-              ## an inferred `c := C.R` already uses, when nothing else recorded a tag; a public tag 4 that
-              ## arrived without its name keeps its tag and only gains the name.
-              if ann.n == 0 and bind_nl == 0 and (kind_is_unknown(bind_tag) or kind_is_enum(bind_tag)) {
-                vet := sema_value_enum_ty(v, decls, src, locals, cnt)
-                if kind_is_enum(vet.kind) {
-                  if kind_is_unknown(bind_tag) { bind_tag = TyKind.TyHiddenEnum }
-                  bind_ns = vet.ns
-                  bind_nl = vet.nl
-                }
-              }
-              ## Issue #5 / TYP-6 — preserve the exact direct two-word tuple residual as a hidden local
-              ## marker. Tag 12 is intentionally not a public type tag (wrapper values use tag 11); the
-              ## Var arm maps it back to UNKNOWN for ordinary type compatibility, while the conversion
-              ## fence below can still distinguish this proven tuple from an array or an unrelated local.
-              ## An explicit tuple annotation is accepted; an array annotation cannot opt into this marker.
-              if sema_two_word_tuple_literal(v, src) and (ann.n == 0 or str_at((src + ann.s), 1) == "(") {
-                bind_tag = TyKind.TyTupleMark
-                bind_ns = 0
-                bind_nl = 0
-              }
-              ## ANNOTATED-local conformance (both directions): `x : <scalar> = <aggregate>` or `x :
-              ## <aggregate> = <scalar-literal>` — covers the float/char sink the tag-only `bad_decl` misses.
-              if agg_scalar_bad(ann.s, ann.n, v, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(ns, 0)) }
-              ## Issue #805 — `ys := xs` over a fixed-array local or parameter records `xs`'s declared
-              ## `[T; N]`, what `ys : [T; N] = xs` records, so an element `match ys[i]` is decided from the
-              ## element type like `match xs[i]`.
-              if ann.n == 0 and bind_nl == 0 and (kind_is_unknown(bind_tag) or kind_is_array(bind_tag)) {
-                avs := expr_var_span(v)
-                if avs.n != 0 {
-                  aal := sema_local_array_ann(avs, src, locals, cnt)
-                  if aal.n != 0 { bind_tag = TyKind.TyArray; bind_ns = aal.s; bind_nl = aal.n }
-                }
-              }
-              mut bind_byte := tag_of_kind(bind_tag)
-              if local_is_mut(src, ns) { bind_byte = tag_with_mut(bind_byte) }
-              lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = bind_byte, prov = bind_prov, tns = bind_ns, tnl = bind_nl))
-              cnt += 1
-            }
-            da_remove_root(deref(da), src, ns, nl)
-            cur = nx
-          }
-          Stmt::While(c, b, nx) => {
-            ## Issue #507 — the `while` condition carried NO name-resolution prepass at all, so it was
-            ## looser than the `Stmt::If` arm below: not just an operand but a BARE undeclared name as the
-            ## whole condition compiled clean and the loop was entered on a garbage read. Run the same
-            ## walk the `if` condition runs, before the bool check, so both conditions reject one shape
-            ## with one diagnostic.
-            if expr_statement_has_unbound(c, decls, upto, src, a, locals, cnt) {
-              return Result(usize, CheckErr).Err(unbound_code(c, decls, upto, src, a, locals, cnt))
-            }
-            cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
-            ## the loop condition must be bool (a known non-bool is a `Mismatch`).
-            if not kind_is_unknown(cc.kind) and not kind_is_bool(cc.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
-            cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
-            cur = nx
-          }
-          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
-            if declared(decls, upto, src, bns, bnl) {
-            } else if local_in(locals, cnt, src, bns, bnl) {
-            } else { return Result(usize, CheckErr).Err(unbound_err(bns, bnl)) }
-            ## Issue #693 — a write is a SEPARATE path from a read: the parser stores `v.a = 5` as two name
-            ## spans, so no expression walker ever sees the place and the read-side refusal above cannot
-            ## reach it. Measured on the parent, this row built at rc 0 and dropped the store silently.
-            ## `sema_name_owner_is_enum` asks the same question `value_agg_ty` answers for an expression
-            ## owner, over the recorded local type a name place carries.
-            if sema_name_owner_is_enum(decls, src, locals, cnt, bns, bnl) {
-              return Result(usize, CheckErr).Err(enum_field_access_err(fns))
-            }
-            ## A known struct write must name one of that struct's declared fields. The parser stores this
-            ## write as separate base/field spans, so the expression walker cannot validate it for us.
-            bowner := sema_struct_owner_name_span(decls, upto, src, locals, cnt, bns, bnl)
-            if bowner.n != 0 and sema_field_ann_span(decls, upto, src, bowner.s, bowner.n, fns, fnl, a).n == 0 {
-              return Result(usize, CheckErr).Err(unbound_err(fns, fnl))
-            }
-            cv := check_expr_da(fv, decls, upto, src, a, locals, cnt, da)?
-            ## Direct field destination/value conformance. The owner was resolved above from a direct
-            ## local, parameter, or global struct root; nested paths and array-held fields remain residual.
-            if bowner.n != 0 {
-              ftsp0 := sema_field_ann_span(decls, upto, src, bowner.s, bowner.n, fns, fnl, a)
-              if ftsp0.n != 0 {
-                ft0 := resolve_ty(src, ftsp0.s, ftsp0.n, decls, upto)
-                if sema_direct_place_value_bad(ft0, cv, fv, src, locals, cnt, "FIELD-STORE", bns) { mark_failed(locals, mismatch_err(bns, 0)) }
-                ## Issue #299 census hook — the struct-FIELD STORE sink, `s.x = b`. The field's declared
-                ## type is already resolved directly above for the TYP-6 conformance check, so this sink
-                ## needs no new type recovery: it is the same `dst` the annotated binding gets, reached
-                ## through a place path instead of a name.
-                brand_probe_sink(ft0, fv, bns, decls, upto, src, locals, cnt, a)
-                ## …and the REFUSAL at the same sink. `sema_direct_place_value_bad` above cannot see it:
-                ## it ends in `tag_compat`, where every tag-8 brand is compatible with every other. A
-                ## field store is the LAST unhooked way to launder a sibling into a brand-typed slot, so
-                ## without it `s.x = b` is the standing way around the annotated binding's own refusal.
-                ## Located at the base name, which is where this arm's other place diagnostics point.
-                sbe := sema_brand_sink_err(ft0, fv, sema_brand_span(s_of(fv, a), bns), decls, upto, src, locals, cnt, a)
-                if sbe != 0 { mark_failed(locals, sbe) }
-              }
-            }
-            ## Issue #298 — a field store is authorized by the ROOT binding's `mut`, not by the field
-            ## token. A const local/global that was already initialized has no unreadied DA marker, while
-            ## the one permitted first write to an uninitialized local still has one.
-            broot := VSpan(s = bns, n = bnl)
-            bperm := sema_write_mutability(decls, src, locals, cnt, broot)
-            if bperm == 2 or (bperm == 1 and not sema_da_field_write_unready(da, src, broot, VSpan(s = fns, n = fnl))) {
-              mark_failed(locals, immutable_err(broot.s))
-            }
-            ## FIELD-ASSIGN conformance (TYP-6): `t.field = <aggregate>` into a scalar field (or the
-            ## REVERSE, a scalar literal into an aggregate field) — the retired `Stmt::FieldAssign` emit net.
-            ## Resolve the base's struct type NAME from its recorded local tag (3 = struct), then the field's
-            ## declared type span, then check the stored value against it. Poison-tolerant (a non-struct or
-            ## unknown base → no fire).
-            bfe := local_lookup(locals, cnt, src, bns, bnl)
-            bftag : TyKind = bfe.ty.kind
-            if (kind_is_struct(bftag) or kind_is_hidden_struct(bftag)) and bfe.ty.nl != 0 {
-              ftsp := sema_field_ann_span(decls, upto, src, bfe.ty.ns, bfe.ty.nl, fns, fnl, a)
-              if agg_scalar_bad(ftsp.s, ftsp.n, fv, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(bns, 0)) }
-              da_assign_field(deref(da), decls, upto, src, bns, bnl, fns, fnl, Ty(kind = TyKind.TyStruct, ns = bfe.ty.ns, nl = bfe.ty.nl))
-            }
-            cur = nx
-          }
-          ## `o.i.v = e` — a nested-field store; check the value expression (the place is a nested Field).
-          Stmt::FieldPathAssign(pl, fpv, nx) => {
-            pbase := field_path_deref_var(pl)
-            pfs := expr_field_span(pl)
-            if pbase.n != 0 and local_prov(locals, cnt, src, pbase.s, pbase.n) == prov_field_ptr() and pfs.n != 0 {
-              return Result(usize, CheckErr).Err(located_err(pfs.s))
-            }
-            cvp := check_expr_da(fpv, decls, upto, src, a, locals, cnt, da)?
-            np := expr_nested_path(pl)
-            ## The leaf destination is resolved ONCE and handed to both consumers — the aggregate conformance
-            ## beside it and the brand judgement under it — because a second walk of the same two struct
-            ## layers is a second decision. That is #679's shape, arrived at for #679's reason: the flat
-            ## field store at `Stmt::FieldAssign` was hooked for #299 and this arm was not, so `s.t.y = b`
-            ## laundered a sibling into the same `A`-typed slot the flat refusal had just closed.
-            np_leaf := sema_nested_field_leaf_ty(np, decls, upto, src, locals, cnt, a)
-            if sema_nested_field_path_value_bad(np, np_leaf, cvp, fpv, src, locals, cnt) {
-              mark_failed(locals, mismatch_err(np.ss, 0))
-            }
-            ## Issue #299 — the brand judgement at this same sink, over the same leaf, through the same
-            ## classifier and census hook the flat `Stmt::FieldAssign` store uses. `sema_direct_place_value_bad`
-            ## above cannot see it: every tag-8 brand is compatible with every other there.
-            nbe := sema_nested_field_brand_err(np, np_leaf, fpv, decls, upto, src, locals, cnt, a)
-            if nbe != 0 { mark_failed(locals, nbe) }
-            if sema_pointer_field_path_value_bad(pl, cvp, fpv, decls, upto, src, locals, cnt, a) {
-              pfield := expr_field_span(pl)
-              mark_failed(locals, mismatch_err(pfield.s, 0))
-            }
-            afp := expr_array_nested_path(pl)
-            if sema_array_nested_field_path_value_bad(afp, cvp, fpv, decls, upto, src, locals, cnt, a) {
-              mark_failed(locals, mismatch_err(afp.ss, 0))
-            }
-            ## Issue #298 — nested field paths carry the same root mutability rule as direct fields. Query
-            ## the exact DA marker BEFORE the write bookkeeping below removes it; an initialized immutable
-            ## aggregate has no marker and must not reach lower as a writable place.
-            proot := sema_place_root_var(pl)
-            pperm := sema_write_mutability(decls, src, locals, cnt, proot)
-            mut p_unready := da_has_root(da, src, proot.s, proot.n)
-            aep := expr_array_elem_nested_path(pl)
-            anp := expr_array_nested_path(pl)
-            if aep.ok {
-              p_unready = sema_da_index_write_unready(da, src, VSpan(s = aep.rs, n = aep.rn), VSpan(s = aep.fs, n = aep.fl), VSpan(s = aep.ss, n = aep.sl), i64(aep.ix))
-            } else if anp.ok {
-              p_unready = sema_da_index_write_unready(da, src, VSpan(s = anp.rs, n = anp.rn), VSpan(s = anp.fs, n = anp.fl), VSpan(s = anp.ss, n = anp.sl), i64(anp.ix))
-            } else if np.sl != 0 {
-              p_unready = sema_da_path_write_unready(da, src, np)
-            }
-            if pperm == 2 or (pperm == 1 and not p_unready) { mark_failed(locals, immutable_err(proot.s)) }
-            if aep.ok {
-              alt1 := local_lookup(locals, cnt, src, aep.rs, aep.rn)
-              alt1_tag : TyKind = alt1.ty.kind
-              aty1 : Ty = Ty(kind = alt1_tag, ns = alt1.ty.ns, nl = alt1.ty.nl)
-              da_assign_array_elem_nested_field(deref(da), decls, upto, src, aep.rs, aep.rn, aep.fs, aep.fl, aep.ss, aep.sl, i64(aep.ix), aty1)
-            }
-            if anp.ok {
-              alt0 := local_lookup(locals, cnt, src, anp.rs, anp.rn)
-              alt0_tag : TyKind = alt0.ty.kind
-              aty0 : Ty = Ty(kind = alt0_tag, ns = alt0.ty.ns, nl = alt0.ty.nl)
-              da_assign_array_nested_field(deref(da), decls, upto, src, anp.rs, anp.rn, anp.fs, anp.fl, anp.ss, anp.sl, i64(anp.ix), aty0)
-            }
-            if np.sl != 0 {
-              ## A root that is no local here is a module global: its declared type drives the DA walk.
-              nlt := local_lookup(locals, cnt, src, np.rs, np.rn)
-              nlt_tag : TyKind = nlt.ty.kind
-              mut rt := Ty(kind = nlt_tag, ns = nlt.ty.ns, nl = nlt.ty.nl)
-              if not nlt.found {
-                gts := global_type_span(decls, src, np.rs, np.rn)
-                if gts.n != 0 { rt = resolve_ty(src, gts.s, gts.n, decls, upto) }
-              }
-              da_assign_path(deref(da), decls, upto, src, np, rt)
-            }
-            cur = nx
-          }
-          Stmt::Return(rv, nx) => {
-            s3ar := s3a_return_bad(rv, decls, upto, src, a, locals, cnt)
-            if s3ar != 0 { return Result(usize, CheckErr).Err(located_err(s3ar)) }
-            ## Check the DA place state before the broad unbound walker. The latter is intentionally
-            ## conservative for ordinary expressions but can descend into an aggregate field return after
-            ## a nested-path write; fail here with the located DA diagnostic instead of reaching that crashy
-            ## aggregate path.
-            if da_bad_expr(rv, da, src) { return Result(usize, CheckErr).Err(unbound_code(rv, decls, upto, src, a, locals, cnt)) }
-            if expr_has_unbound(rv, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_code(rv, decls, upto, src, a, locals, cnt)) }
-            ## RETURN-PATH CHECK: an early `return <e>` must match the fn's declared return type
-            ## (`ret_kind`, `TyUnknown` → no check). Poison-tolerant: only when BOTH the returned
-            ## type and the declared return type are KNOWN and differ is it a `Mismatch`. This
-            ## covers returns nested in if/while/match branches (ret_kind threads into those bodies).
-            rr := check_expr_da(rv, decls, upto, src, a, locals, cnt, da)
-            ## docs/ir.md §3.8 — the declared result type is a `return` value's context.
-            sema_vty_ctx(rv, SEMA_VTY_RET_S, SEMA_VTY_RET_N, decls, src)
-            match rr {
-              Result::Ok(cr) => {
-                if not kind_is_unknown(ret_kind) { ptrint_probe_site("RESULT-RET", "retexpr", true, cr.kind, ret_kind, s_of(rv, a), src) }
-                if not kind_is_unknown(ret_kind) and not kind_compat(cr.kind, ret_kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(rv, a), 0)) }
-                ## The frozen seed can leave a payload-heavy literal's ordinary `check_expr` result UNKNOWN
-                ## even though the AST shape is exact. Recover the literal tag on this return boundary so a
-                ## `StrLit` cannot inhabit a scalar result slot merely because `cr.tag == 0`. This is the
-                ## same bootstrap-safe classifier used by annotated bindings and loop-value checking; an
-                ## unknown/non-literal remains conservative and is still handled by the existing paths.
-                rlit := lbv_lit_tag(rv)
-                if not kind_is_unknown(ret_kind) and not kind_is_unknown(rlit) { ptrint_probe_site("RESULT-RET", "retlit", true, rlit, ret_kind, s_of(rv, a), src) }
-                if not kind_is_unknown(ret_kind) and not kind_is_unknown(rlit) and not kind_compat(rlit, ret_kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(rv, a), 0)) }
-                ## A direct/UFCS call can have a declared result even when the bootstrap-safe `check_expr`
-                ## carrier surfaced UNKNOWN for the payload-heavy call node. Recover that result before
-                ## accepting an early `return make_str()` from a scalar-returning function.
-                rcall := expr_call_result_ty(rv, decls, upto, src)
-                if not kind_is_unknown(ret_kind) and not kind_is_unknown(rcall.kind) { ptrint_probe_site("RESULT-RET", "retcall", true, rcall.kind, ret_kind, s_of(rv, a), src) }
-                if not kind_is_unknown(ret_kind) and not kind_is_unknown(rcall.kind) and not kind_compat(rcall.kind, ret_kind) {
-                  return Result(usize, CheckErr).Err(mismatch_err(s_of(rv, a), 0))
-                }
-              }
-              Result::Err(e) => { return Result(usize, CheckErr).Err(e) }
-            }
-            cur = nx
-          }
-          Stmt::If(c, th, el, nx) => {
-            if expr_statement_has_unbound(c, decls, upto, src, a, locals, cnt) {
-              return Result(usize, CheckErr).Err(unbound_code(c, decls, upto, src, a, locals, cnt))
-            }
-            cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
-            ## the condition must be bool (a known non-bool is a `Mismatch`).
-            if not kind_is_unknown(cc.kind) and not kind_is_bool(cc.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
-            ## A branch-local comptime name cannot safely be read after this join while the current
-            ## bounded lower uses a flat function-local map. Allow an explicit direct ordinary rebind in
-            ## the continuation, but reject a bare post-join read instead of selecting one branch's value.
-            mut branch_escape := sema_comptime_branch_escape_stmts(th, nx, src, locals, cnt, a)
-            if branch_escape.n == 0 { branch_escape = sema_comptime_branch_escape_stmts(el, nx, src, locals, cnt, a) }
-            if branch_escape.n != 0 { return Result(usize, CheckErr).Err(ambiguous_err(branch_escape.s)) }
-            ## With no unreadied places, preserve the established linear checker path. This is also important
-            ## for the self-hosted compiler's large, fully-initialized source tree: branch snapshots are only
-            ## materialized when the function actually contains an uninitialized place.
-            if deref(da).len == 0 and hdr_len(unchecked bitcast(ptr(FVec), da_fvec(da))) == 0 and hdr_len(unchecked bitcast(ptr(FVec), da_pvec(da))) == 0 and hdr_len(unchecked bitcast(ptr(FVec), da_avec(da))) == 0 and hdr_len(unchecked bitcast(ptr(FVec), da_navec(da))) == 0 and hdr_len(unchecked bitcast(ptr(FVec), da_napvec(da))) == 0 {
-              cnt = check_stmts(th, decls, upto, src, a, locals, cnt, da)?
-              cnt = check_stmts(el, decls, upto, src, a, locals, cnt, da)?
-            } else {
-              ## Each arm starts from the same incoming unreadied set. A write in only one arm must not
-              ## make the binding appear initialized after the join; a diverging arm contributes no path.
-              ## Compute divergence before threading state. A direct-return arm can be checked for diagnostics,
-              ## then discarded; the surviving arm is checked from the original incoming state and its state stays
-              ## in `da` without a post-join copy.
-              then_div := stmts_return(th, a) or stmt_starts_return(th, a)
-              else_div := stmts_return(el, a) or stmt_starts_return(el, a)
-              incoming_da := da_copy(da)
-              then_cnt := check_stmts(th, decls, upto, src, a, locals, cnt, da)?
-              then_da := da_copy(da)
-              da_assign(deref(da), incoming_da)
-              else_cnt := check_stmts(el, decls, upto, src, a, locals, cnt, da)?
-              if then_div and not else_div {
-              } else {
-                else_da := da_copy(da)
-                if then_div and else_div {
-                  deref(da).len = 0
-                } else if else_div {
-                  da_assign(deref(da), then_da)
-                } else {
-                  da2 := da_union_src(ptr(then_da), ptr(else_da), src)
-                  da_assign(deref(da), da2)
-                }
-              }
-              if then_cnt > else_cnt { cnt = then_cnt } else { cnt = else_cnt }
-            }
-            cur = nx
-          }
-          Stmt::Match(sc, ah, nx) => {
-            cs := check_expr_da_allow_enum_array_root(sc, decls, upto, src, a, locals, cnt, da)?
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm {
-                Some(armq) => {
-                  am := deref(arm_p(armq))
-                  ## a variant arm `Variant(p0, …) => …` binds its PAYLOAD variables (`binds_head`, a `Bind`
-                  ## list) as locals VISIBLE ONLY IN THAT ARM. Their concrete types are instance-dependent
-                  ## (the enum payload, possibly a generic type-param) — bind them poison-tolerant (tag 0) so
-                  ## the arm body's references resolve. `base` restores the local count after the arm so the
-                  ## bindings (and the arm's own locals) do not leak into sibling arms.
-                  base := cnt
-                  mut bd := am.binds_head
-                  loop {
-                    match bd {
-                      Some(bdq) => {
-                        bnns := bnd_ns(bdq)
-                        bnnl := bnd_nl(bdq)
-                        if not local_in(locals, cnt, src, bnns, bnnl) {
-                          lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                          cnt += 1
-                        }
-                        bd = bnd_next(bdq)
-                      }
-                      None => { break }
-                    }
-                  }
-                  cnt = check_stmts(am.body_stmts, decls, upto, src, a, locals, cnt, da)?
-                  lvec_truncate(deref(locals), base)
-                  cnt = base
-                  arm = am.next
-                }
-                None => { break }
-              }
-            }
-            ## EXHAUSTIVENESS (§60/CF-1): a `match` on a KNOWN enum whose arms are ALL plain variant patterns
-            ## (no `_` wildcard / comptime / lit arm — `wild != 0`) must cover EVERY variant; an uncovered
-            ## variant is a `Mismatch`. The scrutinee's enum type comes from `match_scrut_enum_ty`, which
-            ## resolves it from the EXPRESSION — a parameter or annotated local (`local_lookup`, whose by-value
-            ## `Ty` preserves the type-NAME span ns/nl, unlike `cs`, whose `Result(Ty, CheckErr)` payload
-            ## truncates it to the tag), an inferred enum-literal binding, `deref(p)`, a field read, or a
-            ## call result. Fail-open: fires only when the enum type AND its declaration are found AND a
-            ## variant is provably uncovered; a wildcard arm or an unresolved type still skips. The parser
-            ## normalizes `Col::R` → `vs/vl = "R"`, so `streq` vs the bare variant name is correct.
-            ## Issue #557 — the scrutinee's enum type is resolved from the EXPRESSION, not from the one
-            ## bare-`Var` spelling the old code understood; `match_scrut_enum_ty` documents the branches.
-            ety := match_scrut_enum_ty(sc, decls, upto, src, locals, cnt, a)
-            if kind_is_enum(ety.kind) and ety.nl != 0 and arms_all_plain(ah) {
-              if enum_coverage_gap(ah, decls, src, ety.ns, ety.nl) {
-                return Result(usize, CheckErr).Err(mismatch_err(match_scrut_span(sc, a), 0))
-              }
-            }
-            ## SCALAR exhaustiveness (§5.1/§5.4): a `bool` or integer match must cover its type's values or
-            ## carry a `_`. Issue #788 — decided from the scrutinee's TYPE (`cs`, or a bare local's recorded
-            ## width), not only for a bare local, and for literal-only arm lists as well as ranges.
-            sty := match_scrut_scalar_ty(cs.kind, sc, decls, src, locals, cnt, a)
-            if (kind_is_int(sty.kind) or kind_is_bool(sty.kind)) and scalar_coverage_gap(ah, sty.kind, sty.ns, sty.nl, src) {
-              return Result(usize, CheckErr).Err(mismatch_err(match_scrut_span(sc, a), 0))
-            }
-            cur = nx
-          }
-          ## `for i in lo .. hi { body }` — the bounds must be int; `i` is an int local visible in
-          ## the body. (If a comparison/value were used as a bound it would be bool — `ty_eq` here
-          ## is poison-tolerant, but a known non-int bound is rejected.)
-          ## `deref(p) = v` — a store through a pointer. Both the pointer expression and the
-          ## value expression are checked (their pointee/value type agreement is deferred — the
-          ## pointee type is not tracked); introduces no new local.
-          Stmt::DerefAssign(ptr, val, nx) => {
-            cp := check_expr_da(ptr, decls, upto, src, a, locals, cnt, da)?
-            cv := check_expr_da(val, decls, upto, src, a, locals, cnt, da)?
-            cur = nx
-          }
-          ## `arr[i] = v` — an array element write. The base + index + value expressions are all
-          ## checked (the base `Var` must be bound; the index must be int per the `Index` rule);
-          ## introduces no new local. Element/value type agreement is deferred (element-type
-          ## tracking is not done — the toy arrays hold word-sized ints).
-          Stmt::IndexAssign(ib, ii, iv, nx) => {
-            ## The base is a write place, not a value read. A simple local array may still be unreadied here.
-            cib := check_expr(ib, decls, upto, src, a, locals, cnt)?
-            ## Types §6.4 / Assembly §3 / issue #5 — the write target has the same statically provable
-            ## bound as an `Expr::Index` read, but its base and index are stored as separate Stmt fields.
-            ## Reuse the exact direct-local fixed-array test so zero-length and ordinary fixed-array OOB
-            ## writes reject at the index literal while dynamic, nonliteral, global, and aggregate paths
-            ## remain on their existing deferred/runtime paths.
-            if fixed_array_index_oob(ib, ii, src, locals, cnt) {
-              return Result(usize, CheckErr).Err(located_err(expr_num_lit_start(ii)))
-            }
-            cii := check_expr_da(ii, decls, upto, src, a, locals, cnt, da)?
-            if not kind_is_unknown(cii.kind) and not kind_is_int(cii.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(ii, a), 0)) }
-            civ := check_expr_da(iv, decls, upto, src, a, locals, cnt, da)?
-            ## Issue #298 — `base[index] = value` is writable only when the base's root binding is
-            ## mutable. The DA query preserves the language's single first assignment for an uninitialized
-            ## local and recognizes the exact constant element where that state is tracked.
-            iroot := sema_place_root_var(ib)
-            mut ibfield := VSpan(s = 0, n = 0)
-            ibbase := expr_field_base(ib)
-            if unchecked bitcast(usize, ibbase) != 0 { ibfield = expr_field_span(ib) }
-            mut iix : i64 = 0 - 1
-            if expr_is_num_lit(ii) { iix = expr_num_lit_val(ii) }
-            iperm := sema_write_mutability(decls, src, locals, cnt, iroot)
-            i_unready := sema_da_index_write_unready(da, src, iroot, ibfield, VSpan(s = 0, n = 0), iix)
-            ## INDEX-ASSIGN conformance (TYP-6): `xs[i] = <aggregate>` where `xs` is a SCALAR-element
-            ## array (tag 7, recorded at binding from a scalar-literal-element ArrayLit) — the retired
-            ## `Stmt::IndexAssign` emit net. Poison-tolerant: only a confidently scalar-element array + a
-            ## confident aggregate value fires (a struct/enum-element array is left tolerant).
-            ibv := expr_var_span(ib)
-            if ibv.n != 0 {
-              ilocal := local_at(locals, cnt, src, ibv.s, ibv.n)
-              iak := kind_of_tag(tag_unflag(ilocal.tag))
-              iae := Ty(kind = iak, ns = ilocal.tns, nl = ilocal.tnl)
-              aet := sema_direct_index_elem_ty(src, ilocal, decls, upto)
-              if sema_direct_place_value_bad(aet, civ, iv, src, locals, cnt, "ELEM-STORE", ibv.s) { mark_failed(locals, mismatch_err(ibv.s, 0)) }
-              if expr_is_num_lit(ii) {
-                da_assign_array(deref(da), src, ibv.s, ibv.n, expr_num_lit_val(ii), iae)
-              }
-              iatag := iae.kind
-              if kind_is_array(iatag) and (iae.nl == 0 or array_elem_scalar(src, iae.ns, iae.nl)) {
-                va := value_agg_ty(iv, decls, upto, src, locals, cnt)
-                if kind_is_struct(va.kind) or kind_is_enum(va.kind) { mark_failed(locals, mismatch_err(ibv.s, 0)) }
-              }
-            } else {
-              sfet := sema_direct_slice_field_elem_ty(ib, decls, upto, src, locals, cnt, a)
-              sfsp := expr_field_span(ib)
-              if sema_direct_place_value_bad(sfet, civ, iv, src, locals, cnt, "SLICE-FIELD-STORE", sfsp.s) {
-                mark_failed(locals, mismatch_err(sfsp.s, 0))
-              }
-              if unchecked bitcast(usize, expr_field_base(ib)) != 0 and expr_is_num_lit(ii) {
-                fbv := expr_field_base(ib)
-                frv := expr_var_span(fbv)
-                ffv := expr_field_span(ib)
-                if frv.n != 0 and ffv.n != 0 {
-                  flt := local_lookup(locals, cnt, src, frv.s, frv.n)
-                  flt_tag : TyKind = flt.ty.kind
-                  mut rte := Ty(kind = flt_tag, ns = flt.ty.ns, nl = flt.ty.nl)
-                  if not flt.found {
-                    gts2 := global_type_span(decls, src, frv.s, frv.n)
-                    if gts2.n != 0 { rte = resolve_ty(src, gts2.s, gts2.n, decls, upto) }
-                  }
-                  da_assign_nested_array(deref(da), decls, upto, src, frv.s, frv.n, ffv.s, ffv.n, expr_num_lit_val(ii), rte)
-                }
-              }
-            }
-            ## Keep an established type-conformance diagnostic ahead of the mutability fence: a scalar
-            ## array receiving an aggregate is a type error even when its immutable root is also unwritable.
-            i_immut := iperm == 2 or (iperm == 1 and not i_unready)
-            if i_immut { mark_failed(locals, immutable_err(iroot.s)) }
-            ## Issue #429 — the AND-path's remaining step. `str` is `[u8]` (Types §7 / Stdlib appendix
-            ## §3.6): the view's pointer carries an IMMUTABLE pointee, so `s[i] = v` is ill-formed even
-            ## when the binding is `mut` — Memory §3.3 takes a dereference step's permission from the
-            ## pointee, not from the name. Ordered AFTER the binding fence and mutually exclusive with it,
-            ## so a place that already fails at its FIRST immutable step keeps its established `immutable
-            ## binding` wording and location; this arm fires exactly where that fence does not, which is
-            ## where the store used to reach `.rodata` and the process died with no diagnostic at all.
-            if not i_immut and sema_place_is_str_view(locals, cnt, src, iroot) { mark_failed(locals, str_elem_write_err(iroot.s)) }
-            cur = nx
-          }
-          ## `a[i].f = v` — an array-of-struct element-field write. The base array, index, and
-          ## value are checked (the index must be int); introduces no new local. Field/value type
-          ## agreement is deferred (element-type tracking is poison-tolerant here).
-          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
-            ## The indexed base is a write place (`a[i].f`), not a whole-element read. Constant-index local
-            ## fixed arrays of simple structs are tracked field-by-field; dynamic indices stay conservative.
-            cfa := check_expr(fia, decls, upto, src, a, locals, cnt)?
-            ## `Stmt::IndexFieldAssign` carries the direct array base and index separately, just like
-            ## `Stmt::IndexAssign`; apply the same bounded check before the field-specific DA bookkeeping.
-            if fixed_array_index_oob(fia, fii, src, locals, cnt) {
-              return Result(usize, CheckErr).Err(located_err(expr_num_lit_start(fii)))
-            }
-            cfi := check_expr_da(fii, decls, upto, src, a, locals, cnt, da)?
-            if not kind_is_unknown(cfi.kind) and not kind_is_int(cfi.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(fii, a), 0)) }
-            cfv := check_expr_da(fiv, decls, upto, src, a, locals, cnt, da)?
-            afp := expr_index_array_nested_path(fia, fii, ifs, ifl)
-            if sema_array_nested_field_path_value_bad(afp, cfv, fiv, decls, upto, src, locals, cnt, a) {
-              mark_failed(locals, mismatch_err(afp.ss, 0))
-            }
-            ## Issue #298 — the field after the index is still governed by the indexed base's root
-            ## binding. Exact AVec/NAVec/NAPVec markers keep first writes to uninitialized aggregates
-            ## legal while repeated writes to initialized immutable places fail before emission.
-            ifroot := sema_place_root_var(fia)
-            mut ifbasefield := VSpan(s = 0, n = 0)
-            ifbase := expr_field_base(fia)
-            if unchecked bitcast(usize, ifbase) != 0 { ifbasefield = expr_field_span(fia) }
-            mut ifix : i64 = 0 - 1
-            if expr_is_num_lit(fii) { ifix = expr_num_lit_val(fii) }
-            ifperm := sema_write_mutability(decls, src, locals, cnt, ifroot)
-            if_unready := sema_da_index_write_unready(da, src, ifroot, ifbasefield, VSpan(s = ifs, n = ifl), ifix)
-            if ifperm == 2 or (ifperm == 1 and not if_unready) { mark_failed(locals, immutable_err(ifroot.s)) }
-            iav := expr_var_span(fia)
-            if iav.n != 0 and expr_is_num_lit(fii) {
-              alt := local_lookup(locals, cnt, src, iav.s, iav.n)
-              alt_tag : TyKind = alt.ty.kind
-              aty : Ty = Ty(kind = alt_tag, ns = alt.ty.ns, nl = alt.ty.nl)
-              da_assign_array_field(deref(da), decls, upto, src, iav.s, iav.n, ifs, ifl, expr_num_lit_val(fii), aty)
-            } else if unchecked bitcast(usize, expr_field_base(fia)) != 0 and expr_is_num_lit(fii) {
-              arrroot := expr_var_span(expr_field_base(fia))
-              arrfield := expr_field_span(fia)
-              if arrroot.n != 0 and arrfield.n != 0 {
-                alt2 := local_lookup(locals, cnt, src, arrroot.s, arrroot.n)
-                alt2_tag : TyKind = alt2.ty.kind
-                aty2 : Ty = Ty(kind = alt2_tag, ns = alt2.ty.ns, nl = alt2.ty.nl)
-                da_assign_array_nested_field(deref(da), decls, upto, src, arrroot.s, arrroot.n, arrfield.s, arrfield.n, ifs, ifl, expr_num_lit_val(fii), aty2)
-              }
-            }
-            cur = nx
-          }
-          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-            ## A RANGE `for i in lo .. hi` has a non-null `fhi`; both bounds must be int. A FOR-IN
-            ## `for x in <iterable>` has `fhi == null` (0) — `flo` is the iterable (any aggregate/slice, NOT
-            ## an int) and the loop var binds each ELEMENT. `check_expr_da(fhi, da)` when `fhi` is null DEREFERENCES
-            ## A NULL POINTER → `check` SEGFAULTED on every for-in (`for_over_slice`/`_nonvar`/…); guard it.
-            mut vtag := TyKind.TyUnknown
-            if unchecked bitcast(usize, fhi) != 0 {
-              tlo := check_expr_da(flo, decls, upto, src, a, locals, cnt, da)?
-              thi := check_expr_da(fhi, decls, upto, src, a, locals, cnt, da)?
-              if not kind_is_unknown(tlo.kind) and not kind_is_int(tlo.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(flo, a), 0)) }
-              if not kind_is_unknown(thi.kind) and not kind_is_int(thi.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(fhi, a), 0)) }
-              ## docs/ir-slice-1.md §2 — the two bounds have one type: a literal bound takes the other's.
-              if ir::sty_on() { rj : ir::VTy = sema_vty_join(flo, fhi); ir::sty_bind_put(fns, rj) }
-              vtag = TyKind.TyInt
-            } else {
-              tf := check_expr_da(flo, decls, upto, src, a, locals, cnt, da)?
-            }
-            ## bind the loop variable (int for a range; the element type — left UNKNOWN, poison-tolerant —
-            ## for a for-in) before checking the body.
-            vbyte := tag_of_kind(vtag)
-            if local_in(locals, cnt, src, fns, fnl) {
-            } else {
-              lvec_push(deref(locals), Local(ns = fns, nl = fnl, tag = vbyte, prov = 0, tns = 0, tnl = 0))
-              cnt += 1
-            }
-            cnt = check_stmts(fb, decls, upto, src, a, locals, cnt, da)?
-            cur = nx
-          }
-          ## `loop { body }` — the body is checked (locals it introduces thread out, as for `while`);
-          ## no condition. `break` is a leaf with no value (a `break` outside a loop is checked by
-          ## the scalar structural prepass in `stmts_bad_loop_control`).
-          Stmt::Loop(b, nx) => {
-            cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
-            cur = nx
-          }
-          Stmt::Unchecked(b, nx) => {
-            ## #529 grant column: restore the depth BEFORE the `?`, so an early return cannot leak it.
-            ug := ptrint_grant_enter()
-            ur := check_stmts(b, decls, upto, src, a, locals, cnt, da)
-            ptrint_grant_leave(ug)
-            cnt = ur?
-            cur = nx
-          }
-          Stmt::AllocWith(ae, b, nx) => {
-            cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
-            cur = nx
-          }
-          Stmt::Break(_bv, _bd, nx) => {
-            egab0 := sema_enum_global_array_value_bad(_bv, decls, upto, src, locals, cnt, a, false)
-            if egab0 != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egab0)) }
-            cur = nx
-          }
-          Stmt::Continue(_cd, nx) => { cur = nx }
-          ## A bare expression statement (a call / `?` for effect): type-check the expression for
-          ## well-formedness; its result is discarded, so it introduces no local.
-          Stmt::ExprStmt(e, nx) => {
-            ## A validated direct code-point `jmp(label)` has no value expression to type-check: its target
-            ## is a function-scoped label, not a runtime Var. The dedicated prepass above has already checked
-            ## its target, duplicate namespace, and `unchecked` grant before this ordinary statement walk.
-            if sema_is_direct_jmp(e, src) { }
-            else {
-              ## a bare atomic/fence call in statement position — check ordering legality here (it reaches
-              ## only `check_expr`, and the wrapper is the reliable hook, §1/§4 / spec ch.110).
-              if call_atomic_ordering_bad(e, src, a) { er := Result(usize, CheckErr).Err(mismatch_err(0, 0)); return er }
-              if expr_statement_has_unbound(e, decls, upto, src, a, locals, cnt) {
-                return Result(usize, CheckErr).Err(unbound_code(e, decls, upto, src, a, locals, cnt))
-              }
-              ce := check_expr_da(e, decls, upto, src, a, locals, cnt, da)?
-            }
-            cur = nx
-          }
-          ## COMPTIME statements (`comptime if`/`for`/`match`) — advance to the next statement. The branch
-          ## bodies are NOT type-checked here: they are comptime-selected, and per two-phase semantics an
-          ## unselected target-absent branch is not resolved/checked (§3.2). Without these arms the match had
-          ## no case for them and no wildcard, so `cur` never advanced → `check` INFINITE-LOOPED on any
-          ## `comptime if` (e.g. `arch_intrinsic.al`, num.al's operator shape) — a real hang, not just a gap.
-          Stmt::CompIf(cc, cthen, celse, nx) => {
-            ## The ordinary checker intentionally skips comptime bodies because target folding selects them
-            ## later. The enum-array safety boundary is target-independent, however: whichever target makes
-            ## an arm live must still reject a width-blind `GE[i]` value before its backend emits code.
-            ctlocal := sema_comptime_cond_runtime_local(cc, src, locals, cnt)
-            if ctlocal.n != 0 { return Result(usize, CheckErr).Err(comptime_cond_err(ctlocal.s)) }
-            egcc := sema_enum_global_array_value_bad(cc, decls, upto, src, locals, cnt, a, false)
-            if egcc != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcc)) }
-            egct := sema_enum_global_array_value_bad_stmts(cthen, decls, upto, src, locals, cnt, a)
-            if egct != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egct)) }
-            egce := sema_enum_global_array_value_bad_stmts(celse, decls, upto, src, locals, cnt, a)
-            if egce != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egce)) }
-          ## docs/ir.md §3.8 item 7 — the condition's records (a comptime `bool` expression, checked in
-          ## every case: Phase A, §9.1), then the branch sema can select, both when it cannot.
-          sema_ct_record(CtWalk.WkValue(cc), CtVar.CvNone, 0, 0, ir::expr_span(cc), decls, upto, src, a, locals, cnt)
-          ctsel := guard_fold(cc, src)
-          if ctsel != 0 { sema_ct_record(CtWalk.WkBody(cthen, da), CtVar.CvNone, 0, 0, ir::expr_span(cc), decls, upto, src, a, locals, cnt) }
-          if ctsel != 1 { sema_ct_record(CtWalk.WkBody(celse, da), CtVar.CvNone, 0, 0, ir::expr_span(cc), decls, upto, src, a, locals, cnt) }
-            cur = nx
-          }
-          Stmt::CompFor(cvs, cvl, civ, cb, nx) => {
-            if civ == 0 and sema_compfor_is_fields(src, cvs, cvl) {
-              bad := sema_bad_typeinfo_field_stmts(cb, src, cvs, cvl, a)
-              if bad != 0 { return Result(usize, CheckErr).Err(located_err(bad)) }
-            }
-            egcf := sema_enum_global_array_value_bad_stmts(cb, decls, upto, src, locals, cnt, a)
-            if egcf != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcf)) }
-          ## docs/ir.md §3.8 item 7 — one walk of the body, the member variable untyped.
-          sema_ct_record(CtWalk.WkBody(cb, da), CtVar.CvUntyped, cvs, cvl, Option(u64).Some(u64(cvs)), decls, upto, src, a, locals, cnt)
-            cur = nx
-          }
-          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
-            ## §3.3 COMPTIME STEP BUDGET: a LITERAL-bounded `comptime for` unrolling > 100000 steps is a
-            ## clean CHECK diagnostic (the lower aborts on ANY over-budget range; this catches the common
-            ## literal case at check with a location). Non-literal bounds are left to the lower's guard.
-            if expr_is_num_lit(rlo) and expr_is_num_lit(rhi) and expr_num_lit_val(rhi) - expr_num_lit_val(rlo) > 100000 {
-              return Result(usize, CheckErr).Err(located_err(s_of(rlo, a)))
-            }
-            mut egcr := sema_enum_global_array_value_bad(rlo, decls, upto, src, locals, cnt, a, false)
-            if egcr == 0 { egcr = sema_enum_global_array_value_bad(rhi, decls, upto, src, locals, cnt, a, false) }
-            if egcr == 0 { egcr = sema_enum_global_array_value_bad_stmts(rb, decls, upto, src, locals, cnt, a) }
-            if egcr != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcr)) }
-          ## docs/ir.md §3.8 item 7 — one walk of the body: a range binds its variable as a range `for`
-          ## does; a pack (`comptime for v in rest`, a null `hi`) leaves the element untyped.
-          ## null-ok: Stmt::CompForRange — the pack form carries a null `hi` (ast.al; not an Option).
-          if unchecked bitcast(usize, rhi) != 0 { sema_ct_record(CtWalk.WkBody(rb, da), CtVar.CvRange(rlo, rhi), rvs, rvl, Option(u64).Some(u64(rvs)), decls, upto, src, a, locals, cnt) }
-          else { sema_ct_record(CtWalk.WkBody(rb, da), CtVar.CvUntyped, rvs, rvl, Option(u64).Some(u64(rvs)), decls, upto, src, a, locals, cnt) }
-            cur = nx
-          }
-          Stmt::CompMatch(cmsc, cmah, nx) => {
-            mut egcm := sema_enum_global_array_value_bad(cmsc, decls, upto, src, locals, cnt, a, true)
-            mut armc : Option(ptr(mut Arm)) = cmah
-            loop {
-              match armc {
-                Some(armcq) => {
-                  if not (egcm == 0) { break }
-                  amc := deref(arm_p(armcq))
-                  basec := cnt
-                  mut arm_cntc := cnt
-                  mut bdc := amc.binds_head
-                  loop {
-                    match bdc {
-                      Some(bdcq) => {
-                        bnsc := bnd_ns(bdcq)
-                        bnlc := bnd_nl(bdcq)
-                        if not local_in(locals, arm_cntc, src, bnsc, bnlc) {
-                          lvec_push(deref(locals), Local(ns = bnsc, nl = bnlc, tag = 0, prov = 0, tns = 0, tnl = 0))
-                          arm_cntc += 1
-                        }
-                        bdc = bnd_next(bdcq)
-                      }
-                      None => { break }
-                    }
-                  }
-                  egcm = sema_enum_global_array_value_bad(amc.body, decls, upto, src, locals, arm_cntc, a, false)
-                  if egcm == 0 { egcm = sema_enum_global_array_value_bad_stmts(amc.body_stmts, decls, upto, src, locals, arm_cntc, a) }
-                ## docs/ir.md §3.8 item 7 — every arm's records, its pattern bindings in scope.
-                sema_ct_record(CtWalk.WkBody(amc.body_stmts, da), CtVar.CvNone, 0, 0, ir::expr_span(cmsc), decls, upto, src, a, locals, arm_cntc)
-                ## null-ok: Arm.body — an arm with a statement body carries a null value (ast.al; not an Option).
-                if unchecked bitcast(usize, amc.body) != 0 { sema_ct_record(CtWalk.WkValue(amc.body), CtVar.CvNone, 0, 0, ir::expr_span(cmsc), decls, upto, src, a, locals, arm_cntc) }
-                  lvec_truncate(deref(locals), basec)
-                  armc = amc.next
-                }
-                None => { break }
-              }
-            }
-            if egcm != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcm)) }
-            cur = nx
+    match s {
+      Stmt::Assign(ns, nl, v, nx) => {
+        ## Declarations §1.2 / §10 — a plain re-assignment writes an existing place. The old branch
+        ## treated an unknown `name = value` as a fresh local, so a misspelled target disappeared and
+        ## the program could return a clean wrong value. Keep module mut-globals and known top-level
+        ## bindings on their existing paths; reject only a name proven absent from both scopes.
+        if assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) and not is_mod_mut_global(decls, src, ns, nl) and not declared(decls, upto, src, ns, nl) and not sema_global_name_anywhere(decls, src, ns, nl) {
+          return Result(usize, CheckErr).Err(unbound_err(ns, nl))
+        }
+        ## Issue #298 — a module-level immutable scalar is also a write place. It has no Local record
+        ## and therefore cannot reach the local re-assignment branch below; reject it here while the
+        ## source still identifies the assignment target. Mutable globals remain on their existing path.
+        if assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) {
+          groot := VSpan(s = ns, n = nl)
+          gperm := sema_write_mutability(decls, src, locals, cnt, groot)
+          if gperm == 2 { mark_failed(locals, immutable_err(groot.s)) }
+        }
+        ## Types §8 — reject the initialized local array literal before any lower/backend can apply
+        ## the word-granular array stride to a byte-precise @packed element. Reassignments stay on
+        ## their ordinary path; this is intentionally the exact local-initializer slice only.
+        if not assign_is_reassign(src, ns, nl) {
+          if sema_packed_array_literal(v, decls, src) {
+            return Result(usize, CheckErr).Err(packed_array_err(ns))
           }
         }
+        ## `name : T` is represented by the parser as Assign(name, zero-sentinel) to preserve the
+        ## bootstrap-sensitive AST shape. Recover its declared type from source, record the local as
+        ## unreadied, and do not type-check or mark the sentinel as an initializer.
+        if local_is_uninit(src, ns, nl) {
+          ann0 := local_type_span(src, ns, nl)
+          ## Issue #215 bounded fallback: the exact local 2D fixed-array shapes are not yet safely
+          ## lowerable, including a declaration followed by a later initialization. Reject before any
+          ## backend can treat the nested array as a word-strided scalar array.
+          if local_is_mut(src, ns) and sema_local_multidim_array(decls, upto, src, ann0.s, ann0.n) { return Result(usize, CheckErr).Err(local_multidim_array_err(ns)) }
+          dt0 := resolve_ty(src, ann0.s, ann0.n, decls, upto)
+          if kind_is_unknown(dt0.kind) { return Result(usize, CheckErr).Err(located_err(ns)) }
+          mut bt0 : u8 = tag_of_kind(dt0.kind)
+          if local_is_mut(src, ns) { bt0 = tag_with_mut(bt0) }
+          lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = bt0, prov = 0, tns = dt0.ns, tnl = dt0.nl))
+          if ir::sty_on() { sema_spell_bind(ns, sema_spell_decl(ann0.s, ann0.n, src), decls, src) }
+          da_push_root(da, ns, nl)
+          if kind_is_array(dt0.kind) { da_seed_array(deref(da), src, ns, nl, dt0) }
+          cnt += 1
+          cur = nx
+          continue
+        }
+        ## a bound atomic call (`r := atomic::cas_*(…)`) with an illegal ordering (spec ch.110 §2) —
+        ## poison via `mark_failed` (an early `return` mid-arm mis-lowers the arm's later logic).
+        if call_atomic_ordering_bad(v, src, a) { mark_failed(locals, mismatch_err(s_of(v, a), 0)) }
+        if expr_has_unbound(v, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_code(v, decls, upto, src, a, locals, cnt)) }
+        ann := local_type_span(src, ns, nl)
+        ## Issue #697 — an annotation naming no type is a located refusal, never an annotation that
+        ## silently constrains nothing.
+        if not assign_is_reassign(src, ns, nl) and ann.n != 0 {
+          lau := sema_local_ann_type_unknown(SEMA_DECL_PARAMS, decls, src, ann.s, ann.n)
+          if lau != 0 { mark_failed(locals, lau) }
+        }
+        ## Issue #215 bounded fallback: reject the exact direct annotation in the shared semantic pass,
+        ## so `check`, build, and all emit-to-stdout backends cannot accept a silent wrong value/trap.
+        ## Reassignments and every non-local shape remain outside this local declaration fence.
+        if not assign_is_reassign(src, ns, nl) and local_is_mut(src, ns) and sema_local_multidim_array(decls, upto, src, ann.s, ann.n) {
+          return Result(usize, CheckErr).Err(local_multidim_array_err(ns))
+        }
+        ## The lower has one deliberate whole-element consumer for this shape: an inferred local
+        ## binding (`e := GE[i]`). An annotation or a reassignment may select a narrower/existing
+        ## slot, so keep those in the ordinary value-position fence rather than letting the later
+        ## aggregate copy outrun the destination's proven layout.
+        tv := check_expr_da_mode(v, decls, upto, src, a, locals, cnt, da,
+          not assign_is_reassign(src, ns, nl) and ann.n == 0)?
+        ## docs/ir.md §3.8 — the annotation is the literal-only initializer's context (Types §2.3); a
+        ## reassignment's context is the assigned local's declared type (docs/ir-slice-1.md §2).
+        sema_vty_ctx(v, ann.s, ann.n, decls, src)
+        if ir::sty_on() and assign_is_reassign(src, ns, nl) {
+          rbt : ir::VTy = sema_vty_local(locals, cnt, src, ns, nl)
+          if ir::vty_is_int(rbt) { sema_vty_push(v, rbt) }
+        }
+        ## Types §9.1 — with NO context (an unannotated declaration), an integer literal takes the
+        ## documented default, the target's native signed integer: `i64` on every target this compiler
+        ## emits (x86_64, aarch64, riscv64, and wasm, whose kernel words are i64).
+        if ir::sty_on() and not assign_is_reassign(src, ns, nl) and ann.n == 0 { sema_vty_push(v, ir::vty_s(8)) }
+        ## …and the binding's own type, read by each later use of the name (`sema_vty_var`).
+        if ir::sty_on() and not assign_is_reassign(src, ns, nl) {
+          mut bvt : ir::VTy = ir::sty_get(v)
+          if ann.n != 0 { bvt = sema_vty_name(src, ann.s, ann.n, decls) }
+          ir::sty_bind_put(ns, bvt)
+          ## docs/ir.md §3.8 item 8 — and the spelling its uses read a field, a pointee or an element through.
+          mut bsp : ir::TySpell = ir::sty_spell_get(v)
+          if ann.n != 0 { bsp = sema_spell_decl(ann.s, ann.n, src) }
+          ## an unannotated `[1, 2, 3]` has no context: an array of the native signed integer (Types §9.1)
+          else if not sema_spell_known(bsp) { bsp = sema_spell_init(v, src) }
+          sema_spell_bind(ns, bsp, decls, src)
+        }
+        ## Comptime §2.2 — the bounded worker slice admits only closed scalar literals/arithmetic and
+        ## nullary user-enum values. The lower erases such bindings, so reject a runtime-dependent or
+        ## otherwise unsupported initializer before it can be mistaken for a normal local slot.
+        if not assign_is_reassign(src, ns, nl) and binding_is_comptime(src, ns) {
+          if kind_is_unknown(comptime_binding_kind(v, decls, upto, src, locals, cnt, ann)) { mark_failed(locals, mismatch_err(ns, 0)) }
+        }
+        ## FN-11 (Functions §1.6) — a `dyn fn(T…)->R` value is the type-erased two-word {code, env} fat
+        ## pair, and the ONLY construction form the spec admits is `dyn_over(ptr(mut <store>))` over a
+        ## NAMED PLACE holding a static closure (the env is explicit storage the `dyn` borrows, I3). Any
+        ## OTHER initializer supplies no environment place — notably a plain fn NAME
+        ## (`d : dyn fn(u64)->u64 = f`), which is the ZERO-CAPTURE case that the thin function-value type
+        ## `fn(T…)->R` (FN-10) already covers. Left unchecked the lower's fat-pair emit went looking for a
+        ## store slot that does not exist, read a bogus lambda index out of the decl vector and the
+        ## COMPILER SIGSEGV'd; reject it here instead, LOCATED, before the lower can fault. `src/`+`lib/`
+        ## declare no `dyn` local, so this never fires on the self-build → fixpoint-neutral.
+        if ann.n != 0 and sema_is_dyn_type(src, ann.s, ann.n) and not sema_is_dyn_over_call(v, src) {
+          mark_failed(locals, mismatch_err(ns, 0))
+        }
+        dt := resolve_ty(src, ann.s, ann.n, decls, upto)
+        ## a re-assignment `=` to an existing local reuses its slot/type — and the new value's
+        ## type must MATCH the local's established type (a `:=` binding fixed it; a later `=`
+        ## with a mismatched type is an error; poison-tolerant via `ty_eq`). A fresh `:=` records
+        ## the value's type. (The parser models both as `Assign`; distinguish by the source glyph.)
+        ## A `:=` RE-BINDING of an already-bound name is legal (Alatyr has function-scoped locals that
+        ## LEAK out of blocks — `if c { x := 5 } … x` sees `x` — and a later `:=` REDECLARES/shadows,
+        ## re-typing the name; the lower compiles both, e.g. two sibling `for` loops each `d := …`). So
+        ## only a `=` (reassign) to an existing local takes the immutable/type-match path; a `:=` (even
+        ## of an existing name) takes the fresh-binding path below, re-pushing the current type (the
+        ## LAST push wins in `local_lookup`). Without this, the second `d :=` false-fired "immutable write".
+        if is_mod_mut_global(decls, src, ns, nl) and assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) {
+          ## a `=` write to a module-level `mut` GLOBAL (`A64_CHK = ov`, `A64_SUB_ITS = …`): a `static`
+          ## place the global's own `mut` authorizes writing — NOT a local. Do not push it as a fake local
+          ## (which made a SECOND write to the same global read as an immutable-local reassign) and do not
+          ## run the local immutable/type-match check. The RHS is already checked above; nothing more here.
+          ## GLOBAL-REASSIGN conformance (TYP-6): `G = <aggregate>` into a scalar global (or the
+          ## REVERSE, a scalar literal into an aggregate global) — the retired `Stmt::Assign` scalar-global
+          ## emit net. Recover `G`'s declared `: T` from source and check it against the RHS.
+          gsp := global_type_span(decls, src, ns, nl)
+          if agg_scalar_bad(gsp.s, gsp.n, v, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(ns, 0)) }
+          if global_nonlit_struct_assign_bad(decls, upto, src, ns, nl, v, tv, locals, cnt) { mark_failed(locals, global_agg_err(ns)) }
+        } else if local_in(locals, cnt, src, ns, nl) and assign_is_reassign(src, ns, nl) {
+          raw := local_lookup(locals, cnt, src, ns, nl)
+          raw_tag : TyKind = raw.ty.kind
+          ## Declarations §3.1 / Memory §1.6 — an existing local without `mut` is a validly typed
+          ## place, but it is not writable. Use the dedicated located diagnostic instead of
+          ## `mismatch_err`: the assignment's type already agrees, and the useful fact is the write
+          ## permission at this source span. The same branch handles plain `=` and every compound
+          ## operator after `assign_is_reassign` has recovered its spelling.
+          if sema_local_name_is_comptime(src, locals, cnt, ns, nl) { mark_failed(locals, immutable_err(ns)) }
+          if not raw.mutable and not raw.poison and not da_has_root(da, src, ns, nl) and not local_is_mut(src, ns) or raw.poison { mark_failed(locals, immutable_err(ns)) }
+          mut xtag := raw_tag
+          ## normalize the HIDDEN aggregate tags (9 struct / 10 enum, set for a StructLit/EnumLit binding)
+          ## back to their real struct(3)/enum(4) tag for the reassign type-match — else `tag_compat(9, 3)`
+          ## false-rejects a valid `mut r := S(...)  … r = <struct value>` (a real tag-3 RHS).
+          if kind_is_hidden_struct(xtag) { xtag = TyKind.TyStruct }
+          if kind_is_hidden_enum(xtag) { xtag = TyKind.TyEnum }
+          xt := Ty(kind = xtag, ns = raw.ty.ns, nl = raw.ty.nl)
+          ptrint_probe_site("REASSIGN", "reassign", true, tv.kind, xt.kind, ns, src)
+          if not kind_compat(xt.kind, tv.kind) { mark_failed(locals, mismatch_err(ns, 0)) }
+          ## Issue #299 — a `=` write to an existing local is the same value sink as its `:=` binding:
+          ## `mut a : A = A(1) ; a = b` must not launder a sibling brand through the slot. `tag_compat`
+          ## above cannot see it (every tag 8 is compatible with every other), and the recorded local
+          ## type is where this sink's declared identity lives.
+          rbe := sema_brand_sink_err(xt, v, sema_brand_span(s_of(v, a), ns), decls, upto, src, locals, cnt, a)
+          if rbe != 0 { mark_failed(locals, rbe) }
+        } else {
+          mut bad_decl := false
+          if ann.n != 0 { ptrint_probe_site("BIND", "annbind", true, tv.kind, dt.kind, ns, src) }
+          ## Issue #563 — Types §9.2 names an annotation as one of the two forms that GIVE a literal its
+          ## type, so a LITERAL meeting a BRAND annotation (`a : A = 41`, `A := brand(u64)`) is not a brand
+          ## crossing and not a tag mismatch: it is judged — kind, format and range — against the kernel
+          ## type the brand bottoms out in, exactly as `A(41)` already is. The literal rules below read
+          ## `lit_ts`/`lit_tl` and `lit_dtag`; for every other annotation those are the annotation's own.
+          ## Measured on the parent: `a : A = 41` refused, `a : A = 1.5` ran to 1, `a : A = "x"` ran.
+          mut lit_ts := ann.s
+          mut lit_tl := ann.n
+          mut lit_dtag : TyKind = dt.kind
+          mut brand_lit := false
+          if ann.n != 0 and kind_is_brand(dt.kind) and (not kind_is_unknown(lbv_lit_tag(v)) or sema_is_float_lit(v)) {
+            bk := sema_brand_kernel_span(decls, upto, src, ann.s, ann.n)
+            if bk.n != 0 and not (bk.s == ann.s and bk.n == ann.n) {
+              lit_ts = bk.s
+              lit_tl = bk.n
+              lit_dtag = resolve_kind(src, bk.s, bk.n, decls, upto)
+              brand_lit = true
+            }
+          }
+          if ann.n != 0 and not brand_lit { bad_decl = not kind_compat(dt.kind, tv.kind) }
+          ## #299 census hooks (no refusal): an annotated binding is the declared sink; an INFERRED
+          ## binding from a brand constructor is the identity the recorded local type drops.
+          if ann.n != 0 { brand_probe_sink(dt, v, ns, decls, upto, src, locals, cnt, a) }
+          if ann.n == 0 { brand_probe_blind(v, ns, decls, upto, src) }
+          ## Issue #299 — the refusal at the annotated-binding sink. Located at the initializer when the
+          ## AST records its span, else at the binding name, which is where this statement's other
+          ## annotation diagnostics already point.
+          if ann.n != 0 {
+            abe := sema_brand_sink_err(dt, v, sema_brand_span(s_of(v, a), ns), decls, upto, src, locals, cnt, a)
+            if abe != 0 { mark_failed(locals, abe) }
+          }
+          ## Issue #269 — an annotated local is another value sink, not an implicit unwrap boundary.
+          ## Keep this beside the ordinary declaration conformance checks so `check`, build, and every
+          ## emit-to-stdout backend reject the same direct-call/inferred-local wrapper forms before
+          ## lowering can consume the payload-sized slot.
+          if sema_wrapper_payload_binding_bad(v, decls, upto, src, locals, cnt, ann.s, ann.n) { bad_decl = true }
+          ## Declarations §3.1 assignability, on the RELIABLE literal tag (`ann_lit_incompatible`) —
+          ## `tv.tag` above is 0 for a literal whose `check_expr` arm does not dispatch, so the
+          ## annotation constrained nothing. Located at the binding's own name span.
+          if ann.n != 0 and ann_lit_incompatible(lit_dtag, lbv_lit_tag(v)) { bad_decl = true }
+          ## TYP-13: a float-spelled literal is never an integer initializer, while an integer
+          ## literal in f32/f64 context must be exactly representable in that format.
+          if ann.n != 0 and float_lit_into_integer_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
+          if ann.n != 0 and int_lit_into_float_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
+          ## Types §9.1 REPRESENTABILITY, on the annotation's type NAME (the width `dt.tag` collapsed
+          ## away): `x : u8 = 300` / `x : i8 = 200` / `x : u32 = 5_000_000_000` were all accepted in
+          ## silence and truncated at run time.
+          if ann.n != 0 and ann_lit_range_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
+          ## With no annotation the literal takes the target's native SIGNED type (Types §9.1 /
+          ## Declarations §3.4). A negative `Num` payload is the parser's 64-bit representation of a
+          ## written non-negative literal at or above 2^63; reject it before the untyped binding can
+          ## silently preserve the bit pattern as a native word.
+          if ann.n == 0 and default_lit_range_bad(src, v) { bad_decl = true }
+          ## CT-12 / Comptime §2.6 — a failed CHECKED GUARD in the comptime evaluation of this
+          ## initializer is a LOCATED diagnostic at the operation's site, never a deferred trap.
+          cte := ct_guard_err(src, ann.s, ann.n, v, ns, decls, upto)
+          if cte != 0 { mark_failed(locals, cte) }
+          ## CT-12 ARRAY-ELEMENT: recover the integer context from an explicitly typed fixed-array
+          ## annotation and apply the same guard to each element before lowering can emit the array.
+          acte := ct_array_guard_err(src, ann.s, ann.n, v, decls, upto)
+          if acte != 0 { mark_failed(locals, acte) }
+          ## Issue #803 — each element's §9.1 range in the annotation's element type.
+          if ann.n != 0 {
+            alre := array_lit_range_err(src, ann.s, ann.n, v)
+            if alre != 0 { mark_failed(locals, alre) }
+          }
+          ## The same whitelist over a CALL result, whose type comes from the callee's own DECLARED
+          ## return type — the second source reliable enough to reject on (`sole_fn_ret_ty` answers only
+          ## for an unambiguous, non-overloaded name). `g := fn() -> str { … }  x : u64 = g()` used to
+          ## bind a two-word `str` into a word-sized integer and return a silent wrong value.
+          if ann.n != 0 and kind_is_unknown(lbv_lit_tag(v)) {
+            crt := sole_fn_ret_ty(v, decls, upto, src)
+            if ann_lit_incompatible(dt.kind, crt.kind) { bad_decl = true }
+          }
+          if bad_decl { mark_failed(locals, mismatch_err(ns, 0)) }
+          mut bind_tag : TyKind = tv.kind
+          mut bind_prov : u8 = 0
+          ain := expr_addr_inner(v)
+          ## AddrOf is a payload-heavy arm that the frozen bootstrap may skip in check_expr's large
+          ## match, returning UNKNOWN instead of its invariant pointer tag. The dedicated accessor is
+          ## the reliable AST fact: every Expr::AddrOf has type ptr(_), independently of its pointee.
+          if kind_is_unknown(bind_tag) and unchecked bitcast(usize, ain) != 0 { bind_tag = TyKind.TyPtr }
+          if unchecked bitcast(usize, ain) != 0 and expr_field_span(ain).n != 0 { bind_prov = prov_field_ptr() }
+          ## A range-slice local is a view, so its write permission follows the backing place rather
+          ## than the view's own copied pair. `prov_view` names that provenance; its element kind is
+          ## still unproven at this point and is filled in below. This preserves the existing
+          ## `mut ws; w := ws[...]; w[i] = ...` view idiom while rejecting `a := [...]; s := a[...];
+          ## s[i] = ...` from Issue #298. A pointer-field provenance remains higher priority.
+          if bind_prov == 0 {
+            slice_base := sema_slice_base(v)
+            if unchecked bitcast(usize, slice_base) != 0 {
+              sroot := sema_place_root_var(slice_base)
+              sperm := sema_write_mutability(decls, src, locals, cnt, sroot)
+              bind_prov = prov_view(sperm == 1 or sperm == 2, TyKind.TyUnknown)
+            }
+          }
+          ## Issue #429 — record that this binding holds a STRING LITERAL's view, in the provenance byte
+          ## rather than the public type tag. `check_expr`'s `Expr::StrLit` arm is one of the LATER arms
+          ## that do not reliably dispatch under the bootstrap seed (see `lbv_lit_tag`), so `tv.tag` came
+          ## back 0 for `s := "abc"` and every write fence keyed on the recorded type saw an UNKNOWN place
+          ## — that is the hole the indexed store fell through into `.rodata`. Promoting the binding to
+          ## the public tag 6 instead would also re-type it for every arg/return/reassign check at once;
+          ## this marker changes NOTHING but the element-store fence below. Every other consumer asks
+          ## `local_prov` a NAMED question (see the provenance block above `local_prov`), and none of
+          ## them names this concept, so it stays inert there.
+          if bind_prov == 0 and kind_is_str(lbv_lit_tag(v)) { bind_prov = prov_str_view() }
+          ## …and carry it across a bare ALIAS (`t := s`), which reaches the same bytes through a second
+          ## name. The alias binding copies the two-word view, not the run it points at, so the pointee
+          ## permission it inherits is the source's: measured on the parent, `t := s` re-opened the
+          ## SIGSEGV for every spelling of `s` — the literal binding, the annotated local AND a `str`
+          ## parameter, whose own `s[i] = v` the established fence already refused. Transitive by
+          ## construction: `u := t` reads `t`'s marker the same way.
+          if bind_prov == 0 and sema_place_is_str_view(locals, cnt, src, expr_var_span(v)) { bind_prov = prov_str_view() }
+          ## Preserve the homogeneous scalar element kind of an inferred array literal without
+          ## pretending that Local carries a source type span. `prov_lit_array` records 0 for every
+          ## unproven element kind, so this assignment leaves an undecided provenance undecided.
+          if bind_prov == 0 { bind_prov = prov_lit_array(sema_array_literal_elem_tag(v)) }
+          ## The binding's type NAME never comes from `tv`: `check_expr` hands its `Ty` back through the
+          ## PACKED `Result(Ty, CheckErr)` carrier, which preserves only the TAG — `tv.ns`/`tv.nl` are
+          ## STACK GARBAGE (the truncation the tag-5 recovery below already documents, generalized: it is
+          ## a property of the carrier, not of the pointer tag). Seeding `bind_ns`/`bind_nl` with them
+          ## recorded a "type-name span" that is not a `src` offset at all — typically a whole ABSOLUTE
+          ## address. `local_is_owning` then fed it to `type_is_owning` → `streq(src + <absolute addr>,…)`
+          ## and the COMPILER SIGSEGV'd at CHECK time on a valid program (`t := s` where `s : Slice(u64)`
+          ## is a PARAM: `Slice` resolves to a NOMINAL struct decl, so the tag-3 leak probe fires and the
+          ## garbage span is dereferenced). The frozen seed compiles the same program without faulting even
+          ## though its own source snapshot carries this very line — the read is out of bounds there too, it
+          ## just lands on a benign stale word in that binary's frame layout. So this is not a source-level
+          ## regression against the seed but a LAYOUT-DEPENDENT out-of-bounds read that the current tree's
+          ## frames finally aimed at a live absolute address. Start
+          ## from UNKNOWN (0/0 — poison-tolerant everywhere a name is consulted) and let only RELIABLE
+          ## STORAGE fill it in below: the callee's declared return type, a Var-local's RECORDED type,
+          ## the aggregate-literal recovery, or the binding's own `: T` annotation.
+          mut bind_ns := 0
+          mut bind_nl := 0
+          ## Preserve the proven T of an inferred `view := fixed_array[lo..hi]` in the existing local
+          ## payload. The public tag remains UNKNOWN because the value is a Slice(T), not T itself;
+          ## only `sema_direct_index_elem_ty` consumes this span or scalar tag under slice provenance.
+          if prov_is_view(bind_prov) {
+            set := sema_range_slice_elem_ty(v, src, locals, cnt, decls, upto)
+            if not kind_is_unknown(set.kind) {
+              if set.nl != 0 { bind_ns = set.ns; bind_nl = set.nl }
+              else { bind_prov = prov_view(prov_view_backing_imm(bind_prov), set.kind) }
+            }
+          }
+          ## RECOVER the un-truncated type-NAME for a call-value binding (`x := f(...)`): `check_expr`'s
+          ## `Result(Ty,…)` keeps the tag but drops ns/nl, so `x` otherwise records no resolvable type name.
+          ## Re-resolve the callee's declared return type directly (`callee_ret_ty`, un-packed). Guarded to
+          ## the SAME tag (never changes the type, only fills the dropped name), unannotated bindings only.
+          ccs := expr_call_callee_span(v)
+          if ccs.n != 0 {
+            crt := callee_ret_ty(decls, upto, src, ccs.s, ccs.n)
+            ## adopt the callee's declared return type DIRECTLY (not via the truncating Result) — restores
+            ## the tag + type-name the packed `Result` dropped. STRUCT-only (tag 3): every `@owning` type is
+            ## a struct, so this suffices for leak-detection while leaving ENUM locals untouched (recording a
+            ## call-created enum's generic return-type name — e.g. `Result(U, E)` — would make the match
+            ## exhaustiveness check mis-resolve its variants and spuriously reject; found via result_and_then).
+            if kind_is_struct(crt.kind) and crt.nl != 0 { bind_tag = crt.kind; bind_ns = crt.ns; bind_nl = crt.nl }
+            ## Issue #269: preserve a separate concrete wrapper marker for the one bounded local form.
+            ## Do not turn it into ordinary enum type information — existing match/exhaustiveness paths
+            ## deliberately remain unaware of generic `Option`/`Result` identities.
+            lvwrap := deref(locals)
+            wrt := sema_wrapper_return_ty(decls, upto, src, ccs.s, ccs.n, expr_call_arity(v), lvwrap.mod_s, lvwrap.mod_l)
+            if kind_is_wrapper(wrt.kind) { bind_tag = wrt.kind; bind_ns = wrt.ns; bind_nl = wrt.nl }
+          }
+          ## POINTER value (tag 5): the pointee NAME drives `ty_compat`'s ptr(X)-vs-ptr(Y) discrimination,
+          ## but `tv.ns/tv.nl` came back through the truncating `Result(Ty,…)` (see above) → GARBAGE. A
+          ## garbage pointee that happens to be nonzero makes a valid `x := <ptr-value>` then `f(x)`
+          ## SPURIOUSLY mismatch against `f`'s real param pointee (found whole-tree: `b := bind_head` then
+          ## `bnd_next(b)`; `inner := e` then `str_lit_info(inner)`). Recover the pointee RELIABLY from
+          ## STORAGE, never the truncated Result: a Var-local RHS → that pointer local's recorded pointee;
+          ## a direct AddrOf(Var-local-struct) → the addressed local's recorded nominal type; otherwise DROP
+          ## to unknown (0/0, poison-tolerant). The AddrOf recovery is intentionally struct-only: it supplies
+          ## the exact fact needed by recursive pointer-field place typing without widening other consumers.
+          if kind_is_ptr(bind_tag) {
+            bind_ns = 0
+            bind_nl = 0
+            rvs := expr_var_span(v)
+            if rvs.n != 0 {
+              rlt := local_lookup(locals, cnt, src, rvs.s, rvs.n)
+              rltag : TyKind = rlt.ty.kind
+              if kind_is_ptr(rltag) { bind_ns = rlt.ty.ns; bind_nl = rlt.ty.nl; bind_prov = local_prov(locals, cnt, src, rvs.s, rvs.n) }
+            }
+            if bind_nl == 0 {
+              apt := sema_addr_local_struct_ptr_ty(v, src, locals, cnt)
+              if kind_is_ptr(apt.kind) {
+                bind_ns = apt.ns
+                bind_nl = apt.nl
+              }
+            }
+          }
+          ## Issue #680 — a CALL returning a pointer to an ENUM (`init_e := p_or(pc)`) records the
+          ## callee's declared pointer type, exactly what `init_e : ptr(mut Expr) = p_or(pc)` records, so
+          ## a later `match deref(init_e)` is checked for exhaustiveness. The packed carrier may hand the
+          ## call back as tag 0, so the tag is filled as well as the name. Enum pointees only, as narrow
+          ## as #656's twin: a struct pointee also feeds `ty_compat`'s pointer discrimination.
+          if ann.n == 0 and bind_nl == 0 and (kind_is_unknown(bind_tag) or kind_is_ptr(bind_tag)) and expr_call_callee_span(v).n != 0 {
+            cpt := sema_ptr_expr_ty(v, decls, src, locals, cnt)
+            cpe := sema_enum_pointee(cpt, decls, src)
+            if kind_is_enum(cpe.kind) {
+              bind_tag = TyKind.TyPtr
+              bind_ns = cpt.ns
+              bind_nl = cpt.nl
+            }
+          }
+          if not kind_is_unknown(dt.kind) { bind_tag = dt.kind; bind_ns = dt.ns; bind_nl = dt.nl }
+          ## Issue #656 — the POINTER twin of #557's late enum annotation (below): `p : ptr(E)` where
+          ## `E` is declared in a later-sorted module. Fills only the pointee NAME the `upto` prefix
+          ## could not resolve; the recorded tag is unchanged (see `late_enum_ptr_ty`).
+          if kind_is_ptr(dt.kind) and dt.nl == 0 and ann.n != 0 {
+            lpp := late_enum_ptr_ty(src, ann.s, ann.n, decls, upto)
+            if kind_is_ptr(lpp.kind) { bind_ns = lpp.ns; bind_nl = lpp.nl }
+          }
+          ## Issue #557 — the same late-declared enum annotation, on an annotated local binding.
+          if kind_is_unknown(dt.kind) and ann.n != 0 {
+            lae := late_enum_ann_ty(src, ann.s, ann.n, decls, upto)
+            if kind_is_enum(lae.kind) { bind_tag = TyKind.TyHiddenEnum; bind_ns = lae.ns; bind_nl = lae.nl }
+          }
+          ## RELIABLE aggregate recording (scar #2: StructLit/EnumLit don't dispatch check_expr's big
+          ## match, so `tv.tag` came back 0). Recover the aggregate type NAME + tag straight from the
+          ## literal, so a later use of this local (return / annotated-local / call-arg / field / array-
+          ## element / global sink) is checked against a scalar sink (TYP-6). The Result carrier may
+          ## preserve StructLit's public tag 3 while dropping its name payload; that is still unresolved,
+          ## so recover it exactly like tag 0 instead of recording a nameless struct local. An ARRAY literal
+          ## of SCALAR-LITERAL elements is tagged 7 (scalar-element array) so a whole-aggregate store into
+          ## `xs[i]` is rejected. An annotation / call-return with a reliable payload still wins.
+          ## #726 — `check_expr`'s `EnumLit` arm now answers the public enum tag 4 the same way, and its
+          ## name is lost to the same carrier: a nameless enum local skipped #557's exhaustiveness check
+          ## and #693's raw-union exclusion. Recover it exactly like the nameless struct.
+          ## …and the public array tag `check_expr`'s `ArrayLit` arm answers is not this file's tag-7 local
+          ## marker, which means a SCALAR-literal-element array: recorded as-is it fenced the whole-struct
+          ## store `ps[0] = P(…)` into `mut ps := [P(…), P(…)]`. The literal is re-judged below.
+          if kind_is_unknown(dt.kind) and kind_is_array(bind_tag) and unchecked bitcast(usize, expr_array_first(v)) != 0 { bind_tag = TyKind.TyUnknown }
+          if kind_is_unknown(bind_tag) or ((kind_is_struct(bind_tag) or kind_is_enum(bind_tag)) and bind_nl == 0) {
+            ## HIDDEN tags 9 (struct) / 10 (enum): `value_agg_ty` maps them back, but `check_expr`'s Var
+            ## resolution does NOT surface them, so the overload-naive existing arg checks stay tolerant.
+            ## Covers a StructLit / EnumLit / nullary-enum-variant RHS (and a Var aliasing such a local).
+            vag := value_agg_ty(v, decls, upto, src, locals, cnt)
+            if kind_is_struct(vag.kind) { bind_tag = TyKind.TyHiddenStruct; bind_ns = vag.ns; bind_nl = vag.nl }
+            else if kind_is_enum(vag.kind) { bind_tag = TyKind.TyHiddenEnum; bind_ns = vag.ns; bind_nl = vag.nl }
+            else {
+              afe := expr_array_first(v)
+              if unchecked bitcast(usize, afe) != 0 and value_is_scalar_lit(afe) { bind_tag = TyKind.TyArray }
+            }
+          }
+          ## Issue #680 — an unannotated ENUM value bound from a call or a `deref` (`c := g(0)`,
+          ## `x := deref(stmt_p(Stmt, st))`, `x := deref(p)`) recorded no enum name, so every later
+          ## `match x` skipped the exhaustiveness check. Record it under the HIDDEN enum tag 10, the one
+          ## an inferred `c := C.R` already uses, when nothing else recorded a tag; a public tag 4 that
+          ## arrived without its name keeps its tag and only gains the name.
+          if ann.n == 0 and bind_nl == 0 and (kind_is_unknown(bind_tag) or kind_is_enum(bind_tag)) {
+            vet := sema_value_enum_ty(v, decls, src, locals, cnt)
+            if kind_is_enum(vet.kind) {
+              if kind_is_unknown(bind_tag) { bind_tag = TyKind.TyHiddenEnum }
+              bind_ns = vet.ns
+              bind_nl = vet.nl
+            }
+          }
+          ## Issue #5 / TYP-6 — preserve the exact direct two-word tuple residual as a hidden local
+          ## marker. Tag 12 is intentionally not a public type tag (wrapper values use tag 11); the
+          ## Var arm maps it back to UNKNOWN for ordinary type compatibility, while the conversion
+          ## fence below can still distinguish this proven tuple from an array or an unrelated local.
+          ## An explicit tuple annotation is accepted; an array annotation cannot opt into this marker.
+          if sema_two_word_tuple_literal(v, src) and (ann.n == 0 or str_at((src + ann.s), 1) == "(") {
+            bind_tag = TyKind.TyTupleMark
+            bind_ns = 0
+            bind_nl = 0
+          }
+          ## ANNOTATED-local conformance (both directions): `x : <scalar> = <aggregate>` or `x :
+          ## <aggregate> = <scalar-literal>` — covers the float/char sink the tag-only `bad_decl` misses.
+          if agg_scalar_bad(ann.s, ann.n, v, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(ns, 0)) }
+          ## Issue #805 — `ys := xs` over a fixed-array local or parameter records `xs`'s declared
+          ## `[T; N]`, what `ys : [T; N] = xs` records, so an element `match ys[i]` is decided from the
+          ## element type like `match xs[i]`.
+          if ann.n == 0 and bind_nl == 0 and (kind_is_unknown(bind_tag) or kind_is_array(bind_tag)) {
+            avs := expr_var_span(v)
+            if avs.n != 0 {
+              aal := sema_local_array_ann(avs, src, locals, cnt)
+              if aal.n != 0 { bind_tag = TyKind.TyArray; bind_ns = aal.s; bind_nl = aal.n }
+            }
+          }
+          mut bind_byte := tag_of_kind(bind_tag)
+          if local_is_mut(src, ns) { bind_byte = tag_with_mut(bind_byte) }
+          lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = bind_byte, prov = bind_prov, tns = bind_ns, tnl = bind_nl))
+          cnt += 1
+        }
+        da_remove_root(deref(da), src, ns, nl)
+        cur = nx
       }
+      Stmt::While(c, b, nx) => {
+        ## Issue #507 — the `while` condition carried NO name-resolution prepass at all, so it was
+        ## looser than the `Stmt::If` arm below: not just an operand but a BARE undeclared name as the
+        ## whole condition compiled clean and the loop was entered on a garbage read. Run the same
+        ## walk the `if` condition runs, before the bool check, so both conditions reject one shape
+        ## with one diagnostic.
+        if expr_statement_has_unbound(c, decls, upto, src, a, locals, cnt) {
+          return Result(usize, CheckErr).Err(unbound_code(c, decls, upto, src, a, locals, cnt))
+        }
+        cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
+        ## the loop condition must be bool (a known non-bool is a `Mismatch`).
+        if not kind_is_unknown(cc.kind) and not kind_is_bool(cc.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
+        cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
+        cur = nx
+      }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
+        if declared(decls, upto, src, bns, bnl) {
+        } else if local_in(locals, cnt, src, bns, bnl) {
+        } else { return Result(usize, CheckErr).Err(unbound_err(bns, bnl)) }
+        ## Issue #693 — a write is a SEPARATE path from a read: the parser stores `v.a = 5` as two name
+        ## spans, so no expression walker ever sees the place and the read-side refusal above cannot
+        ## reach it. Measured on the parent, this row built at rc 0 and dropped the store silently.
+        ## `sema_name_owner_is_enum` asks the same question `value_agg_ty` answers for an expression
+        ## owner, over the recorded local type a name place carries.
+        if sema_name_owner_is_enum(decls, src, locals, cnt, bns, bnl) {
+          return Result(usize, CheckErr).Err(enum_field_access_err(fns))
+        }
+        ## A known struct write must name one of that struct's declared fields. The parser stores this
+        ## write as separate base/field spans, so the expression walker cannot validate it for us.
+        bowner := sema_struct_owner_name_span(decls, upto, src, locals, cnt, bns, bnl)
+        if bowner.n != 0 and sema_field_ann_span(decls, upto, src, bowner.s, bowner.n, fns, fnl, a).n == 0 {
+          return Result(usize, CheckErr).Err(unbound_err(fns, fnl))
+        }
+        cv := check_expr_da(fv, decls, upto, src, a, locals, cnt, da)?
+        ## Direct field destination/value conformance. The owner was resolved above from a direct
+        ## local, parameter, or global struct root; nested paths and array-held fields remain residual.
+        if bowner.n != 0 {
+          ftsp0 := sema_field_ann_span(decls, upto, src, bowner.s, bowner.n, fns, fnl, a)
+          if ftsp0.n != 0 {
+            ft0 := resolve_ty(src, ftsp0.s, ftsp0.n, decls, upto)
+            if sema_direct_place_value_bad(ft0, cv, fv, src, locals, cnt, "FIELD-STORE", bns) { mark_failed(locals, mismatch_err(bns, 0)) }
+            ## Issue #299 census hook — the struct-FIELD STORE sink, `s.x = b`. The field's declared
+            ## type is already resolved directly above for the TYP-6 conformance check, so this sink
+            ## needs no new type recovery: it is the same `dst` the annotated binding gets, reached
+            ## through a place path instead of a name.
+            brand_probe_sink(ft0, fv, bns, decls, upto, src, locals, cnt, a)
+            ## …and the REFUSAL at the same sink. `sema_direct_place_value_bad` above cannot see it:
+            ## it ends in `tag_compat`, where every tag-8 brand is compatible with every other. A
+            ## field store is the LAST unhooked way to launder a sibling into a brand-typed slot, so
+            ## without it `s.x = b` is the standing way around the annotated binding's own refusal.
+            ## Located at the base name, which is where this arm's other place diagnostics point.
+            sbe := sema_brand_sink_err(ft0, fv, sema_brand_span(s_of(fv, a), bns), decls, upto, src, locals, cnt, a)
+            if sbe != 0 { mark_failed(locals, sbe) }
+          }
+        }
+        ## Issue #298 — a field store is authorized by the ROOT binding's `mut`, not by the field
+        ## token. A const local/global that was already initialized has no unreadied DA marker, while
+        ## the one permitted first write to an uninitialized local still has one.
+        broot := VSpan(s = bns, n = bnl)
+        bperm := sema_write_mutability(decls, src, locals, cnt, broot)
+        if bperm == 2 or (bperm == 1 and not sema_da_field_write_unready(da, src, broot, VSpan(s = fns, n = fnl))) {
+          mark_failed(locals, immutable_err(broot.s))
+        }
+        ## FIELD-ASSIGN conformance (TYP-6): `t.field = <aggregate>` into a scalar field (or the
+        ## REVERSE, a scalar literal into an aggregate field) — the retired `Stmt::FieldAssign` emit net.
+        ## Resolve the base's struct type NAME from its recorded local tag (3 = struct), then the field's
+        ## declared type span, then check the stored value against it. Poison-tolerant (a non-struct or
+        ## unknown base → no fire).
+        bfe := local_lookup(locals, cnt, src, bns, bnl)
+        bftag : TyKind = bfe.ty.kind
+        if (kind_is_struct(bftag) or kind_is_hidden_struct(bftag)) and bfe.ty.nl != 0 {
+          ftsp := sema_field_ann_span(decls, upto, src, bfe.ty.ns, bfe.ty.nl, fns, fnl, a)
+          if agg_scalar_bad(ftsp.s, ftsp.n, fv, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(bns, 0)) }
+          da_assign_field(deref(da), decls, upto, src, bns, bnl, fns, fnl, Ty(kind = TyKind.TyStruct, ns = bfe.ty.ns, nl = bfe.ty.nl))
+        }
+        cur = nx
+      }
+      ## `o.i.v = e` — a nested-field store; check the value expression (the place is a nested Field).
+      Stmt::FieldPathAssign(pl, fpv, nx) => {
+        pbase := field_path_deref_var(pl)
+        pfs := expr_field_span(pl)
+        if pbase.n != 0 and local_prov(locals, cnt, src, pbase.s, pbase.n) == prov_field_ptr() and pfs.n != 0 {
+          return Result(usize, CheckErr).Err(located_err(pfs.s))
+        }
+        cvp := check_expr_da(fpv, decls, upto, src, a, locals, cnt, da)?
+        ## docs/ir.md §3.8 — the place the checker resolves itself (`sema_nested_field_leaf_ty`) is
+        ## walked for its records only, so a load inside it (`deref(deref(pp)).v`) has a type
+        sema_ct_record(CtWalk.WkValue(pl), CtVar.CvNone, 0, 0, ir::expr_span(pl), decls, upto, src, a, locals, cnt)
+        np := expr_nested_path(pl)
+        ## The leaf destination is resolved ONCE and handed to both consumers — the aggregate conformance
+        ## beside it and the brand judgement under it — because a second walk of the same two struct
+        ## layers is a second decision. That is #679's shape, arrived at for #679's reason: the flat
+        ## field store at `Stmt::FieldAssign` was hooked for #299 and this arm was not, so `s.t.y = b`
+        ## laundered a sibling into the same `A`-typed slot the flat refusal had just closed.
+        np_leaf := sema_nested_field_leaf_ty(np, decls, upto, src, locals, cnt, a)
+        if sema_nested_field_path_value_bad(np, np_leaf, cvp, fpv, src, locals, cnt) {
+          mark_failed(locals, mismatch_err(np.ss, 0))
+        }
+        ## Issue #299 — the brand judgement at this same sink, over the same leaf, through the same
+        ## classifier and census hook the flat `Stmt::FieldAssign` store uses. `sema_direct_place_value_bad`
+        ## above cannot see it: every tag-8 brand is compatible with every other there.
+        nbe := sema_nested_field_brand_err(np, np_leaf, fpv, decls, upto, src, locals, cnt, a)
+        if nbe != 0 { mark_failed(locals, nbe) }
+        if sema_pointer_field_path_value_bad(pl, cvp, fpv, decls, upto, src, locals, cnt, a) {
+          pfield := expr_field_span(pl)
+          mark_failed(locals, mismatch_err(pfield.s, 0))
+        }
+        afp := expr_array_nested_path(pl)
+        if sema_array_nested_field_path_value_bad(afp, cvp, fpv, decls, upto, src, locals, cnt, a) {
+          mark_failed(locals, mismatch_err(afp.ss, 0))
+        }
+        ## Issue #298 — nested field paths carry the same root mutability rule as direct fields. Query
+        ## the exact DA marker BEFORE the write bookkeeping below removes it; an initialized immutable
+        ## aggregate has no marker and must not reach lower as a writable place.
+        proot := sema_place_root_var(pl)
+        pperm := sema_write_mutability(decls, src, locals, cnt, proot)
+        mut p_unready := da_has_root(da, src, proot.s, proot.n)
+        aep := expr_array_elem_nested_path(pl)
+        anp := expr_array_nested_path(pl)
+        if aep.ok {
+          p_unready = sema_da_index_write_unready(da, src, VSpan(s = aep.rs, n = aep.rn), VSpan(s = aep.fs, n = aep.fl), VSpan(s = aep.ss, n = aep.sl), i64(aep.ix))
+        } else if anp.ok {
+          p_unready = sema_da_index_write_unready(da, src, VSpan(s = anp.rs, n = anp.rn), VSpan(s = anp.fs, n = anp.fl), VSpan(s = anp.ss, n = anp.sl), i64(anp.ix))
+        } else if np.sl != 0 {
+          p_unready = sema_da_path_write_unready(da, src, np)
+        }
+        if pperm == 2 or (pperm == 1 and not p_unready) { mark_failed(locals, immutable_err(proot.s)) }
+        if aep.ok {
+          alt1 := local_lookup(locals, cnt, src, aep.rs, aep.rn)
+          alt1_tag : TyKind = alt1.ty.kind
+          aty1 : Ty = Ty(kind = alt1_tag, ns = alt1.ty.ns, nl = alt1.ty.nl)
+          da_assign_array_elem_nested_field(deref(da), decls, upto, src, aep.rs, aep.rn, aep.fs, aep.fl, aep.ss, aep.sl, i64(aep.ix), aty1)
+        }
+        if anp.ok {
+          alt0 := local_lookup(locals, cnt, src, anp.rs, anp.rn)
+          alt0_tag : TyKind = alt0.ty.kind
+          aty0 : Ty = Ty(kind = alt0_tag, ns = alt0.ty.ns, nl = alt0.ty.nl)
+          da_assign_array_nested_field(deref(da), decls, upto, src, anp.rs, anp.rn, anp.fs, anp.fl, anp.ss, anp.sl, i64(anp.ix), aty0)
+        }
+        if np.sl != 0 {
+          ## A root that is no local here is a module global: its declared type drives the DA walk.
+          nlt := local_lookup(locals, cnt, src, np.rs, np.rn)
+          nlt_tag : TyKind = nlt.ty.kind
+          mut rt := Ty(kind = nlt_tag, ns = nlt.ty.ns, nl = nlt.ty.nl)
+          if not nlt.found {
+            gts := global_type_span(decls, src, np.rs, np.rn)
+            if gts.n != 0 { rt = resolve_ty(src, gts.s, gts.n, decls, upto) }
+          }
+          da_assign_path(deref(da), decls, upto, src, np, rt)
+        }
+        cur = nx
+      }
+      Stmt::Return(rv, nx) => {
+        s3ar := s3a_return_bad(rv, decls, upto, src, a, locals, cnt)
+        if s3ar != 0 { return Result(usize, CheckErr).Err(located_err(s3ar)) }
+        ## Check the DA place state before the broad unbound walker. The latter is intentionally
+        ## conservative for ordinary expressions but can descend into an aggregate field return after
+        ## a nested-path write; fail here with the located DA diagnostic instead of reaching that crashy
+        ## aggregate path.
+        if da_bad_expr(rv, da, src) { return Result(usize, CheckErr).Err(unbound_code(rv, decls, upto, src, a, locals, cnt)) }
+        if expr_has_unbound(rv, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_code(rv, decls, upto, src, a, locals, cnt)) }
+        ## RETURN-PATH CHECK: an early `return <e>` must match the fn's declared return type
+        ## (`ret_kind`, `TyUnknown` → no check). Poison-tolerant: only when BOTH the returned
+        ## type and the declared return type are KNOWN and differ is it a `Mismatch`. This
+        ## covers returns nested in if/while/match branches (ret_kind threads into those bodies).
+        rr := check_expr_da(rv, decls, upto, src, a, locals, cnt, da)
+        ## docs/ir.md §3.8 — the declared result type is a `return` value's context.
+        sema_vty_ctx(rv, SEMA_VTY_RET_S, SEMA_VTY_RET_N, decls, src)
+        match rr {
+          Result::Ok(cr) => {
+            if not kind_is_unknown(ret_kind) { ptrint_probe_site("RESULT-RET", "retexpr", true, cr.kind, ret_kind, s_of(rv, a), src) }
+            if not kind_is_unknown(ret_kind) and not kind_compat(cr.kind, ret_kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(rv, a), 0)) }
+            ## The frozen seed can leave a payload-heavy literal's ordinary `check_expr` result UNKNOWN
+            ## even though the AST shape is exact. Recover the literal tag on this return boundary so a
+            ## `StrLit` cannot inhabit a scalar result slot merely because `cr.tag == 0`. This is the
+            ## same bootstrap-safe classifier used by annotated bindings and loop-value checking; an
+            ## unknown/non-literal remains conservative and is still handled by the existing paths.
+            rlit := lbv_lit_tag(rv)
+            if not kind_is_unknown(ret_kind) and not kind_is_unknown(rlit) { ptrint_probe_site("RESULT-RET", "retlit", true, rlit, ret_kind, s_of(rv, a), src) }
+            if not kind_is_unknown(ret_kind) and not kind_is_unknown(rlit) and not kind_compat(rlit, ret_kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(rv, a), 0)) }
+            ## A direct/UFCS call can have a declared result even when the bootstrap-safe `check_expr`
+            ## carrier surfaced UNKNOWN for the payload-heavy call node. Recover that result before
+            ## accepting an early `return make_str()` from a scalar-returning function.
+            rcall := expr_call_result_ty(rv, decls, upto, src)
+            if not kind_is_unknown(ret_kind) and not kind_is_unknown(rcall.kind) { ptrint_probe_site("RESULT-RET", "retcall", true, rcall.kind, ret_kind, s_of(rv, a), src) }
+            if not kind_is_unknown(ret_kind) and not kind_is_unknown(rcall.kind) and not kind_compat(rcall.kind, ret_kind) {
+              return Result(usize, CheckErr).Err(mismatch_err(s_of(rv, a), 0))
+            }
+          }
+          Result::Err(e) => { return Result(usize, CheckErr).Err(e) }
+        }
+        cur = nx
+      }
+      Stmt::If(c, th, el, nx) => {
+        if expr_statement_has_unbound(c, decls, upto, src, a, locals, cnt) {
+          return Result(usize, CheckErr).Err(unbound_code(c, decls, upto, src, a, locals, cnt))
+        }
+        cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
+        ## the condition must be bool (a known non-bool is a `Mismatch`).
+        if not kind_is_unknown(cc.kind) and not kind_is_bool(cc.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
+        ## A branch-local comptime name cannot safely be read after this join while the current
+        ## bounded lower uses a flat function-local map. Allow an explicit direct ordinary rebind in
+        ## the continuation, but reject a bare post-join read instead of selecting one branch's value.
+        mut branch_escape := sema_comptime_branch_escape_stmts(th, nx, src, locals, cnt, a)
+        if branch_escape.n == 0 { branch_escape = sema_comptime_branch_escape_stmts(el, nx, src, locals, cnt, a) }
+        if branch_escape.n != 0 { return Result(usize, CheckErr).Err(ambiguous_err(branch_escape.s)) }
+        ## With no unreadied places, preserve the established linear checker path. This is also important
+        ## for the self-hosted compiler's large, fully-initialized source tree: branch snapshots are only
+        ## materialized when the function actually contains an uninitialized place.
+        if deref(da).len == 0 and hdr_len(unchecked bitcast(ptr(FVec), da_fvec(da))) == 0 and hdr_len(unchecked bitcast(ptr(FVec), da_pvec(da))) == 0 and hdr_len(unchecked bitcast(ptr(FVec), da_avec(da))) == 0 and hdr_len(unchecked bitcast(ptr(FVec), da_navec(da))) == 0 and hdr_len(unchecked bitcast(ptr(FVec), da_napvec(da))) == 0 {
+          cnt = check_stmts(th, decls, upto, src, a, locals, cnt, da)?
+          cnt = check_stmts(el, decls, upto, src, a, locals, cnt, da)?
+        } else {
+          ## Each arm starts from the same incoming unreadied set. A write in only one arm must not
+          ## make the binding appear initialized after the join; a diverging arm contributes no path.
+          ## Compute divergence before threading state. A direct-return arm can be checked for diagnostics,
+          ## then discarded; the surviving arm is checked from the original incoming state and its state stays
+          ## in `da` without a post-join copy.
+          then_div := stmts_return(th, a) or stmt_starts_return(th, a)
+          else_div := stmts_return(el, a) or stmt_starts_return(el, a)
+          incoming_da := da_copy(da)
+          then_cnt := check_stmts(th, decls, upto, src, a, locals, cnt, da)?
+          then_da := da_copy(da)
+          da_assign(deref(da), incoming_da)
+          else_cnt := check_stmts(el, decls, upto, src, a, locals, cnt, da)?
+          if then_div and not else_div {
+          } else {
+            else_da := da_copy(da)
+            if then_div and else_div {
+              deref(da).len = 0
+            } else if else_div {
+              da_assign(deref(da), then_da)
+            } else {
+              da2 := da_union_src(ptr(then_da), ptr(else_da), src)
+              da_assign(deref(da), da2)
+            }
+          }
+          if then_cnt > else_cnt { cnt = then_cnt } else { cnt = else_cnt }
+        }
+        cur = nx
+      }
+      Stmt::Match(sc, ah, nx) => {
+        cs := check_expr_da_allow_enum_array_root(sc, decls, upto, src, a, locals, cnt, da)?
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              ## a variant arm `Variant(p0, …) => …` binds its PAYLOAD variables (`binds_head`, a `Bind`
+              ## list) as locals VISIBLE ONLY IN THAT ARM. Their concrete types are instance-dependent
+              ## (the enum payload, possibly a generic type-param) — bind them poison-tolerant (tag 0) so
+              ## the arm body's references resolve. `base` restores the local count after the arm so the
+              ## bindings (and the arm's own locals) do not leak into sibling arms.
+              base := cnt
+              mut bd := am.binds_head
+              loop {
+                match bd {
+                  Some(bdq) => {
+                    bnns := bnd_ns(bdq)
+                    bnnl := bnd_nl(bdq)
+                    if not local_in(locals, cnt, src, bnns, bnnl) {
+                      lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                      cnt += 1
+                    }
+                    bd = bnd_next(bdq)
+                  }
+                  None => { break }
+                }
+              }
+              sema_spell_arm_binds(sc, am, decls, src, a)
+              cnt = check_stmts(am.body_stmts, decls, upto, src, a, locals, cnt, da)?
+              lvec_truncate(deref(locals), base)
+              cnt = base
+              arm = am.next
+            }
+            None => { break }
+          }
+        }
+        ## EXHAUSTIVENESS (§60/CF-1): a `match` on a KNOWN enum whose arms are ALL plain variant patterns
+        ## (no `_` wildcard / comptime / lit arm — `wild != 0`) must cover EVERY variant; an uncovered
+        ## variant is a `Mismatch`. The scrutinee's enum type comes from `match_scrut_enum_ty`, which
+        ## resolves it from the EXPRESSION — a parameter or annotated local (`local_lookup`, whose by-value
+        ## `Ty` preserves the type-NAME span ns/nl, unlike `cs`, whose `Result(Ty, CheckErr)` payload
+        ## truncates it to the tag), an inferred enum-literal binding, `deref(p)`, a field read, or a
+        ## call result. Fail-open: fires only when the enum type AND its declaration are found AND a
+        ## variant is provably uncovered; a wildcard arm or an unresolved type still skips. The parser
+        ## normalizes `Col::R` → `vs/vl = "R"`, so `streq` vs the bare variant name is correct.
+        ## Issue #557 — the scrutinee's enum type is resolved from the EXPRESSION, not from the one
+        ## bare-`Var` spelling the old code understood; `match_scrut_enum_ty` documents the branches.
+        ety := match_scrut_enum_ty(sc, decls, upto, src, locals, cnt, a)
+        if kind_is_enum(ety.kind) and ety.nl != 0 and arms_all_plain(ah) {
+          if enum_coverage_gap(ah, decls, src, ety.ns, ety.nl) {
+            return Result(usize, CheckErr).Err(mismatch_err(match_scrut_span(sc, a), 0))
+          }
+        }
+        ## SCALAR exhaustiveness (§5.1/§5.4): a `bool` or integer match must cover its type's values or
+        ## carry a `_`. Issue #788 — decided from the scrutinee's TYPE (`cs`, or a bare local's recorded
+        ## width), not only for a bare local, and for literal-only arm lists as well as ranges.
+        sty := match_scrut_scalar_ty(cs.kind, sc, decls, src, locals, cnt, a)
+        if (kind_is_int(sty.kind) or kind_is_bool(sty.kind)) and scalar_coverage_gap(ah, sty.kind, sty.ns, sty.nl, src) {
+          return Result(usize, CheckErr).Err(mismatch_err(match_scrut_span(sc, a), 0))
+        }
+        cur = nx
+      }
+      ## `for i in lo .. hi { body }` — the bounds must be int; `i` is an int local visible in
+      ## the body. (If a comparison/value were used as a bound it would be bool — `ty_eq` here
+      ## is poison-tolerant, but a known non-int bound is rejected.)
+      ## `deref(p) = v` — a store through a pointer. Both the pointer expression and the
+      ## value expression are checked (their pointee/value type agreement is deferred — the
+      ## pointee type is not tracked); introduces no new local.
+      Stmt::DerefAssign(ptr, val, nx) => {
+        cp := check_expr_da(ptr, decls, upto, src, a, locals, cnt, da)?
+        cv := check_expr_da(val, decls, upto, src, a, locals, cnt, da)?
+        cur = nx
+      }
+      ## `arr[i] = v` — an array element write. The base + index + value expressions are all
+      ## checked (the base `Var` must be bound; the index must be int per the `Index` rule);
+      ## introduces no new local. Element/value type agreement is deferred (element-type
+      ## tracking is not done — the toy arrays hold word-sized ints).
+      Stmt::IndexAssign(ib, ii, iv, nx) => {
+        ## The base is a write place, not a value read. A simple local array may still be unreadied here.
+        cib := check_expr(ib, decls, upto, src, a, locals, cnt)?
+        ## Types §6.4 / Assembly §3 / issue #5 — the write target has the same statically provable
+        ## bound as an `Expr::Index` read, but its base and index are stored as separate Stmt fields.
+        ## Reuse the exact direct-local fixed-array test so zero-length and ordinary fixed-array OOB
+        ## writes reject at the index literal while dynamic, nonliteral, global, and aggregate paths
+        ## remain on their existing deferred/runtime paths.
+        if fixed_array_index_oob(ib, ii, src, locals, cnt) {
+          return Result(usize, CheckErr).Err(located_err(expr_num_lit_start(ii)))
+        }
+        cii := check_expr_da(ii, decls, upto, src, a, locals, cnt, da)?
+        if not kind_is_unknown(cii.kind) and not kind_is_int(cii.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(ii, a), 0)) }
+        civ := check_expr_da(iv, decls, upto, src, a, locals, cnt, da)?
+        ## Issue #298 — `base[index] = value` is writable only when the base's root binding is
+        ## mutable. The DA query preserves the language's single first assignment for an uninitialized
+        ## local and recognizes the exact constant element where that state is tracked.
+        iroot := sema_place_root_var(ib)
+        mut ibfield := VSpan(s = 0, n = 0)
+        ibbase := expr_field_base(ib)
+        if unchecked bitcast(usize, ibbase) != 0 { ibfield = expr_field_span(ib) }
+        mut iix : i64 = 0 - 1
+        if expr_is_num_lit(ii) { iix = expr_num_lit_val(ii) }
+        iperm := sema_write_mutability(decls, src, locals, cnt, iroot)
+        i_unready := sema_da_index_write_unready(da, src, iroot, ibfield, VSpan(s = 0, n = 0), iix)
+        ## INDEX-ASSIGN conformance (TYP-6): `xs[i] = <aggregate>` where `xs` is a SCALAR-element
+        ## array (tag 7, recorded at binding from a scalar-literal-element ArrayLit) — the retired
+        ## `Stmt::IndexAssign` emit net. Poison-tolerant: only a confidently scalar-element array + a
+        ## confident aggregate value fires (a struct/enum-element array is left tolerant).
+        ibv := expr_var_span(ib)
+        if ibv.n != 0 {
+          ilocal := local_at(locals, cnt, src, ibv.s, ibv.n)
+          iak := kind_of_tag(tag_unflag(ilocal.tag))
+          iae := Ty(kind = iak, ns = ilocal.tns, nl = ilocal.tnl)
+          aet := sema_direct_index_elem_ty(src, ilocal, decls, upto)
+          if sema_direct_place_value_bad(aet, civ, iv, src, locals, cnt, "ELEM-STORE", ibv.s) { mark_failed(locals, mismatch_err(ibv.s, 0)) }
+          if expr_is_num_lit(ii) {
+            da_assign_array(deref(da), src, ibv.s, ibv.n, expr_num_lit_val(ii), iae)
+          }
+          iatag := iae.kind
+          if kind_is_array(iatag) and (iae.nl == 0 or array_elem_scalar(src, iae.ns, iae.nl)) {
+            va := value_agg_ty(iv, decls, upto, src, locals, cnt)
+            if kind_is_struct(va.kind) or kind_is_enum(va.kind) { mark_failed(locals, mismatch_err(ibv.s, 0)) }
+          }
+        } else {
+          sfet := sema_direct_slice_field_elem_ty(ib, decls, upto, src, locals, cnt, a)
+          sfsp := expr_field_span(ib)
+          if sema_direct_place_value_bad(sfet, civ, iv, src, locals, cnt, "SLICE-FIELD-STORE", sfsp.s) {
+            mark_failed(locals, mismatch_err(sfsp.s, 0))
+          }
+          if unchecked bitcast(usize, expr_field_base(ib)) != 0 and expr_is_num_lit(ii) {
+            fbv := expr_field_base(ib)
+            frv := expr_var_span(fbv)
+            ffv := expr_field_span(ib)
+            if frv.n != 0 and ffv.n != 0 {
+              flt := local_lookup(locals, cnt, src, frv.s, frv.n)
+              flt_tag : TyKind = flt.ty.kind
+              mut rte := Ty(kind = flt_tag, ns = flt.ty.ns, nl = flt.ty.nl)
+              if not flt.found {
+                gts2 := global_type_span(decls, src, frv.s, frv.n)
+                if gts2.n != 0 { rte = resolve_ty(src, gts2.s, gts2.n, decls, upto) }
+              }
+              da_assign_nested_array(deref(da), decls, upto, src, frv.s, frv.n, ffv.s, ffv.n, expr_num_lit_val(ii), rte)
+            }
+          }
+        }
+        ## Keep an established type-conformance diagnostic ahead of the mutability fence: a scalar
+        ## array receiving an aggregate is a type error even when its immutable root is also unwritable.
+        i_immut := iperm == 2 or (iperm == 1 and not i_unready)
+        if i_immut { mark_failed(locals, immutable_err(iroot.s)) }
+        ## Issue #429 — the AND-path's remaining step. `str` is `[u8]` (Types §7 / Stdlib appendix
+        ## §3.6): the view's pointer carries an IMMUTABLE pointee, so `s[i] = v` is ill-formed even
+        ## when the binding is `mut` — Memory §3.3 takes a dereference step's permission from the
+        ## pointee, not from the name. Ordered AFTER the binding fence and mutually exclusive with it,
+        ## so a place that already fails at its FIRST immutable step keeps its established `immutable
+        ## binding` wording and location; this arm fires exactly where that fence does not, which is
+        ## where the store used to reach `.rodata` and the process died with no diagnostic at all.
+        if not i_immut and sema_place_is_str_view(locals, cnt, src, iroot) { mark_failed(locals, str_elem_write_err(iroot.s)) }
+        cur = nx
+      }
+      ## `a[i].f = v` — an array-of-struct element-field write. The base array, index, and
+      ## value are checked (the index must be int); introduces no new local. Field/value type
+      ## agreement is deferred (element-type tracking is poison-tolerant here).
+      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
+        ## The indexed base is a write place (`a[i].f`), not a whole-element read. Constant-index local
+        ## fixed arrays of simple structs are tracked field-by-field; dynamic indices stay conservative.
+        cfa := check_expr(fia, decls, upto, src, a, locals, cnt)?
+        ## `Stmt::IndexFieldAssign` carries the direct array base and index separately, just like
+        ## `Stmt::IndexAssign`; apply the same bounded check before the field-specific DA bookkeeping.
+        if fixed_array_index_oob(fia, fii, src, locals, cnt) {
+          return Result(usize, CheckErr).Err(located_err(expr_num_lit_start(fii)))
+        }
+        cfi := check_expr_da(fii, decls, upto, src, a, locals, cnt, da)?
+        if not kind_is_unknown(cfi.kind) and not kind_is_int(cfi.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(fii, a), 0)) }
+        cfv := check_expr_da(fiv, decls, upto, src, a, locals, cnt, da)?
+        afp := expr_index_array_nested_path(fia, fii, ifs, ifl)
+        if sema_array_nested_field_path_value_bad(afp, cfv, fiv, decls, upto, src, locals, cnt, a) {
+          mark_failed(locals, mismatch_err(afp.ss, 0))
+        }
+        ## Issue #298 — the field after the index is still governed by the indexed base's root
+        ## binding. Exact AVec/NAVec/NAPVec markers keep first writes to uninitialized aggregates
+        ## legal while repeated writes to initialized immutable places fail before emission.
+        ifroot := sema_place_root_var(fia)
+        mut ifbasefield := VSpan(s = 0, n = 0)
+        ifbase := expr_field_base(fia)
+        if unchecked bitcast(usize, ifbase) != 0 { ifbasefield = expr_field_span(fia) }
+        mut ifix : i64 = 0 - 1
+        if expr_is_num_lit(fii) { ifix = expr_num_lit_val(fii) }
+        ifperm := sema_write_mutability(decls, src, locals, cnt, ifroot)
+        if_unready := sema_da_index_write_unready(da, src, ifroot, ifbasefield, VSpan(s = ifs, n = ifl), ifix)
+        if ifperm == 2 or (ifperm == 1 and not if_unready) { mark_failed(locals, immutable_err(ifroot.s)) }
+        iav := expr_var_span(fia)
+        if iav.n != 0 and expr_is_num_lit(fii) {
+          alt := local_lookup(locals, cnt, src, iav.s, iav.n)
+          alt_tag : TyKind = alt.ty.kind
+          aty : Ty = Ty(kind = alt_tag, ns = alt.ty.ns, nl = alt.ty.nl)
+          da_assign_array_field(deref(da), decls, upto, src, iav.s, iav.n, ifs, ifl, expr_num_lit_val(fii), aty)
+        } else if unchecked bitcast(usize, expr_field_base(fia)) != 0 and expr_is_num_lit(fii) {
+          arrroot := expr_var_span(expr_field_base(fia))
+          arrfield := expr_field_span(fia)
+          if arrroot.n != 0 and arrfield.n != 0 {
+            alt2 := local_lookup(locals, cnt, src, arrroot.s, arrroot.n)
+            alt2_tag : TyKind = alt2.ty.kind
+            aty2 : Ty = Ty(kind = alt2_tag, ns = alt2.ty.ns, nl = alt2.ty.nl)
+            da_assign_array_nested_field(deref(da), decls, upto, src, arrroot.s, arrroot.n, arrfield.s, arrfield.n, ifs, ifl, expr_num_lit_val(fii), aty2)
+          }
+        }
+        cur = nx
+      }
+      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+        ## A RANGE `for i in lo .. hi` has a non-null `fhi`; both bounds must be int. A FOR-IN
+        ## `for x in <iterable>` has `fhi == null` (0) — `flo` is the iterable (any aggregate/slice, NOT
+        ## an int) and the loop var binds each ELEMENT. `check_expr_da(fhi, da)` when `fhi` is null DEREFERENCES
+        ## A NULL POINTER → `check` SEGFAULTED on every for-in (`for_over_slice`/`_nonvar`/…); guard it.
+        mut vtag := TyKind.TyUnknown
+        if unchecked bitcast(usize, fhi) != 0 {
+          tlo := check_expr_da(flo, decls, upto, src, a, locals, cnt, da)?
+          thi := check_expr_da(fhi, decls, upto, src, a, locals, cnt, da)?
+          if not kind_is_unknown(tlo.kind) and not kind_is_int(tlo.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(flo, a), 0)) }
+          if not kind_is_unknown(thi.kind) and not kind_is_int(thi.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(fhi, a), 0)) }
+          ## docs/ir-slice-1.md §2 — the two bounds have one type: a literal bound takes the other's.
+          if ir::sty_on() { ir::sty_bind_put(fns, sema_vty_range(flo, fhi)) }
+          vtag = TyKind.TyInt
+        } else {
+          tf := check_expr_da(flo, decls, upto, src, a, locals, cnt, da)?
+          ## docs/ir.md §3.8 item 8 — a for-in variable is an element of the iterable.
+          if ir::sty_on() {
+            mut fel : ir::TySpell = sema_spell_elem(ir::sty_spell_get(flo), decls, src)
+            if not sema_spell_known(fel) { fel = sema_spell_iter_elem(ir::sty_spell_get(flo), decls, src) }
+            sema_spell_bind(fns, fel, decls, src)
+          }
+        }
+        ## bind the loop variable (int for a range; the element type — left UNKNOWN, poison-tolerant —
+        ## for a for-in) before checking the body.
+        vbyte := tag_of_kind(vtag)
+        if local_in(locals, cnt, src, fns, fnl) {
+        } else {
+          lvec_push(deref(locals), Local(ns = fns, nl = fnl, tag = vbyte, prov = 0, tns = 0, tnl = 0))
+          cnt += 1
+        }
+        cnt = check_stmts(fb, decls, upto, src, a, locals, cnt, da)?
+        cur = nx
+      }
+      ## `loop { body }` — the body is checked (locals it introduces thread out, as for `while`);
+      ## no condition. `break` is a leaf with no value (a `break` outside a loop is checked by
+      ## the scalar structural prepass in `stmts_bad_loop_control`).
+      Stmt::Loop(b, nx) => {
+        cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
+        cur = nx
+      }
+      Stmt::Unchecked(b, nx) => {
+        ## #529 grant column: restore the depth BEFORE the `?`, so an early return cannot leak it.
+        ug := ptrint_grant_enter()
+        ur := check_stmts(b, decls, upto, src, a, locals, cnt, da)
+        ptrint_grant_leave(ug)
+        cnt = ur?
+        cur = nx
+      }
+      Stmt::AllocWith(ae, b, nx) => {
+        cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
+        cur = nx
+      }
+      Stmt::Break(_bv, _bd, nx) => {
+        egab0 := sema_enum_global_array_value_bad(_bv, decls, upto, src, locals, cnt, a, false)
+        if egab0 != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egab0)) }
+        cur = nx
+      }
+      Stmt::Continue(_cd, nx) => { cur = nx }
+      ## A bare expression statement (a call / `?` for effect): type-check the expression for
+      ## well-formedness; its result is discarded, so it introduces no local.
+      Stmt::ExprStmt(e, nx) => {
+        ## A validated direct code-point `jmp(label)` has no value expression to type-check: its target
+        ## is a function-scoped label, not a runtime Var. The dedicated prepass above has already checked
+        ## its target, duplicate namespace, and `unchecked` grant before this ordinary statement walk.
+        if sema_is_direct_jmp(e, src) { }
+        else {
+          ## a bare atomic/fence call in statement position — check ordering legality here (it reaches
+          ## only `check_expr`, and the wrapper is the reliable hook, §1/§4 / spec ch.110).
+          if call_atomic_ordering_bad(e, src, a) { er := Result(usize, CheckErr).Err(mismatch_err(0, 0)); return er }
+          if expr_statement_has_unbound(e, decls, upto, src, a, locals, cnt) {
+            return Result(usize, CheckErr).Err(unbound_code(e, decls, upto, src, a, locals, cnt))
+          }
+          ce := check_expr_da(e, decls, upto, src, a, locals, cnt, da)?
+        }
+        cur = nx
+      }
+      ## COMPTIME statements (`comptime if`/`for`/`match`) — advance to the next statement. The branch
+      ## bodies are NOT type-checked here: they are comptime-selected, and per two-phase semantics an
+      ## unselected target-absent branch is not resolved/checked (§3.2). Without these arms the match had
+      ## no case for them and no wildcard, so `cur` never advanced → `check` INFINITE-LOOPED on any
+      ## `comptime if` (e.g. `arch_intrinsic.al`, num.al's operator shape) — a real hang, not just a gap.
+      Stmt::CompIf(cc, cthen, celse, nx) => {
+        ## The ordinary checker intentionally skips comptime bodies because target folding selects them
+        ## later. The enum-array safety boundary is target-independent, however: whichever target makes
+        ## an arm live must still reject a width-blind `GE[i]` value before its backend emits code.
+        ctlocal := sema_comptime_cond_runtime_local(cc, src, locals, cnt)
+        if ctlocal.n != 0 { return Result(usize, CheckErr).Err(comptime_cond_err(ctlocal.s)) }
+        egcc := sema_enum_global_array_value_bad(cc, decls, upto, src, locals, cnt, a, false)
+        if egcc != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcc)) }
+        egct := sema_enum_global_array_value_bad_stmts(cthen, decls, upto, src, locals, cnt, a)
+        if egct != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egct)) }
+        egce := sema_enum_global_array_value_bad_stmts(celse, decls, upto, src, locals, cnt, a)
+        if egce != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egce)) }
+        ## docs/ir.md §3.8 item 7 — the condition's records (a comptime `bool` expression, checked in
+        ## every case: Phase A, §9.1), then the branch sema can select, both when it cannot.
+        sema_ct_record(CtWalk.WkValue(cc), CtVar.CvNone, 0, 0, ir::expr_span(cc), decls, upto, src, a, locals, cnt)
+        ctsel := guard_fold(cc, src)
+        if ctsel != 0 { sema_ct_record(CtWalk.WkBody(cthen, da), CtVar.CvNone, 0, 0, ir::expr_span(cc), decls, upto, src, a, locals, cnt) }
+        if ctsel != 1 { sema_ct_record(CtWalk.WkBody(celse, da), CtVar.CvNone, 0, 0, ir::expr_span(cc), decls, upto, src, a, locals, cnt) }
+        cur = nx
+      }
+      Stmt::CompFor(cvs, cvl, civ, cb, nx) => {
+        if civ == 0 and sema_compfor_is_fields(src, cvs, cvl) {
+          bad := sema_bad_typeinfo_field_stmts(cb, src, cvs, cvl, a)
+          if bad != 0 { return Result(usize, CheckErr).Err(located_err(bad)) }
+        }
+        egcf := sema_enum_global_array_value_bad_stmts(cb, decls, upto, src, locals, cnt, a)
+        if egcf != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcf)) }
+        ## docs/ir.md §3.8 item 7 — one walk of the body, the member variable untyped.
+        sema_ct_record(CtWalk.WkBody(cb, da), CtVar.CvUntyped, cvs, cvl, Option(u64).Some(u64(cvs)), decls, upto, src, a, locals, cnt)
+        cur = nx
+      }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
+        ## §3.3 COMPTIME STEP BUDGET: a LITERAL-bounded `comptime for` unrolling > 100000 steps is a
+        ## clean CHECK diagnostic (the lower aborts on ANY over-budget range; this catches the common
+        ## literal case at check with a location). Non-literal bounds are left to the lower's guard.
+        if expr_is_num_lit(rlo) and expr_is_num_lit(rhi) and expr_num_lit_val(rhi) - expr_num_lit_val(rlo) > 100000 {
+          return Result(usize, CheckErr).Err(located_err(s_of(rlo, a)))
+        }
+        mut egcr := sema_enum_global_array_value_bad(rlo, decls, upto, src, locals, cnt, a, false)
+        if egcr == 0 { egcr = sema_enum_global_array_value_bad(rhi, decls, upto, src, locals, cnt, a, false) }
+        if egcr == 0 { egcr = sema_enum_global_array_value_bad_stmts(rb, decls, upto, src, locals, cnt, a) }
+        if egcr != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcr)) }
+        ## docs/ir.md §3.8 item 7 — one walk of the body: a range binds its variable as a range `for`
+        ## does; a pack (`comptime for v in rest`, a null `hi`) leaves the element untyped.
+        ## null-ok: Stmt::CompForRange — the pack form carries a null `hi` (ast.al; not an Option).
+        if unchecked bitcast(usize, rhi) != 0 { sema_ct_record(CtWalk.WkBody(rb, da), CtVar.CvRange(rlo, rhi), rvs, rvl, Option(u64).Some(u64(rvs)), decls, upto, src, a, locals, cnt) }
+        else { sema_ct_record(CtWalk.WkBody(rb, da), CtVar.CvUntyped, rvs, rvl, Option(u64).Some(u64(rvs)), decls, upto, src, a, locals, cnt) }
+        cur = nx
+      }
+      Stmt::CompMatch(cmsc, cmah, nx) => {
+        mut egcm := sema_enum_global_array_value_bad(cmsc, decls, upto, src, locals, cnt, a, true)
+        mut armc : Option(ptr(mut Arm)) = cmah
+        loop {
+          match armc {
+            Some(armcq) => {
+              if not (egcm == 0) { break }
+              amc := deref(arm_p(armcq))
+              basec := cnt
+              mut arm_cntc := cnt
+              mut bdc := amc.binds_head
+              loop {
+                match bdc {
+                  Some(bdcq) => {
+                    bnsc := bnd_ns(bdcq)
+                    bnlc := bnd_nl(bdcq)
+                    if not local_in(locals, arm_cntc, src, bnsc, bnlc) {
+                      lvec_push(deref(locals), Local(ns = bnsc, nl = bnlc, tag = 0, prov = 0, tns = 0, tnl = 0))
+                      arm_cntc += 1
+                    }
+                    bdc = bnd_next(bdcq)
+                  }
+                  None => { break }
+                }
+              }
+              egcm = sema_enum_global_array_value_bad(amc.body, decls, upto, src, locals, arm_cntc, a, false)
+              if egcm == 0 { egcm = sema_enum_global_array_value_bad_stmts(amc.body_stmts, decls, upto, src, locals, arm_cntc, a) }
+              ## docs/ir.md §3.8 item 7 — every arm's records, its pattern bindings in scope.
+              sema_ct_record(CtWalk.WkBody(amc.body_stmts, da), CtVar.CvNone, 0, 0, ir::expr_span(cmsc), decls, upto, src, a, locals, arm_cntc)
+              ## null-ok: Arm.body — an arm with a statement body carries a null value (ast.al; not an Option).
+              if unchecked bitcast(usize, amc.body) != 0 { sema_ct_record(CtWalk.WkValue(amc.body), CtVar.CvNone, 0, 0, ir::expr_span(cmsc), decls, upto, src, a, locals, arm_cntc) }
+              lvec_truncate(deref(locals), basec)
+              armc = amc.next
+            }
+            None => { break }
+          }
+        }
+        if egcm != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcm)) }
+        cur = nx
+      }
+    }
+  }
       None => { break }
     }
   }
@@ -13489,78 +14934,78 @@ stmts_bad_loop_control := fn(head : Option(ptr(mut Stmt)), in_loop : bool, a : p
     match cur {
       Some(curq) => {
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::While(c, b, nx) => {
-            if stmts_bad_loop_control(b, true, a) { bad = true }
-            cur = nx
-          }
-          Stmt::For(ns, nl, lo, hi, b, nx) => {
-            if stmts_bad_loop_control(b, true, a) { bad = true }
-            cur = nx
-          }
-          Stmt::Loop(b, nx) => {
-            if stmts_bad_loop_control(b, true, a) { bad = true }
-            cur = nx
-          }
-          Stmt::Unchecked(b, nx) => {
-            if stmts_bad_loop_control(b, true, a) { bad = true }
-            cur = nx
-          }
-          Stmt::AllocWith(ae, b, nx) => {
-            if stmts_bad_loop_control(b, true, a) { bad = true }
-            cur = nx
-          }
-          Stmt::If(c, th, el, nx) => {
-            if stmts_bad_loop_control(th, in_loop, a) { bad = true }
-            if stmts_bad_loop_control(el, in_loop, a) { bad = true }
-            cur = nx
-          }
-          Stmt::Match(sc, ah, nx) => {
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm {
-                Some(armq) => {
-                  am := deref(arm_p(armq))
-                  if stmts_bad_loop_control(am.body_stmts, in_loop, a) { bad = true }
-                  arm = am.next
-                }
-                None => { break }
-              }
+    match s {
+      Stmt::While(c, b, nx) => {
+        if stmts_bad_loop_control(b, true, a) { bad = true }
+        cur = nx
+      }
+      Stmt::For(ns, nl, lo, hi, b, nx) => {
+        if stmts_bad_loop_control(b, true, a) { bad = true }
+        cur = nx
+      }
+      Stmt::Loop(b, nx) => {
+        if stmts_bad_loop_control(b, true, a) { bad = true }
+        cur = nx
+      }
+      Stmt::Unchecked(b, nx) => {
+        if stmts_bad_loop_control(b, true, a) { bad = true }
+        cur = nx
+      }
+      Stmt::AllocWith(ae, b, nx) => {
+        if stmts_bad_loop_control(b, true, a) { bad = true }
+        cur = nx
+      }
+      Stmt::If(c, th, el, nx) => {
+        if stmts_bad_loop_control(th, in_loop, a) { bad = true }
+        if stmts_bad_loop_control(el, in_loop, a) { bad = true }
+        cur = nx
+      }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              if stmts_bad_loop_control(am.body_stmts, in_loop, a) { bad = true }
+              arm = am.next
             }
-            cur = nx
+            None => { break }
           }
-          Stmt::Break(_bv, _bd, nx) => {
-            if not in_loop { bad = true }
-            cur = nx
-          }
-          Stmt::Continue(_cd, nx) => {
-            if not in_loop { bad = true }
-            cur = nx
-          }
-          Stmt::CompIf(c, th, el, nx) => {
-            if stmts_bad_loop_control(th, in_loop, a) { bad = true }
-            if stmts_bad_loop_control(el, in_loop, a) { bad = true }
-            cur = nx
-          }
-          Stmt::CompFor(vs, vl, iv, b, nx) => {
-            if stmts_bad_loop_control(b, in_loop, a) { bad = true }
-            cur = nx
-          }
-          Stmt::CompMatch(sc, ah, nx) => {
-            mut arm2 : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm2 {
-                Some(arm2q) => {
-                  am2 := deref(arm_p(arm2q))
-                  if stmts_bad_loop_control(am2.body_stmts, in_loop, a) { bad = true }
-                  arm2 = am2.next
-                }
-                None => { break }
-              }
+        }
+        cur = nx
+      }
+      Stmt::Break(_bv, _bd, nx) => {
+        if not in_loop { bad = true }
+        cur = nx
+      }
+      Stmt::Continue(_cd, nx) => {
+        if not in_loop { bad = true }
+        cur = nx
+      }
+      Stmt::CompIf(c, th, el, nx) => {
+        if stmts_bad_loop_control(th, in_loop, a) { bad = true }
+        if stmts_bad_loop_control(el, in_loop, a) { bad = true }
+        cur = nx
+      }
+      Stmt::CompFor(vs, vl, iv, b, nx) => {
+        if stmts_bad_loop_control(b, in_loop, a) { bad = true }
+        cur = nx
+      }
+      Stmt::CompMatch(sc, ah, nx) => {
+        mut arm2 : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm2 {
+            Some(arm2q) => {
+              am2 := deref(arm_p(arm2q))
+              if stmts_bad_loop_control(am2.body_stmts, in_loop, a) { bad = true }
+              arm2 = am2.next
             }
-            cur = nx
+            None => { break }
           }
-          Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        }
+        cur = nx
+      }
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
             | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::ExprStmt | Stmt::CompForRange => { cur = stmt_next(curq) }
         }
       }
@@ -13614,18 +15059,18 @@ stmts_decl_before := fn(head : Option(ptr(mut Stmt)), upto : usize, src : ptr(u8
       Some(curq) => {
         if not (i < upto) { break }
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::Assign(ns2, nl2, v2, nx2) => {
-            if ns2 != ns and sema_redecl_candidate(src, ns2, nl2) and streq(src, ns2, nl2, ns, nl) { hit = true }
-          }
-          Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-            | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-            | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-            | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { hit = hit }
-        }
-        cur = stmt_next(curq)
-        i += 1
+    match s {
+      Stmt::Assign(ns2, nl2, v2, nx2) => {
+        if ns2 != ns and sema_redecl_candidate(src, ns2, nl2) and streq(src, ns2, nl2, ns, nl) { hit = true }
       }
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { hit = hit }
+    }
+        cur = stmt_next(curq)
+    i += 1
+  }
       None => { break }
     }
   }
@@ -13640,57 +15085,57 @@ stmts_same_scope_redecl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), a : p
     match cur {
       Some(curq) => {
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::Assign(ns, nl, v, nx) => {
-            if bad == 0 and sema_redecl_candidate(src, ns, nl) and stmts_decl_before(head, idx, src, ns, nl, a) { bad = ns }
-          }
-          Stmt::While(c, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
-          Stmt::Loop(b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
-          Stmt::Unchecked(b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
-          Stmt::AllocWith(ae, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
-          Stmt::If(c, th, el, nx) => {
-            if bad == 0 { bad = stmts_same_scope_redecl(th, src, a) }
-            if bad == 0 { bad = stmts_same_scope_redecl(el, src, a) }
-          }
-          Stmt::Match(sc, ah, nx) => {
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm {
-                Some(armq) => {
-                  am := deref(arm_p(armq))
-                  if bad == 0 { bad = stmts_same_scope_redecl(am.body_stmts, src, a) }
-                  arm = am.next
-                }
-                None => { break }
-              }
-            }
-          }
-          Stmt::CompIf(c, th, el, nx) => {
-            if bad == 0 { bad = stmts_same_scope_redecl(th, src, a) }
-            if bad == 0 { bad = stmts_same_scope_redecl(el, src, a) }
-          }
-          Stmt::CompFor(vs, vl, iv, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
-          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
-          Stmt::CompMatch(sc, ah, nx) => {
-            mut arm2 : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm2 {
-                Some(arm2q) => {
-                  am2 := deref(arm_p(arm2q))
-                  if bad == 0 { bad = stmts_same_scope_redecl(am2.body_stmts, src, a) }
-                  arm2 = am2.next
-                }
-                None => { break }
-              }
-            }
-          }
-          Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => { bad = bad }
-        }
-        cur = stmt_next(curq)
-        idx += 1
+    match s {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if bad == 0 and sema_redecl_candidate(src, ns, nl) and stmts_decl_before(head, idx, src, ns, nl, a) { bad = ns }
       }
+      Stmt::While(c, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::Loop(b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::Unchecked(b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::AllocWith(ae, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::If(c, th, el, nx) => {
+        if bad == 0 { bad = stmts_same_scope_redecl(th, src, a) }
+        if bad == 0 { bad = stmts_same_scope_redecl(el, src, a) }
+      }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              if bad == 0 { bad = stmts_same_scope_redecl(am.body_stmts, src, a) }
+              arm = am.next
+            }
+            None => { break }
+          }
+        }
+      }
+      Stmt::CompIf(c, th, el, nx) => {
+        if bad == 0 { bad = stmts_same_scope_redecl(th, src, a) }
+        if bad == 0 { bad = stmts_same_scope_redecl(el, src, a) }
+      }
+      Stmt::CompFor(vs, vl, iv, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::CompMatch(sc, ah, nx) => {
+        mut arm2 : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm2 {
+            Some(arm2q) => {
+              am2 := deref(arm_p(arm2q))
+              if bad == 0 { bad = stmts_same_scope_redecl(am2.body_stmts, src, a) }
+              arm2 = am2.next
+            }
+            None => { break }
+          }
+        }
+      }
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => { bad = bad }
+    }
+        cur = stmt_next(curq)
+    idx += 1
+  }
       None => { break }
     }
   }
@@ -13760,28 +15205,28 @@ codepoint_collect_stmts := fn(head : Option(ptr(mut Stmt)), labels : ptr(mut Cod
       Some(curq) => {
         if not (err == 0) { break }
         st := deref(stmt_p(Stmt, curq))
-        match st {
+    match st {
           Stmt::ExprStmt(e, nx) => { ls := stmt_label_span(curq); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.CodePoint) }
           Stmt::While(c, b, nx) => { ls := stmt_label_span(curq); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
           Stmt::For(ns, nl, lo, hi, b, nx) => { ls := stmt_label_span(curq); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
           Stmt::Loop(b, nx) => { ls := stmt_label_span(curq); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
-          Stmt::If(c, th, el, nx) => { err = codepoint_collect_stmts(th, labels, src, a); if err == 0 { err = codepoint_collect_stmts(el, labels, src, a) } }
-          Stmt::Match(sc, ah, nx) => {
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop { match arm { Some(armq) => { if not (err == 0) { break }; am := deref(arm_p(armq)); err = codepoint_collect_stmts(am.body_stmts, labels, src, a); arm = am.next }; None => { break } } }
-          }
-          Stmt::Unchecked(b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
-          Stmt::AllocWith(ae, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
-          Stmt::CompIf(c, th, el, nx) => { err = codepoint_collect_stmts(th, labels, src, a); if err == 0 { err = codepoint_collect_stmts(el, labels, src, a) } }
-          Stmt::CompFor(vs, vl, iv, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
-          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
-          Stmt::CompMatch(sc, ah, nx) => {
-            mut arm2 : Option(ptr(mut Arm)) = ah
-            loop { match arm2 { Some(arm2q) => { if not (err == 0) { break }; am2 := deref(arm_p(arm2q)); err = codepoint_collect_stmts(am2.body_stmts, labels, src, a); arm2 = am2.next }; None => { break } } }
-          }
-          Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
-        }
+      Stmt::If(c, th, el, nx) => { err = codepoint_collect_stmts(th, labels, src, a); if err == 0 { err = codepoint_collect_stmts(el, labels, src, a) } }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (err == 0) { break }; am := deref(arm_p(armq)); err = codepoint_collect_stmts(am.body_stmts, labels, src, a); arm = am.next }; None => { break } } }
+      }
+      Stmt::Unchecked(b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
+      Stmt::AllocWith(ae, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
+      Stmt::CompIf(c, th, el, nx) => { err = codepoint_collect_stmts(th, labels, src, a); if err == 0 { err = codepoint_collect_stmts(el, labels, src, a) } }
+      Stmt::CompFor(vs, vl, iv, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
+      Stmt::CompMatch(sc, ah, nx) => {
+        mut arm2 : Option(ptr(mut Arm)) = ah
+        loop { match arm2 { Some(arm2q) => { if not (err == 0) { break }; am2 := deref(arm_p(arm2q)); err = codepoint_collect_stmts(am2.body_stmts, labels, src, a); arm2 = am2.next }; None => { break } } }
+      }
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -13797,36 +15242,36 @@ codepoint_check_stmts := fn(head : Option(ptr(mut Stmt)), labels : ptr(CodePoint
       Some(curq) => {
         if not (err == 0) { break }
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          Stmt::ExprStmt(e, nx) => {
-            if sema_is_direct_jmp(e, src) {
-              target := sema_direct_jmp_target(e, src)
-              callee := expr_call_callee_span(e)
-              if target.n == 0 { err = located_err(callee.s) }
-              else if not unchecked_mode { err = located_err(callee.s) }
-              else if not codepoint_label_has(labels, src, target.s, target.n) { err = unbound_err(target.s, target.n) }
-            }
-          }
-          Stmt::While(c, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
-          Stmt::For(ns, nl, lo, hi, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
-          Stmt::Loop(b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
-          Stmt::If(c, th, el, nx) => { err = codepoint_check_stmts(th, labels, src, a, unchecked_mode); if err == 0 { err = codepoint_check_stmts(el, labels, src, a, unchecked_mode) } }
-          Stmt::Match(sc, ah, nx) => {
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop { match arm { Some(armq) => { if not (err == 0) { break }; am := deref(arm_p(armq)); err = codepoint_check_stmts(am.body_stmts, labels, src, a, unchecked_mode); arm = am.next }; None => { break } } }
-          }
-          Stmt::Unchecked(b, nx) => { err = codepoint_check_stmts(b, labels, src, a, true) }
-          Stmt::AllocWith(ae, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
-          Stmt::CompIf(c, th, el, nx) => { err = codepoint_check_stmts(th, labels, src, a, unchecked_mode); if err == 0 { err = codepoint_check_stmts(el, labels, src, a, unchecked_mode) } }
-          Stmt::CompFor(vs, vl, iv, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
-          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
-          Stmt::CompMatch(sc, ah, nx) => {
-            mut arm2 : Option(ptr(mut Arm)) = ah
-            loop { match arm2 { Some(arm2q) => { if not (err == 0) { break }; am2 := deref(arm_p(arm2q)); err = codepoint_check_stmts(am2.body_stmts, labels, src, a, unchecked_mode); arm2 = am2.next }; None => { break } } }
-          }
-          Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
+    match st {
+      Stmt::ExprStmt(e, nx) => {
+        if sema_is_direct_jmp(e, src) {
+          target := sema_direct_jmp_target(e, src)
+          callee := expr_call_callee_span(e)
+          if target.n == 0 { err = located_err(callee.s) }
+          else if not unchecked_mode { err = located_err(callee.s) }
+          else if not codepoint_label_has(labels, src, target.s, target.n) { err = unbound_err(target.s, target.n) }
         }
+      }
+      Stmt::While(c, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::For(ns, nl, lo, hi, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::Loop(b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::If(c, th, el, nx) => { err = codepoint_check_stmts(th, labels, src, a, unchecked_mode); if err == 0 { err = codepoint_check_stmts(el, labels, src, a, unchecked_mode) } }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (err == 0) { break }; am := deref(arm_p(armq)); err = codepoint_check_stmts(am.body_stmts, labels, src, a, unchecked_mode); arm = am.next }; None => { break } } }
+      }
+      Stmt::Unchecked(b, nx) => { err = codepoint_check_stmts(b, labels, src, a, true) }
+      Stmt::AllocWith(ae, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::CompIf(c, th, el, nx) => { err = codepoint_check_stmts(th, labels, src, a, unchecked_mode); if err == 0 { err = codepoint_check_stmts(el, labels, src, a, unchecked_mode) } }
+      Stmt::CompFor(vs, vl, iv, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::CompMatch(sc, ah, nx) => {
+        mut arm2 : Option(ptr(mut Arm)) = ah
+        loop { match arm2 { Some(arm2q) => { if not (err == 0) { break }; am2 := deref(arm_p(arm2q)); err = codepoint_check_stmts(am2.body_stmts, labels, src, a, unchecked_mode); arm2 = am2.next }; None => { break } } }
+      }
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -14057,31 +15502,31 @@ sema_bad_typeinfo_field_stmts := fn(head : Option(ptr(mut Stmt)), src : ptr(u8),
       Some(curq) => {
         if not (bad == 0) { break }
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::Assign(ns, nl, v, nx) => { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) }
-          Stmt::While(c, b, nx) => { bad = sema_bad_typeinfo_field_expr(c, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
-          Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) }
-          Stmt::Return(v, nx) => { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) }
-          Stmt::If(c, th, el, nx) => { bad = sema_bad_typeinfo_field_expr(c, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(th, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(el, src, vs, vl, a) } }
-          Stmt::Match(sc, ah, nx) => {
-            bad = sema_bad_typeinfo_field_expr(sc, src, vs, vl, a)
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop { match arm { Some(armq) => { if not (bad == 0) { break }; am := deref(arm_p(armq)); bad = sema_bad_typeinfo_field_expr(am.body, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(am.body_stmts, src, vs, vl, a) } ; arm = am.next }; None => { break } } }
-          }
-          Stmt::For(ns, nl, lo, hi, b, nx) => { bad = sema_bad_typeinfo_field_expr(lo, src, vs, vl, a); if bad == 0 and hi != 0 { bad = sema_bad_typeinfo_field_expr(hi, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
-          Stmt::DerefAssign(p, v, nx) => { bad = sema_bad_typeinfo_field_expr(p, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) } }
-          Stmt::IndexAssign(b, i, v, nx) => { bad = sema_bad_typeinfo_field_expr(b, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(i, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) } }
-          Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { bad = sema_bad_typeinfo_field_expr(b, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(i, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) } }
-          Stmt::FieldPathAssign(p, v, nx) => { bad = sema_bad_typeinfo_field_expr(p, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) } }
-          Stmt::Loop(b, nx) => { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) }
-          Stmt::ExprStmt(v, nx) => { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) }
-          Stmt::CompIf(c, th, el, nx) => { bad = sema_bad_typeinfo_field_expr(c, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(th, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(el, src, vs, vl, a) } }
-          Stmt::CompFor(cvs, cvl, iv, b, nx) => { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) }
-          Stmt::CompForRange(rvs, rvl, lo, hi, b, nx) => { bad = sema_bad_typeinfo_field_expr(lo, src, vs, vl, a); if bad == 0 and hi != 0 { bad = sema_bad_typeinfo_field_expr(hi, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
-          Stmt::Unchecked(b, nx) => { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) }
-          Stmt::AllocWith(e, b, nx) => { bad = sema_bad_typeinfo_field_expr(e, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
-          Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
-        }
+    match s {
+      Stmt::Assign(ns, nl, v, nx) => { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) }
+      Stmt::While(c, b, nx) => { bad = sema_bad_typeinfo_field_expr(c, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) }
+      Stmt::Return(v, nx) => { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) }
+      Stmt::If(c, th, el, nx) => { bad = sema_bad_typeinfo_field_expr(c, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(th, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(el, src, vs, vl, a) } }
+      Stmt::Match(sc, ah, nx) => {
+        bad = sema_bad_typeinfo_field_expr(sc, src, vs, vl, a)
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (bad == 0) { break }; am := deref(arm_p(armq)); bad = sema_bad_typeinfo_field_expr(am.body, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(am.body_stmts, src, vs, vl, a) } ; arm = am.next }; None => { break } } }
+      }
+      Stmt::For(ns, nl, lo, hi, b, nx) => { bad = sema_bad_typeinfo_field_expr(lo, src, vs, vl, a); if bad == 0 and hi != 0 { bad = sema_bad_typeinfo_field_expr(hi, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
+      Stmt::DerefAssign(p, v, nx) => { bad = sema_bad_typeinfo_field_expr(p, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) } }
+      Stmt::IndexAssign(b, i, v, nx) => { bad = sema_bad_typeinfo_field_expr(b, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(i, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) } }
+      Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { bad = sema_bad_typeinfo_field_expr(b, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(i, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) } }
+      Stmt::FieldPathAssign(p, v, nx) => { bad = sema_bad_typeinfo_field_expr(p, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) } }
+      Stmt::Loop(b, nx) => { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) }
+      Stmt::ExprStmt(v, nx) => { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) }
+      Stmt::CompIf(c, th, el, nx) => { bad = sema_bad_typeinfo_field_expr(c, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(th, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(el, src, vs, vl, a) } }
+      Stmt::CompFor(cvs, cvl, iv, b, nx) => { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) }
+      Stmt::CompForRange(rvs, rvl, lo, hi, b, nx) => { bad = sema_bad_typeinfo_field_expr(lo, src, vs, vl, a); if bad == 0 and hi != 0 { bad = sema_bad_typeinfo_field_expr(hi, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
+      Stmt::Unchecked(b, nx) => { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) }
+      Stmt::AllocWith(e, b, nx) => { bad = sema_bad_typeinfo_field_expr(e, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
+      Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -14250,12 +15695,12 @@ check_leaks := fn(head : Option(ptr(mut Stmt)), dval : ptr(Expr), decls : ptr(rt
     match cur {
       Some(curq) => {
         bv := stmt_binding_var(curq, a)
-        if bv.n != 0 and local_is_owning(locals, nloc, src, bv.s, bv.n, decls, upto) {
-          mut used := expr_uses_var_cons(dval, src, bv.s, bv.n, a)
+    if bv.n != 0 and local_is_owning(locals, nloc, src, bv.s, bv.n, decls, upto) {
+      mut used := expr_uses_var_cons(dval, src, bv.s, bv.n, a)
           mut nx : Option(ptr(mut Stmt)) = stmt_next(curq)
           loop { match nx { Some(nxq) => { if stmt_uses_var_cons(nxq, src, bv.s, bv.n, a) { used = true } ; nx = stmt_next(nxq) }; None => { break } } }
-          if used == false { mark_failed(locals, unbound_err(bv.s, 0)) }
-        }
+      if used == false { mark_failed(locals, unbound_err(bv.s, 0)) }
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -14289,13 +15734,13 @@ stmts_return_local_addr := fn(head : Option(ptr(mut Stmt)), locals : ptr(LVec), 
     match cur {
       Some(curq) => {
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          Stmt::Return(rv, nx) => { if expr_is_local_addr(rv, locals, nloc, src) { res = true } }
-          Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
-            | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-            | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-            | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-        }
+    match st {
+      Stmt::Return(rv, nx) => { if expr_is_local_addr(rv, locals, nloc, src) { res = true } }
+      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -14492,52 +15937,52 @@ stmts_store_escape := fn(head : Option(ptr(mut Stmt)), locals : ptr(LVec), nloc 
     match cur {
       Some(curq) => {
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          Stmt::Assign(ns, nl, v, nx) => {
-            ## a REASSIGN into an OUTLIVING place — a module mut global (a `static` place) OR an `out`/`in
-            ## out` parameter (a reference to the caller's place) — whose RHS is the address of a fn-scoped
-            ## local escapes upward. `assign_is_reassign` distinguishes this from a same-named `:=` local
-            ## binding (well-formed); check_stmts adds every Assign name to `locals`, so `local_in` cannot
-            ## tell bind from reassign — the source scan does.
-            rhs_local_addr := expr_is_local_addr(v, locals, nloc, src)
-            tgt_global := is_mod_mut_global(decls, src, ns, nl)
-            tgt_out := is_out_param(params_head, src, ns, nl, a)
-            outlives := tgt_global or tgt_out
-            reassign := assign_is_reassign(src, ns, nl)
-            if rhs_local_addr and outlives and reassign { res = true }
-          }
-          ## storing `ptr(<local>)` into a FIELD / ELEMENT of a module mut global aggregate — a `static`
-          ## place that outlives the local (§5.3.1: "a field of any aggregate that outlives R"). A field /
-          ## element assign is always a store to an existing place, so no bind-vs-reassign check is needed;
-          ## the base is a module mut global.
-          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
-            if expr_is_local_addr(fv, locals, nloc, src) and is_mod_mut_global(decls, src, bns, bnl) { res = true }
-          }
-          Stmt::IndexAssign(b, i, iv, nx) => {
-            bv := expr_var_span(b)
-            if expr_is_local_addr(iv, locals, nloc, src) and is_mod_mut_global(decls, src, bv.s, bv.n) { res = true }
-          }
-          Stmt::IndexFieldAssign(b, i, fs, fl, ifv, nx) => {
-            bv := expr_var_span(b)
-            if expr_is_local_addr(ifv, locals, nloc, src) and is_mod_mut_global(decls, src, bv.s, bv.n) { res = true }
-          }
-          ## a DEEP-NESTED field path `G.a.b = ptr(<local>)` (`FieldPathAssign`): peel the place to its root
-          ## var; if that root is a module mut global (a `static` place outliving the local), the address
-          ## escapes upward — §5.3.1's "a field of any aggregate that outlives R" at arbitrary field depth.
-          Stmt::FieldPathAssign(pl, pv, nx) => {
-            rv := field_path_root_var(pl)
-            if expr_is_local_addr(pv, locals, nloc, src) and rv.n != 0 and is_mod_mut_global(decls, src, rv.s, rv.n) { res = true }
-          }
-          Stmt::If(c, th, el, nx) => { if stmts_store_escape(th, locals, nloc, src, a, decls, params_head) or stmts_store_escape(el, locals, nloc, src, a, decls, params_head) { res = true } }
-          Stmt::While(c, b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
-          Stmt::Loop(b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
-          Stmt::Unchecked(b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
-          Stmt::AllocWith(ae, b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
-          Stmt::Match(sc, ah, nx) => { if arms_store_escape(ah, locals, nloc, src, a, decls, params_head) { res = true } }
-          Stmt::Return | Stmt::DerefAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
-            | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
-        }
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        ## a REASSIGN into an OUTLIVING place — a module mut global (a `static` place) OR an `out`/`in
+        ## out` parameter (a reference to the caller's place) — whose RHS is the address of a fn-scoped
+        ## local escapes upward. `assign_is_reassign` distinguishes this from a same-named `:=` local
+        ## binding (well-formed); check_stmts adds every Assign name to `locals`, so `local_in` cannot
+        ## tell bind from reassign — the source scan does.
+        rhs_local_addr := expr_is_local_addr(v, locals, nloc, src)
+        tgt_global := is_mod_mut_global(decls, src, ns, nl)
+        tgt_out := is_out_param(params_head, src, ns, nl, a)
+        outlives := tgt_global or tgt_out
+        reassign := assign_is_reassign(src, ns, nl)
+        if rhs_local_addr and outlives and reassign { res = true }
+      }
+      ## storing `ptr(<local>)` into a FIELD / ELEMENT of a module mut global aggregate — a `static`
+      ## place that outlives the local (§5.3.1: "a field of any aggregate that outlives R"). A field /
+      ## element assign is always a store to an existing place, so no bind-vs-reassign check is needed;
+      ## the base is a module mut global.
+      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
+        if expr_is_local_addr(fv, locals, nloc, src) and is_mod_mut_global(decls, src, bns, bnl) { res = true }
+      }
+      Stmt::IndexAssign(b, i, iv, nx) => {
+        bv := expr_var_span(b)
+        if expr_is_local_addr(iv, locals, nloc, src) and is_mod_mut_global(decls, src, bv.s, bv.n) { res = true }
+      }
+      Stmt::IndexFieldAssign(b, i, fs, fl, ifv, nx) => {
+        bv := expr_var_span(b)
+        if expr_is_local_addr(ifv, locals, nloc, src) and is_mod_mut_global(decls, src, bv.s, bv.n) { res = true }
+      }
+      ## a DEEP-NESTED field path `G.a.b = ptr(<local>)` (`FieldPathAssign`): peel the place to its root
+      ## var; if that root is a module mut global (a `static` place outliving the local), the address
+      ## escapes upward — §5.3.1's "a field of any aggregate that outlives R" at arbitrary field depth.
+      Stmt::FieldPathAssign(pl, pv, nx) => {
+        rv := field_path_root_var(pl)
+        if expr_is_local_addr(pv, locals, nloc, src) and rv.n != 0 and is_mod_mut_global(decls, src, rv.s, rv.n) { res = true }
+      }
+      Stmt::If(c, th, el, nx) => { if stmts_store_escape(th, locals, nloc, src, a, decls, params_head) or stmts_store_escape(el, locals, nloc, src, a, decls, params_head) { res = true } }
+      Stmt::While(c, b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
+      Stmt::Loop(b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
+      Stmt::Unchecked(b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
+      Stmt::AllocWith(ae, b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
+      Stmt::Match(sc, ah, nx) => { if arms_store_escape(ah, locals, nloc, src, a, decls, params_head) { res = true } }
+      Stmt::Return | Stmt::DerefAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -14612,6 +16057,8 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         mut pprov : u8 = 0
         if pm.pmode == 1 { pprov = prov_array_param() }
         lvec_push(locals, Local(ns = pm.ns, nl = pm.nl, tag = pbyte, prov = pprov, tns = pt.ns, tnl = pt.nl))
+        ## docs/ir.md §3.8 item 8 — a parameter's declared type, read by each use of it.
+        if ir::sty_on() { sema_spell_bind(pm.ns, sema_spell_param(pm, src), decls, src) }
         pp = pm.next
       }
       None => { break }
@@ -15805,21 +17252,21 @@ stmts_have_comptime := fn(head : Option(ptr(mut Stmt)), a : ptr(mut rt::Arena)) 
       Some(curq) => {
         if not (result == false) { break }
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::CompIf(c, th, el, n) => { result = true }
-          Stmt::CompFor(vs, vl, iv, b, n) => { result = true }
-          Stmt::CompForRange(vs, vl, lo, hi, b, n) => { result = true }
-          Stmt::CompMatch(sc, ah, n) => { result = true }
-          Stmt::If(c, th, el, n) => { if stmts_have_comptime(th, a) { result = true } else if stmts_have_comptime(el, a) { result = true } }
-          Stmt::While(c, b, n) => { if stmts_have_comptime(b, a) { result = true } }
-          Stmt::For(fns, fnl, lo, hi, b, n) => { if stmts_have_comptime(b, a) { result = true } }
-          Stmt::Loop(b, n) => { if stmts_have_comptime(b, a) { result = true } }
-          Stmt::Unchecked(b, n) => { if stmts_have_comptime(b, a) { result = true } }
-          Stmt::AllocWith(ae, b, n) => { if stmts_have_comptime(b, a) { result = true } }
-          Stmt::Match(sc, ah, n) => { if arms_have_comptime(ah, a) { result = true } }
-          Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
-        }
+    match s {
+      Stmt::CompIf(c, th, el, n) => { result = true }
+      Stmt::CompFor(vs, vl, iv, b, n) => { result = true }
+      Stmt::CompForRange(vs, vl, lo, hi, b, n) => { result = true }
+      Stmt::CompMatch(sc, ah, n) => { result = true }
+      Stmt::If(c, th, el, n) => { if stmts_have_comptime(th, a) { result = true } else if stmts_have_comptime(el, a) { result = true } }
+      Stmt::While(c, b, n) => { if stmts_have_comptime(b, a) { result = true } }
+      Stmt::For(fns, fnl, lo, hi, b, n) => { if stmts_have_comptime(b, a) { result = true } }
+      Stmt::Loop(b, n) => { if stmts_have_comptime(b, a) { result = true } }
+      Stmt::Unchecked(b, n) => { if stmts_have_comptime(b, a) { result = true } }
+      Stmt::AllocWith(ae, b, n) => { if stmts_have_comptime(b, a) { result = true } }
+      Stmt::Match(sc, ah, n) => { if arms_have_comptime(ah, a) { result = true } }
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -15918,21 +17365,21 @@ stmts_have_alloc := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), cnt :
       Some(curq) => {
         if not (result == false) { break }
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::Assign(ns, nl, v, n) => { if expr_is_alloc_call(v, decls, cnt, src) { result = true } }
-          Stmt::Return(rv, n) => { if expr_is_alloc_call(rv, decls, cnt, src) { result = true } }
-          Stmt::ExprStmt(e, n) => { if expr_is_alloc_call(e, decls, cnt, src) { result = true } }
-          Stmt::If(c, th, el, n) => { if stmts_have_alloc(th, decls, cnt, src, a) { result = true } else if stmts_have_alloc(el, decls, cnt, src, a) { result = true } }
-          Stmt::While(c, b, n) => { if stmts_have_alloc(b, decls, cnt, src, a) { result = true } }
-          Stmt::For(fns, fnl, lo, hi, b, n) => { if stmts_have_alloc(b, decls, cnt, src, a) { result = true } }
-          Stmt::Loop(b, n) => { if stmts_have_alloc(b, decls, cnt, src, a) { result = true } }
-          Stmt::Unchecked(b, n) => { if stmts_have_alloc(b, decls, cnt, src, a) { result = true } }
-          Stmt::AllocWith(ae, b, n) => { result = true }
-          Stmt::Match(sc, ah, n) => { if arms_have_alloc(ah, decls, cnt, src, a) { result = true } }
-          Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
-            | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
-            | Stmt::CompMatch | Stmt::CompForRange => {}
-        }
+    match s {
+      Stmt::Assign(ns, nl, v, n) => { if expr_is_alloc_call(v, decls, cnt, src) { result = true } }
+      Stmt::Return(rv, n) => { if expr_is_alloc_call(rv, decls, cnt, src) { result = true } }
+      Stmt::ExprStmt(e, n) => { if expr_is_alloc_call(e, decls, cnt, src) { result = true } }
+      Stmt::If(c, th, el, n) => { if stmts_have_alloc(th, decls, cnt, src, a) { result = true } else if stmts_have_alloc(el, decls, cnt, src, a) { result = true } }
+      Stmt::While(c, b, n) => { if stmts_have_alloc(b, decls, cnt, src, a) { result = true } }
+      Stmt::For(fns, fnl, lo, hi, b, n) => { if stmts_have_alloc(b, decls, cnt, src, a) { result = true } }
+      Stmt::Loop(b, n) => { if stmts_have_alloc(b, decls, cnt, src, a) { result = true } }
+      Stmt::Unchecked(b, n) => { if stmts_have_alloc(b, decls, cnt, src, a) { result = true } }
+      Stmt::AllocWith(ae, b, n) => { result = true }
+      Stmt::Match(sc, ah, n) => { if arms_have_alloc(ah, decls, cnt, src, a) { result = true } }
+      Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+        | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -16016,21 +17463,21 @@ stmts_call_syscall := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), cnt
       Some(curq) => {
         if not (result == false) { break }
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::Assign(ns, nl, v, n) => { if expr_calls_syscall(v, decls, cnt, src) { result = true } }
-          Stmt::Return(rv, n) => { if expr_calls_syscall(rv, decls, cnt, src) { result = true } }
-          Stmt::ExprStmt(e, n) => { if expr_calls_syscall(e, decls, cnt, src) { result = true } }
-          Stmt::If(c, th, el, n) => { if stmts_call_syscall(th, decls, cnt, src, a) { result = true } else if stmts_call_syscall(el, decls, cnt, src, a) { result = true } }
-          Stmt::While(c, b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
-          Stmt::For(fns, fnl, lo, hi, b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
-          Stmt::Loop(b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
-          Stmt::Unchecked(b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
-          Stmt::AllocWith(ae, b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
-          Stmt::Match(sc, ah, n) => { if arms_call_syscall(ah, decls, cnt, src, a) { result = true } }
-          Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
-            | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
-            | Stmt::CompMatch | Stmt::CompForRange => {}
-        }
+    match s {
+      Stmt::Assign(ns, nl, v, n) => { if expr_calls_syscall(v, decls, cnt, src) { result = true } }
+      Stmt::Return(rv, n) => { if expr_calls_syscall(rv, decls, cnt, src) { result = true } }
+      Stmt::ExprStmt(e, n) => { if expr_calls_syscall(e, decls, cnt, src) { result = true } }
+      Stmt::If(c, th, el, n) => { if stmts_call_syscall(th, decls, cnt, src, a) { result = true } else if stmts_call_syscall(el, decls, cnt, src, a) { result = true } }
+      Stmt::While(c, b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
+      Stmt::For(fns, fnl, lo, hi, b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
+      Stmt::Loop(b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
+      Stmt::Unchecked(b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
+      Stmt::AllocWith(ae, b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
+      Stmt::Match(sc, ah, n) => { if arms_call_syscall(ah, decls, cnt, src, a) { result = true } }
+      Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+        | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -16172,39 +17619,39 @@ stmts_have_unchecked := fn(head : Option(ptr(mut Stmt)), a : ptr(mut rt::Arena))
       Some(curq) => {
         if not (result == false) { break }
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::Assign(ns, nl, v, n) => { if expr_has_unchecked(v, a) { result = true } }
-          Stmt::FieldAssign(os, ol, fs, fl, v, n) => { if expr_has_unchecked(v, a) { result = true } }
-          Stmt::Return(rv, n) => { if unchecked bitcast(usize, rv) != 0 and expr_has_unchecked(rv, a) { result = true } }
-          Stmt::ExprStmt(e, n) => { if expr_has_unchecked(e, a) { result = true } }
-          Stmt::DerefAssign(p, v, n) => { if expr_has_unchecked(p, a) { result = true } else if expr_has_unchecked(v, a) { result = true } }
-          Stmt::IndexAssign(b, ix, v, n) => { if expr_has_unchecked(b, a) { result = true } else if expr_has_unchecked(ix, a) { result = true } else if expr_has_unchecked(v, a) { result = true } }
-          Stmt::IndexFieldAssign(b, ix, fs, fl, v, n) => { if expr_has_unchecked(b, a) { result = true } else if expr_has_unchecked(ix, a) { result = true } else if expr_has_unchecked(v, a) { result = true } }
-          Stmt::FieldPathAssign(pl, v, n) => { if expr_has_unchecked(pl, a) { result = true } else if expr_has_unchecked(v, a) { result = true } }
-          Stmt::If(c, th, el, n) => { if expr_has_unchecked(c, a) { result = true } else if stmts_have_unchecked(th, a) { result = true } else if stmts_have_unchecked(el, a) { result = true } }
-          Stmt::While(c, b, n) => { if expr_has_unchecked(c, a) { result = true } else if stmts_have_unchecked(b, a) { result = true } }
-          Stmt::For(fns, fnl, lo, hi, b, n) => { if expr_has_unchecked(lo, a) { result = true } else if expr_has_unchecked(hi, a) { result = true } else if stmts_have_unchecked(b, a) { result = true } }
-          Stmt::Loop(b, n) => { if stmts_have_unchecked(b, a) { result = true } }
-          ## The SCOPED STATEMENT form `unchecked { … }` IS the escape — the block itself opts the
-          ## enclosed statements out of I11 verification, exactly like the `unchecked <expr>` operator does.
-          ## This arm used to only RECURSE into the body, so a `@limits(no_unchecked)` unit was rejected for
-          ## `return unchecked (a + b)` but ACCEPTED for `unchecked { r = a + b }` — the unit contract (I5/I9,
-          ## FND-10) was escapable by respelling the same opt-out as a block. Flag it unconditionally; the
-          ## body needs no walk (a nested `unchecked` inside an `unchecked` block is already a violation).
-          Stmt::Unchecked(b, n) => { result = true }
-          ## `break <value>` carries an EXPRESSION the scan used to skip entirely, so `break unchecked (a + b)`
-          ## slipped past the contract. The value is optional (a bare `break`), hence the null guard — the
-          ## same shape `Stmt::Return` uses above.
-          Stmt::Break(bv, bd, n) => { if unchecked bitcast(usize, bv) != 0 and expr_has_unchecked(bv, a) { result = true } }
-          ## `@alloc(<expr>) { … }` — the ALLOCATOR expression was skipped, only the body was walked.
-          Stmt::AllocWith(ae, b, n) => { if expr_has_unchecked(ae, a) { result = true } else if stmts_have_unchecked(b, a) { result = true } }
-          Stmt::Match(sc, ah, n) => { if expr_has_unchecked(sc, a) { result = true } else if arms_have_unchecked(ah, a) { result = true } }
-          Stmt::CompIf(c, th, el, n) => { if stmts_have_unchecked(th, a) { result = true } else if stmts_have_unchecked(el, a) { result = true } }
-          Stmt::CompFor(vs, vl, iv, b, n) => { if stmts_have_unchecked(b, a) { result = true } }
-          Stmt::CompMatch(sc, ah, n) => { if arms_have_unchecked(ah, a) { result = true } }
-          Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_unchecked(b, a) { result = true } }
-          Stmt::Continue => {}
-        }
+    match s {
+      Stmt::Assign(ns, nl, v, n) => { if expr_has_unchecked(v, a) { result = true } }
+      Stmt::FieldAssign(os, ol, fs, fl, v, n) => { if expr_has_unchecked(v, a) { result = true } }
+      Stmt::Return(rv, n) => { if unchecked bitcast(usize, rv) != 0 and expr_has_unchecked(rv, a) { result = true } }
+      Stmt::ExprStmt(e, n) => { if expr_has_unchecked(e, a) { result = true } }
+      Stmt::DerefAssign(p, v, n) => { if expr_has_unchecked(p, a) { result = true } else if expr_has_unchecked(v, a) { result = true } }
+      Stmt::IndexAssign(b, ix, v, n) => { if expr_has_unchecked(b, a) { result = true } else if expr_has_unchecked(ix, a) { result = true } else if expr_has_unchecked(v, a) { result = true } }
+      Stmt::IndexFieldAssign(b, ix, fs, fl, v, n) => { if expr_has_unchecked(b, a) { result = true } else if expr_has_unchecked(ix, a) { result = true } else if expr_has_unchecked(v, a) { result = true } }
+      Stmt::FieldPathAssign(pl, v, n) => { if expr_has_unchecked(pl, a) { result = true } else if expr_has_unchecked(v, a) { result = true } }
+      Stmt::If(c, th, el, n) => { if expr_has_unchecked(c, a) { result = true } else if stmts_have_unchecked(th, a) { result = true } else if stmts_have_unchecked(el, a) { result = true } }
+      Stmt::While(c, b, n) => { if expr_has_unchecked(c, a) { result = true } else if stmts_have_unchecked(b, a) { result = true } }
+      Stmt::For(fns, fnl, lo, hi, b, n) => { if expr_has_unchecked(lo, a) { result = true } else if expr_has_unchecked(hi, a) { result = true } else if stmts_have_unchecked(b, a) { result = true } }
+      Stmt::Loop(b, n) => { if stmts_have_unchecked(b, a) { result = true } }
+      ## The SCOPED STATEMENT form `unchecked { … }` IS the escape — the block itself opts the
+      ## enclosed statements out of I11 verification, exactly like the `unchecked <expr>` operator does.
+      ## This arm used to only RECURSE into the body, so a `@limits(no_unchecked)` unit was rejected for
+      ## `return unchecked (a + b)` but ACCEPTED for `unchecked { r = a + b }` — the unit contract (I5/I9,
+      ## FND-10) was escapable by respelling the same opt-out as a block. Flag it unconditionally; the
+      ## body needs no walk (a nested `unchecked` inside an `unchecked` block is already a violation).
+      Stmt::Unchecked(b, n) => { result = true }
+      ## `break <value>` carries an EXPRESSION the scan used to skip entirely, so `break unchecked (a + b)`
+      ## slipped past the contract. The value is optional (a bare `break`), hence the null guard — the
+      ## same shape `Stmt::Return` uses above.
+      Stmt::Break(bv, bd, n) => { if unchecked bitcast(usize, bv) != 0 and expr_has_unchecked(bv, a) { result = true } }
+      ## `@alloc(<expr>) { … }` — the ALLOCATOR expression was skipped, only the body was walked.
+      Stmt::AllocWith(ae, b, n) => { if expr_has_unchecked(ae, a) { result = true } else if stmts_have_unchecked(b, a) { result = true } }
+      Stmt::Match(sc, ah, n) => { if expr_has_unchecked(sc, a) { result = true } else if arms_have_unchecked(ah, a) { result = true } }
+      Stmt::CompIf(c, th, el, n) => { if stmts_have_unchecked(th, a) { result = true } else if stmts_have_unchecked(el, a) { result = true } }
+      Stmt::CompFor(vs, vl, iv, b, n) => { if stmts_have_unchecked(b, a) { result = true } }
+      Stmt::CompMatch(sc, ah, n) => { if arms_have_unchecked(ah, a) { result = true } }
+      Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_unchecked(b, a) { result = true } }
+      Stmt::Continue => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -16299,29 +17746,29 @@ stmts_have_abstraction := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), a : pt
       Some(curq) => {
         if not (result == false) { break }
         s := deref(stmt_p(Stmt, curq))
-        match s {
-          Stmt::Assign(ns, nl, v, n) => { if expr_has_abstraction(v, src, a) { result = true } }
-          Stmt::Return(rv, n) => { if unchecked bitcast(usize, rv) != 0 and expr_has_abstraction(rv, src, a) { result = true } }
-          Stmt::ExprStmt(e, n) => { if expr_has_abstraction(e, src, a) { result = true } }
-          Stmt::FieldAssign(bns, bnl, fs, fl, v, n) => { result = true }
-          Stmt::IndexAssign(b, i, v, n) => { result = true }
-          Stmt::IndexFieldAssign(b, i, fs, fl, v, n) => { result = true }
-          Stmt::FieldPathAssign(pl, v, n) => { result = true }
-          Stmt::DerefAssign(p, v, n) => { result = true }
-          Stmt::If(c, th, el, n) => { result = true }
-          Stmt::While(c, b, n) => { result = true }
-          Stmt::For(fns, fnl, lo, hi, b, n) => { result = true }
-          Stmt::Loop(b, n) => { result = true }
-          Stmt::Unchecked(b, n) => { result = true }
-          Stmt::AllocWith(ae, b, n) => { result = true }
-          Stmt::Match(sc, ah, n) => { result = true }
-          Stmt::Break(_bv, _bd, n) => { result = true }
-          Stmt::Continue(_cd, n) => { result = true }
-          Stmt::CompIf(c, th, el, n) => { if stmts_have_abstraction(th, src, a) { result = true } else if stmts_have_abstraction(el, src, a) { result = true } }
-          Stmt::CompFor(vs, vl, iv, b, n) => { if stmts_have_abstraction(b, src, a) { result = true } }
-          Stmt::CompMatch(sc, ah, n) => { if arms_have_abstraction(ah, src, a) { result = true } }
-          Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_abstraction(b, src, a) { result = true } }
-        }
+    match s {
+      Stmt::Assign(ns, nl, v, n) => { if expr_has_abstraction(v, src, a) { result = true } }
+      Stmt::Return(rv, n) => { if unchecked bitcast(usize, rv) != 0 and expr_has_abstraction(rv, src, a) { result = true } }
+      Stmt::ExprStmt(e, n) => { if expr_has_abstraction(e, src, a) { result = true } }
+      Stmt::FieldAssign(bns, bnl, fs, fl, v, n) => { result = true }
+      Stmt::IndexAssign(b, i, v, n) => { result = true }
+      Stmt::IndexFieldAssign(b, i, fs, fl, v, n) => { result = true }
+      Stmt::FieldPathAssign(pl, v, n) => { result = true }
+      Stmt::DerefAssign(p, v, n) => { result = true }
+      Stmt::If(c, th, el, n) => { result = true }
+      Stmt::While(c, b, n) => { result = true }
+      Stmt::For(fns, fnl, lo, hi, b, n) => { result = true }
+      Stmt::Loop(b, n) => { result = true }
+      Stmt::Unchecked(b, n) => { result = true }
+      Stmt::AllocWith(ae, b, n) => { result = true }
+      Stmt::Match(sc, ah, n) => { result = true }
+      Stmt::Break(_bv, _bd, n) => { result = true }
+      Stmt::Continue(_cd, n) => { result = true }
+      Stmt::CompIf(c, th, el, n) => { if stmts_have_abstraction(th, src, a) { result = true } else if stmts_have_abstraction(el, src, a) { result = true } }
+      Stmt::CompFor(vs, vl, iv, b, n) => { if stmts_have_abstraction(b, src, a) { result = true } }
+      Stmt::CompMatch(sc, ah, n) => { if arms_have_abstraction(ah, src, a) { result = true } }
+      Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_abstraction(b, src, a) { result = true } }
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -18010,40 +19457,40 @@ sema_collect_stmts := fn(head : Option(ptr(mut Stmt)), locals : ptr(LVec), src :
     match cur {
       Some(curq) => {
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          Stmt::Assign(ns, nl, v, nx) => {
-            if not assign_is_reassign(src, ns, nl) { sema_collect_name(locals, src, ns, nl) }
-            sema_collect_expr(v, locals, src, a)
-          }
-          Stmt::While(c, b, nx) => { sema_collect_expr(c, locals, src, a); sema_collect_stmts(b, locals, src, a) }
-          Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { sema_collect_expr(v, locals, src, a) }
-          Stmt::Return(v, nx) => { sema_collect_expr(v, locals, src, a) }
-          Stmt::If(c, th, el, nx) => { sema_collect_expr(c, locals, src, a); sema_collect_stmts(th, locals, src, a); sema_collect_stmts(el, locals, src, a) }
-          Stmt::Match(sc, ah, nx) => {
-            sema_collect_expr(sc, locals, src, a)
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop { match arm { Some(armq) => { am := deref(arm_p(armq)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }; None => { break } } }
-          }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => { sema_collect_name(locals, src, fns, fnl); sema_collect_expr(lo, locals, src, a); sema_collect_expr(hi, locals, src, a); sema_collect_stmts(b, locals, src, a) }
-          Stmt::DerefAssign(p, v, nx) => { sema_collect_expr(p, locals, src, a); sema_collect_expr(v, locals, src, a) }
-          Stmt::IndexAssign(b, ix, v, nx) => { sema_collect_expr(b, locals, src, a); sema_collect_expr(ix, locals, src, a); sema_collect_expr(v, locals, src, a) }
-          Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { sema_collect_expr(b, locals, src, a); sema_collect_expr(ix, locals, src, a); sema_collect_expr(v, locals, src, a) }
-          Stmt::FieldPathAssign(p, v, nx) => { sema_collect_expr(p, locals, src, a); sema_collect_expr(v, locals, src, a) }
-          Stmt::Loop(b, nx) => { sema_collect_stmts(b, locals, src, a) }
-          Stmt::Break(v, bd, nx) => { sema_collect_expr(v, locals, src, a) }
-          Stmt::ExprStmt(v, nx) => { sema_collect_expr(v, locals, src, a) }
-          Stmt::CompIf(c, th, el, nx) => { sema_collect_expr(c, locals, src, a); sema_collect_stmts(th, locals, src, a); sema_collect_stmts(el, locals, src, a) }
-          Stmt::CompFor(vs, vl, iv, b, nx) => { sema_collect_name(locals, src, vs, vl); sema_collect_stmts(b, locals, src, a) }
-          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { sema_collect_name(locals, src, vs, vl); sema_collect_expr(lo, locals, src, a); sema_collect_expr(hi, locals, src, a); sema_collect_stmts(b, locals, src, a) }
-          Stmt::Unchecked(b, nx) => { sema_collect_stmts(b, locals, src, a) }
-          Stmt::AllocWith(e0, b, nx) => { sema_collect_expr(e0, locals, src, a); sema_collect_stmts(b, locals, src, a) }
-          Stmt::Continue(cd, nx) => {}
-          Stmt::CompMatch(sc, ah, nx) => {
-            sema_collect_expr(sc, locals, src, a)
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop { match arm { Some(armq) => { am := deref(arm_p(armq)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }; None => { break } } }
-          }
-        }
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if not assign_is_reassign(src, ns, nl) { sema_collect_name(locals, src, ns, nl) }
+        sema_collect_expr(v, locals, src, a)
+      }
+      Stmt::While(c, b, nx) => { sema_collect_expr(c, locals, src, a); sema_collect_stmts(b, locals, src, a) }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { sema_collect_expr(v, locals, src, a) }
+      Stmt::Return(v, nx) => { sema_collect_expr(v, locals, src, a) }
+      Stmt::If(c, th, el, nx) => { sema_collect_expr(c, locals, src, a); sema_collect_stmts(th, locals, src, a); sema_collect_stmts(el, locals, src, a) }
+      Stmt::Match(sc, ah, nx) => {
+        sema_collect_expr(sc, locals, src, a)
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }; None => { break } } }
+      }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { sema_collect_name(locals, src, fns, fnl); sema_collect_expr(lo, locals, src, a); sema_collect_expr(hi, locals, src, a); sema_collect_stmts(b, locals, src, a) }
+      Stmt::DerefAssign(p, v, nx) => { sema_collect_expr(p, locals, src, a); sema_collect_expr(v, locals, src, a) }
+      Stmt::IndexAssign(b, ix, v, nx) => { sema_collect_expr(b, locals, src, a); sema_collect_expr(ix, locals, src, a); sema_collect_expr(v, locals, src, a) }
+      Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { sema_collect_expr(b, locals, src, a); sema_collect_expr(ix, locals, src, a); sema_collect_expr(v, locals, src, a) }
+      Stmt::FieldPathAssign(p, v, nx) => { sema_collect_expr(p, locals, src, a); sema_collect_expr(v, locals, src, a) }
+      Stmt::Loop(b, nx) => { sema_collect_stmts(b, locals, src, a) }
+      Stmt::Break(v, bd, nx) => { sema_collect_expr(v, locals, src, a) }
+      Stmt::ExprStmt(v, nx) => { sema_collect_expr(v, locals, src, a) }
+      Stmt::CompIf(c, th, el, nx) => { sema_collect_expr(c, locals, src, a); sema_collect_stmts(th, locals, src, a); sema_collect_stmts(el, locals, src, a) }
+      Stmt::CompFor(vs, vl, iv, b, nx) => { sema_collect_name(locals, src, vs, vl); sema_collect_stmts(b, locals, src, a) }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { sema_collect_name(locals, src, vs, vl); sema_collect_expr(lo, locals, src, a); sema_collect_expr(hi, locals, src, a); sema_collect_stmts(b, locals, src, a) }
+      Stmt::Unchecked(b, nx) => { sema_collect_stmts(b, locals, src, a) }
+      Stmt::AllocWith(e0, b, nx) => { sema_collect_expr(e0, locals, src, a); sema_collect_stmts(b, locals, src, a) }
+      Stmt::Continue(cd, nx) => {}
+      Stmt::CompMatch(sc, ah, nx) => {
+        sema_collect_expr(sc, locals, src, a)
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }; None => { break } } }
+      }
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -18423,130 +19870,130 @@ sema_enum_global_array_value_bad_stmts := fn(head : Option(ptr(mut Stmt)), decls
       Some(curq) => {
         if not (bad == 0) { break }
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          Stmt::Assign(ns, nl, v, nx) => {
-            ann := local_type_span(src, ns, nl)
-            allow := not assign_is_reassign(src, ns, nl) and ann.n == 0
-            bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, allow)
-            if bad == 0 and not assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) {
-              lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = 0, prov = 0, tns = 0, tnl = 0))
-              cnt += 1
-            }
-          }
-          Stmt::While(c, b, nx) => { bad = sema_enum_global_array_value_bad(c, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) } }
-          Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
-          Stmt::Return(v, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
-          Stmt::If(c, th, el, nx) => { bad = sema_enum_global_array_value_bad(c, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(th, decls, upto, src, locals, cnt, a) }; if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(el, decls, upto, src, locals, cnt, a) } }
-          Stmt::Match(sc, ah, nx) => {
-            bad = sema_enum_global_array_value_bad(sc, decls, upto, src, locals, cnt, a, true)
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm {
-                Some(armq) => {
-                  if not (bad == 0) { break }
-                  am := deref(arm_p(armq))
-                  arm_base := cnt
-                  mut arm_cnt := cnt
-                  mut bd := am.binds_head
-                  loop {
-                    match bd {
-                      Some(bdq) => {
-                        bnns := bnd_ns(bdq)
-                        bnnl := bnd_nl(bdq)
-                        if not local_in(locals, arm_cnt, src, bnns, bnnl) {
-                          lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                          arm_cnt += 1
-                        }
-                        bd = bnd_next(bdq)
-                      }
-                      None => { break }
-                    }
-                  }
-                  bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
-                  if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
-                  lvec_truncate(deref(locals), arm_base)
-                  arm = am.next
-                }
-                None => { break }
-              }
-            }
-          }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => {
-            bad = sema_enum_global_array_value_bad(lo, decls, upto, src, locals, cnt, a, false)
-            if bad == 0 and unchecked bitcast(usize, hi) != 0 { bad = sema_enum_global_array_value_bad(hi, decls, upto, src, locals, cnt, a, false) }
-            if bad == 0 {
-              loop_base := cnt
-              if not local_in(locals, cnt, src, fns, fnl) { lvec_push(deref(locals), Local(ns = fns, nl = fnl, tag = 0, prov = 0, tns = 0, tnl = 0)); cnt += 1 }
-              bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a)
-              lvec_truncate(deref(locals), loop_base)
-              cnt = loop_base
-            }
-          }
-          Stmt::DerefAssign(p, v, nx) => { bad = sema_enum_global_array_value_bad(p, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
-          Stmt::IndexAssign(b, i, v, nx) => { bad = sema_enum_global_array_value_bad(b, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(i, decls, upto, src, locals, cnt, a, false) }; if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
-          Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { bad = sema_enum_global_array_value_bad(b, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(i, decls, upto, src, locals, cnt, a, false) }; if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
-          Stmt::FieldPathAssign(p, v, nx) => { bad = sema_enum_global_array_value_bad(p, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
-          Stmt::Loop(b, nx) => { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) }
-          Stmt::Unchecked(b, nx) => { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) }
-          Stmt::Break(v, bd, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
-          Stmt::ExprStmt(v, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
-          Stmt::AllocWith(e0, b, nx) => { bad = sema_enum_global_array_value_bad(e0, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) } }
-          ## Comptime bodies are normally skipped by the type checker because only the selected branch
-          ## is semantically active. This fence is structural and intentionally visits both branches: a
-          ## known enum-array global in either source branch must not reach a backend's width-blind path
-          ## when the target fold selects it.
-          Stmt::CompIf(c, th, el, nx) => { bad = sema_enum_global_array_value_bad(c, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(th, decls, upto, src, locals, cnt, a) }; if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(el, decls, upto, src, locals, cnt, a) } }
-          Stmt::CompFor(vs, vl, iv, b, nx) => {
-            base := cnt
-            if not local_in(locals, cnt, src, vs, vl) { lvec_push(deref(locals), Local(ns = vs, nl = vl, tag = 0, prov = 0, tns = 0, tnl = 0)); cnt += 1 }
-            bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a)
-            lvec_truncate(deref(locals), base)
-            cnt = base
-          }
-          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => {
-            bad = sema_enum_global_array_value_bad(lo, decls, upto, src, locals, cnt, a, false)
-            if bad == 0 { bad = sema_enum_global_array_value_bad(hi, decls, upto, src, locals, cnt, a, false) }
-            if bad == 0 {
-              base := cnt
-              if not local_in(locals, cnt, src, vs, vl) { lvec_push(deref(locals), Local(ns = vs, nl = vl, tag = 0, prov = 0, tns = 0, tnl = 0)); cnt += 1 }
-              bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a)
-              lvec_truncate(deref(locals), base)
-              cnt = base
-            }
-          }
-          Stmt::CompMatch(sc, ah, nx) => {
-            bad = sema_enum_global_array_value_bad(sc, decls, upto, src, locals, cnt, a, true)
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop {
-              match arm {
-                Some(armq) => {
-                  if not (bad == 0) { break }
-                  am := deref(arm_p(armq))
-                  base := cnt
-                  mut arm_cnt := cnt
-                  mut bd := am.binds_head
-                  loop {
-                    match bd {
-                      Some(bdq) => {
-                        bnns := bnd_ns(bdq)
-                        bnnl := bnd_nl(bdq)
-                        if not local_in(locals, arm_cnt, src, bnns, bnnl) { lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0)); arm_cnt += 1 }
-                        bd = bnd_next(bdq)
-                      }
-                      None => { break }
-                    }
-                  }
-                  bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
-                  if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
-                  lvec_truncate(deref(locals), base)
-                  arm = am.next
-                }
-                None => { break }
-              }
-            }
-          }
-          Stmt::Continue => {}
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        ann := local_type_span(src, ns, nl)
+        allow := not assign_is_reassign(src, ns, nl) and ann.n == 0
+        bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, allow)
+        if bad == 0 and not assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) {
+          lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = 0, prov = 0, tns = 0, tnl = 0))
+          cnt += 1
         }
+      }
+      Stmt::While(c, b, nx) => { bad = sema_enum_global_array_value_bad(c, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) } }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
+      Stmt::Return(v, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
+      Stmt::If(c, th, el, nx) => { bad = sema_enum_global_array_value_bad(c, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(th, decls, upto, src, locals, cnt, a) }; if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(el, decls, upto, src, locals, cnt, a) } }
+      Stmt::Match(sc, ah, nx) => {
+        bad = sema_enum_global_array_value_bad(sc, decls, upto, src, locals, cnt, a, true)
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (bad == 0) { break }
+              am := deref(arm_p(armq))
+              arm_base := cnt
+              mut arm_cnt := cnt
+              mut bd := am.binds_head
+              loop {
+                match bd {
+                  Some(bdq) => {
+                    bnns := bnd_ns(bdq)
+                    bnnl := bnd_nl(bdq)
+                    if not local_in(locals, arm_cnt, src, bnns, bnnl) {
+                      lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                      arm_cnt += 1
+                    }
+                    bd = bnd_next(bdq)
+                  }
+                  None => { break }
+                }
+              }
+              bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
+              if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
+              lvec_truncate(deref(locals), arm_base)
+              arm = am.next
+            }
+            None => { break }
+          }
+        }
+      }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => {
+        bad = sema_enum_global_array_value_bad(lo, decls, upto, src, locals, cnt, a, false)
+        if bad == 0 and unchecked bitcast(usize, hi) != 0 { bad = sema_enum_global_array_value_bad(hi, decls, upto, src, locals, cnt, a, false) }
+        if bad == 0 {
+          loop_base := cnt
+          if not local_in(locals, cnt, src, fns, fnl) { lvec_push(deref(locals), Local(ns = fns, nl = fnl, tag = 0, prov = 0, tns = 0, tnl = 0)); cnt += 1 }
+          bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a)
+          lvec_truncate(deref(locals), loop_base)
+          cnt = loop_base
+        }
+      }
+      Stmt::DerefAssign(p, v, nx) => { bad = sema_enum_global_array_value_bad(p, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
+      Stmt::IndexAssign(b, i, v, nx) => { bad = sema_enum_global_array_value_bad(b, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(i, decls, upto, src, locals, cnt, a, false) }; if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
+      Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { bad = sema_enum_global_array_value_bad(b, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(i, decls, upto, src, locals, cnt, a, false) }; if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
+      Stmt::FieldPathAssign(p, v, nx) => { bad = sema_enum_global_array_value_bad(p, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
+      Stmt::Loop(b, nx) => { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) }
+      Stmt::Unchecked(b, nx) => { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) }
+      Stmt::Break(v, bd, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
+      Stmt::ExprStmt(v, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
+      Stmt::AllocWith(e0, b, nx) => { bad = sema_enum_global_array_value_bad(e0, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) } }
+      ## Comptime bodies are normally skipped by the type checker because only the selected branch
+      ## is semantically active. This fence is structural and intentionally visits both branches: a
+      ## known enum-array global in either source branch must not reach a backend's width-blind path
+      ## when the target fold selects it.
+      Stmt::CompIf(c, th, el, nx) => { bad = sema_enum_global_array_value_bad(c, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(th, decls, upto, src, locals, cnt, a) }; if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(el, decls, upto, src, locals, cnt, a) } }
+      Stmt::CompFor(vs, vl, iv, b, nx) => {
+        base := cnt
+        if not local_in(locals, cnt, src, vs, vl) { lvec_push(deref(locals), Local(ns = vs, nl = vl, tag = 0, prov = 0, tns = 0, tnl = 0)); cnt += 1 }
+        bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a)
+        lvec_truncate(deref(locals), base)
+        cnt = base
+      }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => {
+        bad = sema_enum_global_array_value_bad(lo, decls, upto, src, locals, cnt, a, false)
+        if bad == 0 { bad = sema_enum_global_array_value_bad(hi, decls, upto, src, locals, cnt, a, false) }
+        if bad == 0 {
+          base := cnt
+          if not local_in(locals, cnt, src, vs, vl) { lvec_push(deref(locals), Local(ns = vs, nl = vl, tag = 0, prov = 0, tns = 0, tnl = 0)); cnt += 1 }
+          bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a)
+          lvec_truncate(deref(locals), base)
+          cnt = base
+        }
+      }
+      Stmt::CompMatch(sc, ah, nx) => {
+        bad = sema_enum_global_array_value_bad(sc, decls, upto, src, locals, cnt, a, true)
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (bad == 0) { break }
+              am := deref(arm_p(armq))
+              base := cnt
+              mut arm_cnt := cnt
+              mut bd := am.binds_head
+              loop {
+                match bd {
+                  Some(bdq) => {
+                    bnns := bnd_ns(bdq)
+                    bnnl := bnd_nl(bdq)
+                    if not local_in(locals, arm_cnt, src, bnns, bnnl) { lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0)); arm_cnt += 1 }
+                    bd = bnd_next(bdq)
+                  }
+                  None => { break }
+                }
+              }
+              bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
+              if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
+              lvec_truncate(deref(locals), base)
+              arm = am.next
+            }
+            None => { break }
+          }
+        }
+      }
+      Stmt::Continue => {}
+    }
         cur = stmt_next(curq)
       }
       None => { break }
@@ -18741,43 +20188,43 @@ sema_vis_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : p
       Some(curq) => {
         if not (r == 0) { break }
         st := deref(stmt_p(Stmt, curq))
-        match st {
-          Stmt::Assign(ns, nl, v, nx) => {
-            if assign_is_reassign(src, ns, nl) and (nloc == 0 or not local_in(locals, nloc, src, ns, nl)) { r = sema_global_ref_bad(decls, src, ns, nl, cs, cl) }
-            if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) }
-          }
-          Stmt::While(c, b, nx) => { r = sema_vis_expr(c, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => {
-            if nloc == 0 or not local_in(locals, nloc, src, bns, bnl) { r = sema_global_ref_bad(decls, src, bns, bnl, cs, cl) }
-            if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) }
-          }
-          Stmt::Return(v, nx) => { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) }
-          Stmt::If(c, th, el, nx) => { r = sema_vis_expr(c, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_stmts(th, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_stmts(el, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::Match(sc, ah, nx) => {
-            r = sema_vis_expr(sc, decls, src, cs, cl, locals, nloc, a)
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop { match arm { Some(armq) => { if not (r == 0) { break }; am := deref(arm_p(armq)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }; None => { break } } }
-          }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => { r = sema_vis_expr(lo, decls, src, cs, cl, locals, nloc, a); if r == 0 and unchecked bitcast(usize, hi) != 0 { r = sema_vis_expr(hi, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::DerefAssign(p, v, nx) => { r = sema_vis_expr(p, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::IndexAssign(b, ix, v, nx) => { r = sema_vis_expr(b, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(ix, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { r = sema_vis_expr(b, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(ix, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::FieldPathAssign(p, v, nx) => { r = sema_vis_expr(p, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::Loop(b, nx) => { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) }
-          Stmt::Break(v, bd, nx) => { if unchecked bitcast(usize, v) != 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::ExprStmt(v, nx) => { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) }
-          Stmt::CompIf(c, th, el, nx) => { r = sema_vis_expr(c, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_stmts(th, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_stmts(el, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::CompFor(vs, vl, iv, b, nx) => { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) }
-          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { r = sema_vis_expr(lo, decls, src, cs, cl, locals, nloc, a); if r == 0 and unchecked bitcast(usize, hi) != 0 { r = sema_vis_expr(hi, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::Unchecked(b, nx) => { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) }
-          Stmt::AllocWith(e0, b, nx) => { r = sema_vis_expr(e0, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) } }
-          Stmt::Continue(cd, nx) => {}
-          Stmt::CompMatch(sc, ah, nx) => {
-            r = sema_vis_expr(sc, decls, src, cs, cl, locals, nloc, a)
-            mut arm : Option(ptr(mut Arm)) = ah
-            loop { match arm { Some(armq) => { if not (r == 0) { break }; am := deref(arm_p(armq)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }; None => { break } } }
-          }
-        }
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if assign_is_reassign(src, ns, nl) and (nloc == 0 or not local_in(locals, nloc, src, ns, nl)) { r = sema_global_ref_bad(decls, src, ns, nl, cs, cl) }
+        if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) }
+      }
+      Stmt::While(c, b, nx) => { r = sema_vis_expr(c, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => {
+        if nloc == 0 or not local_in(locals, nloc, src, bns, bnl) { r = sema_global_ref_bad(decls, src, bns, bnl, cs, cl) }
+        if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) }
+      }
+      Stmt::Return(v, nx) => { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) }
+      Stmt::If(c, th, el, nx) => { r = sema_vis_expr(c, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_stmts(th, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_stmts(el, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::Match(sc, ah, nx) => {
+        r = sema_vis_expr(sc, decls, src, cs, cl, locals, nloc, a)
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (r == 0) { break }; am := deref(arm_p(armq)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }; None => { break } } }
+      }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { r = sema_vis_expr(lo, decls, src, cs, cl, locals, nloc, a); if r == 0 and unchecked bitcast(usize, hi) != 0 { r = sema_vis_expr(hi, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::DerefAssign(p, v, nx) => { r = sema_vis_expr(p, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::IndexAssign(b, ix, v, nx) => { r = sema_vis_expr(b, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(ix, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { r = sema_vis_expr(b, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(ix, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::FieldPathAssign(p, v, nx) => { r = sema_vis_expr(p, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::Loop(b, nx) => { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) }
+      Stmt::Break(v, bd, nx) => { if unchecked bitcast(usize, v) != 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::ExprStmt(v, nx) => { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) }
+      Stmt::CompIf(c, th, el, nx) => { r = sema_vis_expr(c, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_stmts(th, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_stmts(el, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::CompFor(vs, vl, iv, b, nx) => { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { r = sema_vis_expr(lo, decls, src, cs, cl, locals, nloc, a); if r == 0 and unchecked bitcast(usize, hi) != 0 { r = sema_vis_expr(hi, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::Unchecked(b, nx) => { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) }
+      Stmt::AllocWith(e0, b, nx) => { r = sema_vis_expr(e0, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) } }
+      Stmt::Continue(cd, nx) => {}
+      Stmt::CompMatch(sc, ah, nx) => {
+        r = sema_vis_expr(sc, decls, src, cs, cl, locals, nloc, a)
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (r == 0) { break }; am := deref(arm_p(armq)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }; None => { break } } }
+      }
+    }
         cur = stmt_next(curq)
       }
       None => { break }
