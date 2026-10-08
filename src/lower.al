@@ -30043,7 +30043,7 @@ pub collect_program := fn(decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt:
   build_decl_name_hash(decls, src, deref(mar))
   cnt := rt::vec_len(deref(decls))
   hoff := node_alloc(deref(mar), size(IVec))
-  hp : ptr(mut IVec) = unchecked bitcast(ptr(mut IVec), arena_base(mar) + hoff)
+  hp := node_ptr(IVec, deref(mar), hoff)
   ivec_new(deref(hp), mar, 16)
   collect_program_into(deref(hp), decls, src, mar, a, cnt)
   MONO_INSTS = Option.Some(hp)
