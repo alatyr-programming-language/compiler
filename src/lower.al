@@ -30048,11 +30048,8 @@ pub collect_program := fn(decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt:
   collect_program_into(deref(hp), decls, src, mar, a, cnt)
   MONO_INSTS = Option.Some(hp)
 }
-mono_insts := fn(why : str) -> ptr(IVec) {
-  match MONO_INSTS {
-    Some(hp) => { return hp }
-    None => { panic(why) }
-  }
+mono_insts := fn(msg : str) -> ptr(mut IVec) {
+  match MONO_INSTS { Some(hp) => { hp }; None => { panic(msg) } }
 }
 collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt::Arena), a : rt::Arena, cnt : usize) {
   ## SEED from NON-GENERIC fns only. A generic fn's body calls other generics with its OWN
