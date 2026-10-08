@@ -5,7 +5,7 @@
 ## every observed value matches. Bare break/continue are covered by continue_stmt.al.
 main := fn() -> u64 {
   ## 1. loop-as-expression: `break v` yields the loop's value
-  x := loop { break 40 }                 ## x = 40
+  x : u64 = loop { break 40 }                 ## x = 40
 
   ## 2. break-value produced from inside a conditional in the body
   mut i : u64 = 0
@@ -16,7 +16,7 @@ main := fn() -> u64 {
 
   ## 3. two break-with-value exits of the SAME type (common-type accept)
   mut k : u64 = 0
-  z := loop {
+  z : u64 = loop {
     k = k + 1
     if k == 1 { break 100 }
     break 200

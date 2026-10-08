@@ -22,7 +22,7 @@
 ## spec byte access `bytes(...)[i]` — no `str_at`/`contains`, so it lowers under both compilers).
 streq_src_lit := fn(src : str, start : usize, length : usize, lit : str) -> bool {
   if length != lit.len { return false }
-  mut j := 0
+  mut j : usize = 0
   mut ok := true
   while j < length {
     if bytes(src)[start + j] != bytes(lit)[j] { ok = false }
@@ -100,8 +100,8 @@ is_hex_digit := fn(c : usize) -> bool {
 pub dec_val := fn(s : str) -> usize {
   n := s.len
   base := lit_base(s)
-  mut v := 0
-  mut i := 0
+  mut v : usize = 0
+  mut i : usize = 0
   if base != 10 { i = 2 }
   while i < n {
     c := bytes(s)[i]
@@ -117,7 +117,7 @@ pub dec_val := fn(s : str) -> usize {
 pub int_lit_err := fn(s : str) -> usize {
   n := s.len
   base := lit_base(s)
-  mut i := 0
+  mut i : usize = 0
   if base != 10 {
     if bytes(s)[1] == 88 or bytes(s)[1] == 79 or bytes(s)[1] == 66 { return 4 }
     i = 2
@@ -152,7 +152,7 @@ pub int_lit_err := fn(s : str) -> usize {
 pub float_lit_err := fn(s : str) -> usize {
   n := s.len
   if n == 0 { return 1 }
-  mut i := 0
+  mut i : usize = 0
   ## `hex-float ::= "0x" ( hex-digit { hex-digit | "_" } [ "." { hex-digit | "_" } ]
   ##                   | "." hex-digit { hex-digit | "_" } ) ( "p" | "P" ) [ "+" | "-" ] dec-int`
   if n >= 2 and bytes(s)[0] == 48 and bytes(s)[1] == 120 {
@@ -228,7 +228,7 @@ peek := fn(src : str, i : usize, n : usize) -> usize {
 ## still uses the `src`-relative offset to read the lexeme bytes.)
 pub lex_rt := fn(src : str, base_off : usize, in out toks : rt::Vec, in out ar : rt::Arena) -> usize {
   n := src.len
-  mut i := 0
+  mut i : usize = 0
   mut nt := 0
   while i < n {
     b := bytes(src)[i]
@@ -458,7 +458,7 @@ pub lex_rt := fn(src : str, base_off : usize, in out toks : rt::Vec, in out ar :
       else if b == 124 { kind = 35 }                     ## `|`
       else if b == 94 { kind = 36 }                      ## `^`
       else if b == 126 { kind = 46 }                     ## `~` (bitwise NOT, unary prefix)
-      mut w := 1
+      mut w : usize = 1
       if kind == 5 or kind == 6 or kind == 7 or kind == 20 or kind == 26 or kind == 27 or kind == 28 or kind == 38 or kind == 31 or kind == 40 or kind == 41 or kind == 44 or kind == 45 or kind == 47 or kind == 48 or kind == 49 or kind == 50 { w = 2 }
       if kind == 37 { w = 3 }
       e := emit_tok(toks, ar, kind, base_off + i, w)

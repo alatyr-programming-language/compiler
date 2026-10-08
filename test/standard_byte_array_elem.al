@@ -75,7 +75,7 @@ main := fn() -> u64 {
 
   ## a runtime (non-constant) index must resolve the same place
   mut i := 0
-  mut acc := 0
+  mut acc : u64 = 0
   while i < 3 {
     acc = acc + u64(xs[i].inner.a)
     i = i + 1

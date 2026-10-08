@@ -5,7 +5,7 @@
 ## p + q = 32 + 37 = 69. Same answer under default (regalloc) and ALATYR_RA=0 (text path).
 add := fn(a : u64, b : u64) -> u64 { a + b }
 main := fn() -> u64 {
-  p := 16 + 16
+  p : u64 = 16 + 16
   q := add(p, 5)
   p + q
 }

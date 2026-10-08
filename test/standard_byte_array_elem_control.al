@@ -58,7 +58,7 @@ main := fn() -> u64 {
   if u64(bs[2]) != 3 { return 18 }
   if u64(bs[4]) != 5 { return 19 }
   mut i := 0
-  mut acc := 0
+  mut acc : u64 = 0
   while i < 6 {
     acc = acc + u64(bs[i])
     i = i + 1

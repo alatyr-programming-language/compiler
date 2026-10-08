@@ -2,13 +2,13 @@
 
 ## NON-`pub`: visible to `geo` and to every module NESTED WITHIN it (§3), i.e. to `geo::child`.
 priv_helper := fn() -> u64 { 3 }
-PRIV_C := 4
+PRIV_C : u64 = 4
 Priv := struct { v : u64 }
 
 ## `pub`: exposed one level upward, so the root and its other children may name these (§3).
 pub Pt := struct { x : u64, y : u64 }
 pub Tag := enum { lo, hi }
-pub PUB_C := 10
+pub PUB_C : u64 = 10
 pub answer := fn() -> u64 { priv_helper() + PRIV_C }
 pub bump := fn(p : ptr(Pt)) -> u64 { deref(p).x + deref(p).y }
 pub widen := fn(T : type, v : T) -> u64 { u64(v) + 1 }

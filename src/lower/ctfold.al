@@ -142,13 +142,13 @@ comptime_scalar_value := fn(e : ptr(Expr), cx : ptr(LCtx)) -> ComptimeScalar {
 ## Is `s` a non-empty run of ASCII decimal digits (an integer flag default)?
 bf_is_int := fn(s : str) -> bool {
   if s.len == 0 { return false }
-  mut i := 0
+  mut i : usize = 0
   while i < s.len { c := bytes(s)[i] ; if c < 48 or c > 57 { return false } ; i += 1 }
   return true
 }
 bf_parse_int := fn(s : str) -> i64 {
   mut v := 0
-  mut i := 0
+  mut i : usize = 0
   while i < s.len { v = v * 10 + i64(bytes(s)[i] - 48) ; i += 1 }
   return v
 }
@@ -162,7 +162,7 @@ build_flag_scan := fn(name : str) -> i64 {
   if BUILD_FLAGS_N == 0 { return 0 - 3 }
   blob := str_at(unchecked bitcast(ptr(u8), BUILD_FLAGS_P), BUILD_FLAGS_N)
   bb := unchecked bitcast(usize, blob.ptr)
-  mut i := 0
+  mut i : usize = 0
   while i < blob.len {
     mut e := i
     while e < blob.len and bytes(blob)[e] != 61 { e = e + 1 }        ## '=' (61)
@@ -225,7 +225,7 @@ build_flag_str_eq := fn(name : str, head : str, tail : str) -> i64 {
   }
   blob := str_at(unchecked bitcast(ptr(u8), BUILD_FLAGS_P), BUILD_FLAGS_N)
   bb := unchecked bitcast(usize, blob.ptr)
-  mut i := 0
+  mut i : usize = 0
   while i < blob.len {
     mut e := i
     while e < blob.len and bytes(blob)[e] != 61 { e = e + 1 }
@@ -435,7 +435,7 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr
     ## Only a single-segment head is an alias (multi-segment heads are already
     ## literal module paths), and the alias must belong to the caller module.
     if colon_pos(cx.src, qms, qml) < 0 {
-      mut i := 0
+      mut i : usize = 0
       mut as_ := 0
       mut al := 0
       while i < cnt {
@@ -452,7 +452,7 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr
     }
   }
   mut found := false
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(cx.decls, i))
     mut name_ok := streq(cx.src, d.name_start, d.name_len, qns, qnl)
@@ -840,7 +840,7 @@ codegen_reject := fn(src : ptr(u8), off : usize, mod_s : usize, mod_l : usize, m
     slv := unchecked bitcast(ptr(rt::Vec), CODEGEN_FILE_SL_P)
     nsv := unchecked bitcast(ptr(rt::Vec), CODEGEN_FILE_NS_P)
     nlv := unchecked bitcast(ptr(rt::Vec), CODEGEN_FILE_NL_P)
-    mut i := 0
+    mut i : usize = 0
     while i < CODEGEN_FILE_N {
       fo := rt::vec_get(deref(sov), i)
       fl := rt::vec_get(deref(slv), i)
@@ -856,7 +856,7 @@ codegen_reject := fn(src : ptr(u8), off : usize, mod_s : usize, mod_l : usize, m
   ## If no table was published, the source is the whole input. If a table was published but the
   ## span is outside it, keep the line relative to the shared buffer and omit a guessed filename.
   mut line := 1
-  mut line_base := 0
+  mut line_base : usize = 0
   if found { line_base = fbase }
   if found == false and CODEGEN_FILE_N != 0 { line = 0 }
   ## Issue #523 — a SYNTHESIZED span is not a source position at all (`ast::span_is_synthetic`), so it has

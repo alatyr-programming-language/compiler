@@ -39,7 +39,7 @@ main := fn() -> u64 {
   c := a.name                             ## the str FIELD bound to a str LOCAL (2-word extract)
   s := "wxyz"
   b := G(n = 4, name = s[1..4], m = 0)    ## str field from a range-slice VIEW ("xyz")
-  mut eq := 0
+  mut eq : u64 = 0
   if str_eq(a.name, "abc") { eq = 8 }     ## the str field as a str VALUE (was always "")
   if str_eq(a.name, "abd") { eq = eq + 1 }
   return (a.name.len + a.n + a.m) + (r.name.len + r.n + r.m) + c.len + (b.name.len + b.n) + eq + byref(a)

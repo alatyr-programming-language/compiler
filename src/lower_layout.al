@@ -138,7 +138,7 @@ pub enum_layout_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
 LSpan := struct { s : usize, n : usize }
 
 pub name_tail := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
-  mut i := 0
+  mut i : usize = 0
   mut cp := -1
   while i < n {
     ## `src + s + i` is POINTER arithmetic: `s` may be a REBASED handle (`s = name_ptr - src`) for a
@@ -160,7 +160,7 @@ pub name_tail := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
 ## consumer, recover the head from the adjacent source `::` exactly as the global-reference resolver
 ## does. This keeps `codec::Error` nominal without rejecting the legal generic-call form.
 type_path_head := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
-  mut i := 0
+  mut i : usize = 0
   mut cp := -1
   while i + 1 < n {
     if str_at(((src + s) + i), 2) == "::" { cp = i64(i); i = i + 2 } else { i = i + 1 }
@@ -186,7 +186,7 @@ type_path_head := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
 ## twin of lower::mod_seg_eq, local here to keep the dependency edge lower -> lower_layout acyclic.
 type_module_eq := fn(src : ptr(u8), ds : usize, dn : usize, qs : usize, qn : usize) -> bool {
   if dn != qn { return false }
-  mut i := 0
+  mut i : usize = 0
   while i < dn {
     dc := str_at((src + ds + i), 1)
     qc := str_at((src + qs + i), 1)
@@ -238,8 +238,8 @@ pub type_ref_mod_l := fn() -> usize { TRM_L }
 ## the tree leans on it for every `m := path` binding, and narrowing it is its own decision.
 type_mod_head_matches := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : usize) -> bool {
   if type_module_eq(src, as_, al, ms, ml) { return true }
-  mut ls := 0
-  mut k := 0
+  mut ls : usize = 0
+  mut k : usize = 0
   while k + 1 < al {
     ca := str_at((src + as_ + k), 1)
     cb := str_at((src + as_ + k + 1), 1)
@@ -352,7 +352,7 @@ qualified_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hn
   mut rs := 0
   mut rn := 0
   mut ambiguous := false
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 0 and d.arity == 0 and d.ret_tl != 0
@@ -446,8 +446,8 @@ mut LNI_D : usize = 0
 ## their own cheap length+first+last-byte hash, which is far too weak to bucket a whole decl table).
 _fnv_name := fn(src : ptr(u8), s : usize, n : usize) -> usize {
   w := str_at((src + s), n)
-  mut h := 1469598103934665603
-  mut i := 0
+  mut h : usize = 1469598103934665603
+  mut i : usize = 0
   while i < n {
     unchecked { h = (h ^ usize(bytes(w)[i])) * 1099511628211 }
     i = i + 1
@@ -481,18 +481,18 @@ rt::rec_get(unchecked bitcast(ptr(mut u8), LNH), i) != th
 pub build_layout_name_index := fn(decls : ptr(rt::Vec), src : ptr(u8), in out mar : rt::Arena) {
   cnt := rt::vec_len(deref(decls))
   base := rt::bump(mar, cnt * 8 + 8)
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     rt::rec_set(unchecked bitcast(ptr(mut u8), base), i, _fnv_name(src, d.name_start, d.name_len))
     i = i + 1
   }
-  mut nb := 64
+  mut nb : usize = 64
   while nb < cnt * 2 { nb = nb * 2 }
   bb := rt::bump(mar, nb * 8 + 16)
   cur := rt::bump(mar, nb * 8 + 16)
   lb := rt::bump(mar, cnt * 8 + 8)
-  mut b := 0
+  mut b : usize = 0
   while b < nb + 1 {
     rt::rec_set(unchecked bitcast(ptr(mut u8), bb), b, 0)
     rt::rec_set(unchecked bitcast(ptr(mut u8), cur), b, 0)
@@ -682,7 +682,7 @@ binding_type_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
   mut hl := 0
   mut ts := ns
   mut tl := nl
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0
@@ -1766,8 +1766,8 @@ pub tuple_typearg_span := fn(e : ptr(Expr), src : ptr(u8)) -> LSpan {
 ## remaining neutral for the existing all-word tuple forms.
 pub tuple_type_size_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, a : rt::Arena) -> usize {
   if tl == 0 or str_at((src + ts), 1) != "(" { return 0 }
-  mut off := 0
-  mut al := 1
+  mut off : usize = 0
+  mut al : usize = 1
   mut i := 0
   mut scanning := true
   while scanning {
@@ -1817,7 +1817,7 @@ pub standard_struct_align := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, 
   if di < 0 { return 1 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut mx := 1
+  mut mx : usize = 1
   sa := struct_align_attr(decls, src, s, n)
   if sa >= 1 { mx = usize(sa) }
   loop {
@@ -1843,7 +1843,7 @@ pub standard_field_byte_offset := fn(decls : ptr(rt::Vec), src : ptr(u8), s : us
   if di < 0 { return -1 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut off := 0
+  mut off : usize = 0
   mut res : i64 = -1
   loop {
     match f {
@@ -1870,7 +1870,7 @@ pub standard_struct_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, 
   if di < 0 { return 0 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut off := 0
+  mut off : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -1955,7 +1955,7 @@ pub struct_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut tot := 0
+  mut tot : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -2031,7 +2031,7 @@ pub field_word_offset := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
   if di < 0 { return -1 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut off := 0
+  mut off : usize = 0
   mut res := -1
   loop {
     match f {
@@ -2890,7 +2890,7 @@ pub named_param_is_float := fn(params_head : Option(ptr(mut Param)), src : ptr(u
 ## is why this one is spelled differently). Sticky-true, like the three above.
 pub callee_ret_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
@@ -2944,7 +2944,7 @@ pub call_value_unsigned := fn(src : ptr(u8), cs : usize, cl : usize) -> bool {
 ## The unsigned twin of `callee_ret_is_signed`.
 pub callee_ret_is_unsigned := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
@@ -2955,7 +2955,7 @@ pub callee_ret_is_unsigned := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize
 }
 pub callee_ret_is_signed := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
@@ -3212,7 +3212,7 @@ pub decl_leading_tparam_run := fn(d : Decl, src : ptr(u8)) -> i64 {
 ## three copies this replaces.
 pub generic_gi := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut r := 0 - 1
   while i < cnt { d := deref(decl_get(decls, i)) ; if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, cs, cl) { r = i64(i) } ; i = i + 1 }
   r
@@ -3229,7 +3229,7 @@ pub generic_gi := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize
 pub generic_overload_set_count := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, ms : usize, ml : usize) -> usize {
   cnt := rt::vec_len(deref(decls))
   mut c := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, ns, nl) and streq(src, d.mod_start, d.mod_len, ms, ml) {
@@ -3640,7 +3640,7 @@ pub arch_guard_fold := fn(cond : ptr(Expr), src : ptr(u8), arch : str) -> i64 {
 ## invisible to name lookup without moving the vector.
 pub apply_when_guards := fn(decls : ptr(rt::Vec), src : ptr(u8), arch : str) {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     dg := deref(decl_get(decls, i))
     if unchecked bitcast(usize, dg.when_cond) != 0 {
@@ -3722,7 +3722,7 @@ pub type_name_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
       or t == "f32" or t == "f64" or t == "bool" or t == "char" or t == "str" { return true }
   cnt := rt::vec_len(deref(decls))
   nm := name_tail(src, s, n)
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     ## kind 2 = struct, kind 3 = enum OR union (a union is a kind-3 decl too).
@@ -3739,7 +3739,7 @@ pub type_name_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
       }
       if atl != 0 {
         at := name_tail(src, ats, atl)
-        mut j := 0
+        mut j : usize = 0
         while j < cnt {
           td := deref(decl_get(decls, j))
           if (td.kind == 2 or td.kind == 3) and streq(src, td.name_start, td.name_len, at.s, at.n) { return true }
@@ -3896,7 +3896,7 @@ _erased_bitcast_target := fn(src : ptr(u8), pos : usize) -> LSpan {
   comma := p - 1
   mut q := comma
   mut depth := 0
-  mut open := 0
+  mut open : usize = 0
   mut found := false
   while q > 0 and not found {
     comment := _comment_back(src, q)
@@ -4135,7 +4135,7 @@ _attr_arg_token := fn(src : ptr(u8), sp : LSpan) -> LSpan {
 ## span `[s, n)`. Returns N (≥0) or -1 for absent / non-digit content. Shared by both numeric levers.
 _attr_decimal := fn(src : ptr(u8), sp : LSpan) -> i64 {
   if sp.n == 0 { return -1 }
-  mut val := 0
+  mut val : usize = 0
   mut k := sp.s
   mut end := sp.s + sp.n
   while k < end {
@@ -4241,7 +4241,7 @@ pub struct_align_attr := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
   if str_at((src + p), 1) != "(" { return -1 }
   p = p + 1
   while str_at((src + p), 1) == " " { p = p + 1 }
-  mut val := 0
+  mut val : usize = 0
   mut any := false
   mut go := true
   while go {
@@ -4262,7 +4262,7 @@ pub packed_struct_align := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   if di < 0 { return 1 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut mx := 1
+  mut mx : usize = 1
   loop {
     match f {
       Some(fq) => {
@@ -4338,7 +4338,7 @@ pub packed_field_byte_offset := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usiz
   if di < 0 { return -1 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut off := 0
+  mut off : usize = 0
   mut res := -1
   loop {
     match f {
@@ -4370,8 +4370,8 @@ pub packed_struct_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   if di < 0 { return 0 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut off := 0
-  mut maxend := 0
+  mut off : usize = 0
+  mut maxend : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -4450,7 +4450,7 @@ pub qualified_enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize,
   if qh.n == 0 { return enum_decl_of(decls, src, s, n) }
   nm := name_tail(src, s, n)
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 3 and streq(src, d.name_start, d.name_len, nm.s, nm.n)
@@ -4490,7 +4490,7 @@ pub qualified_type_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   if qh.n == 0 { return -1 }
   nm := name_tail(src, s, n)
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, nm.s, nm.n)
@@ -4662,7 +4662,7 @@ pub enum_max_arity := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   if di < 0 { return 0 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut mx := 0
+  mut mx : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -4694,7 +4694,7 @@ pub enum_max_arity := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
 enum_max_arity_of_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), di : usize, a : rt::Arena) -> usize {
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), di)))
   mut f := d.fields_head
-  mut mx := 0
+  mut mx : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -4772,7 +4772,7 @@ pub typearg_at := fn(src : ptr(u8), hs : usize, hn : usize, idx : usize) -> LSpa
   if str_at((src + p), 1) != "(" { return LSpan(s = 0, n = 0) }
   p += 1
   mut depth := 0
-  mut ai := 0
+  mut ai : usize = 0
   mut start := p
   ## accumulate the result span as SCALARS (`rs`/`rn`), NOT a `mut res : LSpan` reassigned inside
   ## the loop — a struct-local reassigned in a loop is a known lean-lower miscompile (the P1a `Token`
@@ -4838,7 +4838,7 @@ pub param_pos := fn(decls : ptr(rt::Vec), di : usize, src : ptr(u8), ts : usize,
 ## on it re-reads the `(…)` type-args that follow in `src` (the proven bare-span recovery). Used so
 ## a generic-instance type-arg resolves to its base decl WITHOUT a global strip in `struct_decl_of`.
 pub base_type_name := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
-  mut i := 0
+  mut i : usize = 0
   while i < n {
     if str_at(((src + s) + i), 1) == "(" { return LSpan(s = s, n = i) }
     i += 1
@@ -4983,8 +4983,8 @@ pub ct_param_value := fn(decls : ptr(rt::Vec), src : ptr(u8), di : i64, base_s :
   ta := typearg_at(src, base_s, base_n, usize(pos))
   if ta.n == 0 { return -1 }              ## declaration context: no value argument to bind
   tb := bytes(str_at((src + ta.s), ta.n))
-  mut k := 0
-  mut v := 0
+  mut k : usize = 0
+  mut v : usize = 0
   mut badarg := false
   while k < ta.n {
     db := tb[k]
@@ -5007,8 +5007,8 @@ pub ct_arr_len := fn(decls : ptr(rt::Vec), src : ptr(u8), sns : usize, snl : usi
   ## Read via `bytes(str)[i]` (a Slice(u8) byte view) — the same idiom as `parse_arr_len`.
   bs := bytes(str_at((src + fdts), fdtl))
   ## locate the `;` (byte 59) opening the length expression, and the `]` (byte 93) closing it
-  mut i := 0
-  mut sp := 0
+  mut i : usize = 0
+  mut sp : usize = 0
   mut found := false
   while i < fdtl {
     if bs[i] == 59 { sp = i + 1; found = true }
@@ -5028,7 +5028,7 @@ pub ct_arr_len := fn(decls : ptr(rt::Vec), src : ptr(u8), sns : usize, snl : usi
   base := base_type_name(src, inst.s, inst.n)
   di := struct_decl_of(decls, src, base.s, base.n)
   mut p := sp
-  mut acc := 0
+  mut acc : usize = 0
   mut op : u8 = 43                        ## the pending operator ('+' folds the first term)
   mut any := false
   mut bare := false                       ## a declaration-context reference (field → 0 words)
@@ -5043,7 +5043,7 @@ pub ct_arr_len := fn(decls : ptr(rt::Vec), src : ptr(u8), sns : usize, snl : usi
     if p >= e { scanning = false }
     if p < e {
       cb := bs[p]
-      mut tval := 0
+      mut tval : usize = 0
       mut isid := false
       if cb >= 48 and cb <= 57 {
         while p < e and bs[p] >= 48 and bs[p] <= 57 { tval = tval * 10 + usize(bs[p] - 48); p += 1 }
@@ -5147,7 +5147,7 @@ pub enum_inst_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   if d.is_generic == false { return enum_max_arity_of_decl(decls, src, usize(di), a) }
   mut f := d.fields_head
-  mut mx := 0
+  mut mx : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -5333,7 +5333,7 @@ pub variant_bind_pointee := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, 
 ## payload (disc + N payload words, e.g. `Bin(op, ptr, ptr)` = 3).
 pub max_enum_arity_all := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
   cnt := rt::vec_len(deref(decls))
-  mut mx := 0
+  mut mx : usize = 0
   ## A WHOLE-PROGRAM pass asks about a declaration it already HAS, by that declaration's own name —
   ## so the naming module for the query is the DECLARATION's module, never whichever module happened
   ## to be published when the pass ran. Without this the query is answered from (say) `main`, where a
@@ -5360,7 +5360,7 @@ pub max_enum_arity_all := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena)
 ## of this size (over-sizing is harmless frame padding). At least 1.
 pub max_agg_words_all := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
   cnt := rt::vec_len(deref(decls))
-  mut mx := 1
+  mut mx : usize = 1
   ## same whole-program discipline as `max_enum_arity_all` above: each declaration is measured in ITS
   ## OWN module, so the §3 ranking resolves the name to the declaration the pass is standing on.
   ss := TRM_S
@@ -5427,7 +5427,7 @@ variant_pin := fn(src : ptr(u8), ns : usize, nl : usize) -> i64 {
 eff_disc_at := fn(src : ptr(u8), fields_head : Option(ptr(mut FieldDecl)), target : usize) -> i64 {
   mut f := fields_head
   mut running := 0
-  mut idx := 0
+  mut idx : usize = 0
   mut res := -1
   loop {
     match f {
@@ -5541,7 +5541,7 @@ const_module_decl_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   mut res : usize = 0
   if n == 0 { return unchecked bitcast(ptr(Expr), res) }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0

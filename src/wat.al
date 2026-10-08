@@ -685,7 +685,7 @@ wat_cmp_glyph := fn(op : u8) -> str {
 wat_op_fn_match := fn(decls : ptr(rt::Vec), src : ptr(u8), g : str, ss : usize, sn : usize) -> bool {
   if sn == 0 { return false }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -715,7 +715,7 @@ is_cast_callee := fn(src : ptr(u8), cs : usize, cl : usize) -> bool {
 ## Is `[ns,nl)` a module-level FLOAT global (a kind-0 decl with a FloatLit init)? WASM float globals are
 ## NOT modelled (a const-expr forbids `reinterpret`) → their access TRAPS (not mis-treated as a local).
 wat_is_float_global := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> bool {
-  cnt := rt::vec_len(deref(decls)) ; mut i := 0 ; mut r := false
+  cnt := rt::vec_len(deref(decls)) ; mut i : usize = 0 ; mut r := false
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
     ## a kind-0/arity-0 module global whose value is NOT a modelled scalar (Num/Bool) — i.e. a float
@@ -754,7 +754,7 @@ wat_float_global_init := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WS
 ## DECLARATION (`:=` follows the name only there); a use-site scan sees `+`/`)` and fails. Looks the
 ## decl up by name, then scans from ITS name_start.
 wat_float_global_init_ok := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> bool {
-  cnt := rt::vec_len(deref(decls)) ; mut i := 0 ; mut r := false
+  cnt := rt::vec_len(deref(decls)) ; mut i : usize = 0 ; mut r := false
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.name_len != 0 {
@@ -1058,7 +1058,7 @@ wat_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
     Expr::BoolLit(x) => { r = i64(x) }
     Expr::Var(vs, vn) => {
       cnt := rt::vec_len(deref(decls))
-      mut i := 0
+      mut i : usize = 0
       while i < cnt {
         d := deref(decl_get(decls, i))
         if d.kind == 0 and d.is_fn == false and streq(src, d.name_start, d.name_len, vs, vn) {
@@ -1160,7 +1160,7 @@ wat_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
 ## name lowers to `global.get`/`global.set $name`.
 is_global := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < cnt and (not found) {
     d := deref(decl_get(decls, i))
@@ -1203,7 +1203,7 @@ agg_global_base := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usiz
   cnt := rt::vec_len(deref(decls))
   mut off := 1024
   mut res := 0 - 1
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.name_len != 0 and value_is_agg(d.value) {
@@ -1219,7 +1219,7 @@ agg_global_base := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usiz
 agg_globals_end := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64 {
   cnt := rt::vec_len(deref(decls))
   mut off := 1024
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.name_len != 0 and value_is_agg(d.value) {
@@ -1235,7 +1235,7 @@ global_enum_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
   cnt := rt::vec_len(deref(decls))
   mut rs := 0
   mut rn := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and streq(src, d.name_start, d.name_len, ns, nl) {
@@ -1252,7 +1252,7 @@ global_struct_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
   cnt := rt::vec_len(deref(decls))
   mut rs := 0
   mut rn := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and streq(src, d.name_start, d.name_len, ns, nl) {
@@ -1324,7 +1324,7 @@ wat_gchain_root := fn(e : ptr(Expr)) -> WSpan {
 wat_is_array_global := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   cnt := rt::vec_len(deref(decls))
   mut r := false
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) { if ex_is_array_lit(d.value) { r = true } }
@@ -1338,7 +1338,7 @@ wat_is_array_global := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : 
 wat_array_global_nel := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> i64 {
   cnt := rt::vec_len(deref(decls))
   mut r := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) { if ex_is_array_lit(d.value) { r = i64(array_lit_nel(d.value)) } }
@@ -1384,7 +1384,7 @@ wat_arr_lit_elem_struct := fn(v : ptr(Expr), src : ptr(u8)) -> WSpan {
 wat_array_global_stride := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> i64 {
   cnt := rt::vec_len(deref(decls))
   mut r := 1
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) {
@@ -1400,7 +1400,7 @@ wat_array_global_stride := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, n
 wat_array_global_elem_struct := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
   cnt := rt::vec_len(deref(decls))
   mut r := WSpan(s = 0, n = 0)
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) {
@@ -1431,7 +1431,7 @@ emit_i64_le := fn(in out sb : rt::StrBuf, v : i64) {
 ## target, so it emits `(unreachable)` rather than a bogus `(call $undefined)` that fails wat2wasm.
 callee_defined := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a : rt::Arena) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < cnt and (not found) {
     d := deref(decl_get(decls, i))
@@ -1445,7 +1445,7 @@ callee_defined := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize
 ## a `(result i64)` and a call-as-statement leaves nothing to drop.
 callee_is_void := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a : rt::Arena) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut void := false
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -1460,7 +1460,7 @@ callee_is_void := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize
 ## `$__sp` bump region, which survives the return), so a local bound to such a call is a struct local.
 callee_ret_struct := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena) -> WSpan {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut rs := 0
   mut rn := 0
   while i < cnt {
@@ -1520,7 +1520,7 @@ enum_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize,
 ## is an enum local. A wide-payload enum stays unresolved → its `match` falls through to fail-loud.
 callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena, allow_union : bool) -> WSpan {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut rs := 0
   mut rn := 0
   while i < cnt {
@@ -2299,7 +2299,7 @@ wat_call_ret_tuple_words := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
   mut r := 0
   if cn.n != 0 {
     cnt := rt::vec_len(deref(decls))
-    mut i := 0
+    mut i : usize = 0
     while i < cnt {
       d := deref(decl_get(decls, i))
       if d.is_fn and d.name_len != 0 and streq(src, d.name_start, d.name_len, cn.s, cn.n) {
@@ -2458,7 +2458,7 @@ wat_ct_collect := fn(head : Option(ptr(mut Stmt)), src : ptr(u8)) {
 ## The table holds every event of the function, so no binding is ever missing from this answer.
 wat_ct_expr := fn(ns : usize, nl : usize, use_s : usize, src : ptr(u8)) -> ptr(Expr) {
   mut found : u8 = 0
-  mut found_off := 0
+  mut found_off : usize = 0
   mut result : usize = 0
   mut i : usize = 0
   while i < WAT_CT_N {
@@ -2488,18 +2488,18 @@ mut WAT_RET_TUPLE := 0
 ## gets its own deterministic monotonic namespace. The allocator is reset at emit_wat_body entry so
 ## repeated generic instances and repeated program emissions are independent of prior backend state.)
 mut WAT_SUB_GPS := 0    ## the generic type-param NAME span start …
-mut WAT_SUB_GPL := 0    ## … and length (0 = no active substitution)
+mut WAT_SUB_GPL : usize = 0    ## … and length (0 = no active substitution)
 mut WAT_SUB_ITS := 0    ## the instance's concrete type span start …
 mut WAT_SUB_ITL := 0    ## … and length (non-zero while emitting an instance = instance mode)
 ## 2nd/3rd LEADING type-param of a 2/3-type-param generic (`pick3(A, B, C, …)`): NAME → instance-type
 ## substitution for the 2nd (GPS2/GPL2 → ITS2/ITL2) and 3rd (GPS3/GPL3 → ITS3/ITL3). 0 = absent. The
 ## A64_SUB_*2/*3 dual.
 mut WAT_SUB_GPS2 := 0
-mut WAT_SUB_GPL2 := 0
+mut WAT_SUB_GPL2 : usize = 0
 mut WAT_SUB_ITS2 := 0
 mut WAT_SUB_ITL2 := 0
 mut WAT_SUB_GPS3 := 0
-mut WAT_SUB_GPL3 := 0
+mut WAT_SUB_GPL3 : usize = 0
 mut WAT_SUB_ITS3 := 0
 mut WAT_SUB_ITL3 := 0
 ## Check the EFFECTIVE value parameters of the current function. Generic instances substitute the
@@ -3807,7 +3807,7 @@ mut WAT_BRK_VALUE := false
 mut WAT_DEF_E : [usize; 64] = [0; 64]
 mut WAT_DEF_BH : [Option(ptr(mut Stmt)); 64] = [Option.None; 64]
 mut WAT_DEF_BLOCK : [bool; 64] = [false; 64]
-mut WAT_DEF_N := 0
+mut WAT_DEF_N : usize = 0
 mut WAT_DEF_OVF := false
 ## When `Some`, emit_wat_stmts stops BEFORE this statement. A block defer's linked list
 ## continues through its __deferblkend marker into the enclosing list, so the drain temporarily sets
@@ -3816,8 +3816,8 @@ mut WAT_DEF_STOP : Option(ptr(mut Stmt)) = Option.None
 ## The defer-stack depth at the ENTRY of the nearest enclosing loop body — `break`/`continue` replay
 ## down to it (exactly the actions registered inside that body). Saved/restored around each loop
 ## alongside WAT_BRK/WAT_CONT, so a nested loop drains only its own.
-mut WAT_BRK_DB := 0
-mut WAT_CONT_DB := 0
+mut WAT_BRK_DB : usize = 0
+mut WAT_CONT_DB : usize = 0
 ## The compile-time loop-frame stack for named `break`/`continue` targets. The parser stores a label as
 ## a loop nesting depth; the WAT emitter therefore keeps every emitted loop's exit label, continue label,
 ## value-bearing bit, scalar-integer admission, and defer boundary in parallel. Named value-breaks and
@@ -3829,7 +3829,7 @@ mut WAT_LOOP_CONT : [i64; 64] = [0; 64]
 mut WAT_LOOP_VALUE : [bool; 64] = [false; 64]
 mut WAT_LOOP_SCALAR : [bool; 64] = [false; 64]
 mut WAT_LOOP_DB : [usize; 64] = [0; 64]
-mut WAT_LOOP_SP := 0
+mut WAT_LOOP_SP : usize = 0
 mut WAT_LOOP_OVF := false
 wat_loop_push := fn(brk : i64, cont : i64, value : bool, scalar : bool, db : usize) {
   if WAT_LOOP_SP < 64 {
@@ -3929,7 +3929,7 @@ wat_break_scalar_call := fn(cs : usize, cl : usize, ah : Option(ptr(mut Arg)), p
     return wat_break_scalar_expr(arg_expr_at(ah, 0, a), params_head, fn_head, src, a, decls, dep + 1)
   }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -3958,7 +3958,7 @@ wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : Option(ptr(mut 
   if an.n != 0 { return wat_break_integer_type(src, an.s, an.n) }
   if is_global(decls, src, ns, nl, a) {
     cnt := rt::vec_len(deref(decls))
-    mut i := 0
+    mut i : usize = 0
     while i < cnt {
       d := deref(decl_get(decls, i))
       if d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) {
@@ -4794,7 +4794,7 @@ emit_str_data_seg := fn(in out sb : rt::StrBuf, src : ptr(u8), ss : usize, sl : 
   push_str(sb, ") \"")
   raw := str_at((src + ss), sl * 4 + 16)
   mut k := 0
-  mut emitted := 0
+  mut emitted : usize = 0
   while emitted < sl {
     if bytes(raw)[k] == 92 {
       if bytes(raw)[k + 1] == 120 {
@@ -4832,7 +4832,7 @@ emit_print := fn(in out sb : rt::StrBuf, pi : PInfo) {
 ## Does the string `[ss, ss+sl)` contain a `{}` format hole?
 has_hole := fn(src : ptr(u8), ss : usize, sl : usize, a : rt::Arena) -> bool {
   s := str_at((src + ss), sl)
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   while i + 1 < sl {
     if bytes(s)[i] == 123 and bytes(s)[i + 1] == 125 { r = true }
@@ -4885,8 +4885,8 @@ emit_print_template := fn(pi : PInfo, in out sb : rt::StrBuf, a : rt::Arena, src
   firstarg := deref(arg_at(pi.ah, "argument list ended early"))
   mut argp : Option(ptr(mut Arg)) = firstarg.next
   mut k := 0
-  mut dpos := 0
-  mut runstart := 0
+  mut dpos : usize = 0
+  mut runstart : usize = 0
   while dpos < pi.sl {
     if bytes(raw)[k] == 123 and bytes(raw)[k + 1] == 125 {
       if dpos > runstart { emit_print_run(sb, str_data_off(pi.lbl) + i64(runstart), i64(dpos - runstart)) }
@@ -5297,7 +5297,7 @@ wat_bound_lambda := fn(body : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, 
     if fr.is_r { fnpos = fr.fnpos; found = true }
   }
   if not found { return 0 - 1 }
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(deref(decls)) {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and d.name_len == 0 and d.name_start == fnpos { return i64(i) }
@@ -5760,7 +5760,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           ## ERASE the comptime type-arg(s) when passed explicitly (argc == arity): a leading run erases
           ## indices [0, lead); a single non-leading type-param erases its one position. Implicit calls
           ## carry none. FLAT ifs.
-          mut erase_lead := 0
+          mut erase_lead : usize = 0
           mut erase_one := usize(argc) + 1
           if argc == i64(gd.arity) {
             cntc := decl_tparam_count(gd, src)
@@ -8334,7 +8334,7 @@ emit_wat_agg_cells := fn(e : ptr(Expr), in out sb : rt::StrBuf, decls : ptr(rt::
     emit_i64_le(sb, variant_index(decls, src, en.s, en.n, evar.s, evar.n, a))
     maxp := enum_max_arity(decls, src, en.s, en.n, a)
     mut g : Option(ptr(mut Arg)) = ex_enum_lit_args(e)
-    mut w := 0
+    mut w : usize = 0
     loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; emit_i64_le(sb, ex_value_init(ga.e)) ; w += 1 ; g = ga.next }; None => { break } } }
     while w < maxp { emit_i64_le(sb, 0) ; w = w + 1 }
   } else {

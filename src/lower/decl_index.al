@@ -20,8 +20,8 @@
 
 pub name_hash := fn(src : ptr(u8), s : usize, n : usize) -> usize {
   w := str_at((src + s), n)
-  mut h := 1469598103934665603                              ## FNV-1a 64-bit offset basis
-  mut i := 0
+  mut h : usize = 1469598103934665603                              ## FNV-1a 64-bit offset basis
+  mut i : usize = 0
   while i < n {
     unchecked { h = (h ^ usize(bytes(w)[i])) * 1099511628211 }   ## xor byte, * FNV prime (wrapping)
     i = i + 1
@@ -73,8 +73,8 @@ pub dcv_at := fn(cnt : usize, j : usize) -> usize {
 ## as a literal indexes into the same buckets as the decl names hashed from source.
 pub str_name_hash := fn(w : str) -> usize {
   n := w.len
-  mut h := 1469598103934665603
-  mut i := 0
+  mut h : usize = 1469598103934665603
+  mut i : usize = 0
   while i < n {
     unchecked { h = (h ^ usize(bytes(w)[i])) * 1099511628211 }
     i = i + 1
@@ -89,7 +89,7 @@ pub build_decl_name_hash := fn(decls : ptr(rt::Vec), src : ptr(u8), in out mar :
   base := rt::bump(mar, cnt * 8 + 8)
   dbase := rt::bump(mar, cnt * 8 + 8)
   mut nconv := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     rt::rec_set(unchecked bitcast(ptr(mut u8), base), i, name_hash(src, d.name_start, d.name_len))
@@ -103,12 +103,12 @@ pub build_decl_name_hash := fn(decls : ptr(rt::Vec), src : ptr(u8), in out mar :
   DIC = dbase
   DNH_N = cnt
   ## bucket count = the smallest power of two ≥ 2·cnt (load factor ≤ 0.5), floor 64
-  mut nb := 64
+  mut nb : usize = 64
   while nb < cnt * 2 { nb = nb * 2 }
   bb := rt::bump(mar, nb * 8 + 16)
   cur := rt::bump(mar, nb * 8 + 16)
   lb := rt::bump(mar, cnt * 8 + 8)
-  mut b := 0
+  mut b : usize = 0
   while b < nb + 1 {
     rt::rec_set(unchecked bitcast(ptr(mut u8), bb), b, 0)
     rt::rec_set(unchecked bitcast(ptr(mut u8), cur), b, 0)

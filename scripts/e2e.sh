@@ -7387,13 +7387,15 @@ run slice_eq 42
 build_reject_has reject_slice_ordering "ordering (< > <= >=) over a"
 build_reject_has reject_slice_float_compare "float element needs the IEEE compare"
 build_reject_has reject_slice_struct_elem_compare "struct/enum/str/pointer element needs base::derive::eq"
-## Types §9.1 -- the `unchecked` type peel was ORDER-DEPENDENT: `infer_local_scalar_type`'s Bin arm took the
-## FIRST typed operand, so `u64 + i64` recorded u64 and moved a pair containing a PROVEN-SIGNED member to
-## unsigned, while `i64 + u64` stayed signed. Same program, operand order flipped, different answer. The
-## refusal is narrow -- an opposite-signedness PAIR proves nothing -- rather than "both operands typed",
-## which would drop the recorded type for `x := a + 1` over a narrow `a` (what the CG-6/I11 narrow wrap and
-## the overflow guard read) and would flip `u64 + usize`, on which all four backends already agree.
-run unchecked_mixed_signedness 42
+## Types §4.2/§4.3/§4.5 (docs/ir.md §3.8 item 9) -- one operator's integer operands share a signedness.
+## The `unchecked` peel's operand-order bug (u64 + i64 read unsigned, i64 + u64 signed) cannot be written
+## any more: the pair is refused at check time, `unchecked` or not. Its sibling fixtures pin the compare,
+## the literal-default loop counter (Types §9.1) and the spelled forms that stay accepted.
+build_reject_has unchecked_mixed_signedness "implicit signed/unsigned conversion"
+build_reject_has signedness_mixed_compare "implicit signed/unsigned conversion"
+build_reject_has signedness_mixed_literal_default "implicit signed/unsigned conversion"
+run signedness_spelled_ok 42
+run signedness_shadow_records 42
 ## §9.1 — a bare integer literal inherits the proven unsignedness of its `u64` partner inside
 ## an `unchecked` arithmetic expression. All four backends now return 42; this used to be a normal-exit
 ## silent wrong value (3) on a64, rv64 and wasm.

@@ -145,13 +145,13 @@ pub emit_raw_instr := fn(e : ptr(Expr), in out sb : rt::StrBuf, cx : ptr(LCtx), 
         a0 := deref(arg_at(ah, "argument list ended early"))
         sp := asm_str_span(a0.e)
         push_str(sb, "  ")
-        mut j := 0
+        mut j : usize = 0
         while j < sp.n {
           c := str_at((cx.src + sp.s + j), 1)
           d0 := if j + 1 < sp.n { asm_digit(str_at((cx.src + sp.s + j + 1), 1)) } else { -1 }
           if c == "{" and d0 >= 0 {
             mut k := j + 1
-            mut idx := 0
+            mut idx : usize = 0
             while k < sp.n and asm_digit(str_at((cx.src + sp.s + k), 1)) >= 0 {
               idx = idx * 10 + usize(asm_digit(str_at((cx.src + sp.s + k), 1)))
               k += 1

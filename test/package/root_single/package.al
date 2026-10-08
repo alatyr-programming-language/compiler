@@ -26,9 +26,9 @@ app := Package(
 
 print := std::fmt::print
 
-BASE := 35
+BASE : u64 = 35
 
-mut COUNT := 0
+mut COUNT : u64 = 0
 
 bump := fn(x : u64) -> u64 {
   COUNT = COUNT + 1

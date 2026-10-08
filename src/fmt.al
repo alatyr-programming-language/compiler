@@ -86,7 +86,7 @@ str_inner_raw_len := fn(src : ptr(u8), inner_start : usize) -> usize {
 ## (end = the newline offset, so the text is `[start, end)`). String literals are skipped so a `##`
 ## inside `"…"` is not mistaken for a comment. Comments come out in source order.
 pub scan_comments := fn(src : ptr(u8), len : usize, out : ptr(rt::Vec)) {
-  mut i := 0
+  mut i : usize = 0
   while i < len {
     c := str_at((src + i), 1)
     if c == "\"" {
@@ -118,7 +118,7 @@ emit_leading_comments := fn(src : ptr(u8), comments : ptr(rt::Vec), name_start :
   ## L = index of the comment directly above name_start (blank gap, nothing between), else none.
   mut lastc := 0
   mut have := false
-  mut i := 0
+  mut i : usize = 0
   while i < n {
     ce := rt::vec_get(deref(comments), i * 2 + 1)
     if ce <= name_start and gap_is_blank(src, ce, name_start) { lastc = i ; have = true }
@@ -147,7 +147,7 @@ emit_leading_comments := fn(src : ptr(u8), comments : ptr(rt::Vec), name_start :
 ## Byte-span equality against `src` (per-module copy, as in the backends).
 streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
   if a_n != b_n { return false }
-  mut i := 0
+  mut i : usize = 0
   while i < a_n {
     if str_at(((src + a_s) + i), 1) != str_at(((src + b_s) + i), 1) { return false }   ## pointer arith (I11/CG-8)
     i += 1
@@ -292,7 +292,7 @@ fmt_bin_left := fn(e : ptr(Expr)) -> ptr(Expr) {
 }
 ## Emit `n` two-space indents.
 emit_indent := fn(in out sb : rt::StrBuf, n : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < n {
     push_str(sb, "  ")
     i += 1
@@ -639,14 +639,14 @@ fmt_emit_scanfields := fn(head : Option(ptr(mut Arg)), fopen : usize, ind : usiz
 ## INSTANCE name as its head span, but the struct DECL is keyed by the base name, so field-name recovery
 ## must strip the `(…)` args first. Rendering still uses the full span (the instance name round-trips).
 name_base_len := fn(src : ptr(u8), ss : usize, sl : usize) -> usize {
-  mut i := 0
+  mut i : usize = 0
   while i < sl and bytes(str_at((src + ss + i), 1))[0] != 40 { i += 1 }   ## '(' = 40
   i
 }
 
 fmt_struct_fields := fn(decls : ptr(rt::Vec), src : ptr(u8), ss : usize, sl : usize) -> Option(ptr(mut FieldDecl)) {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut r : Option(ptr(mut FieldDecl)) = Option.None
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
@@ -4204,7 +4204,7 @@ emit_fmt_fn := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena
       ## `{` truncated the guard mid-way — the render then no longer PARSED, and the second fmt pass
       ## segfaulted. Consume a balanced group whenever ANOTHER `{` follows it; the one that does not
       ## have a successor is the body.
-      mut wend := 0
+      mut wend : usize = 0
       mut i := k
       mut hunting := true
       while hunting {
@@ -4507,7 +4507,7 @@ emit_fmt_decl := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Are
 ## with a blank line between decls.
 pub emit_fmt_program := fn(decls : ptr(rt::Vec), src : ptr(u8), in out sb : rt::StrBuf, a : rt::Arena, comments : ptr(rt::Vec)) {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
     emit_leading_comments(src, comments, fmt_decl_anchor(src, d.name_start), sb)

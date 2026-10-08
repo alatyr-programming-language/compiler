@@ -22,7 +22,7 @@ h := fn(k : u64) -> Result(u64, E) {
 }
 val := fn(c : C) -> u64 { match c { R => { return 1 }; G => { return 2 }; B => { return 3 } } return 0 }
 shapes := fn(pr : ptr(mut C), pg : ptr(mut C), pb : ptr(mut C)) -> u64 {
-  mut total := 0
+  mut total : u64 = 0
   c1 := g(1)
   match c1 { R => { total += 100 }; G => { total += 2 }; B => { total += 100 } }
   p2 := gp(pr)

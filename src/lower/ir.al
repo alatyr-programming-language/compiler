@@ -265,7 +265,7 @@ ir_lower_call := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)
     }
   }
   ## 2) move each arg into its SysV integer argument register (pre-colored Phys, in order).
-  mut j := 0
+  mut j : usize = 0
   while j < na {
     regalloc::ra_ir_emit(0, 2, i64(ir_argreg_id(j)), IRCA_K[base + j], IRCA_V[base + j])
     j = j + 1
@@ -678,7 +678,7 @@ ir_is_call_rhs := fn(e : ptr(Expr)) -> bool {
 ## qualified `alloc::vec::with_capacity` matches the `with_capacity` decl.
 ir_call_tail := fn(src : ptr(u8), cs : usize, cl : usize) -> CSpan {
   mut ts := cs
-  mut ti := 0
+  mut ti : usize = 0
   while ti + 1 < cl {
     if str_at((src + cs + ti), 2) == "::" { ts = cs + ti + 2 }
     ti += 1
@@ -697,7 +697,7 @@ ir_is_vecbuild_call := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr)) ->
       t := ir_call_tail(src, cs, cl)
       pushname := str_at((src + t.s), t.n) == "push"
       cnt := rt::vec_len(deref(decls))
-      mut i := 0
+      mut i : usize = 0
       while i < cnt {
         d := deref(decl_get(decls, i))
         if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, t.s, t.n) {
@@ -725,7 +725,7 @@ ir_call_returns_vec := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr)) ->
     Expr::Call(cs, cl, na, ah) => {
       t := ir_call_tail(src, cs, cl)
       cnt := rt::vec_len(deref(decls))
-      mut i := 0
+      mut i : usize = 0
       while i < cnt {
         d := deref(decl_get(decls, i))
         if d.is_fn and streq(src, d.name_start, d.name_len, t.s, t.n) {
@@ -1094,7 +1094,7 @@ ir_splice_one_stmt := fn(sp : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf,
 ## (`.Lra<prefix>_<id>`); a `ret` becomes a `jmp` to the shared epilogue label `lepi`.
 pub ir_render := fn(in out sb : strbuf::StrBuf, raprefix : usize, lepi : usize, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   cnt := regalloc::ra_out_count()
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     op := regalloc::ra_out_op(i)
     k0 := regalloc::ra_out_k0(i)
@@ -1362,7 +1362,7 @@ pub ir_native_scalar := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   t == "u64" or t == "usize" or t == "i64" or t == "isize" or t == "bool"
 }
 ir_bound_has := fn(src : ptr(u8), s : usize, n : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i < IRB_N {
     if streq(src, IRB_S[i], IRB_L[i], s, n) { return true }
     i += 1

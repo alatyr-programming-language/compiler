@@ -102,66 +102,66 @@ ambiguous_err := fn(s : usize) -> CheckErr { 4611686018427387904 + diag_span(s) 
 ## A distinct located diagnostic for a struct-construction-shaped expression whose head is neither a
 ## declared aggregate/type alias nor a declared generic type constructor. Keep it between ambiguous
 ## calls and scalar conversions so every older CheckErr range remains byte-identical.
-UNKNOWN_TYPE_CONSTRUCTOR_DIAG_MARKER := 5188146770730811392
+UNKNOWN_TYPE_CONSTRUCTOR_DIAG_MARKER : usize = 5188146770730811392
 unknown_type_ctor_err := fn(s : usize) -> CheckErr { UNKNOWN_TYPE_CONSTRUCTOR_DIAG_MARKER + diag_span(s) * 4 }
 ## TOOL-17 / Tooling §2.7 — `Package` and `Target` are manifest-only structures. Keep their ordinary
 ## source-construction rejection distinct from the generic unknown-constructor class so check/build can
 ## report the configuration-prelude boundary without changing older diagnostic ranges.
-MANIFEST_VALUE_DIAG_MARKER := 5476377146882523136
+MANIFEST_VALUE_DIAG_MARKER : usize = 5476377146882523136
 manifest_value_err := fn(s : usize) -> CheckErr { MANIFEST_VALUE_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for the Declarations §3.1 / Memory §1.6 rule that an existing
 ## binding must be declared `mut` before a write. Keep the marker above the comptime class and below
 ## 2^63 so the existing unsigned CheckErr representation remains bootstrap-safe; the driver strips it
 ## before decoding the ordinary source offset.
-IMMUTABLE_DIAG_MARKER := 8070450532247928832
+IMMUTABLE_DIAG_MARKER : usize = 8070450532247928832
 immutable_err := fn(s : usize) -> CheckErr { IMMUTABLE_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct diagnostic class for the orthogonal `@limits` contract. The payload uses eight-byte
 ## slots so the low three bits carry the violated limit kind while the remaining value carries the
 ## source offset. The driver strips this marker before rendering a named limit; ordinary CheckErr
 ## values above remain byte-identical.
-LIMIT_DIAG_MARKER := 2305843009213693952
+LIMIT_DIAG_MARKER : usize = 2305843009213693952
 limit_err := fn(s : usize, kind : usize) -> CheckErr { LIMIT_DIAG_MARKER + diag_span(s) * 8 + kind }
 ## A distinct located diagnostic for the Types §4.6 scalar/brand conversion constructor arity rule.
 ## Keep it between the existing ambiguous-call and comptime markers so every older CheckErr range
 ## remains unchanged while check/build/emit surfaces can preserve the lower's established wording.
-SCALAR_CONVERSION_DIAG_MARKER := 5764607523034234880
+SCALAR_CONVERSION_DIAG_MARKER : usize = 5764607523034234880
 scalar_conversion_err := fn(s : usize) -> CheckErr { SCALAR_CONVERSION_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for a direct builtin scalar conversion whose operand is a named user
 ## aggregate without a matching in-scope @convert. Keep it between the arity and global-aggregate
 ## classes so existing CheckErr ranges remain byte-identical while pre-emission surfaces retain the
 ## lower's established "needs a scalar operand" wording.
-AGG_SCALAR_CONVERSION_DIAG_MARKER := 6050000000000000000
+AGG_SCALAR_CONVERSION_DIAG_MARKER : usize = 6050000000000000000
 agg_scalar_conversion_err := fn(s : usize) -> CheckErr { AGG_SCALAR_CONVERSION_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for the unsupported non-literal mutable-struct-global assignment
 ## fence. Keep it between the scalar-conversion and comptime classes so older CheckErr ranges remain
 ## byte-identical while every CLI renderer can retain the existing lower's useful wording.
-GLOBAL_AGG_DIAG_MARKER := 6341068275337658368
+GLOBAL_AGG_DIAG_MARKER : usize = 6341068275337658368
 global_agg_err := fn(s : usize) -> CheckErr { GLOBAL_AGG_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for a CONST module-level aggregate runtime-call initializer. Keep it
 ## between the mutable-global and standard-byte-tuple classes so older CheckErr ranges remain byte-for-
 ## byte unchanged while check/build/emit surfaces can name the same pre-emission rule.
-GLOBAL_INIT_CALL_DIAG_MARKER := 6485183463413514240
+GLOBAL_INIT_CALL_DIAG_MARKER : usize = 6485183463413514240
 global_init_call_err := fn(s : usize) -> CheckErr { GLOBAL_INIT_CALL_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for the unsupported standard-byte tuple global ABI boundary. Keep it
 ## above the non-literal aggregate-global class and below comptime so every older CheckErr range stays
 ## byte-identical while check/build/emit surfaces can share the lower's established wording.
-STANDARD_TUPLE_GLOBAL_DIAG_MARKER := 6629298651489350912
+STANDARD_TUPLE_GLOBAL_DIAG_MARKER : usize = 6629298651489350912
 standard_tuple_global_err := fn(s : usize) -> CheckErr { STANDARD_TUPLE_GLOBAL_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for an ENUM-element ARRAY GLOBAL element consumed as a value. Keep it
 ## between the standard-tuple-global and comptime classes so every older CheckErr range remains stable
 ## while check/build/emit surfaces can reject the width-blind generic value load consistently.
-ENUM_GLOBAL_ARRAY_DIAG_MARKER := 6773413839565216384
+ENUM_GLOBAL_ARRAY_DIAG_MARKER : usize = 6773413839565216384
 enum_global_array_err := fn(s : usize) -> CheckErr { ENUM_GLOBAL_ARRAY_DIAG_MARKER + diag_span(s) * 4 }
 
 ## A distinct located diagnostic for an initialized local array literal whose element is a @packed
 ## struct. Keep it between the enum-array and comptime classes so the common sema/pre-emission path
 ## rejects the exact deferred array shape without changing any older CheckErr range.
-PACKED_ARRAY_DIAG_MARKER := 6845468423603140608
+PACKED_ARRAY_DIAG_MARKER : usize = 6845468423603140608
 packed_array_err := fn(s : usize) -> CheckErr { PACKED_ARRAY_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for the bounded local 2D fixed-array slice. Keep it between the packed
 ## array and comptime classes so every older CheckErr range remains stable while check/build/emit surfaces
 ## share one pre-emission refusal for the exact shapes whose nested lowering is not yet safe.
-LOCAL_MULTIDIM_ARRAY_DIAG_MARKER := 6880000000000000000
+LOCAL_MULTIDIM_ARRAY_DIAG_MARKER : usize = 6880000000000000000
 local_multidim_array_err := fn(s : usize) -> CheckErr { LOCAL_MULTIDIM_ARRAY_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #214 — a direct multidimensional fixed-array STRUCT FIELD has no composed nested address
 ## model in the current lower. Keep this class distinct from the bounded local-array fence so both
@@ -170,14 +170,14 @@ local_multidim_array_err := fn(s : usize) -> CheckErr { LOCAL_MULTIDIM_ARRAY_DIA
 ## that is a TARGET-INDEPENDENT rule: the check belonged in `check`, not in the x86 lower. Keep this class
 ## between the local-multidim and field-multidim markers so every older CheckErr value stays
 ## byte-identical.
-ENUM_DUP_DISC_DIAG_MARKER := 6885000000000000000
+ENUM_DUP_DISC_DIAG_MARKER : usize = 6885000000000000000
 enum_dup_disc_err := fn(s : usize) -> CheckErr { ENUM_DUP_DISC_DIAG_MARKER + diag_span(s) * 4 }
-MULTIDIM_ARRAY_FIELD_DIAG_MARKER := 6890000000000000000
+MULTIDIM_ARRAY_FIELD_DIAG_MARKER : usize = 6890000000000000000
 multidim_array_field_err := fn(s : usize) -> CheckErr { MULTIDIM_ARRAY_FIELD_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #324 — a direct nested fixed-array PARAMETER has no composed ABI/address model in the current
 ## lower. Keep this class between the field fence and visibility classes so older CheckErr values remain
 ## byte-identical while every public semantic entry point shares one located refusal.
-NESTED_ARRAY_PARAM_DIAG_MARKER := 6895000000000000000
+NESTED_ARRAY_PARAM_DIAG_MARKER : usize = 6895000000000000000
 nested_array_param_err := fn(s : usize) -> CheckErr { NESTED_ARRAY_PARAM_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #299 / Types §4.2-§4.3 + §5.4 — an IMPLICIT brand conversion at a concrete value sink. §4.2
 ## classes every brand crossing as `T(v)`, "always explicit"; §4.3 makes **widen** the only implicit
@@ -188,14 +188,20 @@ nested_array_param_err := fn(s : usize) -> CheckErr { NESTED_ARRAY_PARAM_DIAG_MA
 ## block as `A(u64(b))`). Keep this class between the nested-array-parameter and same-scope-redeclaration
 ## markers so only the former's upper bound moves and every other decoded CheckErr range stays
 ## byte-identical.
-BRAND_CONVERSION_DIAG_MARKER := 6896000000000000000
+BRAND_CONVERSION_DIAG_MARKER : usize = 6896000000000000000
 brand_conversion_err := fn(s : usize) -> CheckErr { BRAND_CONVERSION_DIAG_MARKER + diag_span(s) * 4 }
+## Types §4.2/§4.3 — two INTEGER operands of one operator, one signed and one unsigned, by the types sema
+## records (docs/ir.md §3.8.9). A signed<->unsigned change is a **numeric** conversion, "always explicit";
+## only widen is implicit. Its own class between the brand-conversion and same-scope-redeclaration
+## markers, so only the former's upper bound moves.
+SIGNEDNESS_CONVERSION_DIAG_MARKER : usize = 6896500000000000000
+signedness_conversion_err := fn(s : usize) -> CheckErr { SIGNEDNESS_CONVERSION_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #414 / Declarations §6.2 — re-declaring a name ALREADY BOUND IN THE SAME SCOPE is a compile
 ## error. That is a TARGET-INDEPENDENT rule about a program the specification calls ILL-FORMED, so it
 ## belongs in `check` (one refusal for all four backends), not in a backend fence. Keep this class
 ## between the nested-array parameter and qualified-private-constant markers so every older CheckErr
 ## range stays byte-identical; only the upper bound of the nested-array-parameter window moves.
-SAME_SCOPE_REDECL_DIAG_MARKER := 6897000000000000000
+SAME_SCOPE_REDECL_DIAG_MARKER : usize = 6897000000000000000
 same_scope_redecl_err := fn(s : usize) -> CheckErr { SAME_SCOPE_REDECL_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #429 / Types §7 + Stdlib appendix §3.6 + Memory §3.3 — `str` IS the slice `[u8]`: a view whose
 ## element permission comes from its POINTER, and the writable spelling of a slice is `[mut T]`, which
@@ -205,7 +211,7 @@ same_scope_redecl_err := fn(s : usize) -> CheckErr { SAME_SCOPE_REDECL_DIAG_MARK
 ## failing AND-step); this class covers exactly the step below it. Keep the marker between the
 ## same-scope-redeclaration and qualified-private-constant windows so only the former's upper bound
 ## moves and every other decoded CheckErr range stays byte-identical.
-STR_ELEM_WRITE_DIAG_MARKER := 6898000000000000000
+STR_ELEM_WRITE_DIAG_MARKER : usize = 6898000000000000000
 str_elem_write_err := fn(s : usize) -> CheckErr { STR_ELEM_WRITE_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #513 / Types §9.4 — an ENUM-VARIANT CONSTRUCTOR whose component count differs from the count
 ## the variant DECLARES. §9.4's first bullet says the language "never zeroes an uninitialized binding
@@ -219,8 +225,8 @@ str_elem_write_err := fn(s : usize) -> CheckErr { STR_ELEM_WRITE_DIAG_MARKER + d
 ## manifest-value class already reads `Package`/`Target`). Keep the class between the
 ## str-element-store and qualified-private-constant windows so only the former's upper bound moves
 ## and every other decoded CheckErr range stays byte-identical.
-ENUM_VARIANT_ARITY_DIAG_MARKER := 6899000000000000000
-ENUM_VARIANT_ARITY_COUNT_CAP := 31
+ENUM_VARIANT_ARITY_DIAG_MARKER : usize = 6899000000000000000
+ENUM_VARIANT_ARITY_COUNT_CAP : usize = 31
 enum_variant_arity_err := fn(s : usize, declared : usize, supplied : usize) -> CheckErr {
   mut dcl := declared
   mut sup := supplied
@@ -236,8 +242,8 @@ enum_variant_arity_err := fn(s : usize, declared : usize, supplied : usize) -> C
 ## rather than a bare "unresolved". Keep the class between the qualified-private-constant and CT
 ## windows so only the former's upper bound moves and every other decoded CheckErr range stays
 ## byte-identical.
-UNRESOLVED_QUAL_HEAD_DIAG_MARKER := 6901000000000000000
-UNRESOLVED_QUAL_HEAD_LEN_CAP := 127
+UNRESOLVED_QUAL_HEAD_DIAG_MARKER : usize = 6901000000000000000
+UNRESOLVED_QUAL_HEAD_LEN_CAP : usize = 127
 unresolved_qual_head_err := fn(s : usize, n : usize) -> CheckErr {
   mut hn := n
   if hn > UNRESOLVED_QUAL_HEAD_LEN_CAP { hn = UNRESOLVED_QUAL_HEAD_LEN_CAP }
@@ -250,7 +256,7 @@ unresolved_qual_head_err := fn(s : usize, n : usize) -> CheckErr {
 ## its source offset, so the message quotes the exact spelling. The class sits between the
 ## unresolved-`::`-head and enum-field-access windows, so only the former's upper bound moves and every
 ## other decoded CheckErr range stays byte-identical.
-UNAPPLIED_TYPE_FN_DIAG_MARKER := 6901500000000000000
+UNAPPLIED_TYPE_FN_DIAG_MARKER : usize = 6901500000000000000
 unapplied_type_fn_err := fn(s : usize, n : usize) -> CheckErr {
   mut hn := n
   if hn > UNRESOLVED_QUAL_HEAD_LEN_CAP { hn = UNRESOLVED_QUAL_HEAD_LEN_CAP }
@@ -264,14 +270,14 @@ unapplied_type_fn_err := fn(s : usize, n : usize) -> CheckErr {
 ## about an ill-formed program, so it belongs in `check`: one refusal for all four backends. Keep the
 ## class between the unresolved-`::`-head and CT windows so only the former's upper bound moves and
 ## every other decoded CheckErr range stays byte-identical.
-ENUM_FIELD_ACCESS_DIAG_MARKER := 6902000000000000000
+ENUM_FIELD_ACCESS_DIAG_MARKER : usize = 6902000000000000000
 enum_field_access_err := fn(s : usize) -> CheckErr { ENUM_FIELD_ACCESS_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
 ## older CheckErr range remains byte-identical. The raw visibility walkers carry this full code through
 ## their usize return channel; `sema_visibility_err` preserves it at their CheckErr boundaries.
-QUALIFIED_PRIVATE_CONST_DIAG_MARKER := 6900000000000000000
+QUALIFIED_PRIVATE_CONST_DIAG_MARKER : usize = 6900000000000000000
 qualified_private_const_err := fn(s : usize) -> CheckErr { QUALIFIED_PRIVATE_CONST_DIAG_MARKER + diag_span(s) * 4 }
 sema_visibility_err := fn(s : usize) -> CheckErr {
   if s >= QUALIFIED_PRIVATE_CONST_DIAG_MARKER { return s }
@@ -281,7 +287,7 @@ sema_visibility_err := fn(s : usize) -> CheckErr {
 ## A distinct located diagnostic for a `comptime if` whose condition reads a runtime local. Keep it
 ## between the CT-12 guard class and immutable bindings so every older CheckErr range remains stable;
 ## the four-byte payload carries the offending local's source offset.
-COMPTIME_COND_DIAG_MARKER := 7493989779944505344
+COMPTIME_COND_DIAG_MARKER : usize = 7493989779944505344
 comptime_cond_err := fn(s : usize) -> CheckErr { COMPTIME_COND_DIAG_MARKER + diag_span(s) * 4 }
 
 ## A synthesized type: its KIND (`TyUnknown` for unknown/error, `TyInt`, `TyBool`, `TyStruct`, `TyEnum`,
@@ -810,7 +816,7 @@ lvec_remember := fn(in out v : LVec, ns : usize, nl : usize) {
     new_cap := v.pcap * 2
     noff := node_alloc(deref(v.arena), new_cap * 16)
     nbase := unchecked bitcast(usize, deref(v.arena).base) + noff
-    mut k := 0
+    mut k : usize = 0
     while k < v.pcnt * 2 {
       sp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.pbase + k * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), nbase + k * 8)
@@ -829,7 +835,7 @@ lvec_remember := fn(in out v : LVec, ns : usize, nl : usize) {
 ## Is name `[s, s+n)` in the function-wide remembered set? (content compare via `streq`).
 remembered := fn(locals : ptr(LVec), src : ptr(u8), s : usize, n : usize) -> bool {
   lv := deref(locals)
-  mut i := 0
+  mut i : usize = 0
   while i < lv.pcnt {
     rns : ptr(usize) = unchecked bitcast(ptr(usize), lv.pbase + i * 16)
     rnl : ptr(usize) = unchecked bitcast(ptr(usize), lv.pbase + i * 16 + 8)
@@ -851,7 +857,7 @@ dvec_new := fn(a : ptr(mut rt::Arena), cap : usize) -> DVec {
 }
 dvec_has := fn(dv : ptr(DVec), src : ptr(u8), s : usize, n : usize) -> bool {
   v := deref(dv)
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 16)
     np : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 16 + 8)
@@ -866,7 +872,7 @@ dvec_push := fn(in out v : DVec, s : usize, n : usize) {
     new_cap := v.cap * 2
     noff := node_alloc(deref(v.arena), new_cap * 16)
     nbase := unchecked bitcast(usize, deref(v.arena).base) + noff
-    mut i := 0
+    mut i : usize = 0
     while i < v.len * 2 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 8)
       dp : ptr(usize) = unchecked bitcast(ptr(usize), nbase + i * 8)
@@ -883,7 +889,7 @@ dvec_push := fn(in out v : DVec, s : usize, n : usize) {
   v.len += 1
 }
 dvec_remove := fn(in out v : DVec, src : ptr(u8), s : usize, n : usize) {
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < v.len {
     sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 16)
@@ -912,7 +918,7 @@ dvec_remove := fn(in out v : DVec, src : ptr(u8), s : usize, n : usize) {
 dvec_copy := fn(sv : ptr(DVec)) -> DVec {
   srcv := deref(sv)
   mut dst := dvec_new(srcv.arena, srcv.cap)
-  mut i := 0
+  mut i : usize = 0
   while i < srcv.len {
     sp : ptr(usize) = unchecked bitcast(ptr(usize), srcv.base + i * 16)
     np : ptr(usize) = unchecked bitcast(ptr(usize), srcv.base + i * 16 + 8)
@@ -925,7 +931,7 @@ dvec_union_src := fn(left : ptr(DVec), right : ptr(DVec), src : ptr(u8)) -> DVec
   lv := deref(left)
   rv := deref(right)
   mut dst := dvec_new(lv.arena, lv.cap + rv.cap)
-  mut i := 0
+  mut i : usize = 0
   while i < lv.len {
     sp : ptr(usize) = unchecked bitcast(ptr(usize), lv.base + i * 16)
     np : ptr(usize) = unchecked bitcast(ptr(usize), lv.base + i * 16 + 8)
@@ -959,7 +965,7 @@ fvec_new := fn(a : ptr(mut rt::Arena), cap : usize) -> FVec {
 }
 fvec_has := fn(v : ptr(FVec), src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize) -> bool {
   fv := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < fv.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), fv.base + i * 32)
     r1 : ptr(usize) = unchecked bitcast(ptr(usize), fv.base + i * 32 + 8)
@@ -972,7 +978,7 @@ fvec_has := fn(v : ptr(FVec), src : ptr(u8), rs : usize, rn : usize, fs : usize,
 }
 fvec_has_root := fn(v : ptr(FVec), src : ptr(u8), rs : usize, rn : usize) -> bool {
   fv := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < fv.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), fv.base + i * 32)
     r1 : ptr(usize) = unchecked bitcast(ptr(usize), fv.base + i * 32 + 8)
@@ -986,7 +992,7 @@ fvec_push := fn(in out v : FVec, rs : usize, rn : usize, fs : usize, fln : usize
     new_cap := v.cap * 2
     noff := node_alloc(deref(v.arena), new_cap * 32)
     nbase := unchecked bitcast(usize, deref(v.arena).base) + noff
-    mut i := 0
+    mut i : usize = 0
     while i < v.len * 4 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 8)
       dp : ptr(usize) = unchecked bitcast(ptr(usize), nbase + i * 8)
@@ -1007,7 +1013,7 @@ fvec_push := fn(in out v : FVec, rs : usize, rn : usize, fs : usize, fln : usize
   v.len += 1
 }
 fvec_remove := fn(in out v : FVec, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize) {
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < v.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 32)
@@ -1020,7 +1026,7 @@ fvec_remove := fn(in out v : FVec, src : ptr(u8), rs : usize, rn : usize, fs : u
   if found == false { return }
   mut j := i + 1
   while j < v.len {
-    mut k := 0
+    mut k : usize = 0
     while k < 4 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 32 + k * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 32 + k * 8)
@@ -1032,14 +1038,14 @@ fvec_remove := fn(in out v : FVec, src : ptr(u8), rs : usize, rn : usize, fs : u
   v.len -= 1
 }
 fvec_remove_root := fn(in out v : FVec, src : ptr(u8), rs : usize, rn : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 32)
     r1 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 32 + 8)
     if streq(src, deref(r0), deref(r1), rs, rn) {
       mut j := i + 1
       while j < v.len {
-        mut k := 0
+        mut k : usize = 0
         while k < 4 {
           sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 32 + k * 8)
           dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 32 + k * 8)
@@ -1057,7 +1063,7 @@ fvec_remove_root := fn(in out v : FVec, src : ptr(u8), rs : usize, rn : usize) {
 fvec_copy := fn(sv : ptr(FVec)) -> FVec {
   srcv := deref(sv)
   mut dst := fvec_new(srcv.arena, srcv.cap)
-  mut i := 0
+  mut i : usize = 0
   while i < srcv.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), srcv.base + i * 32)
     r1 : ptr(usize) = unchecked bitcast(ptr(usize), srcv.base + i * 32 + 8)
@@ -1072,7 +1078,7 @@ fvec_union_src := fn(left : ptr(FVec), right : ptr(FVec), src : ptr(u8)) -> FVec
   lv := deref(left)
   rv := deref(right)
   mut dst := fvec_new(lv.arena, lv.cap + rv.cap)
-  mut i := 0
+  mut i : usize = 0
   while i < lv.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), lv.base + i * 32)
     r1 : ptr(usize) = unchecked bitcast(ptr(usize), lv.base + i * 32 + 8)
@@ -1104,7 +1110,7 @@ pvec_new := fn(a : ptr(mut rt::Arena), cap : usize) -> PVec {
 }
 pvec_has := fn(v : ptr(PVec), src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ss : usize, sln : usize) -> bool {
   pv := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < pv.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 48)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 48 + 8)
@@ -1119,7 +1125,7 @@ pvec_has := fn(v : ptr(PVec), src : ptr(u8), rs : usize, rn : usize, fs : usize,
 }
 pvec_has_prefix := fn(v : ptr(PVec), src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize) -> bool {
   pv := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < pv.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 48)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 48 + 8)
@@ -1132,7 +1138,7 @@ pvec_has_prefix := fn(v : ptr(PVec), src : ptr(u8), rs : usize, rn : usize, fs :
 }
 pvec_has_root := fn(v : ptr(PVec), src : ptr(u8), rs : usize, rn : usize) -> bool {
   pv := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < pv.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 48)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 48 + 8)
@@ -1146,7 +1152,7 @@ pvec_push := fn(in out v : PVec, rs : usize, rn : usize, fs : usize, fln : usize
     new_cap := v.cap * 2
     noff := node_alloc(deref(v.arena), new_cap * 48)
     nbase := unchecked bitcast(usize, deref(v.arena).base) + noff
-    mut i := 0
+    mut i : usize = 0
     while i < v.len * 6 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), nbase + i * 8)
@@ -1171,7 +1177,7 @@ pvec_push := fn(in out v : PVec, rs : usize, rn : usize, fs : usize, fln : usize
   v.len += 1
 }
 pvec_remove := fn(in out v : PVec, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ss : usize, sln : usize) {
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < v.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 48)
@@ -1186,7 +1192,7 @@ pvec_remove := fn(in out v : PVec, src : ptr(u8), rs : usize, rn : usize, fs : u
   if found == false { return }
   mut j := i + 1
   while j < v.len {
-    mut k := 0
+    mut k : usize = 0
     while k < 6 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 48 + k * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 48 + k * 8)
@@ -1198,7 +1204,7 @@ pvec_remove := fn(in out v : PVec, src : ptr(u8), rs : usize, rn : usize, fs : u
   v.len -= 1
 }
 pvec_remove_prefix := fn(in out v : PVec, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 48)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 48 + 8)
@@ -1207,7 +1213,7 @@ pvec_remove_prefix := fn(in out v : PVec, src : ptr(u8), rs : usize, rn : usize,
     if streq(src, deref(p0), deref(p1), rs, rn) and streq(src, deref(p2), deref(p3), fs, fln) {
       mut j := i + 1
       while j < v.len {
-        mut k := 0
+        mut k : usize = 0
         while k < 6 {
           sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 48 + k * 8)
           dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 48 + k * 8)
@@ -1223,14 +1229,14 @@ pvec_remove_prefix := fn(in out v : PVec, src : ptr(u8), rs : usize, rn : usize,
   }
 }
 pvec_remove_root := fn(in out v : PVec, src : ptr(u8), rs : usize, rn : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 48)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 48 + 8)
     if streq(src, deref(p0), deref(p1), rs, rn) {
       mut j := i + 1
       while j < v.len {
-        mut k := 0
+        mut k : usize = 0
         while k < 6 {
           sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 48 + k * 8)
           dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 48 + k * 8)
@@ -1248,7 +1254,7 @@ pvec_remove_root := fn(in out v : PVec, src : ptr(u8), rs : usize, rn : usize) {
 pvec_copy := fn(sv : ptr(PVec)) -> PVec {
   srcv := deref(sv)
   mut dst := pvec_new(srcv.arena, srcv.cap)
-  mut i := 0
+  mut i : usize = 0
   while i < srcv.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), srcv.base + i * 48)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), srcv.base + i * 48 + 8)
@@ -1274,7 +1280,7 @@ avec_new := fn(a : ptr(mut rt::Arena), cap : usize) -> AVec {
 }
 avec_has_root := fn(v : ptr(AVec), src : ptr(u8), rs : usize, rn : usize) -> bool {
   av := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < av.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 24)
     r1 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 24 + 8)
@@ -1285,7 +1291,7 @@ avec_has_root := fn(v : ptr(AVec), src : ptr(u8), rs : usize, rn : usize) -> boo
 }
 avec_has := fn(v : ptr(AVec), src : ptr(u8), rs : usize, rn : usize, ix : usize) -> bool {
   av := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < av.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 24)
     r1 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 24 + 8)
@@ -1302,7 +1308,7 @@ avec_push := fn(in out v : AVec, rs : usize, rn : usize, ix : usize) {
     new_cap := v.cap * 2
     noff := node_alloc(deref(v.arena), new_cap * 24)
     nbase := unchecked bitcast(usize, deref(v.arena).base) + noff
-    mut i := 0
+    mut i : usize = 0
     while i < v.len * 3 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), nbase + i * 8)
@@ -1321,7 +1327,7 @@ avec_push := fn(in out v : AVec, rs : usize, rn : usize, ix : usize) {
   v.len += 1
 }
 avec_remove := fn(in out v : AVec, src : ptr(u8), rs : usize, rn : usize, ix : usize) {
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < v.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 24)
@@ -1333,7 +1339,7 @@ avec_remove := fn(in out v : AVec, src : ptr(u8), rs : usize, rn : usize, ix : u
   if found == false { return }
   mut j := i + 1
   while j < v.len {
-    mut k := 0
+    mut k : usize = 0
     while k < 3 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 24 + k * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 24 + k * 8)
@@ -1345,14 +1351,14 @@ avec_remove := fn(in out v : AVec, src : ptr(u8), rs : usize, rn : usize, ix : u
   v.len -= 1
 }
 avec_remove_root := fn(in out v : AVec, src : ptr(u8), rs : usize, rn : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 24)
     r1 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 24 + 8)
     if streq(src, deref(r0), deref(r1), rs, rn) {
       mut j := i + 1
       while j < v.len {
-        mut k := 0
+        mut k : usize = 0
         while k < 3 {
           sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 24 + k * 8)
           dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 24 + k * 8)
@@ -1368,7 +1374,7 @@ avec_remove_root := fn(in out v : AVec, src : ptr(u8), rs : usize, rn : usize) {
 avec_copy := fn(sv : ptr(AVec)) -> AVec {
   srcv := deref(sv)
   mut dst := avec_new(srcv.arena, srcv.cap)
-  mut i := 0
+  mut i : usize = 0
   while i < srcv.len {
     r0 : ptr(usize) = unchecked bitcast(ptr(usize), srcv.base + i * 24)
     r1 : ptr(usize) = unchecked bitcast(ptr(usize), srcv.base + i * 24 + 8)
@@ -1390,7 +1396,7 @@ navec_new := fn(a : ptr(mut rt::Arena), cap : usize) -> NAVec {
 }
 navec_has := fn(v : ptr(NAVec), src : ptr(u8), rs : usize, rn : usize, fs : usize, fnl : usize, ix : usize) -> bool {
   av := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < av.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 40)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 40 + 8)
@@ -1404,7 +1410,7 @@ navec_has := fn(v : ptr(NAVec), src : ptr(u8), rs : usize, rn : usize, fs : usiz
 }
 navec_has_field := fn(v : ptr(NAVec), src : ptr(u8), rs : usize, rn : usize, fs : usize, fnl : usize) -> bool {
   av := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < av.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 40)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 40 + 8)
@@ -1417,7 +1423,7 @@ navec_has_field := fn(v : ptr(NAVec), src : ptr(u8), rs : usize, rn : usize, fs 
 }
 navec_has_root := fn(v : ptr(NAVec), src : ptr(u8), rs : usize, rn : usize) -> bool {
   av := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < av.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 40)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 40 + 8)
@@ -1428,7 +1434,7 @@ navec_has_root := fn(v : ptr(NAVec), src : ptr(u8), rs : usize, rn : usize) -> b
 }
 navec_has_root_index := fn(v : ptr(NAVec), src : ptr(u8), rs : usize, rn : usize, ix : usize) -> bool {
   av := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < av.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 40)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), av.base + i * 40 + 8)
@@ -1443,7 +1449,7 @@ navec_push := fn(in out v : NAVec, rs : usize, rn : usize, fs : usize, fnl : usi
     new_cap := v.cap * 2
     noff := node_alloc(deref(v.arena), new_cap * 40)
     nbase := unchecked bitcast(usize, deref(v.arena).base) + noff
-    mut i := 0
+    mut i : usize = 0
     while i < v.len * 5 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), nbase + i * 8)
@@ -1466,7 +1472,7 @@ navec_push := fn(in out v : NAVec, rs : usize, rn : usize, fs : usize, fnl : usi
   v.len += 1
 }
 navec_remove := fn(in out v : NAVec, src : ptr(u8), rs : usize, rn : usize, fs : usize, fnl : usize, ix : usize) {
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < v.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 40)
@@ -1480,7 +1486,7 @@ navec_remove := fn(in out v : NAVec, src : ptr(u8), rs : usize, rn : usize, fs :
   if found == false { return }
   mut j := i + 1
   while j < v.len {
-    mut k := 0
+    mut k : usize = 0
     while k < 5 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 40 + k * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 40 + k * 8)
@@ -1492,7 +1498,7 @@ navec_remove := fn(in out v : NAVec, src : ptr(u8), rs : usize, rn : usize, fs :
   v.len -= 1
 }
 navec_remove_field := fn(in out v : NAVec, src : ptr(u8), rs : usize, rn : usize, fs : usize, fnl : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 40)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 40 + 8)
@@ -1501,7 +1507,7 @@ navec_remove_field := fn(in out v : NAVec, src : ptr(u8), rs : usize, rn : usize
     if streq(src, deref(p0), deref(p1), rs, rn) and streq(src, deref(p2), deref(p3), fs, fnl) {
       mut j := i + 1
       while j < v.len {
-        mut k := 0
+        mut k : usize = 0
         while k < 5 {
           sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 40 + k * 8)
           dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 40 + k * 8)
@@ -1515,14 +1521,14 @@ navec_remove_field := fn(in out v : NAVec, src : ptr(u8), rs : usize, rn : usize
   }
 }
 navec_remove_root := fn(in out v : NAVec, src : ptr(u8), rs : usize, rn : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 40)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 40 + 8)
     if streq(src, deref(p0), deref(p1), rs, rn) {
       mut j := i + 1
       while j < v.len {
-        mut k := 0
+        mut k : usize = 0
         while k < 5 {
           sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 40 + k * 8)
           dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 40 + k * 8)
@@ -1548,7 +1554,7 @@ napvec_new := fn(a : ptr(mut rt::Arena), cap : usize) -> NAPVec {
 }
 napvec_has := fn(v : ptr(NAPVec), src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ss : usize, sln : usize, ix : usize) -> bool {
   pv := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < pv.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 56)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 56 + 8)
@@ -1564,7 +1570,7 @@ napvec_has := fn(v : ptr(NAPVec), src : ptr(u8), rs : usize, rn : usize, fs : us
 }
 napvec_has_index := fn(v : ptr(NAPVec), src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ix : usize) -> bool {
   pv := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < pv.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 56)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 56 + 8)
@@ -1578,7 +1584,7 @@ napvec_has_index := fn(v : ptr(NAPVec), src : ptr(u8), rs : usize, rn : usize, f
 }
 napvec_has_field := fn(v : ptr(NAPVec), src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize) -> bool {
   pv := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < pv.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 56)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 56 + 8)
@@ -1591,7 +1597,7 @@ napvec_has_field := fn(v : ptr(NAPVec), src : ptr(u8), rs : usize, rn : usize, f
 }
 napvec_has_root := fn(v : ptr(NAPVec), src : ptr(u8), rs : usize, rn : usize) -> bool {
   pv := deref(v)
-  mut i := 0
+  mut i : usize = 0
   while i < pv.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 56)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), pv.base + i * 56 + 8)
@@ -1605,7 +1611,7 @@ napvec_push := fn(in out v : NAPVec, rs : usize, rn : usize, fs : usize, fln : u
     new_cap := v.cap * 2
     noff := node_alloc(deref(v.arena), new_cap * 56)
     nbase := unchecked bitcast(usize, deref(v.arena).base) + noff
-    mut i := 0
+    mut i : usize = 0
     while i < v.len * 7 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), nbase + i * 8)
@@ -1615,7 +1621,7 @@ napvec_push := fn(in out v : NAPVec, rs : usize, rn : usize, fs : usize, fln : u
     v.base = nbase
     v.cap = new_cap
   }
-  mut k := 0
+  mut k : usize = 0
   while k < 7 {
     dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + v.len * 56 + k * 8)
     if k == 0 { deref(dp) = rs }
@@ -1630,7 +1636,7 @@ napvec_push := fn(in out v : NAPVec, rs : usize, rn : usize, fs : usize, fln : u
   v.len += 1
 }
 napvec_remove := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ss : usize, sln : usize, ix : usize) {
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < v.len {
     if napvec_has(ptr(v), src, rs, rn, fs, fln, ss, sln, ix) { found = true; break }
@@ -1653,7 +1659,7 @@ napvec_remove := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usize, fs
   if not found { return }
   mut j := i + 1
   while j < v.len {
-    mut k := 0
+    mut k : usize = 0
     while k < 7 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 56 + k * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 56 + k * 8)
@@ -1665,7 +1671,7 @@ napvec_remove := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usize, fs
   v.len -= 1
 }
 napvec_remove_index := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ix : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 56)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 56 + 8)
@@ -1675,7 +1681,7 @@ napvec_remove_index := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usi
     if streq(src, deref(p0), deref(p1), rs, rn) and streq(src, deref(p2), deref(p3), fs, fln) and deref(p6) == ix {
       mut j := i + 1
       while j < v.len {
-        mut k := 0
+        mut k : usize = 0
         while k < 7 {
           sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 56 + k * 8)
           dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 56 + k * 8)
@@ -1689,7 +1695,7 @@ napvec_remove_index := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usi
   }
 }
 napvec_remove_field := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 56)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 56 + 8)
@@ -1698,7 +1704,7 @@ napvec_remove_field := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usi
     if streq(src, deref(p0), deref(p1), rs, rn) and streq(src, deref(p2), deref(p3), fs, fln) {
       mut j := i + 1
       while j < v.len {
-        mut k := 0
+        mut k : usize = 0
         while k < 7 {
           sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 56 + k * 8)
           dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 56 + k * 8)
@@ -1712,14 +1718,14 @@ napvec_remove_field := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usi
   }
 }
 napvec_remove_root := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 56)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 56 + 8)
     if streq(src, deref(p0), deref(p1), rs, rn) {
       mut j := i + 1
       while j < v.len {
-        mut k := 0
+        mut k : usize = 0
         while k < 7 {
           sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 56 + k * 8)
           dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 56 + k * 8)
@@ -1735,7 +1741,7 @@ napvec_remove_root := fn(in out v : NAPVec, src : ptr(u8), rs : usize, rn : usiz
 napvec_copy := fn(sv : ptr(NAPVec)) -> NAPVec {
   srcv := deref(sv)
   mut dst := napvec_new(srcv.arena, srcv.cap)
-  mut i := 0
+  mut i : usize = 0
   while i < srcv.len {
     mut q : usize = 0
     mut a0 : usize = 0
@@ -1756,7 +1762,7 @@ napvec_copy := fn(sv : ptr(NAPVec)) -> NAPVec {
   dst
 }
 navec_remove_index := fn(in out v : NAVec, src : ptr(u8), rs : usize, rn : usize, ix : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     p0 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 40)
     p1 : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 40 + 8)
@@ -1764,7 +1770,7 @@ navec_remove_index := fn(in out v : NAVec, src : ptr(u8), rs : usize, rn : usize
     if streq(src, deref(p0), deref(p1), rs, rn) and deref(p4) == ix {
       mut j := i + 1
       while j < v.len {
-        mut k := 0
+        mut k : usize = 0
         while k < 5 {
           sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + j * 40 + k * 8)
           dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + (j - 1) * 40 + k * 8)
@@ -1843,7 +1849,7 @@ da_new := fn(a : ptr(mut rt::Arena), cap : usize) -> DA {
 }
 da_has_root := fn(da : ptr(DA), src : ptr(u8), s : usize, n : usize) -> bool {
   v := deref(da)
-  mut i := 0
+  mut i : usize = 0
   while i < v.len {
     sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 16)
     np : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 16 + 8)
@@ -1900,7 +1906,7 @@ da_push_root := fn(da : ptr(DA), s : usize, n : usize) {
     new_cap := v.cap * 2
     noff := node_alloc(deref(v.arena), new_cap * 16)
     nbase := unchecked bitcast(usize, deref(v.arena).base) + noff
-    mut i := 0
+    mut i : usize = 0
     while i < v.len * 2 {
       sp : ptr(usize) = unchecked bitcast(ptr(usize), v.base + i * 8)
       dp : ptr(usize) = unchecked bitcast(ptr(usize), nbase + i * 8)
@@ -1918,7 +1924,7 @@ da_push_root := fn(da : ptr(DA), s : usize, n : usize) {
   deref(da) = v
 }
 da_remove_root := fn(in out da : DA, src : ptr(u8), s : usize, n : usize) {
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < da.len {
     sp : ptr(usize) = unchecked bitcast(ptr(usize), da.base + i * 16)
@@ -1957,7 +1963,7 @@ hdr_base := fn(p : ptr(FVec)) -> usize { deref(p).base }
 da_copy := fn(sda : ptr(DA)) -> DA {
   srcd := deref(sda)
   mut dst := da_new(srcd.arena, srcd.cap)
-  mut i := 0
+  mut i : usize = 0
   while i < srcd.len {
     sp : ptr(usize) = unchecked bitcast(ptr(usize), srcd.base + i * 16)
     np : ptr(usize) = unchecked bitcast(ptr(usize), srcd.base + i * 16 + 8)
@@ -2035,7 +2041,7 @@ da_union_src := fn(left : ptr(DA), right : ptr(DA), src : ptr(u8)) -> DA {
   lv := deref(left)
   rv := deref(right)
   mut dst := da_new(lv.arena, lv.cap + rv.cap)
-  mut i := 0
+  mut i : usize = 0
   while i < lv.len {
     sp : ptr(usize) = unchecked bitcast(ptr(usize), lv.base + i * 16)
     np : ptr(usize) = unchecked bitcast(ptr(usize), lv.base + i * 16 + 8)
@@ -2394,7 +2400,7 @@ lvec_push := fn(in out v : LVec, x : Local) {
     noff := node_alloc(deref(v.arena), new_cap * st)
     nbase := unchecked bitcast(usize, deref(v.arena).base) + noff
     nwords := (v.len * st) / 8
-    mut k := 0
+    mut k : usize = 0
     while k < nwords {
       sp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + k * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), nbase + k * 8)
@@ -2454,7 +2460,7 @@ ptr_pointee_span := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Ve
   th := sema_name_hash(src, ns2, nl2)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -2535,7 +2541,7 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
   mut bp := ts + tl
   while str_at((src + bp), 1) == " " or str_at((src + bp), 1) == "\n" or str_at((src + bp), 1) == "\t" or str_at((src + bp), 1) == "\r" { bp = bp + 1 }
   if str_at((src + bp), 1) == "(" { direct_brand = false }
-  mut bsep := 0
+  mut bsep : usize = 0
   while bsep + 1 < tl {
     if str_at((src + ts + bsep), 2) == "::" { direct_brand = false }
     bsep = bsep + 1
@@ -2575,7 +2581,7 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
   }
   if kind_is_unknown(r.kind) and alias_tl != 0 {
     at := base_type_name(src, alias_ts, alias_tl)
-    mut j := 0
+    mut j : usize = 0
     while j < ncnt {
       d := deref(decl_get(decls, j))
       if (d.kind == 2 or d.kind == 3) {
@@ -2710,7 +2716,7 @@ brand_probe_line := fn(src : ptr(u8), off : usize) -> VSpan {
     else if off - s > 400 { scanning = false }
     else { s = s - 1 }
   }
-  mut n := 0
+  mut n : usize = 0
   mut fwd := true
   while fwd {
     if n > 200 { fwd = false }
@@ -3064,7 +3070,7 @@ sema_brand_array_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> VSpan
   if str_at((src + ts), 1) != "[" { return z }
   mut p := ts + 1
   mut depth := 0
-  mut semi := 0
+  mut semi : usize = 0
   mut close := 0
   while p < end {
     c := str_at((src + p), 1)
@@ -3258,7 +3264,7 @@ callee_elided_alloc_idx := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
   th := sema_name_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -3535,8 +3541,8 @@ mut SDNH : usize = 0
 mut SDNH_N : usize = 0
 sema_name_hash := fn(src : ptr(u8), s : usize, n : usize) -> usize {
   w := str_at((src + s), n)
-  mut h := 1469598103934665603
-  mut i := 0
+  mut h : usize = 1469598103934665603
+  mut i : usize = 0
   while i < n {
     unchecked { h = (h ^ usize(bytes(w)[i])) * 1099511628211 }
     i = i + 1
@@ -3547,7 +3553,7 @@ sema_name_hash := fn(src : ptr(u8), s : usize, n : usize) -> usize {
 ## name against (for an unqualified call the tail IS the whole name). The pre-filter compares this to the
 ## decl-name hash in `SDNH`.
 sema_tail_hash := fn(src : ptr(u8), cs : usize, cn : usize) -> usize {
-  mut i := 0
+  mut i : usize = 0
   mut tail := cs
   while i + 1 < cn {
     if str_at((src + cs + i), 2) == "::" { tail = cs + i + 2 }
@@ -3596,7 +3602,7 @@ build_sema_dnh := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena) 
   cnt := rt::vec_len(deref(decls))
   base := rt::bump(a, cnt * 8 + 8)
   mut nlim := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     rt::rec_set(unchecked bitcast(ptr(mut u8), base), i, sema_name_hash(src, d.name_start, d.name_len))
@@ -3606,12 +3612,12 @@ build_sema_dnh := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena) 
   SDNH = base
   SDNH_N = cnt
   ## bucket count = the smallest power of two ≥ 2·cnt (load factor ≤ 0.5), floor 64
-  mut nb := 64
+  mut nb : usize = 64
   while nb < cnt * 2 { nb = nb * 2 }
   bb := rt::bump(a, nb * 8 + 16)
   cur := rt::bump(a, nb * 8 + 16)
   lb := rt::bump(a, cnt * 8 + 8)
-  mut b := 0
+  mut b : usize = 0
   while b < nb + 1 {
     rt::rec_set(unchecked bitcast(ptr(mut u8), bb), b, 0)
     rt::rec_set(unchecked bitcast(ptr(mut u8), cur), b, 0)
@@ -3672,7 +3678,7 @@ build_sema_dnh := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena) 
 ## fall back to the exact compare, so a plain call is unchanged (negative arity/name tests unaffected).
 name_matches := fn(src : ptr(u8), dns : usize, dnl : usize, cs : usize, cn : usize) -> bool {
   if streq(src, dns, dnl, cs, cn) { return true }
-  mut i := 0
+  mut i : usize = 0
   mut tail := cs
   while i + 1 < cn {
     if str_at((src + cs + i), 2) == "::" { tail = cs + i + 2 }
@@ -3690,7 +3696,7 @@ name_matches := fn(src : ptr(u8), dns : usize, dnl : usize, cs : usize, cn : usi
 ## build path).
 is_lib_module := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
   if ml < 2 { return false }
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < ml {
     if str_at((src + ms + i), 2) == "__" { return true }
     i += 1
@@ -3727,7 +3733,7 @@ pub set_lib_modules := fn(p : usize, n : usize) -> i64 {
 sema_module_is_lib := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
   if SEMA_LIB_MODULES_SET == false { return is_lib_module(src, ms, ml) }
   tbl := unchecked bitcast(ptr(mut u8), SEMA_LIB_MODULES_P)
-  mut i := 0
+  mut i : usize = 0
   mut hit := false
   while i + 1 < SEMA_LIB_MODULES_N {
     if rt::rec_get(tbl, i) == ms and rt::rec_get(tbl, i + 1) == ml { hit = true }
@@ -3749,7 +3755,7 @@ callee_is_generic := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : u
   th := sema_tail_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -3771,7 +3777,7 @@ callee_param_is_type := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s 
   th := sema_tail_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -3779,7 +3785,7 @@ callee_param_is_type := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s 
       d := deref(decl_get(decls, i))
       if d.kind == 1 and d.is_generic and name_matches(src, d.name_start, d.name_len, s, n) {
         mut pp := d.params_head
-        mut k := 0
+        mut k : usize = 0
         loop {
           match pp {
             Some(ppq) => {
@@ -3847,7 +3853,7 @@ type_decl_index := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
   th := sema_name_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -3872,7 +3878,7 @@ type_decl_index := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
   if first != 0 { return first }
   if alias_tl != 0 {
     at := name_tail(src, alias_ts, alias_tl)
-    mut j := 0
+    mut j : usize = 0
     while j < upto {
       d := deref(decl_get(decls, j))
       if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, at.s, at.n) { return j + 1 }
@@ -3892,10 +3898,10 @@ sema_span_module := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize) -> SpanMo
   if ast::span_is_synthetic(s) { return SpanMod(found = false, s = 0, n = 0) }
   cnt := rt::vec_len(deref(decls))
   mut found := false
-  mut best := 0
+  mut best : usize = 0
   mut ms := 0
   mut ml := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.name_len != 0 and d.name_start <= s and (not found or d.name_start > best) {
@@ -3918,7 +3924,7 @@ type_decl_index_ranked := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), 
   if not wm.found { return first }
   mut best : i64 = 0 - 1
   mut besti := first
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     d := deref(decl_get(decls, i))
     if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, s, n) {
@@ -3944,7 +3950,7 @@ sema_type_alias_chain_reject := fn(d : Decl, decls : ptr(rt::Vec), upto : usize,
   if tl == 0 { return 0 }
   target := base_type_name(src, ts, tl)
   if target.n == 0 { return 0 }
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     td := deref(decl_get(decls, i))
     if td.kind == 0 and td.name_len != 0 and streq(src, td.name_start, td.name_len, target.s, target.n) {
@@ -3997,7 +4003,7 @@ local_lookup := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n
   mut raw : u8 = 0
   mut tns : usize = 0
   mut tnl : usize = 0
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     l := lvec_at(locals, i)
     if streq(src, l.ns, l.nl, s, n) {
@@ -4109,7 +4115,7 @@ prov_view_elem := fn(p : u8) -> TyKind {
 ## name is not a local. Decode the result with the queries above, never with a literal.
 local_prov := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : usize) -> u8 {
   mut r : u8 = 0
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     l := lvec_at(locals, i)
     if streq(src, l.ns, l.nl, s, n) { r = l.prov }
@@ -4169,7 +4175,7 @@ sema_local_is_comptime := fn(src : ptr(u8), l : Local) -> bool {
 ## target span, so inspecting that occurrence's source prefix is insufficient; recover the original
 ## declaration from the local table instead.
 sema_local_name_is_comptime := fn(src : ptr(u8), locals : ptr(LVec), upto : usize, s : usize, n : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   mut result := false
   while i < upto {
     l := lvec_at(locals, i)
@@ -4423,7 +4429,7 @@ expr_call_args_head := fn(e : ptr(Expr)) -> Option(ptr(mut Arg)) {
 ## slice must not infer a parameter context for any of those forms: their resolution or receiver mapping
 ## is outside this deliberately narrow pre-emission judgement.
 sema_direct_call_name := fn(src : ptr(u8), s : usize, n : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < n {
     if str_at((src + s + i), 2) == "::" { return false }
     i += 1
@@ -4470,7 +4476,7 @@ sema_generic_inst_type_span := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
       if op == 0 { return VSpan(s = 0, n = 0) }
       mut depth := 0
       mut j := op
-      mut cp := 0
+      mut cp : usize = 0
       mut lim2 := op + 4096
       while cp == 0 and j < lim2 {
         c := str_at((src + j), 1)
@@ -4951,7 +4957,7 @@ sema_unknown_type_ctor_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : us
   if qualified_type_name_known(decls, src, lit.s, lit.n) { return VSpan(s = 0, n = 0) }
   if callee_is_generic(decls, upto, src, lit.s, lit.n) { return VSpan(s = 0, n = 0) }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, lit.s, lit.n) {
@@ -5075,7 +5081,7 @@ sema_local_multidim_array := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
   if p >= end or str_at((src + p), 1) != "[" { return false }
   p += 1
   p = sema_local_type_trivia(src, p, end)
-  mut scalar_len := 0
+  mut scalar_len : usize = 0
   if p + 2 <= end and str_at((src + p), 2) == "u8" { scalar_len = 2 }
   if p + 3 <= end and str_at((src + p), 3) == "u64" { scalar_len = 3 }
   if scalar_len == 0 { return false }
@@ -5258,7 +5264,7 @@ sema_operator_overload_exists := fn(decls : ptr(rt::Vec), src : ptr(u8), op : u8
   at := base_type_name(src, agg.ns, agg.nl)
   if at.n == 0 { return false }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -5336,7 +5342,7 @@ sema_direct_call_decl_idx := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
   mut tail_s := cs
   mut tail_n := cn
   mut head_s := 0
-  mut head_n := 0
+  mut head_n : usize = 0
   cp := sema_colon_pos(src, cs, cn)
   if cp >= 0 {
     head_s = cs
@@ -5351,7 +5357,7 @@ sema_direct_call_decl_idx := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
   mut own_hits := 0
   mut global := 0 - 1
   mut global_hits := 0
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     d := deref(decl_get(decls, i))
     same := d.kind == 1 and d.is_generic == false and d.arity == nargs and streq(src, d.name_start, d.name_len, tail_s, tail_n)
@@ -5388,7 +5394,7 @@ sema_direct_param_span := fn(decls : ptr(rt::Vec), di : i64, pidx : usize) -> VS
   if di < 0 { return VSpan(s = 0, n = 0) }
   d := deref(decl_get(decls, usize(di)))
   mut p := d.params_head
-  mut i := 0
+  mut i : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -5407,7 +5413,7 @@ sema_direct_param_mode := fn(decls : ptr(rt::Vec), di : i64, pidx : usize) -> u8
   if di < 0 { return 255 }
   d := deref(decl_get(decls, usize(di)))
   mut p := d.params_head
-  mut i := 0
+  mut i : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -5432,7 +5438,7 @@ sema_concrete_named_type := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8)
   mut name_s := bn.s
   mut name_n := bn.n
   mut mod_s := 0
-  mut mod_n := 0
+  mut mod_n : usize = 0
   cp := sema_colon_pos(src, bn.s, bn.n)
   if cp >= 0 {
     mod_s = bn.s
@@ -5444,7 +5450,7 @@ sema_concrete_named_type := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8)
   mut qualified_hits := 0
   mut own_hits := 0
   mut global_hits := 0
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     d := deref(decl_get(decls, i))
     if d.kind == want and d.is_generic == false and streq(src, d.name_start, d.name_len, name_s, name_n) {
@@ -5635,7 +5641,7 @@ callee_fn_name_count := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s 
   cnt := rt::vec_len(deref(decls))
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -5675,14 +5681,14 @@ sema_literal_class := fn(e : ptr(Expr)) -> u8 {
 literal_overload_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, args_head : Option(ptr(mut Arg)), mod_s : usize, mod_l : usize) -> bool {
   ## This slice is intentionally unqualified. The owning-module span makes an unqualified lookup exact;
   ## qualified source paths require the lower's module-path normalization and remain unchanged.
-  mut qi := 0
+  mut qi : usize = 0
   while qi + 1 < cl { if str_at((src + cs + qi), 2) == "::" { return false }; qi += 1 }
   mut nfound := 0
   cnt := rt::vec_len(deref(decls))
   nh := sema_name_hash(src, cs, cl)
   mut jc := sni_lo(cnt, nh)
   jce := sni_hi(cnt, nh)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -5729,7 +5735,7 @@ callee_param_type_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), 
   cnt := rt::vec_len(deref(decls))
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -5737,7 +5743,7 @@ callee_param_type_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), 
       d := deref(decl_get(decls, i))
       if d.kind == 1 and name_matches(src, d.name_start, d.name_len, s, n) {
         mut pp := d.params_head
-        mut k := 0
+        mut k : usize = 0
         loop {
           match pp {
             Some(ppq) => {
@@ -6151,7 +6157,7 @@ array_elem_scalar := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   if tl < 4 or str_at((src + ts), 1) != "[" { return false }
   end := ts + tl
   mut p := ts + 1
-  mut semi := 0
+  mut semi : usize = 0
   while p < end {
     if str_at((src + p), 1) == ";" { semi = p; break }
     p += 1
@@ -6177,7 +6183,7 @@ array_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> VSpan {
   while head < end and (str_at((src + head), 1) == " " or str_at((src + head), 1) == "\n" or str_at((src + head), 1) == "\t" or str_at((src + head), 1) == "\r") { head += 1 }
   if head >= end or str_at((src + head), 1) != "[" { return z }
   mut p := head + 1
-  mut semi := 0
+  mut semi : usize = 0
   while p < end {
     if str_at((src + p), 1) == ";" { semi = p; break }
     p += 1
@@ -6283,7 +6289,7 @@ sema_range_slice_elem_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec),
 ## this lookup never recurses or turns an unresolved name into a guessed type expression.
 sema_direct_type_alias_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), name : VSpan) -> VSpan {
   mut r := VSpan(s = 0, n = 0)
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     d := deref(decl_get(decls, i))
     if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, name.s, name.n) {
@@ -6611,7 +6617,7 @@ da_assign_path := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : p
 global_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> VSpan {
   cnt := rt::vec_len(deref(decls))
   mut r := VSpan(s = 0, n = 0)
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and streq(src, d.name_start, d.name_len, s, n) {
@@ -6629,7 +6635,7 @@ global_struct_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   ann := global_type_span(decls, src, s, n)
   if ann.n != 0 and struct_decl_of(decls, src, ann.s, ann.n) >= 0 { return ann }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and streq(src, d.name_start, d.name_len, s, n) {
@@ -6673,7 +6679,7 @@ sema_name_owner_is_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(
 ## generic `unbound name`. Existence is intentionally module-blind here; `sema_vis_stmts` remains the
 ## authority for which module may address it.
 sema_global_name_anywhere := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   cnt := rt::vec_len(deref(decls))
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -6909,7 +6915,7 @@ callee_ret_ty := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize
   th := sema_name_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -6961,7 +6967,7 @@ sema_call_returns_aggregate := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr
   cnt := rt::vec_len(deref(decls))
   mut chosen : i64 = -1
   mut matches := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and d.arity == nargs and streq(src, d.name_start, d.name_len, cs.s, cs.n) { chosen = i64(i); matches += 1 }
@@ -7245,7 +7251,7 @@ match_scrut_enum_ty := fn(sc : ptr(Expr), decls : ptr(rt::Vec), upto : usize, sr
 enum_coverage_gap := fn(head : Option(ptr(mut Arm)), decls : ptr(rt::Vec), src : ptr(u8), ens : usize, enl : usize) -> bool {
   ncnt := rt::vec_len(deref(decls))
   mut edi : i64 = 0 - 1
-  mut di := 0
+  mut di : usize = 0
   while di < ncnt {
     d := deref(decl_get(decls, di))
     if d.kind == 3 and streq(src, d.name_start, d.name_len, ens, enl) { edi = i64(di) }
@@ -7328,7 +7334,7 @@ arms_all_plain := fn(head : Option(ptr(mut Arm))) -> bool {
 sema_enum_variant_known := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), es : usize, el : usize, vs : usize, vl : usize) -> bool {
   mut matched := false
   mut found := false
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     d := deref(decl_get(decls, i))
     if d.kind == 3 and name_matches(src, d.name_start, d.name_len, es, el) {
@@ -7375,11 +7381,11 @@ EnumVariantArity := struct { known : bool, fits : bool, want : usize, ts : usize
 sema_enum_variant_arity := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), es : usize, el : usize, vs : usize, vl : usize, np : usize) -> EnumVariantArity {
   mut known := false
   mut fits := false
-  mut want := 0
+  mut want : usize = 0
   mut ts := 0
   mut tl := 0
   mut amb := false
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     d := deref(decl_get(decls, i))
     if d.kind == 3 and name_matches(src, d.name_start, d.name_len, es, el) {
@@ -7527,7 +7533,7 @@ comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
         if kind_is_hidden_enum(tag) { return TyKind.TyEnum }
         return TyKind.TyUnknown
       }
-      mut i := 0
+      mut i : usize = 0
       mut result := TyKind.TyUnknown
       while i < upto {
         d := deref(decl_get(decls, i))
@@ -7549,7 +7555,7 @@ comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
 ## classifier also needs the declaration span to distinguish a comptime local from a runtime local.
 local_at := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : usize) -> Local {
   mut result := Local(ns = 0, nl = 0, tag = 255, prov = 0, tns = 0, tnl = 0)
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     l := lvec_at(locals, i)
     if streq(src, l.ns, l.nl, s, n) { result = l }
@@ -7580,7 +7586,7 @@ callee_param_ty := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
   th := sema_name_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -7588,7 +7594,7 @@ callee_param_ty := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
     d := deref(decl_get(decls, i))
     if d.kind == 1 and streq(src, d.name_start, d.name_len, s, n) {
       mut pp := d.params_head
-      mut k := 0
+      mut k : usize = 0
       loop {
         match pp {
           Some(ppq) => {
@@ -7633,7 +7639,7 @@ decl_is_slice_variadic := fn(d : Decl) -> bool {
 ## lets comptime-variadic arity check cover only the FIXED params before the `...` rest.
 params_defaults_cover_until := fn(params_head : Option(ptr(mut Param)), stop : usize, src : ptr(u8), nargs : usize, a : ptr(mut rt::Arena)) -> bool {
   mut pp := params_head
-  mut k := 0
+  mut k : usize = 0
   mut ok := true
   loop {
     match pp {
@@ -7670,7 +7676,7 @@ call_arity_match := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : us
   cnt := rt::vec_len(deref(decls))
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -7707,7 +7713,7 @@ callee_declared_anywhere := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n
   th := sema_tail_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -7812,7 +7818,7 @@ sema_ty_is_scalar := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 callee_is_fn_valued_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
   mut r := false
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 2 or d.kind == 3 {
@@ -7960,7 +7966,7 @@ is_builtin_callee := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   ## match on the TAIL name (after the last `::`) so a QUALIFIED intrinsic (`atomic::load`,
   ## `atomic::fetch_add`) resolves like its bare form — mirrors name_matches' tail logic.
   mut tail := s
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < n {
     if str_at((src + s + i), 2) == "::" { tail = s + i + 2 }
     i += 1
@@ -8036,7 +8042,7 @@ field_variant_name := fn(e : ptr(Expr), src : ptr(u8)) -> str {
 ## The `Ordering.<variant>` name of the arg at index `i` of a call's arg list, else "".
 ordering_arg_name := fn(ah : Option(ptr(mut Arg)), i : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> str {
   mut g : Option(ptr(mut Arg)) = ah
-  mut k := 0
+  mut k : usize = 0
   loop {
     match g {
       Some(gq) => {
@@ -8324,10 +8330,10 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
                 Some(bdq) => {
                   bnns := bnd_ns(bdq)
                   bnnl := bnd_nl(bdq)
-                  if not local_in(locals, nl2, src, bnns, bnnl) {
-                    lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                    nl2 += 1
-                  }
+                  ## a payload binding shadows any earlier local of its name (Declarations §6.1): the innermost
+                  ## entry is the one lookups and the records keyed by its offset must find
+                  lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                  nl2 += 1
                   bd = bnd_next(bdq)
                 }
                 None => { break }
@@ -8481,11 +8487,11 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
 ## ── docs/ir.md §3.8, owner decision D6: sema is the single source of types ──────────────────────────────
 ##
 ## Every expression `check_expr` types is also RECORDED, in the side table `ir::sty_*`, as the value type
-## it has — class, width, signedness (`ir::VTy`) — keyed by the node. Recording runs only when a
-## consumer asked for it (`ir::sty_on()`: the IR dev verb or the signedness census channel), so an
-## ordinary check or build runs one flag test per expression and nothing else, and no verdict changes:
-## the recorder reads what `check_expr` answered and the declarations it already resolved; it never
-## refuses anything. The recorded type comes, in order, from the name `check_expr`'s own `Ty` carries
+## it has — class, width, signedness (`ir::VTy`) — keyed by the node. Recording always runs: the
+## verdict reads it (the mixed-signedness refusal below, docs/ir.md §3.8 item 9), and the IR builder,
+## the selectors and the signedness census read it too. The recorder reads what `check_expr` answered
+## and the declarations it already resolved; on its own it refuses nothing. The recorded type comes, in
+## order, from the name `check_expr`'s own `Ty` carries
 ## (a local's declared type, a call's declared result, a cast's target), then from the node's shape
 ## over its children's records (`sema_vty_shape`). A literal-only expression is `VcLit` until a context
 ## gives it a type (an annotated binding, a `return`, the fn's tail, or the other operand of a binary
@@ -8495,12 +8501,44 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   r := check_expr_core(e, decls, upto, src, a, locals, nloc)
   if ir::sty_on() {
     match r {
-      Result::Ok(t) => { sema_lambda_record(e, decls, upto, src, a, locals, nloc); sema_vty_record(e, t, decls, src); sema_vty_var(e, locals, nloc, src, decls); sema_spell_record(e, t, locals, nloc, decls, src, a) }
+      Result::Ok(t) => {
+        sema_lambda_record(e, decls, upto, src, a, locals, nloc)
+        sema_vty_record(e, t, decls, src)
+        sema_vty_var(e, locals, nloc, src, decls)
+        sema_spell_record(e, t, locals, nloc, decls, src, a)
+        ## Types §4.2/§4.3/§4.5 — one operator's integer operands share a signedness: signed<->unsigned
+        ## is a NUMERIC conversion, always explicit, and no operator takes an `iN` and a `uM`.
+        mx : Option(u64) = sema_mixed_signedness(e, a)
+        match mx { Some(at) => { return Result(Ty, CheckErr).Err(signedness_conversion_err(usize(at))) }; None => {} }
+      }
       Result::Err(x) => {}
     }
   }
   r
 }
+## docs/ir.md §3.8 item 9 — the location of a binary operator whose two operands sema recorded as
+## integers of opposite signedness (its left operand's), `None` when there is none. A literal-only
+## operand is no integer of its own (it takes its partner's type, Types §2.3); the boolean operators
+## and the comparisons of non-integers never meet two integer records.
+sema_mixed_signedness := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> Option(u64) {
+  match deref(e) {
+    Expr::Bin(op, l, r) => {
+      if sema_vty_op_is_boolean(op) { return Option(u64).None }
+      lt : ir::VTy = ir::sty_get(l)
+      rt0 : ir::VTy = ir::sty_get(r)
+      if not ir::vty_is_int(lt) or not ir::vty_is_int(rt0) or ir::vty_same_sign(lt, rt0) { return Option(u64).None }
+      ## located at the pair's leftmost written offset; an operator no source text locates still refuses
+      sp : Option(u64) = ir::expr_span(e)
+      match sp { Some(at) => { Option(u64).Some(at) }; None => { Option(u64).Some(u64(s_of(e, a))) } }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => { Option(u64).None }
+  }
+}
+## Is `op` a boolean operator (`and`, `or`, `not`)?
+sema_vty_op_is_boolean := fn(op : u8) -> bool { op == 40 or op == 41 or op == 42 }
 ## The declaration offset of the innermost local named `[s, s+n)`, when one is in scope.
 sema_vty_local_ns := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), s : usize, n : usize) -> Option(u64) {
   mut found : Option(u64) = Option(u64).None
@@ -10365,8 +10403,8 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     mut qstate0 := false
     mut old_len0 := 0
     mut old_pcnt0 := 0
-    mut old_failed0 := 0
-    mut old_fspan0 := 0
+    mut old_failed0 : usize = 0
+    mut old_fspan0 : usize = 0
     if unchecked bitcast(usize, locals) != 0 {
       qstate0 = true
       old_len0 = deref(locals).len
@@ -10815,10 +10853,10 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
                 Some(bdq) => {
                   bnns := bnd_ns(bdq)
                   bnnl := bnd_nl(bdq)
-                  if not local_in(locals, nl2, src, bnns, bnnl) {
-                    lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                    nl2 += 1
-                  }
+                  ## a payload binding shadows any earlier local of its name (Declarations §6.1): the innermost
+                  ## entry is the one lookups and the records keyed by its offset must find
+                  lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                  nl2 += 1
                   bd = bnd_next(bdq)
                 }
                 None => { break }
@@ -11786,7 +11824,7 @@ ctor_lit_stmts_span := fn(head : Option(ptr(mut Stmt)), chk : bool, decls : ptr(
 ## existing `CheckErr` value stays byte-for-byte unchanged. Eight-byte slots: the low three bits
 ## carry the guard kind (1 overflow, 2 division by zero, 3 shift out of range), the rest the source
 ## offset. Both public renderers strip the marker before decoding.
-CT_DIAG_MARKER := 6917529027641081856
+CT_DIAG_MARKER : usize = 6917529027641081856
 comptime_err := fn(s : usize, kind : usize) -> CheckErr { CT_DIAG_MARKER + diag_span(s) * 8 + kind }
 
 ## The operating WIDTH / SIGNEDNESS of a declared integer type name. An unknown name (a brand, a
@@ -11910,7 +11948,7 @@ ct_named_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   match deref(e) {
     Expr::Var(s, n) => {
       cnt := rt::vec_len(deref(decls))
-      mut i := 0
+      mut i : usize = 0
       mut hits := 0
       while i < upto and i < cnt {
         d := deref(decl_get(decls, i))
@@ -12019,7 +12057,7 @@ ct_span := fn(e : ptr(Expr)) -> usize {
 ct_arg_at := fn(h : Option(ptr(mut Arg)), k : usize) -> ptr(Expr) {
   mut res := unchecked bitcast(ptr(Expr), 0)
   mut g : Option(ptr(mut Arg)) = h
-  mut i := 0
+  mut i : usize = 0
   loop {
     match g {
       Some(gq) => {
@@ -12180,7 +12218,7 @@ call_arg_ct_param_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), 
   th := sema_name_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc += 1
@@ -12332,7 +12370,7 @@ call_arg_lit_incompatible := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
   th := sema_name_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -12399,7 +12437,7 @@ sole_fn_ret_ty := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
   mut hits := 0
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -12970,10 +13008,10 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
                 Some(bd0q) => {
                   bnns0 := bnd_ns(bd0q)
                   bnnl0 := bnd_nl(bd0q)
-                  if not local_in(locals, nl2m, src, bnns0, bnnl0) {
-                    lvec_push(deref(locals), Local(ns = bnns0, nl = bnnl0, tag = 0, prov = 0, tns = 0, tnl = 0))
-                    nl2m += 1
-                  }
+                  ## a payload binding shadows any earlier local of its name (Declarations §6.1): the innermost
+                  ## entry is the one lookups and the records keyed by its offset must find
+                  lvec_push(deref(locals), Local(ns = bnns0, nl = bnnl0, tag = 0, prov = 0, tns = 0, tnl = 0))
+                  nl2m += 1
                   bd0 = bnd_next(bd0q)
                 }
                 None => { break }
@@ -13203,7 +13241,7 @@ sema_comptime_cond_runtime_local := fn(e : ptr(Expr), src : ptr(u8), locals : pt
   if unchecked bitcast(usize, e) == 0 { return out }
   match deref(e) {
     Expr::Var(s, n) => {
-      mut i := 0
+      mut i : usize = 0
       while i < nloc and out.n == 0 {
         l := lvec_at(locals, i)
         if streq(src, l.ns, l.nl, s, n) and not sema_local_is_comptime(src, l) { out = VSpan(s = s, n = n) }
@@ -13330,8 +13368,8 @@ expr_discharge_var := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena)) -
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => {
       ## tail-name after the last `::` (a qualified `strbuf::strbuf_free` resolves like its bare form)
-      mut toff := 0
-      mut i := 0
+      mut toff : usize = 0
+      mut i : usize = 0
       while i + 1 < cl { if str_at((src + cs + i), 2) == "::" { toff = i + 2 } ; i = i + 1 }
       tn := cl - toff
       nm := str_at((src + cs + toff), tn)
@@ -13621,7 +13659,7 @@ sema_lambda_binds_name := fn(ph : Option(ptr(mut Param)), bh : Option(ptr(mut St
 ## lambda forms without expanding closure ABI/dyn or unrelated residual expression cases.
 sema_lambda_capture_span := fn(ph : Option(ptr(mut Param)), bh : Option(ptr(mut Stmt)), val : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
   mut bad := 0
-  mut i := 0
+  mut i : usize = 0
   while i < nloc and bad == 0 {
     l := lvec_at(locals, i)
     if not sema_lambda_binds_name(ph, bh, src, l.ns, l.nl, a) {
@@ -14521,10 +14559,10 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
                   Some(bdq) => {
                     bnns := bnd_ns(bdq)
                     bnnl := bnd_nl(bdq)
-                    if not local_in(locals, cnt, src, bnns, bnnl) {
-                      lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                      cnt += 1
-                    }
+                    ## a payload binding shadows any earlier local of its name (Declarations §6.1): the innermost
+                    ## entry is the one lookups and the records keyed by its offset must find
+                    lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                    cnt += 1
                     bd = bnd_next(bdq)
                   }
                   None => { break }
@@ -14734,12 +14772,12 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         }
         ## bind the loop variable (int for a range; the element type — left UNKNOWN, poison-tolerant —
         ## for a for-in) before checking the body.
+        ## Always a new local, even when an earlier loop's variable of the same name is still in the
+        ## list: the loop variable shadows it (Declarations §6.1), and the innermost entry is the one
+        ## `local_lookup` and the records (`sema_vty_var`, keyed by this `fns`) must find.
         vbyte := tag_of_kind(vtag)
-        if local_in(locals, cnt, src, fns, fnl) {
-        } else {
-          lvec_push(deref(locals), Local(ns = fns, nl = fnl, tag = vbyte, prov = 0, tns = 0, tnl = 0))
-          cnt += 1
-        }
+        lvec_push(deref(locals), Local(ns = fns, nl = fnl, tag = vbyte, prov = 0, tns = 0, tnl = 0))
+        cnt += 1
         cnt = check_stmts(fb, decls, upto, src, a, locals, cnt, da)?
         cur = nx
       }
@@ -14856,10 +14894,10 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
                   Some(bdcq) => {
                     bnsc := bnd_ns(bdcq)
                     bnlc := bnd_nl(bdcq)
-                    if not local_in(locals, arm_cntc, src, bnsc, bnlc) {
-                      lvec_push(deref(locals), Local(ns = bnsc, nl = bnlc, tag = 0, prov = 0, tns = 0, tnl = 0))
-                      arm_cntc += 1
-                    }
+                    ## a payload binding shadows any earlier local of its name (Declarations §6.1): the innermost
+                    ## entry is the one lookups and the records keyed by its offset must find
+                    lvec_push(deref(locals), Local(ns = bnsc, nl = bnlc, tag = 0, prov = 0, tns = 0, tnl = 0))
+                    arm_cntc += 1
                     bdc = bnd_next(bdcq)
                   }
                   None => { break }
@@ -15052,7 +15090,7 @@ sema_redecl_candidate := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
 ## `Stmt::Assign` node, and a node is never its own duplicate.
 stmts_decl_before := fn(head : Option(ptr(mut Stmt)), upto : usize, src : ptr(u8), ns : usize, nl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut cur : Option(ptr(mut Stmt)) = head
-  mut i := 0
+  mut i : usize = 0
   mut hit := false
   loop {
     match cur {
@@ -15547,7 +15585,7 @@ type_is_owning := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), tns : us
     d := deref(decl_get(decls, i))
     if (d.kind == 1 or d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, tns, tnl) {
       p := d.name_start + d.name_len
-      mut k := 0
+      mut k : usize = 0
       while k < 64 { if str_at((src + p + k), 7) == "@owning" { res = true } ; k = k + 1 }
     }
   }
@@ -15759,7 +15797,7 @@ is_mod_mut_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
   mut res := false
   mut jc := sni_lo(cnt, nh)
   jce := sni_hi(cnt, nh)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
@@ -16721,7 +16759,7 @@ sema_fn_is_convert := fn(src : ptr(u8), name_s : usize, name_l : usize) -> bool 
 ## unresolved, qualified, aliased and generic source shapes remain on their existing lower paths.
 sema_aggregate_conversion_exists := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), cs : usize, cl : usize, agg : Ty, caller_s : usize, caller_l : usize) -> bool {
   if agg.nl == 0 { return false }
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and d.is_fn and not d.is_generic and d.arity == 1 and sema_fn_is_convert(src, d.name_start, d.name_len) {
@@ -16763,7 +16801,7 @@ sema_two_word_tuple_param := fn(d : Decl, src : ptr(u8)) -> bool {
 ## returns the builtin target `[cs,cl)`. This is the tuple counterpart of the landed named-aggregate
 ## lookup above; it does not broaden conversion resolution or inspect aliases/generics/indirect forms.
 sema_tuple_conversion_exists := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), cs : usize, cl : usize, caller_s : usize, caller_l : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i < upto {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and d.is_fn and not d.is_generic and d.arity == 1 and sema_fn_is_convert(src, d.name_start, d.name_len) {
@@ -17003,7 +17041,7 @@ sema_guard_pred_body_expr := fn(bs : Option(ptr(mut Stmt)), val : ptr(Expr)) -> 
 sema_guard_pred_resolve := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
   mut gi : i64 = 0 - 1
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt and gi < 0 {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and d.is_generic and name_matches(src, d.name_start, d.name_len, cs, cl) { gi = i64(i) }
@@ -17138,7 +17176,7 @@ sema_guard_fold_inst := fn(cond : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt:
 sema_when_guard_false_span := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ah : Option(ptr(mut Arg)), a : ptr(mut rt::Arena)) -> usize {
   mut gi : i64 = 0 - 1
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt and gi < 0 {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and d.is_generic and name_matches(src, d.name_start, d.name_len, cs, cl) { gi = i64(i) }
@@ -17298,7 +17336,7 @@ arms_have_comptime := fn(ah : Option(ptr(mut Arm)), a : ptr(mut rt::Arena)) -> b
 name_tail_is := fn(src : ptr(u8), s : usize, n : usize, w : str) -> bool {
   mut tail := s
   mut tn := n
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < n {
     if str_at((src + s + i), 2) == "::" { tail = s + i + 2; tn = n - (i + 2) }
     i += 1
@@ -17822,7 +17860,7 @@ span_has_limit := fn(src : ptr(u8), ss : usize, sl : usize, w : str) -> bool {
 module_declares_limit := fn(decls : ptr(rt::Vec), cnt : usize, src : ptr(u8), w : str, ms : usize, ml : usize) -> bool {
   mut r := false
   jce := slim_hi(cnt)
-  mut jc := 0
+  mut jc : usize = 0
   while jc < jce {
     i := slim_at(cnt, jc)
     jc = jc + 1
@@ -17843,7 +17881,7 @@ is_known_limit := fn(w : str) -> bool {
 ## Is every identifier in the `@limits(…)` list span `[ss, ss+sl)` a known limit? Splits on separators
 ## (`,` / space / parens) and checks each name against `is_known_limit`. An unknown name → false (reject).
 limits_all_known := fn(src : ptr(u8), ss : usize, sl : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   mut ok := true
   while i < sl {
     c := str_at((src + ss + i), 1)
@@ -17870,7 +17908,7 @@ lim_delim := fn(c : str) -> bool {
 ## lives in the MANIFEST buffer (a separate str from `src`), so this is a cross-buffer byte compare.
 ceiling_has := fn(cbase : usize, clen : usize, name : str) -> bool {
   nbase := unchecked bitcast(usize, name.ptr)
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < clen {
     if lim_delim(str_at(cbase + i, 1)) {
@@ -17879,7 +17917,7 @@ ceiling_has := fn(cbase : usize, clen : usize, name : str) -> bool {
       mut j := i
       while j < clen and not lim_delim(str_at(cbase + j, 1)) { j += 1 }
       if (j - i) == name.len {
-        mut k := 0
+        mut k : usize = 0
         mut eq := true
         while k < name.len { if str_at(cbase + i + k, 1) != str_at(nbase + k, 1) { eq = false } ; k += 1 }
         if eq { found = true }
@@ -18195,7 +18233,7 @@ sema_repr_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
   if rsp.n == 0 { return 0 }
   if repr_ty_is_integer(src, rsp.s, rsp.n) == false { return located_err(d.name_start) }
   mut f := d.fields_head
-  mut vc := 0
+  mut vc : usize = 0
   loop { match f { Some(fq) => { fd := deref(fld_p(fq)); vc = vc + 1; f = fd.next }; None => { break } } }
   cap := repr_ty_capacity(src, rsp.s, rsp.n)
   if cap != 0 and vc > cap { return located_err(d.name_start) }
@@ -18301,7 +18339,7 @@ sema_slice_sugar_reject := fn(d : Decl, src : ptr(u8)) -> usize {
 ## while still refusing an ordinary value binding whose RHS merely happens to be an identifier.
 sema_type_alias_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, s, n) {
@@ -18323,7 +18361,7 @@ sema_signature_type_head_unknown := fn(ph : Option(ptr(mut Param)), decls : ptr(
   ru := sema_unapplied_type_fn_span(decls, src, ph, s, n)
   if ru != 0 { return ru }
   if n == 0 or not _sident1(src, s) { return 0 }
-  mut i := 1
+  mut i : usize = 1
   while i < n {
     if not _sident1(src, s + i) { return 0 }
     i += 1
@@ -18356,7 +18394,7 @@ sema_signature_type_head_unknown := fn(ph : Option(ptr(mut Param)), decls : ptr(
 ## desugars both to an `is_generic` decl that is not a fn (a generic FN is `is_generic` and `is_fn`).
 sema_type_fn_named := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_generic and d.is_fn == false and streq(src, d.name_start, d.name_len, s, n) { return true }
@@ -18512,7 +18550,7 @@ sema_local_ann_type_unknown := fn(ph : Option(ptr(mut Param)), decls : ptr(rt::V
 ## must resolve to the named module's concrete struct/enum/union declaration; otherwise reject at the
 ## argument itself instead of silently assigning scalar layout to an unknown type.
 type_span_has_path_sep := fn(src : ptr(u8), s : usize, n : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < n {
     if str_at((src + s + i), 2) == "::" { return true }
     i += 1
@@ -18527,7 +18565,7 @@ qualified_generic_span_reject := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : us
   ## its existing validators.
   mut generic_head := false
   cnt := rt::vec_len(deref(decls))
-  mut di := 0
+  mut di : usize = 0
   while di < cnt {
     gd := deref(decl_get(decls, di))
     if (gd.kind == 2 or gd.kind == 3) and gd.is_generic
@@ -18575,7 +18613,7 @@ sema_qualified_generic_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8
 ## source path uses `::`; both are the same module identity.
 sema_mod_seg_eq := fn(src : ptr(u8), as_ : usize, al : usize, bs : usize, bl : usize) -> bool {
   if al != bl { return false }
-  mut i := 0
+  mut i : usize = 0
   mut ok := true
   while i < al {
     ca := str_at((src + as_ + i), 1)
@@ -18643,9 +18681,9 @@ sema_is_root_mod := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
 ## callee carries no separator, opens with one, or ends with one. Mirrors driver's `d_colon_pos`,
 ## which also keeps the LAST separator so `alloc::vec::push` has the head `alloc::vec`.
 sema_qual_head := fn(src : ptr(u8), cs : usize, cl : usize) -> VSpan {
-  mut res := 0
+  mut res : usize = 0
   mut found := false
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < cl {
     if str_at((src + cs + i), 2) == "::" { res = i ; found = true ; i = i + 2 } else { i = i + 1 }
   }
@@ -18673,7 +18711,7 @@ sema_head_is_intrinsic := fn(src : ptr(u8), hs : usize, hl : usize) -> bool {
 sema_head_names_scope := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize) -> bool {
   if hl == 0 { return false }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -18714,9 +18752,9 @@ sema_qual_head_kinds := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl :
   if hl == 0 { return 0 }
   if sema_head_is_intrinsic(src, hs, hl) { return 16 }
   ## the head's OWN last segment, for the one-hop re-export projection (`facade::math::floor`)
-  mut lp := 0
+  mut lp : usize = 0
   mut chained := false
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < hl {
     if str_at((src + hs + i), 2) == "::" { lp = i + 2 ; chained = true ; i = i + 2 } else { i = i + 1 }
   }
@@ -18916,7 +18954,7 @@ pub set_package_modules := fn(p : usize, n : usize) -> i64 {
 sema_module_in_package := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
   if SEMA_PACKAGE_MODULES_N == 0 { return false }
   mods := unchecked bitcast(ptr(rt::Vec), SEMA_PACKAGE_MODULES_P)
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < rt::vec_len(deref(mods)) {
     ns := rt::vec_get(deref(mods), i)
     nl := rt::vec_get(deref(mods), i + 1)
@@ -18949,7 +18987,7 @@ sema_decl_visible_from := fn(src : ptr(u8), d : Decl, cs : usize, cl : usize) ->
 
 sema_colon_pos := fn(src : ptr(u8), cs : usize, cl : usize) -> i64 {
   mut r := -1
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < cl {
     if str_at((src + cs + i), 2) == "::" { r = i64(i); i += 2 } else { i += 1 }
   }
@@ -18994,7 +19032,7 @@ sema_gref_split := fn(src : ptr(u8), s : usize, n : usize) -> SemaGRef {
 sema_vis_pair := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize, ns : usize, nl : usize, cs : usize, cl : usize, k1 : u8, k2 : u8) -> usize {
   if hl == 0 or nl == 0 { return 0 }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if (d.kind == k1 or d.kind == k2) and d.name_len != 0
@@ -19055,7 +19093,7 @@ sema_vis_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : u
 ## a valid user program into a false reject.
 sema_is_ambient_nested := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
   mut sep := 0
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < ml {
     if str_at((src + ms + i), 2) == "__" { sep = i; i = ml } else { i += 1 }
   }
@@ -19070,8 +19108,8 @@ sema_is_ambient_nested := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
 ## compiler's own imported library would create a false reject.
 sema_mod_head_matches := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : usize) -> bool {
   if sema_mod_seg_eq(src, as_, al, ms, ml) { return true }
-  mut ls := 0
-  mut k := 0
+  mut ls : usize = 0
+  mut k : usize = 0
   while k + 1 < al {
     if str_at((src + as_ + k), 2) == "__" or str_at((src + as_ + k), 2) == "::" { ls = k + 2 }
     k += 1
@@ -19121,7 +19159,7 @@ sema_projection_head_for := fn(src : ptr(u8), rs : usize, rl : usize, ns : usize
 ## storage. Private targets are still rejected by sema_vis_declared before any body reaches this helper.
 sema_bound_name_in_module := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, cs : usize, cl : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0
@@ -19140,7 +19178,7 @@ sema_bound_name_in_module := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, 
 sema_binding_resolves := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, cs : usize, cl : usize, k1 : u8, k2 : u8) -> bool {
   if nl == 0 or cl == 0 { return false }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     b := deref(decl_get(decls, i))
     if b.is_fn == false and b.kind == 0 and b.arity == 0 and b.ret_tl != 0
@@ -19157,7 +19195,7 @@ sema_binding_resolves := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl 
         if g.qual { hs = g.ms; hl = g.ml; ts = g.ns; tl = g.nl }
       }
       if hl != 0 {
-        mut j := 0
+        mut j : usize = 0
         while j < cnt {
           d := deref(decl_get(decls, j))
           if (d.kind == k1 or d.kind == k2) and streq(src, d.name_start, d.name_len, ts, tl)
@@ -19182,7 +19220,7 @@ sema_type_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
   cnt := rt::vec_len(deref(decls))
   mut hits := 0
   mut anypub := false
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, s, n) {
@@ -19202,13 +19240,13 @@ sema_type_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
 ## where a full scan is preferable to importing lower's mutable resolver state.
 sema_callee_arity_collision := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, cs : usize, cl : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, s, n)
        and sema_mod_head_matches(src, d.mod_start, d.mod_len, cs, cl) == false
        and sema_mod_anc_rank(src, d.mod_start, d.mod_len, cs, cl) < 0 {
-      mut j := 0
+      mut j : usize = 0
       while j < cnt {
         e := deref(decl_get(decls, j))
         if j != i and (e.kind == 1 or e.kind == 4) and streq(src, e.name_start, e.name_len, s, n)
@@ -19232,7 +19270,7 @@ sema_callee_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
   cnt := rt::vec_len(deref(decls))
   mut hits := 0
   mut generic := false
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, s, n) {
@@ -19281,7 +19319,7 @@ sema_bare_private := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
   if sema_gref_split(src, s, n).qual { return 0 }
   cnt := rt::vec_len(deref(decls))
   mut hits := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if (d.kind == k1 or d.kind == k2) and d.name_len != 0 and streq(src, d.name_start, d.name_len, s, n) {
@@ -19302,7 +19340,7 @@ sema_bare_private := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
 sema_vis_reexport := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize, ns : usize, nl : usize) -> usize {
   if hl == 0 or nl == 0 { return 0 }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.name_len != 0 and streq(src, d.name_start, d.name_len, ns, nl)
@@ -19350,7 +19388,7 @@ sema_vis_projection := fn(decls : ptr(rt::Vec), src : ptr(u8), rs : usize, rl : 
 ## projections.  This runs before body checking, matching lower's pre-emission pass.
 sema_vis_declared := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     mut pp := d.params_head
@@ -19500,7 +19538,7 @@ sema_collect_stmts := fn(head : Option(ptr(mut Stmt)), locals : ptr(LVec), src :
 
 sema_vis_all_bodies := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if is_lib_module(src, d.mod_start, d.mod_len)
@@ -19563,7 +19601,7 @@ sema_global_ref_bad := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
   mut any := false
   mut exact := false
   mut visible := false
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if sema_is_global_decl(d, src) and streq(src, d.name_start, d.name_len, g.ns, g.nl) {
@@ -19625,7 +19663,7 @@ sema_enum_global_array_binding := fn(decls : ptr(rt::Vec), src : ptr(u8), s : us
   z := SemaGRef(ms = 0, ml = 0, ns = 0, nl = 0, qual = false)
   if n == 0 or cl == 0 { return z }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     b := deref(decl_get(decls, i))
     if b.is_fn == false and b.kind == 0 and b.arity == 0 and b.ret_tl != 0
@@ -19662,7 +19700,7 @@ sema_enum_global_array_use_bad := fn(base : ptr(Expr), decls : ptr(rt::Vec), upt
     ## visibility and enum-array classification exactly as the lower's binding_head_span path does.
     ba := sema_enum_global_array_binding(decls, src, g.ns, g.nl, cs, cl)
     if ba.qual {
-      mut ai := 0
+      mut ai : usize = 0
       while ai < cnt {
         ad := deref(decl_get(decls, ai))
         if sema_enum_global_array_decl(ad, decls, upto, src)
@@ -19682,7 +19720,7 @@ sema_enum_global_array_use_bad := fn(base : ptr(Expr), decls : ptr(rt::Vec), upt
   }
   mut best := 0 - 1
   if not g.qual {
-    mut bi := 0
+    mut bi : usize = 0
     while bi < cnt {
       bd := deref(decl_get(decls, bi))
       if sema_is_global_decl(bd, src) and streq(src, bd.name_start, bd.name_len, g.ns, g.nl) {
@@ -19692,7 +19730,7 @@ sema_enum_global_array_use_bad := fn(base : ptr(Expr), decls : ptr(rt::Vec), upt
       bi += 1
     }
   }
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if sema_enum_global_array_decl(d, decls, upto, src) and streq(src, d.name_start, d.name_len, g.ns, g.nl) {
@@ -19759,10 +19797,10 @@ sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto
               Some(bdq) => {
                 bnns := bnd_ns(bdq)
                 bnnl := bnd_nl(bdq)
-                if not local_in(locals, arm_cnt, src, bnns, bnnl) {
-                  lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                  arm_cnt += 1
-                }
+                ## a payload binding shadows any earlier local of its name (Declarations §6.1): the innermost
+                ## entry is the one lookups and the records keyed by its offset must find
+                lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                arm_cnt += 1
                 bd = bnd_next(bdq)
               }
               None => { break }
@@ -19900,10 +19938,10 @@ sema_enum_global_array_value_bad_stmts := fn(head : Option(ptr(mut Stmt)), decls
                   Some(bdq) => {
                     bnns := bnd_ns(bdq)
                     bnnl := bnd_nl(bdq)
-                    if not local_in(locals, arm_cnt, src, bnns, bnnl) {
-                      lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                      arm_cnt += 1
-                    }
+                    ## a payload binding shadows any earlier local of its name (Declarations §6.1): the innermost
+                    ## entry is the one lookups and the records keyed by its offset must find
+                    lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                    arm_cnt += 1
                     bd = bnd_next(bdq)
                   }
                   None => { break }

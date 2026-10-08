@@ -22,7 +22,7 @@ main := fn() -> u64 {
   direct_a := get(S, ar, hh).a ## direct call().field, offset 0: was 0, now 7
   direct_b := get(S, ar, hh).b ## direct call().field, offset 1: was 0, now 99
 
-  mut bad := 0
+  mut bad : u64 = 0
   if direct_a != two_a { bad = 1 }        ## direct form must agree with the two-step form
   if direct_b != two_b { bad = 1 }
   return direct_a + direct_b + bad * 9     ## 7 + 99 = 106 when correct; 0 under the old silent-0 bug

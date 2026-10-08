@@ -7,7 +7,7 @@
 ## default (regalloc) and ALATYR_RA=0 (text path).
 add := fn(a : u64, b : u64) -> u64 { a + b }
 main := fn() -> u64 {
-  t := 20 + 20
+  t : u64 = 20 + 20
   x := add(1, 1)
   t + x
 }

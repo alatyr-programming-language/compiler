@@ -1,7 +1,7 @@
 ## WAT bounded slice: scalar loop expressions yield a literal break and a conditional local break.
 ## Both exits must carry the loop value to the assignment and preserve the surrounding local frame.
 main := fn() -> u64 {
-  first := loop {
+  first : u64 = loop {
     break 40
   }
   mut i : u64 = 0

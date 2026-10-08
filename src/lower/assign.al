@@ -174,7 +174,7 @@ emit_agg_slot_copy := fn(soff : usize, is_ref : bool, dst : i64, nw : usize, in 
       push_str(sb, "  movq ")
       push_int(sb, i64(k * 8))
       push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((dst - k + 1) * 8))
+      push_int(sb, i64((dst - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
   } else {
@@ -182,7 +182,7 @@ emit_agg_slot_copy := fn(soff : usize, is_ref : bool, dst : i64, nw : usize, in 
       push_str(sb, "  movq -")
       push_frame_word(sb, soff, k)
       push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((dst - k + 1) * 8))
+      push_int(sb, i64((dst - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
   }
@@ -598,7 +598,7 @@ emit_standard_scalar_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in ou
   ## sit densely in an array with a stride of two or four bytes, and a qword clear would clobber its
   ## neighbour. Field stores below then replace every non-padding byte.
   emit_gas(dptr, sb, cx, a, nl)
-  mut zoff := 0
+  mut zoff : usize = 0
   zbytes := standard_struct_bytes(cx.decls, cx.src, dts.s, dts.n, deref(cx.mar))
   while zoff + 8 <= zbytes {
     push_str(sb, "  movq (%rsp), %rax\n  movq $0, ")
@@ -669,7 +669,7 @@ pub emit_standard_copy := fn(ts : usize, tl : usize, root : usize, sbo : i64, ds
   ## and a wider load would read (and a wider store would write) past it.
   if ck == 1 {
     nb := std_copy_image_bytes(cx.decls, cx.src, ts, tl, a)
-    mut k := 0
+    mut k : usize = 0
     while k < nb {
       push_str(sb, "  movzbq -")
       push_int(sb, i64((root + 1) * 8) - sbo - i64(k))
@@ -684,7 +684,7 @@ pub emit_standard_copy := fn(ts : usize, tl : usize, root : usize, sbo : i64, ds
   ## with the step) and store the extended value into the destination's word.
   if ck == 2 {
     ns := layout_copy_nsteps(cx.decls, cx.src, ts, tl, a)
-    mut i := 0
+    mut i : usize = 0
     while i < ns {
       st := layout_copy_step(cx.decls, cx.src, ts, tl, i64(i), a)
       if not st.found { panic("selfhost: the byte-precise whole-value copier's plan is shorter than its own step count") }
@@ -1120,7 +1120,7 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
           else if psz == 2 { push_str(sb, "  movw %ax, -") }
           else if psz == 4 { push_str(sb, "  movl %eax, -") }
           else { push_str(sb, "  movq %rax, -") }
-          push_int(sb, (bent.off + 1) * 8 - pbo)
+          push_int(sb, i64((bent.off + 1) * 8) - pbo)
           push_str(sb, "(%rbp)\n")
           fw_handled = true
         }
@@ -1149,7 +1149,7 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
           ## Other aggregate kinds and unaligned children remain a located fail-loud boundary.
           if sbo < 0 or (sbo / 8) * 8 != sbo { panic("selfhost: a standard-layout aggregate field write needs an 8-byte-aligned child in this slice") }
           if struct_lit_info(fv).is_s {
-            emit_struct_assign(fv, bent.off - sbo / 8, sb, cx, a, nl)
+            emit_struct_assign(fv, i64(bent.off) - sbo / 8, sb, cx, a, nl)
             fw_handled = true
           } else { panic("selfhost: a standard-layout aggregate field write needs a struct literal in this slice") }
         } else if smulti {
@@ -1542,7 +1542,7 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
         }
         else if str_ret_call(v, cx.decls, cx.src, deref(cx.mar)) {
           emit_struct_value(v, sb, cx, a, nl)
-          for j in 0..2 { push_str(sb, "  movq "); emit_retreg(sb, j); push_str(sb, ", -"); push_int(sb, i64((usize(cx.agg_tmp) - j + 1) * 8)); push_str(sb, "(%rbp)\n") }
+          for j in 0..usize(2) { push_str(sb, "  movq "); emit_retreg(sb, j); push_str(sb, ", -"); push_int(sb, i64((usize(cx.agg_tmp) - j + 1) * 8)); push_str(sb, "(%rbp)\n") }
           wdel = true
         }
         else if var_agg_info(v, cx.slots, cx.src).ek == 2 {
@@ -1858,7 +1858,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         push_str(sb, "  imulq $")
         push_int(sb, i64(gastride * 8))
         push_str(sb, ", %rcx\n  addq %rcx, %rax\n  movq %rax, %r13\n")
-        mut gak := 0
+        mut gak : usize = 0
         while gak < gastride {
           push_str(sb, "  movq -")
           push_int(sb, i64((usize(cx.agg_tmp) - gak + 1) * 8))
@@ -1885,7 +1885,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         push_str(sb, "  imulq $")
         push_int(sb, i64(gavstr * 8))
         push_str(sb, ", %rcx\n  addq %rcx, %rax\n  movq %rax, %r13\n")
-        mut gavk := 0
+        mut gavk : usize = 0
         while gavk < gavstr {
           push_str(sb, "  movq -")
           push_frame_word(sb, gavent.off, gavk)
@@ -1917,7 +1917,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         push_str(sb, "  imulq $")
         push_int(sb, i64(gacstr * 8))
         push_str(sb, ", %rcx\n  addq %rcx, %rax\n  movq %rax, %r13\n")
-        mut gack := 0
+        mut gack : usize = 0
         while gack < gacstr {
           push_str(sb, "  movq -")
           push_int(sb, i64((usize(cx.agg_tmp) - gack + 1) * 8))
@@ -1942,7 +1942,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         push_str(sb, "  imulq $")
         push_int(sb, i64(gaen.stride * 8))
         push_str(sb, ", %rcx\n  addq %rcx, %rax\n  movq %rax, %r13\n")
-        mut gaek := 0
+        mut gaek : usize = 0
         while gaek < gaen.stride {
           push_str(sb, "  movq -")
           push_int(sb, i64((usize(cx.agg_tmp) - gaek + 1) * 8))
@@ -1968,7 +1968,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         push_str(sb, "  imulq $")
         push_int(sb, i64(gaen.stride * 8))
         push_str(sb, ", %rcx\n  addq %rcx, %rax\n  movq %rax, %r13\n")
-        mut gaevk := 0
+        mut gaevk : usize = 0
         while gaevk < gaen.stride {
           push_str(sb, "  movq -")
           push_frame_word(sb, gaeent.off, gaevk)
@@ -2537,7 +2537,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     ## captures follow them at integer index `nint`. For an all-integer `dyn` type `nint == nuser`
     ## and every instruction below is byte-identical to the former unconditional shift.
     dftp := fnval_ty_pos(ns, nl2, cx.src, a)
-    mut nint := 0
+    mut nint : usize = 0
     for i in 0..nuser {
       if dyn_user_arg_is_float(cx, dftp, i) == false { nint = nint + 1 }
     }
@@ -2908,7 +2908,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_str(sb, "  movq ")
       push_int(sb, i64(k * 8))
       push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((dst - k + 1) * 8))
+      push_int(sb, i64((dst - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
   } else if deref_field_struct_span(v, cx.slots, cx.decls, cx.src, a).n != 0 {
@@ -2925,7 +2925,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_str(sb, "  movq ")
       push_int(sb, i64(k * 8))
       push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((dst - k + 1) * 8))
+      push_int(sb, i64((dst - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
   } else if deref_call_struct_span(v, cx.decls, cx.src, a).n != 0 {
@@ -2941,7 +2941,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_str(sb, "  movq ")
       push_int(sb, i64(k * 8))
       push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((dst - k + 1) * 8))
+      push_int(sb, i64((dst - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
   } else if deref_call_ret_struct_span(v, cx.decls, cx.src, a, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l).n != 0 {
@@ -2958,7 +2958,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_str(sb, "  movq ")
       push_int(sb, i64(k * 8))
       push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((dst - k + 1) * 8))
+      push_int(sb, i64((dst - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
   } else if deref_enum_pointee_span(v, cx.slots, cx.decls, cx.src, a).n != 0 {
@@ -2976,7 +2976,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_str(sb, "  movq ")
       push_int(sb, i64(k * 8))
       push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((dst - k + 1) * 8))
+      push_int(sb, i64((dst - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
   } else if is_mut_struct_global_var(v, cx.decls, cx.src) {
@@ -2995,7 +2995,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_str(sb, "  movq ")
       push_int(sb, i64(k * 8))
       push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((dstg - k + 1) * 8))
+      push_int(sb, i64((dstg - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
   } else if is_mut_enum_global_var(v, cx.decls, cx.src) {
@@ -3013,7 +3013,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_str(sb, "  movq ")
       push_int(sb, i64(k * 8))
       push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((edst - k + 1) * 8))
+      push_int(sb, i64((edst - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
   } else if bin_operator_ret_struct(v, cx.decls, cx.src, cx.slots, a).n != 0 {
@@ -3160,7 +3160,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
         push_str(sb, "  movq ")
         push_int(sb, (fra.fwo + i64(k)) * 8)
         push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-        push_int(sb, i64((dstr - k + 1) * 8))
+        push_int(sb, i64((dstr - i64(k) + 1) * 8))
         push_str(sb, "(%rbp)\n")
       }
     }
@@ -3177,7 +3177,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_str(sb, "  movq -")
       push_int(sb, (i64(fra.boff) - fra.fwo - i64(k) + 1) * 8)
       push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((dstr - k + 1) * 8))
+      push_int(sb, i64((dstr - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
     }
@@ -3196,7 +3196,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_str(sb, "  movq ")
       push_int(sb, (gfa.fwo + i64(k)) * 8)
       push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-      push_int(sb, i64((dstg - k + 1) * 8))
+      push_int(sb, i64((dstg - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
   } else if match_if_agg_kind(v, cx.decls, cx.src, a).kind != 0 {

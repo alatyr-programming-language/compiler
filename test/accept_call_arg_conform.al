@@ -23,7 +23,7 @@ atuple := fn(t : (u64, u64)) -> u64 { return t.0 + t.1 }
 tack := fn(s : str, n : u64) -> u64 { return s.len() + n }
 
 main := fn() -> u64 {
-  mut t := 0
+  mut t : u64 = 0
   t = t + wide(7)               ## 7          → 7
   t = t + astr("abcd")          ## +4         → 11
   t = t + abool(true)           ## +1         → 12

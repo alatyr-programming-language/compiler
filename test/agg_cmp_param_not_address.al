@@ -15,7 +15,7 @@ main := fn() -> u64 {
   qs := P(x = 5, y = 7)   ## field-equal with ps, at a DIFFERENT address
   rs := P(x = 5, y = 9)   ## word 0 equal to ps, word 1 different
 
-  mut r := 0
+  mut r : u64 = 0
   r = r + pcmp(ps, qs) * 1    ## struct params, equal contents -> +1
   r = r + pcmp(ps, rs) * 64   ## struct params, word 1 differs -> +0
   r = r + 2                   ## 1 + 2 = 3

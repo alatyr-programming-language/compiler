@@ -2,7 +2,7 @@
 ## reads ELEMENTS (stride-aware through the data pointer), not bytes, and `s.len` is the runtime
 ## length. Previously `xs[0..3]` bound a str byte-view, so `s[i]` mis-read / segfaulted.
 main := fn() -> u64 {
-  xs := [10, 20, 12, 99]
+  xs : [u64; 4] = [10, 20, 12, 99]
   s := xs[0..3]                               ## {10, 20, 12}, len 3
   mut acc : u64 = 0
   for i in 0..s.len { acc = acc + s[i] }      ## 10 + 20 + 12 = 42

@@ -35,7 +35,7 @@ iface_hash_int := fn(h : usize, n : i64) -> usize {
 }
 iface_hash_span := fn(h : usize, src : ptr(u8), s : usize, n : usize) -> usize {
   mut r := iface_hash_uint(h, n)
-  mut i := 0
+  mut i : usize = 0
   while i < n {
     r = iface_hash_byte(r, usize(bytes(str_at((src + s), n))[i]))
     i += 1
@@ -151,7 +151,7 @@ iface_streq := fn(src : ptr(u8), as : usize, an : usize, bs : usize, bn : usize)
 }
 iface_overloads := fn(decls : ptr(rt::Vec), src : ptr(u8), name_s : usize, name_n : usize, arity : usize, is_fn : bool) -> usize {
   mut n := 0
-  mut i := 0
+  mut i : usize = 0
   while i < vec_len(deref(decls)) {
     qp := iface_decl_get(decls, i)
     if deref(qp).is_fn and is_fn and deref(qp).arity == arity and iface_streq(src, deref(qp).name_start, deref(qp).name_len, name_s, name_n) { n += 1 }
@@ -552,7 +552,7 @@ pub emit_interface_summary := fn(decls : ptr(rt::Vec), src : ptr(u8), b : ptr(rt
   mut out := deref(b)
   push_str(out, "format=alatyr-interface-summary\nversion=1\nhash=fnv1a64\n")
   mut count := 0
-  mut i := 0
+  mut i : usize = 0
   while i < vec_len(deref(decls)) {
     dp := iface_decl_get(decls, i)
     if deref(dp).name_len != 0 and iface_visible(src, deref(dp).name_start, deref(dp).name_len) { count += 1 }

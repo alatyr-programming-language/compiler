@@ -20,7 +20,7 @@ main := fn() -> u64 {
   if r[3] != 40 { return 5 }
 
   ## `for x in r` iteration over the returned slice
-  mut acc := 0
+  mut acc : u64 = 0
   for x in r { acc = acc + x }
   if acc != 82 { return 6 }
 

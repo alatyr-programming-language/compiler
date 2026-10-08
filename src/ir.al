@@ -2399,10 +2399,11 @@ pub self_test := fn(in out ca : rt::Arena) -> usize {
 ## address. The IR builder will copy it onto the IR value (§3.8 step 2) instead of re-deriving it from
 ## the expression's shape; in slice 0a only the census reads it.
 ##
-## Recording is OFF unless a consumer asks for it (`sty_enable`, or the census channel below being
-## open), so an ordinary build maps nothing and runs no extra code past one flag test per expression.
-## The table lives in its own anonymous mappings, never in a compile arena, because the compiler's own
-## output must not move with an instrument (the #529 bitcast table's rule). It GROWS: the key/value
+## Recording is ON for every check: the checker's verdict reads it (the mixed-signedness refusal,
+## docs/ir.md §3.8 item 9), so a verdict never depends on whether a consumer asked for records.
+## `sty_enable` stays the consumers' explicit request and is idempotent. The table lives in its own
+## anonymous mappings, never in a compile arena, because the compiler's own output must not move with
+## the table (the #529 bitcast table's rule). It GROWS: the key/value
 ## arrays rehash into a mapping twice the size at half load, and the records come from chunks that are
 ## never moved, so a record's address stays valid for the whole run.
 
@@ -2428,7 +2429,7 @@ pub vty_int := fn(bytes : u64, sg : Sgn) -> VTy { VTy(cls = VCls.VcInt, bytes = 
 ## The recorded type's class, read through a copy (#792).
 pub vty_cls := fn(t : VTy) -> VCls { t.cls }
 
-mut STY_ON : bool = false
+mut STY_ON : bool = true
 mut STY_KEYS : usize = 0    ## address of the key array (node addresses)
 mut STY_USED : usize = 0    ## address of the occupancy array (1 = the slot holds a key)
 mut STY_VALS : usize = 0    ## address of the value array (record addresses)
@@ -2875,3 +2876,13 @@ vcls_known := fn(c : VCls) -> bool {
 pub vty_known := fn(t : VTy) -> bool { c : VCls = t.cls; vcls_known(c) }
 pub vty_is_int := fn(t : VTy) -> bool { c : VCls = t.cls; vcls_is_int(c) }
 pub vty_is_lit := fn(t : VTy) -> bool { c : VCls = t.cls; vcls_is_lit(c) }
+## Do two integer records have one signedness?
+pub vty_same_sign := fn(a : VTy, b : VTy) -> bool {
+  sa : Sgn = a.sg
+  sb : Sgn = b.sg
+  match sa {
+    SgS => { match sb { SgS => { true }; SgU | SgNone => { false } } }
+    SgU => { match sb { SgU => { true }; SgS | SgNone => { false } } }
+    SgNone => { match sb { SgNone => { true }; SgS | SgU => { false } } }
+  }
+}

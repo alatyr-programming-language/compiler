@@ -123,7 +123,7 @@ hex_digit := fn(c : u8) -> usize {
 ## validator rejects overlong encodings, surrogates, truncated sequences, and invalid continuation
 ## bytes, so `"\\xff"` is a compile error instead of a str carrying invalid UTF-8.
 scan_string := fn(base : usize, n : usize) -> StringScan {
-  mut i := 0
+  mut i : usize = 0
   mut out := 0
   mut need := 0
   mut lo := 128
@@ -244,7 +244,7 @@ pub newnode := fn(a : ptr(mut rt::Arena), val : Expr) -> ptr(mut Expr) {
 ## missing / unopenable file FAILS LOUD (`panic` → non-zero build); an embed is never silently empty.
 ## (The embed label `embed_label_base + pc.nstr` assumes a program has < 500000 string literals — the
 ## renumber design already caps a module at 1000000; the whole compiler uses ~6.5k.)
-embed_label_base := 500000
+embed_label_base : usize = 500000
 
 ## Build a `StrLit` for `embed(<path>)`: `[ps, ps+pn)` is the path's INNER span in `pc.src`. Reads the
 ## file's bytes into the compile arena via the PROVEN arena primitives (`node_alloc`/`node_ptr`, as
@@ -254,7 +254,7 @@ embed_strlit := fn(in out pc : PC, ps : usize, pn : usize) -> ptr(mut Expr) {
   ## NUL-terminated C path in the arena (open needs a C string; the path span is into the shared
   ## source buffer, not NUL-terminated). Copy the path bytes verbatim — a plain path, no escapes.
   mut pb := rt::strbuf(deref(pc.arena), pn + 16)
-  mut i := 0
+  mut i : usize = 0
   while i < pn {
     kb := rt::push_byte(pb, bytes(str_at(pc.src + ps + i, 1))[0])
     i = i + 1
@@ -273,7 +273,7 @@ embed_strlit := fn(in out pc : PC, ps : usize, pn : usize) -> ptr(mut Expr) {
   h := node_alloc(deref(pc.arena), sz)
   pbuf := node_ptr(u8, deref(pc.arena), h)
   addr := unchecked bitcast(usize, pbuf)
-  mut total := 0
+  mut total : usize = 0
   mut done := false
   while done == false {
     nr := rt::sys_read(0, ufd, addr + total, sz - total)
@@ -375,7 +375,7 @@ sfail := fn(msg : str) -> usize {
 ## so this follows that established precedent. Set via `set_module_base` before each module's
 ## `parse_program`; `0` means "the whole buffer is the module", which is both the single-source paths'
 ## correct value and the safe default if a call site forgets (that is exactly today's behavior).
-mut P_MOD_BASE := 0
+mut P_MOD_BASE : usize = 0
 ## Tell the parser where the module about to be parsed starts in the shared buffer (the driver's `soff`).
 pub set_module_base := fn(off : usize) { P_MOD_BASE = off }
 
@@ -447,7 +447,7 @@ reject_at := fn(in out pc : PC, what : str, off : usize) -> usize {
   k6 := rt::push_str(mb, ", at line ")
   k3 := rt::push_int(mb, src_line_at(pc, off))
   k7 := rt::push_str(mb, ", near `")
-  mut snl := 24
+  mut snl : usize = 24
   srcend := tok_at(pc, ntoks(pc) - 1).start
   if off + snl > srcend { snl = srcend - off }
   k8 := rt::push_str(mb, str_at(pc.src + off, snl))
@@ -1216,7 +1216,7 @@ enums_known := fn(pc : PC) -> bool { return unchecked bitcast(usize, pc.enums) !
 is_enum_name := fn(pc : PC, s : usize, n : usize) -> bool {
   ev := deref(pc.enums)
   cnt := rt::vec_len(ev)
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < cnt {
     es := rt::vec_get(ev, i)
     el := rt::vec_get(ev, i + 1)
@@ -1266,7 +1266,7 @@ struct_rec_of := fn(pc : PC, s : usize, n : usize) -> i64 {
   if structs_known() == false { return 0 - 1 }
   sv := structs_tbl()
   cnt := rt::vec_len(sv)
-  mut i := 0
+  mut i : usize = 0
   mut first := 0 - 1
   mut best := 0 - 1
   mut besti := 0 - 1
@@ -1294,7 +1294,7 @@ struct_rec_of := fn(pc : PC, s : usize, n : usize) -> i64 {
 struct_field_idx := fn(pc : PC, rec : usize, fs : usize, fl : usize) -> i64 {
   sv := structs_tbl()
   nf := rt::vec_get(sv, rec + 4)
-  mut k := 0
+  mut k : usize = 0
   while k < nf {
     fns := rt::vec_get(sv, rec + 5 + k * 4)
     fnl := rt::vec_get(sv, rec + 5 + k * 4 + 1)
@@ -1906,7 +1906,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       if float_lit_err(str_at(pc.src + ft.start, ft.len)) != 0 {
         reject_at(pc, "selfhost: malformed FLOAT literal - Grammar §2.4 requires `dec-int . dec-int [e/E [+-] dec-int]`, `dec-int e/E [+-] dec-int`, or a C-style `0x...p/P[+-]dec-int` hex float", ft.start)
       }
-      mut fi := 0
+      mut fi : usize = 0
       while fi < ft.len {
         if bytes(str_at(pc.src + ft.start + fi, 1))[0] == 95 {
           reject_at(pc, "selfhost: a `_` digit separator in a FLOAT literal is not supported yet (Grammar §2.4 allows it; the float's source text is emitted verbatim into `.double`) - write the digits without `_`", ft.start)
@@ -5248,7 +5248,7 @@ parse_struct_members := fn(in out pc : PC, packed : bool) -> Option(ptr(mut Fiel
     if tok_kw(pc, "mut") { pc.idx = pc.idx + 1 }
     mn := cur(pc); pc.idx = pc.idx + 1      ## member name
     mut marity := 0
-    mut mts := 0
+    mut mts : usize = 0
     mut mtl := 0
     mut mwsize := 1                   ## field size in words (1 scalar; N for [T; N])
     if cur(pc).kind == 8 {                  ## ': T'  — a struct field
@@ -5430,7 +5430,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
      and str_eq(str_at(pc.src + tok_at(pc, pc.idx + 1).start, tok_at(pc, pc.idx + 1).len), "limits") {
     pc.idx = pc.idx + 2                                    ## '@' 'limits'
     if cur(pc).kind == 10 { pc.idx = pc.idx + 1 }          ## '('
-    mut lts := 0
+    mut lts : usize = 0
     if cur(pc).kind == 1 { lts = cur(pc).start }           ## start of the FIRST limit name
     while cur(pc).kind != 11 and cur(pc).kind != 0 { pc.idx = pc.idx + 1 } ## consume the whole list
     mut ltl := 0
@@ -6474,7 +6474,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     mut k := rhs_idx + 1
     mut depth := 0
     mut top_eq := false
-    mut close := 0
+    mut close : usize = 0
     mut scanning := true
     while scanning and k < nt {
       kk := tok_at(pc, k).kind
@@ -6601,7 +6601,7 @@ pub parse_program := fn(in out pc : PC, in out out_decls : rt::Vec, in out da : 
   ## so their present behaviour is untouched.
   mut eod := 0
   mut eod_off := 0
-  mut eod_i := 0
+  mut eod_i : usize = 0
   eod_n := ntoks(pc)
   while eod_i < eod_n {
     eod_k := tok_at(pc, eod_i).kind
