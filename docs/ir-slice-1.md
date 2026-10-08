@@ -209,3 +209,98 @@ higher-order callee (9), and the 35 assorted shapes. One more is a **spec** ques
 one: `typeinfo(T)` members (6 lines) — Comptime §5.1 names `.n`, `.fields`, `Field.offset` but gives
 them no types, so sema cannot record one without the spec deciding it. The x86 switch itself (§5
 item 5) cannot land with any residue, because without a fallback a node with no record has no answer.
+
+## 8. Prerequisite (e): the plan for option A — records keyed by (node, instance)
+
+This is the implementation plan for §7's decision. It changes no verdict and no emission until step
+e3, and each step is its own PR, gated alone (D8).
+
+**8.1 Where mono's collection runs.** Today the instance set is built inside x86's
+`lower::emit_program` (`src/lower.al`, the "GENERICS pre-pass": a seed walk over non-generic bodies,
+then the transitive worklist that substitutes the enclosing instance's arguments, then the
+comptime-for field instances). It only reads the AST (`collect_insts_*`, `src/lower/mono.al`). The
+twins keep private single-parameter lists (`a64_inst_add`, `rv_inst_add`, `wat_inst_add`).
+Step e1 moves the x86 pre-pass, unchanged, into one function `mono::collect_program(decls, src, mar,
+a) -> IVec` in `src/lower/mono.al`. The driver calls it once after parsing and before
+`sema::check_program`, on every path that runs sema (build, check, x86-ir, the census), and hands the
+list to sema and to `emit_program`, which stops collecting on its own. The list and its order are the
+ones `emit_program` builds today, so the self-build's GAS does not move (fixpoint proof). The twins'
+private lists stay until slice 6. They are *consumers* of the ids (8.3) and need not share the order.
+
+**8.2 The instance key.** An instance's identity is its content: the generic's decl index plus the
+written type-argument spellings `(gi, ts/tl, ts2/tl2, ts3/tl3)`, compared by text (`Inst`). Sema
+interns each one into its own table, with a brand `InstId := distinct u32`, and answers
+`Option(InstId)` for a lookup. `None` is "not an instance" (the generic pass, or a non-generic
+body). There is no reserved id 0 and no sentinel. The record table grows a **second key word**:
+every slot holds `(key, inst)`, where `inst` is the `InstId` plus one, stored in its own word array
+next to `STY_KEYS`. The one non-instance key word is 0, which is written by the typed constructor
+`sty_key(k, Option(InstId))` and is never read back as an id. Binding keys (`bind_key`) and spelling
+keys get the same second word. Bits are not packed into the address: the address keeps its meaning,
+and the scheme does not depend on the address width.
+The API is `sty_put_in(e, Option(InstId), t)` / `sty_get_in(e, Option(InstId))` (plus the `bind_`
+and `spell_` forms). Today's `sty_put`/`sty_get` stay, as the `None` case.
+
+**8.3 Who checks and who asks.**
+- *Sema (e2).* After the generic pass, `check_program` walks the instance list. For each instance of a
+  **user-module** generic it checks the body again, with `SEMA_DECL_PARAMS`'s type parameters bound to
+  the instance's spellings and `SEMA_INST = Some(id)`. `sema_spell_head_is_param` /
+  `sema_vty_spell` then resolve `T` to the bound spelling (the substitution #903 already does for a
+  callee's own parameter), and every record goes under `(node, Some(id))`. The generic pass keeps
+  its records under `None`, so it still answers `VcUnknown` for a `T` value. Library generics get the
+  same walk, records only and verdict-free, as `sema_lib_record` does today (§3.8.6). That choice is
+  owner question E-Q1 below.
+- *The x86 legacy queries and the census (e3).* An instance's body is emitted with its identity in
+  `LCtx` (`gp*/it*` spans and the decl). At instance entry `emit_fn` asks sema once for the id and
+  sets `ir::STY_INST`, saving and restoring it around the body, the same way `brk`/`cont` are saved.
+  `is_signed_expr` and its relatives read `sty_get_in(e, STY_INST)`. This is a module global, not a
+  new `LCtx` field, because `LCtx`'s own comment records that growing it perturbs a latent
+  uninitialised-stack read (`src/lower_ctx.al`).
+- *The IR builder and the twins' selectors (e3).* `ir::select_input` receives the same
+  `Option(InstId)` from each twin's instance loop. The twin looks the id up by content
+  (`sema::inst_id(gi, spellings)`), so it does not depend on x86's list order. A twin instance that
+  sema has no id for is a located internal error, not `None`.
+- *Forgetting the id* reads the generic pass's `VcUnknown`. The census counts that, so it shows up
+  as a number and nothing is defaulted silently.
+
+**8.4 What (e) does not cover yet.** A comptime-for iteration (`v.(f)`, `f.type`) and a pack element
+have a different type per *iteration* inside one instance. Their key needs an iteration component,
+`(inst, cf-iteration path)`, interned the same way. That is step e4 (E-Q2). Until then those lines
+stay in §7's residue (part of the 43).
+
+**8.5 Fixtures.**
+- `generic_mix_usize_reject` — `f := fn(T : type, a : T, n : usize) -> T { a + n }` called with
+  `T = i64`: a `build_reject_has … "implicit signed/unsigned conversion"` at the body's `+`, on all
+  four backends. With `T = u64` it is accepted (run fixture `generic_mix_usize_u64_ok`).
+- `generic_signedness_per_instance` — one body `lt(T, a, b) -> bool { a < b }` called with `i64` and
+  `u64` on values whose signed and unsigned orders differ (`-1` vs `1`). It runs 42 when each
+  instance compares with its own signedness. Today the x86 legacy shape answer gets this right only
+  by accident, so the fixture pins it before 1e flips the query.
+- `generic_unused_instance_mix` — a mixing body that is never instantiated is accepted (Comptime §9.3:
+  there is no abstract check).
+- Census self-test: an instance-body node has a known record under `Some(id)` and `VcUnknown` under
+  `None`.
+
+**8.6 Predicted transitions, and how.** e1 is a move: manifest `0 CHANGED`, fixpoint seed ==
+Stage1 == Stage2. e2 is the step that moves verdicts. Before it lands, a probe build (sema's
+per-instance walk with the refusal, verdicts *reported, not raised*) runs over the self-build and
+every corpus program, and lists each instance that would be refused, with its file:line. Each row
+becomes a predicted `ACCEPTED → REJECTED` transition in the PR, or a source fix at its root (as in
+prerequisite d). The census predicts e3: the count of instance-dependent `VcUnknown` lines among
+the 43 that become known, per backend. The x86 GAS does not move until 1e's own promotion.
+
+**8.7 Owner questions for (e)** (spec-silent; options, no default taken):
+- **E-Q1, library generics' verdicts.** Comptime §9.3 says a body's type error surfaces "at
+  instantiation" and makes no carve-out. The project's "trust the stdlib" rule (sema §1 item 5;
+  `sema_module_is_lib`) does not re-check library bodies. (a) The rule wins: lib instances get records
+  only. A lib body that mixes for some `T` stays accepted, and the case is listed as a known gap.
+  (b) The spec wins: a user program that instantiates a mixing lib generic is rejected at its
+  instantiation. Lib bodies are fixed first, as in (d). (c) The spec wins for the corpus and `src/`,
+  through a lib sweep first, and then the same as (b). I lean (b)/(c), because it is the spec's
+  wording, but it reverses an explicit project rule.
+- **E-Q2, comptime-for and pack elements.** (a) Extend the key to iteration contexts in (e) (step e4,
+  before 1e). (b) Leave them to slice 6's clones (option B), and 1e waits for that. (c) Leave them in
+  the residue and give 1e a located internal error for them. That reads against "no residue" (§7, last
+  paragraph). I lean (a).
+- **E-Q3, the diagnostic's location.** Spec-silent on the format. The proposal: the primary location
+  is the body's operator, with a second line `in instance f(i64), instantiated at <file:line:col>`.
+  The other option is to report only at the call site.
