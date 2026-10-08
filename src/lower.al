@@ -30031,88 +30031,30 @@ x86_plain_label := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
   if overload_set_count(decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) >= 2 { return false }
   not fn_is_naked(src, d.name_start, d.name_len) and not callee_is_abi_c(src, d.name_start, d.name_len)
 }
-pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : ptr(u8), src_n : usize, mar : ptr(mut rt::Arena), a : rt::Arena, in out nl : usize, spanbase : usize, library_mode : bool) {
-  ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
-  ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
-  LOWER_SRC_N = src_n
-  ## COMMIT 3 (--ra default-on): probe the `ALATYR_RA=0` OFF escape hatch ONCE (intra-module write of
-  ## RA_ON). Default → `emit_fn` register-allocates the scalar-leaf shape; `ALATYR_RA=0` forces the old
-  ## text path (for debugging). This build is self-promoted (its own scalar-leaf fns are allocated).
-  ra_env_init(a)
-  SPLIT_ON = 0
-  if spanbase != 0 { SPLIT_ON = 1 }
-  LIBRARY_MODE = 0
-  if library_mode { LIBRARY_MODE = 1 }
-  ## PERF: build the per-decl name-hash pre-filter ONCE (decls are final here — lambda lifting ran in the
-  ## driver before emit) so the O(cnt) decl-by-name scans in the `.text` emit skip non-matches cheaply.
+## Mono's instance list (docs/ir-slice-1.md §8.1, prerequisite e1 of option A, §7). The x86 GENERICS
+## pre-pass, moved here unchanged out of `emit_program` so the driver can run it once after parsing and
+## BEFORE `sema::check_program` (sema needs the list to check each generic body per instance, step e2).
+## It only READS the AST: a seed walk over non-generic bodies, the transitive worklist that substitutes the
+## enclosing instance's arguments, then the comptime-for / variant-template field instances. The list
+## and its order are the ones `emit_program` built itself before e1, so the GAS does not move.
+## `emit_program` reads it through `mono_insts`; the twins keep their private lists until slice 6.
+mut MONO_INSTS : Option(ptr(mut IVec)) = Option.None
+pub collect_program := fn(decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt::Arena), a : rt::Arena) {
   build_decl_name_hash(decls, src, deref(mar))
   cnt := rt::vec_len(deref(decls))
-  ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any name-resolution / reachability /
-  ## emission. A decl carrying a `when <predicate>` whose CLOSED predicate folds FALSE for the build
-  ## target is NEUTERED IN PLACE to an inert kind-0 no-op with an EMPTY name (`name_len = 0`): it then
-  ## matches no name lookup, no overload set, no reachability root, and emits nothing — exactly the
-  ## spec's "as if the declaration were absent" (Phase B exclusion). A TRUE or unfoldable predicate
-  ## leaves the decl untouched (active). `src/`+`lib/` carry no `when` (every `when_cond` is 0), so this
-  ## loop neuters nothing there → the emitted GAS is byte-identical → the TOOL-1 fixpoint holds.
-  for i in 0..cnt {
-    dg := deref(decl_get(decls, i))
-    if unchecked bitcast(usize, dg.when_cond) != 0 {
-      if decl_guard_fold(dg.when_cond, src) == 0 {
-        gh := rt::vec_get(deref(decls), i)
-        gdp : ptr(mut Decl) = unchecked bitcast(ptr(mut Decl), gh)
-        ## keep `value` (a valid `Expr` ptr the `.rodata` walker handles harmlessly) but drop the NAME,
-        ## body, params, and kind → an inert kind-0 no-op that matches no lookup and emits no code.
-        deref(gdp) = Decl(name_start = dg.name_start, name_len = 0, value = dg.value,
-          is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
-          body_stmts = Option.None, fields_head = Option.None, ret_ts = 0, ret_tl = 0,
-          mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
-      }
-    }
+  hoff := node_alloc(deref(mar), size(IVec))
+  hp : ptr(mut IVec) = unchecked bitcast(ptr(mut IVec), arena_base(mar) + hoff)
+  ivec_new(deref(hp), mar, 16)
+  collect_program_into(deref(hp), decls, src, mar, a, cnt)
+  MONO_INSTS = Option.Some(hp)
+}
+mono_insts := fn(why : str) -> ptr(IVec) {
+  match MONO_INSTS {
+    Some(hp) => { return hp }
+    None => { panic(why) }
   }
-  ## §5.1 fill omitted trailing parameter-defaults BEFORE any emission (the `.rodata`/pool scans below
-  ## must see the completed arg lists). No-op for `src/` (no defaults) → fixpoint-neutral.
-  fill_program(decls, src, mar)
-  validate_standard_byte_tuple_boundaries(decls, src)
-  ## .rodata: emit every string literal's data, walking each fn body + each value binding.
-  ## `seen` collects already-emitted FLOAT-literal source offsets so a HOF-clone body that duplicates
-  ## a float literal (see `emit_rodata_expr`'s FloatLit case) emits the shared `.Lflt<offset>:` entry
-  ## once. Cap = `decls.cap` (reserved to the SOURCE BYTE COUNT by the driver): the number of distinct
-  ## float offsets ≤ the token count ≤ that cap, so `rt::vec_push` never overflows. For `src/`+`lib/`
-  ## every float offset is unique → nothing is deduped → the GAS is byte-identical (fixpoint-neutral).
-  scap := deref(decls).cap + 16
-  mut seen := rt::Vec(data = rt::bump(deref(mar), scap * 8), len = 0, cap = scap)
-  ## TOOL-6 slice 1b-ii (per-module BLOCK reorg): the `.rodata` STRING-literal emission is MOVED down into
-  ## the merged per-module loop (each module's `.rodata` strings now sit immediately before that same
-  ## module's `.text` fn defs, forming ONE contiguous rodata+text block per module — the exact physical
-  ## shape the per-module `.o` split needs). `seen` (the float-dedup Vec, from `mar` above) must stay LIVE
-  ## across that whole loop, so it must not be aliased by `a`-scratch or `rb`/`rb`: `rb`/`pb` are now
-  ## bumped from `mar` (past `seen`), not the by-value `a`. Field-name `.rodata` (below) + `.data` (below)
-  ## stay LEADING whole-program sections for now; folding them into the per-module block is the next slice.
-  ## FIELD-NAME rodata — for `display`'s aggregate rendering `{ <name> = value, … }`: a comptime-for
-  ## field-name read `f.name` (`emit_str_pair`'s `is_cf_name_ref` case) points at `.Lfld<name-offset>`,
-  ## so emit each STRUCT field's NAME as a `.ascii` string keyed on the field decl's name offset
-  ## (unique per field). GATED on the renderer (`alloc::fmt::display`) being compiled in, so a program
-  ## that never renders (the compiler's OWN self-build — `alloc::fmt` is not ambiently injected) emits
-  ## nothing → the `.rodata` (hence whole GAS) is byte-identical → the TOOL-1 fixpoint is unaffected.
-  mut needs_fld := false
-  for i in 0..cnt {
-    d := deref(decl_get(decls, i))
-    if d.kind == 1 and str_at((src + d.name_start), d.name_len) == "display" and str_at((src + d.mod_start), d.mod_len) == "alloc__fmt" { needs_fld = true }
-  }
-  ## TOOL-6 slice 1b-iii: the leading whole-program FIELD-NAME `.rodata` block and the leading
-  ## whole-program `.data` GLOBALS block have BOTH been folded into the per-module BLOCK loop below,
-  ## so each module's field-names now sit in ITS OWN `.rodata` (right after its string literals) and
-  ## its globals in ITS OWN `.data`, immediately before that module's `.text` — one contiguous
-  ## rodata+data+text block per module (the physical shape the per-module `.o` split needs). Only the
-  ## gate computations remain here: `needs_fld` (above, the aggregate renderer) and `has_gl` (below).
-  mut has_gl := false
-  for i in 0..cnt {
-    d := deref(decl_get(decls, i))
-    if global_needs_storage(src, d) { has_gl = true }
-  }
-  ## GENERICS pre-pass: collect the monomorphization instantiation set from every fn body.
-  mut insts := IVec(base = 0, len = 0, cap = 0, arena = mar)
-  ivec_new(insts, mar, 16)
+}
+collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt::Arena), a : rt::Arena, cnt : usize) {
   ## SEED from NON-GENERIC fns only. A generic fn's body calls other generics with its OWN
   ## type-PARAM (`allocate`'s `buf_ptr(T, …)`), which — collected literally here — would seed a
   ## BOGUS `buf_ptr__T` instance (an unsubstituted type-param tag); its body then calls `get(T)`
@@ -30294,6 +30236,91 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
       }
     }
   }
+}
+
+pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : ptr(u8), src_n : usize, mar : ptr(mut rt::Arena), a : rt::Arena, in out nl : usize, spanbase : usize, library_mode : bool) {
+  ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
+  ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
+  LOWER_SRC_N = src_n
+  ## COMMIT 3 (--ra default-on): probe the `ALATYR_RA=0` OFF escape hatch ONCE (intra-module write of
+  ## RA_ON). Default → `emit_fn` register-allocates the scalar-leaf shape; `ALATYR_RA=0` forces the old
+  ## text path (for debugging). This build is self-promoted (its own scalar-leaf fns are allocated).
+  ra_env_init(a)
+  SPLIT_ON = 0
+  if spanbase != 0 { SPLIT_ON = 1 }
+  LIBRARY_MODE = 0
+  if library_mode { LIBRARY_MODE = 1 }
+  ## PERF: build the per-decl name-hash pre-filter ONCE (decls are final here — lambda lifting ran in the
+  ## driver before emit) so the O(cnt) decl-by-name scans in the `.text` emit skip non-matches cheaply.
+  build_decl_name_hash(decls, src, deref(mar))
+  cnt := rt::vec_len(deref(decls))
+  ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any name-resolution / reachability /
+  ## emission. A decl carrying a `when <predicate>` whose CLOSED predicate folds FALSE for the build
+  ## target is NEUTERED IN PLACE to an inert kind-0 no-op with an EMPTY name (`name_len = 0`): it then
+  ## matches no name lookup, no overload set, no reachability root, and emits nothing — exactly the
+  ## spec's "as if the declaration were absent" (Phase B exclusion). A TRUE or unfoldable predicate
+  ## leaves the decl untouched (active). `src/`+`lib/` carry no `when` (every `when_cond` is 0), so this
+  ## loop neuters nothing there → the emitted GAS is byte-identical → the TOOL-1 fixpoint holds.
+  for i in 0..cnt {
+    dg := deref(decl_get(decls, i))
+    if unchecked bitcast(usize, dg.when_cond) != 0 {
+      if decl_guard_fold(dg.when_cond, src) == 0 {
+        gh := rt::vec_get(deref(decls), i)
+        gdp : ptr(mut Decl) = unchecked bitcast(ptr(mut Decl), gh)
+        ## keep `value` (a valid `Expr` ptr the `.rodata` walker handles harmlessly) but drop the NAME,
+        ## body, params, and kind → an inert kind-0 no-op that matches no lookup and emits no code.
+        deref(gdp) = Decl(name_start = dg.name_start, name_len = 0, value = dg.value,
+          is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
+          body_stmts = Option.None, fields_head = Option.None, ret_ts = 0, ret_tl = 0,
+          mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
+      }
+    }
+  }
+  ## §5.1 fill omitted trailing parameter-defaults BEFORE any emission (the `.rodata`/pool scans below
+  ## must see the completed arg lists). No-op for `src/` (no defaults) → fixpoint-neutral.
+  fill_program(decls, src, mar)
+  validate_standard_byte_tuple_boundaries(decls, src)
+  ## .rodata: emit every string literal's data, walking each fn body + each value binding.
+  ## `seen` collects already-emitted FLOAT-literal source offsets so a HOF-clone body that duplicates
+  ## a float literal (see `emit_rodata_expr`'s FloatLit case) emits the shared `.Lflt<offset>:` entry
+  ## once. Cap = `decls.cap` (reserved to the SOURCE BYTE COUNT by the driver): the number of distinct
+  ## float offsets ≤ the token count ≤ that cap, so `rt::vec_push` never overflows. For `src/`+`lib/`
+  ## every float offset is unique → nothing is deduped → the GAS is byte-identical (fixpoint-neutral).
+  scap := deref(decls).cap + 16
+  mut seen := rt::Vec(data = rt::bump(deref(mar), scap * 8), len = 0, cap = scap)
+  ## TOOL-6 slice 1b-ii (per-module BLOCK reorg): the `.rodata` STRING-literal emission is MOVED down into
+  ## the merged per-module loop (each module's `.rodata` strings now sit immediately before that same
+  ## module's `.text` fn defs, forming ONE contiguous rodata+text block per module — the exact physical
+  ## shape the per-module `.o` split needs). `seen` (the float-dedup Vec, from `mar` above) must stay LIVE
+  ## across that whole loop, so it must not be aliased by `a`-scratch or `rb`/`rb`: `rb`/`pb` are now
+  ## bumped from `mar` (past `seen`), not the by-value `a`. Field-name `.rodata` (below) + `.data` (below)
+  ## stay LEADING whole-program sections for now; folding them into the per-module block is the next slice.
+  ## FIELD-NAME rodata — for `display`'s aggregate rendering `{ <name> = value, … }`: a comptime-for
+  ## field-name read `f.name` (`emit_str_pair`'s `is_cf_name_ref` case) points at `.Lfld<name-offset>`,
+  ## so emit each STRUCT field's NAME as a `.ascii` string keyed on the field decl's name offset
+  ## (unique per field). GATED on the renderer (`alloc::fmt::display`) being compiled in, so a program
+  ## that never renders (the compiler's OWN self-build — `alloc::fmt` is not ambiently injected) emits
+  ## nothing → the `.rodata` (hence whole GAS) is byte-identical → the TOOL-1 fixpoint is unaffected.
+  mut needs_fld := false
+  for i in 0..cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 1 and str_at((src + d.name_start), d.name_len) == "display" and str_at((src + d.mod_start), d.mod_len) == "alloc__fmt" { needs_fld = true }
+  }
+  ## TOOL-6 slice 1b-iii: the leading whole-program FIELD-NAME `.rodata` block and the leading
+  ## whole-program `.data` GLOBALS block have BOTH been folded into the per-module BLOCK loop below,
+  ## so each module's field-names now sit in ITS OWN `.rodata` (right after its string literals) and
+  ## its globals in ITS OWN `.data`, immediately before that module's `.text` — one contiguous
+  ## rodata+data+text block per module (the physical shape the per-module `.o` split needs). Only the
+  ## gate computations remain here: `needs_fld` (above, the aggregate renderer) and `has_gl` (below).
+  mut has_gl := false
+  for i in 0..cnt {
+    d := deref(decl_get(decls, i))
+    if global_needs_storage(src, d) { has_gl = true }
+  }
+  ## GENERICS: the monomorphization instance set comes from `collect_program` (docs/ir-slice-1.md §8.1,
+  ## prerequisite e1), which the driver runs once after parsing and before sema. Absent = a driver path
+  ## that skipped it, a located internal error rather than an empty set.
+  insts_p := mono_insts("lower: emit_program before collect_program (mono instance set not collected)")
   ## REACHABILITY (dead-code elimination): a marker word per decl (bump-backed, zeroed). Seed the
   ## roots — every @test body, `main` only for a production artifact (the executable entry), and every
   ## GENERIC fn (scanning its
@@ -30786,9 +30813,9 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     sp_n = sp_n + 1
   }
   push_str(sb, ".text\n")
-  ni := ivec_len(ptr(insts))
+  ni := ivec_len(insts_p)
   for i in 0..ni {
-    e := ivec_at(ptr(insts), i)
+    e := ivec_at(insts_p, i)
     gd := deref(decl_at(Decl, rt::vec_get(deref(decls), e.gi)))
     ## CT-4/CT-5 INSTANTIATION guard: a generic fn carrying a `when P(T)` predicate is emitted ONLY for
     ## instances whose concrete `T` satisfies `P` (an inline comptime-bool over `size(T)`, folded by

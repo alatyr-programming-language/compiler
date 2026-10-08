@@ -2913,6 +2913,7 @@ pub compile := fn(src : str, in out a : Arena) -> strbuf::StrBuf {
   }
   mut nl := 0
   zdiag := lower::set_codegen_files(0, 0, 0, 0, 0)
+  lower::collect_program(ptr(decls), base, ptr(na), na)
   lower::emit_program(ptr(decls), sb, base, src.len, ptr(na), na, nl, 0, false)
   sb = lower::peephole_gas(ptr(sb), tar)
 
@@ -3007,6 +3008,7 @@ pub compile_pair := fn(sa : str, sb_src : str, in out a : Arena) -> strbuf::StrB
   strbuf::push_str(gas, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
   mut nl := 0
   zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), 2)
+  lower::collect_program(ptr(decls), base, ptr(na), na)
   lower::emit_program(ptr(decls), gas, base, strbuf::buf_len(bld), ptr(na), na, nl, 0, false)
   gas = lower::peephole_gas(ptr(gas), tar)
   ## discharge the working containers (the buffer is freed AFTER emit, which read spans off it).
@@ -3093,6 +3095,7 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
   strbuf::push_str(gas, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
   mut nl := 0
   zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), n)
+  lower::collect_program(ptr(decls), base, ptr(na), na)
   lower::emit_program(ptr(decls), gas, base, strbuf::buf_len(bld), ptr(na), na, nl, 0, false)
   gas = lower::peephole_gas(ptr(gas), tar)
   ## The file-table vectors (name/src offsets) + buffers live in the rt arena `tar`, reclaimed in
@@ -5241,6 +5244,10 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## IR slice 1d: under the `x86-ir` verb sema also RECORDS each expression's type (`ir::sty_*`, slice
   ## 1a) over these very nodes, which the shared IR's builder reads. Recording moves no verdict; every
   ## other surface leaves it off, as before.
+  ## IR prerequisite e1 (docs/ir-slice-1.md §8.1): mono's instance set is collected once, here, after
+  ## parsing and before sema (which will check each generic body per instance, e2); `emit_program`
+  ## reads this list instead of collecting its own.
+  lower::collect_program(ptr(decls), base, ptr(na), na)
   if lower::x86_ir_select_on() { ir::sty_enable() }
   scode := sema::check_program(ptr(decls), base, ptr(na))
   if scode != 0 { d_sema_reject(scode, base, ptr(ftab), tar) }
