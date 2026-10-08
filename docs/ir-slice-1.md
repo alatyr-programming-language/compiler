@@ -158,7 +158,7 @@ One child module per target, as §6 names them: `src/aarch64/isel.al`, `src/risc
 - **D1** (unchecked division) is still open. Slice 1 keeps each target's current `hw` behaviour and
   predicts no row change for the four `unchecked_*div*` paths.
 
-## 7. Owner question for 1e: a generic body's node has one record, its instances have several types
+## 7. Owner question for 1e (decided: A): a generic body's node has one record, its instances have several types
 
 **The residue.** After prerequisite (c) (#903) the 1e probe — every operand at x86's legacy
 signedness decisions, self-build plus every corpus program through x86_64 — leaves 0 untyped lines in
@@ -189,10 +189,19 @@ by sema**, and recorded keyed by the node; nothing defaults it.
 | **C. Symbolic record, substituted by the consumer** | Sema keeps recording the spelling `T` with its declaration (it does today, `TySpell`); an x86 query or the builder that meets a type-parameter spelling asks sema's resolver for the type the current instance binds (`LCtx`'s `gp_s/it_s` span, read through `sema_vty_name`). | Smallest: no new walk, no new key. The substitution is the one #903 already does for callee instances — of a declaration's own parameter, never a shape. Unblocks 1e's 43 lines. | No per-instance **verdict**: Comptime §9.3's checking stays a gap (to be closed by A or B later, so this work is partly thrown away). The consumer takes part in typing, which reads against D6's "sema is the single source" even if the resolver is sema's. `v.(f)` and pack elements need a per-iteration binding the consumers do not all have. | Small. | None by itself. |
 | D. Shape answer for instance-dependent nodes | x86 keeps `is_signed_expr`'s shape rule where the record is `VcUnknown` | — | **Excluded by D6** ("no shape-based fallback"); listed only because §6 Q2 proposed it. | — | — |
 
-**Recommendation, for the owner to decide:** A. It is the smallest change that makes the records
+**Recommendation, as put to the owner:** A. It is the smallest change that makes the records
 mean one thing and gives the checker the per-instance model Comptime §9.3 specifies; B is the same
 model with a larger blast radius and fits slice 6, where the twins' mono retires anyway; C unblocks 1e
 fastest but leaves the verdict gap and reads against D6.
+
+**Decided (owner, 2026-10-08): option A.** Records are keyed by (node, instance). Sema receives mono's
+instance list (mono's collection walk runs first, as a read-only pre-pass) and checks each generic
+body once more per instance, with the type parameters bound to the instance's written arguments,
+recording under `key(node) ⊕ instance id`. The generic pass stays. The consumers (the x86 legacy
+queries, the IR builder, the census) pass the instance id that `lower` already carries in `LCtx`.
+Verdicts are per instance, as Comptime §9.3 specifies: a body that mixes `T` with `usize` becomes a
+located error at its instantiation. B and C are not pursued; B's clones remain slice 6's business.
+This is 1e prerequisite (e).
 
 **What 1e can do before the answer.** The other 66 residue lines are sema gaps that do not depend on
 this question: calls of values the checker types as non-functions (16), lambdas passed to a

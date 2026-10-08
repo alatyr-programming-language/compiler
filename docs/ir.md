@@ -575,7 +575,8 @@ removes the question instead:
      same rule. A generic body's operand of a type-parameter type is `VcUnknown` (item 8), so a mix
      that only an instance can see (`T` against `usize`) is not refused: Comptime §9.3 checks a generic
      "per satisfying instantiation", which needs per-instance records — the 1e question
-     (docs/ir-slice-1.md §7).
+     (docs/ir-slice-1.md §7), decided 2026-10-08 as option A: records keyed by (node, instance),
+     1e prerequisite (e).
    - **Bindings shadow, and the records follow.** The checker kept the FIRST of two same-named `for`
      variables or match payload bindings in its local list (`if local_in(…) {} else { push }`), so a
      second loop's `u64` counter or a second match's `u64` payload was typed as the first one's
