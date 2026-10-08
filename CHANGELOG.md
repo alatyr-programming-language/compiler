@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64 and riscv64 read and write through pointers in the shared IR (IR slice 3b).** A field of a
+  struct reached through a `ptr(S)` (`p.f`, `deref(p).f`), a one-word scalar through `deref(p)`, a local
+  whose address is taken, and a mutable module scalar are built as loads and stores. The IR uses the
+  same layout as the legacy emitters wherever memory crosses between the two, and refuses (falls back
+  for) the layouts where that is not proved yet. x86_64 output is unchanged.
 - **aarch64 and riscv64 build struct locals through the shared IR (IR slice 3a).** A function whose
   struct locals have scalar fields is now emitted from the IR on the two register twins: a struct local
   is a frame object, a field read carries the field's declared width and signedness, and a whole-struct

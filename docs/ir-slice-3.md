@@ -1,6 +1,6 @@
 # Shared IR, slice 3 — design note and HANDOFF (aggregates, places, layout)
 
-Status: **3a in review** (§5). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
+Status: **3a in review** (§5, #910), **3b in review** (§6). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
 §0–§2 are the plan written at the end of the slice-2 lane, §3 what that lane measured, §4 the open
 questions, §5 onwards each PR as built.
 
@@ -165,3 +165,48 @@ all 758; `ir_diff`: the #909 fixture is the one new disagreement (x86_64 22, x86
 #765 stays open for wasm (no frame objects there yet) and for a struct parameter (3d); #713 for a
 generic `size(T)` (slice 6) and an enum/array operand; #769 needs 3d. The twins' legacy struct paths
 are still reached by every function that falls back, so none is deleted (rule 7.1.7).
+
+## 6. 3b — pointers as places (as built)
+
+Stacked on 3a (#910).
+
+- **Places** (`src/ir/build.al`, "places"): a field is read or written at a base — a struct local's
+  frame object, or a `ptr` vreg whose binding was declared `ptr(S)`/`ptr(mut S)` (a parameter's or an
+  annotated local's type; the parser records only a parameter's `ptr` head, so the `( … )` group is
+  found by bracket depth). `p.f`, `deref(p).f` read and `p.f = v`, `deref(p).f = v` write through it;
+  `deref(p)` reads and `deref(p) = v` writes a scalar (sema's type of the read; the declared pointee for
+  the store; the value is evaluated before the pointer, the legacy order).
+- **Address-taken locals**: a local or parameter whose address `ptr(x)` the function takes
+  (`ib_scan_taken`, by name, over the constructs the builder builds) lives in an 8-byte frame object;
+  its reads and writes are loads and stores, and `ptr(x)` is `addr $k`. `ptr(s)` of a struct local is
+  `addr $k` of its object.
+- **Mutable module scalars**: a read is `addr @G` + `load` at sema's type (never folded); `G = v` stores
+  the WHOLE one-word cell each target already gives a scalar global (`global_has_scalar_cell`), the
+  value widened to 64 bits first. wasm selects that store as `global.set` of the `i64` global.
+- **Layout agreement (Q4, rule 7.1.1).** Memory reached through a pointer may be written or read by a
+  legacy-emitted function. Agreement is proved for exactly one tier: a WORD-tier struct whose every
+  field is an 8-byte scalar (every model places field `i` at byte `8 i` and moves whole words), and an
+  8-byte scalar pointee or address-taken local. `test/ir_ptr_agree.al` writes in the IR and reads in a
+  legacy function, then the reverse, for both. aarch64's legacy emitter reads and writes `deref(p).f`;
+  riscv64's has no field place through a pointer at all (a located trap), so nothing legacy-written can
+  disagree there. A BYTE-tier struct through a pointer, a narrow scalar through `deref`, and a narrow
+  address-taken local are `NotYet`: a narrow store would leave the upper bytes of a word a legacy
+  reader loads whole, and the BYTE tier's legacy readers are not proved yet.
+- **Outside 3b**: pointer arithmetic (`gep`, with arrays in 3c), a pointer whose type no declaration
+  spells (an unannotated `m := ptr(x)`), `ptr(G)` of a global, nested field paths, a place reached
+  through a call result.
+
+### 6.1 Predicted manifest transitions (measured before the gate)
+
+Fresh manifests of 3a and of 3b on the gate machine, joined on (backend, path):
+
+| backend | path | before → after | why |
+|---|---|---|---|
+| aarch64, riscv64 | `test/deref_field_write.al` | run/133 → run/42 | `deref(p).f = v` through a pointer parameter |
+| riscv64 | `test/accept_ptr_target.al` | run/133 → run/139 | the program dereferences a null `ptr(A)`; now the same SIGSEGV as x86_64 and aarch64 (139) |
+| wasm | `test/package/visibility_pub_mut_lib/package.al`, `…/src/api.al` | assemble/1 → assemble/1 (stderr) | a function writing a `pub mut` module scalar is selected from the IR; the module still fails to assemble elsewhere |
+| all | 3 new fixtures | 12 ADDED rows | `ir_ptr_place` 42 (wasm 134), `ir_ptr_agree` 42 (riscv64 133, wasm 134), `ir_global_mut` 42 |
+
+No x86_64 row moves. Legacy values of the new fixtures (3a's compiler): `ir_ptr_place` aarch64/riscv64
+133; `ir_ptr_agree` aarch64 133; `ir_global_mut` 42 everywhere (the legacy twins already agree on
+whole-cell module scalars; the fixture pins the IR's store width against them).

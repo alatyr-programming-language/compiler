@@ -390,6 +390,35 @@ sw_load := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool
     None => { false }
   }
 }
+## `store T [%a + 0], v` into a module scalar (slice 3b): `global.set` of the whole `i64` cell. The
+## builder stores a module scalar's whole word (an integer widened to `i64`, a `bool`'s 0/1), so the
+## value is already the cell's canonical content. A store to any other address needs the shadow stack.
+sw_store := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool {
+  if ir::i_off(ip) != 0 { return false }
+  match ir::i_ak(ip) {
+    OkVReg => {}
+    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+  }
+  ty : ir::Kty = ir::i_ty(ip)
+  match ty {
+    KI64 | KBool => {}
+    KI8 | KI16 | KI32 | KPtr | KF32 | KF64 | KNone => { return false }
+  }
+  so : Option(usize) = sw_addr_of(x, usize(ir::i_av(ip)))
+  match so {
+    Some(s) => {
+      if not sw_ld(sb, ir::i_bk(ip), ir::i_bv(ip)) { return false }
+      di := ir::sym_decl(x.p, ir::SymId(s))
+      g : Decl = deref(lower_ctx::decl_get(x.decls, di))
+      gname := str_at((x.src + g.name_start), g.name_len)
+      sw_put(sb, "    global.set $")
+      sw_put(sb, gname)
+      sw_put(sb, "\n")
+      true
+    }
+    None => { false }
+  }
+}
 ## A direct call: the arguments pushed in order, `call $<name>`, the result canonicalized from the
 ## destination's type (or dropped when the callee answers one nobody reads).
 sw_call := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool {
@@ -486,6 +515,7 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
     OpCmp => { sw_cmp(sb, ip) }
     OpAddrSym => { sw_addr(x, a, ip) }
     OpLoad => { sw_load(sb, x, ip) }
+    OpStore => { sw_store(sb, x, ip) }
     OpCall => { sw_call(sb, x, ip) }
     OpBlock => { sw_open(sb, "block", ip); sw_push(x, a, i); true }
     OpLoop => { sw_open(sb, "loop", ip); sw_push(x, a, i); true }
@@ -525,7 +555,7 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpAddrFrame | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpStore | OpBSwap | OpCopy | OpZero | OpGep | OpBound | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpCopy | OpZero | OpGep | OpBound | OpCallInd
       | OpCallC | OpSyscall | OpSwitch => { false }
   }
 }
