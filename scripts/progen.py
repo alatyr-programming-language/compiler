@@ -663,14 +663,27 @@ class _Err(Exception):
         self.v = v
 
 
+def lit_only(e):
+    """Is `e` built from integer literals alone? Such an expression is a comptime number (Types §2.3)
+    whose type comes from its context; `if` counts when both of its arms are literal-only."""
+    k = e[0]
+    if k == 'lit':
+        return True
+    if k in ('bin', 'div'):
+        return lit_only(e[2]) and lit_only(e[3])
+    if k == 'if':
+        return lit_only(e[2]) and lit_only(e[3])
+    return False
+
+
 def model_exit(P):
     ty = P['ty']
     M = 1 << 64
     fns = {fn['name']: fn for fn in P['fns']}
 
-    def w(v):
+    def w(v, t=None):
         v %= M
-        return v - M if ty == 'i64' and v >= 1 << 63 else v
+        return v - M if (t or ty) == 'i64' and v >= 1 << 63 else v
 
     def tdiv(a, b):
         q = abs(a) // abs(b)
@@ -679,24 +692,31 @@ def model_exit(P):
     def trem(a, b):
         return a - b * tdiv(a, b)
 
-    def ex(e, env):
+    # `t` is the type the context gives a literal-only expression (Types §2.3/§9.1); every other
+    # expression has the program's one scalar type.
+    def ex(e, env, t=None):
         k = e[0]
         if k == 'lit':
-            return w(e[1])
+            return w(e[1], t)
         if k == 'var':
             return env[e[1]]
         if k == 'bin':
-            a, b = ex(e[2], env), ex(e[3], env)
-            return w({'+': a + b, '-': a - b, '*': a * b, '&': a & b, '|': a | b, '^': a ^ b}[e[1]])
+            a, b = ex(e[2], env, t), ex(e[3], env, t)
+            return w({'+': a + b, '-': a - b, '*': a * b, '&': a & b, '|': a | b, '^': a ^ b}[e[1]], t)
         if k == 'div':
-            a, d = ex(e[2], env), ex(e[3], env)
-            g = w(trem(d, 7) + (8 if ty == 'i64' else 1))
-            return w(tdiv(a, g) if e[1] == '/' else trem(a, g))
+            a, d = ex(e[2], env, t), ex(e[3], env, t)
+            g = w(trem(d, 7) + (8 if ty == 'i64' else 1), t)
+            return w(tdiv(a, g) if e[1] == '/' else trem(a, g), t)
         if k == 'cmp':
-            a, b = ex(e[2], env), ex(e[3], env)
+            # Types §9.1 / Declarations §3.4: two literal-only operands give each other no typed
+            # context, so both take the documented default, the target's native SIGNED integer, and
+            # the ordering is signed whatever the program's type. A literal next to a typed operand
+            # takes that operand's type (§2.3), which is the program's.
+            ct = 'i64' if lit_only(e[2]) and lit_only(e[3]) else None
+            a, b = ex(e[2], env, ct), ex(e[3], env, ct)
             return {'==': a == b, '!=': a != b, '<': a < b, '<=': a <= b, '>': a > b, '>=': a >= b}[e[1]]
         if k == 'if':
-            return ex(e[2], env) if ex(e[1], env) else ex(e[3], env)
+            return ex(e[2], env, t) if ex(e[1], env) else ex(e[3], env, t)
         if k == 'call':
             return call(e[1], [ex(a, env) for a in e[2]])
         if k == 'field':
@@ -783,7 +803,7 @@ def model_of(P):
     longer means anything is the usual one)."""
     try:
         return model_exit(P)
-    except (KeyError, AssertionError, ValueError, TypeError) as e:
+    except (KeyError, AssertionError, ValueError, TypeError, ZeroDivisionError) as e:
         return f'none({type(e).__name__})'
 
 
@@ -1302,7 +1322,9 @@ def cmd_self_test(a):
     bad += not same
     # the model, on two planted programs whose meaning is fixed by the specification: a signed
     # remainder takes the dividend's sign (-9 % 8 = -1, so main answers 113), and a `u64` ordering
-    # is unsigned (1 < 0 - 1 wrapped, so main answers 42)
+    # is unsigned (1 < 0 - 1 wrapped, so main answers 42), and an ordering of two literal-only
+    # operands is signed even in a `u64` program (Types §9.1: no typed context, the native signed
+    # default; 0 - 1 < 1, so main answers 42 — the shape of seed 2072800060)
     planted = [
         ({'ty': 'i64', 'forms': [], 'structs': {}, 'enums': {}, 'brands': [], 'calls': [('call', 'g1', [('lit', -9)])],
           'fns': [{'name': 'g1', 'params': [('p', 'v')], 'ret': 'v', 'body': [],
@@ -1311,6 +1333,10 @@ def cmd_self_test(a):
           'fns': [{'name': 'g1', 'params': [('p', 'v')], 'ret': 'v', 'body': [],
                    'tail': ('if', ('cmp', '<', ('var', 'p'), ('bin', '-', ('lit', 0), ('lit', 1))),
                             ('lit', 41), ('lit', 0))}]}, 42, 'unsigned ordering'),
+        ({'ty': 'u64', 'forms': [], 'structs': {}, 'enums': {}, 'brands': [], 'calls': [('call', 'g1', [('lit', 1)])],
+          'fns': [{'name': 'g1', 'params': [('p', 'v')], 'ret': 'v', 'body': [],
+                   'tail': ('if', ('cmp', '<', ('bin', '-', ('lit', 0), ('lit', 1)), ('lit', 1)),
+                            ('lit', 41), ('lit', 0))}]}, 42, 'literal-only ordering (§9.1)'),
     ]
     for prog, want, name in planted:
         got = model_of(prog)
