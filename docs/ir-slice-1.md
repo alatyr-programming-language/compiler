@@ -227,6 +227,18 @@ list to sema and to `emit_program`, which stops collecting on its own. The list 
 ones `emit_program` builds today, so the self-build's GAS does not move (fixpoint proof). The twins'
 private lists stay until slice 6. They are *consumers* of the ids (8.3) and need not share the order.
 
+*As landed (e1).* The function is `lower::collect_program(decls, src, mar, a)`, in `src/lower.al` next to
+`Inst`/`IVec`/`add_inst`, not in `src/lower/mono.al`. The walk needs `add_inst`, `tparam_idx2/3`,
+`struct_decl_of` and the `COLLECT_*` globals, and they all live in `lower`. `mono` is imported by
+`lower`, so it cannot call back into `lower`. It keeps the list in `MONO_INSTS : Option(ptr(mut IVec))`.
+`emit_program` reads the list through `mono_insts`, and an absent list panics with the missing step named, never an empty
+set. The driver calls it before `sema::check_program` on the build path, and before `emit_program` on the
+three paths that do not run sema. `check`, `x86-ir` and the census get the call in e2, where sema
+first reads the list. The walk now runs before three steps that `emit_program` took first:
+`fill_program` (trailing defaults), the `when`-guard fold of declarations, and sema itself. The
+proof that none of them changes the set is measured: fixpoint seed == Stage1 == Stage2, and the corpus
+manifest unchanged against the base commit, both on omen.
+
 **8.2 The instance key.** An instance's identity is its content: the generic's decl index plus the
 written type-argument spellings `(gi, ts/tl, ts2/tl2, ts3/tl3)`, compared by text (`Inst`). Sema
 interns each one into its own table, with a brand `InstId := distinct u32`, and answers
