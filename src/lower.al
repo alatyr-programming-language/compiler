@@ -10343,6 +10343,12 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
         } else {
           pw = payload_agg_words(ga0.e, cx, a)
         }
+        ## #912/#913 — a STRUCT-LITERAL payload (`Some(W(k = K(…)))`) is delivered by the one struct-value
+        ## emitter, `emit_struct_value`, which knows every field kind (nested struct, enum, str, byte
+        ## tier), and then rides the same word SHIFT as a call payload. A private per-field push here
+        ## used to treat field k as payload word k: a nested-struct field read past the field list (a
+        ## compiler SIGSEGV, #912) or, one word wide, pushed `emit_gas`'s `$0` struct placeholder (#913).
+        if parray == false and pw > 0 and struct_lit_info(ga0.e).is_s { pcall = true }
         if parray == false and pw == 0 and expr_is_call(ga0.e) {
           cw := payload_call_struct_words(es, el, vs, vl, cx, a)
           if cw > 1 { pw = cw; pcall = true }
@@ -10374,7 +10380,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
         ## register (word k → payload reg k+1) so the payload rides %rdx.. and %rax is free for the
         ## outer discriminant. The Call arm below leaves the registers (no push).
         ga := deref(arg_at(phead, "argument list ended early"))
-        emit_enum_value(ga.e, sb, cx, a, nl)
+        if struct_lit_info(ga.e).is_s { emit_struct_value(ga.e, sb, cx, a, nl) } else { emit_enum_value(ga.e, sb, cx, a, nl) }
         mut j := pw
         while j > 0 {
           push_str(sb, "  movq ")
@@ -10398,19 +10404,8 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
           emit_retreg(sb, 1)
           push_str(sb, "\n")
         } else {
-        psl := struct_lit_info(ga.e)
-        if psl.is_s {
-          ## struct LITERAL payload: lower fields onto the stack, pop into %rdx.. in reverse (field
-          ## k → `emit_retreg(k+1)`), matching `emit_struct_value`'s StructLit register order.
-          fh := struct_lit_fields(ga.e)
-          for k in 0..pw { fk := arg_expr_at(fh, k, a); emit_gas(fk, sb, cx, a, nl) }
-          for j in 0..pw {
-            push_str(sb, "  popq ")
-            emit_retreg(sb, pw - j)
-            push_str(sb, "\n")
-          }
-        } else {
-          ## struct VAR payload: copy each of its slot words into a payload register (word k → retreg k+1).
+          ## struct VAR payload (a struct LITERAL took the `pcall` path above): copy each of its slot
+          ## words into a payload register (word k → retreg k+1).
           vn := var_name_span(ga.e)
           pent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
           if pent.is_ref {
@@ -10439,7 +10434,6 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
               push_str(sb, "\n")
             }
           }
-        }
         }
       } else if np >= 2 {
         ## a MULTI-FIELD payload (`E.B(a, b)`, np >= 2): deliver EACH payload field into a consecutive
@@ -10499,8 +10493,8 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
           ga := deref(arg_at(phead, "argument list ended early"))
           psi := struct_lit_info(ga.e)
           if psi.is_s {
-            ## a 1-word STRUCT-literal payload (`Ok(Ty(kind=…))`): return the struct's WORD 0 (its
-            ## FIRST field) in %rdx — `emit_gas` of a whole struct pushes a placeholder `$0`.
+            ## a ZERO-word struct-literal payload (every wider one took the `pcall` path above):
+            ## %rdx carries no payload word — `emit_gas` of a whole struct pushes a placeholder `$0`.
             f0 := arg_expr_at(struct_lit_fields(ga.e), 0, a)
             if unchecked bitcast(usize, f0) != 0 { emit_gas(f0, sb, cx, a, nl) } else { push_str(sb, "  pushq $0\n") }
             push_str(sb, "  popq %rdx\n")
@@ -11297,7 +11291,12 @@ lit_has_byref_agg_value := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> b
   }
   res
 }
-struct_has_nonstr_multiword_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
+## Does struct `[s, s+n)` have a field that `emit_struct_value`'s per-field word push cannot lower:
+## a multi-word non-`str` field (enum with payload, array, wide struct) OR a field of STRUCT type at
+## any width. The second half is #913: a one-word nested struct (`W { k : K }`, `K { ty : i64 }`)
+## passed the old multi-word-only test, so its value `K(ty = 42)` went to `emit_gas`, which pushes the
+## `$0` placeholder for a whole struct — a silent zero. Such a literal is materialized whole instead.
+struct_has_nonstr_agg_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
   sbn := base_type_name(src, s, n)
   di := struct_decl_of(decls, src, sbn.s, sbn.n)
   if di < 0 { return false }
@@ -11312,6 +11311,7 @@ struct_has_nonstr_multiword_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s :
         efw := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
         fw := field_words(decls, src, eff.s, eff.n, efw, a)
         if fw > 1 and str_at((src + eff.s), eff.n) != "str" { res = true }
+        if struct_decl_of(decls, src, base_type_name(src, eff.s, eff.n).s, base_type_name(src, eff.s, eff.n).n) >= 0 { res = true }
         f = fd.next
       }
       None => { break }
@@ -11512,20 +11512,26 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       ## width gate misses for a ONE-word aggregate field (see `lit_has_byref_agg_value`). Correct-or-
       ## trap: without a reserved aggregate scratch there is nowhere to materialize, so panic rather
       ## than emit the address.
-      mut matz := swf > nf and struct_has_nonstr_multiword_field(cx.decls, cx.src, irs.s, irs.n, a)
+      mut matz := struct_has_nonstr_agg_field(cx.decls, cx.src, irs.s, irs.n, a)
       if matz == false and lit_has_byref_agg_value(e, cx, a) {
         if cx.agg_tmp < 0 { panic("selfhost: a struct literal returned by value with a by-reference aggregate field value has no aggregate scratch to materialize into") }
         matz = true
       }
       if matz {
-        emit_struct_assign(e, cx.agg_tmp, sb, cx, a, nl)
+        ## A fresh pool block of the literal's own width (`agg_alloc_words`, widened by `emit_fn`'s
+        ## re-emission when the body needs more), not the fixed `cx.agg_tmp` reservation: since #913 an
+        ## enum-returning fn reaches here for its `Some(W(…))` payload, and the scan that sizes
+        ## `cx.agg_tmp` does not count that literal, so a fixed block could be narrower than `swf`.
+        sv_next := cx.agg_next
+        mb := emit_agg_lit_temp(e, swf, sb, cx, a, nl)
         for k in 0..swf {
           push_str(sb, "  movq -")
-          push_int(sb, i64((cx.agg_tmp - i64(k) + 1) * 8))
+          push_frame_word(sb, usize(mb), k)
           push_str(sb, "(%rbp), ")
           emit_retreg(sb, k)
           push_str(sb, "\n")
         }
+        cx.agg_next = sv_next
         return
       }
       ## lower each field's WORDS onto the stack in declaration/word order, then pop into the return

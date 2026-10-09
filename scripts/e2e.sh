@@ -11659,6 +11659,13 @@ check_accept issue693_union_member_control
 ## plus `check_accept`) and `callfield_ptr_ret` (106). All four are already registered in this table
 ## and all four are pinned per backend by the corpus oracle, so no row is added here: a duplicate
 ## would assert nothing the existing rows do not, and the oracle is the stronger record.
+## #912/#913 — a struct literal with a struct-typed field, delivered by value (returned in registers
+## or carried as an enum payload). x86_64 built it one pushed word per FIELD, so a one-word nested
+## struct pushed the `$0` placeholder (w.k.ty read 0, #913) and a wider one read past the field list
+## and crashed the compiler (#912). The literal is now built whole and its words delivered. 42 on
+## x86_64; aarch64/riscv64/wasm implement a subset and fail loud (trap) on the nested field read,
+## which the sweeps accept — the forbidden verdict is a normal wrong exit, not a trap.
+run issue913_struct_lit_nested_field 42
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
