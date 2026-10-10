@@ -122,6 +122,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.13 — 2026-10-09
+
 - **A loop nest deeper than 64 leaves through the right loop (x86_64).** The loop-target frames were
   `[_; 64]` arrays whose push dropped the 65th frame while every pop still popped, so each later
   `break`/`continue` jumped to another loop's label (#829). They now live in a word table that grows
@@ -162,6 +164,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   explicit. Before, each backend picked a signedness by its own rule, and they disagreed. This newly
   rejects programs the specification declares invalid, so it is a PATCH: spell the binding's type
   (`mut i : usize = 0`, `0..u64(9)`) or convert one operand with `T(v)`.
+
+- **A struct literal with a struct-typed field, delivered by value, keeps every component (x86_64).** A struct or enum payload built from a nested struct literal (`Some(W(k = K(…)))`, a returned `W(k = K(…))`) was lowered one pushed word per FIELD, so a one-word nested struct pushed the `$0` placeholder (`w.k.ty` read 0, #913) and a wider one read past the field list and crashed the compiler (#912). The literal is now built whole and its words delivered. **Seed promotion:** the fix is in the compiler's own emitter, so `seed/alatyr` advances from 0.2.12 to 0.2.13 to carry it. Seed to Stage1 is 71 hunks (191 added, 82 removed) — the compiler's own struct-literal payloads now lower through the whole-materialization path instead of the per-field push/pop path; one sentence: every struct-literal payload in the compiler's own code is built whole and its words delivered. Stage1, Stage2 and Stage3 emit byte-identical GAS (1 557 220 lines) and Stage2 == Stage3 in the binary, all answering `alatyr 0.2.13`; `seed/VERSION` records the hashes.
 
 ## 0.2.12 — 2026-10-02
 
