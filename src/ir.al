@@ -352,6 +352,11 @@ pub LabelId := brand(usize)
 pub FrameId := brand(usize)
 pub FnId := brand(usize)
 pub SymId := brand(usize)
+## A byte offset inside a memory object (a field's place, `docs/ir.md` §3.2) — never a word count or a
+## slot index (#167: a word offset used as a byte offset). It becomes an instruction's `off` only
+## through `byte_off_imm`.
+pub ByteOff := brand(usize)
+pub byte_off_imm := fn(o : ByteOff) -> i64 { i64(usize(o)) }
 
 ## ───────────────────────────── storage: a growing word buffer ─────────────────────────────
 
@@ -576,6 +581,26 @@ pub new_frame := fn(f : ptr(mut IrFn), in out a : rt::Arena, sz : usize, al : us
   deref(fr) = nfr
   FrameId(wb_push(fn_frames(f), a, ptr_word(hp)))
 }
+## Frame-object placement for a selector whose frame keeps `base` bytes before its first object (the
+## register twins' vreg slots): object `k` at the next multiple of its alignment, in order. Answers one
+## word per object (its byte offset from the frame base) and a last word, the end of the last object.
+## Placement is the selector's (spec `90-codegen.md` §3.3); one function keeps the two register twins
+## from placing differently.
+pub frame_place := fn(f : ptr(mut IrFn), in out a : rt::Arena, base : usize) -> ptr(mut WBuf) {
+  n := fn_nframes(f)
+  w := wb_new(a, n + 1)
+  mut cur := base
+  mut k : usize = 0
+  while k < n {
+    al := frame_align_of(f, k)
+    if al > 1 and cur % al != 0 { cur = cur + (al - cur % al) }
+    q := wb_push(w, a, cur)
+    cur = cur + frame_bytes(f, k)
+    k = k + 1
+  }
+  q2 := wb_push(w, a, cur)
+  w
+}
 pub new_label := fn(f : ptr(mut IrFn)) -> LabelId {
   l := fn_nlabels(f)
   deref(f).nlabels = l + 1
@@ -588,11 +613,11 @@ pool_len := fn(f : ptr(mut IrFn)) -> usize { wb_len(fn_pool(f)) }
 pub fn_ninst := fn(f : ptr(mut IrFn)) -> usize { wb_len(fn_insts(f)) }
 pub fn_inst := fn(f : ptr(mut IrFn), i : usize) -> ptr(mut IrInst) { inst_ptr(wb_get(fn_insts(f), i)) }
 pub fn_nvregs := fn(f : ptr(mut IrFn)) -> usize { wb_len(fn_vregs(f)) }
-fn_nframes := fn(f : ptr(mut IrFn)) -> usize { wb_len(fn_frames(f)) }
+pub fn_nframes := fn(f : ptr(mut IrFn)) -> usize { wb_len(fn_frames(f)) }
 pub vreg_ty := fn(f : ptr(mut IrFn), v : usize) -> Kty { vi : VInfo = deref(vinfo_ptr(wb_get(fn_vregs(f), v))); vi.ty }
 pub vreg_sg := fn(f : ptr(mut IrFn), v : usize) -> Sgn { vi : VInfo = deref(vinfo_ptr(wb_get(fn_vregs(f), v))); vi.sg }
-frame_bytes := fn(f : ptr(mut IrFn), k : usize) -> usize { fr : Frame = deref(frame_ptr(wb_get(fn_frames(f), k))); fr.size }
-frame_align_of := fn(f : ptr(mut IrFn), k : usize) -> usize { fr : Frame = deref(frame_ptr(wb_get(fn_frames(f), k))); fr.align }
+pub frame_bytes := fn(f : ptr(mut IrFn), k : usize) -> usize { fr : Frame = deref(frame_ptr(wb_get(fn_frames(f), k))); fr.size }
+pub frame_align_of := fn(f : ptr(mut IrFn), k : usize) -> usize { fr : Frame = deref(frame_ptr(wb_get(fn_frames(f), k))); fr.align }
 
 ## Instruction field reads (#792: copy first, then read; the call is what a `match` scrutinizes).
 pub i_op := fn(ip : ptr(mut IrInst)) -> Op { it : IrInst = deref(ip); it.op }

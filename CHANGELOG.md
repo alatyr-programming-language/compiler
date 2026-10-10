@@ -122,6 +122,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64 and riscv64 build struct locals through the shared IR (IR slice 3a).** A function whose
+  struct locals have scalar fields is now emitted from the IR on the two register twins: a struct local
+  is a frame object, a field read carries the field's declared width and signedness, and a whole-struct
+  assignment copies. A signed `i64` field now divides signed there (#765), `size(T)`/`align(T)` of a
+  scalar or such a struct is a constant on all three twins (#713), and `p = P(a = p.b, b = p.a)`
+  answers the literal's value on the IR-built twins (x86_64 and the legacy emitters still build it in
+  place, #909). wasm keeps its legacy emission for these functions until it has a shadow stack.
+  x86_64 output is unchanged.
 ## 0.2.13 — 2026-10-09
 
 - **A loop nest deeper than 64 leaves through the right loop (x86_64).** The loop-target frames were

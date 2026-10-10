@@ -533,6 +533,10 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
 ## Select function `f` (declaration `d`) into `sb`. Answers false when the function is refused.
 sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> bool {
   if wat_ovl_is_marked(d.name_start) { return false }
+  ## A frame object (a struct local, an aggregate temporary: slice 3) needs the shadow stack of
+  ## `docs/ir.md` §6 — linear memory popped on return. Until it exists such a function keeps its
+  ## legacy emission (`docs/ir-slice-3.md` §3.5), never the legacy bump allocator from the selector.
+  if ir::fn_nframes(x.f) != 0 { return false }
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   fname := str_at((x.src + d.name_start), d.name_len)

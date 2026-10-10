@@ -17,14 +17,20 @@
 ## legacy-emitted function call each other. Both ends of a call re-canonicalize a narrow value from its
 ## IR type (a parameter at entry, a result after the `bl`), because a legacy peer does not promise it.
 ##
+## Frame objects (slice 3a: struct locals and aggregate temporaries, `docs/ir.md` §3.3) follow the vreg
+## slots, each at its alignment (`ir::frame_place`); an address operand `$k` is `x29 + <its offset>`.
+## `load`/`store` take the width from the IR type, `copy`/`zero` move whole words when the size is a
+## multiple of 8 and bytes otherwise.
+##
 ## A selector may REFUSE a function (an op it does not select, more than 8 parameters, a frame past
 ## the addressing range); the caller then rewinds the output and emits the function the legacy way.
 (Decl) := ast
 
 ## What one function is selected against: the IR, the program its symbols index, the source, the
 ## declaration list, a per-program function number for local labels, the function's own name span
-## (the location of a trap that carries none), and the region stack (opener instruction indices).
-SaX := struct { f : ptr(mut ir::IrFn), p : ir::IrProg, src : ptr(u8), decls : ptr(rt::Vec), fid : usize, fspan : usize, stk : ptr(mut ir::WBuf) }
+## (the location of a trap that carries none), the region stack (opener instruction indices), and the
+## placement of the frame objects (`ir::frame_place`: one byte offset from x29 per object, then the end).
+SaX := struct { f : ptr(mut ir::IrFn), p : ir::IrProg, src : ptr(u8), decls : ptr(rt::Vec), fid : usize, fspan : usize, stk : ptr(mut ir::WBuf), fobj : ptr(mut ir::WBuf) }
 
 ## The number of the next function this selector emits, for its `.Lir<n>_<k>` labels.
 mut SA_FN : usize = 0
@@ -37,6 +43,8 @@ sa_u := fn(in out sb : rt::StrBuf, n : usize) { k := rt::push_int(sb, i64(n)) }
 sa_off := fn(v : usize) -> i64 { 16 + i64(v) * 8 }
 ## The most vregs a frame may hold: `ldr x, [x29, #imm]` addresses at most 32760 bytes.
 SA_MAX_VREGS : usize = 4000
+## The largest frame the prologue's `mov x9, #<frame>` encodes (a 16-bit immediate).
+SA_MAX_FRAME : i64 = 65520
 
 ## `  ldr <reg>, [x29, #<slot of v>]` / `  str …`.
 sa_ldv := fn(in out sb : rt::StrBuf, reg : str, v : usize) {
@@ -367,11 +375,30 @@ sa_addr := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool
     None => { false }
   }
 }
+## The byte offset of frame object `k` from x29.
+sa_fobj_off := fn(x : SaX, k : usize) -> i64 { i64(ir::wb_get(x.fobj, k)) }
+## An ADDRESS operand into `reg`: a `ptr` vreg's value, or a frame object's address `x29 + off`.
+sa_base := fn(in out sb : rt::StrBuf, x : SaX, reg : str, k : ir::OpndK, v : i64) -> bool {
+  match k {
+    OkVReg => { sa_ldv(sb, reg, usize(v)); true }
+    OkFrame => {
+      sa_put(sb, "  ldr "); sa_put(sb, reg); sa_put(sb, ", ="); sa_int(sb, sa_fobj_off(x, usize(v)))
+      sa_put(sb, "\n  add "); sa_put(sb, reg); sa_put(sb, ", x29, "); sa_put(sb, reg); sa_put(sb, "\n")
+      true
+    }
+    OkNone | OkImm | OkSym | OkFn | OkLabel => { false }
+  }
+}
+## The memory operand `[x9, #off]` of a `width`-byte access whose base is in x9: the offset folded
+## into x9 first when the unsigned scaled form cannot encode it.
+sa_mem_off := fn(in out sb : rt::StrBuf, off : i64, width : u64) -> i64 {
+  if off >= 0 and off <= 4095 and off % i64(width) == 0 { return off }
+  sa_put(sb, "  ldr x12, ="); sa_int(sb, off); sa_put(sb, "\n  add x9, x9, x12\n")
+  0
+}
 ## `load T [a + off]`: the width from `T`, the extension from its spelled signedness.
-sa_load := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
-  off := ir::i_off(ip)
-  if off < 0 or off > 4095 { return false }
-  if not sa_lda(sb, "x9", ip) { return false }
+sa_load := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sa_base(sb, x, "x9", ir::i_ak(ip), ir::i_av(ip)) { return false }
   ty : ir::Kty = ir::i_ty(ip)
   sg : ir::Sgn = ir::i_sg(ip)
   mut mn : str = ""
@@ -383,12 +410,56 @@ sa_load := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
     KBool => { mn = "  ldrb w11" }
     KF32 | KF64 | KNone => { return false }
   }
-  if off % i64(ir::kty_bytes(ty)) != 0 { return false }
+  off := sa_mem_off(sb, ir::i_off(ip), ir::kty_bytes(ty))
   sa_put(sb, mn)
   sa_put(sb, ", [x9, #")
   sa_int(sb, off)
   sa_put(sb, "]\n")
   sa_st11(sb, ip)
+}
+## `store T [a + off], v`: the value's low `T`-width bytes.
+sa_store := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sa_base(sb, x, "x9", ir::i_ak(ip), ir::i_av(ip)) { return false }
+  if not sa_ldb(sb, "x10", ip) { return false }
+  ty : ir::Kty = ir::i_ty(ip)
+  mut mn : str = ""
+  match ty {
+    KI8 | KBool => { mn = "  strb w10" }
+    KI16 => { mn = "  strh w10" }
+    KI32 => { mn = "  str w10" }
+    KI64 | KPtr => { mn = "  str x10" }
+    KF32 | KF64 | KNone => { return false }
+  }
+  off := sa_mem_off(sb, ir::i_off(ip), ir::kty_bytes(ty))
+  sa_put(sb, mn)
+  sa_put(sb, ", [x9, #")
+  sa_int(sb, off)
+  sa_put(sb, "]\n")
+  true
+}
+## `addr $k`: the frame object's address.
+sa_addr_frame := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sa_base(sb, x, "x11", ir::i_ak(ip), ir::i_av(ip)) { return false }
+  sa_st11(sb, ip)
+}
+## `copy dst, src, n` (x9 ← dst, x10 ← src) and `zero dst, n` (x9 ← dst): a counted loop over 8-byte
+## words when `n` is a multiple of 8, over bytes otherwise. Nothing for `n == 0`.
+sa_mem := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst), copy : bool) -> bool {
+  n := ir::i_n(ip)
+  if not sa_base(sb, x, "x9", ir::i_ak(ip), ir::i_av(ip)) { return false }
+  if copy { if not sa_base(sb, x, "x10", ir::i_bk(ip), ir::i_bv(ip)) { return false } }
+  if n == 0 { return true }
+  words := n % 8 == 0
+  mut cnt : usize = n
+  if words { cnt = n / 8 }
+  sa_put(sb, "  ldr x12, ="); sa_u(sb, cnt); sa_put(sb, "\n1:\n")
+  if copy {
+    if words { sa_put(sb, "  ldr x11, [x10], #8\n  str x11, [x9], #8\n") } else { sa_put(sb, "  ldrb w11, [x10], #1\n  strb w11, [x9], #1\n") }
+  } else {
+    if words { sa_put(sb, "  str xzr, [x9], #8\n") } else { sa_put(sb, "  strb wzr, [x9], #1\n") }
+  }
+  sa_put(sb, "  subs x12, x12, #1\n  b.ne 1b\n")
+  true
 }
 ## The argument run of call or syscall `ip` into x0, x1, … (the one register mapping both share).
 sa_args := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) {
@@ -540,7 +611,11 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
     OpFit => { sa_fit(sb, x, ip) }
     OpCmp => { sa_cmp(sb, ip) }
     OpAddrSym => { sa_addr(sb, x, ip) }
-    OpLoad => { sa_load(sb, ip) }
+    OpLoad => { sa_load(sb, x, ip) }
+    OpStore => { sa_store(sb, x, ip) }
+    OpAddrFrame => { sa_addr_frame(sb, x, ip) }
+    OpCopy => { sa_mem(sb, x, ip, true) }
+    OpZero => { sa_mem(sb, x, ip, false) }
     OpCall => { sa_call(sb, x, ip) }
     OpSyscall => { sa_syscall(sb, x, ip) }
     OpBlock | OpUnch => { stk_push(x, a, i); true }
@@ -588,8 +663,8 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
       sa_put(sb, "1:\n")
       true
     }
-    OpFConst | OpAddrFrame | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpStore | OpBSwap | OpCopy | OpZero | OpGep | OpBound | OpCallInd
+    OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpGep | OpBound | OpCallInd
       | OpCallC | OpSwitch => { false }
   }
 }
@@ -600,8 +675,10 @@ sa_fn := fn(in out sb : rt::StrBuf, x : SaX, d : Decl, in out a : rt::Arena) -> 
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > 8 or nv > SA_MAX_VREGS { return false }
-  mut frame : i64 = 16 + i64(nv) * 8
-  if frame % 16 != 0 { frame = frame + 8 }
+  ## The vreg slots, then the frame objects (`x.fobj`'s last word is their end), rounded to 16.
+  mut frame : i64 = i64(ir::wb_get(x.fobj, ir::wb_len(x.fobj) - 1))
+  if frame % 16 != 0 { frame = frame + (16 - frame % 16) }
+  if frame > SA_MAX_FRAME { return false }
   sa_put(sb, "// ir: selected from the shared IR\n")
   emit_a64_export(sb, x.src, d.name_start, d.name_len)
   a64_emit_fn_label(sb, x.src, d)
@@ -648,7 +725,8 @@ pub a64_isel_try := fn(decls : ptr(rt::Vec), di : usize, in out sb : rt::StrBuf,
   match si {
     SiBuilt(f) => {
       d : Decl = deref(lower_ctx::decl_get(decls, di))
-      x := SaX(f = f, p = p, src = src, decls = decls, fid = SA_FN, fspan = d.name_start, stk = ir::wb_new(ia, 16))
+      fo := ir::frame_place(f, ia, 16 + ir::fn_nvregs(f) * 8)
+      x := SaX(f = f, p = p, src = src, decls = decls, fid = SA_FN, fspan = d.name_start, stk = ir::wb_new(ia, 16), fobj = fo)
       mark := sb.len
       if sa_fn(sb, x, d, ia) {
         SA_FN = SA_FN + 1
