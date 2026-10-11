@@ -20546,6 +20546,12 @@ sema_inst_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)
       ## locals are local to it, and the record table stores only `VTy`/`TySpell` VALUES (spans,
       ## never a pointer into this arena), so nothing allocated here outlives the body — rewinding
       ## per body bounds the walk's memory.
+      ## `base` is a null placeholder that `arena_init` overwrites on the next line (or panics
+      ## before returning), so it is never read as a pointer — the same in-out-constructor shape
+      ## every other arena in the tree uses (`driver.al:6514` and its 22 siblings). The bitcast is
+      ## spelled explicitly because Types §4.3 makes an integer->pointer reinterpret carry a grant;
+      ## leaving it implicit would add a #529 seam row.
+      ## null-ok: an Arena's pre-init `base`; rt.al:29 assigns it or panics, never dereferenced.
       mut scratch := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
       rt::arena_init(scratch, 16777216)
       mut i : usize = 0
