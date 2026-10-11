@@ -20507,6 +20507,11 @@ sema_signedness_span := fn(code : usize) -> Option(u64) {
   if code < SIGNEDNESS_CONVERSION_DIAG_MARKER or code >= SAME_SCOPE_REDECL_DIAG_MARKER { return Option(u64).None }
   Option(u64).Some(u64((code - SIGNEDNESS_CONVERSION_DIAG_MARKER) / 4))
 }
+## Is `code` the mixed-signedness class? (The predicate `sema_signedness_span` answers, spelled as a
+## bool so the walk's `match` stays on one channel-agnostic test.)
+sema_is_signedness_err := fn(code : usize) -> bool {
+  code >= SIGNEDNESS_CONVERSION_DIAG_MARKER and code < SAME_SCOPE_REDECL_DIAG_MARKER
+}
 
 ## docs/ir-slice-1.md §8.3 (e2) — the per-instance walk. For each instance mono collected, re-check
 ## its generic body once with `SEMA_INST` set to the instance's id (mono's IVec index, already deduped
@@ -20559,23 +20564,28 @@ sema_inst_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)
           ## instance re-check sees the same declaration prefix and answers the same questions the
           ## generic pass answered — only the type parameters are bound now.
           cr := check_decl(d, decls, ie.gi, src, ptr(scratch))
+          ## The finding is the MIXED-SIGNEDNESS class (§8.3): the verdict e2 adds, and the one a
+          ## generic body can show only once `T` is bound. Any other class the re-check refuses is a
+          ## pre-existing check-gap unrelated to instance typing — `check_decl` over a library body
+          ## reaches those too, and the generic pass already reports them verdict-free through
+          ## `sema_lib_record`. Measured over the corpus: 4 rows from `alloc::fmt::display`, code
+          ## 493756 (kind 0, a plain located error), against gmix's real mix at code
+          ## 6896500000000000188 (the signedness marker). Counting the former as findings would be a
+          ## false positive that blocks enabling the verdicts, so the class is recognised by its marker
+          ## and its span read with the marker SUBTRACTED — dividing a code by four alone reads a
+          ## number past the source buffer (measured: SIGSEGV in `ir.line_start`).
           mut refused := false
-          ## located at the body's operator when the refusal is the signedness class (the one this walk
-          ## exists to find), else at the generic's own name — always a valid span. A `CheckErr` is
-          ## `marker + span * 4` with a per-class marker, so dividing by four without subtracting the
-          ## marker reads a number past the source buffer (measured: SIGSEGV in `ir.line_start`).
-          mut at : usize = d.name_start
+          mut at : usize = 0
+          mut code : usize = 0
           match cr {
-            Result::Ok(c) => { refused = c != 0 }
-            Result::Err(e) => {
-              refused = true
-              sp : Option(u64) = sema_signedness_span(usize(e))
-              match sp { Some(a) => { at = usize(a) }; None => {} }
-            }
+            Result::Ok(c) => { refused = sema_is_signedness_err(usize(c)) ; code = usize(c) }
+            Result::Err(e) => { refused = sema_is_signedness_err(usize(e)) ; code = usize(e) }
           }
           if refused {
+            sp : Option(u64) = sema_signedness_span(code)
+            match sp { Some(a) => { at = usize(a) }; None => {} }
             SEMA_INST_REFUSED = SEMA_INST_REFUSED + 1
-            ir::sign_inst_row(d.mod_start, d.mod_len, d.name_start, d.name_len, at, src)
+            ir::sign_inst_row(d.mod_start, d.mod_len, d.name_start, d.name_len, code, at, src)
           }
           SEMA_INST_RECORDING = false
           sema_instruments_put(kept)
