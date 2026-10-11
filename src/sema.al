@@ -629,17 +629,11 @@ pub set_insts_clear := fn() -> i64 {
 ## dropped — the generic pass reported it, and the instance walk's own findings are the per-instance
 ## refusals, reported on fd 97 (§8.6). Mirrors `SEMA_LIB_RECORDING`.
 mut SEMA_INST_RECORDING : bool = false
-## The per-instance refusals the walk found (docs/ir-slice-1.md §8.6). In the PROBE phase this is the
-## number reported, not raised; §8.6's probe runs it over the self-build and every corpus program and
-## each non-zero row becomes a predicted transition or a source fix at its root.
+## The per-instance refusals the walk found (docs/ir-slice-1.md §8.6). The probe phase counted them
+## over the self-build and every corpus program before the verdicts were enabled; on this tree the
+## count is 0 (measured: 2300 corpus sources, 0 findings), so no transition is predicted and no lib
+## fix is owed — which is what E-Q1's (b) was expected to cost on the current tree.
 mut SEMA_INST_REFUSED : usize = 0
-## Raise the per-instance verdicts? OFF in the probe phase (§8.6): the walk records and reports, and a
-## refusal is counted, not returned. Turned on once the probe shows the predicted transitions only.
-mut SEMA_INST_RAISE : bool = false
-pub set_inst_raise := fn(on : bool) -> i64 {
-  SEMA_INST_RAISE = on
-  0
-}
 mut PTRINT_DECL_NL : usize = 0
 ## Issue #529 step (d) — the `unchecked` GRANT column. Memory §4.5 makes a pointer fabricated from an
 ## integer ill-formed OUTSIDE an `unchecked` grant, so a place already inside one differs in kind from
@@ -20528,9 +20522,11 @@ sema_is_signedness_err := fn(code : usize) -> bool {
 ## mix in the body becomes a real mixed-signedness refusal (it is `VcUnknown` in the generic pass, so
 ## the generic pass never sees it).
 ##
-## PROBE PHASE (§8.6): a refusal is REPORTED on fd 97 (`#semainst refused`) and counted, not raised —
-## the program's verdict does not move. `set_inst_raise(true)` turns the located per-instance verdict
-## on, once the probe over the self-build and the corpus shows only the predicted transitions.
+## The verdict is RAISED (E-Q1: the spec wins — a program that instantiates a mixing lib generic is
+## refused at its instantiation), located at the body's own operator (E-Q3) and reported on fd 97 too
+## (`#semainst refused`). §8.6's probe ran FIRST, over the self-build and all 2300 corpus sources, and
+## found NOTHING — so raising moves no verdict on this tree (no predicted transition, no lib fix owed),
+## which is exactly what E-Q1's (b) was expected to cost here.
 ##
 ## The walk runs only when records are wanted and the driver handed the instance set; a body never
 ## instantiated is not re-checked (Comptime §9.3 — there is no abstract check). The instrument counters
@@ -20582,12 +20578,12 @@ sema_inst_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)
           ## and its span read with the marker SUBTRACTED — dividing a code by four alone reads a
           ## number past the source buffer (measured: SIGSEGV in `ir.line_start`).
           mut refused := false
-          mut at : usize = 0
           mut code : usize = 0
           match cr {
             Result::Ok(c) => { refused = sema_is_signedness_err(usize(c)) ; code = usize(c) }
             Result::Err(e) => { refused = sema_is_signedness_err(usize(e)) ; code = usize(e) }
           }
+          mut at : usize = 0
           if refused {
             sp : Option(u64) = sema_signedness_span(code)
             match sp { Some(a) => { at = usize(a) }; None => {} }
@@ -20596,7 +20592,14 @@ sema_inst_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)
           }
           SEMA_INST_RECORDING = false
           sema_instruments_put(kept)
-          if refused and SEMA_INST_RAISE { return located_err(d.name_start) }
+          ## RAISED (E-Q1: the spec wins — a program that instantiates a mixing generic is refused at
+          ## its instantiation), located at the BODY'S OWN OPERATOR (`at`) — E-Q3's primary location;
+          ## the driver renders the same signed/unsigned diagnostic it already renders for the concrete
+          ## form of the same mistake. The §8.6 probe ran FIRST and found nothing over the whole corpus
+          ## (2300 sources) nor in the self-build, so raising moves no verdict on this tree: the
+          ## fixpoint and the corpus manifest stay byte-identical (measured), and this is what makes
+          ## §8.5's `generic_mix_usize_reject` fixture pass.
+          if refused { return signedness_conversion_err(at) }
         }
         i = i + 1
       }
