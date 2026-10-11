@@ -600,6 +600,12 @@ mut PTRINT_DECL_NS : usize = 0
 ## Issue #697 — the parameter list of the declaration `check_decl` is checking (as a word), so a local
 ## annotation can tell the enclosing function's `T : type` parameters from unknown type names.
 mut SEMA_DECL_PARAMS : Option(ptr(mut Param)) = Option.None
+## docs/ir-slice-1.md §8.3 (e2) — the monomorphization instance `check_program` is re-checking a
+## generic body for, or `None` during the ordinary (generic) pass. The record functions consult it so
+## every record a body check writes lands under `(node, Some(id))` for an instance and `(node, None)`
+## for the generic pass — no `Option(InstId)` is threaded through the check walk. Set and RESTORED
+## (not cleared) around each per-instance `check_fn`, exactly as `SEMA_DECL_PARAMS` is.
+mut SEMA_INST : Option(ir::InstId) = Option.None
 mut PTRINT_DECL_NL : usize = 0
 ## Issue #529 step (d) — the `unchecked` GRANT column. Memory §4.5 makes a pointer fabricated from an
 ## integer ill-formed OUTSIDE an `unchecked` grant, so a place already inside one differs in kind from
@@ -8524,8 +8530,8 @@ sema_mixed_signedness := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> Option(u64
   match deref(e) {
     Expr::Bin(op, l, r) => {
       if sema_vty_op_is_boolean(op) { return Option(u64).None }
-      lt : ir::VTy = ir::sty_get(l)
-      rt0 : ir::VTy = ir::sty_get(r)
+      lt : ir::VTy = sema_sty_get(l)
+      rt0 : ir::VTy = sema_sty_get(r)
       if not ir::vty_is_int(lt) or not ir::vty_is_int(rt0) or ir::vty_same_sign(lt, rt0) { return Option(u64).None }
       ## located at the pair's leftmost written offset; an operator no source text locates still refuses
       sp : Option(u64) = ir::expr_span(e)
@@ -8553,7 +8559,7 @@ sema_vty_local_ns := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), s : usi
 ## The recorded type of the innermost local named `[s, s+n)`: its declaration's binding record.
 sema_vty_local := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), s : usize, n : usize) -> ir::VTy {
   lo : Option(u64) = sema_vty_local_ns(locals, nloc, src, s, n)
-  match lo { Some(dns) => { ir::sty_bind_get(usize(dns)) }; None => { ir::vty_unknown() } }
+  match lo { Some(dns) => { sema_sty_bind_get(usize(dns)) }; None => { ir::vty_unknown() } }
 }
 ## A use of a name whose `Ty` names no type takes the type recorded for its declaration: the innermost
 ## local of that name (`ir::sty_bind_put`, as `local_lookup` resolves it), and with no local of that
@@ -8561,12 +8567,12 @@ sema_vty_local := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), s : usize,
 sema_vty_var := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, src : ptr(u8), decls : ptr(rt::Vec)) {
   vs := expr_var_span(e)
   if vs.n == 0 { return }
-  cur : ir::VTy = ir::sty_get(e)
+  cur : ir::VTy = sema_sty_get(e)
   if ir::vty_known(cur) { return }
   lo : Option(u64) = sema_vty_local_ns(locals, nloc, src, vs.s, vs.n)
   mut bt : ir::VTy = ir::vty_unknown()
-  match lo { Some(dns) => { bt = ir::sty_bind_get(usize(dns)); sema_lambda_capture(locals, src, vs.s, vs.n, usize(dns)) }; None => { bt = sema_vty_global(decls, src, vs.s, vs.n) } }
-  if ir::vty_known(bt) { ir::sty_put(e, bt) }
+  match lo { Some(dns) => { bt = sema_sty_bind_get(usize(dns)); sema_lambda_capture(locals, src, vs.s, vs.n, usize(dns)) }; None => { bt = sema_vty_global(decls, src, vs.s, vs.n) } }
+  if ir::vty_known(bt) { sema_sty_put(e, bt) }
 }
 ## docs/ir.md §3.8 — the records of code `check_expr` does not walk: a value `loop`'s body, and a
 ## lambda's. The checker does not walk a lambda body where it is written
@@ -8625,10 +8631,10 @@ sema_lambda_capture := fn(locals : ptr(LVec), src : ptr(u8), s : usize, n : usiz
   match outer {
     Some(ons) => {
       if usize(ons) != dns { return }
-      ct : ir::VTy = ir::sty_bind_get(dns)
-      if ir::vty_known(ct) { ir::sty_bind_put(s, ct) }
-      csp : ir::TySpell = ir::sty_bind_spell_get(dns)
-      if sema_spell_known(csp) { ir::sty_bind_spell_put(s, csp) }
+      ct : ir::VTy = sema_sty_bind_get(dns)
+      if ir::vty_known(ct) { sema_sty_bind_put(s, ct) }
+      csp : ir::TySpell = sema_sty_bind_spell_get(dns)
+      if sema_spell_known(csp) { sema_sty_bind_spell_put(s, csp) }
     }
     None => {}
   }
@@ -8645,7 +8651,7 @@ sema_vty_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize)
       if ann.n != 0 { return sema_vty_spell(sema_spell_at(ann.s, ann.n), decls, src) }
       ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
       if unchecked bitcast(usize, d.value) == 0 { return ir::vty_unknown() }
-      r : ir::VTy = ir::sty_get(d.value)
+      r : ir::VTy = sema_sty_get(d.value)
       if ir::vty_is_lit(r) or (not ir::vty_known(r) and sema_expr_is_num(d.value)) { return ir::vty_s(8) }
       r
     }
@@ -8663,12 +8669,44 @@ sema_expr_is_num := fn(e : ptr(Expr)) -> bool {
   }
 }
 ## Record `e`'s value type from the `Ty` `check_expr` answered, and remember it as a census site.
+## docs/ir-slice-1.md §8.3 (e2) — the record-table accessors, instance-aware. Each consults `SEMA_INST`:
+## during the ordinary (generic) pass it is `None` and the call goes to the plain `ir::sty_*` form
+## (the record lands under `(node, None)`, exactly as before); while `check_program` re-checks a
+## generic body for an instance it is `Some(id)` and the call goes to the `ir::sty_*_in` form (the
+## record lands under `(node, Some(id))`). This is what keeps the per-instance walk from threading an
+## `Option(InstId)` through the whole check walk: every record a body check writes is keyed by the
+## instance that is being checked.
+sema_sty_put := fn(e : ptr(Expr), t : ir::VTy) {
+  match SEMA_INST { Some(id) => { ir::sty_put_in(e, Option(ir::InstId).Some(id), t) }; None => { ir::sty_put(e, t) } }
+}
+sema_sty_get := fn(e : ptr(Expr)) -> ir::VTy {
+  match SEMA_INST { Some(id) => { ir::sty_get_in(e, Option(ir::InstId).Some(id)) }; None => { ir::sty_get(e) } }
+}
+sema_sty_bind_put := fn(ns : usize, t : ir::VTy) {
+  match SEMA_INST { Some(id) => { ir::sty_bind_put_in(ns, Option(ir::InstId).Some(id), t) }; None => { ir::sty_bind_put(ns, t) } }
+}
+sema_sty_bind_get := fn(ns : usize) -> ir::VTy {
+  match SEMA_INST { Some(id) => { ir::sty_bind_get_in(ns, Option(ir::InstId).Some(id)) }; None => { ir::sty_bind_get(ns) } }
+}
+sema_sty_spell_put := fn(e : ptr(Expr), t : ir::TySpell) {
+  match SEMA_INST { Some(id) => { ir::sty_spell_put_in(e, Option(ir::InstId).Some(id), t) }; None => { ir::sty_spell_put(e, t) } }
+}
+sema_sty_spell_get := fn(e : ptr(Expr)) -> ir::TySpell {
+  match SEMA_INST { Some(id) => { ir::sty_spell_get_in(e, Option(ir::InstId).Some(id)) }; None => { ir::sty_spell_get(e) } }
+}
+sema_sty_bind_spell_put := fn(ns : usize, t : ir::TySpell) {
+  match SEMA_INST { Some(id) => { ir::sty_bind_spell_put_in(ns, Option(ir::InstId).Some(id), t) }; None => { ir::sty_bind_spell_put(ns, t) } }
+}
+sema_sty_bind_spell_get := fn(ns : usize) -> ir::TySpell {
+  match SEMA_INST { Some(id) => { ir::sty_bind_spell_get_in(ns, Option(ir::InstId).Some(id)) }; None => { ir::sty_bind_spell_get(ns) } }
+}
+## Record `e`'s value type from the `Ty` `check_expr` answered, and remember it as a census site.
 sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)) {
   mut vt : ir::VTy = ir::vty_unknown()
   if t.nl != 0 { vt = sema_vty_name(src, t.ns, t.nl, decls) }
   if not ir::vty_known(vt) { vt = sema_vty_kind(ty_kind(t)) }
   if not ir::vty_known(vt) { vt = sema_vty_shape(e, decls, src) }
-  ir::sty_put(e, vt)
+  sema_sty_put(e, vt)
   if sema_vty_site(e, src) { ir::sign_site(e) }
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { sema_vty_call_args(cs, cl, na, ah, decls, src) }
@@ -8881,8 +8919,8 @@ sema_vty_breaks_go := fn(h : Option(ptr(mut Stmt)), depth : usize, t : ir::VTy, 
             if bd == depth and unchecked bitcast(usize, bv) != 0 {
               ## a literal `break` value is never checked as an expression (the break-value pass reads its
               ## tag): it is the literal-only value `check_expr` would record
-              bvt : ir::VTy = ir::sty_get(bv)
-              if not ir::vty_known(bvt) and not ir::vty_is_lit(bvt) and sema_expr_is_num(bv) { ir::sty_put(bv, ir::vty_lit()) }
+              bvt : ir::VTy = sema_sty_get(bv)
+              if not ir::vty_known(bvt) and not ir::vty_is_lit(bvt) and sema_expr_is_num(bv) { sema_sty_put(bv, ir::vty_lit()) }
               if push { sema_vty_push(bv, t) }
               r = sema_vty_child(bv)
             }
@@ -8924,7 +8962,7 @@ sema_vty_breaks_go := fn(h : Option(ptr(mut Stmt)), depth : usize, t : ir::VTy, 
 }
 ## A child's record, `VcUnknown` when sema never typed it.
 sema_vty_child := fn(c : ptr(Expr)) -> ir::VTy {
-  ct : ir::VTy = ir::sty_get(c)
+  ct : ir::VTy = sema_sty_get(c)
   if ir::vty_known(ct) or ir::vty_is_lit(ct) { return ct }
   ir::vty_unknown()
 }
@@ -9026,9 +9064,9 @@ sema_vty_syscall_at := fn(d : Decl, ah : Option(ptr(mut Arg)), decls : ptr(rt::V
 ## A context gives the literal-only expression `e` the type `t`: rewrite its record, and its literal
 ## parts' (an arithmetic operand, an `unchecked` body, a value `if`'s or `match`'s arms).
 sema_vty_push := fn(e : ptr(Expr), t : ir::VTy) {
-  cur : ir::VTy = ir::sty_get(e)
+  cur : ir::VTy = sema_sty_get(e)
   if not ir::vty_is_lit(cur) { return }
-  ir::sty_put(e, t)
+  sema_sty_put(e, t)
   match deref(e) {
     Expr::Bin(op, l, r) => {
       if not sema_vty_op_is_bool(op) { sema_vty_push(l, t); sema_vty_push(r, t) }
@@ -9277,7 +9315,7 @@ sema_spell_call_targ := fn(ce : ptr(Expr), di : usize, pos : usize, decls : ptr(
                 Some(g2q) => {
                   ga2 := deref(arg_p(g2q))
                   pt : ir::TySpell = sema_spell_param(pm, src)
-                  r : ir::TySpell = sema_spell_unify(pt.s, pt.n, pn_s, pn_n, ir::sty_spell_get(ga2.e), decls, src, 0)
+                  r : ir::TySpell = sema_spell_unify(pt.s, pt.n, pn_s, pn_n, sema_sty_spell_get(ga2.e), decls, src, 0)
                   if sema_spell_known(r) { return r }
                   g2 = ga2.next
                 }
@@ -9797,7 +9835,7 @@ sema_spell_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
       if ann.n != 0 { return sema_spell_type(ann.s, ann.n, src) }
       ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
       if unchecked bitcast(usize, d.value) != 0 {
-        vsp : ir::TySpell = ir::sty_spell_get(d.value)
+        vsp : ir::TySpell = sema_sty_spell_get(d.value)
         if sema_spell_known(vsp) { return vsp }
         return sema_spell_init(d.value, src)
       }
@@ -9834,7 +9872,7 @@ sema_spell_shape := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : 
     Expr::Var(vs, vl) => {
       lo : Option(u64) = sema_vty_local_ns(locals, nloc, src, vs, vl)
       match lo {
-        Some(dns) => { ir::sty_bind_spell_get(usize(dns)) }
+        Some(dns) => { sema_sty_bind_spell_get(usize(dns)) }
         None => { sema_spell_global(decls, src, vs, vl) }
       }
     }
@@ -9842,7 +9880,7 @@ sema_spell_shape := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : 
       ## a call of a fn-typed local or parameter: the `-> R` of its `fn(…) -> R` type
       lf : Option(u64) = sema_vty_local_ns(locals, nloc, src, cs, cl)
       match lf {
-        Some(lfn) => { sema_spell_fn_result(ir::sty_bind_spell_get(usize(lfn)), src) }
+        Some(lfn) => { sema_spell_fn_result(sema_sty_bind_spell_get(usize(lfn)), src) }
         None => {
           sc : ir::TySpell = sema_spell_call(e, cs, cl, na, decls, src)
           if sema_spell_known(sc) { sc } else { sema_spell_call_more(e, cs, cl, na, ah, decls, src, a) }
@@ -9879,14 +9917,14 @@ sema_spell_shape := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : 
     ## an array literal's elements have one type: the first one's
     Expr::ArrayLit(an, ah) => {
       match ah {
-        Some(aq) => { a0 := deref(arg_p(aq)); sema_spell_array_of(ir::sty_spell_get(a0.e)) }
+        Some(aq) => { a0 := deref(arg_p(aq)); sema_spell_array_of(sema_sty_spell_get(a0.e)) }
         None => { sema_spell_none() }
       }
     }
     ## both arms of a value `if` have the one type the checker agreed
     Expr::If(c, th, el) => {
-      tsp : ir::TySpell = ir::sty_spell_get(th)
-      if sema_spell_known(tsp) { tsp } else { ir::sty_spell_get(el) }
+      tsp : ir::TySpell = sema_sty_spell_get(th)
+      if sema_spell_known(tsp) { tsp } else { sema_sty_spell_get(el) }
     }
     Expr::Match(sc, mh) => { sema_spell_arms(mh) }
     ## `ptr(x)` points at a value of `x`'s type; `E.V(…)` / `Result(u64, E).Ok(…)` has the type its head names
@@ -9903,7 +9941,7 @@ sema_spell_shape := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : 
 ## or projected name it looks up itself), so a name with no record of its own is read here the way
 ## `check_expr` would record it.
 sema_spell_child := fn(c : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
-  sp : ir::TySpell = ir::sty_spell_get(c)
+  sp : ir::TySpell = sema_sty_spell_get(c)
   if sema_spell_known(sp) { return sp }
   match deref(c) {
     Expr::Var(vs, vl) => { sema_spell_shape(c, locals, nloc, decls, src, a) }
@@ -9940,7 +9978,7 @@ sema_spell_call_more := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah
   match ah {
     Some(aq) => {
       a0 := deref(arg_p(aq))
-      rsp : ir::TySpell = sema_spell_norm(ir::sty_spell_get(a0.e), decls, src)
+      rsp : ir::TySpell = sema_spell_norm(sema_sty_spell_get(a0.e), decls, src)
       if cl > 8 and str_at((src + cs), 8) == "atomic::" {
         nm := str_at((src + cs + 8), cl - 8)
         if nm == "load" or nm == "swap" or nm == "fetch_add" or nm == "fetch_sub" or nm == "fetch_and" or nm == "fetch_or" or nm == "fetch_xor" {
@@ -10107,7 +10145,7 @@ sema_spell_arms := fn(mh : Option(ptr(mut Arm))) -> ir::TySpell {
         am := deref(arm_p(armq))
         ## null-ok: Arm.body — an arm with a statement body carries a null value expression (ast.al).
         if unchecked bitcast(usize, am.body) != 0 {
-          bsp : ir::TySpell = ir::sty_spell_get(am.body)
+          bsp : ir::TySpell = sema_sty_spell_get(am.body)
           if sema_spell_known(bsp) { return bsp }
         }
         arm = am.next
@@ -10187,7 +10225,7 @@ sema_spell_payload := fn(scs0 : ir::TySpell, vs : usize, vl : usize, nbind : usi
 sema_spell_arm_binds := fn(sc : ptr(Expr), am : Arm, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) {
   if not ir::sty_on() { return }
   nb := bind_count(am.binds_head)
-  scs : ir::TySpell = ir::sty_spell_get(sc)
+  scs : ir::TySpell = sema_sty_spell_get(sc)
   mut bi : usize = 0
   mut bd := am.binds_head
   loop {
@@ -10208,7 +10246,7 @@ sema_spell_arm_binds := fn(sc : ptr(Expr), am : Arm, decls : ptr(rt::Vec), src :
 sema_vty_builtin := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
   match deref(e) {
     Expr::Field(fb, fs, fl) => {
-      bsp : ir::TySpell = sema_spell_norm(ir::sty_spell_get(fb), decls, src)
+      bsp : ir::TySpell = sema_spell_norm(sema_sty_spell_get(fb), decls, src)
       fname := str_at((src + fs), fl)
       if ir::spell_array(bsp) or (sema_spell_text(bsp) and lower_layout::arr_field_elem_span(src, bsp.s, bsp.n).n != 0) {
         if fname == "len" { return ir::vty_u(8) }
@@ -10220,7 +10258,7 @@ sema_vty_builtin := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir
       ir::vty_unknown()
     }
     Expr::Index(ib, ii) => {
-      isp : ir::TySpell = ir::sty_spell_get(ib)
+      isp : ir::TySpell = sema_sty_spell_get(ib)
       if ir::spell_bytes_view(isp) or (sema_spell_text(isp) and isp.n == 3 and str_at((src + isp.s), 3) == "str") { return ir::vty_u(1) }
       ir::vty_unknown()
     }
@@ -10231,7 +10269,7 @@ sema_vty_builtin := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir
         match ah {
           Some(lq) => {
             l0 := deref(arg_p(lq))
-            lsp : ir::TySpell = sema_spell_norm(ir::sty_spell_get(l0.e), decls, src)
+            lsp : ir::TySpell = sema_spell_norm(sema_sty_spell_get(l0.e), decls, src)
             if sema_spell_is_view(lsp, src) or ir::spell_array(lsp) {
               SEMA_REC_NA = 2
               ld : Option(u64) = sema_rec_decl(decls, src, cs, cl, true)
@@ -10268,27 +10306,27 @@ sema_spell_record := fn(e : ptr(Expr), t : Ty, locals : ptr(LVec), nloc : usize,
     }
   }
   if not sema_spell_known(sp) {
-    cur0 : ir::VTy = ir::sty_get(e)
+    cur0 : ir::VTy = sema_sty_get(e)
     if ir::vty_known(cur0) or ir::vty_is_lit(cur0) { return }
     bt : ir::VTy = sema_vty_builtin(e, decls, src)
-    if ir::vty_known(bt) { ir::sty_put(e, bt) }
+    if ir::vty_known(bt) { sema_sty_put(e, bt) }
     return
   }
-  ir::sty_spell_put(e, sp)
-  cur : ir::VTy = ir::sty_get(e)
+  sema_sty_spell_put(e, sp)
+  cur : ir::VTy = sema_sty_get(e)
   if ir::vty_known(cur) or ir::vty_is_lit(cur) { return }
   mut vt : ir::VTy = sema_vty_spell(sp, decls, src)
   if not ir::vty_known(vt) { vt = sema_vty_builtin(e, decls, src) }
-  if ir::vty_known(vt) { ir::sty_put(e, vt) }
+  if ir::vty_known(vt) { sema_sty_put(e, vt) }
 }
 ## A binding declared with the spelling `sp`: its value type and its spelling, read by each use.
 sema_spell_bind := fn(ns : usize, sp : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) {
-  if not sema_spell_known(sp) and sema_spell_known(ir::sty_bind_spell_get(ns)) { return }
-  ir::sty_bind_spell_put(ns, sp)
-  cur : ir::VTy = ir::sty_bind_get(ns)
+  if not sema_spell_known(sp) and sema_spell_known(sema_sty_bind_spell_get(ns)) { return }
+  sema_sty_bind_spell_put(ns, sp)
+  cur : ir::VTy = sema_sty_bind_get(ns)
   if ir::vty_known(cur) { return }
   vt : ir::VTy = sema_vty_spell(sp, decls, src)
-  if ir::vty_known(vt) { ir::sty_bind_put(ns, vt) }
+  if ir::vty_known(vt) { sema_sty_bind_put(ns, vt) }
 }
 ## The declared result type of the fn being checked, for `return` contexts.
 mut SEMA_VTY_RET_S : usize = 0
@@ -13798,7 +13836,7 @@ sema_ct_record := fn(w : CtWalk, vk : CtVar, vs : usize, vl : usize, at : Option
     CvRange(lo, hi) => {
       if sema_ct_value_refused(lo, decls, upto, src, a, locals, n) { refused = true }
       if sema_ct_value_refused(hi, decls, upto, src, a, locals, n) { refused = true }
-      ir::sty_bind_put(vs, sema_vty_range(lo, hi))
+      sema_sty_bind_put(vs, sema_vty_range(lo, hi))
       lvec_push(deref(locals), Local(ns = vs, nl = vl, tag = tag_of_kind(TyKind.TyInt), prov = 0, tns = 0, tnl = 0))
       n += 1
     }
@@ -13932,11 +13970,11 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         if ir::sty_on() and not assign_is_reassign(src, ns, nl) and ann.n == 0 { sema_vty_push(v, ir::vty_s(8)) }
         ## …and the binding's own type, read by each later use of the name (`sema_vty_var`).
         if ir::sty_on() and not assign_is_reassign(src, ns, nl) {
-          mut bvt : ir::VTy = ir::sty_get(v)
+          mut bvt : ir::VTy = sema_sty_get(v)
           if ann.n != 0 { bvt = sema_vty_name(src, ann.s, ann.n, decls) }
-          ir::sty_bind_put(ns, bvt)
+          sema_sty_bind_put(ns, bvt)
           ## docs/ir.md §3.8 item 8 — and the spelling its uses read a field, a pointee or an element through.
-          mut bsp : ir::TySpell = ir::sty_spell_get(v)
+          mut bsp : ir::TySpell = sema_sty_spell_get(v)
           if ann.n != 0 { bsp = sema_spell_decl(ann.s, ann.n, src) }
           ## an unannotated `[1, 2, 3]` has no context: an array of the native signed integer (Types §9.1)
           else if not sema_spell_known(bsp) { bsp = sema_spell_init(v, src) }
@@ -14759,14 +14797,14 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
           if not kind_is_unknown(tlo.kind) and not kind_is_int(tlo.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(flo, a), 0)) }
           if not kind_is_unknown(thi.kind) and not kind_is_int(thi.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(fhi, a), 0)) }
           ## docs/ir-slice-1.md §2 — the two bounds have one type: a literal bound takes the other's.
-          if ir::sty_on() { ir::sty_bind_put(fns, sema_vty_range(flo, fhi)) }
+          if ir::sty_on() { sema_sty_bind_put(fns, sema_vty_range(flo, fhi)) }
           vtag = TyKind.TyInt
         } else {
           tf := check_expr_da(flo, decls, upto, src, a, locals, cnt, da)?
           ## docs/ir.md §3.8 item 8 — a for-in variable is an element of the iterable.
           if ir::sty_on() {
-            mut fel : ir::TySpell = sema_spell_elem(ir::sty_spell_get(flo), decls, src)
-            if not sema_spell_known(fel) { fel = sema_spell_iter_elem(ir::sty_spell_get(flo), decls, src) }
+            mut fel : ir::TySpell = sema_spell_elem(sema_sty_spell_get(flo), decls, src)
+            if not sema_spell_known(fel) { fel = sema_spell_iter_elem(sema_sty_spell_get(flo), decls, src) }
             sema_spell_bind(fns, fel, decls, src)
           }
         }
