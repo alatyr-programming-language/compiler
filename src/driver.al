@@ -5249,6 +5249,12 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## reads this list instead of collecting its own.
   lower::collect_program(ptr(decls), base, ptr(na), na)
   if lower::x86_ir_select_on() { ir::sty_enable() }
+  ## IR prerequisite e2 (docs/ir-slice-1.md §8.3): hand the collected instance set to sema, which
+  ## re-checks each generic body per instance so a generic body's node gets the type ITS instance has
+  ## (the generic pass can only answer `VcUnknown` for a `T`). In the probe phase this moves no verdict
+  ## (§8.6): a per-instance refusal is reported on fd 97, not raised.
+  io := lower::mono_insts_opt()
+  match io { Some(iv) => { sema::set_insts(iv) }; None => {} }
   scode := sema::check_program(ptr(decls), base, ptr(na))
   if scode != 0 { d_sema_reject(scode, base, ptr(ftab), tar) }
   dlc := sema::enforce_declared_limits(ptr(decls), base, ptr(na))

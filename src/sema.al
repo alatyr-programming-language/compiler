@@ -20497,6 +20497,17 @@ sema_lib_record := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8
   sema_instruments_put(kept)
 }
 
+## docs/ir-slice-1.md §8.3 (e2) — the source span of a `CheckErr` that is the mixed-signedness class
+## (the refusal this walk looks for), `None` for any other class. A `CheckErr` is
+## `marker + span * 4` with a PER-CLASS marker, so the class must be recognised before the span is
+## read: dividing a code by four without subtracting its marker answers a number past the source
+## buffer, which is what crashed `ir.line_start` here. The class's window is the driver's own
+## (`DIAG_SIGNEDNESS_CONVERSION_MARKER` .. `DIAG_SAME_SCOPE_REDECL_MARKER`).
+sema_signedness_span := fn(code : usize) -> Option(u64) {
+  if code < SIGNEDNESS_CONVERSION_DIAG_MARKER or code >= SAME_SCOPE_REDECL_DIAG_MARKER { return Option(u64).None }
+  Option(u64).Some(u64((code - SIGNEDNESS_CONVERSION_DIAG_MARKER) / 4))
+}
+
 ## docs/ir-slice-1.md §8.3 (e2) — the per-instance walk. For each instance mono collected, re-check
 ## its generic body once with `SEMA_INST` set to the instance's id (mono's IVec index, already deduped
 ## by content — so the index IS the identity, no second interning table) and its type parameters bound
@@ -20549,10 +20560,18 @@ sema_inst_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)
           ## generic pass answered — only the type parameters are bound now.
           cr := check_decl(d, decls, ie.gi, src, ptr(scratch))
           mut refused := false
-          mut at : usize = 0
+          ## located at the body's operator when the refusal is the signedness class (the one this walk
+          ## exists to find), else at the generic's own name — always a valid span. A `CheckErr` is
+          ## `marker + span * 4` with a per-class marker, so dividing by four without subtracting the
+          ## marker reads a number past the source buffer (measured: SIGSEGV in `ir.line_start`).
+          mut at : usize = d.name_start
           match cr {
             Result::Ok(c) => { refused = c != 0 }
-            Result::Err(e) => { refused = true ; at = usize(e) / 4 }
+            Result::Err(e) => {
+              refused = true
+              sp : Option(u64) = sema_signedness_span(usize(e))
+              match sp { Some(a) => { at = usize(a) }; None => {} }
+            }
           }
           if refused {
             SEMA_INST_REFUSED = SEMA_INST_REFUSED + 1
