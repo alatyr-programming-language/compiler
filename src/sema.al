@@ -616,6 +616,13 @@ pub set_insts := fn(v : ptr(lower_layout::IVec)) -> i64 {
   SEMA_INSTS = Option(ptr(lower_layout::IVec)).Some(v)
   0
 }
+## Clear the set (docs/ir-slice-1.md §8.1): a path that does not run mono's collection says so,
+## rather than leaving a previous program's list in place for the next `check_program` to index this
+## tree's `decls` with. The walk then does nothing — the honest answer for a path that did not collect.
+pub set_insts_clear := fn() -> i64 {
+  SEMA_INSTS = Option(ptr(lower_layout::IVec)).None
+  0
+}
 ## docs/ir-slice-1.md §8.3 (e2) — TRUE while the per-instance walk re-checks a body. It silences the
 ## census channels (the #529/#299/#580 probes and the signedness census's site list), which the generic
 ## pass already ran over these very nodes: re-counting them would double every row. A finding is not
