@@ -30044,6 +30044,11 @@ pub collect_program := fn(decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt:
 mono_insts := fn(msg : str) -> ptr(mut IVec) {
   match MONO_INSTS { Some(hp) => { hp }; None => { panic(msg) } }
 }
+## The collected instance set, as `sema::set_insts` wants it: `Some` once `collect_program` has run,
+## `None` before it (docs/ir-slice-1.md §8.3, e2 — sema reads the list to re-check each generic body
+## per instance). An absent list is `None`, never an empty set: the walk then does nothing, which is
+## the honest answer for a path that did not collect.
+pub mono_insts_opt := fn() -> Option(ptr(mut IVec)) { MONO_INSTS }
 collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt::Arena), a : rt::Arena, cnt : usize) {
   ## SEED from NON-GENERIC fns only. A generic fn's body calls other generics with its OWN
   ## type-PARAM (`allocate`'s `buf_ptr(T, …)`), which — collected literally here — would seed a
