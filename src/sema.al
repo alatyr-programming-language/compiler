@@ -606,6 +606,33 @@ mut SEMA_DECL_PARAMS : Option(ptr(mut Param)) = Option.None
 ## for the generic pass — no `Option(InstId)` is threaded through the check walk. Set and RESTORED
 ## (not cleared) around each per-instance `check_fn`, exactly as `SEMA_DECL_PARAMS` is.
 mut SEMA_INST : Option(ir::InstId) = Option.None
+## docs/ir-slice-1.md §8.3 (e2) — the monomorphization instance set mono collected (`lower::collect_program`),
+## handed to sema by the driver through `set_insts` (the `set_package_modules`/`set_lib_records` pattern):
+## sema must read it to re-check each generic body per instance but must not import `lower` (the
+## `conv_kind` precedent), so the driver hands it the list. `None` until the driver sets it (the paths
+## that do not run mono's collection leave it absent, and the per-instance walk is a no-op).
+mut SEMA_INSTS : Option(ptr(lower_layout::IVec)) = Option.None
+pub set_insts := fn(v : ptr(lower_layout::IVec)) -> i64 {
+  SEMA_INSTS = Option(ptr(lower_layout::IVec)).Some(v)
+  0
+}
+## docs/ir-slice-1.md §8.3 (e2) — TRUE while the per-instance walk re-checks a body. It silences the
+## census channels (the #529/#299/#580 probes and the signedness census's site list), which the generic
+## pass already ran over these very nodes: re-counting them would double every row. A finding is not
+## dropped — the generic pass reported it, and the instance walk's own findings are the per-instance
+## refusals, reported on fd 97 (§8.6). Mirrors `SEMA_LIB_RECORDING`.
+mut SEMA_INST_RECORDING : bool = false
+## The per-instance refusals the walk found (docs/ir-slice-1.md §8.6). In the PROBE phase this is the
+## number reported, not raised; §8.6's probe runs it over the self-build and every corpus program and
+## each non-zero row becomes a predicted transition or a source fix at its root.
+mut SEMA_INST_REFUSED : usize = 0
+## Raise the per-instance verdicts? OFF in the probe phase (§8.6): the walk records and reports, and a
+## refusal is counted, not returned. Turned on once the probe shows the predicted transitions only.
+mut SEMA_INST_RAISE : bool = false
+pub set_inst_raise := fn(on : bool) -> i64 {
+  SEMA_INST_RAISE = on
+  0
+}
 mut PTRINT_DECL_NL : usize = 0
 ## Issue #529 step (d) — the `unchecked` GRANT column. Memory §4.5 makes a pointer fabricated from an
 ## integer ill-formed OUTSIDE an `unchecked` grant, so a place already inside one differs in kind from
@@ -635,7 +662,7 @@ ptrint_grant_name := fn() -> str {
 }
 ## Is the census channel open? `write(fd, NULL, 0)` returns 0 for a writable descriptor and -EBADF for
 ## one that is closed or opened read-only, and touches no memory in either case.
-ptrint_probe_open := fn() -> bool { not SEMA_LIB_RECORDING and rt::sys_write(1, ptrint_probe_fd(), 0, 0) == 0 }
+ptrint_probe_open := fn() -> bool { not SEMA_LIB_RECORDING and not SEMA_INST_RECORDING and rt::sys_write(1, ptrint_probe_fd(), 0, 0) == 0 }
 ## The row buffer, in the instrument's OWN freshly mapped arena: bumping a compile arena would move
 ## addresses the compiler's own output depends on, so an instrument that shared them could not claim
 ## byte-identical emission. Mapped only when the channel is open.
@@ -2692,7 +2719,7 @@ mut BRAND_PROBE_HITS : usize = 0
 ## Is the census channel open? `write(fd, NULL, 0)` returns 0 for a writable descriptor and -EBADF
 ## for one that is closed or opened read-only, and touches no memory in either case — so this one
 ## syscall is the whole gate.
-brand_probe_open := fn() -> bool { not SEMA_LIB_RECORDING and rt::sys_write(1, brand_probe_fd(), 0, 0) == 0 }
+brand_probe_open := fn() -> bool { not SEMA_LIB_RECORDING and not SEMA_INST_RECORDING and rt::sys_write(1, brand_probe_fd(), 0, 0) == 0 }
 ## A census row is assembled in the instrument's OWN freshly mapped arena and flushed in one write.
 ## The compile arenas are deliberately untouched: bumping one would move addresses the compiler's own
 ## output depends on, so an instrument that shared them could not claim byte-identical emission. The
@@ -9191,6 +9218,66 @@ sema_tparam_named := fn(ph : Option(ptr(mut Param)), src : ptr(u8), s : usize, n
   }
   false
 }
+## docs/ir-slice-1.md §8.3 (e2) — the 1-based ORDINAL of `[s, s+n)` among the `T : type` parameters of
+## the list `ph` (value parameters are not counted), `None` when it names no type parameter. This is the
+## same positional order mono's collection assigns its type-arg tags to (`tparam_count`/`tparam_idx2/3`):
+## the FIRST type-param is tag 1 (`ts`/`tl`), the SECOND tag 2 (`ts2`/`tl2`), the THIRD tag 3
+## (`ts3`/`tl3`). A wrong ordinal here would bind a type-param to the WRONG instance argument — a silent
+## wrong value — so it mirrors mono's counting exactly (only `type` params, in parameter-list order).
+sema_tparam_type_ordinal := fn(ph : Option(ptr(mut Param)), src : ptr(u8), s : usize, n : usize) -> Option(u64) {
+  mut pp := ph
+  mut ord : u64 = 0
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if str_at((src + pm.ts), pm.tl) == "type" {
+          ord += 1
+          if streq(src, pm.ns, pm.nl, s, n) { return Option(u64).Some(ord) }
+        }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  Option(u64).None
+}
+## docs/ir-slice-1.md §8.3 (e2) — the concrete type-argument span the instance being checked binds the
+## type parameter `[s, s+n)` to, `None` when there is no instance in reach (the generic pass) or the name
+## is not one of THAT INSTANCE'S OWN type parameters. The instance is `SEMA_INSTS[SEMA_INST]`; its
+## generic decl is `decls[ie.gi]`, whose type parameters are bound positionally to the instance's tags.
+##
+## The owning-decl test is the safety of the whole binding: a spelling carries `ed`, the generic
+## declaration it was read in (`0` = the declaration being checked). A name that is a type parameter of
+## some OTHER generic — a nested instance's own `T`, or a local that shadows the name — must NOT be
+## bound to this instance's argument, because binding it would answer a concrete type for a name that
+## means something else: a silent wrong value, the exact class this slice exists to make impossible. So
+## the binding fires only when the spelling belongs to the instance's own generic (`ed == 0` while that
+## generic is the declaration being checked, or `ed - 1 == ie.gi`). The answer is a CONCRETE span (mono
+## substitutes every enclosing type-param before it records an instance), so resolving never re-enters.
+sema_inst_bound_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ed : usize, s : usize, n : usize) -> Option(VSpan) {
+  match SEMA_INST {
+    None => { return Option(VSpan).None }
+    Some(id) => {
+      match SEMA_INSTS {
+        None => { return Option(VSpan).None }
+        Some(iv) => {
+          ie := lower_layout::ivec_at(iv, usize(id))
+          ## the spelling must belong to the instance's own generic declaration (see above)
+          if ed != 0 and ed - 1 != ie.gi { return Option(VSpan).None }
+          gd := deref(decl_get(decls, ie.gi))
+          ord : Option(u64) = sema_tparam_type_ordinal(gd.params_head, src, s, n)
+          match ord {
+            Some(1) => { if ie.tl != 0 { return Option(VSpan).Some(VSpan(s = ie.ts, n = ie.tl)) } else { return Option(VSpan).None } }
+            Some(2) => { if ie.tl2 != 0 { return Option(VSpan).Some(VSpan(s = ie.ts2, n = ie.tl2)) } else { return Option(VSpan).None } }
+            Some(3) => { if ie.tl3 != 0 { return Option(VSpan).Some(VSpan(s = ie.ts3, n = ie.tl3)) } else { return Option(VSpan).None } }
+            None => { return Option(VSpan).None }
+          }
+        }
+      }
+    }
+  }
+}
 ## `sp` with a bare type parameter of its generic declaration replaced by what the instance binds it
 ## to, as often as the binding is itself one (bounded: a binding chain is as deep as the source nests).
 sema_spell_norm := fn(sp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
@@ -9472,6 +9559,19 @@ sema_vty_spell := fn(sp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> 
   if ir::spell_i64(sp) { return ir::vty_s(8) }
   if ir::spell_u8(sp) { return ir::vty_u(1) }
   if not sema_spell_text(sp) { return ir::vty_unknown() }
+  ## docs/ir-slice-1.md §8.3 (e2) — a generic body's own type parameter, re-checked for an instance,
+  ## resolves to the instance's CONCRETE binding (not `VcUnknown`): this is what lets the per-instance
+  ## mixed-signedness refusal fire (a `T`-vs-concrete-int mix is a real error once `T` is known). In the
+  ## generic pass `SEMA_INST` is `None`, so this answers `None` and the line below keeps its old answer.
+  bs : Option(VSpan) = sema_inst_bound_span(decls, src, sp.ed, sp.s, sp.n)
+  match bs {
+    Some(b) => {
+      bvt : ir::VTy = sema_vty_name(src, b.s, b.n, decls)
+      if ir::vty_known(bvt) { return bvt }
+      return sema_vty_kind(resolve_kind(src, b.s, b.n, decls, rt::vec_len(deref(decls))))
+    }
+    None => {}
+  }
   if sema_spell_head_is_param(sp, decls, src) { return ir::vty_unknown() }
   vt : ir::VTy = sema_vty_name(src, sp.s, sp.n, decls)
   if ir::vty_known(vt) { return vt }
@@ -10333,6 +10433,10 @@ mut SEMA_VTY_RET_S : usize = 0
 mut SEMA_VTY_RET_N : usize = 0
 ## Is `e` a site the signedness census follows (`/`, `%`, an ordering compare, a `shr` call)?
 sema_vty_site := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+  ## docs/ir-slice-1.md §8.3 (e2) — the per-instance walk re-walks nodes the generic pass already
+  ## added to the site list; adding them twice would double every row. The instance walk's own output
+  ## is the per-instance refusal, not a census row (§8.6).
+  if SEMA_INST_RECORDING { return false }
   match deref(e) {
     Expr::Bin(op, l, r) => { ir::sign_op_followed(op) }
     Expr::Call(cs, cl, na, ah) => { na == 2 and str_at((src + cs), cl) == "shr" }
@@ -18882,7 +18986,7 @@ mut QH_PROBE_LOST : usize = 0
 ## The census channel, byte-for-byte the #299/#529 instrument's: fd 99, opened by the probe harness
 ## and closed on an ordinary run, so an ordinary run maps nothing and writes nothing.
 qh_probe_fd := fn() -> usize { 99 }
-qh_probe_open := fn() -> bool { not SEMA_LIB_RECORDING and rt::sys_write(1, qh_probe_fd(), 0, 0) == 0 }
+qh_probe_open := fn() -> bool { not SEMA_LIB_RECORDING and not SEMA_INST_RECORDING and rt::sys_write(1, qh_probe_fd(), 0, 0) == 0 }
 qh_probe_send := fn(in out sb : rt::StrBuf) {
   n := rt::push_byte(sb, 10)
   w := rt::sb_flush(sb, qh_probe_fd())
@@ -20393,6 +20497,79 @@ sema_lib_record := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8
   sema_instruments_put(kept)
 }
 
+## docs/ir-slice-1.md §8.3 (e2) — the per-instance walk. For each instance mono collected, re-check
+## its generic body once with `SEMA_INST` set to the instance's id (mono's IVec index, already deduped
+## by content — so the index IS the identity, no second interning table) and its type parameters bound
+## to the instance's concrete arguments (through `sema_inst_bound_span`, read by `sema_vty_spell`).
+## Every record the body check writes then lands under `(node, Some(id))`, and a `T`-vs-concrete-int
+## mix in the body becomes a real mixed-signedness refusal (it is `VcUnknown` in the generic pass, so
+## the generic pass never sees it).
+##
+## PROBE PHASE (§8.6): a refusal is REPORTED on fd 97 (`#semainst refused`) and counted, not raised —
+## the program's verdict does not move. `set_inst_raise(true)` turns the located per-instance verdict
+## on, once the probe over the self-build and the corpus shows only the predicted transitions.
+##
+## The walk runs only when records are wanted and the driver handed the instance set; a body never
+## instantiated is not re-checked (Comptime §9.3 — there is no abstract check). The instrument counters
+## and the census channels are saved/silenced around it (`sema_instruments_take`/`put`,
+## `SEMA_INST_RECORDING`): the generic pass already counted these nodes, and a re-check must not
+## double a row. The body is checked over a SCRATCH arena, so the re-check never bumps the compile
+## arena the compiler's own output depends on.
+sema_inst_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
+  iv : Option(ptr(lower_layout::IVec)) = SEMA_INSTS
+  match iv {
+    None => { return 0 }
+    Some(v) => {
+      cnt := lower_layout::ivec_len(v)
+      if cnt == 0 { return 0 }
+      ## the scratch is NOT the compile arena `a`: bumping `a` here would shift the allocations
+      ## `emit_program` makes after `check_program` and move the GAS (the fixpoint). A body check's
+      ## locals are local to it, and the record table stores only `VTy`/`TySpell` VALUES (spans,
+      ## never a pointer into this arena), so nothing allocated here outlives the body — rewinding
+      ## per body bounds the walk's memory.
+      mut scratch := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
+      rt::arena_init(scratch, 16777216)
+      mut i : usize = 0
+      while i < cnt {
+        ie := lower_layout::ivec_at(v, i)
+        d := deref(decl_get(decls, ie.gi))
+        ## only a generic fn has an instance to re-check; a FALSE `when`-guarded decl is "as if absent".
+        if d.is_fn and d.is_generic and not guard_is_false(d, src) {
+          scratch.off = 0
+          kept := sema_instruments_take()
+          SEMA_INST_RECORDING = true
+          ## `check_decl` sets `SEMA_DECL_PARAMS` and `SEMA_VTY_RET_*` itself, and the walk is flat
+          ## (one instance's body at a time), so only `SEMA_INST` needs setting here — and it is set
+          ## with a literal constructor, never assigned from a variable: the self-host lower refuses a
+          ## whole-value assignment of a non-literal enum to a mutable global (it would drop payload
+          ## words), so the walk clears it with `None` after the loop instead of saving and restoring.
+          SEMA_INST = Option(ir::InstId).Some(ir::InstId(i))
+          ## `upto` is the generic's own decl index, exactly as the generic pass passed it, so the
+          ## instance re-check sees the same declaration prefix and answers the same questions the
+          ## generic pass answered — only the type parameters are bound now.
+          cr := check_decl(d, decls, ie.gi, src, ptr(scratch))
+          mut refused := false
+          mut at : usize = 0
+          match cr {
+            Result::Ok(c) => { refused = c != 0 }
+            Result::Err(e) => { refused = true ; at = usize(e) / 4 }
+          }
+          if refused {
+            SEMA_INST_REFUSED = SEMA_INST_REFUSED + 1
+            ir::sign_inst_row(d.mod_start, d.mod_len, d.name_start, d.name_len, at, src)
+          }
+          SEMA_INST_RECORDING = false
+          sema_instruments_put(kept)
+          if refused and SEMA_INST_RAISE { return located_err(d.name_start) }
+        }
+        i = i + 1
+      }
+      SEMA_INST = Option(ir::InstId).None
+    }
+  }
+  0
+}
+
 pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
   ## PERF: build the per-decl name-hash pre-filter for the O(cnt) `name_matches` resolution scans.
   build_sema_dnh(decls, src, deref(a))
@@ -20508,6 +20685,16 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
       }
     }
   }
+  ## docs/ir-slice-1.md §8.3 (e2) — the per-instance walk: after the generic pass, re-check each
+  ## monomorphization instance's generic body once, with its type parameters bound to the instance's
+  ## concrete arguments and `SEMA_INST` set, so every record lands under `(node, Some(id))` and the
+  ## mixed-signedness refusal can fire per instance (a `T`-vs-concrete-int mix is a real error once
+  ## `T` is known). The generic pass keeps its records under `None`. Runs only when records are wanted
+  ## and the driver handed the instance set; a body that is never instantiated is not re-checked
+  ## (Comptime §9.3 — there is no abstract check). A rejection here is the located per-instance verdict
+  ## (E-Q1: the spec wins — a mixing lib generic is refused at its instantiation).
+  iw := sema_inst_walk(decls, src, a)
+  if iw != 0 { return iw }
   ## The census's own receipt, on the ACCEPTING exit only: a rejected program leaves through one of
   ## the returns above, so a run that prints rows but no SUMMARY was refused before the walk ended.
   ## #580 — THE REPORT. The negatives the walk recorded are answered ONCE, here, after the whole

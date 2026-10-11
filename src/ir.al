@@ -2879,6 +2879,24 @@ pub sign_ct_row := fn(at : Option(u64), src : ptr(u8)) {
   if w != isize(rowlen) { SIGN_LOST = SIGN_LOST + 1 }
 }
 
+## docs/ir-slice-1.md §8.6 (e2) — a per-instance refusal the instance walk found while RECORDING
+## (verdicts reported, not raised): the generic body's operator that mixes signedness once `T` is
+## bound, plus the instance it was reached through. The program's verdict does not move in the probe
+## phase, so this row is where the finding surfaces:
+##   #semainst refused <module>::<fn> |<the line of the body's operator>
+pub sign_inst_row := fn(ms : usize, ml : usize, ns : usize, nl : usize, at : usize, src : ptr(u8)) {
+  if not sign_open() { return }
+  mut sb := sign_buf()
+  put(sb, "#semainst refused ")
+  put(sb, str_at((src + ms), ml))
+  put(sb, "::")
+  put(sb, str_at((src + ns), nl))
+  put_line_at(sb, Option(u64).Some(u64(at)), src)
+  rowlen : usize = sb.len
+  w := rt::sb_flush(sb, sign_fd())
+  if w != isize(rowlen) { SIGN_LOST = SIGN_LOST + 1 }
+}
+
 ## Sema's answer for a site: the signedness of the first operand whose recorded type is an integer.
 sema_answer := fn(l : ptr(Expr), r : ptr(Expr)) -> str {
   lt : VTy = sty_get(l)
