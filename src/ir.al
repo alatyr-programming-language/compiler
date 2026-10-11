@@ -357,6 +357,12 @@ pub SymId := brand(usize)
 ## through `byte_off_imm`.
 pub ByteOff := brand(usize)
 pub byte_off_imm := fn(o : ByteOff) -> i64 { i64(usize(o)) }
+## A monomorphization instance's identity, as sema interns it (docs/ir-slice-1.md §8.2). It is the
+## record table's SECOND key word: a generic body's node has one record per instance, and the
+## instance is named by this brand, not by the node's address. `None` (the generic pass, or a
+## non-generic body) is the one non-instance key word. There is no reserved id 0 and no sentinel:
+## the stored word is `usize(id) + 1`, and 0 means "not an instance".
+pub InstId := brand(usize)
 
 ## ───────────────────────────── storage: a growing word buffer ─────────────────────────────
 
@@ -2456,6 +2462,7 @@ pub vty_cls := fn(t : VTy) -> VCls { t.cls }
 
 mut STY_ON : bool = true
 mut STY_KEYS : usize = 0    ## address of the key array (node addresses)
+mut STY_INSTS : usize = 0   ## address of the second key word array (the instance id + 1; 0 = not an instance)
 mut STY_USED : usize = 0    ## address of the occupancy array (1 = the slot holds a key)
 mut STY_VALS : usize = 0    ## address of the value array (record addresses)
 mut STY_CAP : usize = 0     ## slots, a power of two
@@ -2483,27 +2490,31 @@ sty_word := fn(base : usize, i : usize) -> ptr(mut usize) {
   unchecked bitcast(ptr(mut usize), base + i * 8)
 }
 ## The slot a key hashes to: multiplicative hashing of the node address (nodes are 8-byte aligned).
-sty_home := fn(k : usize, cap : usize) -> usize {
-  ## unchecked-ok: a hash is modular by intent; the product's overflow is the mixing, not an error.
-  h : usize = unchecked { shr(k, 3) * 2654435761 }
+## The second key word (the instance id + 1, or 0) is mixed in with a different odd constant so that
+## the same node under two instances lands in different slots (docs/ir-slice-1.md §8.2).
+sty_home := fn(k : usize, iw : usize, cap : usize) -> usize {
+  ## unchecked-ok: a hash is modular by intent; the products' overflow is the mixing, not an error.
+  mut h : usize = unchecked { shr(k, 3) * 2654435761 }
+  h = unchecked { h + iw * 2246822519 }
   shr(h, 8) % cap
 }
 ## Is slot `i` of the occupancy array at `used` taken? Occupancy is its own array, so no key value is
 ## reserved to mean "free".
 sty_taken := fn(used : usize, i : usize) -> bool { deref(sty_word(used, i)) == 1 }
-## Insert or overwrite `k -> v` in the arrays at (keys, vals, used) of `cap` slots, WITHOUT growing.
-## Answers whether a new slot was taken.
-sty_place := fn(keys : usize, vals : usize, used : usize, cap : usize, k : usize, v : usize) -> bool {
-  mut i := sty_home(k, cap)
+## Insert or overwrite `(k, iw) -> v` in the arrays at (keys, insts, vals, used) of `cap` slots,
+## WITHOUT growing. Answers whether a new slot was taken.
+sty_place := fn(keys : usize, insts : usize, vals : usize, used : usize, cap : usize, k : usize, iw : usize, v : usize) -> bool {
+  mut i := sty_home(k, iw, cap)
   mut probes : usize = 0
   while probes < cap {
     if not sty_taken(used, i) {
       deref(sty_word(keys, i)) = k
+      deref(sty_word(insts, i)) = iw
       deref(sty_word(vals, i)) = v
       deref(sty_word(used, i)) = 1
       return true
     }
-    if deref(sty_word(keys, i)) == k { deref(sty_word(vals, i)) = v; return false }
+    if deref(sty_word(keys, i)) == k and deref(sty_word(insts, i)) == iw { deref(sty_word(vals, i)) = v; return false }
     i = (i + 1) % cap
     probes = probes + 1
   }
@@ -2515,14 +2526,16 @@ sty_grow := fn() {
   mut nc : usize = STY_CAP * 2
   if nc == 0 { nc = 65536 }
   nk := sty_map(nc * 8)
+  ni := sty_map(nc * 8)
   nv := sty_map(nc * 8)
   nu := sty_map(nc * 8)
   mut i : usize = 0
   while i < STY_CAP {
-    if sty_taken(STY_USED, i) { fresh := sty_place(nk, nv, nu, nc, deref(sty_word(STY_KEYS, i)), deref(sty_word(STY_VALS, i))) }
+    if sty_taken(STY_USED, i) { fresh := sty_place(nk, ni, nv, nu, nc, deref(sty_word(STY_KEYS, i)), deref(sty_word(STY_INSTS, i)), deref(sty_word(STY_VALS, i))) }
     i = i + 1
   }
   STY_KEYS = nk
+  STY_INSTS = ni
   STY_VALS = nv
   STY_USED = nu
   STY_CAP = nc
@@ -2542,24 +2555,41 @@ sty_record := fn() -> usize {
   STY_ROFF = STY_ROFF + rs
   p
 }
-## Record (or re-record) the value type of the node at `e`.
+## Record (or re-record) the value type of the node at `e` (the generic pass / non-generic bodies:
+## the `None` instance case, docs/ir-slice-1.md §8.2).
 pub sty_put := fn(e : ptr(Expr), t : VTy) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_put_key(k, t)
+  sty_put_key(k, 0, t)
+}
+## Record (or re-record) the value type of the node at `e` under instance `opt` (`Some(id)` for a
+## monomorphization instance's body, `None` for the generic pass). The second key word is
+## `usize(id) + 1`, so the one non-instance word is 0.
+pub sty_put_in := fn(e : ptr(Expr), opt : Option(InstId), t : VTy) {
+  ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
+  k := unchecked bitcast(usize, e)
+  iw := sty_inst_word(opt)
+  sty_put_key(k, iw, t)
+}
+## The second key word for an instance: `usize(id) + 1`, or 0 for `None`.
+sty_inst_word := fn(opt : Option(InstId)) -> usize {
+  match opt { Some(id) => { usize(id) + 1 }; None => { 0 } }
 }
 ## docs/ir-slice-1.md §2 — the value type of a BINDING, keyed by its declaration's name offset: an
 ## unannotated local's type is known only where it is declared, and each use of it reads it here. The
 ## key is the offset with the top bit set, a value no node address (an arena address) takes, so binding
 ## keys and node keys share the one growing table without meeting.
 bind_key := fn(ns : usize) -> usize { ns | shl(usize(1), 63) }
-pub sty_bind_put := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), t) }
-pub sty_bind_get := fn(ns : usize) -> VTy { sty_get_key(bind_key(ns)) }
-sty_put_key := fn(k : usize, t : VTy) {
+pub sty_bind_put := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), 0, t) }
+pub sty_bind_get := fn(ns : usize) -> VTy { sty_get_key(bind_key(ns), 0) }
+## The binding record under instance `opt` (a generic body's local, checked per instance).
+pub sty_bind_put_in := fn(ns : usize, opt : Option(InstId), t : VTy) { sty_put_key(bind_key(ns), sty_inst_word(opt), t) }
+pub sty_bind_get_in := fn(ns : usize, opt : Option(InstId)) -> VTy { sty_get_key(bind_key(ns), sty_inst_word(opt)) }
+sty_put_key := fn(k : usize, iw : usize, t : VTy) {
   if STY_N * 2 >= STY_CAP { sty_grow() }
   ## An existing record is overwritten in place, so a context that refines a literal reaches every
   ## reader of the node.
-  ex := sty_find(k)
+  ex := sty_find(k, iw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word is a record address `sty_record` handed out.
@@ -2571,31 +2601,38 @@ sty_put_key := fn(k : usize, t : VTy) {
       ## unchecked-ok: `sty_record` answered a fresh slot of a live mapping, at least `size(VTy)` bytes.
       rp2 : ptr(mut VTy) = unchecked bitcast(ptr(mut VTy), ra)
       deref(rp2) = t
-      if sty_place(STY_KEYS, STY_VALS, STY_USED, STY_CAP, k, ra) { STY_N = STY_N + 1 }
+      if sty_place(STY_KEYS, STY_INSTS, STY_VALS, STY_USED, STY_CAP, k, iw, ra) { STY_N = STY_N + 1 }
     }
   }
 }
-## The record address stored for key `k`, if any.
-sty_find := fn(k : usize) -> Option(u64) {
+## The record address stored for key `(k, iw)`, if any.
+sty_find := fn(k : usize, iw : usize) -> Option(u64) {
   if STY_CAP == 0 { return Option(u64).None }
-  mut i := sty_home(k, STY_CAP)
+  mut i := sty_home(k, iw, STY_CAP)
   mut probes : usize = 0
   while probes < STY_CAP {
     if not sty_taken(STY_USED, i) { return Option(u64).None }
-    if deref(sty_word(STY_KEYS, i)) == k { return Option(u64).Some(u64(deref(sty_word(STY_VALS, i)))) }
+    if deref(sty_word(STY_KEYS, i)) == k and deref(sty_word(STY_INSTS, i)) == iw { return Option(u64).Some(u64(deref(sty_word(STY_VALS, i)))) }
     i = (i + 1) % STY_CAP
     probes = probes + 1
   }
   Option(u64).None
 }
-## The value type recorded for the node at `e` (`VcAbsent` when sema never typed it).
+## The value type recorded for the node at `e` (`VcAbsent` when sema never typed it) — the generic
+## pass / non-generic bodies (`None` instance).
 pub sty_get := fn(e : ptr(Expr)) -> VTy {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_get_key(k)
+  sty_get_key(k, 0)
 }
-sty_get_key := fn(k : usize) -> VTy {
-  ex := sty_find(k)
+## The value type recorded for the node at `e` under instance `opt`.
+pub sty_get_in := fn(e : ptr(Expr), opt : Option(InstId)) -> VTy {
+  ## unchecked-ok: the node's address is the table key.
+  k := unchecked bitcast(usize, e)
+  sty_get_key(k, sty_inst_word(opt))
+}
+sty_get_key := fn(k : usize, iw : usize) -> VTy {
+  ex := sty_find(k, iw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word is a record address `sty_record` handed out.
@@ -2648,18 +2685,31 @@ spell_key := fn(k : usize) -> usize { k | shl(usize(1), 62) }
 pub sty_spell_put := fn(e : ptr(Expr), t : TySpell) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_spell_put_key(spell_key(k), t)
+  sty_spell_put_key(spell_key(k), 0, t)
 }
 pub sty_spell_get := fn(e : ptr(Expr)) -> TySpell {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_spell_get_key(spell_key(k))
+  sty_spell_get_key(spell_key(k), 0)
 }
-pub sty_bind_spell_put := fn(ns : usize, t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), t) }
-pub sty_bind_spell_get := fn(ns : usize) -> TySpell { sty_spell_get_key(spell_key(bind_key(ns))) }
-sty_spell_put_key := fn(k : usize, t : TySpell) {
+## The spelling record under instance `opt` (a generic body's node, checked per instance).
+pub sty_spell_put_in := fn(e : ptr(Expr), opt : Option(InstId), t : TySpell) {
+  ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
+  k := unchecked bitcast(usize, e)
+  sty_spell_put_key(spell_key(k), sty_inst_word(opt), t)
+}
+pub sty_spell_get_in := fn(e : ptr(Expr), opt : Option(InstId)) -> TySpell {
+  ## unchecked-ok: the node's address is the table key.
+  k := unchecked bitcast(usize, e)
+  sty_spell_get_key(spell_key(k), sty_inst_word(opt))
+}
+pub sty_bind_spell_put := fn(ns : usize, t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), 0, t) }
+pub sty_bind_spell_get := fn(ns : usize) -> TySpell { sty_spell_get_key(spell_key(bind_key(ns)), 0) }
+pub sty_bind_spell_put_in := fn(ns : usize, opt : Option(InstId), t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), sty_inst_word(opt), t) }
+pub sty_bind_spell_get_in := fn(ns : usize, opt : Option(InstId)) -> TySpell { sty_spell_get_key(spell_key(bind_key(ns)), sty_inst_word(opt)) }
+sty_spell_put_key := fn(k : usize, iw : usize, t : TySpell) {
   if STY_N * 2 >= STY_CAP { sty_grow() }
-  ex := sty_find(k)
+  ex := sty_find(k, iw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word under a spelling key is a record address `sty_record` handed out.
@@ -2671,12 +2721,12 @@ sty_spell_put_key := fn(k : usize, t : TySpell) {
       ## unchecked-ok: `sty_record` answered a fresh slot of a live mapping, at least `size(TySpell)` bytes.
       rp2 : ptr(mut TySpell) = unchecked bitcast(ptr(mut TySpell), ra)
       deref(rp2) = t
-      if sty_place(STY_KEYS, STY_VALS, STY_USED, STY_CAP, k, ra) { STY_N = STY_N + 1 }
+      if sty_place(STY_KEYS, STY_INSTS, STY_VALS, STY_USED, STY_CAP, k, iw, ra) { STY_N = STY_N + 1 }
     }
   }
 }
-sty_spell_get_key := fn(k : usize) -> TySpell {
-  ex := sty_find(k)
+sty_spell_get_key := fn(k : usize, iw : usize) -> TySpell {
+  ex := sty_find(k, iw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word under a spelling key is a record address `sty_record` handed out.
