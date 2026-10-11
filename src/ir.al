@@ -2495,6 +2495,9 @@ sty_word := fn(base : usize, i : usize) -> ptr(mut usize) {
 sty_home := fn(k : usize, iw : usize, cap : usize) -> usize {
   ## unchecked-ok: a hash is modular by intent; the products' overflow is the mixing, not an error.
   mut h : usize = unchecked { shr(k, 3) * 2654435761 }
+  ## A hash is modular by intent; adding the second key word's product is the mixing, and a wrap
+  ## still leaves a valid slot index for the `% cap` below.
+  ## unchecked-ok: modular hash mixing, as above — the overflow is the point, not an error.
   h = unchecked { h + iw * 2246822519 }
   shr(h, 8) % cap
 }

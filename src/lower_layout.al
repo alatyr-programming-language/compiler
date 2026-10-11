@@ -5649,6 +5649,9 @@ pub ivec_stride := fn() -> usize {
 }
 ## The `i`-th instance of the vector at `v` (a copy).
 pub ivec_at := fn(v : ptr(IVec), i : usize) -> Inst {
+  ## `base` is an arena block of `cap * ivec_stride()` bytes that `ivec_new` reserved and `ivec_push`
+  ## fills one whole `Inst` per stride-sized slot; every caller bounds `i < len <= cap`.
+  ## unchecked-ok: a stride-indexed slot of that block, read back as the `Inst` written there.
   p : ptr(Inst) = unchecked bitcast(ptr(Inst), deref(v).base + i * ivec_stride())
   return deref(p)
 }
