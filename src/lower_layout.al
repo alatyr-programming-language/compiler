@@ -3526,6 +3526,34 @@ pub DECL_KIND_SYSCALL : u8 = 4
 pub global_has_scalar_cell := fn(d : Decl) -> bool {
   d.is_fn == false and d.kind == DECL_KIND_VALUE and d.arity == 0 and d.name_len != 0 and ex_value_is_scalar(d.value)
 }
+## Does module declaration `d` own a RUN of one-word cells — a fixed array whose initializer is all
+## integer literals? `emit_a64_global_cells` / its riscv64 peer emit `<name>: .quad v0 .quad v1 …`,
+## ONE `.quad` PER ELEMENT whatever the element's declared width (measured on `main`: `[u64; 2]`,
+## `[u32; 3]` and `[i8; 3]` all come out as three `.quad`s), and the legacy read is `[x2, x0, lsl #3]`
+## — base + index × 8. So the stride of such a global is 8 BY CONSTRUCTION of the data emitter, and an
+## IR `addr @g` + `load T [ptr + i*8]` lands on the same byte the legacy emitter reads. Answers the
+## number of cells, or -1 when `d` is not such a run (the caller refuses, never guesses a stride).
+## The declared element width is checked by the CALLER against this count: only an 8-byte scalar element
+## makes the load's own width equal the cell's, which is the tier whose layout is PROVED equal (Q4).
+pub global_word_array_cells := fn(d : Decl) -> i64 {
+  if d.is_fn or d.kind != DECL_KIND_VALUE or d.arity != 0 or d.name_len == 0 { return 0 - 1 }
+  if not ex_is_array_lit(d.value) { return 0 - 1 }
+  mut n : usize = 0
+  mut ag : Option(ptr(mut Arg)) = ex_array_lit_ehead(d.value)
+  loop {
+    match ag {
+      Some(aq) => {
+        aa := deref(arg_p(aq))
+        if not ex_is_foldable_word(aa.e) { return 0 - 1 }
+        n = n + 1
+        ag = aa.next
+      }
+      None => { break }
+    }
+  }
+  if n == 0 { return 0 - 1 }
+  i64(n)
+}
 ## Is `v` a compile-time SCALAR literal (a number or a bool), and what is its value? The two are
 ## separate because a value of 0 is indistinguishable from "not a literal" in the second answer.
 pub ex_value_is_scalar := fn(v : ptr(Expr)) -> bool {
@@ -3534,6 +3562,31 @@ pub ex_value_is_scalar := fn(v : ptr(Expr)) -> bool {
     Expr::Num(x, s, n) => { r = true }
     Expr::BoolLit(x) => { r = true }
     Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+## Is `e` an initializer the twins and x86_64 fold to the SAME word? Structurally: a number, a bool,
+## or a `Bin` over the arithmetic ops (`16 + 17 - 18 * 19 / 29 %`, the parser's own kinds) whose two
+## sides are themselves foldable. This is exactly the domain where `ex_value_init` (twins) and
+## `lower.al::global_init_value` (x86_64) agree, so a cell of this shape holds one value in every
+## backend and the IR may name it.
+## `Expr::Var` is REFUSED on purpose: x86_64 resolves a name through `module_const_value` and the
+## twins answer 0, so a `Var` cell is a live disagreement (the rest of #923), not a folded word.
+## Measured: no integer global in the corpus is initialised from a bare name, so refusing it costs
+## nothing today and turns this predicate into the place that must change when #923's `Var` half lands.
+pub ex_is_foldable_word := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Num | Expr::BoolLit => { r = true }
+    Expr::Bin(op, l, rr) => {
+      if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 {
+        if ex_is_foldable_word(l) and ex_is_foldable_word(rr) { r = true }
+      }
+    }
+    Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}

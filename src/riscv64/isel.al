@@ -331,7 +331,9 @@ sr_addr := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool
   gdo : Option(Decl) = sr_sym_decl(x, ip)
   match gdo {
     Some(g) => {
-      has_cell := lower_layout::global_has_scalar_cell(g)
+      ## Slice 3c: see `aarch64::isel::sa_addr` — a global laid out as a run of one-word cells is
+      ## addressable; `la t2, G` names its first cell and the access below adds `i * 8`.
+      has_cell := lower_layout::global_has_scalar_cell(g) or lower_layout::global_word_array_cells(g) > 0
       if not has_cell { return false }
       gname := str_at((x.src + g.name_start), g.name_len)
       sr_put(sb, "  la t2, ")
