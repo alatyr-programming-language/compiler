@@ -8705,7 +8705,15 @@ run_x86 signedness_struct_field_array 42
 ## Indexed module-global fixed-array signedness: recover the declared builtin element type from the
 ## global `: [T; N]` annotation (there is no local SlotEntry). High-bit u64 ordering must be unsigned;
 ## i64 division must remain signed. Inferred/aggregate/non-builtin/global-field forms stay conservative.
+## IR slice 3c: the twins now read `U[i]`/`C[i]`/`S[i]` as a typed load of a global word cell and
+## `S[0] / 2` as `sdiv`/`div` (measured: x86_64, aarch64 and riscv64 all answer 42; wasm still
+## answers 1 — its global lives in linear memory, `sw_addr` answers a `global.get`, so #707 stays
+## open there and this fixture is deliberately NOT registered for `run_wat`). Registered on the two
+## register twins so a signedness regression there is a FAIL and not a silent non-42: until now this
+## was `run_x86` only, which is why the twins were wrong on it in silence.
 run_x86 signedness_global_array 42
+run_a64 signedness_global_array 42
+run_rv64 signedness_global_array 42
 ## Same unsigned-across-2^63 fix on the a64 (`cset lo/hi/ls/hs`), rv64 (`sltu`) and wasm
 ## (`i64.lt_u`/…) backends: plain `run` so ALL sweeps exercise the boundary (a signed regression →
 ## non-42 = SILENT miscompile there). x86 also asserts 42; every operand is provably `u64` → UNSIGNED.
