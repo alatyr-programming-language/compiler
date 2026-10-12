@@ -3300,6 +3300,14 @@ rv_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), b
   match deref(e) {
     Expr::Var(s, n) => {
       if param_ann_unsigned(params_head, src, s, n, a) { r = true }
+      ## #918 — inside a MONOMORIZED INSTANCE the param spells its type as the generic's
+      ## type-parameter (`a : T`), so the scan above cannot prove unsignedness and the comparison
+      ## fell back to the always-SIGNED ordering: `lt(u64, 1, -1)` ordered `1 < huge` as `1 < -1`,
+      ## FALSE, a valid binary, a normal exit, a wrong value. The instance's concrete type is already
+      ## in the substitution globals this fn emits with (`RV_SUB_GPS/GPL` -> `RV_SUB_ITS/ITL`, the
+      ## same pair the size path reads at :416), so the signedness question is answered from it here.
+      ## Outside instance mode `RV_SUB_ITL == 0` and the call is inert: no non-generic site changes.
+      if r == false { if lower_layout::param_ann_unsigned_inst(params_head, src, s, n, a, RV_SUB_GPS, RV_SUB_GPL, RV_SUB_ITS, RV_SUB_ITL, RV_SUB_GPS2, RV_SUB_GPL2, RV_SUB_ITS2, RV_SUB_ITL2, RV_SUB_GPS3, RV_SUB_GPL3, RV_SUB_ITS3, RV_SUB_ITL3) { r = true } }
       if rv_local_ann_unsigned(body_head, src, s, n, a) { r = true }
       ## un-annotated `s := unchecked (<init>)` — recover the unsignedness the wrapper swallowed
       ## (mirrors the SIGNED side's `rv_shift_call_signed` recovery two functions above).
