@@ -3544,7 +3544,7 @@ pub global_word_array_cells := fn(d : Decl) -> i64 {
     match ag {
       Some(aq) => {
         aa := deref(arg_p(aq))
-        if not ex_is_num_lit(aa.e) { return 0 - 1 }
+        if not ex_is_foldable_word(aa.e) { return 0 - 1 }
         n = n + 1
         ag = aa.next
       }
@@ -3562,6 +3562,31 @@ pub ex_value_is_scalar := fn(v : ptr(Expr)) -> bool {
     Expr::Num(x, s, n) => { r = true }
     Expr::BoolLit(x) => { r = true }
     Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+## Is `e` an initializer the twins and x86_64 fold to the SAME word? Structurally: a number, a bool,
+## or a `Bin` over the arithmetic ops (`16 + 17 - 18 * 19 / 29 %`, the parser's own kinds) whose two
+## sides are themselves foldable. This is exactly the domain where `ex_value_init` (twins) and
+## `lower.al::global_init_value` (x86_64) agree, so a cell of this shape holds one value in every
+## backend and the IR may name it.
+## `Expr::Var` is REFUSED on purpose: x86_64 resolves a name through `module_const_value` and the
+## twins answer 0, so a `Var` cell is a live disagreement (the rest of #923), not a folded word.
+## Measured: no integer global in the corpus is initialised from a bare name, so refusing it costs
+## nothing today and turns this predicate into the place that must change when #923's `Var` half lands.
+pub ex_is_foldable_word := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Num | Expr::BoolLit => { r = true }
+    Expr::Bin(op, l, rr) => {
+      if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 {
+        if ex_is_foldable_word(l) and ex_is_foldable_word(rr) { r = true }
+      }
+    }
+    Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
