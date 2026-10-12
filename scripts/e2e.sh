@@ -7408,6 +7408,16 @@ run signedness_shadow_records 42
 build_reject_has generic_mix_usize_reject "implicit signed/unsigned conversion"
 run generic_mix_usize_u64_ok 42
 run generic_unused_instance_mix 42
+## #918 — §8.5's fourth fixture, the one that pins per-instance signedness. One body `lt(T,a,b)`,
+## instantiated twice on the same bit pattern `-1` seen two ways: `lt(i64,-1,1)` is TRUE under the
+## signed order, `lt(u64,1,-1)` is TRUE under the UNSIGNED order. 2 + 40 = 42 only if each instance
+## compares with the signedness it was instantiated with; a compiler that types every `T` comparison
+## alike answers 2 or 40. Measured BEFORE the fix: x86_64 answered 42 and aarch64/riscv64/wasm
+## answered 2 — those three re-derived unsignedness from the param's SPELLING, which inside a generic
+## body is `T` and therefore unprovable, so the comparison fell back to the always-signed condition.
+## x86_64 escaped it only because `lower::bind_param` substitutes the instance type into the param
+## span, which is exactly the accident §8.5 wanted pinned before 1e moved the query.
+run generic_signedness_per_instance 42
 ## §9.1 — a bare integer literal inherits the proven unsignedness of its `u64` partner inside
 ## an `unchecked` arithmetic expression. All four backends now return 42; this used to be a normal-exit
 ## silent wrong value (3) on a64, rv64 and wasm.

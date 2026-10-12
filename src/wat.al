@@ -447,6 +447,14 @@ wat_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
   match deref(e) {
     Expr::Var(s, n) => {
       if param_ann_unsigned(params_head, src, s, n, a) { r = true }
+      ## #918 — inside a MONOMORIZED INSTANCE the param spells its type as the generic's
+      ## type-parameter (`a : T`), so the scan above cannot prove unsignedness and the comparison
+      ## fell back to the always-SIGNED ordering: `lt(u64, 1, -1)` ordered `1 < huge` as `1 < -1`,
+      ## FALSE, a valid binary, a normal exit, a wrong value. The instance's concrete type is already
+      ## in the substitution globals this fn emits with (`WAT_SUB_GPS/GPL` -> `WAT_SUB_ITS/ITL`,
+      ## the same pair the size path reads at :2518). Outside instance mode `WAT_SUB_ITL == 0` and
+      ## the call is inert: no non-generic site changes.
+      if r == false { if lower_layout::param_ann_unsigned_inst(params_head, src, s, n, a, WAT_SUB_GPS, WAT_SUB_GPL, WAT_SUB_ITS, WAT_SUB_ITL, WAT_SUB_GPS2, WAT_SUB_GPL2, WAT_SUB_ITS2, WAT_SUB_ITL2, WAT_SUB_GPS3, WAT_SUB_GPL3, WAT_SUB_ITS3, WAT_SUB_ITL3) { r = true } }
       if wat_local_ann_unsigned(body_head, src, s, n, a) { r = true }
       ## un-annotated `s := unchecked (<init>)` — recover the unsignedness the wrapper swallowed
       ## (mirrors the SIGNED side's `wat_shift_call_signed` recovery above).

@@ -2868,6 +2868,43 @@ pub param_ann_unsigned := fn(params_head : Option(ptr(mut Param)), src : ptr(u8)
   r
 }
 
+## #918 — the same question, answered for a MONOMORIZED INSTANCE of a generic fn. Inside a generic
+## body a parameter spells its type as the type-parameter (`a : T`), so `param_ann_unsigned` above
+## cannot prove unsignedness and the caller falls back to the always-SIGNED condition — `lt(u64, 1,
+## -1)` then ordered `1 < huge` as `1 < -1`, FALSE, a valid binary, a normal exit, a wrong value on
+## aarch64/riscv64/wasm (x86_64 escaped it only because `lower::bind_param` substitutes the instance
+## type into the param span, so its own scan sees `u64`).
+##
+## The substitution is the one each backend ALREADY applies for size and struct resolution —
+## `a64_param_struct_ns` (aarch64.al:540), its riscv64/wasm twins — applied here to the signedness
+## question. `gps/gpl` is the generic's type-parameter NAME, `its/itl` the instance's concrete type
+## spelled at the call site; three pairs for up to three type-params, exactly as the size path takes
+## them. Outside instance mode (`gpl == 0`) every arm is inert and the answer is `param_ann_unsigned`
+## verbatim, so no non-generic site changes. ONE-DIRECTIONAL like the shape proofs it joins: it can
+## only prove a param unsigned that the spelling could not, never flip a signed one.
+pub param_ann_unsigned_inst := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize) -> bool {
+  mut p := params_head
+  mut r := false
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, ns, nl) {
+          mut ets := pm.ts
+          mut etl := pm.tl
+          if gpl != 0 and itl != 0 { if streq(src, pm.ts, pm.tl, gps, gpl) { ets = its ; etl = itl } }
+          if gpl2 != 0 and itl2 != 0 { if streq(src, pm.ts, pm.tl, gps2, gpl2) { ets = its2 ; etl = itl2 } }
+          if gpl3 != 0 and itl3 != 0 { if streq(src, pm.ts, pm.tl, gps3, gpl3) { ets = its3 ; etl = itl3 } }
+          if scalar_name_is_unsigned(src, ets, etl) { r = true }
+        }
+        p = pm.next
+      }
+      None => { break }
+    }
+  }
+  r
+}
+
 ## Is the parameter named `[ns, ns+nl)` declared with a FLOAT type?
 pub named_param_is_float := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   mut p := params_head
