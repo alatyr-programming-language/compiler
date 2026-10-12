@@ -642,6 +642,17 @@ ib_global_decl := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(u64) {
     }
     i = i + 1
   }
+  ## AMBIGUITY REFUSES, and it is the span that is ambiguous, not the name. `Expr::Var` keeps only
+  ## the LAST segment of a qualified path (`parser.al:2163` "retain the LAST segment as the Var span"),
+  ## so after parsing, `geo::G` and a bare `G` are the SAME span. The front half knows this and refuses
+  ## to rewrite a path whose value name is carried by more than one module value (`d_qual_var`:
+  ## `if d_value_name_count(vs, vl, decls, src) != 1 { return }`, measured on this very fixture as
+  ## `G + geo::G` answering 2 where 42 is due). The builder must refuse on exactly the same ground:
+  ## with two modules declaring `G`, `nown == 1` picks the CURRENT module's, which is right for a bare
+  ## `G` and silently wrong for `geo::G` — measured: `test/package/module_global_shadow` answered 82
+  ## (41 + 41) where the ancestor's 1 was due. Refusing falls the function back to the legacy emitter
+  ## (D7), which resolves the path and answers 42.
+  if nany >= 2 { return Option(u64).None }
   if nown == 1 { return own }
   if nown == 0 and nany == 1 { return any }
   Option(u64).None
