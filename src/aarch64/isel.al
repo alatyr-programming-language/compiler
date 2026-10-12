@@ -362,7 +362,11 @@ sa_addr := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool
   gdo : Option(Decl) = sa_sym_decl(x, ip)
   match gdo {
     Some(g) => {
-      has_cell := lower_layout::global_has_scalar_cell(g)
+      ## Slice 3c: a global whose data cells the emitter lays out as a run of one-word cells
+      ## (`global_word_array_cells`) is addressable too — `addr @G` names the FIRST cell, and the
+      ## `load`/`store` below adds `i * 8`. The gate is the same proof as for a scalar cell: the
+      ## emitter, not the IR, decides the layout, so the address is the label the legacy path uses.
+      has_cell := lower_layout::global_has_scalar_cell(g) or lower_layout::global_word_array_cells(g) > 0
       if not has_cell { return false }
       gname := str_at((x.src + g.name_start), g.name_len)
       sa_put(sb, "  adrp x11, ")

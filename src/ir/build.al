@@ -482,10 +482,11 @@ ib_bx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> Option(VR
     Expr::Loop(body) => { return ib_bx_value_loop(bp, a, e, body) }
     Expr::Bitcast(inner, ts, tl) => { return ib_bx_bitcast(bp, a, e, inner, ts, tl) }
     Expr::Field(b, fs, fl) => { return ib_bx_field(bp, a, e, b, fs, fl) }
+    Expr::Index(b, ix) => { return ib_bx_index(bp, a, e, b, ix) }
     Expr::Deref(pe) => { return ib_bx_deref(bp, a, e, pe) }
     Expr::AddrOf(pl) => { return ib_bx_addr_of(bp, a, e, pl) }
     Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit
-      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
       | Expr::FnRef => { ib_refuse_expr(bp, e, NyWhy.NwOutside) }
   }
   Option(VRegId).None
@@ -1752,6 +1753,67 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
     None => {}
   }
   ib_no(bp, e, NyWhy.NwOutside)
+}
+
+## `T[i]` of a module-global fixed array whose cells the target's data emitter already lays out as a
+## run of one-word cells (`lower_layout::global_word_array_cells`): `addr @G` + a `load T` at `i * 8`.
+## Slice 3c (`docs/ir-slice-3.md` §1 item 3), and the reason it is the element signedness of #707:
+## the element's kernel type and signedness come from sema's record of THIS node (`ib_ty(e)`, D6), so
+## `U[0] < U[1]` over `[u64; 2]` compares UNSIGNED — the legacy emitters answered it signed because
+## their shape scan sees an index over a global and has no annotation to read there.
+##
+## The narrowness is the proof, not caution:
+##  • the base must be a global whose initializer is ALL integer literals — that is exactly the shape
+##    `emit_a64_global_cells` writes as `.quad v0 .quad v1 …`, so the stride is 8 by construction of
+##    the emitter and NOT by the declared element width (`[u32; 3]` also emits three `.quad`s, measured;
+##    taking `layout_elem_stride_bytes` here would read byte 4 of an 8-byte cell — Q4's disagreement);
+##  • the element's recorded width must be 8, so the load's own width equals the cell's width;
+##  • the index must be a literal inside the cell count — no `bound` yet, so nothing is read out of the
+##    run and no bounds trap is invented (a later slice adds `bound`, docs/ir-slice-3.md §1 item 3).
+## Anything else answers `NotYet` and the function falls back to its target's legacy emitter (D7).
+## wasm refuses at its `load` (its `sw_load` takes offset 0 only, linear memory being slice 3's other
+## half), so wasm keeps its legacy answer and #707 stays open there — reported, not hidden.
+ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : ptr(Expr), ix : ptr(Expr)) -> Option(VRegId) {
+  bv : IbB = deref(bp)
+  bs : usize = lower_layout::ex_var_ns(b)
+  bn : usize = lower_layout::ex_var_nl(b)
+  if bn == 0 { return ib_no(bp, e, NyWhy.NwOutside) }
+  ## The same ambiguity refusal as `ib_global_decl`: a qualified path and a bare name share the Var
+  ## span, so two globals of one name cannot be told apart here.
+  gd : Option(u64) = ib_global_decl(bp, bs, bn)
+  di : usize = 0
+  mut ok := false
+  match gd { Some(x) => { di = usize(x); ok = true } None => {} }
+  if not ok { return ib_no(bp, e, NyWhy.NwOutside) }
+  d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), di))
+  cells := lower_layout::global_word_array_cells(d)
+  if cells <= 0 { return ib_no(bp, e, NyWhy.NwOutside) }
+  io : Option(i64) = ib_num_value(ix)
+  iv : i64 = 0
+  mut iok := false
+  match io { Some(v) => { iv = v; iok = true } None => {} }
+  ## A literal index INSIDE the run: nothing is read out of it, so no `bound` is owed yet (§1 item 3)
+  ## and no out-of-bounds address can be formed.
+  if not iok or iv < 0 or iv >= cells { return ib_no(bp, e, NyWhy.NwOutside) }
+  k := ib_ty(bp, e)?
+  ## Only an 8-byte scalar element: the cell is one word, so the load's width must be it.
+  if not ib_ks_word(k) { return ib_no(bp, e, NyWhy.NwOutside) }
+  ## The declared element type must agree with sema's record of this node — the same check
+  ## `ib_bx_field` makes against the field's declared type.
+  lts := ast::local_type_span(bv.src, d.name_start, d.name_len)
+  es := lower_layout::arr_field_elem_span(bv.src, lts.s, lts.n)
+  if es.n == 0 { return ib_no(bp, e, NyWhy.NwOutside) }
+  ek : Option(IbKS) = ib_name_ks(bv.src, es.s, es.n)
+  dk : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+  mut eok := false
+  match ek { Some(x) => { dk = x; eok = true } None => {} }
+  if not eok { return ib_no(bp, e, NyWhy.NwOutside) }
+  if not ib_ks_eq(k, dk) { return ib_no(bp, e, NyWhy.NwDisagree) }
+  pa := ib_global_addr(bp, a, di, d)
+  opa := o_vreg(pa)
+  ofd := IbFld(off = ByteOff(usize(iv) * 8), ty = k.ty, sg = k.sg)
+  lv := ib_load_at(bp, a, opa, ofd)
+  Option(VRegId).Some(lv)
 }
 
 ## A one-word kernel scalar (8 bytes): what a pointer or an address-taken local may move (see above).

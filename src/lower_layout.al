@@ -3526,6 +3526,34 @@ pub DECL_KIND_SYSCALL : u8 = 4
 pub global_has_scalar_cell := fn(d : Decl) -> bool {
   d.is_fn == false and d.kind == DECL_KIND_VALUE and d.arity == 0 and d.name_len != 0 and ex_value_is_scalar(d.value)
 }
+## Does module declaration `d` own a RUN of one-word cells — a fixed array whose initializer is all
+## integer literals? `emit_a64_global_cells` / its riscv64 peer emit `<name>: .quad v0 .quad v1 …`,
+## ONE `.quad` PER ELEMENT whatever the element's declared width (measured on `main`: `[u64; 2]`,
+## `[u32; 3]` and `[i8; 3]` all come out as three `.quad`s), and the legacy read is `[x2, x0, lsl #3]`
+## — base + index × 8. So the stride of such a global is 8 BY CONSTRUCTION of the data emitter, and an
+## IR `addr @g` + `load T [ptr + i*8]` lands on the same byte the legacy emitter reads. Answers the
+## number of cells, or -1 when `d` is not such a run (the caller refuses, never guesses a stride).
+## The declared element width is checked by the CALLER against this count: only an 8-byte scalar element
+## makes the load's own width equal the cell's, which is the tier whose layout is PROVED equal (Q4).
+pub global_word_array_cells := fn(d : Decl) -> i64 {
+  if d.is_fn or d.kind != DECL_KIND_VALUE or d.arity != 0 or d.name_len == 0 { return 0 - 1 }
+  if not ex_is_array_lit(d.value) { return 0 - 1 }
+  mut n : usize = 0
+  mut ag : Option(ptr(mut Arg)) = ex_array_lit_ehead(d.value)
+  loop {
+    match ag {
+      Some(aq) => {
+        aa := deref(arg_p(aq))
+        if not ex_is_num_lit(aa.e) { return 0 - 1 }
+        n = n + 1
+        ag = aa.next
+      }
+      None => { break }
+    }
+  }
+  if n == 0 { return 0 - 1 }
+  i64(n)
+}
 ## Is `v` a compile-time SCALAR literal (a number or a bool), and what is its value? The two are
 ## separate because a value of 0 is indistinguishable from "not a literal" in the second answer.
 pub ex_value_is_scalar := fn(v : ptr(Expr)) -> bool {
