@@ -3540,12 +3540,32 @@ pub ex_value_is_scalar := fn(v : ptr(Expr)) -> bool {
   }
   r
 }
+## The twins' comptime value of an initializer expression. `#923`: this leaf used to answer
+## `Num`/`BoolLit` and 0 for EVERYTHING ELSE, so a global whose initializer was still an
+## unevaluated expression — `mut G : i64 = 0 - 1`, or an array cell `[i64; 2] = [0 - 1, 7]` —
+## laid down `0` where x86_64, folding the same tree in `lower.al::global_init_value`, laid down
+## `-1`: a silent wrong value on aarch64, riscv64 and wasm, with no trap to point at.
+## The fold mirrors x86's set EXACTLY — the same op bytes (16 `+` 17 `-` 18 `*` 19 `/` 29 `%`,
+## the parser's own kinds), `unchecked` so the wrap is the same, and nothing else: x86 leaves
+## `If`/`Match`/`Call`/`Unchecked`/… unfolded, so this must too, or the twins would answer a
+## value x86 never computes. `Var` is the one arm of x86's fold left out here because this leaf
+## takes no `decls`/`src` to resolve a name in; the corpus's `Var`-initialised globals are all
+## `false`/`true`, which the parser already folds to `BoolLit`, so no live case is missed.
 pub ex_value_init := fn(v : ptr(Expr)) -> i64 {
   mut r := 0
   match deref(v) {
     Expr::Num(x, s, n) => { r = i64(x) }
     Expr::BoolLit(x) => { r = i64(x) }
-    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+    Expr::Bin(op, l, rr) => {
+      lv := ex_value_init(l)
+      rv := ex_value_init(rr)
+      if op == 16 { r = unchecked (lv + rv) }
+      if op == 17 { r = unchecked (lv - rv) }
+      if op == 18 { r = unchecked (lv * rv) }
+      if op == 19 { r = unchecked (lv / rv) }
+      if op == 29 { r = unchecked (lv % rv) }
+    }
+    Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
