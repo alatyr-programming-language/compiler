@@ -28515,22 +28515,10 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
 ## fn, concrete type) pair seen at a call site: `gi` the generic fn's decl index, `ts`/`tl`
 ## the type-argument lexeme span. `emit_program` collects these from every call site (deduped
 ## by `gi` + typetag content) then emits one specialized fn-definition copy per entry.
-## A monomorphization instance: the generic decl index `gi` + up to TWO comptime type-arg tags
-## (`ts`/`tl` = the FIRST type-param's concrete-type lexeme span; `ts2`/`tl2` = the SECOND's, 0/0
-## when the fn has a single type-param). Two tags cover `map(T, U, …)` / `HashMap(K, V, …)`; the
-## mangled label is `<mod>__<fn>__<tag1>` (single) or `<mod>__<fn>__<tag1>__<tag2>` (two).
-Inst := struct { gi : usize, ts : usize, tl : usize, ts2 : usize, tl2 : usize, ts3 : usize, tl3 : usize }
-
-## `IVec` — an `Inst` vector backed by a bump arena (the lean replacement for
-## `alloc::IVec` fixpoint), mirroring `SVec`. The mono pre-pass collects
-## a bounded set of generic instances here; growth doubles `cap` with a word-granular copy.
-IVec := struct { base : usize, len : usize, cap : usize, arena : ptr(mut rt::Arena) }
-ivec_stride := fn() -> usize {
-  sz := size(Inst)
-  r := sz % 8
-  if r == 0 { return sz }
-  return sz + (8 - r)
-}
+## The data types `Inst`/`IVec` and the read accessors (`ivec_stride`/`ivec_at`/`ivec_len`) live in
+## `lower_layout` (docs/ir-slice-1.md §8.3, e2): sema reads the set to re-check each generic body per
+## instance but must not import `lower` (the `conv_kind` precedent), so the shared leaf holds them.
+(Inst, IVec, ivec_stride, ivec_at, ivec_len) := lower_layout
 ## Initialize `v` as a fresh IVec backed by `cap` element slots from `a` (an IN-OUT constructor,
 ## the dual of `rt::arena_init`). IVec is a 4-WORD struct {base,len,cap,arena}; the self-host
 ## lower's struct-RETURN convention rides ≤3 registers (%rax:%rdx:%rcx), so a 4-word `return
@@ -28566,11 +28554,6 @@ ivec_push := fn(in out v : IVec, x : Inst) {
   deref(p) = x
   v.len = v.len + 1
 }
-ivec_at := fn(v : ptr(IVec), i : usize) -> Inst {
-  p : ptr(Inst) = unchecked bitcast(ptr(Inst), deref(v).base + i * ivec_stride())
-  return deref(p)
-}
-ivec_len := fn(v : ptr(IVec)) -> usize { return deref(v).len }
 
 ## Two type-arg spans denote the SAME instantiation? Compares the bare head lexeme AND every
 ## top-level type-argument (via the proven `typearg_at` re-scan), so two generic-instance type-args
@@ -30061,6 +30044,11 @@ pub collect_program := fn(decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt:
 mono_insts := fn(msg : str) -> ptr(mut IVec) {
   match MONO_INSTS { Some(hp) => { hp }; None => { panic(msg) } }
 }
+## The collected instance set, as `sema::set_insts` wants it: `Some` once `collect_program` has run,
+## `None` before it (docs/ir-slice-1.md §8.3, e2 — sema reads the list to re-check each generic body
+## per instance). An absent list is `None`, never an empty set: the walk then does nothing, which is
+## the honest answer for a path that did not collect.
+pub mono_insts_opt := fn() -> Option(ptr(mut IVec)) { MONO_INSTS }
 collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt::Arena), a : rt::Arena, cnt : usize) {
   ## SEED from NON-GENERIC fns only. A generic fn's body calls other generics with its OWN
   ## type-PARAM (`allocate`'s `buf_ptr(T, …)`), which — collected literally here — would seed a

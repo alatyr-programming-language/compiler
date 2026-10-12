@@ -5249,6 +5249,12 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## reads this list instead of collecting its own.
   lower::collect_program(ptr(decls), base, ptr(na), na)
   if lower::x86_ir_select_on() { ir::sty_enable() }
+  ## IR prerequisite e2 (docs/ir-slice-1.md §8.3): hand the collected instance set to sema, which
+  ## re-checks each generic body per instance so a generic body's node gets the type ITS instance has
+  ## (the generic pass can only answer `VcUnknown` for a `T`). In the probe phase this moves no verdict
+  ## (§8.6): a per-instance refusal is reported on fd 97, not raised.
+  io := lower::mono_insts_opt()
+  match io { Some(iv) => { sema::set_insts(iv) }; None => {} }
   scode := sema::check_program(ptr(decls), base, ptr(na))
   if scode != 0 { d_sema_reject(scode, base, ptr(ftab), tar) }
   dlc := sema::enforce_declared_limits(ptr(decls), base, ptr(na))
@@ -6672,6 +6678,11 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## twins' front half does not model a package yet (slice 0b's package roots), so this run sees none.
   pkr := sema::set_package_modules(0, 0)
   ir::sty_enable()
+  ## IR prerequisite e2 (docs/ir-slice-1.md §8.1): this path keeps the twins' PRIVATE instance lists
+  ## until slice 6 and does not run mono's collection, so it CLEARS sema's set. Clearing is not
+  ## optional: `SEMA_INSTS` outlives one `check_program` call, and a list left over from an earlier
+  ## program would index THIS tree's `decls` with another tree's `gi` — a wrong decl, or a crash.
+  sic := sema::set_insts_clear()
   ## docs/ir.md §3.8.6 — this run does not record library bodies yet (`sema::set_lib_records`): doing
   ## so moves which library functions the twins select from the IR, an oracle transition of its own.
   lro := sema::set_lib_records(false)
@@ -7458,6 +7469,12 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   d_manifest_module_decls(pv, name_start, name_len, decls, na, tar, nstr)
   d_manifest_rewrite_decls(decls, pv, name_start, name_len, base, nstr, ptr(na))
   d_manifest_set_sema_modules(pv, name_start, name_len, tar)
+  ## IR prerequisite e2 (docs/ir-slice-1.md §8.1): `check` runs sema too, so it collects the instance
+  ## set and hands it over exactly as `build` does — otherwise the per-instance verdict would fire at
+  ## build and be silent at check, the Tooling §2.2/§5 split FND-11 was filed for.
+  lower::collect_program(ptr(decls), base, ptr(na), na)
+  io := lower::mono_insts_opt()
+  match io { Some(iv) => { sema::set_insts(iv) }; None => {} }
   mut r := sema::check_program(ptr(decls), base, ptr(na))
   ## FND-11 — the LAXER-THAN-CEILING rule, which `check` was missing while `build` enforced it: a file whose
   ## `@limits` list OMITS a ceiling limit declares a weaker contract than the package allows. `check` ran
@@ -7757,7 +7774,14 @@ pub check := fn(src : str, in out a : Arena) -> usize {
       parser::set_module_base(0)
       pr2 := parser::parse_program(pc2, decls, tar)
       match pr2 {
-        Result::Ok(n2) => { rc = sema::check_program(ptr(decls), base, ptr(na)) }
+        Result::Ok(n2) => {
+          ## IR prerequisite e2 (docs/ir-slice-1.md §8.1): collect and hand over the instance set, as
+          ## `build` does, so `check` and `build` reach the same per-instance verdict.
+          lower::collect_program(ptr(decls), base, ptr(na), na)
+          io2 := lower::mono_insts_opt()
+          match io2 { Some(iv) => { sema::set_insts(iv) }; None => {} }
+          rc = sema::check_program(ptr(decls), base, ptr(na))
+        }
         Result::Err(e2) => { pek2 := d_perr_kind(e2) ; zp2 := d_parse_diag_pc(pc2, pek2, 0, src.len, 0, 0, tar) ; rc = 9 }
       }
     }

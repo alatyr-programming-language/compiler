@@ -7398,6 +7398,16 @@ build_reject_has signedness_mixed_compare "implicit signed/unsigned conversion"
 build_reject_has signedness_mixed_literal_default "implicit signed/unsigned conversion"
 run signedness_spelled_ok 42
 run signedness_shadow_records 42
+## docs/ir-slice-1.md §8.5 (prerequisite e, option A) -- the PER-INSTANCE half of the same rule. The
+## generic pass cannot see a `T`-vs-concrete-int mix (`a : T` is `VcUnknown` there, and §3.8 forbids
+## defaulting it), so the refusal only exists once each generic body is re-checked per monomorphization
+## instance with `T` bound. The reject/accept pair pins the verdict to the INSTANCE'S OWN signedness:
+## a rule that refused every generic `T`-plus-integer body fails the accept half, and one that never
+## looked at instances fails the reject half. The third fixture is Comptime §9.3 -- a body that would
+## mix but is never instantiated stays accepted (there is no abstract check).
+build_reject_has generic_mix_usize_reject "implicit signed/unsigned conversion"
+run generic_mix_usize_u64_ok 42
+run generic_unused_instance_mix 42
 ## §9.1 — a bare integer literal inherits the proven unsignedness of its `u64` partner inside
 ## an `unchecked` arithmetic expression. All four backends now return 42; this used to be a normal-exit
 ## silent wrong value (3) on a64, rv64 and wasm.

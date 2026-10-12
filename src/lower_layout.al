@@ -5623,3 +5623,37 @@ pub const_denoted_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
   }
   res
 }
+
+## ───────────────────────────── the monomorphization instance set (shared data) ─────────────────────────────
+##
+## Relocated from `lower.al` (docs/ir-slice-1.md §8.3, e2): `sema` must read the instance set mono
+## collects (to re-check each generic body per instance) but must not import `lower` (the `conv_kind`
+## precedent), so the pure DATA types and the read accessors live here, in the shared leaf both
+## `lower` and `sema` import. The arena-allocating constructors (`ivec_new`/`ivec_push`) and the
+## collection logic (`add_inst`/`inst_targ_eq`) stay in `lower.al`, which imports these back.
+## A monomorphization instance: the generic decl index `gi` + up to THREE comptime type-arg tags
+## (`ts`/`tl` the FIRST type-param's concrete-type lexeme span; `ts2`/`tl2` the SECOND's; `ts3`/`tl3`
+## the THIRD's, 0/0 when the fn has fewer type-params). The mangled label is
+## `<mod>__<fn>__<tag1>[__<tag2>][__<tag3>]`.
+pub Inst := struct { gi : usize, ts : usize, tl : usize, ts2 : usize, tl2 : usize, ts3 : usize, tl3 : usize }
+## `IVec` — an `Inst` vector backed by a bump arena (the lean replacement for `alloc::IVec` fixpoint),
+## mirroring `SVec`. The mono pre-pass collects a bounded set of generic instances here; growth doubles
+## `cap` with a word-granular copy.
+pub IVec := struct { base : usize, len : usize, cap : usize, arena : ptr(mut rt::Arena) }
+## The word-aligned stride of one `Inst` element.
+pub ivec_stride := fn() -> usize {
+  sz := size(Inst)
+  r := sz % 8
+  if r == 0 { return sz }
+  return sz + (8 - r)
+}
+## The `i`-th instance of the vector at `v` (a copy).
+pub ivec_at := fn(v : ptr(IVec), i : usize) -> Inst {
+  ## `base` is an arena block of `cap * ivec_stride()` bytes that `ivec_new` reserved and `ivec_push`
+  ## fills one whole `Inst` per stride-sized slot; every caller bounds `i < len <= cap`.
+  ## unchecked-ok: a stride-indexed slot of that block, read back as the `Inst` written there.
+  p : ptr(Inst) = unchecked bitcast(ptr(Inst), deref(v).base + i * ivec_stride())
+  return deref(p)
+}
+## The number of instances in the vector at `v`.
+pub ivec_len := fn(v : ptr(IVec)) -> usize { return deref(v).len }

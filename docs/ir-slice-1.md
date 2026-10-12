@@ -309,10 +309,27 @@ the 43 that become known, per backend. The x86 GAS does not move until 1e's own 
   instantiation. Lib bodies are fixed first, as in (d). (c) The spec wins for the corpus and `src/`,
   through a lib sweep first, and then the same as (b). I lean (b)/(c), because it is the spec's
   wording, but it reverses an explicit project rule.
+  *Decided (owner, 2026-10-10): (b) — the spec wins; a user program that instantiates a mixing lib
+  generic is rejected at its instantiation, and lib bodies are fixed first, as in (d).* The basis: a
+  read of all 16 lib generic bodies (`lib/base/{cmp,slice,option,derive,result,alloc}.al`,
+  `lib/alloc/{vec,deque,hashmap,oset,omap,fmt}.al`, `lib/std/{sync,fmt,channel,io}.al`) found **zero**
+  bodies that mix a `T`-typed value with a concrete integer in one operator — `T` is compared only
+  against `T` (through `eq`/`lt`/`less`), all arithmetic is over `usize`/`u64` (cap/size/align/idx/
+  len/head/tail), and `T` otherwise appears only as a type argument (`size(T)`, `Handle(T)`, `ptr(T)`)
+  or behind an explicit conversion (`i64(v)`/`u64(v)`/`f64(v)`). So (b) is free on the current tree
+  (no `ACCEPTED → REJECTED` transition, no lib fix owed) and makes a future mixing lib generic a
+  located error at its instantiation rather than a silent wrong value — the goal's own requirement.
+  The "trust the stdlib" rule is about not letting a *check-gap* (the checker not understanding a
+  stdlib feature) reject a well-typed program; a `T`-vs-concrete-int mix is a real type error, not a
+  check-gap, so (b) applies the per-instance verdict to lib instances without reversing the rule's
+  intent. The residual risk — a false reject from a check-gap on a lib body — is caught by the §8.6
+  probe (verdicts reported, not raised) before the verdicts are enabled.
 - **E-Q2, comptime-for and pack elements.** (a) Extend the key to iteration contexts in (e) (step e4,
   before 1e). (b) Leave them to slice 6's clones (option B), and 1e waits for that. (c) Leave them in
   the residue and give 1e a located internal error for them. That reads against "no residue" (§7, last
-  paragraph). I lean (a).
+  paragraph). I lean (a). *Decided (owner, 2026-10-10): (a) — extend the key to iteration contexts,
+  step e4, before 1e.*
 - **E-Q3, the diagnostic's location.** Spec-silent on the format. The proposal: the primary location
   is the body's operator, with a second line `in instance f(i64), instantiated at <file:line:col>`.
-  The other option is to report only at the call site.
+  The other option is to report only at the call site. *Decided (owner, 2026-10-10): the body's
+  operator, with the second instance line.*
