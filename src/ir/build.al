@@ -1781,7 +1781,7 @@ ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
   ## The same ambiguity refusal as `ib_global_decl`: a qualified path and a bare name share the Var
   ## span, so two globals of one name cannot be told apart here.
   gd : Option(u64) = ib_global_decl(bp, bs, bn)
-  di : usize = 0
+  mut di : usize = 0
   mut ok := false
   match gd { Some(x) => { di = usize(x); ok = true } None => {} }
   if not ok { return ib_no(bp, e, NyWhy.NwOutside) }
@@ -1789,7 +1789,7 @@ ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
   cells := lower_layout::global_word_array_cells(d)
   if cells <= 0 { return ib_no(bp, e, NyWhy.NwOutside) }
   io : Option(i64) = ib_num_value(ix)
-  iv : i64 = 0
+  mut iv : i64 = 0
   mut iok := false
   match io { Some(v) => { iv = v; iok = true } None => {} }
   ## A literal index INSIDE the run: nothing is read out of it, so no `bound` is owed yet (§1 item 3)
@@ -1804,7 +1804,7 @@ ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
   es := lower_layout::arr_field_elem_span(bv.src, lts.s, lts.n)
   if es.n == 0 { return ib_no(bp, e, NyWhy.NwOutside) }
   ek : Option(IbKS) = ib_name_ks(bv.src, es.s, es.n)
-  dk : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+  mut dk : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
   mut eok := false
   match ek { Some(x) => { dk = x; eok = true } None => {} }
   if not eok { return ib_no(bp, e, NyWhy.NwOutside) }
