@@ -76,7 +76,8 @@ SCAN	src/riscv64.al	emit_rv_fn	src/wat.al	emit_wat_fn	5	Decl,rt::StrBuf,rt::Aren
 SCAN	src/riscv64.al	rv_ann_span	src/wat.al	wat_ann_span	4	ptr(u8),usize,usize	2277:2377
 SCAN	src/riscv64.al	rv_comp_range_bound	src/wat.al	wat_comp_range_bound	4	ptr(Expr),ptr(rt::Vec),ptr(u8)	1919:768
 STRIDE	lib/alloc/hashmap.al	3	-
-STRIDE	src/lower.al	5	-
+STRIDE	src/lower.al	4	-
+STRIDE	src/lower_layout.al	1	-
 STRIDE	src/sema.al	204	-
 TABLE	src/aarch64.al	a64_cond	src/aarch64.al	a64_fcond	4	-	3709:3733
 TABLE	src/aarch64.al	emit_a64_expr	src/riscv64.al	emit_rv_expr	6	-	3870:3439
