@@ -3559,11 +3559,14 @@ pub ex_value_init := fn(v : ptr(Expr)) -> i64 {
     Expr::Bin(op, l, rr) => {
       lv := ex_value_init(l)
       rv := ex_value_init(rr)
-      if op == 16 { r = unchecked (lv + rv) }
-      if op == 17 { r = unchecked (lv - rv) }
-      if op == 18 { r = unchecked (lv * rv) }
-      if op == 19 { r = unchecked (lv / rv) }
-      if op == 29 { r = unchecked (lv % rv) }
+      ## unchecked-ok: comptime fold of a global initializer; the wrap is two's complement and is
+      ## the value x86_64's `global_init_value` already stores in the same `.quad`.
+      if op == 16 { r = unchecked (lv + rv) } ## unchecked-ok: same fold, `+`.
+      if op == 17 { r = unchecked (lv - rv) } ## unchecked-ok: same fold, `-` (`0 - 1` = MAX).
+      if op == 18 { r = unchecked (lv * rv) } ## unchecked-ok: same fold, `*`.
+      if op == 19 { r = unchecked (lv / rv) } ## unchecked-ok: same fold, `/`; a zero divisor is
+        ## refused by sema before this runs (`reject_comptime_unchecked_div_zero`).
+      if op == 29 { r = unchecked (lv % rv) } ## unchecked-ok: same fold, `%`; same refusal.
     }
     Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
