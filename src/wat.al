@@ -1070,7 +1070,7 @@ wat_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
       while i < cnt {
         d := deref(decl_get(decls, i))
         if d.kind == 0 and d.is_fn == false and streq(src, d.name_start, d.name_len, vs, vn) {
-          if unchecked bitcast(usize, d.value) != 0 { r = ex_value_init(d.value) }
+          if unchecked bitcast(usize, d.value) != 0 { r = ex_value_init(d.value, decls, src) }
         }
         i = i + 1
       }
@@ -8343,10 +8343,10 @@ emit_wat_agg_cells := fn(e : ptr(Expr), in out sb : rt::StrBuf, decls : ptr(rt::
     maxp := enum_max_arity(decls, src, en.s, en.n, a)
     mut g : Option(ptr(mut Arg)) = ex_enum_lit_args(e)
     mut w : usize = 0
-    loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; emit_i64_le(sb, ex_value_init(ga.e)) ; w += 1 ; g = ga.next }; None => { break } } }
+    loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; emit_i64_le(sb, ex_value_init(ga.e, decls, src)) ; w += 1 ; g = ga.next }; None => { break } } }
     while w < maxp { emit_i64_le(sb, 0) ; w = w + 1 }
   } else {
-    emit_i64_le(sb, ex_value_init(e))
+    emit_i64_le(sb, ex_value_init(e, decls, src))
   }
 }
 emit_agg_global_data := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
@@ -8674,7 +8674,7 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
       gname := str_at((src + d.name_start), d.name_len)
       push_str(sb, gname)
       push_str(sb, " (mut i64) (i64.const ")
-      push_int(sb, ex_value_init(d.value))
+      push_int(sb, ex_value_init(d.value, decls, src))
       push_str(sb, "))\n")
     }
   }

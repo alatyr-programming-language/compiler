@@ -3593,25 +3593,45 @@ pub ex_is_foldable_word := fn(e : ptr(Expr)) -> bool {
   }
   r
 }
-## The twins' comptime value of an initializer expression. `#923`: this leaf used to answer
-## `Num`/`BoolLit` and 0 for EVERYTHING ELSE, so a global whose initializer was still an
-## unevaluated expression — `mut G : i64 = 0 - 1`, or an array cell `[i64; 2] = [0 - 1, 7]` —
-## laid down `0` where x86_64, folding the same tree in `lower.al::global_init_value`, laid down
-## `-1`: a silent wrong value on aarch64, riscv64 and wasm, with no trap to point at.
-## The fold mirrors x86's set EXACTLY — the same op bytes (16 `+` 17 `-` 18 `*` 19 `/` 29 `%`,
-## the parser's own kinds), `unchecked` so the wrap is the same, and nothing else: x86 leaves
-## `If`/`Match`/`Call`/`Unchecked`/… unfolded, so this must too, or the twins would answer a
-## value x86 never computes. `Var` is the one arm of x86's fold left out here because this leaf
-## takes no `decls`/`src` to resolve a name in; the corpus's `Var`-initialised globals are all
-## `false`/`true`, which the parser already folds to `BoolLit`, so no live case is missed.
-pub ex_value_init := fn(v : ptr(Expr)) -> i64 {
+## The bound on `ex_value_fold`'s chase of a `Var` that names another const. x86's own chase in
+## `global_init_value` is UNBOUNDED and SEGFAULTS on `A := A + 1` (#926, rc 139 measured 3/3);
+## copying that is not "matching x86", it is crashing. Measured: 0 self-referential consts in the
+## corpus, and the only `CONST := CONST` spellings are 4 type ALIASES, which the resolver below does
+## not chase at all — so 16 is far above any real program and still turns a cycle into a decline.
+EX_VALUE_DEPTH := 16
+## The twins' comptime value of an initializer expression — ONE leaf, the exact twin of
+## `lower.al::global_init_value`, including its `Expr::Var` arm (#923's remaining half, #682).
+## It used to answer 0 for `Var`, so `B := A + 1` folded to `0 + 1`: the twins laid down 1 where
+## x86_64, resolving the name through `module_const_value` and RECURSING, laid down 4. Measured on
+## `a02baeb`: `comptime for i in 0 .. B` iterated 4 times on x86_64 and 0 times on aarch64/riscv64.
+## The signature now carries `decls`/`src` for that resolution — all 14 call sites already have both
+## in scope (measured: every `emit_*_program`, `emit_*_global_cells` and `*_comp_range_bound` takes
+## them), so this adds no plumbing, it removes the reason the arm was missing.
+## Resolution is `const_module_decl_value`, this file's own resolver, deliberately EXACTLY x86's set:
+## a `mut` global is excluded (runtime `.data`, not a constant), only a bare `Var` names one, and an
+## unresolved name yields 0 — the SAME decline x86's `global_init_value` yields. It is kept identical
+## rather than made loud on purpose: a `brk` where x86 answers 0 would turn a wrong value into a new
+## TRAP path and RAISE `scripts/xbackend_diff.baseline`, which #922 now refuses. The loud repair for
+## the shapes that have no refusal channel (`.data`, where `emit_*_program` returns nothing) is the
+## `check`-time diagnostic #926 asks for, not a guess made here.
+pub ex_value_init := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> i64 {
+  ex_value_fold(v, decls, src, 0)
+}
+## The chase. `depth` counts const-to-const hops only; the tree walk does not consume it beyond the
+## one frame, so a literal `0 - 1` at any nesting still folds exactly as before.
+pub ex_value_fold := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), depth : i64) -> i64 {
   mut r := 0
+  if depth > EX_VALUE_DEPTH { return 0 }
   match deref(v) {
     Expr::Num(x, s, n) => { r = i64(x) }
     Expr::BoolLit(x) => { r = i64(x) }
+    Expr::Var(vs, vn) => {
+      cv := const_module_decl_value(decls, src, vs, vn)
+      if unchecked bitcast(usize, cv) != 0 { r = ex_value_fold(cv, decls, src, depth + 1) } ## unchecked-ok: the resolver's null ptr compared against 0 to ask "did it resolve"; nothing is reinterpreted.
+    }
     Expr::Bin(op, l, rr) => {
-      lv := ex_value_init(l)
-      rv := ex_value_init(rr)
+      lv := ex_value_fold(l, decls, src, depth + 1)
+      rv := ex_value_fold(rr, decls, src, depth + 1)
       ## unchecked-ok: comptime fold of a global initializer; the wrap is two's complement and is
       ## the value x86_64's `global_init_value` already stores in the same `.quad`.
       if op == 16 { r = unchecked (lv + rv) } ## unchecked-ok: same fold, `+`.
@@ -3621,7 +3641,7 @@ pub ex_value_init := fn(v : ptr(Expr)) -> i64 {
         ## refused by sema before this runs (`reject_comptime_unchecked_div_zero`).
       if op == 29 { r = unchecked (lv % rv) } ## unchecked-ok: same fold, `%`; same refusal.
     }
-    Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+    Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
