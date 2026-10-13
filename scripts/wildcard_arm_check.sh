@@ -161,12 +161,16 @@ wa_decide() { # base-dir head-dir base-label [head-git-rev-for-line-locating]
 
   wa_counted < "$w/base.rows" > "$w/base.counted"
   wa_counted < "$w/head.rows" > "$w/head.counted"
-  bn="$(wc -l < "$w/base.counted")"; hn="$(wc -l < "$w/head.counted")"
-  nf="$(cut -f1 "$w/head.rows" | sort -u | wc -l)"
-  acked="$(awk -F'\t' '$5 == 1' "$w/head.rows" | wc -l)"
-  lit="$(awk -F'\t' '$4 == "literal"'  "$w/head.rows" | wc -l)"
-  ct="$(awk -F'\t'  '$4 == "comptime"' "$w/head.rows" | wc -l)"
-  none="$(awk -F'\t' '$4 == "none"'    "$w/head.rows" | wc -l)"
+  ## `tr -d ' '` on every count: BSD `wc -l` right-pads its number with spaces and GNU does not
+  ## (#927), so on macOS this line printed `base_arms=       1` and the self-test's own assertion
+  ## on `base_arms=1` failed against a decider whose numbers were correct — it was comparing column
+  ## widths, not counts. A count is a bare number on both platforms from here on.
+  bn="$(wc -l < "$w/base.counted" | tr -d ' ')"; hn="$(wc -l < "$w/head.counted" | tr -d ' ')"
+  nf="$(cut -f1 "$w/head.rows" | sort -u | wc -l | tr -d ' ')"
+  acked="$(awk -F'\t' '$5 == 1' "$w/head.rows" | wc -l | tr -d ' ')"
+  lit="$(awk -F'\t' '$4 == "literal"'  "$w/head.rows" | wc -l | tr -d ' ')"
+  ct="$(awk -F'\t'  '$4 == "comptime"' "$w/head.rows" | wc -l | tr -d ' ')"
+  none="$(awk -F'\t' '$4 == "none"'    "$w/head.rows" | wc -l | tr -d ' ')"
 
   if [ "$hn" -gt "$bn" ]; then
     bad=1
