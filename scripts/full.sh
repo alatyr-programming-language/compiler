@@ -418,7 +418,7 @@ fi
 #     planted defect is not evidence", and a report nobody has seen fire is decoration;
 #   * it must print its proof-of-work line, so "found nothing" can be told apart from "walked
 #     nothing" — the same rule, and the same failure mode, as `idiom gate: files=` above.
-echo "### CROSS-BACKEND (manifest divergence report, reporting only, findings never gate) ###"
+echo "### CROSS-BACKEND (report: reporting only; xbackend_diff: RATCHET, growth gates) ###"
 XB_LOG="$LOGDIR/full_xbackend.log"
 bash scripts/xbackend_report.sh --self-test > "$XB_LOG" 2>&1
 xb_st_rc=$?
@@ -443,17 +443,23 @@ if [ "$xb_cover" != 1 ]; then
 fi
 ## The same manifest, the WIDER question (#683): every (phase, exit) disagreement between x86_64 and a
 ## twin, classified — traps, crashes, build-step failures and twins accepting what x86_64 refuses, not
-## only the quiet wrong values above. Reporting only, by the same argument: its count is the backlog
-## #683 is draining, so a finding never sets `fail`; a broken self-test or a missing proof line does.
+## only the quiet wrong values above. `--ratchet`, NOT `--count`: the count used to be reporting-only
+## (`--count` ended in `exit 0` whatever it printed), so a PR that ADDED a disagreement passed and the
+## only trace was a number in a log nobody read — that is how `paths` reached 950. The ratchet holds
+## the line without pretending the backlog is empty: the count may not GROW, and it never demands zero
+## (the 833 TRAP paths are unimplemented lowerings, IR slices 3–8, not defects this change introduced).
+## Growing the count, or a missing/malformed baseline, sets `fail`; so does a broken self-test or a
+## missing proof line. Lowering the count passes and says to tighten the baseline in the same PR.
 bash scripts/xbackend_diff.sh --self-test >> "$XB_LOG" 2>&1
 xd_st_rc=$?
-bash scripts/xbackend_diff.sh --count >> "$XB_LOG" 2>&1
+bash scripts/xbackend_diff.sh --ratchet >> "$XB_LOG" 2>&1
 xd_rc=$?
-grep -E "^(xbackend_diff self-test:|xbackend diff:)" "$XB_LOG"
+grep -E "^(xbackend_diff self-test:|xbackend diff:|xbackend ratchet:)" "$XB_LOG"
 if [ "$xd_st_rc" != 0 ] || [ "$xd_rc" != 0 ] || [ "$(grep -cE '^xbackend diff: paths=' "$XB_LOG")" != 1 ]; then
-  echo "  scripts/xbackend_diff.sh failed its self-test, could not read the manifest, or printed no"
+  echo "  scripts/xbackend_diff.sh failed its self-test or its RATCHET (the disagreement count grew"
+  echo "  past scripts/xbackend_diff.baseline, or the baseline is missing/malformed), or printed no"
   echo "  'xbackend diff: paths=' proof-of-work line (from $XB_LOG):"
-  grep -E "^  FAIL " "$XB_LOG" | head -5 | sed 's/^/    /'
+  grep -E "^  FAIL |^xbackend ratchet:" "$XB_LOG" | head -8 | sed 's/^/    /'
   fail=1
 fi
 

@@ -84,9 +84,16 @@ MODE=table
 ALL=0
 CLASS=""
 SITES_CC=""
+RATCHET=0
+RATCHET_WRITE=0
+RATCHET_FILE="$ROOT/scripts/xbackend_diff.baseline"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --count)     MODE=count; shift ;;
+    --ratchet)   MODE=count; RATCHET=1; shift ;;
+    --write)     RATCHET_WRITE=1; shift ;;
+    --baseline)  [ "$#" -ge 2 ] || { echo "xbackend_diff: --baseline needs a file" >&2; exit 2; }
+                 RATCHET_FILE="$2"; shift 2 ;;
     --rows)      MODE=rows; shift ;;
     --all)       ALL=1; shift ;;
     --class)     [ "$#" -ge 2 ] || { echo "xbackend_diff: --class needs a class name" >&2; exit 2; }
@@ -130,6 +137,43 @@ test/unchecked_div_min_neg1.al'
 ## The join. Reads a manifest, writes one line per disagreeing (path, twin):
 ##   class TAB backend TAB path TAB x86-state TAB twin-state TAB tag
 ## `all=1` also emits REFUSED-LATE. Kept a function so the self-test feeds it synthetic manifests.
+xb_ratchet() { # baseline-file paths rows hw-defined — 0 held, 1 GREW, 2 the baseline is unusable
+  ## The ratchet (#922): the counters used to be REPORTING ONLY — `--count` ended in `exit 0`
+  ## whatever it had just printed, so a PR that ADDED a cross-backend disagreement passed the gate
+  ## and the only trace was a number in a log nobody reads. That is how `paths` reached 950.
+  ## This holds the line WITHOUT pretending the backlog is empty: the count may not GROW, and it
+  ## never demands zero. The 833 TRAP paths are unimplemented lowerings (IR slices 3–8), not
+  ## defects this change introduced; demanding zero today would make the gate permanently red and
+  ## teach everyone to ignore it, which is the failure mode being repaired.
+  local f="$1" bp br bh
+  [ -s "$f" ] || { echo "xbackend ratchet: NO baseline at $f — a ratchet cannot hold a line it does" \
+    ; echo "  not have. Write one with: scripts/xbackend_diff.sh --ratchet --write" >&2; return 2; }
+  bp="$(awk -F= '/^paths=/{print $2}' "$f" | head -1)"
+  br="$(awk -F= '/^rows=/{print $2}' "$f" | head -1)"
+  bh="$(awk -F= '/^hw-defined=/{print $2}' "$f" | head -1)"
+  case "$bp$br$bh" in ''|*[!0-9]*) echo "xbackend ratchet: baseline at $f is malformed" >&2; return 2 ;; esac
+  if [ "$2" -gt "$bp" ] || [ "$3" -gt "$br" ]; then
+    echo "xbackend ratchet: FAIL — the disagreement count GREW past the baseline."
+    echo "    paths $bp -> $2   rows $br -> $3"
+    if [ "$4" -gt "$bh" ]; then
+      echo "    hw-defined $bh -> $4 — a row newly claimed hardware-defined is a documented platform"
+      echo "      difference, not a fix; justify it in review."
+    fi
+    echo "  Each new path is a program that answers differently on two backends (#683). Either fix"
+    echo "  the lowering, or refuse it at compile time with a located diagnostic. Do NOT raise the"
+    echo "  baseline to make this pass."
+    return 1
+  fi
+  if [ "$2" -lt "$bp" ] || [ "$3" -lt "$br" ]; then
+    echo "xbackend ratchet: held, and LOWER than the baseline ($bp -> $2 paths, $br -> $3 rows)."
+    echo "  Lower the baseline so the next change cannot creep back up:"
+    echo "      scripts/xbackend_diff.sh --ratchet --write"
+    return 0
+  fi
+  echo "xbackend ratchet: held at the baseline ($bp paths, $br rows)."
+  return 0
+}
+
 xb_rows() { # manifest all [hw-defined-list]
   awk -F'\t' -v all="$2" -v empty="$SHA_EMPTY" -v hwl="$(printf '%s' "${3-$HW_DEFINED}" | tr '\n' ' ')" '
     BEGIN { nh = split(hwl, hl, " "); for (i = 1; i <= nh; i++) if (hl[i] != "") hw[hl[i]] = 1 }
@@ -284,6 +328,15 @@ if [ "$MODE" = selftest ]; then
   ok "wat site 1 carries its comment" "$(wat_site_info 1 < "$T/w.wat")" "$(printf '(; why one ;)\t$main')"
   ok "wat site 2 is exit(2)" "$(rewrite_wat < "$T/w.wat" | grep -c 'i32.const 2)')" 1
   ok "wat prose is untouched" "$(rewrite_wat < "$T/w.wat" | grep -c '(; unreachable in prose ;)')" 1
+  ## The ratchet (#922): it must fail on growth, hold at the line, and refuse to hold nothing.
+  printf 'paths=10\nrows=20\nhw-defined=1\n' > "$T/base"
+  ok "ratchet: held at the line"        "$(xb_ratchet "$T/base" 10 20 1 >/dev/null; echo $?)" 0
+  ok "ratchet: held when LOWER"         "$(xb_ratchet "$T/base" 9 18 1 >/dev/null; echo $?)" 0
+  ok "ratchet: FAIL on one more path"   "$(xb_ratchet "$T/base" 11 20 1 >/dev/null; echo $?)" 1
+  ok "ratchet: FAIL on one more row"    "$(xb_ratchet "$T/base" 10 21 1 >/dev/null; echo $?)" 1
+  ok "ratchet: a missing baseline is not a pass" "$(xb_ratchet "$T/nope" 10 20 1 >/dev/null 2>&1; echo $?)" 2
+  printf 'paths=abc\nrows=20\nhw-defined=1\n' > "$T/bad"
+  ok "ratchet: a malformed baseline is not a pass" "$(xb_ratchet "$T/bad" 10 20 1 >/dev/null 2>&1; echo $?)" 2
   if [ "$fails" = 0 ]; then echo "xbackend_diff self-test: $ran/$ran ok"; exit 0; fi
   echo "xbackend_diff self-test: $fails of $ran check(s) FAILED — this script's output proves nothing"
   exit 3
@@ -378,6 +431,19 @@ if [ -n "$ROWS" ]; then
 fi
 nsrc="$(awk -F'\t' '!/^#/ && NF >= 6 && $1 == "x86_64"' "$MANIFEST" | wc -l | tr -d ' ')"
 echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw"
+if [ "$RATCHET_WRITE" = 1 ]; then
+  ## Writing the baseline is a deliberate, reviewable act: it moves the line the gate holds. The
+  ## file records the manifest it was measured from, so a baseline cannot be moved without the
+  ## manifest that justifies it being in the same diff.
+  printf 'paths=%s\nrows=%s\nhw-defined=%s\n' "$npaths" "$nrows" "$nhw" > "$RATCHET_FILE" || exit 2
+  echo "xbackend ratchet: WROTE $RATCHET_FILE (paths=$npaths rows=$nrows hw-defined=$nhw)"
+  exit 0
+fi
+if [ "$RATCHET" = 1 ]; then
+  xb_ratchet "$RATCHET_FILE" "$npaths" "$nrows" "$nhw"
+  rc=$?
+  [ "$MODE" = count ] && exit $rc
+fi
 [ -n "$ROWS" ] || exit 0
 
 ## A path's class is its highest-priority row's class.
