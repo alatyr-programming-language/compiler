@@ -122,6 +122,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.14 — 2026-10-13
+
 - **An ordering compare over `str` compares the strings, not their addresses (x86_64).** `<`, `>`,
   `<=` and `>=` over two `str` operands fell through to the scalar compare and answered on the two
   data pointers, so `"z" >= "a"` was FALSE and the answer moved with where the literals were placed.
