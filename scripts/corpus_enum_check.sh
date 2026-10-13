@@ -112,9 +112,13 @@ enum_check() { # root
   git -C "$root" ls-files --others --ignored --exclude-standard -- "${ENUM_PATHSPECS[@]}" | sort > "$w/ignored"
   comm -23 "$w/disk" "$w/ignored" > "$w/disk_live"
 
-  tracked="$(wc -l < "$w/index")"
-  worktree="$(wc -l < "$w/disk_live")"
-  ignored="$(wc -l < "$w/ignored")"
+  ## `tr -d ' '` because BSD `wc -l` RIGHT-PADS its count with spaces while GNU does not (#927):
+  ## on macOS this printed `index=       4`, and the self-test's own assertion on `index=5` then
+  ## failed against a decider whose numbers were correct — the column width, not the count. The
+  ## canonical form is a bare number, so the assertion tests what it claims to test on both.
+  tracked="$(wc -l < "$w/index" | tr -d ' ')"
+  worktree="$(wc -l < "$w/disk_live" | tr -d ' ')"
+  ignored="$(wc -l < "$w/ignored" | tr -d ' ')"
   extra="$(comm -13 "$w/index" "$w/disk_live")"
   missing="$(comm -23 "$w/index" "$w/disk_live")"
 
