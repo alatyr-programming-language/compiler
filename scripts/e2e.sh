@@ -7418,6 +7418,15 @@ run generic_unused_instance_mix 42
 ## x86_64 escaped it only because `lower::bind_param` substitutes the instance type into the param
 ## span, which is exactly the accident §8.5 wanted pinned before 1e moved the query.
 run generic_signedness_per_instance 42
+## An ORDERING compare over `str` compares CONTENT, lexicographically by byte (`str_cmp(a,b) <> 0`,
+## Stdlib §2.6), not the two operands' `.rodata` ADDRESSES. x86_64 had the byte-compare arm for
+## `==`/`!=` (`emit_str_eq_core`) and none for `<`/`>`/`<=`/`>=`, so `c >= "a"` fell to the scalar
+## `cmpq` and answered on two literal addresses — `"z" >= "a"` FALSE, a normal-exit wrong value.
+## Registered on x86_64 ONLY: the three twins trap every `StrLit` (`brk #0 // unsupported expr
+## StrLit`, measured on this fixture at aarch64 133 / riscv64 133 / wasm 134 = SIGTRAP/SIGABRT),
+## so they answer LOUD rather than wrong and there is no ordering behaviour to pin there yet. Behind
+## that trap their compare is still a word compare on the data pointers — #931 owns that half.
+run str_ordering_lexicographic 42
 ## §9.1 — a bare integer literal inherits the proven unsignedness of its `u64` partner inside
 ## an `unchecked` arithmetic expression. All four backends now return 42; this used to be a normal-exit
 ## silent wrong value (3) on a64, rv64 and wasm.
