@@ -2425,7 +2425,7 @@ rv_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) ->
       while i < cnt {
         d := deref(decl_get(decls, i))
         if d.kind == 0 and d.is_fn == false and streq(src, d.name_start, d.name_len, vs, vn) {
-          if unchecked bitcast(usize, d.value) != 0 { r = ex_value_init(d.value) }
+          if unchecked bitcast(usize, d.value) != 0 { r = ex_value_init(d.value, decls, src) }
         }
         i = i + 1
       }
@@ -2579,14 +2579,14 @@ emit_rv_global_cells := fn(e : ptr(Expr), in out sb : rt::StrBuf, decls : ptr(rt
     push_str(sb, "  .quad ") ; push_int(sb, variant_index(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), expr_enum_variant_ns(e), expr_enum_variant_nl(e), a)) ; push_str(sb, "\n")
     mut np := 0
     mut eg : Option(ptr(mut Arg)) = ex_enum_lit_args(e)
-    loop { match eg { Some(egq) => { ega := deref(arg_p(egq)) ; push_str(sb, "  .quad ") ; push_int(sb, ex_value_init(ega.e)) ; push_str(sb, "\n") ; np += 1 ; eg = ega.next }; None => { break } } }
+    loop { match eg { Some(egq) => { ega := deref(arg_p(egq)) ; push_str(sb, "  .quad ") ; push_int(sb, ex_value_init(ega.e, decls, src)) ; push_str(sb, "\n") ; np += 1 ; eg = ega.next }; None => { break } } }
     emxw := i64(enum_inst_words(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), a))
     mut padk := np
     while padk < emxw { push_str(sb, "  .quad 0\n") ; padk += 1 }
   } else if expr_is_float_lit(e) {
     push_str(sb, "  .double ") ; push_str(sb, str_at((src + expr_float_lit_ns(e)), expr_float_lit_nl(e))) ; push_str(sb, "\n")
   } else {
-    push_str(sb, "  .quad ") ; push_int(sb, ex_value_init(e)) ; push_str(sb, "\n")
+    push_str(sb, "  .quad ") ; push_int(sb, ex_value_init(e, decls, src)) ; push_str(sb, "\n")
   }
 }
 
@@ -4760,7 +4760,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
             mut idx : usize = 0
             while k < sl and dec_digit_val(str_at((src + ss + k), 1)) >= 0 { idx = idx * 10 + usize(dec_digit_val(str_at((src + ss + k), 1))) ; k = k + 1 }
             oe := rv_arg_at(args_head, idx + 1, a)
-            push_int(sb, ex_value_init(oe))
+            push_int(sb, ex_value_init(oe, decls, src))
             if k < sl and str_at((src + ss + k), 1) == "}" { k = k + 1 }
             j = k
           } else {
@@ -8671,7 +8671,7 @@ pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : pt
     ## emit an EMPTY label (`.align 3` / `:` / `.quad …`) that `as` rejects. As-if-absent means no cell.
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.name_len != 0 and ex_value_is_scalar(d.value) {
       gname := str_at((src + d.name_start), d.name_len)
-      push_str(sb, ".align 3\n") ; push_str(sb, gname) ; push_str(sb, ":\n  .quad ") ; push_int(sb, ex_value_init(d.value)) ; push_str(sb, "\n")
+      push_str(sb, ".align 3\n") ; push_str(sb, gname) ; push_str(sb, ":\n  .quad ") ; push_int(sb, ex_value_init(d.value, decls, src)) ; push_str(sb, "\n")
     }
     ## a FLOAT-valued global — `.data` cell is a `.double`. Null-guard d.value before touching it.
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.name_len != 0 {

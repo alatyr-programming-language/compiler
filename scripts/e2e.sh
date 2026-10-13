@@ -10470,6 +10470,16 @@ run comptime_for_const_arith_bound 42
 run_a64 comptime_for_const_arith_bound 42
 run_rv64 comptime_for_const_arith_bound 42
 run_wat comptime_for_const_arith_bound 42
+## #682 — the OTHER half: the arithmetic is INSIDE the const's initializer (`B := A + 1`), so the
+## bound expression is a plain `Expr::Var` and never reaches the `Bin` arm #672 added. The twins
+## resolved the name and read its value with `lower_layout::ex_value_init`, which answered 0 for a
+## `Var`, so `B` folded to `0 + 1` and the loop ran a different number of times — clean compile, no
+## diagnostic. Measured on `a02baeb`: x86_64 42 against aarch64 V2, riscv64 V2, wasm V2. Asserted
+## on all four because the iteration count is a property of the source, not of the backend.
+run comptime_for_const_ref_bound 42
+run_a64 comptime_for_const_ref_bound 42
+run_rv64 comptime_for_const_ref_bound 42
+run_wat comptime_for_const_ref_bound 42
 ## §3: a comptime-for range bound of typeinfo(T).n (comptime array length) — unrolls N times.
 run comptime_for_typeinfo_n 42
 ## CT-6: the range bound uses the typeinfo(X) argument itself, even when X differs from the
