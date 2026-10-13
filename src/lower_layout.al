@@ -3627,7 +3627,10 @@ pub ex_value_fold := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), dept
     Expr::BoolLit(x) => { r = i64(x) }
     Expr::Var(vs, vn) => {
       cv := const_module_decl_value(decls, src, vs, vn)
-      if unchecked bitcast(usize, cv) != 0 { r = ex_value_fold(cv, decls, src, depth + 1) } ## unchecked-ok: the resolver's null ptr compared against 0 to ask "did it resolve"; nothing is reinterpreted.
+      ## null-ok: `const_module_decl_value` spells "no such const" as a null ptr(Expr) — the same
+      ## null-link convention `const_struct_field_value` uses two functions below; compared against 0
+      ## to ask "did it resolve", nothing is dereferenced on the null path.
+      if unchecked bitcast(usize, cv) != 0 { r = ex_value_fold(cv, decls, src, depth + 1) } ## null-ok: the resolver's null ptr means "no such const"; guarded, never dereferenced.
     }
     Expr::Bin(op, l, rr) => {
       lv := ex_value_fold(l, decls, src, depth + 1)
