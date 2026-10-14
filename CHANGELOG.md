@@ -122,6 +122,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.15 — 2026-10-14
+
 - **x86_64 divides, orders and shifts with the signedness sema recorded (IR slice 1 step e3, part 1).**
   The x86 emitter decided a `/`, `%`, `<`/`>`/`<=`/`>=` or `shr` by recognising the operand's SHAPE
   and fell back to one default for everything it did not recognise, so `mut d : i64 = (0 - 1000) / 9`
