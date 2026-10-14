@@ -380,6 +380,20 @@ if [ -z "$irv_cover" ]; then
   fail=1; irv_cover="UNKNOWN — no coverage line"
 fi
 
+# The SIGNEDNESS CENSUS's record-context self-test (`docs/ir-slice-1.md` §8.5, step e4). The census
+# itself only reports, but the record keys it reads are what 1e will switch x86's queries onto, so its
+# planted programs run here: a generic instance's operand is unknown with no context and typed in its
+# instance; a `comptime for` member's and a pack element's are typed only in their own iteration.
+echo "### SIGN CENSUS SELF-TEST (record contexts: instance, comptime-for member, pack element) ###"
+SC_LOG="$LOGDIR/full_sign_census_selftest.log"
+ALATYR="$ROOT/target/debug/alatyr" bash scripts/sign_census.sh --self-test > "$SC_LOG" 2>&1
+sc_rc=$?
+grep -E "^(FAIL|sign_census self-test:)" "$SC_LOG"
+if [ "$sc_rc" != 0 ] || ! grep -qE "^sign_census self-test: [0-9]+ checks, 0 failed$" "$SC_LOG"; then
+  echo "  FAILURES (from $SC_LOG): sign census self-test rc=$sc_rc"
+  fail=1
+fi
+
 # The STRICT-FORMS check, typed half (issue #691). `p == 0` with `p : ptr(T)` is invisible to a
 # tokenizer, and the checker already names it: the #529 instrument writes each implicit usize<->ptr
 # crossing to fd 98. The Stage2 compiler checks the MERGE BASE and this tree (the base from its own

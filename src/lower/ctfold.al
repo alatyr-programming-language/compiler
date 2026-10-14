@@ -22,11 +22,11 @@
 ##   - `set_build_flags` (and therefore `BUILD_FLAGS_P`/`BUILD_FLAGS_N`) stays in `src/lower.al`: it is
 ##     `pub` and `cli` calls it as `lower::set_build_flags`. The band READS the two globals from here
 ##     through the ancestor chain.
-##   - `compfor_iter_arg` stays too, for two independent reasons: it is `pub` (other back ends call it
-##     as `lower::compfor_iter_arg`), and it calls `fnty_skip_ws`, which band 3 already moved into the
-##     `lower::fnval` CHILD — a bare call from one child to another is a SIBLING reach that Modules §3
-##     gives no legal spelling. Left in the parent it is parent -> child, which §3 does sanction, and
-##     its call to this band's `comptime_arg_end` is parent -> child as well.
+##   - `compfor_iter_arg` stayed in the parent then (it was `pub`, and it called `fnval`'s
+##     `fnty_skip_ws`, a sibling reach). Since IR slice-1 step e4 it lives in `lower_layout` with this
+##     band's `comptime_arg_end` and a 6-line whitespace skip of its own: sema reads the same header
+##     to record each `comptime for` iteration (docs/ir-slice-1.md §8.4), and sema cannot import
+##     `lower`. This band imports both back from `lower_layout`.
 ##
 ## NOTE the import ORDER: a BARE module alias (`strbuf := rt`) followed by a listed projection is a
 ## parse error in the self-host parser unless a QUALIFIED alias (`x := m::y`) separates them.
@@ -42,6 +42,8 @@ stmt_p := ast::stmt_p
 (push_str, push_int) := strbuf
 (CSpan, LCtx, arg_expr_at, var_name_span) := lower_ctx
 (base_type_name, ct_bind_depth, ct_bound_value, enum_decl_of, struct_decl_of, typearg_at) := lower_layout
+## moved to `lower_layout` so sema reads a `comptime for` header the way this lowering does (docs/ir-slice-1.md §8.4)
+(comptime_arg_end, compfor_iter_arg) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
@@ -743,32 +745,6 @@ pub target_facet_eq := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> i64 {
   return -1
 }
 
-## The end offset of the balanced TYPE text starting at `p0` — the `)` that closes the enclosing
-## `typeinfo(`, or a top-level `,`; trailing whitespace trimmed. `p0` itself when no terminator is
-## found inside `lim`. Keeps a nested spelling (`ptr(T)`, `Vec(u64)`, `[T; 4]`) whole, exactly as
-## `cx.it` holds one.
-pub comptime_arg_end := fn(src : ptr(u8), p0 : usize, lim : usize) -> usize {
-  mut p := p0
-  mut d := 0
-  mut r := p0
-  mut done := false
-  while p < lim and done == false {
-    c := str_at((src + p), 1)
-    if c == "(" or c == "[" { d = d + 1 ; p = p + 1 }
-    else if c == "]" { if d > 0 { d = d - 1 } ; p = p + 1 }
-    else if c == ")" { if d == 0 { r = p ; done = true } else { d = d - 1 ; p = p + 1 } }
-    else if c == "," { if d == 0 { r = p ; done = true } else { p = p + 1 } }
-    else { p = p + 1 }
-  }
-  if done == false { return p0 }
-  mut e := r
-  mut trim := true
-  while e > p0 and trim {
-    c2 := str_at((src + (e - 1)), 1)
-    if c2 == " " or c2 == "\n" or c2 == "\t" or c2 == "\r" { e = e - 1 } else { trim = false }
-  }
-  e
-}
 
 
 ## The CONCRETE type a `comptime for … in typeinfo(X).…` header ITERATES: the header's `typeinfo(X)`

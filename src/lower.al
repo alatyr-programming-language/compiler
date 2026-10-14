@@ -89,9 +89,9 @@ ecallee_is := ast::ecallee_is
 ## COMPILE-TIME FOLDING (`src/lower/ctfold.al`) — a CHILD module under MOD-12. It is NOT called
 ## `comptime`: `comptime` is a KEYWORD, so `(…) := comptime` is a parse error, and a submodule named
 ## after it could never be imported by bare name (measured — see the file's header).
-## `set_build_flags` + `BUILD_FLAGS_*` and `compfor_iter_arg` stay HERE (both are `pub`, and
-## `compfor_iter_arg` also calls the `fnval` CHILD).
-(lower_show_src_line, comptime_cond_src_off, comptime_reject_cond, comptime_cond_eval, comptime_query_expr_ok, comptime_arg_end, compfor_target_type, comptime_range_bound, stmts_have_compfor, stmts_have_variant_template, emit_build_flag_value, target_facet_eq) := ctfold
+## `set_build_flags` + `BUILD_FLAGS_*` stay HERE (`pub`; `cli` calls it). `compfor_iter_arg` and the
+## `comptime_arg_end` it calls now live in `lower_layout`, shared with sema (docs/ir-slice-1.md §8.4).
+(lower_show_src_line, comptime_cond_src_off, comptime_reject_cond, comptime_cond_eval, comptime_query_expr_ok, compfor_target_type, comptime_range_bound, stmts_have_compfor, stmts_have_variant_template, emit_build_flag_value, target_facet_eq) := ctfold
 ## The `@abi(c)` FOREIGN-CALL ABI (`src/lower/abi_c.al`) — a CHILD module under MOD-12, imported by
 ## BARE NAME. It is the C-ABI half of the audit's `abi` band; the rest stays here because `lower::fnval`
 ## already names `emit_call_args`/`nstack_args`/`align_pad`/the float classifiers, and a child-to-child
@@ -6089,33 +6089,9 @@ fixed_arr_len := fn(base : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> i64 {
   i64(agg_arr_fill_count(slots, si) / ent.estride)
 }
 
-## Parse the element COUNT `N` from an array type-annotation span `[T; N]` (recovered by
-## `local_type_span`) — scan for the `;` (byte 59), then read the trailing decimal number. 0 if the
-## span holds no `; N` (not an array annotation). Bytes read directly from the source via a `ptr(u8)`.
-parse_arr_len := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
-  ## Read via `bytes(str)[i]` (a Slice(u8) byte view) — NOT `deref(bitcast(ptr(u8), ...))`, which the
-  ## lean lower reads as a WORD (the bitcast target type is discarded), so `;` (byte 59) was missed.
-  bs := bytes(str_at((src + ts), tl))
-  mut i : usize = 0
-  mut sp : usize = 0
-  mut found := false
-  while i < tl {
-    if bs[i] == 59 { sp = i + 1; found = true }
-    i += 1
-  }
-  if found == false { return 0 }
-  mut j := sp
-  mut n : usize = 0
-  mut any := false
-  mut going := true
-  while going and j < tl {
-    b := bs[j]
-    if b >= 48 and b <= 57 { n = n * 10 + usize(b - 48); any = true; j = j + 1 }
-    else if b == 32 and any == false { j = j + 1 }
-    else { going = false }
-  }
-  n
-}
+## `parse_arr_len` lives in `lower_layout` (shared with sema, docs/ir-slice-1.md §8.4); this binding keeps the
+## name for `lower` and its descendants.
+parse_arr_len := lower_layout::parse_arr_len
 
 ## The ELEMENT TYPE span of an array type `[T; N]` — the text between `[` and `;` (or `]`), trimmed of
 ## surrounding spaces. `[u64; 3]` → `u64`. 0/0 if the span isn't an array. Used to mangle an array
@@ -17353,7 +17329,11 @@ emit_inline_call := fn(inl_ci : i64, args_head : Option(ptr(mut Arg)), in out sb
       None => { break }
     }
   }
+  ## docs/ir-slice-1.md §8.4 — the callee body's records carry no context of the caller's (sema
+  ## checked it once, as its own declaration): emit it in the plain record context.
+  lower_layout::ir_rec_enter_plain()
   emit_inline_body(inl_ci, sb, cx, a, nl)
+  lower_layout::ir_rec_leave()
 }
 
 ## The routed integer operand type name, or an empty string for aggregate/float/non-integer operators.
@@ -17472,7 +17452,10 @@ emit_inline_binop := fn(op : i64, inl_ci : i64, l : ptr(Expr), r : ptr(Expr), in
   ## cannot create a second failure mechanism; the operation-site guard above remains mode-sensitive.
   ov := cx.vchk
   cx.vchk = false
+  ## the callee body's records carry no context of the caller's (as in `emit_inline_call`)
+  lower_layout::ir_rec_enter_plain()
   emit_inline_body(inl_ci, sb, cx, a, nl)
+  lower_layout::ir_rec_leave()
   cx.vchk = ov
 }
 
@@ -18413,7 +18396,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## narrow-typed op keeps its §4 value-model WRAP (the truncation below), not a trap.
       dsigned := is_signed_expr(l, cx) or is_signed_expr(r, cx)
       ## docs/ir.md §3.8.5 — the census row for this division's signedness (no-op unless fd 97 is open).
-      if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned) }
+      if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
       mut ovf_narrow := false
       if op == 16 or op == 17 or op == 18 {
         mut owt := expr_type_span(l, cx)
@@ -18572,7 +18555,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## setcc (`setb`/`seta`/`setbe`/`setae`) so a `u64`/`usize` comparison whose operands straddle
       ## 2^63 (`0 < u64::MAX`) is correct instead of reading the high-bit operand as negative.
       ucmp := is_unsigned_cmp(l, r, cx)
-      if op == 24 or op == 25 or op == 26 or op == 27 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, not ucmp) }
+      if op == 24 or op == 25 or op == 26 or op == 27 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, not ucmp); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
       if op == 24 { if ucmp { push_str(sb, "  cmpq %rbx, %rax\n  setb %al\n  movzbq %al, %rax\n") } else { push_str(sb, "  cmpq %rbx, %rax\n  setl %al\n  movzbq %al, %rax\n") } }
       if op == 25 { if ucmp { push_str(sb, "  cmpq %rbx, %rax\n  seta %al\n  movzbq %al, %rax\n") } else { push_str(sb, "  cmpq %rbx, %rax\n  setg %al\n  movzbq %al, %rax\n") } }
       if op == 26 { if ucmp { push_str(sb, "  cmpq %rbx, %rax\n  setbe %al\n  movzbq %al, %rax\n") } else { push_str(sb, "  cmpq %rbx, %rax\n  setle %al\n  movzbq %al, %rax\n") } }
@@ -19364,6 +19347,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if callee == "shl" { push_str(sb, "  shlq %cl, %rax\n") }
         else if callee == "shr" {
           lower_layout::ir_sign_row("x86_64", 0, sa0, sa1, cx.src, is_signed_expr(sa0, cx))
+          lower_layout::ir_sign_rec_row(0, sa0, sa1, cx.src)
           if is_signed_expr(sa0, cx) { push_str(sb, "  sarq %cl, %rax\n") }
           else { push_str(sb, "  shrq %cl, %rax\n") }
         }
@@ -25337,25 +25321,6 @@ mut EMIT_BODY : Option(ptr(mut Stmt)) = Option.None
 mut EMIT_PARAMS : Option(ptr(mut Param)) = Option.None
 
 
-## The `typeinfo(X)` ARGUMENT type text of a `comptime for <v> in typeinfo(X).fields/.variants/…`
-## header, recovered by a SOURCE-SCAN forward from the loop-var name span `[vs, vs+vl)`. The `CompFor`
-## AST node keeps only the loop-var span, the fields/variants flag, the body and `next` (the seed's
-## AST-node word budget), so the ITERATED TYPE is otherwise LOST — the same recovery discipline as
-## `fnty_ret_span` and the enum discriminant pins. 0/0 when the header does not spell
-## `in typeinfo(<type>)`.
-pub compfor_iter_arg := fn(src : ptr(u8), vs : usize, vl : usize) -> CSpan {
-  lim := vs + vl + 512
-  mut p := fnty_skip_ws(src, vs + vl, lim)
-  if str_at((src + p), 2) != "in" { return CSpan(s = 0, n = 0) }
-  p = fnty_skip_ws(src, p + 2, lim)
-  if str_at((src + p), 8) != "typeinfo" { return CSpan(s = 0, n = 0) }
-  p = fnty_skip_ws(src, p + 8, lim)
-  if str_at((src + p), 1) != "(" { return CSpan(s = 0, n = 0) }
-  p = fnty_skip_ws(src, p + 1, lim)
-  e := comptime_arg_end(src, p, lim)
-  if e <= p { return CSpan(s = 0, n = 0) }
-  CSpan(s = p, n = e - p)
-}
 
 
 
@@ -25525,14 +25490,19 @@ emit_st_expr_stmt := fn(e : ptr(Expr), nx : Option(ptr(mut Stmt)), head : Option
 
 ## The `Stmt::CompForRange` arm of `emit_stmts`, moved out verbatim (Step 4.1). Both the pack unroll
 ## and the constant-range unroll re-enter `emit_stmts` per iteration; the caller keeps `s = nx`.
-## Touches no module global.
-emit_st_comp_for_range := fn(rvs : usize, rvl : usize, rlo : ptr(Expr), rhi : ptr(Expr), rbody : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+## `cst` is the loop statement itself. Touches no module global; each pack iteration is emitted in its
+## own record context (`ir_rec_enter_iter`, docs/ir-slice-1.md §8.4: a pack element has its argument's
+## type, one per iteration), while a constant range binds the same integer type every iteration and
+## pushes none.
+emit_st_comp_for_range := fn(cst : ptr(mut Stmt), rvs : usize, rvl : usize, rlo : ptr(Expr), rhi : ptr(Expr), rbody : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   if unchecked bitcast(usize, rhi) == 0 {
     ## PACK unroll (Functions §7.1) — a null hi marks `comptime for v in <pack>`: bind the loop var
     ## `v` to each TRAILING pack argument (`cx.pack_args`) in turn (evaluate the arg → `v`'s slot),
     ## then emit the body. Control flow erased; an empty pack (`pack_args == 0`) emits nothing.
     rslot := slot_of(cx.slots, cx.src, rvs, rvl)
+    psite : Option(ptr(mut Arg)) = cx.pack_args
     mut pa : Option(ptr(mut Arg)) = cx.pack_args
+    mut pk : usize = 0
     loop {
       match pa {
         Some(paq) => {
@@ -25551,7 +25521,10 @@ emit_st_comp_for_range := fn(rvs : usize, rvl : usize, rlo : ptr(Expr), rhi : pt
             if streq(cx.src, aent.ns, aent.nl, vsp.s, vsp.n) {
               asv := svec_len(cx.slots)
               svec_push(deref(cx.slots), SlotEntry(ns = rvs, nl = rvl, off = aent.off, sns = aent.sns, snl = aent.snl, ek = aent.ek, estride = aent.estride, eek = aent.eek, is_ref = aent.is_ref, tmod_s = aent.tmod_s, tmod_l = aent.tmod_l))
+              ## the body (not the argument, a node of the caller's) is the iteration's
+              lower_layout::ir_rec_enter_iter(cst, psite, pk)
               emit_stmts(rbody, sb, cx, nl)
+              lower_layout::ir_rec_leave()
               svec_truncate(deref(cx.slots), asv)
               handled = true
             }
@@ -25566,8 +25539,11 @@ emit_st_comp_for_range := fn(rvs : usize, rvl : usize, rlo : ptr(Expr), rhi : pt
             push_str(sb, "  popq %rax\n  movq %rax, -")
             push_int(sb, (rslot + 1) * 8)
             push_str(sb, "(%rbp)\n")
+            lower_layout::ir_rec_enter_iter(cst, psite, pk)
             emit_stmts(rbody, sb, cx, nl)
+            lower_layout::ir_rec_leave()
           }
+          pk += 1
           pa = pam.next
         }
         None => { break }
@@ -25600,8 +25576,10 @@ emit_st_comp_for_range := fn(rvs : usize, rvl : usize, rlo : ptr(Expr), rhi : pt
 
 ## The `Stmt::CompFor` arm of `emit_stmts`, moved out verbatim (Step 4.1). Unrolls a
 ## `comptime for` over a type's members, re-entering `emit_stmts` per member; the caller keeps
-## `s = nx`. Touches no module global.
-emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+## `s = nx`. `cst` is the loop statement itself. Touches no module global; member `k` is emitted in its
+## own record context (`ir_rec_enter_iter(cst, None, k)`, docs/ir-slice-1.md §8.4), the ordinal sema
+## re-checks the body under for that member.
+emit_st_comp_for := fn(cst : ptr(mut Stmt), cvs : usize, cvl : usize, cisvar : u8, cbody : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   cft := compfor_target_type(cx, cvs, cvl)
   cfts := cft.s
   cftl := cft.n
@@ -25625,7 +25603,9 @@ emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : Option(ptr
         cx.cf_fld_l = 0
         cx.cf_ty_s = comp.s
         cx.cf_ty_l = comp.n
+        lower_layout::ir_rec_enter_iter(cst, Option(ptr(mut Arg)).None, jt)
         emit_stmts(cbody, sb, cx, nl)
+        lower_layout::ir_rec_leave()
         jt += 1
       }
     }
@@ -25650,7 +25630,9 @@ emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : Option(ptr
       cx.cf_fld_l = 0
       cx.cf_ty_s = aes.s
       cx.cf_ty_l = aes.n
+      lower_layout::ir_rec_enter_iter(cst, Option(ptr(mut Arg)).None, ai)
       emit_stmts(cbody, sb, cx, nl)
+      lower_layout::ir_rec_leave()
       ai += 1
     }
     cx.cf_var_s = ov_vs; cx.cf_var_l = ov_vl
@@ -25673,6 +25655,7 @@ emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : Option(ptr
       ov_fs := cx.cf_fld_s; ov_fl := cx.cf_fld_l
       ov_ts := cx.cf_ty_s; ov_tl := cx.cf_ty_l
       mut fd := sd.fields_head
+      mut fk : usize = 0
       loop {
         match fd {
           Some(fdq) => {
@@ -25683,7 +25666,10 @@ emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : Option(ptr
             cx.cf_fld_l = fdd.nl
             cx.cf_ty_s = fdd.ts
             cx.cf_ty_l = fdd.tl
+            lower_layout::ir_rec_enter_iter(cst, Option(ptr(mut Arg)).None, fk)
             emit_stmts(cbody, sb, cx, nl)
+            lower_layout::ir_rec_leave()
+            fk += 1
             fd = fdd.next
           }
           None => { break }
@@ -25716,6 +25702,7 @@ emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : Option(ptr
       ov_cs := cx.cf_curvar_s; ov_cl := cx.cf_curvar_l
       ov_ls := cx.cf_vloop_s; ov_ll := cx.cf_vloop_l
       mut vf := ed.fields_head
+      mut vk : usize = 0
       loop {
         match vf {
           Some(vfq) => {
@@ -25730,7 +25717,10 @@ emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : Option(ptr
             cx.cf_curvar_l = vfd.nl
             cx.cf_vloop_s = cvs
             cx.cf_vloop_l = cvl
+            lower_layout::ir_rec_enter_iter(cst, Option(ptr(mut Arg)).None, vk)
             emit_stmts(cbody, sb, cx, nl)
+            lower_layout::ir_rec_leave()
+            vk += 1
             vf = vfd.next
           }
           None => { break }
@@ -26645,7 +26635,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
           ## `src/`+`lib/` spells is `typeinfo(T)` with T the 1st type-param, which resolves to exactly the
           ## `cx.it` used before → byte-identical.
           Stmt::CompFor(cvs, cvl, cisvar, cbody, nx) => {
-            emit_st_comp_for(cvs, cvl, cisvar, cbody, sb, cx, a, nl)
+            emit_st_comp_for(sq, cvs, cvl, cisvar, cbody, sb, cx, a, nl)
             s = nx
           }
           ## `comptime for i in lo .. hi { body }` — UNROLL at compile time: for each constant `k` in
@@ -26654,7 +26644,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
           ## constant from the slot. Bounds are compile-time integer constants (`global_init_value`:
           ## literal / module const / const arithmetic).
           Stmt::CompForRange(rvs, rvl, rlo, rhi, rbody, nx) => {
-            emit_st_comp_for_range(rvs, rvl, rlo, rhi, rbody, sb, cx, a, nl)
+            emit_st_comp_for_range(sq, rvs, rvl, rlo, rhi, rbody, sb, cx, a, nl)
             s = nx
           }
           ## `comptime match typeinfo(T) { Struct(_) => … _ => … }` — evaluate T's KIND and emit ONLY the
@@ -30921,7 +30911,13 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     ## Executable/test artifacts retain the historical collector/emitter pairing.
     if g_ok and (library_mode == false or rb_get(rb, e.gi) == 1) {
       ipcx := PCtx(src = src, decls = decls, mar = mar, inst = true, its = e.ts, itl = e.tl, its2 = e.ts2, itl2 = e.tl2, its3 = e.ts3, itl3 = e.tl3)
+      ## docs/ir-slice-1.md §8.3–§8.4 — the instance's body is emitted in its record context: mono's
+      ## index `i` IS the `InstId` sema re-checked the body under (`sema_inst_walk`), so a consumer
+      ## asking `ir::sty_get_cur` here reads that instance's records. Census-only in e4: no emitted
+      ## byte reads the context yet.
+      lower_layout::ir_rec_enter_inst(i)
       emit_fn(gd, 0, sb, ptr(ipcx), nl)
+      lower_layout::ir_rec_leave()
       mar.off = emit_hw                          ## reclaim this instance's dead per-fn scratch
     }
   }

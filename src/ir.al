@@ -363,6 +363,15 @@ pub byte_off_imm := fn(o : ByteOff) -> i64 { i64(usize(o)) }
 ## non-generic body) is the one non-instance key word. There is no reserved id 0 and no sentinel:
 ## the stored word is `usize(id) + 1`, and 0 means "not an instance".
 pub InstId := brand(usize)
+## A comptime-for ITERATION's identity (docs/ir-slice-1.md §8.4, step e4). Inside one instance a node of
+## a `comptime for` body has a different type per iteration (`v.(f)`, `f.type`, a pack element), so the
+## record table's THIRD key word names the iteration path: the iteration `k` of the loop statement at an
+## address, reached from a parent path (an enclosing iteration, or none), and — for a pack — the call
+## whose trailing arguments the loop walks (each call site expands the body again), named by its first
+## pack argument's node. Interned by content
+## (`iter_intern`); `None` is "not inside an iteration". The stored word is `usize(id) + 1`, as for
+## `InstId`: there is no reserved id and no sentinel.
+pub IterId := brand(usize)
 
 ## ───────────────────────────── storage: a growing word buffer ─────────────────────────────
 
@@ -2463,6 +2472,7 @@ pub vty_cls := fn(t : VTy) -> VCls { t.cls }
 mut STY_ON : bool = true
 mut STY_KEYS : usize = 0    ## address of the key array (node addresses)
 mut STY_INSTS : usize = 0   ## address of the second key word array (the instance id + 1; 0 = not an instance)
+mut STY_ITERS : usize = 0   ## address of the third key word array (the iteration id + 1; 0 = not in an iteration)
 mut STY_USED : usize = 0    ## address of the occupancy array (1 = the slot holds a key)
 mut STY_VALS : usize = 0    ## address of the value array (record addresses)
 mut STY_CAP : usize = 0     ## slots, a power of two
@@ -2491,33 +2501,37 @@ sty_word := fn(base : usize, i : usize) -> ptr(mut usize) {
 }
 ## The slot a key hashes to: multiplicative hashing of the node address (nodes are 8-byte aligned).
 ## The second key word (the instance id + 1, or 0) is mixed in with a different odd constant so that
-## the same node under two instances lands in different slots (docs/ir-slice-1.md §8.2).
-sty_home := fn(k : usize, iw : usize, cap : usize) -> usize {
+## the same node under two instances lands in different slots (docs/ir-slice-1.md §8.2). The third key
+## word (the iteration id + 1, or 0) is mixed in the same way with a third constant (§8.4, step e4).
+sty_home := fn(k : usize, iw : usize, tw : usize, cap : usize) -> usize {
   ## unchecked-ok: a hash is modular by intent; the products' overflow is the mixing, not an error.
   mut h : usize = unchecked { shr(k, 3) * 2654435761 }
   ## A hash is modular by intent; adding the second key word's product is the mixing, and a wrap
   ## still leaves a valid slot index for the `% cap` below.
   ## unchecked-ok: modular hash mixing, as above — the overflow is the point, not an error.
   h = unchecked { h + iw * 2246822519 }
+  ## unchecked-ok: modular hash mixing of the third key word, as above.
+  h = unchecked { h + tw * 3266489917 }
   shr(h, 8) % cap
 }
 ## Is slot `i` of the occupancy array at `used` taken? Occupancy is its own array, so no key value is
 ## reserved to mean "free".
 sty_taken := fn(used : usize, i : usize) -> bool { deref(sty_word(used, i)) == 1 }
-## Insert or overwrite `(k, iw) -> v` in the arrays at (keys, insts, vals, used) of `cap` slots,
-## WITHOUT growing. Answers whether a new slot was taken.
-sty_place := fn(keys : usize, insts : usize, vals : usize, used : usize, cap : usize, k : usize, iw : usize, v : usize) -> bool {
-  mut i := sty_home(k, iw, cap)
+## Insert or overwrite `(k, iw, tw) -> v` in the arrays at (keys, insts, iters, vals, used) of `cap`
+## slots, WITHOUT growing. Answers whether a new slot was taken.
+sty_place := fn(keys : usize, insts : usize, iters : usize, vals : usize, used : usize, cap : usize, k : usize, iw : usize, tw : usize, v : usize) -> bool {
+  mut i := sty_home(k, iw, tw, cap)
   mut probes : usize = 0
   while probes < cap {
     if not sty_taken(used, i) {
       deref(sty_word(keys, i)) = k
       deref(sty_word(insts, i)) = iw
+      deref(sty_word(iters, i)) = tw
       deref(sty_word(vals, i)) = v
       deref(sty_word(used, i)) = 1
       return true
     }
-    if deref(sty_word(keys, i)) == k and deref(sty_word(insts, i)) == iw { deref(sty_word(vals, i)) = v; return false }
+    if deref(sty_word(keys, i)) == k and deref(sty_word(insts, i)) == iw and deref(sty_word(iters, i)) == tw { deref(sty_word(vals, i)) = v; return false }
     i = (i + 1) % cap
     probes = probes + 1
   }
@@ -2530,15 +2544,17 @@ sty_grow := fn() {
   if nc == 0 { nc = 65536 }
   nk := sty_map(nc * 8)
   ni := sty_map(nc * 8)
+  nt := sty_map(nc * 8)
   nv := sty_map(nc * 8)
   nu := sty_map(nc * 8)
   mut i : usize = 0
   while i < STY_CAP {
-    if sty_taken(STY_USED, i) { fresh := sty_place(nk, ni, nv, nu, nc, deref(sty_word(STY_KEYS, i)), deref(sty_word(STY_INSTS, i)), deref(sty_word(STY_VALS, i))) }
+    if sty_taken(STY_USED, i) { fresh := sty_place(nk, ni, nt, nv, nu, nc, deref(sty_word(STY_KEYS, i)), deref(sty_word(STY_INSTS, i)), deref(sty_word(STY_ITERS, i)), deref(sty_word(STY_VALS, i))) }
     i = i + 1
   }
   STY_KEYS = nk
   STY_INSTS = ni
+  STY_ITERS = nt
   STY_VALS = nv
   STY_USED = nu
   STY_CAP = nc
@@ -2563,19 +2579,23 @@ sty_record := fn() -> usize {
 pub sty_put := fn(e : ptr(Expr), t : VTy) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_put_key(k, 0, t)
+  sty_put_key(k, 0, 0, t)
 }
-## Record (or re-record) the value type of the node at `e` under instance `opt` (`Some(id)` for a
-## monomorphization instance's body, `None` for the generic pass). The second key word is
-## `usize(id) + 1`, so the one non-instance word is 0.
-pub sty_put_in := fn(e : ptr(Expr), opt : Option(InstId), t : VTy) {
+## Record (or re-record) the value type of the node at `e` in the context (`inst`, `iter`): `Some(id)`
+## for a monomorphization instance's body (`None` for the generic pass or a non-generic body), and the
+## comptime-for iteration path inside it (`None` outside any unrolled iteration). Each key word is the
+## id plus one, so the one "absent" word is 0 (docs/ir-slice-1.md §8.2, §8.4).
+pub sty_put_at := fn(e : ptr(Expr), inst : Option(InstId), iter : Option(IterId), t : VTy) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  iw := sty_inst_word(opt)
-  sty_put_key(k, iw, t)
+  sty_put_key(k, sty_inst_word(inst), sty_iter_word(iter), t)
 }
 ## The second key word for an instance: `usize(id) + 1`, or 0 for `None`.
 sty_inst_word := fn(opt : Option(InstId)) -> usize {
+  match opt { Some(id) => { usize(id) + 1 }; None => { 0 } }
+}
+## The third key word for an iteration path: `usize(id) + 1`, or 0 for `None`.
+sty_iter_word := fn(opt : Option(IterId)) -> usize {
   match opt { Some(id) => { usize(id) + 1 }; None => { 0 } }
 }
 ## docs/ir-slice-1.md §2 — the value type of a BINDING, keyed by its declaration's name offset: an
@@ -2583,16 +2603,17 @@ sty_inst_word := fn(opt : Option(InstId)) -> usize {
 ## key is the offset with the top bit set, a value no node address (an arena address) takes, so binding
 ## keys and node keys share the one growing table without meeting.
 bind_key := fn(ns : usize) -> usize { ns | shl(usize(1), 63) }
-pub sty_bind_put := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), 0, t) }
-pub sty_bind_get := fn(ns : usize) -> VTy { sty_get_key(bind_key(ns), 0) }
-## The binding record under instance `opt` (a generic body's local, checked per instance).
-pub sty_bind_put_in := fn(ns : usize, opt : Option(InstId), t : VTy) { sty_put_key(bind_key(ns), sty_inst_word(opt), t) }
-pub sty_bind_get_in := fn(ns : usize, opt : Option(InstId)) -> VTy { sty_get_key(bind_key(ns), sty_inst_word(opt)) }
-sty_put_key := fn(k : usize, iw : usize, t : VTy) {
+pub sty_bind_put := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), 0, 0, t) }
+pub sty_bind_get := fn(ns : usize) -> VTy { sty_get_key(bind_key(ns), 0, 0) }
+## The binding record in the context (`inst`, `iter`) (a generic body's local, checked per instance;
+## a `comptime for` variable, bound per iteration).
+pub sty_bind_put_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId), t : VTy) { sty_put_key(bind_key(ns), sty_inst_word(inst), sty_iter_word(iter), t) }
+pub sty_bind_get_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId)) -> VTy { sty_get_key(bind_key(ns), sty_inst_word(inst), sty_iter_word(iter)) }
+sty_put_key := fn(k : usize, iw : usize, tw : usize, t : VTy) {
   if STY_N * 2 >= STY_CAP { sty_grow() }
   ## An existing record is overwritten in place, so a context that refines a literal reaches every
   ## reader of the node.
-  ex := sty_find(k, iw)
+  ex := sty_find(k, iw, tw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word is a record address `sty_record` handed out.
@@ -2604,18 +2625,18 @@ sty_put_key := fn(k : usize, iw : usize, t : VTy) {
       ## unchecked-ok: `sty_record` answered a fresh slot of a live mapping, at least `size(VTy)` bytes.
       rp2 : ptr(mut VTy) = unchecked bitcast(ptr(mut VTy), ra)
       deref(rp2) = t
-      if sty_place(STY_KEYS, STY_INSTS, STY_VALS, STY_USED, STY_CAP, k, iw, ra) { STY_N = STY_N + 1 }
+      if sty_place(STY_KEYS, STY_INSTS, STY_ITERS, STY_VALS, STY_USED, STY_CAP, k, iw, tw, ra) { STY_N = STY_N + 1 }
     }
   }
 }
-## The record address stored for key `(k, iw)`, if any.
-sty_find := fn(k : usize, iw : usize) -> Option(u64) {
+## The record address stored for key `(k, iw, tw)`, if any.
+sty_find := fn(k : usize, iw : usize, tw : usize) -> Option(u64) {
   if STY_CAP == 0 { return Option(u64).None }
-  mut i := sty_home(k, iw, STY_CAP)
+  mut i := sty_home(k, iw, tw, STY_CAP)
   mut probes : usize = 0
   while probes < STY_CAP {
     if not sty_taken(STY_USED, i) { return Option(u64).None }
-    if deref(sty_word(STY_KEYS, i)) == k and deref(sty_word(STY_INSTS, i)) == iw { return Option(u64).Some(u64(deref(sty_word(STY_VALS, i)))) }
+    if deref(sty_word(STY_KEYS, i)) == k and deref(sty_word(STY_INSTS, i)) == iw and deref(sty_word(STY_ITERS, i)) == tw { return Option(u64).Some(u64(deref(sty_word(STY_VALS, i)))) }
     i = (i + 1) % STY_CAP
     probes = probes + 1
   }
@@ -2626,16 +2647,17 @@ sty_find := fn(k : usize, iw : usize) -> Option(u64) {
 pub sty_get := fn(e : ptr(Expr)) -> VTy {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_get_key(k, 0)
+  sty_get_key(k, 0, 0)
 }
-## The value type recorded for the node at `e` under instance `opt`.
-pub sty_get_in := fn(e : ptr(Expr), opt : Option(InstId)) -> VTy {
+## The value type recorded for the node at `e` in the context (`inst`, `iter`). No context falls back
+## to another: a node with no record in exactly this context is `VcAbsent` (§3.8.4, never a default).
+pub sty_get_at := fn(e : ptr(Expr), inst : Option(InstId), iter : Option(IterId)) -> VTy {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_get_key(k, sty_inst_word(opt))
+  sty_get_key(k, sty_inst_word(inst), sty_iter_word(iter))
 }
-sty_get_key := fn(k : usize, iw : usize) -> VTy {
-  ex := sty_find(k, iw)
+sty_get_key := fn(k : usize, iw : usize, tw : usize) -> VTy {
+  ex := sty_find(k, iw, tw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word is a record address `sty_record` handed out.
@@ -2688,31 +2710,32 @@ spell_key := fn(k : usize) -> usize { k | shl(usize(1), 62) }
 pub sty_spell_put := fn(e : ptr(Expr), t : TySpell) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_spell_put_key(spell_key(k), 0, t)
+  sty_spell_put_key(spell_key(k), 0, 0, t)
 }
 pub sty_spell_get := fn(e : ptr(Expr)) -> TySpell {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_spell_get_key(spell_key(k), 0)
+  sty_spell_get_key(spell_key(k), 0, 0)
 }
-## The spelling record under instance `opt` (a generic body's node, checked per instance).
-pub sty_spell_put_in := fn(e : ptr(Expr), opt : Option(InstId), t : TySpell) {
+## The spelling record in the context (`inst`, `iter`) (a generic body's node, checked per instance;
+## a `comptime for` body's node, checked per iteration).
+pub sty_spell_put_at := fn(e : ptr(Expr), inst : Option(InstId), iter : Option(IterId), t : TySpell) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_spell_put_key(spell_key(k), sty_inst_word(opt), t)
+  sty_spell_put_key(spell_key(k), sty_inst_word(inst), sty_iter_word(iter), t)
 }
-pub sty_spell_get_in := fn(e : ptr(Expr), opt : Option(InstId)) -> TySpell {
+pub sty_spell_get_at := fn(e : ptr(Expr), inst : Option(InstId), iter : Option(IterId)) -> TySpell {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_spell_get_key(spell_key(k), sty_inst_word(opt))
+  sty_spell_get_key(spell_key(k), sty_inst_word(inst), sty_iter_word(iter))
 }
-pub sty_bind_spell_put := fn(ns : usize, t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), 0, t) }
-pub sty_bind_spell_get := fn(ns : usize) -> TySpell { sty_spell_get_key(spell_key(bind_key(ns)), 0) }
-pub sty_bind_spell_put_in := fn(ns : usize, opt : Option(InstId), t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), sty_inst_word(opt), t) }
-pub sty_bind_spell_get_in := fn(ns : usize, opt : Option(InstId)) -> TySpell { sty_spell_get_key(spell_key(bind_key(ns)), sty_inst_word(opt)) }
-sty_spell_put_key := fn(k : usize, iw : usize, t : TySpell) {
+pub sty_bind_spell_put := fn(ns : usize, t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), 0, 0, t) }
+pub sty_bind_spell_get := fn(ns : usize) -> TySpell { sty_spell_get_key(spell_key(bind_key(ns)), 0, 0) }
+pub sty_bind_spell_put_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId), t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), sty_inst_word(inst), sty_iter_word(iter), t) }
+pub sty_bind_spell_get_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId)) -> TySpell { sty_spell_get_key(spell_key(bind_key(ns)), sty_inst_word(inst), sty_iter_word(iter)) }
+sty_spell_put_key := fn(k : usize, iw : usize, tw : usize, t : TySpell) {
   if STY_N * 2 >= STY_CAP { sty_grow() }
-  ex := sty_find(k, iw)
+  ex := sty_find(k, iw, tw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word under a spelling key is a record address `sty_record` handed out.
@@ -2724,12 +2747,12 @@ sty_spell_put_key := fn(k : usize, iw : usize, t : TySpell) {
       ## unchecked-ok: `sty_record` answered a fresh slot of a live mapping, at least `size(TySpell)` bytes.
       rp2 : ptr(mut TySpell) = unchecked bitcast(ptr(mut TySpell), ra)
       deref(rp2) = t
-      if sty_place(STY_KEYS, STY_INSTS, STY_VALS, STY_USED, STY_CAP, k, iw, ra) { STY_N = STY_N + 1 }
+      if sty_place(STY_KEYS, STY_INSTS, STY_ITERS, STY_VALS, STY_USED, STY_CAP, k, iw, tw, ra) { STY_N = STY_N + 1 }
     }
   }
 }
-sty_spell_get_key := fn(k : usize, iw : usize) -> TySpell {
-  ex := sty_find(k, iw)
+sty_spell_get_key := fn(k : usize, iw : usize, tw : usize) -> TySpell {
+  ex := sty_find(k, iw, tw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word under a spelling key is a record address `sty_record` handed out.
@@ -2741,6 +2764,293 @@ sty_spell_get_key := fn(k : usize, iw : usize) -> TySpell {
   }
   TySpell(s = 0, n = 0, form = SpellForm.SfText, layers = 0, ed = 0, he = 0, call = Option(ptr(Expr)).None)
 }
+
+## ───────────────────────────── the record context (docs/ir-slice-1.md §8.3–§8.4, steps e2–e4) ─────────────────────────────
+##
+## A record is written (sema) and asked for (a consumer) in a CONTEXT: the monomorphization instance
+## whose body is being checked or emitted, and the comptime-for iteration path inside it. Both sides
+## walk the one tree (nothing is cloned), so both keep the context the same way, on this stack:
+## - an instance's body pushes `rec_enter_inst(id)` (sema's per-instance walk; x86's instance loop);
+## - each unrolled iteration of a `comptime for` over a type's members or over a pack pushes
+##   `rec_enter_iter(loop, site, k)`, which keeps the instance and extends the path (a range
+##   `comptime for` binds a plain integer, the same type in every iteration, and pushes nothing);
+## - a body expanded at a call site whose records do not depend on the caller (an `@inline` callee)
+##   pushes `rec_enter_plain()`;
+## and each push is popped by `rec_leave()` on the way out. A stack, not a saved-and-restored
+## `Option` global: assigning a saved enum value to a mutable global is refused by the lowering (#934).
+##
+## The iteration identity is interned by content (`iter_intern`): (the parent path, the loop
+## statement's address, the call site for a pack — its first pack argument's node, `None` for a member
+## loop —, the iteration ordinal). Both sides enumerate the same members in the same order, so the same content names the
+## same iteration. Storage is anonymous mappings (`sty_map`), as for the record table: the compiler's
+## output must not move with them.
+mut REC_INSTS : usize = 0   ## mapping: each frame's instance word (`InstId` + 1, 0 = none)
+mut REC_ITERS : usize = 0   ## mapping: each frame's iteration word (`IterId` + 1, 0 = none)
+mut REC_SP : usize = 0      ## frames on the stack
+mut REC_CAP : usize = 0     ## frames the mappings hold
+## Room for one more frame.
+rec_reserve := fn() {
+  if REC_SP < REC_CAP { return }
+  mut nc : usize = REC_CAP * 2
+  if nc == 0 { nc = 256 }
+  ni := sty_map(nc * 8)
+  nt := sty_map(nc * 8)
+  mut i : usize = 0
+  while i < REC_SP {
+    deref(sty_word(ni, i)) = deref(sty_word(REC_INSTS, i))
+    deref(sty_word(nt, i)) = deref(sty_word(REC_ITERS, i))
+    i = i + 1
+  }
+  REC_INSTS = ni
+  REC_ITERS = nt
+  REC_CAP = nc
+}
+rec_push_words := fn(iw : usize, tw : usize) {
+  rec_reserve()
+  deref(sty_word(REC_INSTS, REC_SP)) = iw
+  deref(sty_word(REC_ITERS, REC_SP)) = tw
+  REC_SP = REC_SP + 1
+}
+## The current frame's words; outside every frame both are 0 (no instance, no iteration). The depth is
+## copied into a local before `- 1`: the checker folds a `mut` global's initializer (0) as its value and
+## refuses `REC_SP - 1` as a comptime overflow (#935).
+rec_inst_word := fn() -> usize {
+  sp : usize = REC_SP
+  if sp == 0 { return 0 }
+  deref(sty_word(REC_INSTS, sp - 1))
+}
+rec_iter_word := fn() -> usize {
+  sp : usize = REC_SP
+  if sp == 0 { return 0 }
+  deref(sty_word(REC_ITERS, sp - 1))
+}
+## Enter instance `id`'s body (no iteration yet).
+pub rec_enter_inst := fn(id : InstId) { rec_push_words(usize(id) + 1, 0) }
+## Enter a body whose records carry no context (an `@inline` callee expanded at a call site).
+pub rec_enter_plain := fn() { rec_push_words(0, 0) }
+## Enter an explicit context (sema re-entering a call site's context to expand a pack there).
+pub rec_enter_at := fn(inst : Option(InstId), iter : Option(IterId)) { rec_push_words(sty_inst_word(inst), sty_iter_word(iter)) }
+## Enter iteration `k` of the loop statement `lp` (a pack's loop also names its call `site`, by the
+## call's first pack argument): the instance is kept, the path extended.
+pub rec_enter_iter := fn(lp : ptr(mut Stmt), site : Option(ptr(mut Arg)), k : usize) {
+  it := iter_intern(rec_iter(), lp, site, k)
+  rec_push_words(rec_inst_word(), usize(it) + 1)
+}
+## Leave the innermost frame. An unbalanced leave is a compiler bug, and it is loud.
+pub rec_leave := fn() {
+  sp : usize = REC_SP
+  if sp == 0 { panic("selfhost: ir — record context: leave without a matching enter") }
+  ## through a local, as above (#935)
+  REC_SP = sp - 1
+}
+pub rec_depth := fn() -> usize { REC_SP }
+## The current instance and iteration path.
+pub rec_inst := fn() -> Option(InstId) {
+  w := rec_inst_word()
+  if w == 0 { return Option(InstId).None }
+  Option(InstId).Some(InstId(w - 1))
+}
+pub rec_iter := fn() -> Option(IterId) {
+  w := rec_iter_word()
+  if w == 0 { return Option(IterId).None }
+  Option(IterId).Some(IterId(w - 1))
+}
+## The records in the CURRENT context: what sema writes while it checks a body (its context is on the
+## stack), and what a consumer reads while it emits one.
+pub sty_put_cur := fn(e : ptr(Expr), t : VTy) {
+  ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
+  k := unchecked bitcast(usize, e)
+  sty_put_key(k, rec_inst_word(), rec_iter_word(), t)
+}
+pub sty_get_cur := fn(e : ptr(Expr)) -> VTy {
+  ## unchecked-ok: the node's address is the table key.
+  k := unchecked bitcast(usize, e)
+  sty_get_key(k, rec_inst_word(), rec_iter_word())
+}
+pub sty_bind_put_cur := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), rec_inst_word(), rec_iter_word(), t) }
+## A BINDING's records are written in the context it is declared in, and a use reads them there. A
+## binding declared outside an unrolled loop (a parameter, a local before the loop) is the same binding
+## in every iteration, so a lookup that finds nothing at the current iteration path continues at the
+## path's parent, and so on up to the frame with no iteration — lexical scope, not a fallback to another
+## answer: a binding declared INSIDE the body is re-recorded at each iteration and found first. The
+## instance word is kept: a binding is never read across instances.
+sty_bind_find_cur := fn(k : usize) -> Option(u64) {
+  iw := rec_inst_word()
+  mut tw := rec_iter_word()
+  loop {
+    r := sty_find(k, iw, tw)
+    match r { Some(x) => { return Option(u64).Some(x) }; None => {} }
+    if tw == 0 { return Option(u64).None }
+    tw = iter_parent_word(tw)
+  }
+  Option(u64).None
+}
+pub sty_bind_get_cur := fn(ns : usize) -> VTy {
+  ex := sty_bind_find_cur(bind_key(ns))
+  match ex {
+    Some(rw) => {
+      ## unchecked-ok: every value word is a record address `sty_record` handed out.
+      rp : ptr(mut VTy) = unchecked bitcast(ptr(mut VTy), usize(rw))
+      t : VTy = deref(rp)
+      return t
+    }
+    None => {}
+  }
+  VTy(cls = VCls.VcAbsent, bytes = 0, sg = Sgn.SgNone)
+}
+pub sty_spell_put_cur := fn(e : ptr(Expr), t : TySpell) {
+  ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
+  k := unchecked bitcast(usize, e)
+  sty_spell_put_key(spell_key(k), rec_inst_word(), rec_iter_word(), t)
+}
+pub sty_spell_get_cur := fn(e : ptr(Expr)) -> TySpell {
+  ## unchecked-ok: the node's address is the table key.
+  k := unchecked bitcast(usize, e)
+  sty_spell_get_key(spell_key(k), rec_inst_word(), rec_iter_word())
+}
+pub sty_bind_spell_put_cur := fn(ns : usize, t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), rec_inst_word(), rec_iter_word(), t) }
+## A binding's spelling, read in its declaration's context (as `sty_bind_get_cur`).
+pub sty_bind_spell_get_cur := fn(ns : usize) -> TySpell {
+  ex := sty_bind_find_cur(spell_key(bind_key(ns)))
+  match ex {
+    Some(rw) => {
+      ## unchecked-ok: every value word under a spelling key is a record address `sty_record` handed out.
+      rp : ptr(mut TySpell) = unchecked bitcast(ptr(mut TySpell), usize(rw))
+      t : TySpell = deref(rp)
+      return t
+    }
+    None => {}
+  }
+  TySpell(s = 0, n = 0, form = SpellForm.SfText, layers = 0, ed = 0, he = 0, call = Option(ptr(Expr)).None)
+}
+
+## The interned iterations: entry `i` is `IterId(i)`.
+mut ITER_PAR : usize = 0    ## mapping: the parent path's word (`IterId` + 1, 0 = none)
+mut ITER_LOOP : usize = 0   ## mapping: the loop statement's address
+mut ITER_SITE : usize = 0   ## mapping: the pack call's first pack argument's address (0 = a member loop, no site)
+mut ITER_K : usize = 0      ## mapping: the iteration ordinal
+mut ITER_N : usize = 0
+mut ITER_CAP : usize = 0
+iter_reserve := fn() {
+  if ITER_N < ITER_CAP { return }
+  mut nc : usize = ITER_CAP * 2
+  if nc == 0 { nc = 1024 }
+  np := sty_map(nc * 8)
+  nlp := sty_map(nc * 8)
+  ns := sty_map(nc * 8)
+  nk := sty_map(nc * 8)
+  mut i : usize = 0
+  while i < ITER_N {
+    deref(sty_word(np, i)) = deref(sty_word(ITER_PAR, i))
+    deref(sty_word(nlp, i)) = deref(sty_word(ITER_LOOP, i))
+    deref(sty_word(ns, i)) = deref(sty_word(ITER_SITE, i))
+    deref(sty_word(nk, i)) = deref(sty_word(ITER_K, i))
+    i = i + 1
+  }
+  ITER_PAR = np
+  ITER_LOOP = nlp
+  ITER_SITE = ns
+  ITER_K = nk
+  ITER_CAP = nc
+}
+## The id of iteration `k` of loop `lp` (at call `site` for a pack) under the path `parent`, interned:
+## the same content always answers the same id. The newest entries are searched first (an unrolled
+## loop interns its iterations one after another).
+pub iter_intern := fn(parent : Option(IterId), lp : ptr(mut Stmt), site : Option(ptr(mut Arg)), k : usize) -> IterId {
+  pw := sty_iter_word(parent)
+  ## unchecked-ok: the loop statement's address is an identity key; nothing reads it back as a pointer.
+  lw := unchecked bitcast(usize, lp)
+  ## unchecked-ok: the argument node's address is an identity key; a real node address is never 0 (niche).
+  sw : usize = match site { Some(c) => { unchecked bitcast(usize, c) }; None => { 0 } }
+  mut i := ITER_N
+  while i > 0 {
+    i = i - 1
+    if deref(sty_word(ITER_LOOP, i)) == lw and deref(sty_word(ITER_K, i)) == k and deref(sty_word(ITER_PAR, i)) == pw and deref(sty_word(ITER_SITE, i)) == sw { return IterId(i) }
+  }
+  iter_reserve()
+  deref(sty_word(ITER_PAR, ITER_N)) = pw
+  deref(sty_word(ITER_LOOP, ITER_N)) = lw
+  deref(sty_word(ITER_SITE, ITER_N)) = sw
+  deref(sty_word(ITER_K, ITER_N)) = k
+  id := IterId(ITER_N)
+  ITER_N = ITER_N + 1
+  id
+}
+pub iter_count := fn() -> usize { ITER_N }
+
+## ── pack expansions (docs/ir-slice-1.md §8.4, step e4) ──
+## A comptime-variadic call is expanded at its call site: the callee's body is emitted inline, in the
+## CALLER's record context (`lower::emit_variadic_body`), and its `comptime for v in <pack>` unrolls once
+## per trailing argument, each element with its own argument's type (Functions §7.1). Sema meets the call
+## while it checks the caller, and can re-check the callee for that call only after the caller's walk is
+## over, so it notes the expansion here — the callee's declaration index, the call's first pack argument
+## (the iteration's site) and the caller's context — and walks the notes afterwards
+## (`sema::sema_pack_walk`). A note made twice is kept once. Mappings, as above.
+pub PackExp := struct { di : usize, site : ptr(mut Arg), inst : Option(InstId), iter : Option(IterId) }
+mut PACK_DI : usize = 0     ## mapping: the callee's declaration index
+mut PACK_SITE : usize = 0   ## mapping: the first pack argument's address
+mut PACK_IW : usize = 0     ## mapping: the caller's instance word
+mut PACK_TW : usize = 0     ## mapping: the caller's iteration word
+mut PACK_N : usize = 0
+mut PACK_CAP : usize = 0
+pack_reserve := fn() {
+  if PACK_N < PACK_CAP { return }
+  mut nc : usize = PACK_CAP * 2
+  if nc == 0 { nc = 256 }
+  nd := sty_map(nc * 8)
+  ns := sty_map(nc * 8)
+  ni := sty_map(nc * 8)
+  nt := sty_map(nc * 8)
+  mut i : usize = 0
+  while i < PACK_N {
+    deref(sty_word(nd, i)) = deref(sty_word(PACK_DI, i))
+    deref(sty_word(ns, i)) = deref(sty_word(PACK_SITE, i))
+    deref(sty_word(ni, i)) = deref(sty_word(PACK_IW, i))
+    deref(sty_word(nt, i)) = deref(sty_word(PACK_TW, i))
+    i = i + 1
+  }
+  PACK_DI = nd
+  PACK_SITE = ns
+  PACK_IW = ni
+  PACK_TW = nt
+  PACK_CAP = nc
+}
+## Note the expansion of callee `di` at the call whose first pack argument is `site`, in the current
+## record context.
+pub pack_note := fn(di : usize, site : ptr(mut Arg)) {
+  ## unchecked-ok: the argument node's address is an identity key; `pack_at` hands it back as the same node.
+  sw := unchecked bitcast(usize, site)
+  iw := rec_inst_word()
+  tw := rec_iter_word()
+  mut i : usize = 0
+  while i < PACK_N {
+    if deref(sty_word(PACK_SITE, i)) == sw and deref(sty_word(PACK_DI, i)) == di and deref(sty_word(PACK_IW, i)) == iw and deref(sty_word(PACK_TW, i)) == tw { return }
+    i = i + 1
+  }
+  pack_reserve()
+  deref(sty_word(PACK_DI, PACK_N)) = di
+  deref(sty_word(PACK_SITE, PACK_N)) = sw
+  deref(sty_word(PACK_IW, PACK_N)) = iw
+  deref(sty_word(PACK_TW, PACK_N)) = tw
+  PACK_N = PACK_N + 1
+}
+pub pack_count := fn() -> usize { PACK_N }
+pub pack_at := fn(i : usize) -> PackExp {
+  iw := deref(sty_word(PACK_IW, i))
+  tw := deref(sty_word(PACK_TW, i))
+  mut inst : Option(InstId) = Option(InstId).None
+  if iw != 0 { inst = Option(InstId).Some(InstId(iw - 1)) }
+  mut iter : Option(IterId) = Option(IterId).None
+  if tw != 0 { iter = Option(IterId).Some(IterId(tw - 1)) }
+  ## unchecked-ok: every site word was stored by `pack_note` from a `ptr(mut Arg)`.
+  site := unchecked bitcast(ptr(mut Arg), deref(sty_word(PACK_SITE, i)))
+  PackExp(di = deref(sty_word(PACK_DI, i)), site = site, inst = inst, iter = iter)
+}
+## Forget the notes (a later check in the same process starts clean).
+pub pack_reset := fn() { PACK_N = 0 }
+## The parent path's word of the iteration whose word is `tw` (`tw` names an interned iteration, so it
+## is at least 1).
+iter_parent_word := fn(tw : usize) -> usize { deref(sty_word(ITER_PAR, tw - 1)) }
 
 ## ───────────────────────────── the signedness differential census (docs/ir.md §3.8.5) ─────────────────────────────
 ##
@@ -2847,6 +3157,54 @@ mut SIGN_LOST : usize = 0
 pub sign_row := fn(who : str, op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8), signed : bool) {
   if not sign_open() { return }
   if signed { sign_emit(who, op, l, r, src, "s") } else { sign_emit(who, op, l, r, src, "u") }
+}
+## docs/ir-slice-1.md §8.4 (e4) — the RECORDS a consumer can read at one of x86's legacy signedness
+## decisions, in the context the emitter is in (the record-context stack above): for each operand, the
+## record with no context, in the current instance alone, and in the current instance and iteration
+## path. The third column is what a consumer that asks with the whole context reads (e3); a `U` or `A`
+## there is the residue no record answers. One row per decision, written beside the `#sign` row:
+##   #signrec <op-byte> <lcol> <rcol> <l>,<r> <l>,<r> <l>,<r> |<the source line>
+## Each record is one letter, an integer's with its signedness: `A` absent, `U` unknown, `L` a literal
+## no context typed, `Is`/`Iu` an integer, `B` bool, `P` pointer, `F` float, `G` aggregate.
+put_rec := fn(in out sb : rt::StrBuf, t : VTy) {
+  c : VCls = t.cls
+  match c {
+    VcAbsent => { put(sb, "A") }
+    VcUnknown => { put(sb, "U") }
+    VcLit => { put(sb, "L") }
+    VcInt => { put(sb, "I"); put(sb, sgn_name(t.sg)) }
+    VcBool => { put(sb, "B") }
+    VcPtr => { put(sb, "P") }
+    VcFloat => { put(sb, "F") }
+    VcAgg => { put(sb, "G") }
+  }
+}
+put_rec_pair := fn(in out sb : rt::StrBuf, kl : usize, kr : usize, iw : usize, tw : usize) {
+  put(sb, " ")
+  put_rec(sb, sty_get_key(kl, iw, tw))
+  put(sb, ",")
+  put_rec(sb, sty_get_key(kr, iw, tw))
+}
+pub sign_rec_row := fn(op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) {
+  if not sign_open() { return }
+  ## unchecked-ok: the operands' node addresses are the table keys.
+  kl := unchecked bitcast(usize, l)
+  ## unchecked-ok: as above.
+  kr := unchecked bitcast(usize, r)
+  mut sb := sign_buf()
+  put(sb, "#signrec ")
+  put_u(sb, usize(op))
+  put(sb, " ")
+  put_col(sb, l, src)
+  put(sb, " ")
+  put_col(sb, r, src)
+  put_rec_pair(sb, kl, kr, 0, 0)
+  put_rec_pair(sb, kl, kr, rec_inst_word(), 0)
+  put_rec_pair(sb, kl, kr, rec_inst_word(), rec_iter_word())
+  put_line(sb, l, r, src)
+  rowlen : usize = sb.len
+  w := rt::sb_flush(sb, sign_fd())
+  if w != isize(rowlen) { SIGN_LOST = SIGN_LOST + 1 }
 }
 
 ## docs/ir.md §3.8.6 — what sema's RECORD pass over a library declaration found that a check of the

@@ -600,12 +600,16 @@ mut PTRINT_DECL_NS : usize = 0
 ## Issue #697 — the parameter list of the declaration `check_decl` is checking (as a word), so a local
 ## annotation can tell the enclosing function's `T : type` parameters from unknown type names.
 mut SEMA_DECL_PARAMS : Option(ptr(mut Param)) = Option.None
+## The index of the declaration `check_decl` is checking (its `upto`: every caller passes the
+## declaration's own index). `sema_inst_bound_span` binds a bare type parameter only inside the
+## instance's own generic, never inside another declaration checked in the instance's record context
+## (a comptime-variadic callee expanded there, docs/ir-slice-1.md §8.4).
+mut SEMA_DECL_IDX : usize = 0
 ## docs/ir-slice-1.md §8.3 (e2) — the monomorphization instance `check_program` is re-checking a
-## generic body for, or `None` during the ordinary (generic) pass. The record functions consult it so
-## every record a body check writes lands under `(node, Some(id))` for an instance and `(node, None)`
-## for the generic pass — no `Option(InstId)` is threaded through the check walk. Set and RESTORED
-## (not cleared) around each per-instance `check_fn`, exactly as `SEMA_DECL_PARAMS` is.
-mut SEMA_INST : Option(ir::InstId) = Option.None
+## generic body for is the instance of the current RECORD CONTEXT (`ir::rec_inst()`, `None` during the
+## ordinary generic pass): the per-instance walk pushes it with `ir::rec_enter_inst` and pops it after
+## the body, so every record the body check writes lands under `(node, Some(id), …)` — no
+## `Option(InstId)` is threaded through the check walk, and none is assigned to a global (#934).
 ## docs/ir-slice-1.md §8.3 (e2) — the monomorphization instance set mono collected (`lower::collect_program`),
 ## handed to sema by the driver through `set_insts` (the `set_package_modules`/`set_lib_records` pattern):
 ## sema must read it to re-check each generic body per instance but must not import `lower` (the
@@ -8540,6 +8544,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         sema_vty_record(e, t, decls, src)
         sema_vty_var(e, locals, nloc, src, decls)
         sema_spell_record(e, t, locals, nloc, decls, src, a)
+        sema_pack_note(e, decls, src)
         ## Types §4.2/§4.3/§4.5 — one operator's integer operands share a signedness: signed<->unsigned
         ## is a NUMERIC conversion, always explicit, and no operator takes an `iN` and a `uM`.
         mx : Option(u64) = sema_mixed_signedness(e, a)
@@ -8697,37 +8702,21 @@ sema_expr_is_num := fn(e : ptr(Expr)) -> bool {
   }
 }
 ## Record `e`'s value type from the `Ty` `check_expr` answered, and remember it as a census site.
-## docs/ir-slice-1.md §8.3 (e2) — the record-table accessors, instance-aware. Each consults `SEMA_INST`:
-## during the ordinary (generic) pass it is `None` and the call goes to the plain `ir::sty_*` form
-## (the record lands under `(node, None)`, exactly as before); while `check_program` re-checks a
-## generic body for an instance it is `Some(id)` and the call goes to the `ir::sty_*_in` form (the
-## record lands under `(node, Some(id))`). This is what keeps the per-instance walk from threading an
-## `Option(InstId)` through the whole check walk: every record a body check writes is keyed by the
-## instance that is being checked.
-sema_sty_put := fn(e : ptr(Expr), t : ir::VTy) {
-  match SEMA_INST { Some(id) => { ir::sty_put_in(e, Option(ir::InstId).Some(id), t) }; None => { ir::sty_put(e, t) } }
-}
-sema_sty_get := fn(e : ptr(Expr)) -> ir::VTy {
-  match SEMA_INST { Some(id) => { ir::sty_get_in(e, Option(ir::InstId).Some(id)) }; None => { ir::sty_get(e) } }
-}
-sema_sty_bind_put := fn(ns : usize, t : ir::VTy) {
-  match SEMA_INST { Some(id) => { ir::sty_bind_put_in(ns, Option(ir::InstId).Some(id), t) }; None => { ir::sty_bind_put(ns, t) } }
-}
-sema_sty_bind_get := fn(ns : usize) -> ir::VTy {
-  match SEMA_INST { Some(id) => { ir::sty_bind_get_in(ns, Option(ir::InstId).Some(id)) }; None => { ir::sty_bind_get(ns) } }
-}
-sema_sty_spell_put := fn(e : ptr(Expr), t : ir::TySpell) {
-  match SEMA_INST { Some(id) => { ir::sty_spell_put_in(e, Option(ir::InstId).Some(id), t) }; None => { ir::sty_spell_put(e, t) } }
-}
-sema_sty_spell_get := fn(e : ptr(Expr)) -> ir::TySpell {
-  match SEMA_INST { Some(id) => { ir::sty_spell_get_in(e, Option(ir::InstId).Some(id)) }; None => { ir::sty_spell_get(e) } }
-}
-sema_sty_bind_spell_put := fn(ns : usize, t : ir::TySpell) {
-  match SEMA_INST { Some(id) => { ir::sty_bind_spell_put_in(ns, Option(ir::InstId).Some(id), t) }; None => { ir::sty_bind_spell_put(ns, t) } }
-}
-sema_sty_bind_spell_get := fn(ns : usize) -> ir::TySpell {
-  match SEMA_INST { Some(id) => { ir::sty_bind_spell_get_in(ns, Option(ir::InstId).Some(id)) }; None => { ir::sty_bind_spell_get(ns) } }
-}
+## docs/ir-slice-1.md §8.3–§8.4 (e2, e4) — the record-table accessors, context-aware. Each writes or
+## reads in the CURRENT record context (`ir::rec_*`, a stack): during the ordinary (generic) pass no
+## frame is pushed and the record lands under `(node, None, None)`, exactly as before; while
+## `check_program` re-checks a generic body for an instance the walk has pushed that instance
+## (`(node, Some(id), None)`); inside an unrolled `comptime for` iteration the walk has pushed the
+## iteration as well (`(node, inst, Some(path))`). This is what keeps the per-instance and
+## per-iteration walks from threading a context through the whole check walk.
+sema_sty_put := fn(e : ptr(Expr), t : ir::VTy) { ir::sty_put_cur(e, t) }
+sema_sty_get := fn(e : ptr(Expr)) -> ir::VTy { ir::sty_get_cur(e) }
+sema_sty_bind_put := fn(ns : usize, t : ir::VTy) { ir::sty_bind_put_cur(ns, t) }
+sema_sty_bind_get := fn(ns : usize) -> ir::VTy { ir::sty_bind_get_cur(ns) }
+sema_sty_spell_put := fn(e : ptr(Expr), t : ir::TySpell) { ir::sty_spell_put_cur(e, t) }
+sema_sty_spell_get := fn(e : ptr(Expr)) -> ir::TySpell { ir::sty_spell_get_cur(e) }
+sema_sty_bind_spell_put := fn(ns : usize, t : ir::TySpell) { ir::sty_bind_spell_put_cur(ns, t) }
+sema_sty_bind_spell_get := fn(ns : usize) -> ir::TySpell { ir::sty_bind_spell_get_cur(ns) }
 ## Record `e`'s value type from the `Ty` `check_expr` answered, and remember it as a census site.
 sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)) {
   mut vt : ir::VTy = ir::vty_unknown()
@@ -9245,7 +9234,7 @@ sema_tparam_type_ordinal := fn(ph : Option(ptr(mut Param)), src : ptr(u8), s : u
 }
 ## docs/ir-slice-1.md §8.3 (e2) — the concrete type-argument span the instance being checked binds the
 ## type parameter `[s, s+n)` to, `None` when there is no instance in reach (the generic pass) or the name
-## is not one of THAT INSTANCE'S OWN type parameters. The instance is `SEMA_INSTS[SEMA_INST]`; its
+## is not one of THAT INSTANCE'S OWN type parameters. The instance is `SEMA_INSTS[ir::rec_inst()]`; its
 ## generic decl is `decls[ie.gi]`, whose type parameters are bound positionally to the instance's tags.
 ##
 ## The owning-decl test is the safety of the whole binding: a spelling carries `ed`, the generic
@@ -9257,15 +9246,18 @@ sema_tparam_type_ordinal := fn(ph : Option(ptr(mut Param)), src : ptr(u8), s : u
 ## generic is the declaration being checked, or `ed - 1 == ie.gi`). The answer is a CONCRETE span (mono
 ## substitutes every enclosing type-param before it records an instance), so resolving never re-enters.
 sema_inst_bound_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ed : usize, s : usize, n : usize) -> Option(VSpan) {
-  match SEMA_INST {
+  cur : Option(ir::InstId) = ir::rec_inst()
+  match cur {
     None => { return Option(VSpan).None }
     Some(id) => {
       match SEMA_INSTS {
         None => { return Option(VSpan).None }
         Some(iv) => {
           ie := lower_layout::ivec_at(iv, usize(id))
-          ## the spelling must belong to the instance's own generic declaration (see above)
+          ## the spelling must belong to the instance's own generic declaration (see above), and a
+          ## spelling of the declaration being checked binds only while that declaration IS the generic
           if ed != 0 and ed - 1 != ie.gi { return Option(VSpan).None }
+          if ed == 0 and SEMA_DECL_IDX != ie.gi { return Option(VSpan).None }
           gd := deref(decl_get(decls, ie.gi))
           ord : Option(u64) = sema_tparam_type_ordinal(gd.params_head, src, s, n)
           match ord {
@@ -9563,7 +9555,7 @@ sema_vty_spell := fn(sp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> 
   ## docs/ir-slice-1.md §8.3 (e2) — a generic body's own type parameter, re-checked for an instance,
   ## resolves to the instance's CONCRETE binding (not `VcUnknown`): this is what lets the per-instance
   ## mixed-signedness refusal fire (a `T`-vs-concrete-int mix is a real error once `T` is known). In the
-  ## generic pass `SEMA_INST` is `None`, so this answers `None` and the line below keeps its old answer.
+  ## generic pass `ir::rec_inst()` is `None`, so this answers `None` and the line below keeps its old answer.
   bs : Option(VSpan) = sema_inst_bound_span(decls, src, sp.ed, sp.s, sp.n)
   match bs {
     Some(b) => {
@@ -10033,8 +10025,10 @@ sema_spell_shape := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : 
     Expr::EnumLit(es, el, evs, evl, en, eah) => { sema_spell_type(es, el, src) }
     ## an arithmetic operator over an aggregate is a call of the operator fn declared for it (`+ := fn(a : W, b : W) -> W`)
     Expr::Bin(bop, bl, br) => { sema_spell_operator(bop, sema_spell_child(bl, locals, nloc, decls, src, a), decls, src) }
+    ## `v.(f)` inside an iteration that binds `f` to a member (docs/ir-slice-1.md §8.4)
+    Expr::CompField(cfb, cfi) => { sema_spell_compfield(cfb, cfi, locals, nloc, decls, src, a) }
     Expr::Num | Expr::BoolLit
-      | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { sema_spell_none() }
+      | Expr::FloatLit | Expr::Lambda | Expr::FnRef | Expr::Loop => { sema_spell_none() }
   }
 }
 ## A value `match`'s spelling: the first arm value that has one (the checker agreed the arms' types).
@@ -10055,20 +10049,25 @@ sema_spell_child := fn(c : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : 
 ## Component `i` of a tuple-typed value (`t.N` parses as `Index(t, Num(N))`): the `N`-th type of the
 ## `( … )` its spelling is; none when `sp` is not a tuple or the index not a literal.
 sema_spell_tuple_part := fn(sp0 : ir::TySpell, i : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
-  sp : ir::TySpell = sema_spell_norm(sp0, decls, src)
-  if sp.n < 2 or not sema_spell_text(sp) or str_at((src + sp.s), 1) != "(" { return sema_spell_none() }
   match deref(i) {
     Expr::Num(v, ns, nn) => {
       if v < 0 { return sema_spell_none() }
-      ta := typearg_at(src, sp.s, 0, usize(v))
-      um := sema_spell_unmut(ta.s, ta.n, src)
-      sema_spell_norm(sema_spell_in(um.s, um.n, sp), decls, src)
+      sema_spell_tuple_at(sp0, usize(v), decls, src)
     }
     Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => { sema_spell_none() }
   }
+}
+## Component `k` of a value of tuple type `sp` (none when `sp` is not a tuple spelled `( … )`).
+sema_spell_tuple_at := fn(sp0 : ir::TySpell, k : usize, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  sp : ir::TySpell = sema_spell_norm(sp0, decls, src)
+  if sp.n < 2 or not sema_spell_text(sp) or str_at((src + sp.s), 1) != "(" { return sema_spell_none() }
+  ta := typearg_at(src, sp.s, 0, k)
+  if ta.n == 0 { return sema_spell_none() }
+  um := sema_spell_unmut(ta.s, ta.n, src)
+  sema_spell_norm(sema_spell_in(um.s, um.n, sp), decls, src)
 }
 ## A call `sema_spell_call` found no one declaration for: a method-style call of a fn-typed field of its
 ## receiver (`o.f(11)`, desugared `f(o, 11)`); one of several same-named fns told apart by the
@@ -13978,6 +13977,247 @@ sema_ct_value_refused := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, s
   match r { Result::Ok(t) => { false }; Result::Err(e) => { true } }
 }
 
+## ── docs/ir-slice-1.md §8.4 (step e4): records per `comptime for` iteration ─────────────────────────
+##
+## A `comptime for` over a type's members is unrolled by the emitter once per member, and inside one
+## instance a node of its body has a type per member: `v.(f)` is that member of `v` (Comptime §5.4).
+## So, besides the one untyped walk above, the body is walked once per member for its records, each in
+## its own record context (`ir::rec_enter_iter(loop, None, k)` — the ordinal the x86 lowering emits the
+## member under, `lower::emit_st_comp_for`). The members are enumerated exactly as that lowering does:
+## the header's `typeinfo(X)` read by the same scan (`lower_layout::compfor_iter_arg`), `X` resolved
+## through the instance's type parameters, then a tuple's components, an array's elements, a struct's
+## fields or an enum's variants in declaration order. Where the iterated type is a type parameter no
+## instance binds (the generic pass), no member is known and no iteration is recorded: the emitter
+## only unrolls instances, and an iteration without records reads as absent — visible, never guessed.
+##
+## The member the current iteration binds its loop variable to, read by `sema_spell_compfield`: a
+## struct field or an enum variant by name (`named`), a tuple component or array element by ordinal
+## `k`. The binding lives in the walking frame (`sema_ct_member`) and the global points at it, saved
+## and restored around the walk, so an inner loop's variable hides an outer one's for its own body.
+CfMember := struct { vs : usize, vl : usize, named : bool, ms : usize, ml : usize, k : usize }
+mut SEMA_CF : Option(ptr(CfMember)) = Option.None
+## `v.(f)`'s spelling when `f` is the loop variable of the iteration being walked: that member of `v`.
+sema_spell_compfield := fn(b : ptr(Expr), i : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
+  cf : Option(ptr(CfMember)) = SEMA_CF
+  match cf {
+    None => { sema_spell_none() }
+    Some(mp) => {
+      m : CfMember = deref(mp)
+      iv := expr_var_span(i)
+      if iv.n == 0 or not streq(src, iv.s, iv.n, m.vs, m.vl) {
+        sema_spell_none()
+      } else {
+        bsp : ir::TySpell = sema_spell_inst_bound(sema_spell_child(b, locals, nloc, decls, src, a), decls, src)
+        if m.named {
+          sema_spell_field(bsp, m.ms, m.ml, decls, src, a)
+        } else {
+          tc : ir::TySpell = sema_spell_tuple_at(bsp, m.k, decls, src)
+          if sema_spell_known(tc) { tc } else { sema_spell_elem(bsp, decls, src) }
+        }
+      }
+    }
+  }
+}
+## `sp` with a bare type parameter of the instance being checked replaced by the instance's concrete
+## spelling (inside the wrappers it had): `v.(f)` over `v : T` reads `f` of what `T` is in this
+## instance. `sema_spell_field` does not substitute instance bindings itself (it serves the generic
+## pass, where `T` is unbound); `sema_vty_spell` does the same substitution for a value type.
+sema_spell_inst_bound := fn(sp0 : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  sp : ir::TySpell = sema_spell_norm(sp0, decls, src)
+  if not sema_spell_text(sp) { return sp }
+  bs : Option(VSpan) = sema_inst_bound_span(decls, src, sp.ed, sp.s, sp.n)
+  match bs {
+    Some(bv) => { sema_spell_rewrap(sema_spell_at(bv.s, bv.n), sp.layers) }
+    None => { sp }
+  }
+}
+## Walk the body of the `comptime for` statement `st` once for member `k` (named `[ms, ms+ml)` when
+## `named`), in that iteration's record context, the loop variable `[cvs, cvs+cvl)` bound to it.
+sema_ct_member := fn(st : ptr(mut Stmt), k : usize, named : bool, ms : usize, ml : usize, cvs : usize, cvl : usize, cb : Option(ptr(mut Stmt)), da : ptr(DA), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), cnt : usize) {
+  m := CfMember(vs = cvs, vl = cvl, named = named, ms = ms, ml = ml, k = k)
+  saved : Option(ptr(CfMember)) = SEMA_CF
+  SEMA_CF = Option(ptr(CfMember)).Some(ptr(m))
+  ir::rec_enter_iter(st, Option(ptr(mut Arg)).None, k)
+  sema_ct_record(CtWalk.WkBody(cb, da), CtVar.CvUntyped, cvs, cvl, Option(u64).Some(u64(cvs)), decls, upto, src, a, locals, cnt)
+  ir::rec_leave()
+  SEMA_CF = saved
+}
+## A pack element (Functions §7.1): a comptime-variadic call is expanded at its call site, in the
+## caller's record context, and the callee's `comptime for v in <pack>` unrolls once per trailing
+## argument, `v` having that argument's type. While a call is checked it is noted (`sema_pack_note`);
+## after the program, each noted expansion re-checks its callee for records only, in the caller's context
+## (`sema_pack_walk`), and the pack loop then walks its body once per element (`sema_ct_pack`), in the
+## iteration context the x86 lowering emits it under (`ir::rec_enter_iter(loop, Some(site), k)`, the
+## site being the call's first pack argument — `lower::emit_st_comp_for_range`).
+## The expansion being walked, `None` outside the pack walk.
+mut SEMA_PACK : Option(ptr(ir::PackExp)) = Option.None
+## Note a call of a comptime-variadic fn: its callee, its first pack argument, the current context.
+sema_pack_note := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) {
+  match deref(e) {
+    Expr::Call(cs, cl, na, ah) => {
+      ci : Option(u64) = sema_rec_decl(decls, src, cs, cl, true)
+      match ci {
+        Some(di) => {
+          d := deref(decl_get(decls, usize(di)))
+          if d.is_fn and decl_is_variadic(d, src) {
+            nfixed := d.arity - 1
+            mut p : Option(ptr(mut Arg)) = ah
+            mut i : usize = 0
+            while i < nfixed and arg_any(p) {
+              p = deref(arg_at(p, "selfhost: sema — pack note: the argument list ended early")).next
+              i += 1
+            }
+            match p { Some(site) => { ir::pack_note(usize(di), site) }; None => {} }
+          }
+        }
+        None => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+}
+## Walk the body of the pack loop `st` (variable `[rvs, rvs+rvl)`) once per element of the expansion
+## being walked, the variable bound to the element's argument's type in that iteration's context.
+sema_ct_pack := fn(st : ptr(mut Stmt), rvs : usize, rvl : usize, rb : Option(ptr(mut Stmt)), da : ptr(DA), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), cnt : usize) {
+  if not ir::sty_on() { return }
+  cur : Option(ptr(ir::PackExp)) = SEMA_PACK
+  match cur {
+    None => {}
+    Some(pp) => {
+      pe : ir::PackExp = deref(pp)
+      mut p : Option(ptr(mut Arg)) = Option(ptr(mut Arg)).Some(pe.site)
+      mut k : usize = 0
+      loop {
+        match p {
+          Some(pq) => {
+            ag := deref(arg_p(pq))
+            ## the element's type is its argument's, recorded where the call was checked
+            mut vt : ir::VTy = ir::sty_get_at(ag.e, pe.inst, pe.iter)
+            mut vsp : ir::TySpell = ir::sty_spell_get_at(ag.e, pe.inst, pe.iter)
+            ## an integer literal no context typed takes the native signed integer (Types §9.1): a
+            ## pack parameter declares no element type, so it gives the literal no context
+            if ir::vty_is_lit(vt) {
+              vsp = sema_spell_i64()
+              vt = sema_vty_spell(vsp, decls, src)
+            }
+            ir::rec_enter_iter(st, Option(ptr(mut Arg)).Some(pe.site), k)
+            if ir::vty_known(vt) { sema_sty_bind_put(rvs, vt) }
+            if sema_spell_known(vsp) { sema_sty_bind_spell_put(rvs, vsp) }
+            sema_ct_record(CtWalk.WkBody(rb, da), CtVar.CvUntyped, rvs, rvl, Option(u64).Some(u64(rvs)), decls, upto, src, a, locals, cnt)
+            ir::rec_leave()
+            k += 1
+            p = ag.next
+          }
+          None => { break }
+        }
+      }
+    }
+  }
+}
+## Re-check the callee of each noted expansion for its records, in its call's context. The notes grow
+## while they are walked (a pack call inside a callee is noted in turn); the walk stops at a bound,
+## which leaves any expansion past it without records — absent to a consumer, never guessed. Verdicts
+## do not move: this is a records-only walk, and its census instruments are silenced as the instance
+## walk's are.
+sema_pack_walk := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
+  if not ir::sty_on() or ir::pack_count() == 0 { ir::pack_reset(); return }
+  mut scratch := sema_scratch_arena()
+  mut i : usize = 0
+  while i < ir::pack_count() and i < 65536 {
+    pe := ir::pack_at(i)
+    d := deref(decl_get(decls, pe.di))
+    if d.is_fn and not guard_is_false(d, src) {
+      scratch.off = 0
+      kept := sema_instruments_take()
+      SEMA_INST_RECORDING = true
+      SEMA_PACK = Option(ptr(ir::PackExp)).Some(ptr(pe))
+      ir::rec_enter_at(pe.inst, pe.iter)
+      cr := check_decl(d, decls, pe.di, src, ptr(scratch))
+      ir::rec_leave()
+      SEMA_PACK = Option(ptr(ir::PackExp)).None
+      SEMA_INST_RECORDING = false
+      sema_instruments_put(kept)
+    }
+    i += 1
+  }
+  ir::pack_reset()
+}
+## The per-member walks of the `comptime for <var> in typeinfo(X).<members>` statement `st`.
+sema_ct_members := fn(st : ptr(mut Stmt), cvs : usize, cvl : usize, civ : u8, cb : Option(ptr(mut Stmt)), da : ptr(DA), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), cnt : usize) {
+  if not ir::sty_on() { return }
+  ia := lower_layout::compfor_iter_arg(src, cvs, cvl)
+  if ia.n == 0 { return }
+  mut ts := ia.s
+  mut tn := ia.n
+  bound : Option(VSpan) = sema_inst_bound_span(decls, src, 0, ia.s, ia.n)
+  match bound { Some(bv) => { ts = bv.s; tn = bv.n }; None => {} }
+  ## a type parameter no instance binds here: its members are not known (the generic pass)
+  if sema_tparam_named(SEMA_DECL_PARAMS, src, ts, tn) { return }
+  if civ == 0 and str_at((src + ts), 1) == "(" {
+    ## a tuple's components
+    mut k : usize = 0
+    mut going := true
+    while going {
+      comp := typearg_at(src, ts, 0, k)
+      if comp.n == 0 { going = false } else {
+        sema_ct_member(st, k, false, 0, 0, cvs, cvl, cb, da, decls, upto, src, a, locals, cnt)
+        k += 1
+      }
+    }
+  } else if civ == 0 and str_at((src + ts), 1) == "[" {
+    ## an array's elements
+    an := lower_layout::parse_arr_len(src, ts, tn)
+    mut k : usize = 0
+    while k < an {
+      sema_ct_member(st, k, false, 0, 0, cvs, cvl, cb, da, decls, upto, src, a, locals, cnt)
+      k += 1
+    }
+  } else if civ == 0 {
+    ## a struct's fields (a type with no field list unrolls zero times, as in the lowering)
+    bn := base_type_name(src, ts, tn)
+    sdi := struct_decl_of(decls, src, bn.s, bn.n)
+    if sdi >= 0 {
+      sd := deref(decl_get(decls, usize(sdi)))
+      mut fd := sd.fields_head
+      mut k : usize = 0
+      loop {
+        match fd {
+          Some(fdq) => {
+            fdd := deref(fld_p(fdq))
+            sema_ct_member(st, k, true, fdd.ns, fdd.nl, cvs, cvl, cb, da, decls, upto, src, a, locals, cnt)
+            k += 1
+            fd = fdd.next
+          }
+          None => { break }
+        }
+      }
+    }
+  } else {
+    ## an enum's variants (`typeinfo(E).variants`)
+    bne := base_type_name(src, ts, tn)
+    edi := enum_decl_of(decls, src, bne.s, bne.n)
+    if edi >= 0 {
+      ed := deref(decl_get(decls, usize(edi)))
+      mut vf := ed.fields_head
+      mut k : usize = 0
+      loop {
+        match vf {
+          Some(vfq) => {
+            vfd := deref(fld_p(vfq))
+            sema_ct_member(st, k, true, vfd.ns, vfd.nl, cvs, cvl, cb, da, decls, upto, src, a, locals, cnt)
+            k += 1
+            vf = vfd.next
+          }
+          None => { break }
+        }
+      }
+    }
+  }
+}
+
 ## Check a fn body's arena-linked statement list (`head`, 0 = none) and grow the in-scope
 ## `locals` as bindings are introduced: an `Assign`'s value expression is checked, then its
 ## name is recorded with the value's synthesized type (so later statements see its type); a
@@ -15001,6 +15241,8 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         if egcf != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcf)) }
         ## docs/ir.md §3.8 item 7 — one walk of the body, the member variable untyped.
         sema_ct_record(CtWalk.WkBody(cb, da), CtVar.CvUntyped, cvs, cvl, Option(u64).Some(u64(cvs)), decls, upto, src, a, locals, cnt)
+        ## docs/ir-slice-1.md §8.4 (e4) — and once per member, in that iteration's record context
+        sema_ct_members(curq, cvs, cvl, civ, cb, da, decls, upto, src, a, locals, cnt)
         cur = nx
       }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
@@ -15018,7 +15260,11 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         ## does; a pack (`comptime for v in rest`, a null `hi`) leaves the element untyped.
         ## null-ok: Stmt::CompForRange — the pack form carries a null `hi` (ast.al; not an Option).
         if unchecked bitcast(usize, rhi) != 0 { sema_ct_record(CtWalk.WkBody(rb, da), CtVar.CvRange(rlo, rhi), rvs, rvl, Option(u64).Some(u64(rvs)), decls, upto, src, a, locals, cnt) }
-        else { sema_ct_record(CtWalk.WkBody(rb, da), CtVar.CvUntyped, rvs, rvl, Option(u64).Some(u64(rvs)), decls, upto, src, a, locals, cnt) }
+        else {
+          sema_ct_record(CtWalk.WkBody(rb, da), CtVar.CvUntyped, rvs, rvl, Option(u64).Some(u64(rvs)), decls, upto, src, a, locals, cnt)
+          ## docs/ir-slice-1.md §8.4 (e4) — inside a pack expansion, once per element, in its own context
+          sema_ct_pack(curq, rvs, rvl, rb, da, decls, upto, src, a, locals, cnt)
+        }
         cur = nx
       }
       Stmt::CompMatch(cmsc, cmah, nx) => {
@@ -16457,6 +16703,7 @@ check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a 
   SEMA_VTY_RET_S = d.ret_ts
   SEMA_VTY_RET_N = d.ret_tl
   SEMA_DECL_PARAMS = d.params_head
+  SEMA_DECL_IDX = upto
   if d.kind == 1 { return check_fn(d, decls, upto, src, a) }
   if d.kind == 0 {
     mut failed_word := 0
@@ -20514,9 +20761,24 @@ sema_is_signedness_err := fn(code : usize) -> bool {
   code >= SIGNEDNESS_CONVERSION_DIAG_MARKER and code < SAME_SCOPE_REDECL_DIAG_MARKER
 }
 
+## A fresh 16 MiB scratch arena for a re-check walk (the per-instance walk, the pack walk): never the
+## compile arena, whose allocations `emit_program` makes after `check_program` (bumping it would move
+## the GAS). `base` is a null placeholder that `arena_init` overwrites on the next line (or panics
+## before returning), so it is never read as a pointer — the same in-out-constructor shape every other
+## arena in the tree uses (`driver.al:6514` and its 22 siblings). The bitcast is spelled explicitly
+## because Types §4.3 makes an integer->pointer reinterpret carry a grant; leaving it implicit would add
+## a #529 seam row.
+sema_scratch_arena := fn() -> rt::Arena {
+  ## null-ok: an Arena's pre-init `base`; rt.al:29 assigns it or panics, never dereferenced.
+  mut scratch := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
+  rt::arena_init(scratch, 16777216)
+  scratch
+}
+
 ## docs/ir-slice-1.md §8.3 (e2) — the per-instance walk. For each instance mono collected, re-check
-## its generic body once with `SEMA_INST` set to the instance's id (mono's IVec index, already deduped
-## by content — so the index IS the identity, no second interning table) and its type parameters bound
+## its generic body once with the instance pushed on the record context (`ir::rec_enter_inst`; the id is
+## mono's IVec index, already deduped by content — so the index IS the identity, no second interning
+## table) and its type parameters bound
 ## to the instance's concrete arguments (through `sema_inst_bound_span`, read by `sema_vty_spell`).
 ## Every record the body check writes then lands under `(node, Some(id))`, and a `T`-vs-concrete-int
 ## mix in the body becomes a real mixed-signedness refusal (it is `VcUnknown` in the generic pass, so
@@ -20546,14 +20808,7 @@ sema_inst_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)
       ## locals are local to it, and the record table stores only `VTy`/`TySpell` VALUES (spans,
       ## never a pointer into this arena), so nothing allocated here outlives the body — rewinding
       ## per body bounds the walk's memory.
-      ## `base` is a null placeholder that `arena_init` overwrites on the next line (or panics
-      ## before returning), so it is never read as a pointer — the same in-out-constructor shape
-      ## every other arena in the tree uses (`driver.al:6514` and its 22 siblings). The bitcast is
-      ## spelled explicitly because Types §4.3 makes an integer->pointer reinterpret carry a grant;
-      ## leaving it implicit would add a #529 seam row.
-      ## null-ok: an Arena's pre-init `base`; rt.al:29 assigns it or panics, never dereferenced.
-      mut scratch := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
-      rt::arena_init(scratch, 16777216)
+      mut scratch := sema_scratch_arena()
       mut i : usize = 0
       while i < cnt {
         ie := lower_layout::ivec_at(v, i)
@@ -20564,15 +20819,14 @@ sema_inst_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)
           kept := sema_instruments_take()
           SEMA_INST_RECORDING = true
           ## `check_decl` sets `SEMA_DECL_PARAMS` and `SEMA_VTY_RET_*` itself, and the walk is flat
-          ## (one instance's body at a time), so only `SEMA_INST` needs setting here — and it is set
-          ## with a literal constructor, never assigned from a variable: the self-host lower refuses a
-          ## whole-value assignment of a non-literal enum to a mutable global (it would drop payload
-          ## words), so the walk clears it with `None` after the loop instead of saving and restoring.
-          SEMA_INST = Option(ir::InstId).Some(ir::InstId(i))
+          ## (one instance's body at a time), so only the record context needs entering here: the
+          ## instance is pushed for the body and popped right after it.
+          ir::rec_enter_inst(ir::InstId(i))
           ## `upto` is the generic's own decl index, exactly as the generic pass passed it, so the
           ## instance re-check sees the same declaration prefix and answers the same questions the
           ## generic pass answered — only the type parameters are bound now.
           cr := check_decl(d, decls, ie.gi, src, ptr(scratch))
+          ir::rec_leave()
           ## The finding is the MIXED-SIGNEDNESS class (§8.3): the verdict e2 adds, and the one a
           ## generic body can show only once `T` is bound. Any other class the re-check refuses is a
           ## pre-existing check-gap unrelated to instance typing — `check_decl` over a library body
@@ -20609,13 +20863,15 @@ sema_inst_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)
         }
         i = i + 1
       }
-      SEMA_INST = Option(ir::InstId).None
     }
   }
   0
 }
 
 pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
+  ## docs/ir-slice-1.md §8.4 — pack expansions are noted per check (an earlier, refused check in the
+  ## same process may have left notes behind).
+  ir::pack_reset()
   ## PERF: build the per-decl name-hash pre-filter for the O(cnt) `name_matches` resolution scans.
   build_sema_dnh(decls, src, deref(a))
   ## #299 census bookkeeping. One O(decls) scan decides whether the instrument has anything to look
@@ -20732,14 +20988,17 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   }
   ## docs/ir-slice-1.md §8.3 (e2) — the per-instance walk: after the generic pass, re-check each
   ## monomorphization instance's generic body once, with its type parameters bound to the instance's
-  ## concrete arguments and `SEMA_INST` set, so every record lands under `(node, Some(id))` and the
-  ## mixed-signedness refusal can fire per instance (a `T`-vs-concrete-int mix is a real error once
+  ## concrete arguments and the instance pushed on the record context, so every record lands under
+  ## `(node, Some(id), …)` and the mixed-signedness refusal can fire per instance (a `T`-vs-concrete-int mix is a real error once
   ## `T` is known). The generic pass keeps its records under `None`. Runs only when records are wanted
   ## and the driver handed the instance set; a body that is never instantiated is not re-checked
   ## (Comptime §9.3 — there is no abstract check). A rejection here is the located per-instance verdict
   ## (E-Q1: the spec wins — a mixing lib generic is refused at its instantiation).
   iw := sema_inst_walk(decls, src, a)
   if iw != 0 { return iw }
+  ## docs/ir-slice-1.md §8.4 (e4) — then each comptime-variadic expansion noted on the way, for its
+  ## records only, in its call's context.
+  sema_pack_walk(decls, src)
   ## The census's own receipt, on the ACCEPTING exit only: a rejected program leaves through one of
   ## the returns above, so a run that prints rows but no SUMMARY was refused before the walk ended.
   ## #580 — THE REPORT. The negatives the walk recorded are answered ONCE, here, after the whole
