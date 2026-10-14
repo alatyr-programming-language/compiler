@@ -316,8 +316,13 @@ plain `sty_put`/`sty_get` stay as `(None, None)`.
   context, under the instance alone, and under the instance plus the iteration. Its `--self-test`
   (§8.5) compiles three planted programs: a generic instance, a member loop over a struct with a `u64`
   field and an `i64` field, and a pack. Each node must be unknown without its key and known, with the
-  right signedness, under it. `scripts/full.sh` runs the self-test. The measured numbers are in the
-  e4 PR.
+  right signedness, under it. `scripts/full.sh` runs the self-test. Measured on omen (corpus 2309
+  sources through x86_64, 17582 decisions): residue (an operand `U` or `A`) is 12 rows / 9 lines
+  with no context, 3 / 1 under the instance alone, and 0 / 0 under the instance and the iteration. The
+  one line the iteration key answers is the pack element `v > m` in `test/variadic_max.al`. No
+  corpus decision reads `v.(f)`. The self-build has 0 residue in every context. The census's
+  emitter-vs-sema table is the same as c67cfa8's, row for row. The self-test's member program
+  exposed #938: x86 compares a `u64` `v.(f)` as signed.
 
 **8.5 Fixtures.**
 - `generic_mix_usize_reject` — `f := fn(T : type, a : T, n : usize) -> T { a + n }` called with
