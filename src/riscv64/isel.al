@@ -384,6 +384,20 @@ sr_store := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> boo
   sr_put(sb, "(t0)\n")
   true
 }
+## `gep a, i, stride` (slice 3c): `a + i * stride`, no check (§3.4) — the stride is the op's offset.
+sr_gep := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sr_lda(sb, "t0", ip) or not sr_ldb(sb, "t1", ip) { return false }
+  sr_put(sb, "  li t6, "); sr_int(sb, ir::i_off(ip)); sr_put(sb, "\n  mul t1, t1, t6\n  add t2, t0, t1\n")
+  sr_st2(sb, ip)
+}
+## `bound i, n` (slice 3c): trap with the op's kind (`bounds`) unless `i < n`, read unsigned.
+sr_bound := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sr_lda(sb, "t0", ip) or not sr_ldb(sb, "t1", ip) { return false }
+  sr_put(sb, "  bltu t0, t1, 1f\n")
+  sr_trap(sb, x, ir::i_tk(ip), ip)
+  sr_put(sb, "1:\n")
+  true
+}
 ## `addr $k`: the frame object's address.
 sr_addr_frame := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
   if not sr_base(sb, x, "t2", ir::i_ak(ip), ir::i_av(ip)) { return false }
@@ -576,6 +590,8 @@ sr_inst := fn(in out sb : rt::StrBuf, x : SrX, in out a : rt::Arena, i : usize) 
     OpAddrFrame => { sr_addr_frame(sb, x, ip) }
     OpCopy => { sr_mem(sb, x, ip, true) }
     OpZero => { sr_mem(sb, x, ip, false) }
+    OpGep => { sr_gep(sb, ip) }
+    OpBound => { sr_bound(sb, x, ip) }
     OpCall => { sr_call(sb, x, ip) }
     OpSyscall => { sr_syscall(sb, x, ip) }
     OpBlock | OpUnch => { sr_push(x, a, i); true }
@@ -624,7 +640,7 @@ sr_inst := fn(in out sb : rt::StrBuf, x : SrX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpGep | OpBound | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpCallInd
       | OpCallC | OpSwitch => { false }
   }
 }
