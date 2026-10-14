@@ -27,6 +27,12 @@ arg_any := ast::arg_any
 ## children, where the name `ir` is `lower`'s own child module (`src/lower/ir.al`).
 pub ir_sign_row := fn(who : str, op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8), signed : bool) { ir::sign_row(who, op, l, r, src, signed) }
 pub ir_sign_open := fn() -> bool { ir::sign_open() }
+## docs/ir-slice-1.md §8.3 (e3) — x86's legacy signedness queries read sema's record in the current
+## record context through these (`ir::val_sg_cur` / `ir::pair_sg_cur` are the one decision).
+pub ir_val_signed := fn(e : ptr(Expr), src : ptr(u8)) -> bool { ir::vs_signed(ir::val_sg_cur(e, src)) }
+pub ir_val_unsigned := fn(e : ptr(Expr), src : ptr(u8)) -> bool { ir::vs_unsigned(ir::val_sg_cur(e, src)) }
+pub ir_pair_unsigned := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> bool { ir::vs_unsigned(ir::pair_sg_cur(l, r, src)) }
+pub ir_arith_signed := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> bool { ir::vs_signed(ir::arith_sg_cur(be, l, r, src)) }
 ## docs/ir-slice-1.md §8.4 (e4) — the record context the x86 emitter keeps while it emits (`ir::rec_*`),
 ## and the census row of the records it can read at a signedness decision (`ir::sign_rec_row`).
 pub ir_sign_rec_row := fn(op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) { ir::sign_rec_row(op, l, r, src) }

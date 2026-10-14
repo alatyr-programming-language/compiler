@@ -15816,8 +15816,9 @@ int_operand_sign := fn(e : ptr(Expr), octs : CSpan, cx : ptr(LCtx)) -> IntSign {
     if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" or nm == "isize" { return IntSign.IsSigned }
     if nm == "u8" or nm == "u16" or nm == "u32" or nm == "u64" or nm == "usize" { return IntSign.IsUnsigned }
   }
-  if is_signed_expr(e, cx) { return IntSign.IsSigned }
-  if is_unsigned_expr(e, cx) { return IntSign.IsUnsigned }
+  ## transitional shape test (#943): sema leaves a checked conversion's source untyped in ~15 shapes
+  if shape_is_signed_expr(e, cx) { return IntSign.IsSigned }
+  if shape_is_unsigned_expr(e, cx) { return IntSign.IsUnsigned }
   IntSign.IsUnknown
 }
 ## Can the checked int→int conversion `name(x)` meet a value `name` cannot hold (Types §4.4 "preserves
@@ -16053,153 +16054,54 @@ index_field_array_type_span := fn(base : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   res
 }
 
-## Recover the STATIC integer element type of a fixed-array LOCAL, BY-REFERENCE PARAM, or declared
-## array FIELD index for the signedness scans.
-## `bind_array_slot` stores a scalar array's LENGTH in `snl`, not its element type, so the ordinary
-## `expr_type_span` path deliberately returns 0/0 for native-width `[u64; N]` / `[i64; N]` elements.
-## That neutrality was useful for overload/routing, but it left `is_unsigned_expr` and `is_signed_expr`
-## unable to classify `xs[i]`: two indexed operands silently used the SIGNED comparison default, and
-## native-width signed array elements used the UNSIGNED division default. Read the declaration only for
-## a fixed-array slot and only return a builtin integer span; Slice/variadic, unknown, aggregate, and
-## other unsupported forms remain unresolved and keep their existing conservative behavior.
-index_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
-  match deref(e) {
-    Expr::Index(base, idx) => {
-      mut lt := CSpan(s = 0, n = 0)
-      bv := var_name_span(base)
-      if bv.n != 0 {
-        si := slot_of(cx.slots, cx.src, bv.s, bv.n)
-        if si >= 0 {
-          ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
-          if ent.ek == 5 { lt = local_type_span(cx.src, ent.ns, ent.nl) }
-        }
-      } else {
-        ## A declared array FIELD has no SlotEntry of its own: recover the field's
-        ## `[T; N]` annotation from the owning struct, keeping this lane limited to
-        ## `Index(Field(Var, field), index)` rather than global/variadic/aggregate bases.
-        lt = index_field_array_type_span(base, cx)
-      }
-      if lt.n == 0 { return CSpan(s = 0, n = 0) }
-      es := array_elem_span(cx.src, lt.s, lt.n)
-      if es.n != 0 and is_builtin_int_name(str_at((cx.src + es.s), es.n)) { return es }
-    }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
-      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
-      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  CSpan(s = 0, n = 0)
+## docs/ir-slice-1.md §8.3 (e3): is `e` a SIGNED integer value? Sema's record in the current context
+## answers (`ir::val_sg_cur`, docs/ir.md §3.8) — never the operand's shape. A value sema did not record
+## stops the compilation at it (a sema gap, D6).
+is_signed_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool { lower_layout::ir_val_signed(e, cx.src) }
+## e3: is `e` an UNSIGNED integer value? The same record answers (`ir::val_sg_cur`): a literal-only
+## value is the native signed integer (Types §9.1), so it is never unsigned on its own.
+is_unsigned_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool { lower_layout::ir_val_unsigned(e, cx.src) }
+## ─── TRANSITIONAL (IR slice 1 step e3, owner decision 2026-10-14: e3 lands in parts) ──────────────
+## The SHAPE-based signedness tests x86 used before e3. They now answer ONLY the decisions sema's
+## records cannot answer yet on the corpus — the checked-overflow guard of `+ - *`, a checked integer
+## conversion's source (`int_operand_sign`) and a `match` range arm's scrutinee — because sema leaves
+## ~15 classes of value untyped there (#943). Division, remainder, orderings and `shr` read sema
+## (`is_signed_expr` / `is_unsigned_expr` / `is_unsigned_cmp`). When #943 closes, these decisions move
+## to sema too and everything below is deleted. Do not add a caller.
+shape_is_signed_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  mut t := expr_type_span(e, cx)
+  if t.n == 0 { t = signedness_ptr_field_type_span(e, cx) }
+  if t.n == 0 { t = index_signedness_type_span(e, cx) }
+  if t.n == 0 { t = global_array_signedness_type_span(e, cx) }
+  if t.n == 0 { t = slice_local_signedness_type_span(e, cx) }
+  if t.n == 0 { t = slice_param_signedness_type_span(e, cx) }
+  if t.n == 0 { return false }
+  bn := base_type_name(cx.src, t.s, t.n)
+  tx := str_at((cx.src + bn.s), bn.n)
+  tx == "i8" or tx == "i16" or tx == "i32" or tx == "i64" or tx == "isize"
 }
-## Recover the declared builtin integer element type of a module-level fixed-array global index. Global
-## values have no SlotEntry, so use the module Decl's name to find its source `: [T; N]` annotation.
-## Keep this lane separate from locals/params/fields and require a bare Var base; inferred globals,
-## aggregate/non-builtin elements, variadic forms, and unknown names remain unresolved and preserve the
-## conservative signedness fallback.
-global_array_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
-  match deref(e) {
-    Expr::Index(base, idx) => {
-      bv := var_name_span(base)
-      if bv.n != 0 and slot_of(cx.slots, cx.src, bv.s, bv.n) < 0 {
-        cnt := rt::vec_len(deref(cx.decls))
-        mut i : usize = 0
-        mut found := CSpan(s = 0, n = 0)
-        while i < cnt {
-          d := deref(decl_get(cx.decls, i))
-          if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and streq(cx.src, d.name_start, d.name_len, bv.s, bv.n) {
-            lt := local_type_span(cx.src, d.name_start, d.name_len)
-            if lt.n != 0 {
-              es := array_elem_span(cx.src, lt.s, lt.n)
-              if es.n != 0 and is_builtin_int_name(str_at((cx.src + es.s), es.n)) { found = CSpan(s = es.s, n = es.n) }
-            }
-          }
-          i += 1
-        }
-        if found.n != 0 { return found }
-      }
-    }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
-      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
-      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  CSpan(s = 0, n = 0)
+
+## POSITIVE, CONSERVATIVE unsignedness test (the DUAL of `is_signed_expr`): is `e` PROVABLY an
+## unsigned integer type (`u8`/`u16`/`u32`/`u64`/`usize`)? Used ONLY to pick the UNSIGNED ordering
+## setcc (`setb`/`seta`/`setbe`/`setae`) in the non-inline binary-op fallback below, in place of the
+## always-signed `setl`/… default. An UNKNOWN type (0/0 span — a literal, an unrecorded local, an
+## `iN`) returns FALSE, so an unproven operand keeps the SIGNED default: a MISS just leaves the latent
+## bug for that site (safe), while never mis-flipping a signed comparison to unsigned (which would
+## mis-lower the compiler's own `isize` comparisons that go negative → break self-build).
+shape_is_unsigned_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  mut t := expr_type_span(e, cx)
+  if t.n == 0 { t = comptime_local_type_span(e, cx) }
+  if t.n == 0 { t = signedness_ptr_field_type_span(e, cx) }
+  if t.n == 0 { t = index_signedness_type_span(e, cx) }
+  if t.n == 0 { t = global_array_signedness_type_span(e, cx) }
+  if t.n == 0 { t = slice_local_signedness_type_span(e, cx) }
+  if t.n == 0 { t = slice_param_signedness_type_span(e, cx) }
+  if t.n == 0 { return unsigned_thru_unchecked(e, cx) }
+  bn := base_type_name(cx.src, t.s, t.n)
+  tx := str_at((cx.src + bn.s), bn.n)
+  tx == "u8" or tx == "u16" or tx == "u32" or tx == "u64" or tx == "usize"
 }
-## Recover the declared builtin integer element type of a typed `Slice(T)` LOCAL index. A range-view
-## local is a two-word `ek == 5` slot with `is_ref == true`, `sns == 0`, and `snl == 1`; unlike a
-## `Slice(T)` PARAM it has the local-view runtime marker rather than the parameter pair marker. Keep this
-## lane local-only and scalar-only: parameters use the helper below, while slice-variadic, global/field
-## bases, aggregate elements, and non-builtin elements remain unresolved and keep the conservative
-## signed comparison fallback.
-slice_local_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
-  match deref(e) {
-    Expr::Index(base, idx) => {
-      bv := var_name_span(base)
-      if bv.n == 0 { return CSpan(s = 0, n = 0) }
-      ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
-      if ent.ek != 5 or ent.is_ref == false or ent.sns != 0 or ent.snl != 1 { return CSpan(s = 0, n = 0) }
-      lt := local_type_span(cx.src, ent.ns, ent.nl)
-      if lt.n < 7 or str_at((cx.src + lt.s), 6) != "Slice(" { return CSpan(s = 0, n = 0) }
-      es := lt.s + 6
-      mut ee := es
-      end := lt.s + lt.n
-      while ee < end and str_at((cx.src + ee), 1) != ")" { ee += 1 }
-      if ee == es or ee >= end { return CSpan(s = 0, n = 0) }
-      if is_builtin_int_name(str_at((cx.src + es), ee - es)) { return CSpan(s = es, n = ee - es) }
-    }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
-      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
-      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  CSpan(s = 0, n = 0)
-}
-## Recover the declared builtin integer element type of a concrete `Slice(T)` PARAM index.
-## `bind_param` records the runtime pair marker (`sns == 1`, `snl == 1`) instead of T in the
-## slot, so `array_elem_span(local_type_span(...))` cannot see the element declaration here. Keep
-## this bridge PARAM-only and syntax-gated to `Slice(`: a typed-slice LOCAL has `sns == 0`, while
-## slice-variadic params must remain outside this lane. Unknown, aggregate, and non-builtin elements
-## stay unresolved and retain the conservative signed comparison fallback.
-slice_param_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
-  match deref(e) {
-    Expr::Index(base, idx) => {
-      bv := var_name_span(base)
-      if bv.n == 0 { return CSpan(s = 0, n = 0) }
-      ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
-      if ent.ek != 5 or ent.is_ref == false or ent.sns != 1 or ent.snl != 1 { return CSpan(s = 0, n = 0) }
-      es := slice_param_elem_span(cx.src, ent.ns, ent.nl)
-      if es.n != 0 and is_builtin_int_name(str_at((cx.src + es.s), es.n)) { return es }
-    }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
-      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
-      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  CSpan(s = 0, n = 0)
-}
-## Recover the declared INTEGER type of a direct pointer-field read `deref(p).f` for the
-## signedness scans only. `expr_type_span` intentionally leaves this field shape unresolved because
-## the aggregate/read paths have their own pointer-aware resolvers; without this narrow bridge,
-## `is_unsigned_expr`/`is_signed_expr` see 0/0 and silently choose the conservative fallback for a
-## field that is already proven by the pointer parameter's `ek == 7` + struct span. The helper is
-## deliberately limited to `deref(Var).field`: nested derefs, pointer-producing calls, generic-erased
-## pointees, and aggregate/layout recovery remain unresolved rather than guessing.
-signedness_ptr_field_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
-  mut res := CSpan(s = 0, n = 0)
-  match deref(e) {
-    Expr::Field(base, fs, fl) => {
-      pv := deref_var_span(base)
-      if pv.n != 0 {
-        ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, pv.s, pv.n)))
-        if ent.ek == 7 { res = field_type_span(cx.decls, cx.src, ent.sns, ent.snl, fs, fl, deref(cx.mar)) }
-      }
-    }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
-      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  res
-}
+
 ## Recover the declared type of a local `comptime` value that is materialized by the runtime emitter.
 ## Such a binding is intentionally absent from `cx.slots`; its side-table entry stores the initializer
 ## but not the annotation. Match the same latest-binding/shadowing rule as `comptime_slot_expr`, then
@@ -16243,38 +16145,159 @@ comptime_local_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   }
   CSpan(s = 0, n = 0)
 }
-is_signed_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
-  mut t := expr_type_span(e, cx)
-  if t.n == 0 { t = signedness_ptr_field_type_span(e, cx) }
-  if t.n == 0 { t = index_signedness_type_span(e, cx) }
-  if t.n == 0 { t = global_array_signedness_type_span(e, cx) }
-  if t.n == 0 { t = slice_local_signedness_type_span(e, cx) }
-  if t.n == 0 { t = slice_param_signedness_type_span(e, cx) }
-  if t.n == 0 { return false }
-  bn := base_type_name(cx.src, t.s, t.n)
-  tx := str_at((cx.src + bn.s), bn.n)
-  tx == "i8" or tx == "i16" or tx == "i32" or tx == "i64" or tx == "isize"
+
+## Recover the declared INTEGER type of a direct pointer-field read `deref(p).f` for the
+## signedness scans only. `expr_type_span` intentionally leaves this field shape unresolved because
+## the aggregate/read paths have their own pointer-aware resolvers; without this narrow bridge,
+## `is_unsigned_expr`/`is_signed_expr` see 0/0 and silently choose the conservative fallback for a
+## field that is already proven by the pointer parameter's `ek == 7` + struct span. The helper is
+## deliberately limited to `deref(Var).field`: nested derefs, pointer-producing calls, generic-erased
+## pointees, and aggregate/layout recovery remain unresolved rather than guessing.
+signedness_ptr_field_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  mut res := CSpan(s = 0, n = 0)
+  match deref(e) {
+    Expr::Field(base, fs, fl) => {
+      pv := deref_var_span(base)
+      if pv.n != 0 {
+        ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, pv.s, pv.n)))
+        if ent.ek == 7 { res = field_type_span(cx.decls, cx.src, ent.sns, ent.snl, fs, fl, deref(cx.mar)) }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  res
 }
-## POSITIVE, CONSERVATIVE unsignedness test (the DUAL of `is_signed_expr`): is `e` PROVABLY an
-## unsigned integer type (`u8`/`u16`/`u32`/`u64`/`usize`)? Used ONLY to pick the UNSIGNED ordering
-## setcc (`setb`/`seta`/`setbe`/`setae`) in the non-inline binary-op fallback below, in place of the
-## always-signed `setl`/… default. An UNKNOWN type (0/0 span — a literal, an unrecorded local, an
-## `iN`) returns FALSE, so an unproven operand keeps the SIGNED default: a MISS just leaves the latent
-## bug for that site (safe), while never mis-flipping a signed comparison to unsigned (which would
-## mis-lower the compiler's own `isize` comparisons that go negative → break self-build).
-is_unsigned_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
-  mut t := expr_type_span(e, cx)
-  if t.n == 0 { t = comptime_local_type_span(e, cx) }
-  if t.n == 0 { t = signedness_ptr_field_type_span(e, cx) }
-  if t.n == 0 { t = index_signedness_type_span(e, cx) }
-  if t.n == 0 { t = global_array_signedness_type_span(e, cx) }
-  if t.n == 0 { t = slice_local_signedness_type_span(e, cx) }
-  if t.n == 0 { t = slice_param_signedness_type_span(e, cx) }
-  if t.n == 0 { return unsigned_thru_unchecked(e, cx) }
-  bn := base_type_name(cx.src, t.s, t.n)
-  tx := str_at((cx.src + bn.s), bn.n)
-  tx == "u8" or tx == "u16" or tx == "u32" or tx == "u64" or tx == "usize"
+
+## Recover the STATIC integer element type of a fixed-array LOCAL, BY-REFERENCE PARAM, or declared
+## array FIELD index for the signedness scans.
+## `bind_array_slot` stores a scalar array's LENGTH in `snl`, not its element type, so the ordinary
+## `expr_type_span` path deliberately returns 0/0 for native-width `[u64; N]` / `[i64; N]` elements.
+## That neutrality was useful for overload/routing, but it left `is_unsigned_expr` and `is_signed_expr`
+## unable to classify `xs[i]`: two indexed operands silently used the SIGNED comparison default, and
+## native-width signed array elements used the UNSIGNED division default. Read the declaration only for
+## a fixed-array slot and only return a builtin integer span; Slice/variadic, unknown, aggregate, and
+## other unsupported forms remain unresolved and keep their existing conservative behavior.
+index_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  match deref(e) {
+    Expr::Index(base, idx) => {
+      mut lt := CSpan(s = 0, n = 0)
+      bv := var_name_span(base)
+      if bv.n != 0 {
+        si := slot_of(cx.slots, cx.src, bv.s, bv.n)
+        if si >= 0 {
+          ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
+          if ent.ek == 5 { lt = local_type_span(cx.src, ent.ns, ent.nl) }
+        }
+      } else {
+        ## A declared array FIELD has no SlotEntry of its own: recover the field's
+        ## `[T; N]` annotation from the owning struct, keeping this lane limited to
+        ## `Index(Field(Var, field), index)` rather than global/variadic/aggregate bases.
+        lt = index_field_array_type_span(base, cx)
+      }
+      if lt.n == 0 { return CSpan(s = 0, n = 0) }
+      es := array_elem_span(cx.src, lt.s, lt.n)
+      if es.n != 0 and is_builtin_int_name(str_at((cx.src + es.s), es.n)) { return es }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  CSpan(s = 0, n = 0)
 }
+
+## Recover the declared builtin integer element type of a module-level fixed-array global index. Global
+## values have no SlotEntry, so use the module Decl's name to find its source `: [T; N]` annotation.
+## Keep this lane separate from locals/params/fields and require a bare Var base; inferred globals,
+## aggregate/non-builtin elements, variadic forms, and unknown names remain unresolved and preserve the
+## conservative signedness fallback.
+global_array_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  match deref(e) {
+    Expr::Index(base, idx) => {
+      bv := var_name_span(base)
+      if bv.n != 0 and slot_of(cx.slots, cx.src, bv.s, bv.n) < 0 {
+        cnt := rt::vec_len(deref(cx.decls))
+        mut i : usize = 0
+        mut found := CSpan(s = 0, n = 0)
+        while i < cnt {
+          d := deref(decl_get(cx.decls, i))
+          if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and streq(cx.src, d.name_start, d.name_len, bv.s, bv.n) {
+            lt := local_type_span(cx.src, d.name_start, d.name_len)
+            if lt.n != 0 {
+              es := array_elem_span(cx.src, lt.s, lt.n)
+              if es.n != 0 and is_builtin_int_name(str_at((cx.src + es.s), es.n)) { found = CSpan(s = es.s, n = es.n) }
+            }
+          }
+          i += 1
+        }
+        if found.n != 0 { return found }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  CSpan(s = 0, n = 0)
+}
+
+## Recover the declared builtin integer element type of a typed `Slice(T)` LOCAL index. A range-view
+## local is a two-word `ek == 5` slot with `is_ref == true`, `sns == 0`, and `snl == 1`; unlike a
+## `Slice(T)` PARAM it has the local-view runtime marker rather than the parameter pair marker. Keep this
+## lane local-only and scalar-only: parameters use the helper below, while slice-variadic, global/field
+## bases, aggregate elements, and non-builtin elements remain unresolved and keep the conservative
+## signed comparison fallback.
+slice_local_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  match deref(e) {
+    Expr::Index(base, idx) => {
+      bv := var_name_span(base)
+      if bv.n == 0 { return CSpan(s = 0, n = 0) }
+      ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
+      if ent.ek != 5 or ent.is_ref == false or ent.sns != 0 or ent.snl != 1 { return CSpan(s = 0, n = 0) }
+      lt := local_type_span(cx.src, ent.ns, ent.nl)
+      if lt.n < 7 or str_at((cx.src + lt.s), 6) != "Slice(" { return CSpan(s = 0, n = 0) }
+      es := lt.s + 6
+      mut ee := es
+      end := lt.s + lt.n
+      while ee < end and str_at((cx.src + ee), 1) != ")" { ee += 1 }
+      if ee == es or ee >= end { return CSpan(s = 0, n = 0) }
+      if is_builtin_int_name(str_at((cx.src + es), ee - es)) { return CSpan(s = es, n = ee - es) }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  CSpan(s = 0, n = 0)
+}
+
+## Recover the declared builtin integer element type of a concrete `Slice(T)` PARAM index.
+## `bind_param` records the runtime pair marker (`sns == 1`, `snl == 1`) instead of T in the
+## slot, so `array_elem_span(local_type_span(...))` cannot see the element declaration here. Keep
+## this bridge PARAM-only and syntax-gated to `Slice(`: a typed-slice LOCAL has `sns == 0`, while
+## slice-variadic params must remain outside this lane. Unknown, aggregate, and non-builtin elements
+## stay unresolved and retain the conservative signed comparison fallback.
+slice_param_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  match deref(e) {
+    Expr::Index(base, idx) => {
+      bv := var_name_span(base)
+      if bv.n == 0 { return CSpan(s = 0, n = 0) }
+      ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
+      if ent.ek != 5 or ent.is_ref == false or ent.sns != 1 or ent.snl != 1 { return CSpan(s = 0, n = 0) }
+      es := slice_param_elem_span(cx.src, ent.ns, ent.nl)
+      if es.n != 0 and is_builtin_int_name(str_at((cx.src + es.s), es.n)) { return es }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  CSpan(s = 0, n = 0)
+}
+
 ## The two SHAPES that carry an operand's unsignedness but record no type span of their own, so
 ## `expr_type_span` answers 0/0 for them and `is_unsigned_expr` could not prove them unsigned:
 ##
@@ -16292,10 +16315,10 @@ is_unsigned_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
 ## tried on 2026-07-24 and broke self-reproduction; this is the opposite move.)
 unsigned_thru_unchecked := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   match deref(e) {
-    Expr::Unchecked(inner) => { is_unsigned_expr(inner, cx) }
+    Expr::Unchecked(inner) => { shape_is_unsigned_expr(inner, cx) }
     Expr::Bin(op, l, r) => {
       if is_scalar_bin_op(op) {
-        is_unsigned_expr(l, cx) and is_unsigned_expr(r, cx)
+        shape_is_unsigned_expr(l, cx) and shape_is_unsigned_expr(r, cx)
       } else { false }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
@@ -16304,6 +16327,7 @@ unsigned_thru_unchecked := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
+
 ## Is `e` a bare INTEGER LITERAL (`Expr::Num`)? An integer literal carries NO type span
 ## (`expr_type_span` returns 0/0), so `is_unsigned_expr` can never prove it unsigned — which is why
 ## `n >= 10` over a `u64` fell back to the SIGNED `setge` and read every value at or above 2^63 as
@@ -16330,32 +16354,22 @@ expr_is_int_lit := fn(e : ptr(Expr)) -> bool {
   }
   r
 }
-## An ORDERING comparison (`<`/`>`/`<=`/`>=`) is PROVABLY UNSIGNED iff BOTH operands are provably
-## unsigned, OR one operand is provably unsigned and the other is a bare integer LITERAL (which has no
-## type span of its own and takes its partner's type). Requiring the NON-LITERAL side to be PROVEN
-## unsigned keeps the guard's conservative character — it only ever moves signed → unsigned, never the
-## reverse — so the always-signed default still covers every operand the type scan misses (the
-## compiler's own `isize` comparisons among them; flipping the DEFAULT to unsigned was tried on
-## 2026-07-24 and broke self-reproduction). `0 < u64::MAX` (both `u64`) and `n >= 10` (`u64` vs a
-## literal) are then both compared with the unsigned setcc and evaluate TRUE.
-## An identity-ERASED `bitcast` TARGET (#546) is asked FIRST, and it is the only thing here that can
-## move the answer toward SIGNED: Types §4.2 makes the written target the operand's interpretation,
-## and the parser records a word-sized bare scalar target nowhere in the AST
-## (`lower_layout::cmp_operand_bitcast_kind` recovers it from the source). A SIGNED target on EITHER
-## side forces the signed condition, which is also this family's default; an UNSIGNED target counts
-## as a proof of that operand's unsignedness and then feeds the SAME both-or-literal rule below,
-## unchanged. `0` — no erased bitcast, or an inner shape this scan declines — leaves the predicate
-## byte-for-byte the one it was.
+
+## e3: is the ORDERING comparison over (`l`, `r`) unsigned? The pair's signedness is its first integer
+## operand's record (`ir::pair_sg_cur`; sema refuses a pair whose integer operands disagree, docs/ir.md
+## §3.8 item 9), so a literal takes its partner's type and two literals are the native signed integer.
+## This replaced the shape test that proved unsignedness only from a typed NAME and fell back to SIGNED
+## for everything else — the #764/#766/#608 family: a `u64` ordering over an `if`, a `match`, a call
+## result or `unchecked` arithmetic compared signed.
 is_unsigned_cmp := fn(l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  ## The ERASED-bitcast bridge (#546) stays ahead of sema: the parser builds no node for a word-sized bare
+  ## scalar `bitcast` target, so sema records the INNER operand's type and would answer `usize` for
+  ## `bitcast(i64, off) < 0`. Until the parser keeps the node (#940), the target is read from the source.
   bl := lower_layout::cmp_operand_bitcast_kind(l, cx.src)
   br := lower_layout::cmp_operand_bitcast_kind(r, cx.src)
   if bl == 1 or br == 1 { return false }
-  ul := bl == 2 or is_unsigned_expr(l, cx)
-  ur := br == 2 or is_unsigned_expr(r, cx)
-  if ul and ur { return true }
-  if ul and expr_is_int_lit(r) { return true }
-  if ur and expr_is_int_lit(l) { return true }
-  false
+  if bl == 2 or br == 2 { return true }
+  lower_layout::ir_pair_unsigned(l, r, cx.src)
 }
 
 ## Is `base` a direct Slice(T) value whose `.len` field is a `usize`? Most slice params and range-view
@@ -17261,7 +17275,7 @@ emit_operand_words := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
         ## slice B: bind the generic operator's comptime value (`N` ← the operand's `192`) around
         ## the expansion AND the result-width read (both fold the operator's `uint(N)` spans).
         didb := op_ct_bind(cx.decls, cx.src, opci, ots.s, ots.n, a)
-        emit_inline_binop(op, opci, l, r, sb, cx, a, nl)
+        emit_inline_binop(op, opci, e, l, r, sb, cx, a, nl)
         orw := operator_result_words(cx.decls, cx.src, opci, a)
         if didb { ct_bind_pop() }
         return orw
@@ -17355,8 +17369,9 @@ routed_int_name := fn(l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx)) -> str {
 ## +/−/* so the actual routed body still receives the untouched operands. Division and remainder only
 ## need the pre-operation zero / MIN÷-1 tests. Every failure is the direct inline trap (CG-13), never the
 ## routed body's library logic.
-emit_routed_int_guard := fn(op : i64, typ : str, l : ptr(Expr), r : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)) {
-  dsigned := is_signed_expr(l, cx) or is_signed_expr(r, cx)
+emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)) {
+  ## e3 (in parts): `/ %` read sema's record of the operator; `+ - *` keep the shape test (#943).
+  dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx) } else { false }
   gsigned := dsigned or expr_is_uneg(l) or expr_is_uneg(r)
   narrow := typ == "u8" or typ == "u16" or typ == "u32" or typ == "i8" or typ == "i16" or typ == "i32"
   mut bits := 64
@@ -17436,7 +17451,7 @@ emit_routed_int_guard := fn(op : i64, typ : str, l : ptr(Expr), r : ptr(Expr), i
 ## then hand off to `emit_inline_body`. This is the operator-overloading path: `a <op> b` over a user
 ## type routes through the user's `@inline` `op` function (`operator_decl_idx`) instead of the built-in
 ## scalar/float lowering. The caller guarantees `inl_ci >= 0 and cx.inl_tmp >= 0` and 2 params.
-emit_inline_binop := fn(op : i64, inl_ci : i64, l : ptr(Expr), r : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_inline_binop := fn(op : i64, inl_ci : i64, be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   emit_operand_words(l, sb, cx, a, nl)
   emit_operand_words(r, sb, cx, a, nl)
   ## A routed native integer operation still owns the compiler's checked guard. Preserve the two
@@ -17444,7 +17459,7 @@ emit_inline_binop := fn(op : i64, inl_ci : i64, l : ptr(Expr), r : ptr(Expr), in
   routed_typ := routed_int_name(l, r, cx)
   if cx.vchk and routed_typ != "" {
     push_str(sb, "  popq %rbx\n  popq %rax\n")
-    emit_routed_int_guard(op, routed_typ, l, r, sb, cx)
+    emit_routed_int_guard(op, routed_typ, be, l, r, sb, cx)
     push_str(sb, "  pushq %rax\n  pushq %rbx\n")
   }
   ## A routed operator body is an implementation detail, not the owner of the operation's checked
@@ -18122,7 +18137,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           ## slice B: bind the generic operator's comptime value (`N` ← the operand's value
           ## argument) around the expansion, popped after; a concrete operator pushes nothing.
           didb := op_ct_bind(cx.decls, cx.src, opci, ots.s, ots.n, a)
-          emit_inline_binop(op, opci, l, r, sb, cx, a, nl)
+          emit_inline_binop(op, opci, e, l, r, sb, cx, a, nl)
           if didb { ct_bind_pop() }
           return
         }
@@ -18248,8 +18263,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if cts.n == 0 { cts = expr_type_span(r, cx) }
         cci := cmp_route_idx(cx.decls, cx.src, op, cts.s, cts.n, a)
         if cci >= 0 {
-          if op == 25 or op == 26 { emit_inline_binop(op, cci, r, l, sb, cx, a, nl) }   ## `>`/`<=`: swap operands
-          else { emit_inline_binop(op, cci, l, r, sb, cx, a, nl) }
+          if op == 25 or op == 26 { emit_inline_binop(op, cci, e, r, l, sb, cx, a, nl) }   ## `>`/`<=`: swap operands
+          else { emit_inline_binop(op, cci, e, l, r, sb, cx, a, nl) }
           if op == 28 or op == 26 or op == 27 { push_str(sb, "  popq %rax\n  xorq $1, %rax\n  pushq %rax\n") }   ## `!=`/`<=`/`>=`: negate
           return
         }
@@ -18394,7 +18409,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## §4/I11: operand signedness + narrow-width, needed by the checked OVERFLOW guard (native-width
       ## `+`, below) AND by division signedness (op 19/29). Overflow traps at NATIVE width only; a
       ## narrow-typed op keeps its §4 value-model WRAP (the truncation below), not a trap.
-      dsigned := is_signed_expr(l, cx) or is_signed_expr(r, cx)
+      ## e3 (in parts): `/ %` read sema's record of the operator; the overflow guard of `+ - *` keeps the
+      ## transitional shape test until #943 closes; nothing else asks.
+      dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(e, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx) } else { false }
       ## docs/ir.md §3.8.5 — the census row for this division's signedness (no-op unless fd 97 is open).
       if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
       mut ovf_narrow := false
@@ -18554,8 +18571,11 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## byte-unchanged. When BOTH operands are PROVABLY unsigned (`is_unsigned_cmp`), emit the UNSIGNED
       ## setcc (`setb`/`seta`/`setbe`/`setae`) so a `u64`/`usize` comparison whose operands straddle
       ## 2^63 (`0 < u64::MAX`) is correct instead of reading the high-bit operand as negative.
-      ucmp := is_unsigned_cmp(l, r, cx)
-      if op == 24 or op == 25 or op == 26 or op == 27 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, not ucmp); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
+      ## Asked ONLY for an ordering (e3): the answer is sema's record, and an `==`/`and`/`+` here has no
+      ## signedness to ask for — asking would stop at an operand that is not an integer value.
+      ordering := op == 24 or op == 25 or op == 26 or op == 27
+      ucmp := ordering and is_unsigned_cmp(l, r, cx)
+      if ordering { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, not ucmp); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
       if op == 24 { if ucmp { push_str(sb, "  cmpq %rbx, %rax\n  setb %al\n  movzbq %al, %rax\n") } else { push_str(sb, "  cmpq %rbx, %rax\n  setl %al\n  movzbq %al, %rax\n") } }
       if op == 25 { if ucmp { push_str(sb, "  cmpq %rbx, %rax\n  seta %al\n  movzbq %al, %rax\n") } else { push_str(sb, "  cmpq %rbx, %rax\n  setg %al\n  movzbq %al, %rax\n") } }
       if op == 26 { if ucmp { push_str(sb, "  cmpq %rbx, %rax\n  setbe %al\n  movzbq %al, %rax\n") } else { push_str(sb, "  cmpq %rbx, %rax\n  setle %al\n  movzbq %al, %rax\n") } }
@@ -18763,7 +18783,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             } else if am.wild == 5 or am.wild == 6 {
               ## a RANGE arm (Control Flow §5.4): `lo..hi` (wild 5, half-open) / `lo..=hi` (wild 6,
               ## inclusive), compared with the scrutinee's signedness (`emit_range_arm`, #806).
-              emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
+              emit_range_arm(am.lit, am.hi, am.wild == 6, shape_is_unsigned_expr(scrut, cx), lbody, sb, nl)
             } else if am.wild != 0 {
               push_str(sb, "  jmp ")
               emit_label(sb, lbody)
@@ -23648,7 +23668,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
             } else if am.wild == 5 or am.wild == 6 {
               ## a RANGE arm (Control Flow §5.4): `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6), compared
               ## with the scrutinee's signedness (`emit_range_arm`, #806).
-              emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(mi.scrut, cx), lbody, sb, nl)
+              emit_range_arm(am.lit, am.hi, am.wild == 6, shape_is_unsigned_expr(mi.scrut, cx), lbody, sb, nl)
             } else if am.wild != 0 {
               push_str(sb, "  jmp ")
               emit_label(sb, lbody)
@@ -24225,7 +24245,7 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : Option(ptr(mut Arm)), ba
         } else if am.wild == 5 or am.wild == 6 {
           ## a RANGE arm (Control Flow §5.4): `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6), compared with
           ## the scrutinee's signedness (`emit_range_arm`, #806).
-          emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
+          emit_range_arm(am.lit, am.hi, am.wild == 6, shape_is_unsigned_expr(scrut, cx), lbody, sb, nl)
         } else if am.wild != 0 {
           push_str(sb, "  jmp ")
           emit_label(sb, lbody)
@@ -24523,7 +24543,7 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
           ## `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6); jump to the body iff in range, else fall
           ## through. Ranges are scalar-only, so this never fires for an enum (`sise`) scrutinee. The
           ## comparison takes the scrutinee's signedness (`emit_range_arm`, #806).
-          emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
+          emit_range_arm(am.lit, am.hi, am.wild == 6, shape_is_unsigned_expr(scrut, cx), lbody, sb, nl)
         } else if am.wild != 0 {
           push_str(sb, "  jmp ")
           emit_label(sb, lbody)

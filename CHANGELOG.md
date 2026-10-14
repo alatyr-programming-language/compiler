@@ -122,6 +122,18 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **x86_64 divides, orders and shifts with the signedness sema recorded (IR slice 1 step e3, part 1).**
+  The x86 emitter decided a `/`, `%`, `<`/`>`/`<=`/`>=` or `shr` by recognising the operand's SHAPE
+  and fell back to one default for everything it did not recognise, so `mut d : i64 = (0 - 1000) / 9`
+  divided unsigned (`divq`, exit 242 where 42 is due) and a `u64` ordering over an `if`, a `match`, a
+  call result or `unchecked` arithmetic compared signed (#764, #766, #608 — the program generator's
+  nightly WRONG rows). It now asks sema's record of the value in the current instance and iteration;
+  a value sema did not type stops the compilation with a located internal error instead of taking a
+  default. The checked-overflow guard of `+ - *`, a checked conversion's source and a `match` range
+  arm still read the shape until #943 closes. The compiler's own GAS changes (1062 orderings, 8
+  divisions), so the seed is promoted.
+- **A value of a qualified brand or alias type is typed (`ir::InstId`).** Sema resolved a qualified
+  brand or alias name to nothing, so such a value had no recorded type.
 - **aarch64 and riscv64 build fixed arrays through the shared IR (IR slice 3c).** A local `[T; N]`
   of an integer or `bool`, and a `[T; N]` field of one-word elements in a struct local, are frame
   memory with each element at its spec stride; an index is bounds-checked in a checked scope (a trap,
