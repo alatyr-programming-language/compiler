@@ -97,8 +97,17 @@ twins = 260 rows move, the same paths on aarch64 and riscv64; no x86_64 and no w
   the library like any per-target row; (b) a located compile-time refusal of `@abi(syscall)` on wasm;
   (c) today's behaviour (a `std::sysno` name with no wasm row, or the call, traps at run time). Slice 2
   keeps (c) and does not choose.
+  *Decided (owner, 2026-10-14): (a) — WASI imports. The library gives wasm its own row like any other
+  target (`fd_write`, `proc_exit`, `memory.grow` for an anonymous `mmap`, …), so a program that does I/O
+  runs on wasm as it does on x86_64 and its rows leave the disagreement count. A call WASI has no
+  equivalent for (e.g. a file-backed `mmap`, `fork`) is a located compile-time refusal on wasm, never a
+  run-time trap.*
 - **Q2 (D4 on wasm, spec-silent).** A bodyless `@extern` on wasm: import from `env` and let the
   embedder fail (today, LOUD-EXIT) or a located refusal. Kept as today.
+  *Decided (owner, 2026-10-14): a located compile-time refusal — a bodyless `@extern` the wasm module
+  cannot satisfy is an error at its declaration's use when the target is wasm, declared in
+  `scripts/xbackend_diff.sh` as a documented target limit (like `HW_DEFINED`), not an `env` import that
+  fails at instantiation.*
 - **Q3 (2b, design).** Who resolves an overloaded call. Sema does not resolve overloads today (it
   checks a set tolerantly); x86's resolver infers argument types from the expression's shape
   (`lower::overload_args_match`), which D6 forbids for the IR. Proposal: sema resolves the overload
