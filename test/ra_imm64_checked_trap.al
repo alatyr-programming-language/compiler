@@ -3,6 +3,8 @@
 ## becomes `movabsq $2^32, %vt; subq %vt, %v; jnc CONT; ud2; CONT:` — the guard stays IMMEDIATELY after the
 ## flag-producing instruction. 5 - 2^32 underflows u64, so this MUST trap (x86 exact 132, `ud2`).
 main := fn() -> u64 {
-  a := 5
+  ## ANNOTATED `u64`: an unannotated `a := 5` is the native SIGNED integer (Types §9.1), and this
+  ## fixture is about the checked u64 subtract.
+  a : u64 = 5
   a - 4294967296
 }
