@@ -324,6 +324,39 @@ plain `sty_put`/`sty_get` stay as `(None, None)`.
   emitter-vs-sema table is the same as c67cfa8's, row for row. The self-test's member program
   exposed #938: x86 compares a `u64` `v.(f)` as signed.
 
+*As landed (e3, part 1).* Owner decision (2026-10-14): e3 lands **in parts**. One decision answers
+"which signedness does this integer value carry": `ir::val_sg_cur` (a value), `ir::pair_sg_cur` (an
+operator's operands: the first integer operand's record — sema refuses a mixed pair, §3.8 item 9 — and
+two literal-only operands are the native signed integer, Types §9.1) and `ir::arith_sg_cur` (an
+arithmetic operator: the record of the OPERATOR node, which carries its context —
+`S : u64 = 9223372036854775807 + 1` is a `u64` addition — else the pair), all in the current record
+context (instance + iteration, e4). A value with no record, or one sema could not type, is never given a
+default: the compilation stops with a located internal error naming the record class and the spelling.
+- **On sema now (x86):** `/` and `%` (`idivq`/`divq`), the four orderings (`setl…`/`setb…`, both the
+  text and the register-allocated paths, and the comptime-condition fold) and `shr` (`sarq`/`shrq`).
+  Each is asked only where it decides something (an `==`, an `and` or a `+` never asks). Residue 0 on the
+  self-build and the corpus.
+- **Transitional (#943):** the checked-overflow guard of `+ - *`, a checked conversion's source
+  (`int_operand_sign`) and a `match` range arm's scrutinee keep the shape tests, renamed
+  `shape_is_signed_expr` / `shape_is_unsigned_expr`. With them on sema too, 97 corpus programs stopped
+  at a gap: ~15 shapes sema leaves untyped (a generic lib body inside a comptime `match` arm, a call's
+  array result element, a byte-array view element, a generic struct field, fn-value and lambda call
+  results, type-alias and generic-enum payloads, a value-`loop` `break` value, …), listed in #943.
+- **The erased bitcast (#940)** stays ahead of sema in `is_unsigned_cmp`: the parser builds no node for
+  a word-sized bare-scalar `bitcast` target, so sema records the inner operand's type.
+- **A sema gap closed on the way:** a QUALIFIED brand or alias name (`ir::InstId`) resolved to nothing,
+  so a value of that type read `VcUnknown` (the self-build's `usize(id)` over `Some(id)` of an
+  `Option(ir::InstId)`). `sema_qual_type_head` is now the one reading of a qualified type name's head
+  (shared with `sema_type_decl_q`), and `sema_qual_scalar_target` reads the brand or alias it names.
+- **Two fixtures annotated:** `checked_sub_ovf` and `ra_imm64_checked_trap` wrote `a := 0` and returned
+  `a - 1` from `-> u64`, relying on x86's shape reading `a` as `u64`. By Types §9.1 `a` is `i64`; the
+  fixtures now say `a : u64` so they test the borrow they describe, and the checker's acceptance of the
+  unannotated program is #942.
+- **Measured:** corpus manifest unchanged (0 rows: no corpus program depended on a wrong x86 answer,
+  because e2e would have refused it). The compiler's own GAS: 1070 hunks, 1078 lines changed in place —
+  1062 orderings over unsigned operands now use the unsigned condition and 8 signed divisions divide
+  signed — so the seed is promoted. Progen, the class this step exists for, is in the PR.
+
 **8.5 Fixtures.**
 - `generic_mix_usize_reject` — `f := fn(T : type, a : T, n : usize) -> T { a + n }` called with
   `T = i64`: a `build_reject_has … "implicit signed/unsigned conversion"` at the body's `+`, on all
