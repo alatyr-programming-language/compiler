@@ -8630,6 +8630,21 @@ run ir_global_mut 42
 run_a64 ir_global_mut 42
 run_rv64 ir_global_mut 42
 run_wat ir_global_mut 42
+## IR slice 3c (`docs/ir-slice-3.md` §7): fixed arrays — a local `[T; N]` is a frame object, an array
+## field a run in its struct's object, an index `bound`-checked in a checked scope. `ir_array_local`
+## failed first on the legacy twins (93: an `i8` element divided unsigned); `ir_array_field` guards that
+## the IR's field place equals the legacy one; `ir_array_bound` traps on every backend (x86_64 `ud2`
+## 132, the twins' `brk`/`ebreak` 133, wasm 134). Each fixture agrees on all four backends.
+run ir_array_local 42
+run_a64 ir_array_local 42
+run_rv64 ir_array_local 42
+run ir_array_field 42
+run_a64 ir_array_field 42
+run_rv64 ir_array_field 42
+run_x86_trap ir_array_bound 132
+run_a64 ir_array_bound 133
+run_rv64 ir_array_bound 133
+run_wat ir_array_bound 134
 ## Explicit overflow-policy operations (Concurrency §6.3 / CG-8): wrapping_*/saturating_*/checked_* (->
 ## Option)/overflowing_* (-> (T,bool)) on the integer interpretations, exercised at the u8/u64/i32
 ## boundaries. A NEUTRAL library addition (lib/base/num.al) resting on the x86_64-gated scalar
@@ -8711,6 +8726,11 @@ run_x86 signedness_byref_array 42
 ## through the owning plain struct, so the high-bit boundary uses `setb` rather than `setl`.
 ## Global/variadic/aggregate and non-builtin field elements remain outside this bounded lane.
 run_x86 signedness_struct_field_array 42
+## IR slice 3c (`docs/ir-slice-3.md` §7): the register twins build `r.u[i]` from the shared IR, the
+## element's signedness from sema's record — the legacy twin emitters compared it signed (1). wasm keeps
+## its legacy emission (no frame objects yet), still 1, so it is not asserted there.
+run_a64 signedness_struct_field_array 42
+run_rv64 signedness_struct_field_array 42
 ## Indexed module-global fixed-array signedness: recover the declared builtin element type from the
 ## global `: [T; N]` annotation (there is no local SlotEntry). High-bit u64 ordering must be unsigned;
 ## i64 division must remain signed. Inferred/aggregate/non-builtin/global-field forms stay conservative.
