@@ -943,12 +943,14 @@ check_trap_names() {
 # writes nothing extra. On the parent compiler fd 97 receives nothing.
 # From IR slice 1c a function the shared IR builds is selected from its IR on the twins, where every
 # signedness is sema's and no emitter decides one by shape, so the legacy aarch64 emitter reports only
-# the functions it still emits. The probe's `main` keeps an aggregate local (`w`, outside slice 1's
-# scalar subset) so the builder refuses it and the legacy emitter's report stays exercised.
+# the functions it still emits. The probe's `main` keeps an ENUM local (`w : Option(u64)`, slice 4's —
+# outside what the builder takes) so the builder refuses it and the legacy emitter's report stays
+# exercised. It was a fixed array until slice 3c taught the builder fixed arrays: the anchor must name
+# a construct no landed slice builds, and moves to a later slice's construct when one lands.
 check_sign_census() {
   local d="$T/sign_census" rc
   mkdir -p "$d"
-  printf '%s\n' 'f := fn() -> i64 { return 0 - 7 }' 'main := fn() -> u64 {' '  w : [u64; 2] = [1, 2]' '  a : i64 = f()' \
+  printf '%s\n' 'f := fn() -> i64 { return 0 - 7 }' 'main := fn() -> u64 {' '  w : Option(u64) = Option.Some(1)' '  a : i64 = f()' \
     '  x : i64 = (0 - 7) % 9' '  q := a / 7' '  u : u64 = 5' '  if u < 3 { return 1 }' '  if x < 0 { return 42 }' '  7' '}' > "$d/p.al"
   "$CC" "$d/p.al" > "$d/x86.s" 2>/dev/null 97> "$d/x86.rows"; rc=$?
   "$CC" aarch64 "$d/p.al" > /dev/null 2>/dev/null 97> "$d/a64.rows"
@@ -8630,6 +8632,21 @@ run ir_global_mut 42
 run_a64 ir_global_mut 42
 run_rv64 ir_global_mut 42
 run_wat ir_global_mut 42
+## IR slice 3c (`docs/ir-slice-3.md` §7): fixed arrays — a local `[T; N]` is a frame object, an array
+## field a run in its struct's object, an index `bound`-checked in a checked scope. `ir_array_local`
+## failed first on the legacy twins (93: an `i8` element divided unsigned); `ir_array_field` guards that
+## the IR's field place equals the legacy one; `ir_array_bound` traps on every backend (x86_64 `ud2`
+## 132, the twins' `brk`/`ebreak` 133, wasm 134). Each fixture agrees on all four backends.
+run ir_array_local 42
+run_a64 ir_array_local 42
+run_rv64 ir_array_local 42
+run ir_array_field 42
+run_a64 ir_array_field 42
+run_rv64 ir_array_field 42
+run_x86_trap ir_array_bound 132
+run_a64 ir_array_bound 133
+run_rv64 ir_array_bound 133
+run_wat ir_array_bound 134
 ## Explicit overflow-policy operations (Concurrency §6.3 / CG-8): wrapping_*/saturating_*/checked_* (->
 ## Option)/overflowing_* (-> (T,bool)) on the integer interpretations, exercised at the u8/u64/i32
 ## boundaries. A NEUTRAL library addition (lib/base/num.al) resting on the x86_64-gated scalar
@@ -8711,6 +8728,11 @@ run_x86 signedness_byref_array 42
 ## through the owning plain struct, so the high-bit boundary uses `setb` rather than `setl`.
 ## Global/variadic/aggregate and non-builtin field elements remain outside this bounded lane.
 run_x86 signedness_struct_field_array 42
+## IR slice 3c (`docs/ir-slice-3.md` §7): the register twins build `r.u[i]` from the shared IR, the
+## element's signedness from sema's record — the legacy twin emitters compared it signed (1). wasm keeps
+## its legacy emission (no frame objects yet), still 1, so it is not asserted there.
+run_a64 signedness_struct_field_array 42
+run_rv64 signedness_struct_field_array 42
 ## Indexed module-global fixed-array signedness: recover the declared builtin element type from the
 ## global `: [T; N]` annotation (there is no local SlotEntry). High-bit u64 ordering must be unsigned;
 ## i64 division must remain signed. Inferred/aggregate/non-builtin/global-field forms stay conservative.

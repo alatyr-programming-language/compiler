@@ -441,6 +441,20 @@ sa_store := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> boo
   sa_put(sb, "]\n")
   true
 }
+## `gep a, i, stride` (slice 3c): `a + i * stride`, no check (§3.4) — the stride is the op's offset.
+sa_gep := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sa_lda(sb, "x9", ip) or not sa_ldb(sb, "x10", ip) { return false }
+  sa_put(sb, "  ldr x12, ="); sa_int(sb, ir::i_off(ip)); sa_put(sb, "\n  madd x11, x10, x12, x9\n")
+  sa_st11(sb, ip)
+}
+## `bound i, n` (slice 3c): trap with the op's kind (`bounds`) unless `i < n`, read unsigned.
+sa_bound := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sa_lda(sb, "x9", ip) or not sa_ldb(sb, "x10", ip) { return false }
+  sa_put(sb, "  cmp x9, x10\n  b.lo 1f\n")
+  sa_trap(sb, x, ir::i_tk(ip), ip)
+  sa_put(sb, "1:\n")
+  true
+}
 ## `addr $k`: the frame object's address.
 sa_addr_frame := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
   if not sa_base(sb, x, "x11", ir::i_ak(ip), ir::i_av(ip)) { return false }
@@ -620,6 +634,8 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
     OpAddrFrame => { sa_addr_frame(sb, x, ip) }
     OpCopy => { sa_mem(sb, x, ip, true) }
     OpZero => { sa_mem(sb, x, ip, false) }
+    OpGep => { sa_gep(sb, ip) }
+    OpBound => { sa_bound(sb, x, ip) }
     OpCall => { sa_call(sb, x, ip) }
     OpSyscall => { sa_syscall(sb, x, ip) }
     OpBlock | OpUnch => { stk_push(x, a, i); true }
@@ -668,7 +684,7 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpGep | OpBound | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpCallInd
       | OpCallC | OpSwitch => { false }
   }
 }

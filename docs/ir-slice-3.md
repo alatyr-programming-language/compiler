@@ -1,6 +1,7 @@
 # Shared IR, slice 3 — design note and HANDOFF (aggregates, places, layout)
 
-Status: **3a in review** (§5, #910), **3b in review** (§6). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
+Status: **3a landed** (§5, #910), **3b landed** (§6, #921), **3c in progress** (§7: first tier landed in
+#925, fixed arrays in review). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
 §0–§2 are the plan written at the end of the slice-2 lane, §3 what that lane measured, §4 the open
 questions, §5 onwards each PR as built.
 
@@ -210,3 +211,90 @@ Fresh manifests of 3a and of 3b on the gate machine, joined on (backend, path):
 No x86_64 row moves. Legacy values of the new fixtures (3a's compiler): `ir_ptr_place` aarch64/riscv64
 133; `ir_ptr_agree` aarch64 133; `ir_global_mut` 42 everywhere (the legacy twins already agree on
 whole-cell module scalars; the fixture pins the IR's store width against them).
+
+## 7. 3c — arrays, index, bounds (as built)
+
+### 7.1 First tier: module-global word arrays (#925)
+
+`E[i]` over a module global whose initializer is all foldable integer words is `addr @E` + `load T`
+at `i * 8`: the twins' data emitter writes such a global as a run of `.quad` cells whatever the
+declared element width, so the stride is 8 by construction of the emitter, and only an 8-byte element
+with a literal index inside the run is admitted (no `bound` is owed for an index proved in range).
+The element's type and signedness are sema's record of the read, checked against the declared
+element type. wasm keeps a global array in linear memory where its `addr @G` answers a `global.get`,
+so wasm is not opened. Closed `signedness_global_array` on aarch64/riscv64.
+
+### 7.2 Fixed arrays (this PR)
+
+Stacked on `c67cfa8`.
+
+- **Array locals** (`src/ir/build.al`, "fixed arrays"): `xs : [T; N] = …` with `T` a kernel scalar
+  and a literal `N > 0` is a frame object of `N * stride` bytes, `stride` being
+  `lower_layout::layout_elem_stride_bytes` — for a kernel scalar its own width (Types §6.4). The type
+  is the annotation's; `ys := xs` takes `xs`'s (D6: the declaration names it; an unannotated
+  `[1, 2, 3]` stays `NotYet`). The initializer is an array literal stored element by element, left to
+  right, at the element type (its count must equal `N`: `check` accepts a shorter literal today), or
+  another array local of the same layout, copied. A fill `[v; N]` is `N` references to one node (the
+  parser's desugar) and is admitted only for a literal-only `v`, where evaluating it once or `N` times
+  is the same. `xs = v` builds `v` in its own object first, then copies (a literal reading `xs` sees
+  its old elements, as for #909). `xs.len` is the constant `N`.
+- **Index places**: `xs[i]` reads and `xs[i] = v` writes. A literal index inside the array folds into
+  the offset (`[$k + i * stride]`, V6-checked); any other index must be an unsigned integer (widened to
+  `u64`; a signed index is refused, never reinterpreted) and is checked in a checked scope —
+  `bound i, N` (`trap bounds`) before `gep (addr $k), i, stride` — and unchecked inside `unchecked`
+  (Types §6.4). `xs[i] = v` evaluates the index, then the value, then checks: `a[i] = v` is
+  `index_set(a, i, v)` (Types §4.5) with its arguments left to right (Functions §5.4). A literal index
+  outside the array is refused (the legacy emitter decides that case today).
+- **Array fields** of a 3a struct local: a field `[T; N]` with `T` an **8-byte** kernel scalar and the
+  parser's `wsize == N` is admitted, at its `lower_layout::field_byte_place`, stride one word: the one
+  layout every tier agrees on, so the struct's size stays x86_64's (`size(Rec)` is unchanged). The
+  struct literal stores an array literal into it; `r.u[i]`, `r.u[i] = v` and `r.u.len` are places as
+  above. A struct with an array field is never reached through a pointer (3b's proved tier requires
+  scalar fields).
+- **Literals above `i64`**: a source literal `≥ 2^63` is carried by the parser as its 64-bit pattern
+  (#881); in a `u64` position it is that pattern (`ib_u64_pattern_lit`). The parser's other negative
+  `Num`s are told apart by span (a folded `-N` spans its `-`, the `~x` desugar spans nothing).
+- **Selectors**: `gep` and `bound` on aarch64 (`madd`; `cmp` + `b.lo` + `brk`), riscv64 (`mul`/`add`;
+  `bltu` + `ebreak`) and the x86_64 dev selector (`imulq`/`addq`; `cmpq` + `jb` + `ud2`). wasm still
+  refuses a function with a frame object (no shadow stack), so every array function falls back there.
+- **Never crosses to legacy code (Q4)**: an array argument is an aggregate argument (3d), `ptr(xs)`
+  and a slice `xs[a..b]` are refused, an array is never returned (`signature`), a nested array or an
+  aggregate element is refused, `for x in xs` (the iterable `for`) is refused. So the IR's layout of an
+  array local is internal to one function, as 3a's struct locals are.
+- **Outside**: global arrays beyond §7.1, slices and `str` as two-word aggregates (next PR), arrays of
+  structs, nested arrays, `size(xs)`/`align(xs)` of an array.
+
+### 7.3 Predicted manifest transitions (measured before the gate)
+
+A fresh manifest of the candidate on the gate machine, joined on (backend, path) with the committed
+one — which a fresh run of the base Stage1 reproduces exactly (`match (9236 rows)`):
+
+| backend | path | before → after | why |
+|---|---|---|---|
+| aarch64, riscv64 | `test/signedness_struct_field_array.al` | run/1 → run/42 | `r.u[0] < r.u[1]` over `[u64; 2]` compares unsigned (#707, field half) |
+| aarch64, riscv64 | `test/array_lit_single_elem.al` | run/133 → run/42 | a `[u64; 1]` field built from its literal |
+| aarch64, riscv64 | `test/signedness_ptr_field.al` | run/133 → run/64 | `main` builds `Rec(u = u64::MAX, …)` (the literal above `i64`) |
+| all four | 3 new fixtures | 12 ADDED rows | `ir_array_local` 42, `ir_array_field` 42, `ir_array_bound` 132/133/133/134 |
+
+No x86_64 row and no wasm row moves; every moved row lands on x86_64's value. `xbackend_diff --count`
+on the fresh manifest: paths 951 → 951, rows 2613 → 2607 (WRONG-VALUE 25 → 23, TRAP 2271 → 2267);
+every new fixture agrees on all four backends. Census: 13 corpus functions newly built (and the
+fixtures' own; §7.6 has the gate's totals), `lib/` and `src/` unchanged, the verifier refused none. Ten
+of the 13 answered the same before (the legacy twin was right), which the unchanged manifest rows
+confirm: `checked_index_*` ×5, `checked_struct_field_array_oob`, `compound_assign_place`,
+`issue215_local_array_1d_control`, `p0_stmt_walk_index_assign`, `signedness_array_elem`.
+
+### 7.4 Found while measuring
+
+The IR answers the spec's value on three shapes where a legacy reference does not. They are filed and
+left out of the fixtures (each would add a disagreement row the ratchet refuses):
+`r.u.len` of an array field answers 0 on x86_64 (#936); `ys : [u64; 3] = xs` lands shifted by one
+element on x86_64 and aliases on wasm (#937); `xs = [xs[1] + 3, …]` is built in place on x86_64 (#909).
+Legacy wasm also traps on `xs.len` of a local and answers a wrong value for an array reassignment;
+both close when wasm selects arrays (shadow stack).
+
+### 7.5 What 3c does not close yet
+
+#707 stays open for wasm (both halves) and for the global-field shapes; `slice_field_compare` (a
+`Slice(u64)` field compared on wasm) needs wasm aggregates (the shadow stack), so it does not move in
+3c.

@@ -142,17 +142,18 @@ CallOut := enum { CoValue(VRegId), CoVoid, CoRefused }
 ## carries a value (`lhasres`, 0/1) with that value's vreg (`lres`, read only when `lhasres` is 1), and
 ## whether a `break` reached it (`lbroken`, 0/1: a loop no `break` leaves never falls through).
 ## The binding table is parallel buffers too: each binding's name and what it is bound to, told apart
-## by two 0/1 flags — a scalar in a vreg (`bvregs`, with the type span it was declared with in
+## by three 0/1 flags — a scalar in a vreg (`bvregs`, with the type span it was declared with in
 ## `bts`/`btn`, 0/0 when it has none), a struct local (`bagg` 1: its frame object in `bvregs`, its
-## struct declaration in `bsd`, its type name span in `bts`/`btn`, slice 3a), or an address-taken
+## struct declaration in `bsd`, its type name span in `bts`/`btn`, slice 3a), an address-taken
 ## scalar local (`bmem` 1: its frame object in `bvregs`, its declaration's name offset in `bsd`, the key
-## of sema's binding record, slice 3b). `taken` holds the name spans `ptr(x)` takes in the function
+## of sema's binding record, slice 3b), or a fixed array local (`barr` 1: its frame object in
+## `bvregs`, its `[T; N]` annotation span in `bts`/`btn`, slice 3c). `taken` holds the name spans `ptr(x)` takes in the function
 ## (`ib_scan_taken`), two words each.
 IbB := struct {
   f : ptr(mut IrFn), p : IrProg,
   src : ptr(u8), decls : ptr(rt::Vec), mod_s : usize, mod_n : usize,
   bnames : ptr(mut WBuf), blens : ptr(mut WBuf), bvregs : ptr(mut WBuf),
-  bagg : ptr(mut WBuf), bmem : ptr(mut WBuf), bsd : ptr(mut WBuf), bts : ptr(mut WBuf), btn : ptr(mut WBuf),
+  bagg : ptr(mut WBuf), bmem : ptr(mut WBuf), barr : ptr(mut WBuf), bsd : ptr(mut WBuf), bts : ptr(mut WBuf), btn : ptr(mut WBuf),
   taken : ptr(mut WBuf),
   lexit : ptr(mut WBuf), lcont : ptr(mut WBuf), lres : ptr(mut WBuf), lhasres : ptr(mut WBuf), lbroken : ptr(mut WBuf),
   unch : bool, term : bool,
@@ -353,34 +354,40 @@ ib_wrap_to := fn(bp : ptr(mut IbB), in out a : rt::Arena, x : VRegId, to : IbKS)
 ## What a name is bound to: a scalar's vreg with the type span it was declared with (0/0 when none:
 ## a pointer's pointee is read from it, slice 3b); a struct local's frame object with its struct
 ## declaration and type name span (slice 3a); an address-taken scalar local's frame object with its
-## declaration's name offset (sema's binding record, slice 3b); or nothing.
-IbBind := enum { BdNone, BdVal(VRegId, usize, usize), BdAgg(FrameId, usize, usize, usize), BdMem(FrameId, usize) }
+## declaration's name offset (sema's binding record, slice 3b); a fixed array local's frame object
+## with its `[T; N]` annotation span (slice 3c); or nothing.
+IbBind := enum { BdNone, BdVal(VRegId, usize, usize), BdAgg(FrameId, usize, usize, usize), BdMem(FrameId, usize), BdArr(FrameId, usize, usize) }
 
-ib_bind_push := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, w : usize, agg : usize, mem : usize, sd : usize, ts : usize, tn : usize) {
+ib_bind_push := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, w : usize, agg : usize, mem : usize, arr : usize, sd : usize, ts : usize, tn : usize) {
   bv : IbB = deref(bp)
   k1 := wb_push(bv.bnames, a, s)
   k2 := wb_push(bv.blens, a, n)
   k3 := wb_push(bv.bvregs, a, w)
   k4 := wb_push(bv.bagg, a, agg)
   k8 := wb_push(bv.bmem, a, mem)
+  k9 := wb_push(bv.barr, a, arr)
   k5 := wb_push(bv.bsd, a, sd)
   k6 := wb_push(bv.bts, a, ts)
   k7 := wb_push(bv.btn, a, tn)
 }
 ib_bind := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, v : VRegId) {
-  ib_bind_push(bp, a, s, n, usize(v), 0, 0, 0, 0, 0)
+  ib_bind_push(bp, a, s, n, usize(v), 0, 0, 0, 0, 0, 0)
 }
 ## Bind `[s, s+n)` to the vreg `v` of a scalar declared with the type spelled `[ts, ts+tn)`.
 ib_bind_typed := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, v : VRegId, ts : usize, tn : usize) {
-  ib_bind_push(bp, a, s, n, usize(v), 0, 0, 0, ts, tn)
+  ib_bind_push(bp, a, s, n, usize(v), 0, 0, 0, 0, ts, tn)
 }
 ## Bind `[s, s+n)` to the struct local in frame object `fr`, of struct type `st`.
 ib_bind_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, fr : FrameId, st : IbSt) {
-  ib_bind_push(bp, a, s, n, usize(fr), 1, 0, st.di, st.s, st.n)
+  ib_bind_push(bp, a, s, n, usize(fr), 1, 0, 0, st.di, st.s, st.n)
 }
 ## Bind `[s, s+n)` (declared at name offset `ns`) to the address-taken scalar in frame object `fr`.
 ib_bind_mem := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, fr : FrameId, ns : usize) {
-  ib_bind_push(bp, a, s, n, usize(fr), 0, 1, ns, 0, 0)
+  ib_bind_push(bp, a, s, n, usize(fr), 0, 1, 0, ns, 0, 0)
+}
+## Bind `[s, s+n)` to the fixed array local in frame object `fr`, annotated `[ts, ts+tn)`.
+ib_bind_arr := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, fr : FrameId, ts : usize, tn : usize) {
+  ib_bind_push(bp, a, s, n, usize(fr), 0, 0, 1, 0, ts, tn)
 }
 ## The innermost binding of the name `[s, s+n)`.
 ib_lookup := fn(bp : ptr(mut IbB), s : usize, n : usize) -> IbBind {
@@ -392,6 +399,7 @@ ib_lookup := fn(bp : ptr(mut IbB), s : usize, n : usize) -> IbBind {
       w := wb_get(bv.bvregs, i)
       if wb_get(bv.bagg, i) == 1 { return IbBind.BdAgg(FrameId(w), wb_get(bv.bsd, i), wb_get(bv.bts, i), wb_get(bv.btn, i)) }
       if wb_get(bv.bmem, i) == 1 { return IbBind.BdMem(FrameId(w), wb_get(bv.bsd, i)) }
+      if wb_get(bv.barr, i) == 1 { return IbBind.BdArr(FrameId(w), wb_get(bv.bts, i), wb_get(bv.btn, i)) }
       return IbBind.BdVal(VRegId(w), wb_get(bv.bts, i), wb_get(bv.btn, i))
     }
   }
@@ -407,6 +415,7 @@ ib_scope_drop := fn(bp : ptr(mut IbB), mark : usize) {
   ib_wb_cut(bv.bvregs, mark)
   ib_wb_cut(bv.bagg, mark)
   ib_wb_cut(bv.bmem, mark)
+  ib_wb_cut(bv.barr, mark)
   ib_wb_cut(bv.bsd, mark)
   ib_wb_cut(bv.bts, mark)
   ib_wb_cut(bv.btn, mark)
@@ -543,6 +552,23 @@ ib_lit_fold := fn(e : ptr(Expr)) -> Option(i64) {
       | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Call | Expr::Bitcast | Expr::Loop => { Option(i64).None }
   }
 }
+## The bit pattern of a SOURCE literal above `i64`'s range: a `Num` whose word is negative and whose
+## span is the literal's digits. The parser's other negative `Num`s are told apart by their spans — a
+## folded `-N` spans its `-`, the `~x` desugar's all-ones word spans nothing — and answer `None`.
+ib_u64_pattern_lit := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> Option(i64) {
+  match deref(e) {
+    Expr::Num(v, s, n) => {
+      if v >= 0 or n == 0 { return Option(i64).None }
+      c := bytes(str_at((ib_b_src(bp) + s), 1))[0]
+      if c >= 48 and c <= 57 { return Option(i64).Some(v) }
+    }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Call | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  Option(i64).None
+}
 ## One exact `+ - *` step over `i64`, when the result fits; any other operator is not folded.
 IB_I64_MAX : i64 = 9223372036854775807
 IB_I64_MIN : i64 = 0 - 9223372036854775807 - 1
@@ -608,6 +634,8 @@ ib_bx_var := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s : usiz
     ## position reads it.
     BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) }
     BdMem(mf, mns) => { return ib_bx_mem_read(bp, a, e, mf, mns) }
+    ## A fixed array local is memory too: only an index, `.len` or a copy reads it (slice 3c).
+    BdArr(af, ats, atn) => { return ib_no(bp, e, NyWhy.NwOutside) }
     BdNone => {}
   }
   ib_bx_global(bp, a, e, s, n)
@@ -1301,8 +1329,14 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
       Some(fq) => {
         fd := deref(ast::fld_p(fq))
         ko : Option(IbKS) = ib_name_ks(bv.src, fd.ts, fd.tl)
-        match ko { Some(k) => {}; None => { return Option(IbSt).None } }
-        if fd.wsize != 1 { return Option(IbSt).None }
+        match ko {
+          Some(k) => { if fd.wsize != 1 { return Option(IbSt).None } }
+          None => {
+            ## Slice 3c: an array field of 8-byte kernel scalars (`ib_arr_field`).
+            ro : Option(IbArr) = ib_arr_of(bp, a, fd.ts, fd.tl, true)
+            match ro { Some(r) => { if fd.wsize != r.n { return Option(IbSt).None } }; None => { return Option(IbSt).None } }
+          }
+        }
         if lower_layout::field_offset_attr(bv.src, fd.ns) >= 0 or lower_layout::field_align_attr(bv.src, fd.ns) >= 0
           or lower_layout::field_endian_attr(bv.src, fd.ns) >= 0 { return Option(IbSt).None }
         nf = nf + 1
@@ -1327,7 +1361,8 @@ ib_struct_bound := fn(bp : ptr(mut IbB), in out a : rt::Arena, sd : usize, ts : 
   Option(IbSt).None
 }
 ## Does struct `st` have a field narrower than its slot (padding the literal must not leave undefined)?
-ib_struct_padded := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
+## An array field counts its elements' bytes.
+ib_struct_padded := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> bool {
   bv : IbB = deref(bp)
   d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
   mut f := d.fields_head
@@ -1337,13 +1372,37 @@ ib_struct_padded := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
       Some(fq) => {
         fd := deref(ast::fld_p(fq))
         ko : Option(IbKS) = ib_name_ks(bv.src, fd.ts, fd.tl)
-        match ko { Some(k) => { w = w + usize(kty_bytes(k.ty)) }; None => { return true } }
+        match ko {
+          Some(k) => { w = w + usize(kty_bytes(k.ty)) }
+          None => {
+            ro : Option(IbArr) = ib_arr_of(bp, a, fd.ts, fd.tl, true)
+            match ro { Some(r) => { w = w + ib_arr_bytes(r) }; None => { return true } }
+          }
+        }
         f = fd.next
       }
       None => { break }
     }
   }
   w != st.size
+}
+## Is every field of struct `st` one kernel scalar (no array field)?
+ib_struct_scalar_fields := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        ko : Option(IbKS) = ib_name_ks(bv.src, fd.ts, fd.tl)
+        match ko { Some(k) => {}; None => { return false } }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  true
 }
 ## Field `[fs, fs+fl)` of struct `st`: its declared kernel type and its byte place.
 ib_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, fs : usize, fl : usize) -> Option(IbFld) {
@@ -1430,6 +1489,7 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
         BdAgg(fr, sd, ts, tn) => { return ib_struct_bound(bp, a, sd, ts, tn) }
         BdVal(v, vts, vtn) => {}
         BdMem(mf, mns) => {}
+        BdArr(af, ats, atn) => {}
         BdNone => {}
       }
     }
@@ -1476,6 +1536,7 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
         BdAgg(fr, sd, ts, tn) => { return Option(IbObj).Some(IbObj(fr = fr, fresh = false)) }
         BdVal(v, vts, vtn) => {}
         BdMem(mf, mns) => {}
+        BdArr(af, ats, atn) => {}
         BdNone => {}
       }
     }
@@ -1494,7 +1555,7 @@ ib_agg_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : Ib
   bv : IbB = deref(bp)
   d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
   fr := ib_new_obj(bp, a, st)
-  if ib_struct_padded(bp, st) { ib_zero_obj(bp, a, fr, st.size) }
+  if ib_struct_padded(bp, a, st) { ib_zero_obj(bp, a, fr, st.size) }
   mut f := d.fields_head
   mut g : Option(ptr(mut Arg)) = fh
   loop {
@@ -1510,7 +1571,14 @@ ib_agg_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : Ib
                 vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, IbKS(ty = fld.ty, sg = fld.sg))
                 match vo { Some(v) => { ib_store_field(bp, a, fr, fld, v) }; None => { return Option(IbObj).None } }
               }
-              None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
+              None => {
+                ## Slice 3c: an array field takes an array literal, stored element by element.
+                afo : Option(IbArrAt) = ib_arr_field(bp, a, fr, st, fd.ns, fd.nl)
+                match afo {
+                  Some(ap) => { if not ib_arr_lit(bp, a, ga.e, ap) { return Option(IbObj).None } }
+                  None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
+                }
+              }
             }
             g = ga.next
           }
@@ -1531,6 +1599,21 @@ ib_agg_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : Ib
 ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, v : ptr(Expr)) {
   src := ib_b_src(bp)
   lts := ast::local_type_span(src, ns, nl)
+  ## Slice 3c: a fixed array local — annotated `[T; N]`, or `xs := ys` of an array local `ys`.
+  if lts.n != 0 {
+    if lower_layout::arr_field_elem_span(src, lts.s, lts.n).n != 0 { ib_bs_arr_decl(bp, a, h, ns, nl, lts.s, lts.n, v); return }
+  } else {
+    match deref(v) {
+      Expr::Var(vs, vn) => {
+        ao : Option(IbSpan) = ib_arr_local(bp, vs, vn)
+        match ao { Some(sp) => { ib_bs_arr_decl(bp, a, h, ns, nl, sp.s, sp.n, v); return }; None => {} }
+      }
+      Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+        | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+        | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+        | Expr::Loop => {}
+    }
+  }
   mut sto : Option(IbSt) = Option(IbSt).None
   if lts.n != 0 { sto = ib_struct_named(bp, a, lts.s, lts.n) } else { sto = ib_agg_type_of(bp, a, v) }
   match sto {
@@ -1643,6 +1726,7 @@ ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
       }
     }
     BdMem(mf, mns) => {}
+    BdArr(af, ats, atn) => {}
     BdNone => {}
   }
   Option(IbPlace).None
@@ -1660,6 +1744,7 @@ ib_place_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Opt
             BdVal(v, vts, vtn) => { return ib_place_name(bp, a, ps, pn) }
             BdAgg(fr, sd, ts, tn) => {}
             BdMem(mf, mns) => {}
+            BdArr(af, ats, atn) => {}
             BdNone => {}
           }
         }
@@ -1680,7 +1765,9 @@ ib_struct_word := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> bool
   bv : IbB = deref(bp)
   lk := lower_layout::layout_kind(bv.decls, bv.src, st.s, st.n, a)
   if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return false }
-  not ib_struct_padded(bp, st)
+  ## An array field's place through a pointer is not proved against the legacy readers (Q4).
+  if not ib_struct_scalar_fields(bp, st) { return false }
+  not ib_struct_padded(bp, a, st)
 }
 
 ## `s.f = v` / `p.f = v` (FieldAssign): a `store` at the field's place, the value at its declared type.
@@ -1729,6 +1816,17 @@ ib_bs_store_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stm
 ## `s.f`, `p.f`, `deref(p).f`: a `load` at the field's place, at its declared type, which must be sema's
 ## record of the read (#765: the field's signedness is the value's from here on).
 ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : ptr(Expr), fs : usize, fl : usize) -> Option(VRegId) {
+  ## `xs.len` / `r.u.len` of an array the builder lays out is its comptime length `N` (Types §6.4,
+  ## slice 3c). x86_64 answers 0 for the field form (#936); the IR answers the spec's value, as it does
+  ## for #909.
+  apo : Option(IbArrAt) = ib_arr_place(bp, a, b)
+  match apo {
+    Some(ap) => {
+      if fl == 3 and str_at((ib_b_src(bp) + fs), 3) == "len" { return ib_bx_arr_len(bp, a, e, ap) }
+      return ib_no(bp, e, NyWhy.NwOutside)
+    }
+    None => {}
+  }
   plo : Option(IbPlace) = ib_place_of(bp, a, b)
   match plo {
     Some(pl) => {
@@ -1773,7 +1871,7 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
 ## Anything else answers `NotYet` and the function falls back to its target's legacy emitter (D7).
 ## wasm refuses at its `load` (its `sw_load` takes offset 0 only, linear memory being slice 3's other
 ## half), so wasm keeps its legacy answer and #707 stays open there — reported, not hidden.
-ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : ptr(Expr), ix : ptr(Expr)) -> Option(VRegId) {
+ib_bx_index_global := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : ptr(Expr), ix : ptr(Expr)) -> Option(VRegId) {
   bv : IbB = deref(bp)
   bs : usize = lower_layout::ex_var_ns(b)
   bn : usize = lower_layout::ex_var_nl(b)
@@ -1814,6 +1912,417 @@ ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
   ofd := IbFld(off = ByteOff(usize(iv) * 8), ty = k.ty, sg = k.sg)
   lv := ib_load_at(bp, a, opa, ofd)
   Option(VRegId).Some(lv)
+}
+
+## ── fixed arrays (slice 3c, `docs/ir-slice-3.md` §7) ──
+##
+## A fixed array `[T; N]` of one kernel scalar `T` is memory, never an IR value (§3.2): a local array
+## is its own frame object of `N * stride` bytes, an array FIELD a run inside its struct local's
+## object. Element `i` is at `base + i * stride` (Types §6.4), and an index is checked: in a checked
+## scope `bound i, N` traps before any address is formed; inside `unchecked` the check is omitted (the
+## verification mode, Types §6.4). The element's kernel type and signedness are sema's record of the
+## `Index` node (D6), checked against the declared element type, so `r.u[0] < r.u[1]` over `[u64; 2]`
+## compares unsigned (#707).
+##
+## Why the layout is the IR's own here (Q4, rule 7.1.1): a local array never meets legacy code in this
+## slice — passing one to a call is an aggregate argument (3d: refused by the call), `ptr(xs)` and a
+## slice `xs[a..b]` are refused, an array is never returned (`signature`). So the stride is the spec's,
+## `lower_layout::layout_elem_stride_bytes` — for a kernel scalar its own width. An array FIELD lives in
+## a struct whose layout `lower_layout` decides (the struct's `size(T)` must stay x86_64's), so only an
+## 8-byte element is admitted there: every tier then places element `i` of the field at `8 i` past
+## the field's `field_byte_place`, the one stride all models agree on.
+
+## A fixed array the builder lays out: `n` elements of the kernel scalar `ty`/`sg`, `stride` bytes apart.
+IbArr := struct { n : usize, ty : Kty, sg : Sgn, stride : usize }
+
+## The array type spelled `[ts, ts+tn)`, when the builder lays it out: `[T; N]` with a literal `N > 0`
+## and a kernel scalar `T` (no nested array, no aggregate element). `word` asks for an 8-byte element
+## (an array field, see the band comment).
+ib_arr_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, ts : usize, tn : usize, word : bool) -> Option(IbArr) {
+  bv : IbB = deref(bp)
+  if tn == 0 { return Option(IbArr).None }
+  if lower_layout::array_type_has_array_element(bv.src, ts, tn) { return Option(IbArr).None }
+  es := lower_layout::arr_field_elem_span(bv.src, ts, tn)
+  if es.n == 0 { return Option(IbArr).None }
+  ko : Option(IbKS) = ib_name_ks(bv.src, es.s, es.n)
+  mut k : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+  match ko { Some(x) => { k = x }; None => { return Option(IbArr).None } }
+  if word and kty_bytes(k.ty) != 8 { return Option(IbArr).None }
+  no : Option(u64) = lower_layout::arr_type_lit_len(bv.src, ts, tn)
+  mut n : usize = 0
+  match no { Some(x) => { n = usize(x) }; None => { return Option(IbArr).None } }
+  if n == 0 { return Option(IbArr).None }
+  stride := lower_layout::layout_elem_stride_bytes(bv.decls, bv.src, es.s, es.n, a)
+  ## A kernel scalar's stride is its own width (Types §6.4); any other answer is a layout this builder
+  ## does not model, so the array is refused rather than guessed.
+  if stride != usize(kty_bytes(k.ty)) { return Option(IbArr).None }
+  Option(IbArr).Some(IbArr(n = n, ty = k.ty, sg = k.sg, stride = stride))
+}
+## Two array layouts describe the same type of value (a copy between them is a whole-object copy).
+ib_arr_same := fn(x : IbArr, y : IbArr) -> bool { x.n == y.n and x.stride == y.stride and kty_eq(x.ty, y.ty) and sgn_eq(x.sg, y.sg) }
+## The bytes an array of layout `r` occupies.
+ib_arr_bytes := fn(r : IbArr) -> usize { r.n * r.stride }
+
+## Where an array lives: its frame object, the byte offset of element 0 in it, and its layout. Flat
+## (no `IbArr` field) because an `Option` of a struct holding a struct crashes the frozen seed's build
+## (the note at `IbIntOp`, #912).
+IbArrAt := struct { fr : FrameId, off : ByteOff, n : usize, ty : Kty, sg : Sgn, stride : usize }
+ib_arr_at := fn(fr : FrameId, off : ByteOff, r : IbArr) -> IbArrAt { IbArrAt(fr = fr, off = off, n = r.n, ty = r.ty, sg = r.sg, stride = r.stride) }
+ib_arr_at_ks := fn(ap : IbArrAt) -> IbKS { IbKS(ty = ap.ty, sg = ap.sg) }
+
+## The array local bound to `[s, s+n)`, with its annotation span, when there is one.
+ib_arr_local := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(IbSpan) {
+  if ib_names_global(bp, s, n) { return Option(IbSpan).None }
+  bd : IbBind = ib_lookup(bp, s, n)
+  match bd {
+    BdArr(af, ats, atn) => { return Option(IbSpan).Some(IbSpan(s = ats, n = atn)) }
+    BdNone => {}
+    BdVal(v, vts, vtn) => {}
+    BdAgg(fr, sd, ts, tn) => {}
+    BdMem(mf, mns) => {}
+  }
+  Option(IbSpan).None
+}
+
+## The array an index base denotes: a fixed array local (`xs[i]`), or an array field of a struct local
+## (`r.u[i]`). Answers `None` without refusing; the caller decides.
+ib_arr_place := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Option(IbArrAt) {
+  match deref(b) {
+    Expr::Var(s, n) => {
+      if ib_names_global(bp, s, n) { return Option(IbArrAt).None }
+      bd : IbBind = ib_lookup(bp, s, n)
+      match bd {
+        BdArr(af, ats, atn) => {
+          ro : Option(IbArr) = ib_arr_of(bp, a, ats, atn, false)
+          match ro { Some(r) => { return Option(IbArrAt).Some(ib_arr_at(af, ByteOff(0), r)) }; None => {} }
+        }
+        BdNone => {}
+        BdVal(v, vts, vtn) => {}
+        BdAgg(fr, sd, ts, tn) => {}
+        BdMem(mf, mns) => {}
+      }
+    }
+    Expr::Field(fb, fs, fl) => {
+      match deref(fb) {
+        Expr::Var(s, n) => {
+          if ib_names_global(bp, s, n) { return Option(IbArrAt).None }
+          bd : IbBind = ib_lookup(bp, s, n)
+          match bd {
+            BdAgg(fr, sd, ts, tn) => {
+              sto : Option(IbSt) = ib_struct_bound(bp, a, sd, ts, tn)
+              match sto { Some(st) => { return ib_arr_field(bp, a, fr, st, fs, fl) }; None => {} }
+            }
+            BdNone => {}
+            BdVal(v, vts, vtn) => {}
+            BdMem(mf, mns) => {}
+            BdArr(af, ats, atn) => {}
+          }
+        }
+        Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+          | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+          | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+          | Expr::Loop => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  Option(IbArrAt).None
+}
+## The array field `[fs, fs+fl)` of struct `st` in object `fr`: an `[T; N]` field of 8-byte kernel
+## scalars whose length the parser recorded (`wsize`), at its `lower_layout::field_byte_place`.
+ib_arr_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId, st : IbSt, fs : usize, fl : usize) -> Option(IbArrAt) {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        if fd.nl == fl and streq(bv.src, fd.ns, fd.nl, fs, fl) {
+          ro : Option(IbArr) = ib_arr_of(bp, a, fd.ts, fd.tl, true)
+          match ro {
+            Some(r) => {
+              if fd.wsize != r.n { return Option(IbArrAt).None }
+              fp := lower_layout::field_byte_place(bv.decls, bv.src, st.s, st.n, fs, fl, a)
+              if not fp.addressable or fp.off < 0 { return Option(IbArrAt).None }
+              ## V6 holds a constant-offset access inside the object; this keeps a field past it out.
+              if usize(fp.off) + ib_arr_bytes(r) > st.size { return Option(IbArrAt).None }
+              return Option(IbArrAt).Some(ib_arr_at(fr, ByteOff(usize(fp.off)), r))
+            }
+            None => { return Option(IbArrAt).None }
+          }
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  Option(IbArrAt).None
+}
+
+## An evaluated index: a literal inside the array (folded into the offset — no `bound` is owed for an
+## index proved in range), a `u64` value to check, or a refusal.
+IbIx := enum { IxLit(usize), IxVal(VRegId), IxRefused }
+## Evaluate index `ix` of `ap`. A literal outside the array is refused (x86_64 owns that case today);
+## a value must be an unsigned integer (widened to 64 bits), the index type sema accepts for an
+## array (a signed index is refused, never reinterpreted).
+ib_arr_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, ap : IbArrAt, ix : ptr(Expr)) -> IbIx {
+  io : Option(i64) = ib_num_value(ix)
+  match io {
+    Some(v) => {
+      if v < 0 or usize(v) >= ap.n { ib_refuse_expr(bp, ix, NyWhy.NwOutside); return IbIx.IxRefused }
+      return IbIx.IxLit(usize(v))
+    }
+    None => {}
+  }
+  vo : Option(VRegId) = ib_bx(bp, a, ix)
+  match vo {
+    Some(iv) => {
+      ik : IbKS = ib_vreg_ks(ib_b_f(bp), iv)
+      if not kty_is_int(ik.ty) or not sgn_eq(ik.sg, Sgn.SgU) { ib_refuse_expr(bp, ix, NyWhy.NwOutside); return IbIx.IxRefused }
+      if kty_eq(ik.ty, Kty.KI64) { return IbIx.IxVal(iv) }
+      wv := ib_ext_to(bp, a, iv, ib_ks_i64(Sgn.SgU))
+      return IbIx.IxVal(wv)
+    }
+    None => {}
+  }
+  IbIx.IxRefused
+}
+## An element's place: a base operand (the frame object, or a `ptr` vreg) and the byte offset there.
+## Flat for the frozen seed (#912).
+IbElem := struct { bk : OpndK, bv : i64, off : ByteOff }
+ib_elem_base := fn(el : IbElem) -> Opnd { Opnd(k = el.bk, v = el.bv) }
+## The place of element `x` of `ap` (`at` locates the `bound` trap). A literal index is `[$k + off +
+## i * stride]`; a value is checked (`bound i, N`, in a checked scope only) and `gep`'d from the
+## object's address.
+ib_arr_elem := fn(bp : ptr(mut IbB), in out a : rt::Arena, at : ptr(Expr), ap : IbArrAt, x : IbIx) -> Option(IbElem) {
+  match x {
+    IxLit(i) => {
+      return Option(IbElem).Some(IbElem(bk = OpndK.OkFrame, bv = i64(usize(ap.fr)), off = ByteOff(usize(ap.off) + i * ap.stride)))
+    }
+    IxVal(iv) => {
+      if not ib_b_unch(bp) {
+        nv := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), i64(ap.n))
+        mut bi := inst0(Op.OpBound)
+        oi := o_vreg(iv)
+        on := o_vreg(nv)
+        set_a(bi, oi)
+        set_b(bi, on)
+        bi.tk = TrapKind.TkBounds
+        set_span(bi, ib_span_of(bp, at))
+        k1 := emit(ib_b_f(bp), a, bi)
+      }
+      base := ib_addr_obj(bp, a, ap.fr)
+      q := ib_fresh(bp, a, IbKS(ty = Kty.KPtr, sg = Sgn.SgNone))
+      mut gi := inst0(Op.OpGep)
+      gi.ty = Kty.KPtr
+      set_dst(gi, q)
+      ob := o_vreg(base)
+      oi2 := o_vreg(iv)
+      set_a(gi, ob)
+      set_b(gi, oi2)
+      gi.off = i64(ap.stride)
+      k2 := emit(ib_b_f(bp), a, gi)
+      return Option(IbElem).Some(IbElem(bk = OpndK.OkVReg, bv = i64(usize(q)), off = ap.off))
+    }
+    IxRefused => {}
+  }
+  Option(IbElem).None
+}
+## `%p = addr $k` — a frame object's address as a `ptr` value.
+ib_addr_obj := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId) -> VRegId {
+  d := ib_fresh(bp, a, IbKS(ty = Kty.KPtr, sg = Sgn.SgNone))
+  mut it := inst0(Op.OpAddrFrame)
+  it.ty = Kty.KPtr
+  set_dst(it, d)
+  ofr := o_frame(fr)
+  set_a(it, ofr)
+  i := emit(ib_b_f(bp), a, it)
+  d
+}
+
+## `E[i]`: an element of an array local or field (above), else a module-global word array (3c's first
+## tier, `ib_bx_index_global`).
+ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : ptr(Expr), ix : ptr(Expr)) -> Option(VRegId) {
+  apo : Option(IbArrAt) = ib_arr_place(bp, a, b)
+  match apo {
+    Some(ap) => {
+      k := ib_ty(bp, e)?
+      if not ib_ks_eq(k, ib_arr_at_ks(ap)) { return ib_no(bp, e, NyWhy.NwDisagree) }
+      x : IbIx = ib_arr_index(bp, a, ap, ix)
+      eo : Option(IbElem) = ib_arr_elem(bp, a, e, ap, x)
+      match eo {
+        Some(el) => {
+          eb := ib_elem_base(el)
+          lv := ib_load_at(bp, a, eb, IbFld(off = el.off, ty = ap.ty, sg = ap.sg))
+          return Option(VRegId).Some(lv)
+        }
+        None => { return Option(VRegId).None }
+      }
+    }
+    None => {}
+  }
+  ib_bx_index_global(bp, a, e, b, ix)
+}
+## `E[i] = v` (IndexAssign) into an array local or field. The order is the spec's: `a[i] = v` is
+## `index_set(a, i, v)` (Types §4.5), whose arguments are evaluated left to right (Functions §5.4) —
+## the index, then the value — and whose bound check is the callee's, after both.
+ib_bs_index_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), b : ptr(Expr), ix : ptr(Expr), v : ptr(Expr)) {
+  apo : Option(IbArrAt) = ib_arr_place(bp, a, b)
+  match apo {
+    Some(ap) => {
+      x : IbIx = ib_arr_index(bp, a, ap, ix)
+      match x { IxRefused => { return }; IxLit(i) => {}; IxVal(iv) => {} }
+      vo : Option(VRegId) = ib_value_ctx(bp, a, v, ib_arr_at_ks(ap))
+      match vo {
+        Some(vv) => {
+          eo : Option(IbElem) = ib_arr_elem(bp, a, ix, ap, x)
+          match eo {
+            Some(el) => { eb := ib_elem_base(el); ib_store_at(bp, a, eb, IbFld(off = el.off, ty = ap.ty, sg = ap.sg), vv) }
+            None => {}
+          }
+        }
+        None => {}
+      }
+      return
+    }
+    None => {}
+  }
+  ib_refuse_stmt(bp, h, NyWhy.NwOutside)
+}
+
+## May one node be evaluated once per element of a fill `[v; N]`? The parser desugars the fill to N
+## references to ONE node and the legacy emitters evaluate it per element; for a literal-only `v`
+## (no side effect) that is the same as evaluating it once, so the question needs no decision here.
+ib_fill_pure := fn(e : ptr(Expr)) -> bool {
+  match deref(e) {
+    Expr::Num(v, s, n) => { return true }
+    Expr::BoolLit(v) => { return true }
+    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  lf : Option(i64) = ib_lit_fold(e)
+  match lf { Some(x) => { true }; None => { false } }
+}
+## An array literal `[e0, …]` (or a fill `[v; N]`) stored element by element into the array at `ap`,
+## each element evaluated left to right at the element type. Its count must be the declared `N`
+## (`check` does not refuse a shorter literal today, measured: `a : [u64; 3] = [1, 2]` checks).
+ib_arr_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ap : IbArrAt) -> bool {
+  match deref(e) {
+    Expr::ArrayLit(nel, eh) => {
+      if nel != ap.n { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+      k : IbKS = ib_arr_at_ks(ap)
+      ofr := o_frame(ap.fr)
+      mut g : Option(ptr(mut Arg)) = eh
+      mut prev : Option(ptr(Expr)) = Option(ptr(Expr)).None
+      mut i : usize = 0
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            match prev { Some(pe) => { if pe == ga.e and not ib_fill_pure(ga.e) { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false } }; None => {} }
+            vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, k)
+            match vo {
+              Some(vv) => { ib_store_at(bp, a, ofr, IbFld(off = ByteOff(usize(ap.off) + i * ap.stride), ty = k.ty, sg = k.sg), vv) }
+              None => { return false }
+            }
+            prev = Option(ptr(Expr)).Some(ga.e)
+            i = i + 1
+            g = ga.next
+          }
+          None => { break }
+        }
+      }
+      if i != ap.n { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+      return true
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  false
+}
+## The value `v` of array layout `r`, in a frame object: a literal is built into a fresh object; an
+## array local of the same layout is its own object (the caller copies it).
+ib_arr_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : ptr(Expr), r : IbArr) -> Option(FrameId) {
+  match deref(v) {
+    Expr::ArrayLit(nel, eh) => {
+      fr := new_frame(ib_b_f(bp), a, ib_arr_bytes(r), r.stride)
+      if ib_arr_lit(bp, a, v, ib_arr_at(fr, ByteOff(0), r)) { return Option(FrameId).Some(fr) }
+      return Option(FrameId).None
+    }
+    Expr::Var(s, n) => {
+      if not ib_names_global(bp, s, n) {
+        bd : IbBind = ib_lookup(bp, s, n)
+        match bd {
+          BdArr(af, ats, atn) => {
+            so : Option(IbArr) = ib_arr_of(bp, a, ats, atn, false)
+            match so { Some(sr) => { if ib_arr_same(sr, r) { return Option(FrameId).Some(af) } }; None => {} }
+          }
+          BdNone => {}
+          BdVal(bv2, vts, vtn) => {}
+          BdAgg(fr2, sd, ts, tn) => {}
+          BdMem(mf, mns) => {}
+        }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  ib_refuse_expr(bp, v, NyWhy.NwOutside)
+  Option(FrameId).None
+}
+## `xs : [T; N] = v` (the annotation `[ts, ts+tn)`), or `xs := ys` (the annotation of the array local
+## `ys`): a fresh object of its own (a local never shares another's memory), bound after its
+## initializer is built, so the initializer still sees an outer `xs`.
+ib_bs_arr_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, ts : usize, tn : usize, v : ptr(Expr)) {
+  ro : Option(IbArr) = ib_arr_of(bp, a, ts, tn, false)
+  match ro {
+    Some(r) => {
+      fo : Option(FrameId) = ib_arr_value(bp, a, v, r)
+      match fo {
+        Some(sf) => {
+          match deref(v) {
+            Expr::ArrayLit(nel, eh) => { ib_bind_arr(bp, a, ns, nl, sf, ts, tn); return }
+            Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+              | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try
+              | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+              | Expr::Bitcast | Expr::Loop => {}
+          }
+          fr := new_frame(ib_b_f(bp), a, ib_arr_bytes(r), r.stride)
+          ib_copy_obj(bp, a, fr, sf, ib_arr_bytes(r))
+          ib_bind_arr(bp, a, ns, nl, fr, ts, tn)
+        }
+        None => {}
+      }
+    }
+    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+  }
+}
+## `xs = v` into the array local in object `fr`: the value in its own object first (a literal reading
+## `xs` itself sees the old elements), then copied.
+ib_bs_arr_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), fr : FrameId, ts : usize, tn : usize, v : ptr(Expr)) {
+  ro : Option(IbArr) = ib_arr_of(bp, a, ts, tn, false)
+  match ro {
+    Some(r) => {
+      fo : Option(FrameId) = ib_arr_value(bp, a, v, r)
+      match fo { Some(sf) => { ib_copy_obj(bp, a, fr, sf, ib_arr_bytes(r)) }; None => {} }
+    }
+    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+  }
+}
+## `xs.len` of an array the builder lays out: the comptime `N` (Types §6.4), at sema's type of the read.
+ib_bx_arr_len := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ap : IbArrAt) -> Option(VRegId) {
+  k := ib_ty(bp, e)?
+  if not kty_is_int(k.ty) { return ib_no(bp, e, NyWhy.NwDisagree) }
+  d := ib_konst(bp, a, k, i64(ap.n))
+  Option(VRegId).Some(d)
 }
 
 ## A one-word kernel scalar (8 bytes): what a pointer or an address-taken local may move (see above).
@@ -1873,6 +2382,7 @@ ib_ptr_pointee_ks := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> Option(IbKS) {
         }
         BdAgg(fr, sd, ts, tn) => {}
         BdMem(mf, mns) => {}
+        BdArr(af, ats, atn) => {}
         BdNone => {}
       }
     }
@@ -1899,6 +2409,9 @@ ib_bx_addr_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pl :
           }
         }
         BdMem(mf, mns) => { return ib_addr_frame(bp, a, e, mf) }
+        ## `ptr(xs)` of an array would hand legacy code an IR-laid-out array: no agreement is proved
+        ## for that (Q4), so it is refused (the function falls back).
+        BdArr(af, ats, atn) => {}
         BdVal(v, vts, vtn) => {}
         BdNone => {}
       }
@@ -1967,8 +2480,9 @@ ib_scan_stmt := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
     Stmt::Break(bv, bd, nx) => { ib_scan_opt(bp, a, bv) }
     Stmt::ExprStmt(e, nx) => { ib_scan_expr(bp, a, e) }
     Stmt::Unchecked(b, nx) => { ib_scan_stmts(bp, a, b) }
+    Stmt::IndexAssign(ib, ix, iv, nx) => { ib_scan_expr(bp, a, ib); ib_scan_expr(bp, a, ix); ib_scan_expr(bp, a, iv) }
     ## Constructs the builder refuses before it reaches anything inside them (see the band comment).
-    Stmt::Match | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+    Stmt::Match | Stmt::IndexFieldAssign | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
       | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => {}
   }
 }
@@ -2005,7 +2519,9 @@ ib_scan_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
     Expr::Unchecked(inner) => { ib_scan_expr(bp, a, inner) }
     Expr::Bitcast(inner, ts, tl) => { ib_scan_expr(bp, a, inner) }
     Expr::Loop(b) => { ib_scan_stmts(bp, a, b) }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::EnumLit | Expr::StrLit | Expr::ArrayLit | Expr::Index
+    Expr::Index(ib, ix) => { ib_scan_expr(bp, a, ib); ib_scan_expr(bp, a, ix) }
+    Expr::ArrayLit(nel, eh) => { ib_scan_args(bp, a, eh) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::EnumLit | Expr::StrLit
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef => {}
   }
 }
@@ -2113,6 +2629,17 @@ ib_global_addr := fn(bp : ptr(mut IbB), in out a : rt::Arena, di : usize, d : De
 ib_value_ctx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), k : IbKS) -> Option(VRegId) {
   t : VTy = sty_get(e)
   if vty_is_lit(t) and kty_is_int(k.ty) {
+    ## A source literal above `i64`'s range is carried as its 64-bit pattern (`parser::int_at`, #881):
+    ## its value is that pattern read as a `u64`, which only a `u64` position holds.
+    po : Option(i64) = ib_u64_pattern_lit(bp, e)
+    match po {
+      Some(pv) => {
+        if not ib_ks_eq(k, ib_ks_i64(Sgn.SgU)) { return ib_no(bp, e, NyWhy.NwLit) }
+        pd := ib_konst(bp, a, k, pv)
+        return Option(VRegId).Some(pd)
+      }
+      None => {}
+    }
     fo : Option(i64) = ib_lit_fold(e)
     match fo {
       Some(v) => {
@@ -2157,7 +2684,7 @@ ib_bx_layout_q := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), q :
   match deref(ae) {
     Expr::Var(s, n) => {
       bd : IbBind = ib_lookup(bp, s, n)
-      match bd { BdNone => {}; BdVal(v, vts, vtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdMem(mf, mns) => { return ib_no(bp, e, NyWhy.NwOutside) } }
+      match bd { BdNone => {}; BdVal(v, vts, vtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdMem(mf, mns) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdArr(af, ats, atn) => { return ib_no(bp, e, NyWhy.NwOutside) } }
       src := ib_b_src(bp)
       mut bytes : usize = 0
       ko : Option(IbKS) = ib_name_ks(src, s, n)
@@ -2316,7 +2843,8 @@ ib_bs_one := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
     Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { ib_bs_field_assign(bp, a, h, bns, bnl, fns, fnl, fv) }
     Stmt::DerefAssign(pe, dv, nx) => { ib_bs_deref_assign(bp, a, h, pe, dv) }
     Stmt::FieldPathAssign(pl, pv, nx) => { ib_bs_field_path_assign(bp, a, h, pl, pv) }
-    Stmt::Match | Stmt::IndexAssign | Stmt::IndexFieldAssign
+    Stmt::IndexAssign(ib, ix, iv, nx) => { ib_bs_index_assign(bp, a, h, ib, ix, iv) }
+    Stmt::Match | Stmt::IndexFieldAssign
       | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange
       | Stmt::AllocWith => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
   }
@@ -2368,6 +2896,7 @@ ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), n
     BdVal(dv, dts, dtn) => { ib_assign_to(bp, a, dv, v) }
     BdAgg(fr, sd, ts, tn) => { ib_bs_agg_assign(bp, a, h, fr, sd, ts, tn, v) }
     BdMem(mf, mns) => { ib_bs_mem_assign(bp, a, h, mf, mns, v) }
+    BdArr(af, ats, atn) => { ib_bs_arr_assign(bp, a, h, af, ats, atn, v) }
     BdNone => { ib_bs_global_assign(bp, a, h, ns, nl, v) }
   }
 }
@@ -2580,7 +3109,7 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
   f := fn_new(a, fnm.ptr, fnm.len, has_ret, rk.ty, rk.sg)
   nb := IbB(f = f, p = p, src = src, decls = decls, mod_s = d.mod_start, mod_n = d.mod_len,
           bnames = wb_new(a, 16), blens = wb_new(a, 16), bvregs = wb_new(a, 16),
-          bagg = wb_new(a, 16), bmem = wb_new(a, 16), bsd = wb_new(a, 16), bts = wb_new(a, 16), btn = wb_new(a, 16),
+          bagg = wb_new(a, 16), bmem = wb_new(a, 16), barr = wb_new(a, 16), bsd = wb_new(a, 16), bts = wb_new(a, 16), btn = wb_new(a, 16),
           taken = wb_new(a, 8),
           lexit = wb_new(a, 8), lcont = wb_new(a, 8), lres = wb_new(a, 8), lhasres = wb_new(a, 8), lbroken = wb_new(a, 8),
           unch = false, term = false, failed = false, fail_c = Construct.CEmpty, fail_w = NyWhy.NwOutside,

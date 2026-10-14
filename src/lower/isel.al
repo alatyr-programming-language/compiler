@@ -427,6 +427,21 @@ sx_store := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> boo
   sx_put(sb, "(%rax)\n")
   true
 }
+## `gep a, i, stride` (slice 3c): `a + i * stride`, no check (§3.4) — the stride is the op's offset.
+sx_gep := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
+  st := ir::i_off(ip)
+  if not sx_imm32(st) { return false }
+  if not sx_ld2(sb, ip) { return false }
+  sx_put(sb, "  imulq $"); sx_int(sb, st); sx_put(sb, ", %rcx, %rcx\n  addq %rcx, %rax\n")
+  sx_strax(sb, ip)
+}
+## `bound i, n` (slice 3c): trap with the op's kind (`bounds`) unless `i < n`, read unsigned.
+sx_bound := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sx_ld2(sb, ip) { return false }
+  sx_put(sb, "  cmpq %rcx, %rax\n")
+  sx_trap_unless(sb, x, "jb", ir::i_tk(ip), ip)
+  true
+}
 ## `addr $k`.
 sx_addr_frame := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
   if not sx_base(sb, x, SxR.XrAx, ir::i_ak(ip), ir::i_av(ip)) { return false }
@@ -614,6 +629,8 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
     OpAddrFrame => { sx_addr_frame(sb, x, ip) }
     OpCopy => { sx_mem(sb, x, ip, true) }
     OpZero => { sx_mem(sb, x, ip, false) }
+    OpGep => { sx_gep(sb, ip) }
+    OpBound => { sx_bound(sb, x, ip) }
     OpCall => { sx_call(sb, x, ip) }
     OpBlock | OpUnch => { sx_stk_push(x, a, SxAt(i)); true }
     OpLoop => { sx_stk_push(x, a, SxAt(i)); sx_def_lbl(sb, x, SxAt(i)); true }
@@ -660,7 +677,7 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpGep | OpBound | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpCallInd
       | OpCallC | OpSyscall | OpSwitch => { false }
   }
 }
