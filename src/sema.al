@@ -8795,6 +8795,12 @@ sema_vty_kind := fn(k : TyKind) -> ir::VTy {
 sema_vty_name := fn(src : ptr(u8), s : usize, n : usize, decls : ptr(rt::Vec)) -> ir::VTy {
   sv : ir::VTy = sema_vty_scalar(src, s, n)
   if ir::vty_known(sv) { return sv }
+  ## A QUALIFIED brand or alias name names one declaration of the module its head names.
+  qt := sema_qual_scalar_target(decls, src, s, n)
+  if qt.n != 0 {
+    qv : ir::VTy = sema_vty_scalar(src, qt.s, qt.n)
+    if ir::vty_known(qv) { return qv }
+  }
   bu := sema_brand_underlying(decls, rt::vec_len(deref(decls)), src, s, n)
   if bu.n != 0 { return sema_vty_scalar(src, bu.s, bu.n) }
   ## a type alias `CheckErr := usize` names its target (an alias of an alias is refused, so one hop)
@@ -9832,34 +9838,75 @@ sema_spell_field := fn(bs : ir::TySpell, fs : usize, fl : usize, decls : ptr(rt:
   }
   sema_spell_none()
 }
+## The module a qualified name's head names — `ir` in `ir::InstId`, followed through the writing
+## module's own alias or a root/path alias one hop, as a qualified call's head is. `None` for a bare
+## name or a head that names no module. The one reading of a qualified TYPE name's head.
+sema_qual_type_head := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> Option(VSpan) {
+  g := sema_gref_split(src, s, n)
+  if not g.qual { return Option(VSpan).None }
+  wm := sema_span_module(decls, src, s)
+  own : ir::TySpell = sema_rec_head_alias_in(decls, src, g.ms, g.ml, wm)
+  if own.n != 0 { return Option(VSpan).Some(VSpan(s = own.s, n = own.n)) }
+  if sema_head_is_module(decls, src, g.ms, g.ml) { return Option(VSpan).Some(VSpan(s = g.ms, n = g.ml)) }
+  al := sema_rec_head_alias(decls, src, g.ms, g.ml)
+  if al.n == 0 { return Option(VSpan).None }
+  Option(VSpan).Some(VSpan(s = al.s, n = al.n))
+}
 ## The declaration (index + 1, 0 = none) a type name `[s, s+n)` names. A qualified `rt::Vec` is the
-## `Vec` of the module its head names (the head followed through an alias, as a qualified call's is);
-## a bare name ranks by Modules §3 (`type_decl_index`).
+## `Vec` of the module its head names (`sema_qual_type_head`); a bare name ranks by Modules §3
+## (`type_decl_index`).
 sema_type_decl_q := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
   g := sema_gref_split(src, s, n)
   if not g.qual { return type_decl_index(decls, rt::vec_len(deref(decls)), src, s, n) }
-  wm := sema_span_module(decls, src, s)
-  mut hs := g.ms
-  mut hl := g.ml
-  own : ir::TySpell = sema_rec_head_alias_in(decls, src, hs, hl, wm)
-  if own.n != 0 { hs = own.s; hl = own.n }
-  else if not sema_head_is_module(decls, src, hs, hl) {
-    al := sema_rec_head_alias(decls, src, hs, hl)
-    if al.n == 0 { return 0 }
-    hs = al.s
-    hl = al.n
+  hm : Option(VSpan) = sema_qual_type_head(decls, src, s, n)
+  match hm {
+    None => { return 0 }
+    Some(h) => {
+      cnt := rt::vec_len(deref(decls))
+      mut found : usize = 0
+      mut hits : usize = 0
+      mut i : usize = 0
+      while i < cnt {
+        d := deref(decl_get(decls, i))
+        if (d.kind == lower_layout::DECL_KIND_STRUCT or d.kind == lower_layout::DECL_KIND_ENUM) and streq(src, d.name_start, d.name_len, g.ns, g.nl) and sema_mod_seg_eq(src, d.mod_start, d.mod_len, h.s, h.n) { found = i + 1; hits += 1 }
+        i += 1
+      }
+      if hits != 1 { return 0 }
+      return found
+    }
   }
-  cnt := rt::vec_len(deref(decls))
-  mut found : usize = 0
-  mut hits : usize = 0
-  mut i : usize = 0
-  while i < cnt {
-    d := deref(decl_get(decls, i))
-    if (d.kind == lower_layout::DECL_KIND_STRUCT or d.kind == lower_layout::DECL_KIND_ENUM) and streq(src, d.name_start, d.name_len, g.ns, g.nl) and sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl) { found = i + 1; hits += 1 }
-    i += 1
+  0
+}
+## The SCALAR a qualified brand or alias name denotes (`ir::InstId` → `usize`): the one brand
+## (`B := brand(T)`) or type alias (`A := T`) of that name in the module the head names, read through
+## to its underlying spelling. `{0,0}` when the name is bare, the head names no module, or not exactly
+## one such declaration answers. (Found by IR slice 1 step e3: the by-name brand and alias scans compare
+## the WHOLE spelling with a bare declaration name, so a value of a qualified brand type read
+## `VcUnknown` — the self-build's `usize(id)` over `Some(id)` of an `Option(ir::InstId)`.)
+sema_qual_scalar_target := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> VSpan {
+  hm : Option(VSpan) = sema_qual_type_head(decls, src, s, n)
+  match hm {
+    None => { return VSpan(s = 0, n = 0) }
+    Some(h) => {
+      g := sema_gref_split(src, s, n)
+      cnt := rt::vec_len(deref(decls))
+      mut ts : usize = 0
+      mut tl : usize = 0
+      mut hits : usize = 0
+      mut i : usize = 0
+      while i < cnt {
+        d := deref(decl_get(decls, i))
+        if streq(src, d.name_start, d.name_len, g.ns, g.nl) and sema_mod_seg_eq(src, d.mod_start, d.mod_len, h.s, h.n) {
+          if d.is_fn == false and d.kind == lower_layout::DECL_KIND_VALUE and d.arity == 1 and d.ret_tl != 0 and sema_brand_is_decl(src, d.name_start, d.name_len) { ts = d.ret_ts; tl = d.ret_tl; hits += 1 }
+          else if d.kind == lower_layout::DECL_KIND_VALUE and d.alias_tl != 0 { ts = d.alias_ts; tl = d.alias_tl; hits += 1 }
+        }
+        i += 1
+      }
+      if hits != 1 { return VSpan(s = 0, n = 0) }
+      return VSpan(s = ts, n = tl)
+    }
   }
-  if hits != 1 { return 0 }
-  found
+  VSpan(s = 0, n = 0)
 }
 ## Is `sp` a view spelling — `str` (`[u8]`) or `[T]` — rather than a declared struct (Types §7)?
 sema_spell_is_view := fn(sp : ir::TySpell, src : ptr(u8)) -> bool {
