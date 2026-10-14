@@ -1022,10 +1022,11 @@ pub compfor_iter_arg := fn(src : ptr(u8), vs : usize, vl : usize) -> LSpan {
   LSpan(s = p, n = e - p)
 }
 
-## Parse the element COUNT `N` from an array type-annotation span `[T; N]` (recovered by
-## `local_type_span`) — scan for the `;` (byte 59), then read the trailing decimal number. 0 if the
-## span holds no `; N` (not an array annotation). Bytes read directly from the source via a `ptr(u8)`.
-pub parse_arr_len := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
+## The element COUNT `N` of an array type `[T; N]` spelled at `[ts, ts+tl)`: the decimal literal after
+## its last `;` (leading spaces skipped). `None` when the span has no `;` or no literal there (`[T]`, a
+## computed `[T; N / 64]`, a non-array) — absence is a variant, never a reserved 0 (`[T; 0]` answers
+## `Some(0)`). `parse_arr_len` (below) and the IR builder both read it here.
+pub arr_type_lit_len := fn(src : ptr(u8), ts : usize, tl : usize) -> Option(u64) {
   ## Read via `bytes(str)[i]` (a Slice(u8) byte view) — NOT `deref(bitcast(ptr(u8), ...))`, which the
   ## lean lower reads as a WORD (the bitcast target type is discarded), so `;` (byte 59) was missed.
   bs := bytes(str_at((src + ts), tl))
@@ -1036,18 +1037,26 @@ pub parse_arr_len := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
     if bs[i] == 59 { sp = i + 1; found = true }
     i += 1
   }
-  if found == false { return 0 }
+  if found == false { return Option(u64).None }
   mut j := sp
-  mut n : usize = 0
+  mut n : u64 = 0
   mut any := false
   mut going := true
   while going and j < tl {
     b := bs[j]
-    if b >= 48 and b <= 57 { n = n * 10 + usize(b - 48); any = true; j = j + 1 }
+    if b >= 48 and b <= 57 { n = n * 10 + u64(b - 48); any = true; j = j + 1 }
     else if b == 32 and any == false { j = j + 1 }
     else { going = false }
   }
-  n
+  if not any { return Option(u64).None }
+  Option(u64).Some(n)
+}
+
+## `parse_arr_len` — the historical 0-for-absent answer over `arr_type_lit_len`, for the callers that
+## test `> 0` (x86's `lower`, re-bound there, and sema since e4). The one reading is `arr_type_lit_len`.
+pub parse_arr_len := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
+  no : Option(u64) = arr_type_lit_len(src, ts, tl)
+  match no { Some(n) => { usize(n) }; None => { 0 } }
 }
 
 ## A direct nested fixed-array type (`[[T; N]; M]`) starts with an opening bracket for its element
