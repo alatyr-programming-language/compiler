@@ -791,13 +791,19 @@ for the same functions.
   (`60-control-flow.md` §5.1), so `default` is unreachable for a well-typed program. The IR lowers it to
   `trap match_no_arm`. Today x86 falls through (the observed `rc=255`, #544); any program that reaches
   it would move from a value to a trap. Is the trap accepted as the one behaviour?
+  *Decided by the spec, not an owner choice (recorded 2026-10-14): `60-control-flow.md` §5.1 — a
+  non-exhaustive `match` is a compile error, "there is no fall-through to undefined behavior (I11)". A
+  well-typed program never reaches `default`; the IR lowers it to `trap match_no_arm` as the only
+  conforming defensive answer, and any program observed reaching it is a sema/exhaustiveness defect to
+  file, not a behaviour to preserve.*
 - **D3 — syscall numbers.** `lib/std/os.al` passes x86_64 numbers (`sys_mmap(9, …)`). The IR op is
   per-target in its instruction, but the numbers are data: a per-target table in the library (`when
   target.arch`), or a symbolic syscall name the selector maps? And on wasm: WASI imports for the few the
   library needs (`fd_write`, `memory.grow` for `mmap`), or a located refusal?
 - **D4 — bodyless externs on wasm.** An `extern` the module cannot satisfy is a wasmtime `unknown import`
   at instantiation (LOUD-EXIT). Import from `env` and let the embedder fail (today), or refuse at compile
-  time?
+  time? *Decided (owner, 2026-10-14): refuse at compile time on wasm; see `docs/ir-slice-2.md` §4 Q2.
+  D3 on wasm likewise decided: WASI imports (Q1 there).*
 - **D5 — the dev surfaces.** The x86 differential and IR fixtures need a way in: an `alatyr ir <file>`
   print verb and an x86-via-IR emit verb (next to `alatyr aarch64 <file>`), or an environment switch like
   `ALATYR_RA=0`. The spec's codegen purity ("no environment", `90-codegen.md` §3.1) argues for verbs.
