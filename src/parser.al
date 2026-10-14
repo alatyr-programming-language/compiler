@@ -5595,7 +5595,9 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ## body: statements + an optional trailing return expr (the fn-body shape, kept local here).
     mut shead : Option(ptr(mut Stmt)) = Option.None
     mut stail : Option(ptr(mut Stmt)) = Option.None
-    mut tbody := newnode(pc.arena, Expr.Num(0, 0, 0))
+    ## `Num(-1)` with no span is the fn path's NO-TAIL marker (`expr_is_no_tail`); a `0` here was read by
+    ## sema as a trailing value `0` and compared with the test's `-> Result(…)`.
+    mut tbody := newnode(pc.arena, Expr.Num(0 - 1, 0, 0))
     while cur(pc).kind != 13 and cur(pc).kind != 0 {
       if stmt_starts(pc) {
         s := p_stmt(pc)

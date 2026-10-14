@@ -16751,7 +16751,12 @@ check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a 
   SEMA_VTY_RET_N = d.ret_tl
   SEMA_DECL_PARAMS = d.params_head
   SEMA_DECL_IDX = upto
-  if d.kind == 1 { return check_fn(d, decls, upto, src, a) }
+  if d.kind == lower_layout::DECL_KIND_FN { return check_fn(d, decls, upto, src, a) }
+  ## A `@test` body (Tooling §TOOL-5: an anonymous `fn()` the test runner calls) is code like any fn
+  ## body and is checked as one. It used to be skipped, so its expressions had no recorded type and
+  ## its type errors surfaced only as a wrong run (found by IR slice 1 step e3: x86's signedness
+  ## decision in `test/package/abi_reachability`'s `@test` stopped at a value sema never typed).
+  if d.kind == lower_layout::DECL_KIND_TEST { return check_fn(d, decls, upto, src, a) }
   if d.kind == 0 {
     mut failed_word := 0
     mut fspan_word := 0
