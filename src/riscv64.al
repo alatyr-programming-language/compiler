@@ -55,7 +55,8 @@ variant_payload_type := lower_layout::variant_payload_type
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower (see aarch64.al): the
 ## `@export("sym")` alias + `@extern("sym")` external symbol, reused so the symbol rules stay identical.
 (CSpan, decl_at, decl_get, node_ptr, streq, param_find, effective_param_count, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl, typeinfo_arg_span) := lower_ctx
-(export_name, extern_symbol, field_type_span, compfor_iter_arg, fn_returns_tuple, tuple_words) := lower
+(export_name, extern_symbol, field_type_span, fn_returns_tuple, tuple_words) := lower
+compfor_iter_arg := lower_layout::compfor_iter_arg
 
 ## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
 ## from the driver so the frozen self-host lower does not copy a selection aggregate.

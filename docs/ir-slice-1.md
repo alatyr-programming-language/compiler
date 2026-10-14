@@ -279,6 +279,51 @@ have a different type per *iteration* inside one instance. Their key needs an it
 `(inst, cf-iteration path)`, interned the same way. That is step e4 (E-Q2). Until then those lines
 stay in §7's residue (part of the 43).
 
+*As landed (e4).* The record table has a **third key word**, the iteration: every slot is `(key, inst,
+iter)`, each absent component stored as 0 and a present one as id + 1 (`ir::IterId := brand(usize)`,
+`Option(IterId)` for absence, no bits in the address). The accessors are `sty_put_at(e, inst, iter, t)`
+/ `sty_get_at(e, inst, iter)` (and the `bind_`/`spell_` forms); they replace e2's `*_in` pair, and the
+plain `sty_put`/`sty_get` stay as `(None, None)`.
+- *The iteration's identity* is its content, interned by `ir::iter_intern`: the parent path (the
+  enclosing iteration, or `None`), the loop statement's address, the ordinal `k`, and for a pack the
+  call site (the call's first pack argument node; `None` for a member loop), because each call of a
+  comptime-variadic fn expands the callee's body again. Equal content gives the same id on both sides,
+  so the producer and the consumers do not share an order.
+- *The context is a stack* (`ir::rec_enter_inst` / `rec_enter_iter` / `rec_enter_plain` /
+  `rec_enter_at`, popped by `rec_leave`; the `sty_*_cur` accessors read and write at its top). Sema's
+  e2 global `SEMA_INST` is gone. A saved `Option` cannot be put back into a mutable global today
+  (#934), and a stack also nests iterations without threading anything through the check walk. An
+  unbalanced `rec_leave` panics.
+- *Sema* walks a `comptime for` over a type's members once more per member
+  (`sema_ct_members`, records only, as the §3.8 item 7 walk is), in `rec_enter_iter(loop, None, k)`,
+  with `v.(f)` spelled as that member of `v`'s type. A `T` the instance binds is substituted first.
+  Members are enumerated the way x86's `emit_st_comp_for` enumerates them: tuple components, array
+  elements, struct fields, enum variants, in declaration order. The header scan
+  (`compfor_iter_arg`, `comptime_arg_end`, `parse_arr_len`) moved, unchanged, from `lower` to
+  `lower_layout`, so both sides read it with the same code. A type parameter that no instance binds
+  (the generic pass) enumerates nothing. A pack is handled as follows: every call of a
+  comptime-variadic fn is noted with its caller's context (`ir::pack_note`). After the instance walk,
+  `sema_pack_walk` re-checks each noted callee in that context, records only, and its
+  `comptime for v in <pack>` walks the body once per trailing argument, in `rec_enter_iter(loop,
+  Some(site), k)`, with `v` bound to the argument's recorded type (an untyped literal is the target's native signed integer, Types §9.1: today the record says `i64`,
+  which holds for the 64-bit targets. A 32-bit wasm consumer must not read it as-is before slice 6).
+  A binding is looked up at the current path first and then at each parent path, because that is
+  lexical scope. A binding declared before the loop is the same binding in every iteration.
+- *x86* keeps the same stack while it emits: each instance (`InstId` = mono's index, as e2 has it),
+  each member iteration, each pack element, and an `@inline` body in the plain context (sema checked
+  it once, as its own declaration). No emitted byte reads it yet.
+- *The census* writes a `#signrec` row beside each x86 decision, with the operands' records under no
+  context, under the instance alone, and under the instance plus the iteration. Its `--self-test`
+  (§8.5) compiles three planted programs: a generic instance, a member loop over a struct with a `u64`
+  field and an `i64` field, and a pack. Each node must be unknown without its key and known, with the
+  right signedness, under it. `scripts/full.sh` runs the self-test. Measured on omen (corpus 2309
+  sources through x86_64, 17582 decisions): residue (an operand `U` or `A`) is 12 rows / 9 lines
+  with no context, 3 / 1 under the instance alone, and 0 / 0 under the instance and the iteration. The
+  one line the iteration key answers is the pack element `v > m` in `test/variadic_max.al`. No
+  corpus decision reads `v.(f)`. The self-build has 0 residue in every context. The census's
+  emitter-vs-sema table is the same as c67cfa8's, row for row. The self-test's member program
+  exposed #938: x86 compares a `u64` `v.(f)` as signed.
+
 **8.5 Fixtures.**
 - `generic_mix_usize_reject` — `f := fn(T : type, a : T, n : usize) -> T { a + n }` called with
   `T = i64`: a `build_reject_has … "implicit signed/unsigned conversion"` at the body's `+`, on all

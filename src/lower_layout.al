@@ -27,6 +27,13 @@ arg_any := ast::arg_any
 ## children, where the name `ir` is `lower`'s own child module (`src/lower/ir.al`).
 pub ir_sign_row := fn(who : str, op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8), signed : bool) { ir::sign_row(who, op, l, r, src, signed) }
 pub ir_sign_open := fn() -> bool { ir::sign_open() }
+## docs/ir-slice-1.md §8.4 (e4) — the record context the x86 emitter keeps while it emits (`ir::rec_*`),
+## and the census row of the records it can read at a signedness decision (`ir::sign_rec_row`).
+pub ir_sign_rec_row := fn(op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) { ir::sign_rec_row(op, l, r, src) }
+pub ir_rec_enter_inst := fn(i : usize) { ir::rec_enter_inst(ir::InstId(i)) }
+pub ir_rec_enter_plain := fn() { ir::rec_enter_plain() }
+pub ir_rec_enter_iter := fn(lp : ptr(mut Stmt), site : Option(ptr(mut Arg)), k : usize) { ir::rec_enter_iter(lp, site, k) }
+pub ir_rec_leave := fn() { ir::rec_leave() }
 streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
   ## PERF: length-first fast reject — most scan comparisons are against a different-length name, and this
   ## skips constructing both str views + the byte compare. Byte-neutral.
@@ -949,6 +956,98 @@ pub arr_field_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
   mut et := ee
   while et > es and str_at((src + et - 1), 1) == " " { et = et - 1 }
   LSpan(s = es, n = et - es)
+}
+
+## ─── docs/ir-slice-1.md §8.4 (e4): the `comptime for` header and array-length scans ──────────
+## Moved here verbatim (from `lower.al` and `lower/ctfold.al`) so the x86 lowering, which unrolls a
+## `comptime for` over a type's members, and sema, which records each of those iterations, read the
+## header and the member count with ONE decision: the same content must name the same iteration.
+
+## Skip spaces/newlines/tabs from `p0`, bounded by `lim` (`lower::fnty_skip_ws`'s 6-line leaf, kept
+## here so the module stays self-contained, as `streq` is).
+cf_skip_ws := fn(src : ptr(u8), p0 : usize, lim : usize) -> usize {
+  mut p := p0
+  mut done := false
+  while p < lim and done == false {
+    c := str_at((src + p), 1)
+    if c == " " or c == "\n" or c == "\t" or c == "\r" { p = p + 1 } else { done = true }
+  }
+  p
+}
+
+## The end offset of the balanced TYPE text starting at `p0` — the `)` that closes the enclosing
+## `typeinfo(`, or a top-level `,`; trailing whitespace trimmed. `p0` itself when no terminator is
+## found inside `lim`. Keeps a nested spelling (`ptr(T)`, `Vec(u64)`, `[T; 4]`) whole, exactly as
+## `cx.it` holds one.
+pub comptime_arg_end := fn(src : ptr(u8), p0 : usize, lim : usize) -> usize {
+  mut p := p0
+  mut d := 0
+  mut r := p0
+  mut done := false
+  while p < lim and done == false {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" { d = d + 1 ; p = p + 1 }
+    else if c == "]" { if d > 0 { d = d - 1 } ; p = p + 1 }
+    else if c == ")" { if d == 0 { r = p ; done = true } else { d = d - 1 ; p = p + 1 } }
+    else if c == "," { if d == 0 { r = p ; done = true } else { p = p + 1 } }
+    else { p = p + 1 }
+  }
+  if done == false { return p0 }
+  mut e := r
+  mut trim := true
+  while e > p0 and trim {
+    c2 := str_at((src + (e - 1)), 1)
+    if c2 == " " or c2 == "\n" or c2 == "\t" or c2 == "\r" { e = e - 1 } else { trim = false }
+  }
+  e
+}
+
+## The `typeinfo(X)` ARGUMENT type text of a `comptime for <v> in typeinfo(X).fields/.variants/…`
+## header, recovered by a SOURCE-SCAN forward from the loop-var name span `[vs, vs+vl)`. The `CompFor`
+## AST node keeps only the loop-var span, the fields/variants flag, the body and `next` (the seed's
+## AST-node word budget), so the ITERATED TYPE is otherwise LOST — the same recovery discipline as
+## `fnty_ret_span` and the enum discriminant pins. 0/0 when the header does not spell
+## `in typeinfo(<type>)`.
+pub compfor_iter_arg := fn(src : ptr(u8), vs : usize, vl : usize) -> LSpan {
+  lim := vs + vl + 512
+  mut p := cf_skip_ws(src, vs + vl, lim)
+  if str_at((src + p), 2) != "in" { return LSpan(s = 0, n = 0) }
+  p = cf_skip_ws(src, p + 2, lim)
+  if str_at((src + p), 8) != "typeinfo" { return LSpan(s = 0, n = 0) }
+  p = cf_skip_ws(src, p + 8, lim)
+  if str_at((src + p), 1) != "(" { return LSpan(s = 0, n = 0) }
+  p = cf_skip_ws(src, p + 1, lim)
+  e := comptime_arg_end(src, p, lim)
+  if e <= p { return LSpan(s = 0, n = 0) }
+  LSpan(s = p, n = e - p)
+}
+
+## Parse the element COUNT `N` from an array type-annotation span `[T; N]` (recovered by
+## `local_type_span`) — scan for the `;` (byte 59), then read the trailing decimal number. 0 if the
+## span holds no `; N` (not an array annotation). Bytes read directly from the source via a `ptr(u8)`.
+pub parse_arr_len := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
+  ## Read via `bytes(str)[i]` (a Slice(u8) byte view) — NOT `deref(bitcast(ptr(u8), ...))`, which the
+  ## lean lower reads as a WORD (the bitcast target type is discarded), so `;` (byte 59) was missed.
+  bs := bytes(str_at((src + ts), tl))
+  mut i : usize = 0
+  mut sp : usize = 0
+  mut found := false
+  while i < tl {
+    if bs[i] == 59 { sp = i + 1; found = true }
+    i += 1
+  }
+  if found == false { return 0 }
+  mut j := sp
+  mut n : usize = 0
+  mut any := false
+  mut going := true
+  while going and j < tl {
+    b := bs[j]
+    if b >= 48 and b <= 57 { n = n * 10 + usize(b - 48); any = true; j = j + 1 }
+    else if b == 32 and any == false { j = j + 1 }
+    else { going = false }
+  }
+  n
 }
 
 ## A direct nested fixed-array type (`[[T; N]; M]`) starts with an opening bracket for its element
