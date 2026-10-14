@@ -10111,6 +10111,49 @@ emit_str_eq := fn(args_head : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, 
   emit_str_eq_core(a0, a1, sb, cx, a, nl)
 }
 
+## The lexicographic BYTE ordering of two already-resolved str operands — pushes 1 / 0. `cc` is the
+## full setcc used where the two bytes DIFFER (the loop's exit), `pcc` where one string is a prefix
+## of the other (the lengths decide). The operators over `str` desugar to `str_cmp(a, b) ⊕ 0`
+## (Stdlib §2.6 / `lib/base/str.al`: compare bytes up to the shorter length; on a common prefix the
+## SHORTER string is the smaller). Bytes come from `movzbq` and are therefore UNSIGNED, so both
+## conditions are carry forms (`setb`/`seta`/`setbe`/`setae`), never the signed `setl`/`setg`.
+## The register set is `emit_str_eq_core`'s own (rdi/rsi/rdx/rcx/r8/r9/rax) — no new pressure.
+emit_str_order_core := fn(cc : str, pcc : str, a0 : ptr(Expr), a1 : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  emit_str_pair(a0, sb, cx, a, nl)
+  emit_str_pair(a1, sb, cx, a, nl)
+  ## pop b (top) then a: blen, bptr, alen, aptr
+  push_str(sb, "  popq %rcx\n  popq %rdx\n  popq %rsi\n  popq %rdi\n")
+  lloop := nl      ## loop head
+  lbyte := nl + 1  ## the two bytes at index i differ → cc decides
+  lprefix := nl + 2## one string is exhausted on a common prefix → pcc decides
+  lend := nl + 3
+  nl += 4
+  push_str(sb, "  movq $0, %r8\n")
+  emit_label(sb, lloop)
+  ## `i < alen and i < blen` — stop at the SHORTER length (a prefix precedes its extension).
+  push_str(sb, ":\n  cmpq %rsi, %r8\n  jge ")
+  emit_label(sb, lprefix)
+  push_str(sb, "\n  cmpq %rcx, %r8\n  jge ")
+  emit_label(sb, lprefix)
+  push_str(sb, "\n  movzbq (%rdi,%r8), %rax\n  movzbq (%rdx,%r8), %r9\n  cmpq %r9, %rax\n  jne ")
+  emit_label(sb, lbyte)
+  push_str(sb, "\n  addq $1, %r8\n  jmp ")
+  emit_label(sb, lloop)
+  push_str(sb, "\n")
+  emit_label(sb, lbyte)
+  push_str(sb, ":\n  ")
+  push_str(sb, cc)
+  push_str(sb, " %al\n  movzbq %al, %rax\n  jmp ")
+  emit_label(sb, lend)
+  push_str(sb, "\n")
+  emit_label(sb, lprefix)
+  push_str(sb, ":\n  cmpq %rcx, %rsi\n  ")
+  push_str(sb, pcc)
+  push_str(sb, " %al\n  movzbq %al, %rax\n")
+  emit_label(sb, lend)
+  push_str(sb, ":\n  pushq %rax\n")
+}
+
 ## If `e` is a struct payload (a struct LITERAL or a struct-typed VAR), its word count; 0 otherwise.
 ## Used by `emit_enum_value` to decide whether a variant payload rides more than one return register.
 payload_agg_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
@@ -18148,6 +18191,28 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       if (op == 20 or op == 28) and is_str_operand(l, cx) {
         emit_str_eq_core(l, r, sb, cx, a, nl)
         if op == 28 { push_str(sb, "  popq %rax\n  xorq $1, %rax\n  pushq %rax\n") }
+        return
+      }
+      ## ORDERING over `str` (`<`/`>`/`<=`/`>=`) — the operators desugar to `str_cmp(a, b) ⊕ 0`
+      ## (Stdlib §2.6 / `lib/base/str.al`: lexicographic BYTES, the shorter string preceding its
+      ## extension). Without this arm the pair fell to the scalar `cmpq` at the bottom of the Bin
+      ## case and compared the two `.rodata` ADDRESSES: `"z" >= "a"` answered FALSE (measured, a
+      ## normal-exit wrong value) because `.Lstr0_1` happened to sit below `.Lstr0_0`. Both operands
+      ## must be str operands — a `str` against a scalar is a type error, and byte-comparing the
+      ## pair's words would answer on unrelated data. Bytes load with `movzbq` and are UNSIGNED, so
+      ## the setcc forms are the carry ones. `src/` DOES make bare str orderings — the identifier
+      ## scans at `iface.al:72`, `driver.al:312`, `sema.al:18139`, `lower_attrs.al:28`, `wat.al:117`
+      ## (42 census rows, the whole self-build residue) — so this arm MOVES the fixpoint.
+      if (op == 24 or op == 25 or op == 26 or op == 27) and is_str_operand(l, cx) and is_str_operand(r, cx) {
+        ## The differing-byte condition and the prefix condition: `<`/`<=` take the borrow (`b`),
+        ## `>`/`>=` the carry (`a`); on a common prefix only `<=`/`>=` also accept EQUAL lengths,
+        ## which is why their prefix condition is the inclusive `be`/`ae` while `<`/`>` keep `b`/`a`.
+        mut occ := "setb"
+        mut pcc := "setb"
+        if op == 25 { occ = "seta"; pcc = "seta" }
+        if op == 26 { occ = "setb"; pcc = "setbe" }
+        if op == 27 { occ = "seta"; pcc = "setae" }
+        emit_str_order_core(occ, pcc, l, r, sb, cx, a, nl)
         return
       }
       ## FLOAT arithmetic (`+`/`-`/`*`/`/` over an `f64` operand) — pop the two bit patterns off the
