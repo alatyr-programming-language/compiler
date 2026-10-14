@@ -122,6 +122,15 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64 and riscv64 build fixed arrays through the shared IR (IR slice 3c).** A local `[T; N]`
+  of an integer or `bool`, and a `[T; N]` field of one-word elements in a struct local, are frame
+  memory with each element at its spec stride; an index is bounds-checked in a checked scope (a trap,
+  as on x86_64) and unchecked inside `unchecked`, and an element keeps its declared width and
+  signedness — so `r.u[0] < r.u[1]` over a `[u64; 2]` field compares unsigned there (#707) and an
+  `i8` element divides signed. A literal above `i64`'s range (`18446744073709551615`) now builds in a
+  `u64` position. wasm keeps its legacy emission for these functions until it has a shadow stack.
+  x86_64 output is unchanged.
+
 ## 0.2.14 — 2026-10-13
 
 - **An ordering compare over `str` compares the strings, not their addresses (x86_64).** `<`, `>`,
