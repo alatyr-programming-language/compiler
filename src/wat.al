@@ -8705,11 +8705,27 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   ## loop emits each instance with the substitution active, re-reading WAT_INST_N so transitively
   ## discovered instances are emitted too.
   WAT_INST_N = 0
+  ## The legacy data layout of every module-global word array (`agg_global_base`), handed to the IR
+  ## selector as (declaration index, base) pairs so an IR-built `addr @G` names the same bytes. The
+  ## table lives in `ga`, and the loop below allocates from `ga` past it (an `Arena` is a value: a copy
+  ## that starts at `a`'s offset would overwrite it).
+  mut ga := a
+  gtab := ir::wb_new(ga, 8)
+  for gi in 0..cnt {
+    gd := deref(decl_get(decls, gi))
+    if lower_layout::global_word_array_cells(gd) > 0 {
+      gb := agg_global_base(decls, src, gd.name_start, gd.name_len, a)
+      if gb >= 0 {
+        q1 := ir::wb_push(gtab, ga, gi)
+        q2 := ir::wb_push(gtab, ga, usize(gb))
+      }
+    }
+  }
   for i in 0..cnt {
     d := deref(decl_get(decls, i))
     ## IR slice 1c: a function the shared IR builds and verifies is emitted by the selector
     ## (`src/wat/isel.al`); every other one keeps its legacy emission (owner decision D7).
-    if d.kind == lower_layout::DECL_KIND_FN and not wat_isel_try(decls, i, sb, src, a) { emit_wat_fn(d, sb, a, src, decls) }
+    if d.kind == lower_layout::DECL_KIND_FN and not wat_isel_try(decls, i, gtab, sb, src, ga) { emit_wat_fn(d, sb, ga, src, decls) }
   }
   ## emit one monomorphized instance per RECORDED (generic-fn, type) pair. WAT_SUB_ITS/ITL select the
   ## instance; emit_wat_fn drops the leading type-param and mangles `$<fn>__<tag>`.

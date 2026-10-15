@@ -29,7 +29,7 @@
 ## and the module-global addresses (`gv[i]` holds the address of symbol `gs[i]`).
 ## `fobj`: each frame object's byte offset from the frame base `fp` (a local, after the two scratch
 ## locals); slice 3w: frame objects live on the shadow stack in linear memory (docs/ir.md §6).
-SwX := struct { f : ptr(mut ir::IrFn), p : ir::IrProg, src : ptr(u8), decls : ptr(rt::Vec), fspan : usize, stk : ptr(mut ir::WBuf), s0 : usize, gv : ptr(mut ir::WBuf), gs : ptr(mut ir::WBuf), fobj : ptr(mut ir::WBuf), fp : usize }
+SwX := struct { f : ptr(mut ir::IrFn), p : ir::IrProg, src : ptr(u8), decls : ptr(rt::Vec), fspan : usize, stk : ptr(mut ir::WBuf), s0 : usize, gv : ptr(mut ir::WBuf), gs : ptr(mut ir::WBuf), fobj : ptr(mut ir::WBuf), fp : usize, gt : ptr(mut ir::WBuf) }
 
 sw_put := fn(in out sb : rt::StrBuf, s : str) { k := rt::push_str(sb, s) }
 sw_int := fn(in out sb : rt::StrBuf, n : i64) { k := rt::push_int(sb, n) }
@@ -339,13 +339,26 @@ sw_sym_decl := fn(x : SwX, ip : ptr(mut ir::IrInst)) -> Option(Decl) {
   }
 }
 ## `addr @g` of a module scalar that has a wasm global: remembered, not emitted (see the header).
-sw_addr := fn(x : SwX, in out a : rt::Arena, ip : ptr(mut ir::IrInst)) -> bool {
+## `addr @G` of a module-global word array (the only aggregate global the builder addresses,
+## `ib_bx_index_global`): its linear-memory address, which the legacy data emitter decides and
+## `wat.al` hands over in `x.gt` (pairs of declaration index and base) — one layout, never a second
+## copy of it here (Q4).
+sw_addr := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, ip : ptr(mut ir::IrInst)) -> bool {
   gdo : Option(Decl) = sw_sym_decl(x, ip)
   dv : Option(usize) = sw_dst(ip)
   match gdo {
     Some(g) => {
       has_global := lower_layout::global_has_scalar_cell(g)
-      if not has_global { return false }
+      if not has_global {
+        gbo : Option(usize) = sw_word_array_base(x, ip)
+        match gbo {
+          Some(base) => {
+            sw_const(sb, i64(base))
+            return sw_setd(sb, ip)
+          }
+          None => { return false }
+        }
+      }
       match dv {
         Some(d) => {
           q1 := ir::wb_push(x.gv, a, d)
@@ -357,6 +370,21 @@ sw_addr := fn(x : SwX, in out a : rt::Arena, ip : ptr(mut ir::IrInst)) -> bool {
     }
     None => { false }
   }
+}
+## The legacy linear-memory base of the word-array global `addr @G` names, from `x.gt`.
+sw_word_array_base := fn(x : SwX, ip : ptr(mut ir::IrInst)) -> Option(usize) {
+  match ir::i_ak(ip) {
+    OkSym => {
+      di := ir::sym_decl(x.p, ir::SymId(usize(ir::i_av(ip))))
+      mut i : usize = 0
+      while i + 1 < ir::wb_len(x.gt) {
+        if ir::wb_get(x.gt, i) == di { return Option(usize).Some(ir::wb_get(x.gt, i + 1)) }
+        i = i + 2
+      }
+    }
+    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel => {}
+  }
+  Option(usize).None
 }
 ## The symbol whose address vreg `v` holds, if `addr` gave it one.
 sw_addr_of := fn(x : SwX, v : usize) -> Option(usize) {
@@ -633,7 +661,7 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
     OpExt => { sw_ext(sb, x, ip) }
     OpFit => { sw_fit(sb, x, ip) }
     OpCmp => { sw_cmp(sb, ip) }
-    OpAddrSym => { sw_addr(x, a, ip) }
+    OpAddrSym => { sw_addr(sb, x, a, ip) }
     OpLoad => { sw_load(sb, x, ip) }
     OpStore => { sw_store(sb, x, ip) }
     OpAddrFrame => {
@@ -771,7 +799,7 @@ sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> 
 }
 
 ## The hook in `emit_wat_program`'s declaration loop (see `aarch64::isel`'s `a64_isel_try`).
-pub wat_isel_try := fn(decls : ptr(rt::Vec), di : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) -> bool {
+pub wat_isel_try := fn(decls : ptr(rt::Vec), di : usize, gt : ptr(mut ir::WBuf), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) -> bool {
   mut ia := a
   p := ir::prog_new(ia)
   si : ir::SelIn = ir::select_input(p, decls, src, di, ia)
@@ -779,7 +807,7 @@ pub wat_isel_try := fn(decls : ptr(rt::Vec), di : usize, in out sb : rt::StrBuf,
     SiBuilt(f) => {
       d : Decl = deref(lower_ctx::decl_get(decls, di))
       nv := ir::fn_nvregs(f)
-      x := SwX(f = f, p = p, src = src, decls = decls, fspan = d.name_start, stk = ir::wb_new(ia, 16), s0 = nv, gv = ir::wb_new(ia, 8), gs = ir::wb_new(ia, 8), fobj = ir::wb_new(ia, 8), fp = nv + 2)
+      x := SwX(f = f, p = p, src = src, decls = decls, fspan = d.name_start, stk = ir::wb_new(ia, 16), s0 = nv, gv = ir::wb_new(ia, 8), gs = ir::wb_new(ia, 8), fobj = ir::wb_new(ia, 8), fp = nv + 2, gt = gt)
       mark := sb.len
       if sw_fn(sb, x, d, ia) { return true }
       sb.len = mark
