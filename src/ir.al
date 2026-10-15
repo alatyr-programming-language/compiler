@@ -2867,6 +2867,83 @@ pub sty_get_cur := fn(e : ptr(Expr)) -> VTy {
   k := unchecked bitcast(usize, e)
   sty_get_key(k, rec_inst_word(), rec_iter_word())
 }
+## docs/ir-slice-1.md §8.3 (e3), docs/ir.md §3.8 — THE answer to "which signedness does this integer
+## value carry", read from sema's record in the CURRENT context (instance + iteration). x86's legacy
+## signedness queries ask it instead of recognising the operand's shape (#764/#766/#608), so one
+## decision answers every backend. An integer record carries its own signedness; a literal-only value no
+## context typed is the native SIGNED integer (Types §9.1, Declarations §3.4 — the spec's rule, not a
+## default picked here); a bool/pointer/float/aggregate is not an integer. A node with no record, or one
+## sema could not type, has NO answer: that is a sema gap to close at its root (D6), never a default, so
+## asking for it stops the compilation and names the node.
+pub ValSg := enum { VsSigned, VsUnsigned, VsNotInt }
+val_sg_of := fn(e : ptr(Expr), t : VTy, src : ptr(u8)) -> ValSg {
+  c : VCls = t.cls
+  match c {
+    VcInt => {
+      s : Sgn = t.sg
+      match s { SgS => { return ValSg.VsSigned }; SgU => { return ValSg.VsUnsigned }; SgNone => {} }
+    }
+    VcLit => { return ValSg.VsSigned }
+    VcBool | VcPtr | VcFloat | VcAgg => { return ValSg.VsNotInt }
+    VcAbsent | VcUnknown => {}
+  }
+  val_sg_gap(e, t, src)
+  ValSg.VsNotInt
+}
+## The stop for a value no record answers, located at the node (the verifier's located-error form), so
+## the gap is found at its root (docs/ir.md §3.8: "each is a sema gap to close, never a default").
+val_sg_gap := fn(e : ptr(Expr), t : VTy, src : ptr(u8)) {
+  mut eb := sign_buf()
+  put(eb, "alatyr: internal: e3 — sema recorded no integer type (record ")
+  put_rec(eb, t)
+  put(eb, ") for a value whose signedness x86 must decide")
+  ## the spelling sema kept for the node, so the gap's root (resolution or recording) is visible
+  dsp : TySpell = sty_spell_get_cur(e)
+  put(eb, " [spell n=")
+  put_u(eb, dsp.n)
+  put(eb, " layers=")
+  put_u(eb, usize(dsp.layers))
+  if dsp.n != 0 { put(eb, " text="); put(eb, str_at((src + dsp.s), dsp.n)) }
+  put(eb, "]")
+  sp : Option(u64) = expr_span(e)
+  match sp { Some(s) => { put(eb, " at "); put_src_loc(eb, src, usize(s)) }; None => {} }
+  put(eb, "\n")
+  ew := rt::sb_flush(eb, 2)
+  if ew < 0 { panic("selfhost: ir — the e3 located error could not be written to stderr") }
+  panic("selfhost: e3 — a signedness decision met a value with no sema record (a sema gap; docs/ir-slice-1.md §8.3)")
+}
+pub val_sg_cur := fn(e : ptr(Expr), src : ptr(u8)) -> ValSg { val_sg_of(e, sty_get_cur(e), src) }
+## An operator over (`l`, `r`): the signedness of its first INTEGER operand (sema refuses an operator
+## whose two integer operands disagree, §3.8 item 9, so the first is the pair's); two literal-only
+## operands are the native signed integer; otherwise each side is asked in turn, so a gap stops at the
+## side that has it and two non-integers are not an integer operation.
+pub pair_sg_cur := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> ValSg {
+  lt : VTy = sty_get_cur(l)
+  rt0 : VTy = sty_get_cur(r)
+  lc : VCls = lt.cls
+  rc : VCls = rt0.cls
+  if vcls_is_int(lc) { return val_sg_of(l, lt, src) }
+  if vcls_is_int(rc) { return val_sg_of(r, rt0, src) }
+  if vcls_is_lit(lc) and vcls_is_lit(rc) { return ValSg.VsSigned }
+  if vcls_is_lit(lc) { return val_sg_of(r, rt0, src) }
+  if vcls_is_lit(rc) { return val_sg_of(l, lt, src) }
+  lv : ValSg = val_sg_of(l, lt, src)
+  match lv { VsSigned | VsUnsigned => { return lv }; VsNotInt => {} }
+  val_sg_of(r, rt0, src)
+}
+## An ARITHMETIC operator node `be` over (`l`, `r`) — `+ - *` (its overflow guard) and `/ %`: the
+## type sema recorded for the OPERATOR itself, which carries its context (`S : u64 = 9223372036854775807
+## + 1` is a `u64` addition although both operands are literals); without an integer record of its own
+## the pair answers (`pair_sg_cur`). The shared IR builder types an integer operator the same way
+## (`ib_int_ty` of the node).
+pub arith_sg_cur := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> ValSg {
+  t : VTy = sty_get_cur(be)
+  c : VCls = t.cls
+  if vcls_is_int(c) { return val_sg_of(be, t, src) }
+  pair_sg_cur(l, r, src)
+}
+pub vs_signed := fn(v : ValSg) -> bool { match v { VsSigned => { true }; VsUnsigned | VsNotInt => { false } } }
+pub vs_unsigned := fn(v : ValSg) -> bool { match v { VsUnsigned => { true }; VsSigned | VsNotInt => { false } } }
 pub sty_bind_put_cur := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), rec_inst_word(), rec_iter_word(), t) }
 ## A BINDING's records are written in the context it is declared in, and a use reads them there. A
 ## binding declared outside an unrolled loop (a parameter, a local before the loop) is the same binding

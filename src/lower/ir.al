@@ -109,7 +109,7 @@ pub ir_lower_expr := fn(e : ptr(Expr), cx : ptr(LCtx), unch : bool) -> IROperand
       if bitcast_target_is_narrow_scalar(cx.src, bcs, bcl) { panic("selfhost: regalloc emit — narrow scalar bitcast requires text lowering") }
       ir_lower_expr(inner, cx, true)
     }
-    Expr::Bin(op, l, r) => { ir_lower_bin(op, l, r, cx, unch) }
+    Expr::Bin(op, l, r) => { ir_lower_bin(e, op, l, r, cx, unch) }
     Expr::Call(cs, cl, na, ah) => { ir_lower_call(cs, cl, na, ah, cx, unch) }
     ## a SCALAR field read of a by-ref struct param (predicate-validated) → a BARRIER: the whole `e` is
     ## emitted by the text `emit_gas` at render, so it takes the same path as the text-machine build.
@@ -336,8 +336,9 @@ ir_emit_div_guard := fn(rok : usize, rov : i64, signed : bool) {
 ## conversion / field / call expr in the admitted set), so the ONLY guard distinction is signed (`jno`)
 ## vs unsigned (`jnc`), matching the text path where `ovf_narrow`/pointer are both false. A literal-`0`
 ## LEFT operand (`0 - x` / `0 * x`) skips the guard, exactly as the text path's `expr_is_zero(l)` does.
-ir_lower_bin := fn(op : u8, l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx), unch : bool) -> IROperand {
-  dsigned := is_signed_expr(l, cx) or is_signed_expr(r, cx)
+ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx), unch : bool) -> IROperand {
+  ## e3 (in parts): `/ %` read sema's record of the operator; `+ - *` keep the shape test (#943).
+  dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx) } else { false }
   ## docs/ir.md §3.8.5 — the census row for this division's signedness (no-op unless fd 97 is open).
   if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
   ## A NEGATED operand (`30 + -a`) forces the SIGNED overflow guard — `-a`'s runtime word is a large
@@ -451,8 +452,9 @@ ir_lower_cond := fn(c : ptr(Expr), lfalse : usize, cx : ptr(LCtx), unch : bool) 
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
         lo := ir_to_reg(ir_lower_expr(l, cx, unch))
         ro := ir_lower_expr(r, cx, unch)
-        ucmp := is_unsigned_cmp(l, r, cx)
-        if op == 24 or op == 25 or op == 26 or op == 27 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, not ucmp); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
+        ordering := op == 24 or op == 25 or op == 26 or op == 27
+        ucmp := ordering and is_unsigned_cmp(l, r, cx)
+        if ordering { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, not ucmp); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
         regalloc::ra_ir_emit(4, lo.k, lo.v, ro.k, ro.v)              ## cmp L, R
         regalloc::ra_ir_emit(9, 4, i64(lfalse), 1, i64(ir_neg_cc(op, ucmp)))
       } else {

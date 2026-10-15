@@ -1044,7 +1044,9 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
         lsv := comptime_scalar_value(l, cx)
         rsv := comptime_scalar_value(r, cx)
         if lsv.known and rsv.known {
-          return comptime_cmp(i64(op), lsv.value, rsv.value, is_unsigned_cmp(l, r, cx))
+          ## e3: the domain is asked only for an ordering (`==`/`!=` compare words either way)
+          ordc := i64(op) == 24 or i64(op) == 25 or i64(op) == 26 or i64(op) == 27
+          return comptime_cmp(i64(op), lsv.value, rsv.value, ordc and is_unsigned_cmp(l, r, cx))
         }
       }
       ## STRUCTURAL comparisons, DELEGATED to the `when`-guard fold helpers over this context's
