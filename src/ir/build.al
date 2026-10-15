@@ -2004,8 +2004,8 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
 ##  • the index must be a literal inside the cell count — no `bound` yet, so nothing is read out of the
 ##    run and no bounds trap is invented (a later slice adds `bound`, docs/ir-slice-3.md §1 item 3).
 ## Anything else answers `NotYet` and the function falls back to its target's legacy emitter (D7).
-## wasm refuses at its `load` (its `sw_load` takes offset 0 only, linear memory being slice 3's other
-## half), so wasm keeps its legacy answer and #707 stays open there — reported, not hidden.
+## wasm selects it too: `addr @G` is the linear-memory base its legacy data emitter gave `G`
+## (`agg_global_base`, handed to the selector by `wat.al`), where the same run lies one word per cell.
 ib_bx_index_global := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : ptr(Expr), ix : ptr(Expr)) -> Option(VRegId) {
   bv : IbB = deref(bp)
   bs : usize = lower_layout::ex_var_ns(b)

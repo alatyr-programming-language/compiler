@@ -430,3 +430,13 @@ different instruction). No x86_64, aarch64 or riscv64 row moves. Counts and cens
 - **Closes** the WRONG-VALUE paths `endian_struct`, `endian_offset_struct` and `fmt_agg_body_comment` on
   all three twins (#709, #710's local half). Golden `ig_agg` now pins the packed struct it used as a
   refusal example.
+
+## 11. 3w-g — wasm selects module-global word arrays
+
+§7.1's first tier was closed on aarch64/riscv64 only: wasm's selector refused `addr @G` of anything
+but a module scalar (a wasm global). The legacy wasm data emitter already lays such a global out in
+linear memory as one 8-byte word per cell, at `agg_global_base` (1024 plus the aggregate globals
+declared before it), so `wat.al` hands the selector a table of (declaration index, base) for every
+word-array global and `addr @G` becomes `i64.const base`. The layout stays the legacy emitter's one
+decision (Q4); the selector only reads it. Closes `signedness_global_array` on wasm (#707's global
+half), the last twin of that path.
