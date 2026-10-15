@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **wasm builds structs, arrays and pointers through the shared IR (IR slice 3w).** A function with a
+  struct or array local, a pointer place or a struct argument is now selected from the IR on wasm too:
+  its frame objects live in linear memory from the module's stack pointer. Eleven corpus programs that
+  trapped or answered a wrong value on wasm (a signed struct field divided unsigned, #765; an unsigned
+  array element compared signed, #707) now answer what x86_64 answers. A function with no result whose
+  body ends in a void call keeps that call on every backend (the legacy wasm emitter dropped it, #946).
 - **aarch64 and riscv64 return small structs from IR-built functions (IR slice 3d, step 2).** A function
   whose result is a one- or two-word struct is built through the shared IR and returns the words in the
   result registers — the convention the legacy emitters use — so IR-built and legacy functions return
