@@ -1,8 +1,8 @@
 # Shared IR, slice 3 — design note and HANDOFF (aggregates, places, layout)
 
 Status: **3a landed** (§5, #910), **3b landed** (§6, #921), **3c landed in part** (§7: first tier #925,
-fixed arrays #941; `str`/slices as two-word aggregates remain), **3d step 1 in review** (§8: aggregate
-arguments). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
+fixed arrays #941; `str`/slices as two-word aggregates remain), **3d** (§8: step 1 #945 aggregate arguments; step 2 in review,
+aggregate results). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
 §0–§2 are the plan written at the end of the slice-2 lane, §3 what that lane measured, §4 the open
 questions, §5 onwards each PR as built.
 
@@ -341,8 +341,29 @@ function earlier in the file is now IR-emitted with a different size, so the err
 `.text` offset moves. No row changes phase or exit; no x86_64 row moves. Census and `ir_diff` numbers
 are in the PR.
 
-### 8.4 Step 2 (next)
+### 8.4 Step 2 — aggregate results (as built)
 
-Aggregate RESULTS: ≤ 2 words in the two result registers (the legacy convention on the register twins),
-more through a hidden first `ptr` (sret — legacy has no convention to meet there). It needs a call with
-two results in the IR, or the sret form for both.
+Measured: x86_64 returns a struct's words in `%rax`, `%rdx` (and `%rcx` for a third); aarch64 and
+riscv64 in `x0/x1`, `a0/a1`, and do not lower a larger struct result at all. The common convention is
+one or two words in two result registers, so step 2 builds exactly that:
+
+- **IR**: a function's result may be an aggregate of `ret_words` (1 or 2) words — `ret_ty` is `ptr` and
+  `ret` carries the value's ADDRESS (`-> agg 16`). A `call` with an aggregate result receives it in a
+  frame object (`$k = call …`, `set_dst_frame`). The verifier's `ret` rule is unchanged (a `ptr`).
+- **Builder**: `ib_agg_ret_words` admits a WORD-tier struct of one or two words; `return`, a tail value
+  and a body's trailing value go through `ib_ret_expr` (the value built or copied into a fresh frame
+  object, its address returned). A call's aggregate result is `CoAgg(frame)`, used by `p := mk()`,
+  `mk().f` (a place in the receiving object) and `take(mk())`; in a scalar value position it refuses.
+- **Selectors**: at `ret`, aarch64/riscv64/x86-ir load the words through the address into the result
+  registers; after a `call` they store the result registers into the receiving object. wasm refuses a
+  function with an aggregate result (its legacy emitter returns a block's address).
+- **Proof (Q4)**: `test/ir_agg_ret.al`, IR ↔ legacy in both directions, 42 on all four backends; the
+  `ig_aggret` golden pins `mk(a).y` (the legacy wasm emitter cannot lower a field straight off a call,
+  so a running fixture of it would add a wasm trap row).
+
+### 8.5 What 3d does not cover yet
+
+A struct result of three or more words (needs a convention: sret, or x86's register run), a struct
+parameter that is address-taken, `in out` or assigned, a non-WORD tier (BYTE/PACKED) struct crossing a
+call, and every aggregate call on wasm (shadow stack). Arrays and `str` as arguments follow with 3c's
+two-word aggregates.
