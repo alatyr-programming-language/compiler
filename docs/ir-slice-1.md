@@ -348,6 +348,11 @@ default: the compilation stops with a located internal error naming the record c
   so a value of that type read `VcUnknown` (the self-build's `usize(id)` over `Some(id)` of an
   `Option(ir::InstId)`). `sema_qual_type_head` is now the one reading of a qualified type name's head
   (shared with `sema_type_decl_q`), and `sema_qual_scalar_target` reads the brand or alias it names.
+- **A second sema gap closed: `@test` bodies were never checked.** `check_decl` checked fn bodies
+  and module values only, so a `@test` item's expressions had no record and the e3 stop fired in
+  `test/package/abi_reachability`'s test. They are checked like a fn body now; the parser's test
+  path also had to use the fn path's no-tail marker (`Num(-1)`), not `Num(0)`, or sema read a
+  trailing `0` and refused every `-> Result(…)` test.
 - **Two fixtures annotated:** `checked_sub_ovf` and `ra_imm64_checked_trap` wrote `a := 0` and returned
   `a - 1` from `-> u64`, relying on x86's shape reading `a` as `u64`. By Types §9.1 `a` is `i64`; the
   fixtures now say `a : u64` so they test the borrow they describe, and the checker's acceptance of the
