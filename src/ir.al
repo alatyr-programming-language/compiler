@@ -174,7 +174,7 @@ opndk_is_vreg := fn(k : OpndK) -> bool {
 opndk_is_none := fn(k : OpndK) -> bool {
   match k { OkNone => { true }; OkVReg | OkImm | OkFrame | OkSym | OkFn | OkLabel => { false } }
 }
-opndk_is_frame := fn(k : OpndK) -> bool {
+pub opndk_is_frame := fn(k : OpndK) -> bool {
   match k { OkFrame => { true }; OkNone | OkVReg | OkImm | OkSym | OkFn | OkLabel => { false } }
 }
 opndk_is_fn := fn(k : OpndK) -> bool {
@@ -494,6 +494,10 @@ pub IrInst := struct {
 pub IrFn := struct {
   name_p : ptr(u8), name_n : usize,
   nparams : usize, has_ret : bool, ret_ty : Kty, ret_sg : Sgn,
+  ## Slice 3d: `ret_words` > 0 is an AGGREGATE result of that many words (`ret_ty` is then `ptr`): `ret`
+  ## carries the ADDRESS of the value and each selector returns its words in the target's result
+  ## registers — the convention every legacy emitter uses for a struct result of up to two words.
+  ret_words : usize,
   vregs : ptr(mut WBuf), frames : ptr(mut WBuf), insts : ptr(mut WBuf), pool : ptr(mut WBuf),
   nlabels : usize,
 }
@@ -553,7 +557,7 @@ pub fn_new := fn(in out a : rt::Arena, name_p : ptr(u8), name_n : usize, has_ret
   iw := wb_new(a, 32)
   pw := wb_new(a, 8)
   nf := IrFn(name_p = name_p, name_n = name_n, nparams = 0, has_ret = has_ret, ret_ty = ret_ty, ret_sg = ret_sg,
-             vregs = vw, frames = fw, insts = iw, pool = pw, nlabels = 0)
+             ret_words = 0, vregs = vw, frames = fw, insts = iw, pool = pw, nlabels = 0)
   deref(f) = nf
   f
 }
@@ -566,6 +570,9 @@ pub fn_nparams := fn(f : ptr(mut IrFn)) -> usize { fv : IrFn = deref(f); fv.npar
 pub fn_has_ret := fn(f : ptr(mut IrFn)) -> bool { fv : IrFn = deref(f); fv.has_ret }
 pub fn_ret_ty := fn(f : ptr(mut IrFn)) -> Kty { fv : IrFn = deref(f); fv.ret_ty }
 pub fn_ret_sg := fn(f : ptr(mut IrFn)) -> Sgn { fv : IrFn = deref(f); fv.ret_sg }
+pub fn_ret_words := fn(f : ptr(mut IrFn)) -> usize { fv : IrFn = deref(f); fv.ret_words }
+## Mark `f`'s result an aggregate of `n` words (slice 3d); its `ret_ty` must be `ptr`.
+pub fn_set_ret_words := fn(f : ptr(mut IrFn), n : usize) { deref(f).ret_words = n }
 fn_nlabels := fn(f : ptr(mut IrFn)) -> usize { fv : IrFn = deref(f); fv.nlabels }
 fn_vregs := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.vregs }
 fn_frames := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.frames }
@@ -673,6 +680,9 @@ pub inst0 := fn(o : Op) -> IrInst {
        has_span = false, span = 0, proven = false)
 }
 pub set_dst := fn(in out it : IrInst, v : VRegId) { it.dk = OpndK.OkVReg; it.dv = i64(usize(v)) }
+## A `call`'s aggregate result is received in frame object `k` (slice 3d): the selector stores the
+## result registers' words into it after the call.
+pub set_dst_frame := fn(in out it : IrInst, k : FrameId) { it.dk = OpndK.OkFrame; it.dv = i64(usize(k)) }
 pub set_a := fn(in out it : IrInst, o : Opnd) { it.ak = o.k; it.av = o.v }
 pub set_b := fn(in out it : IrInst, o : Opnd) { it.bk = o.k; it.bv = o.v }
 pub set_span := fn(in out it : IrInst, s : usize) { it.has_span = true; it.span = s }
@@ -921,7 +931,9 @@ pub print_fn := fn(in out sb : rt::StrBuf, p : IrProg, f : ptr(mut IrFn)) {
     rty : Kty = fn_ret_ty(f)
     rsg : Sgn = fn_ret_sg(f)
     put(sb, " -> ")
-    put_ty(sb, rty, rsg)
+    rw := fn_ret_words(f)
+    if rw > 0 { put(sb, "agg "); put_u(sb, rw * 8) }
+    if rw == 0 { put_ty(sb, rty, rsg) }
   }
   put(sb, " {\n")
   mut k : usize = 0

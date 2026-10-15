@@ -16,7 +16,7 @@
 ## One golden: its module name (the file stem), its source, and the report it must print.
 Golden := struct { name : str, src : str, want : str }
 
-golden_count := fn() -> usize { 10 }
+golden_count := fn() -> usize { 11 }
 golden_at := fn(i : usize) -> Golden {
   if i == 0 { return Golden(name = "ig_arith", src = g_arith_src(), want = g_arith_want()) }
   if i == 1 { return Golden(name = "ig_logic", src = g_logic_src(), want = g_logic_want()) }
@@ -27,6 +27,7 @@ golden_at := fn(i : usize) -> Golden {
   if i == 6 { return Golden(name = "ig_sys", src = g_sys_src(), want = g_sys_want()) }
   if i == 7 { return Golden(name = "ig_agg", src = g_agg_src(), want = g_agg_want()) }
   if i == 8 { return Golden(name = "ig_place", src = g_place_src(), want = g_place_want()) }
+  if i == 9 { return Golden(name = "ig_aggret", src = g_aggret_src(), want = g_aggret_want()) }
   Golden(name = "ig_notyet", src = g_notyet_src(), want = g_notyet_want())
 }
 
@@ -106,12 +107,21 @@ g_place_want := fn() -> str {
   "fn ig_place::bump Built\nfn bump(%0 : ptr, %1 : ptr) {\n  %2 = load.s i64 [%0 + 0]\n  %3 = const.s i64 1\n  %4 = add.chk.s i64 %2, %3 overflow  @8347\n  store i64 [%0 + 0], %4\n  %5 = load.u i64 [%1 + 0]\n  store i64 [%0 + 8], %5\n  %6 = const.u i64 0\n  store i64 [%1 + 0], %6\n  ret\n}\nfn ig_place::take Built\nfn take() -> i64 u {\n  $0 : frame 8 align 8\n  %0 = const.u i64 5\n  %1 = mov i64 %0\n  store i64 [$0 + 0], %1\n  %2 = addr $0\n  %3 = mov ptr %2\n  %4 = const.u i64 6\n  store i64 [%3 + 0], %4\n  %5 = addr @G\n  %6 = load.u i32 [%5 + 0]\n  %7 = const.u i32 1\n  %8 = ext.u i64 <- i32 %6\n  %9 = ext.u i64 <- i32 %7\n  %10 = add.chk.u i64 %8, %9 overflow  @8602\n  %11 = fit.u i32 <- i64 %10 overflow  @8602\n  %12 = ext.u i64 <- i32 %11\n  %13 = addr @G\n  store i64 [%13 + 0], %12\n  %14 = load.u i64 [$0 + 0]\n  ret %14\n}\nfn ig_place::low NotYet(stmt DerefAssign, ig_place.al:18:36)\nir: functions=3 built=2 notyet=1 sema_gaps=0 verify_failed=0\n"
 }
 
+## Slice 3d: a one- or two-word struct RESULT — `ret` carries the value's address (`-> agg 16`), and a
+## call receives it in a fresh frame object (`$k = call …`), read in place (`mk(a).y`).
+g_aggret_src := fn() -> str {
+  "P := struct { x : u64, y : u64 }\nmk := fn(a : u64) -> P { P(x = a, y = a + 1) }\nget := fn(a : u64) -> u64 { mk(a).y }\n"
+}
+g_aggret_want := fn() -> str {
+  "fn ig_aggret::mk Built\nfn mk(%0 : i64 u) -> agg 16 {\n  $0 : frame 16 align 8\n  store i64 [$0 + 0], %0\n  %1 = const.u i64 1\n  %2 = add.chk.u i64 %0, %1 overflow  @8259\n  store i64 [$0 + 8], %2\n  %3 = addr $0\n  ret %3\n}\nfn ig_aggret::get Built\nfn get(%0 : i64 u) -> i64 u {\n  $0 : frame 16 align 8\n  $0 = call @mk(%0)\n  %1 = load.u i64 [$0 + 8]\n  ret %1\n}\nir: functions=2 built=2 notyet=0 sema_gaps=0 verify_failed=0\n"
+}
+
 ## Refusals: constructs outside the subset, and sema gaps (D6).
 g_notyet_src := fn() -> str {
-  "S := struct { a : u64 }\n## outside the subset: an aggregate RESULT (a struct local builds since 3a, a struct parameter since 3d)\nmk := fn(x : u64) -> S { S(a = x) }\npair := fn(x : u64) -> u64 {\n  t := S(a = x)\n  t.a\n}\n## a sema gap, counted and never defaulted (D6): a default argument is filled after sema ran\n## (a value `loop`'s body is recorded since docs/ir.md §3.8.8, so `first` builds)\ndflt := fn(x : u64 = 5) -> u64 { x }\nfill := fn() -> u64 { dflt() }\nfirst := fn(n : u64) -> u64 {\n  mut i : u64 = 0\n  r := loop {\n    if i * i > n { break i }\n    i = i + 1\n  }\n  r\n}\n"
+  "S := struct { a : u64 }\nT := struct { a : u64, b : u64, c : u64 }\n## outside the subset: an aggregate RESULT of three words (one or two build since 3d)\nmk := fn(x : u64) -> T { T(a = x, b = x, c = x) }\npair := fn(x : u64) -> u64 {\n  t := S(a = x)\n  t.a\n}\n## a sema gap, counted and never defaulted (D6): a default argument is filled after sema ran\n## (a value `loop`'s body is recorded since docs/ir.md §3.8.8, so `first` builds)\ndflt := fn(x : u64 = 5) -> u64 { x }\nfill := fn() -> u64 { dflt() }\nfirst := fn(n : u64) -> u64 {\n  mut i : u64 = 0\n  r := loop {\n    if i * i > n { break i }\n    i = i + 1\n  }\n  r\n}\n"
 }
 g_notyet_want := fn() -> str {
-  "fn ig_notyet::mk NotYet(signature (a parameter or result that is not a kernel scalar), ig_notyet.al:3:1)\nfn ig_notyet::pair Built\nfn pair(%0 : i64 u) -> i64 u {\n  $0 : frame 8 align 8\n  store i64 [$0 + 0], %0\n  %1 = load.u i64 [$0 + 0]\n  ret %1\n}\nfn ig_notyet::dflt Built\nfn dflt(%0 : i64 u) -> i64 u {\n  ret %0\n}\nfn ig_notyet::fill NotYet(sema-gap absent: expr Num, ig_notyet.al:10:22)\nfn ig_notyet::first Built\nfn first(%0 : i64 u) -> i64 u {\n  %1 = const.u i64 0\n  %2 = mov i64 %1\n  block L0 {\n    loop L1 {\n      %4 = mul.chk.u i64 %2, %2 overflow  @8719\n      %5 = cmp.>.u i64 %4, %0\n      if %5 {\n        %3 = mov i64 %2\n        br L0\n      } else {\n      }\n      %6 = const.u i64 1\n      %7 = add.chk.u i64 %2, %6 overflow  @8749\n      %2 = mov i64 %7\n      br L1\n    }\n  }\n  %8 = mov i64 %3\n  ret %8\n}\nir: functions=5 built=3 notyet=2 sema_gaps=1 verify_failed=0\n"
+  "fn ig_notyet::mk NotYet(signature (a parameter or result that is not a kernel scalar), ig_notyet.al:4:1)\nfn ig_notyet::pair Built\nfn pair(%0 : i64 u) -> i64 u {\n  $0 : frame 8 align 8\n  store i64 [$0 + 0], %0\n  %1 = load.u i64 [$0 + 0]\n  ret %1\n}\nfn ig_notyet::dflt Built\nfn dflt(%0 : i64 u) -> i64 u {\n  ret %0\n}\nfn ig_notyet::fill NotYet(sema-gap absent: expr Num, ig_notyet.al:11:22)\nfn ig_notyet::first Built\nfn first(%0 : i64 u) -> i64 u {\n  %1 = const.u i64 0\n  %2 = mov i64 %1\n  block L0 {\n    loop L1 {\n      %4 = mul.chk.u i64 %2, %2 overflow  @8756\n      %5 = cmp.>.u i64 %4, %0\n      if %5 {\n        %3 = mov i64 %2\n        br L0\n      } else {\n      }\n      %6 = const.u i64 1\n      %7 = add.chk.u i64 %2, %6 overflow  @8786\n      %2 = mov i64 %7\n      br L1\n    }\n  }\n  %8 = mov i64 %3\n  ret %8\n}\nir: functions=5 built=3 notyet=2 sema_gaps=1 verify_failed=0\n"
 }
 
 ## ── the runner ──
