@@ -459,6 +459,23 @@ sr_args := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) {
 }
 ## A direct call: the arguments in a0..a7, `call` the callee's legacy label, the result from a0,
 ## re-canonicalized from the destination's type.
+## `%d = bswap T %a` (slice 3e, `@endian(big)`): the base ISA has no byte reverse, so the low `T`-width
+## bytes are moved one by one (byte i to byte nb-1-i), then canonical at `T`.
+sr_bswap := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sr_lda(sb, "t0", ip) { return false }
+  ty : ir::Kty = ir::i_ty(ip)
+  nb := ir::kty_bytes(ty)
+  if nb != 1 and nb != 2 and nb != 4 and nb != 8 { return false }
+  sr_put(sb, "  li t1, 0\n")
+  mut i : u64 = 0
+  while i < nb {
+    sr_put(sb, "  srli t2, t0, "); sr_int(sb, i64(i * 8)); sr_put(sb, "\n  andi t2, t2, 255\n")
+    sr_put(sb, "  slli t2, t2, "); sr_int(sb, i64((nb - 1 - i) * 8)); sr_put(sb, "\n  or t1, t1, t2\n")
+    i = i + 1
+  }
+  if not sr_canon(sb, "t2", "t1", ty, ir::i_sg(ip)) { return false }
+  sr_st2(sb, ip)
+}
 ## Slice 3d: a call's aggregate result — a0, then a1 for a two-word value — into its frame object.
 sr_agg_res := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
   nb := ir::frame_bytes(x.f, usize(ir::i_dv(ip)))
@@ -656,6 +673,7 @@ sr_inst := fn(in out sb : rt::StrBuf, x : SrX, in out a : rt::Arena, i : usize) 
       sr_put(sb, "\n")
       true
     }
+    OpBSwap => { sr_bswap(sb, ip) }
     OpTrap => { sr_trap(sb, x, ir::i_tk(ip), ip); true }
     OpTrapIf => {
       if not sr_lda(sb, "t0", ip) { return false }
@@ -665,7 +683,7 @@ sr_inst := fn(in out sb : rt::StrBuf, x : SrX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpCallInd
       | OpCallC | OpSwitch => { false }
   }
 }
