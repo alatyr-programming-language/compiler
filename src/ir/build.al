@@ -3339,9 +3339,14 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
   if has_ret and not has_tail { ib_bs_tail(bp, a, d.body_stmts) } else { ib_bs(bp, a, d.body_stmts) }
   if not ib_b_failed(bp) and not ib_b_term(bp) {
     if has_tail {
-      if has_ret { ib_ret_expr(bp, a, d.value) } else {
-        tvo : Option(VRegId) = ib_bx(bp, a, d.value)
-        match tvo { Some(tv) => { on := o_none(); i2 := e_ret(f, a, on) }; None => {} }
+      if has_ret { ib_ret_expr(bp, a, d.value) }
+      if not has_ret {
+        ## A function with no result whose body ends in an expression (`bump(p, by)`, a call of a void
+        ## function): the expression is a statement, then the function returns. Building it as a VALUE
+        ## refused a void call (no value to take), which left such a function to a legacy emitter that
+        ## drops the call on wasm (#946).
+        ib_bs_expr(bp, a, d.value)
+        if not ib_b_failed(bp) and not ib_b_term(bp) { on := o_none(); i2 := e_ret(f, a, on) }
       }
     } else {
       ## A body that neither returns nor yields its declared result on every path is not one the builder
