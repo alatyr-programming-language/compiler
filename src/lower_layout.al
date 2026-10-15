@@ -3771,6 +3771,88 @@ pub ex_value_fold := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), dept
 ## operand type, which is why the signedness proof in `operand_unsigned` excludes them.
 pub ex_is_cmp_op := fn(op : u8) -> bool { op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 }
 ## The synthetic "no tail expression" marker the backends encode as `Expr::Num(-1)` with an empty span.
+## MAY expression `e` read the local named `[xs, xs+xl)`? An OVER-approximation, the safe polarity for
+## its one use: building a struct literal straight into a local is sound only when the literal cannot
+## read that local (#909, `p = P(a = p.b, b = p.a)` overwrote `p.a` before `b`'s initializer read it).
+## The forms whose operands are walked here answer exactly; every other form (`match`, a value `loop`,
+## a lambda) answers TRUE — a needless copy, never a wrong value (on a byte-layout array, a loud
+## refusal; so the walk covers every form whose operands are plain expressions). One
+## read it does not see: a CALLEE reading the local through a pointer that escaped earlier (`ptr(p)`
+## stored elsewhere); only the call's own arguments are walked. (sema's `expr_mentions_var` is the
+## opposite, an under-approximation, for a check that must not over-reject.)
+pub expr_may_read_var := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize) -> bool {
+  match deref(e) {
+    Expr::Var(s, n) => { streq(src, s, n, xs, xl) }
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::FnRef => { false }
+    Expr::Bin(op, l, r) => { expr_may_read_var(l, src, xs, xl) or expr_may_read_var(r, src, xs, xl) }
+    Expr::If(c, t, f) => { expr_may_read_var(c, src, xs, xl) or expr_may_read_var(t, src, xs, xl) or expr_may_read_var(f, src, xs, xl) }
+    Expr::Field(b, fs, fl) => { expr_may_read_var(b, src, xs, xl) }
+    Expr::Deref(p) => { expr_may_read_var(p, src, xs, xl) }
+    Expr::AddrOf(p) => { expr_may_read_var(p, src, xs, xl) }
+    Expr::Unchecked(p) => { expr_may_read_var(p, src, xs, xl) }
+    Expr::Index(b, i) => { expr_may_read_var(b, src, xs, xl) or expr_may_read_var(i, src, xs, xl) }
+    Expr::Call(cs, cl, na, ah) => { args_may_read_var(ah, src, xs, xl) }
+    Expr::StructLit(ns, nl, nf, fh) => { args_may_read_var(fh, src, xs, xl) }
+    Expr::ArrayLit(nel, eh) => { args_may_read_var(eh, src, xs, xl) }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { args_may_read_var(ph, src, xs, xl) }
+    Expr::Try(p) => { expr_may_read_var(p, src, xs, xl) }
+    Expr::Bitcast(p, ts, tl) => { expr_may_read_var(p, src, xs, xl) }
+    Expr::Slice(b, lo, hi) => { expr_may_read_var(b, src, xs, xl) or expr_may_read_var(lo, src, xs, xl) or expr_may_read_var(hi, src, xs, xl) }
+    Expr::CompField(b, f) => { expr_may_read_var(b, src, xs, xl) or expr_may_read_var(f, src, xs, xl) }
+    Expr::Match | Expr::Lambda | Expr::Loop => { true }
+  }
+}
+## #909, precisely: built in place, a struct literal writes its fields in declaration order and a
+## word-layout array literal its elements in order, so an initializer AFTER the first can see a word an
+## earlier one overwrote — and so can the first one's own parts when it is itself a literal that is
+## stored piece by piece (a nested struct, array or enum literal; a nested @packed or byte-layout
+## struct also zeroes its words first). May any of those read the local `[xs, xs+xl)`? A scalar or
+## call first initializer is evaluated whole before its store, which is sound. Not a struct or array
+## literal: the whole expression is asked. Callers pass only writers that store in that order; the
+## zero-first writers ask `expr_may_read_var` instead.
+pub lit_tail_may_read_var := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize) -> bool {
+  mut h : Option(ptr(mut Arg)) = Option.None
+  match deref(e) {
+    Expr::StructLit(ns, nl, nf, fh) => { h = fh }
+    Expr::ArrayLit(nel, eh) => { h = eh }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { return expr_may_read_var(e, src, xs, xl) }
+  }
+  match h {
+    Some(fq) => {
+      f0 := deref(arg_p(fq))
+      if args_may_read_var(f0.next, src, xs, xl) { return true }
+      if is_piecewise_lit(f0.e) { return expr_may_read_var(f0.e, src, xs, xl) }
+      false
+    }
+    None => { false }
+  }
+}
+## Is `e` a literal its writer stores piece by piece (so its own parts can read what it already wrote)?
+is_piecewise_lit := fn(e : ptr(Expr)) -> bool {
+  match deref(e) {
+    Expr::StructLit | Expr::ArrayLit | Expr::EnumLit => { true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+args_may_read_var := fn(h : Option(ptr(mut Arg)), src : ptr(u8), xs : usize, xl : usize) -> bool {
+  mut g : Option(ptr(mut Arg)) = h
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if expr_may_read_var(ga.e, src, xs, xl) { return true }
+        g = ga.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
 pub ex_is_no_tail := fn(e : ptr(Expr)) -> bool {
   mut r := false
   match deref(e) { Expr::Num(v, s, n) => { if v == 0 - 1 and n == 0 { r = true } } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }

@@ -290,7 +290,7 @@ confirm: `checked_index_*` ×5, `checked_struct_field_array_oob`, `compound_assi
 The IR answers the spec's value on three shapes where a legacy reference does not. They are filed and
 left out of the fixtures (each would add a disagreement row the ratchet refuses):
 `r.u.len` of an array field answers 0 on x86_64 (#936); `ys : [u64; 3] = xs` lands shifted by one
-element on x86_64 and aliases on wasm (#937); `xs = [xs[1] + 3, …]` is built in place on x86_64 (#909).
+element on x86_64 and aliases on wasm (#937); `xs = [xs[1] + 3, …]` is built in place on x86_64 (#909; fixed in 0.2.16, `test/array_assign_self.al`).
 Legacy wasm also traps on `xs.len` of a local and answers a wrong value for an array reassignment;
 both close when wasm selects arrays (shadow stack).
 

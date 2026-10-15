@@ -122,6 +122,17 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.16 — 2026-10-15
+
+- **x86_64 assigns a struct or array literal that reads its own destination by value (#909).**
+  `p = P(a = p.b, b = p.a)` built the literal in place, so the second initializer read the field the
+  first had just overwritten (`(2, 2)`, not `(2, 1)`); `xs = [xs[1] + 3, xs[0], xs[2]]` likewise. For a
+  `@packed` or byte-layout struct the destination was zeroed first, so even the first initializer read
+  zero. Such a literal is now built in a temporary and copied; every other literal is still built in
+  place. An array literal that reads a byte-layout array it is assigned to is refused with an error
+  instead. aarch64, riscv64 and wasm already built these literals in their own frame object, except a
+  nested struct literal as the first initializer, which is still wrong there (#951). The compiler's own
+  code has this shape, so the seed is promoted.
 - **aarch64, riscv64 and wasm honour `@packed`, `@offset` and `@endian(big)` on struct locals (IR slice
   3e).** Such a struct is laid out byte-exactly through the shared IR and a big-endian field is
   byte-reversed on store and load, so `endian_struct`, `endian_offset_struct` and `fmt_agg_body_comment`

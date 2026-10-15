@@ -8622,9 +8622,10 @@ run_wat ir_twins_short_circuit 42
 ## is asserted by value; the legacy twin emitters trapped on `ir_struct_local` and `ir_size_align` and
 ## divided the signed field of `ir_struct_field_signed` unsigned (#765). Since slice 3w wasm builds them
 ## too (frame objects on the shadow stack), so each is asserted on wasm as well; legacy wasm answered
-## 134, 2 (#765's wrong value), 0. `ir_struct_assign_self` is
-## #909: x86_64 and the legacy emitters build the literal in place (22); the IR-selected twins answer
-## the literal's value (21).
+## 134, 2 (#765's wrong value), 0. `ir_struct_assign_self` is #909: x86_64 and the legacy emitters
+## built the literal in place (22); the IR-selected twins answer the literal's value (21), and since
+## #909's fix so does x86_64 (a literal that may read its own destination is built in a temp block
+## and copied).
 run ir_struct_local 42
 run_a64 ir_struct_local 42
 run_rv64 ir_struct_local 42
@@ -8637,9 +8638,24 @@ run ir_size_align 42
 run_a64 ir_size_align 42
 run_rv64 ir_size_align 42
 run_wat ir_size_align 42
+run ir_struct_assign_self 21
 run_a64 ir_struct_assign_self 21
 run_rv64 ir_struct_assign_self 21
 run_wat ir_struct_assign_self 21
+## #909, the zeroing writers (@packed, standard byte layout): the FIRST initializer reads the destination.
+run struct_assign_self_zeroing 42
+run_a64 struct_assign_self_zeroing 42
+run_rv64 struct_assign_self_zeroing 42
+run_wat struct_assign_self_zeroing 42
+## #909, a nested literal as the first initializer, and the array form (`xs = [xs[1] + 3, …]`).
+run struct_assign_self_nested 42
+run_a64 struct_assign_self_nested 42
+run_rv64 struct_assign_self_nested 42
+run_wat struct_assign_self_nested 42
+run array_assign_self 40
+run_a64 array_assign_self 40
+run_rv64 array_assign_self 40
+run_wat array_assign_self 40
 ## IR slice 3b (`docs/ir-slice-3.md` §6): pointers as places. `ir_ptr_place` is IR-built end to end on
 ## the register twins (the legacy twins trapped on its field places). `ir_ptr_agree` writes in the IR
 ## and reads in a legacy function and the reverse; riscv64's legacy emitter has no field place through
