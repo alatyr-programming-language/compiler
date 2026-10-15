@@ -291,13 +291,15 @@ op_has_mode := fn(o : Op) -> bool {
 ## V3 — the ops whose result is canonical for a narrow type by construction: bitwise ops over canonical
 ## operands, a `load` (its extension comes from the type's sign), an in-range `const`, and the width
 ## ops themselves. A `call` result is canonical by the convention every selector keeps, and a `mov`
-## copies a canonical value. Everything else that produces a narrow type must go through `ext`/`fit`.
+## copies a canonical value. `bswap T` (slice 3e) reverses the low `T`-width bytes and every selector
+## canonicalizes its result at `T` — that is the op's definition. Everything else that produces a narrow
+## type must go through `ext`/`fit`.
 op_keeps_canonical := fn(o : Op) -> bool {
   match o {
-    OpAnd | OpOr | OpXor | OpLoad | OpConst | OpExt | OpFit | OpMov | OpCall | OpCallInd | OpCallC => { true }
+    OpAnd | OpOr | OpXor | OpLoad | OpConst | OpExt | OpFit | OpMov | OpCall | OpCallInd | OpCallC | OpBSwap => { true }
     OpFConst | OpAddrSym | OpAddrFrame | OpFnAddr | OpAdd | OpSub | OpMul | OpDiv | OpRem | OpNot | OpNeg | OpShl
       | OpShr | OpRotl | OpRotr | OpTrunc | OpCmp | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg | OpIToF
-      | OpFToI | OpFExt | OpFDemote | OpBits | OpStore | OpBSwap | OpCopy | OpZero | OpGep | OpBound | OpSyscall
+      | OpFToI | OpFExt | OpFDemote | OpBits | OpStore | OpCopy | OpZero | OpGep | OpBound | OpSyscall
       | OpBlock | OpLoop | OpIf | OpElse | OpUnch | OpEnd | OpBr | OpBrIf | OpSwitch | OpRet | OpTrap | OpTrapIf => { false }
   }
 }

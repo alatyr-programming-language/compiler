@@ -482,6 +482,19 @@ sx_load := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
 ## A direct call: the arguments in the six argument registers, `call` the callee's legacy label, the
 ## result from %rax, re-canonicalized from the destination's type. A callee whose label the legacy
 ## emitter spells with a suffix or an alias is refused (`sx_plain_label`).
+## `%d = bswap T %a` (slice 3e, `@endian(big)`): the low `T`-width bytes reversed (`bswapq`, `bswapl`,
+## `rolw $8`; one byte is itself), then canonical at `T`.
+sx_bswap := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sx_lda(sb, SxR.XrAx, ip) { return false }
+  ty : ir::Kty = ir::i_ty(ip)
+  nb := ir::kty_bytes(ty)
+  if nb != 1 and nb != 2 and nb != 4 and nb != 8 { return false }
+  if nb == 8 { sx_put(sb, "  bswapq %rax\n") }
+  if nb == 4 { sx_put(sb, "  bswapl %eax\n") }
+  if nb == 2 { sx_put(sb, "  rolw $8, %ax\n") }
+  if not sx_canon(sb, SxR.XrAx, ty, ir::i_sg(ip)) { return false }
+  sx_strax(sb, ip)
+}
 ## Slice 3d: a call's aggregate result — %rax, then %rdx for a two-word value — into its frame object.
 sx_agg_res := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
   nb := ir::frame_bytes(x.f, usize(ir::i_dv(ip)))
@@ -695,6 +708,7 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
       sx_put(sb, "\n")
       true
     }
+    OpBSwap => { sx_bswap(sb, ip) }
     OpTrap => { sx_trap(sb, x, ir::i_tk(ip), ip); true }
     OpTrapIf => {
       if not sx_lda(sb, SxR.XrAx, ip) { return false }
@@ -703,7 +717,7 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpCallInd
       | OpCallC | OpSyscall | OpSwitch => { false }
   }
 }

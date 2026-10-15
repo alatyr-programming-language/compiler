@@ -482,6 +482,34 @@ sw_addr32 := fn(in out sb : rt::StrBuf, x : SwX, k : ir::OpndK, v : i64, off : i
   sw_op(sb, "i32.wrap_i64")
   true
 }
+## `%d = bswap T %a` (slice 3e, `@endian(big)`): wasm has no byte reverse, so the low `T`-width bytes
+## are moved one by one through the two scratch locals (byte i to byte nb-1-i), then canonical at `T`.
+sw_bswap := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool {
+  ty : ir::Kty = ir::i_ty(ip)
+  nb := ir::kty_bytes(ty)
+  if nb != 1 and nb != 2 and nb != 4 and nb != 8 { return false }
+  if not sw_lda(sb, ip) { return false }
+  sw_set(sb, x.s0)
+  sw_const(sb, 0)
+  sw_set(sb, x.s0 + 1)
+  mut i : u64 = 0
+  while i < nb {
+    sw_get(sb, x.s0 + 1)
+    sw_get(sb, x.s0)
+    sw_const(sb, i64(i * 8))
+    sw_op(sb, "i64.shr_u")
+    sw_const(sb, 255)
+    sw_op(sb, "i64.and")
+    sw_const(sb, i64((nb - 1 - i) * 8))
+    sw_op(sb, "i64.shl")
+    sw_op(sb, "i64.or")
+    sw_set(sb, x.s0 + 1)
+    i = i + 1
+  }
+  sw_get(sb, x.s0 + 1)
+  if not sw_canon(sb, ty, ir::i_sg(ip)) { return false }
+  sw_setd(sb, ip)
+}
 ## `copy dst, src, n` / `zero dst, n`: unrolled, 8-byte words when `n` is a multiple of 8, bytes
 ## otherwise (`n` is the object's size, known here). A very large object refuses rather than emit a
 ## page of code.
@@ -627,6 +655,7 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
       sw_trap_on(sb, x, ir::i_tk(ip), ip)
       true
     }
+    OpBSwap => { sw_bswap(sb, x, ip) }
     OpCopy => { sw_mem(sb, x, ip, true) }
     OpZero => { sw_mem(sb, x, ip, false) }
     OpCall => { sw_call(sb, x, ip) }
@@ -668,7 +697,7 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpCallInd
       | OpCallC | OpSyscall | OpSwitch => { false }
   }
 }

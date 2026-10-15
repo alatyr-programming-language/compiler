@@ -1355,7 +1355,9 @@ ib_callee_decl := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
 ## answer).
 IbSt := struct { di : usize, s : usize, n : usize, size : usize, align : usize }
 ## A field of a struct: its byte offset in the object and its kernel type.
-IbFld := struct { off : ByteOff, ty : Kty, sg : Sgn }
+## `be`: the field is `@endian(big)` (slice 3e) — its bytes are stored most-significant first, so a load is
+## followed and a store preceded by `bswap` at the field's width.
+IbFld := struct { off : ByteOff, ty : Kty, sg : Sgn, be : bool }
 ## An aggregate value in memory: its frame object, and whether the builder made that object for this
 ## value alone (a literal's fresh object may be bound directly; a local's must be copied).
 IbObj := struct { fr : FrameId, fresh : bool }
@@ -1374,7 +1376,10 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
   d : Decl = deref(ib_decl_ptr(bv.decls, usize(sdi)))
   if d.is_generic { return Option(IbSt).None }
   lk := lower_layout::layout_kind(bv.decls, bv.src, s, n, a)
-  if lower_layout::layout_kind_is_packed(lk) { return Option(IbSt).None }
+  ## Slice 3e: a `@packed` struct is laid out byte-exactly by `lower_layout::field_byte_place` (the one
+  ## answer for every tier), `@offset` and `@endian` fields included. It stays a LOCAL value: every place
+  ## through a pointer and every call crossing requires the WORD tier (`ib_struct_word`, Q4).
+  packed := lower_layout::layout_kind_is_packed(lk)
   if lower_layout::struct_align_attr(bv.decls, bv.src, s, n) >= 1 { return Option(IbSt).None }
   mut f := d.fields_head
   mut nf : usize = 0
@@ -1391,8 +1396,8 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
             match ro { Some(r) => { if fd.wsize != r.n { return Option(IbSt).None } }; None => { return Option(IbSt).None } }
           }
         }
-        if lower_layout::field_offset_attr(bv.src, fd.ns) >= 0 or lower_layout::field_align_attr(bv.src, fd.ns) >= 0
-          or lower_layout::field_endian_attr(bv.src, fd.ns) >= 0 { return Option(IbSt).None }
+        if lower_layout::field_align_attr(bv.src, fd.ns) >= 0 { return Option(IbSt).None }
+        if not packed and (lower_layout::field_offset_attr(bv.src, fd.ns) >= 0 or lower_layout::field_endian_attr(bv.src, fd.ns) >= 0) { return Option(IbSt).None }
         nf = nf + 1
         f = fd.next
       }
@@ -1406,6 +1411,7 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
   ## word in the WORD tier.
   mut al : usize = 8
   if lower_layout::layout_kind_is_byte(lk) { al = lower_layout::standard_struct_align(bv.decls, bv.src, s, n, a) }
+  if packed { al = 1 }
   Option(IbSt).Some(IbSt(di = usize(sdi), s = s, n = n, size = sz, align = al))
 }
 ## The struct type of a struct local bound with declaration `sd` and type span `[ts, ts+tn)`.
@@ -1475,7 +1481,8 @@ ib_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, fs : usize, f
               if not fp.addressable or fp.off < 0 { return Option(IbFld).None }
               ## V6 holds the access inside the object; this keeps a place past it out of the IR.
               if usize(fp.off) + usize(kty_bytes(k.ty)) > st.size { return Option(IbFld).None }
-              return Option(IbFld).Some(IbFld(off = ByteOff(usize(fp.off)), ty = k.ty, sg = k.sg))
+              be := lower_layout::field_endian_attr(bv.src, fd.ns) == 1
+              return Option(IbFld).Some(IbFld(off = ByteOff(usize(fp.off)), ty = k.ty, sg = k.sg, be = be))
             }
             None => { return Option(IbFld).None }
           }
@@ -1500,8 +1507,10 @@ ib_load_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId, fd : 
 }
 ## `store T [base + off], v` / `%d = load T [base + off]` — `base` a frame object or a `ptr` vreg, the
 ## place's offset and kernel type in `fd`.
-ib_store_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, base : Opnd, fd : IbFld, v : VRegId) {
+ib_store_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, base : Opnd, fd : IbFld, v0 : VRegId) {
   on := o_none()
+  mut v := v0
+  if fd.be { v = ib_bswap(bp, a, v0, fd) }
   ov := o_vreg(v)
   i := e_mem(ib_b_f(bp), a, Op.OpStore, fd.ty, Sgn.SgNone, on, base, byte_off_imm(fd.off), ov)
 }
@@ -1510,6 +1519,19 @@ ib_load_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, base : Opnd, fd : IbFl
   od := o_vreg(d)
   on := o_none()
   i := e_mem(ib_b_f(bp), a, Op.OpLoad, fd.ty, fd.sg, od, base, byte_off_imm(fd.off), on)
+  if fd.be { return ib_bswap(bp, a, d, fd) }
+  d
+}
+## `%d = bswap T %v`: the low `T`-width bytes of `v` reversed, `d` canonical at `T` (slice 3e).
+ib_bswap := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : VRegId, fd : IbFld) -> VRegId {
+  d := ib_fresh(bp, a, IbKS(ty = fd.ty, sg = fd.sg))
+  mut it := inst0(Op.OpBSwap)
+  it.ty = fd.ty
+  it.sg = fd.sg
+  set_dst(it, d)
+  ov := o_vreg(v)
+  set_a(it, ov)
+  i := emit(ib_b_f(bp), a, it)
   d
 }
 ## `copy $dst, $src, n` — a whole struct value.
@@ -1644,7 +1666,13 @@ ib_agg_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : Ib
   bv : IbB = deref(bp)
   d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
   fr := ib_new_obj(bp, a, st)
-  if ib_struct_padded(bp, a, st) { ib_zero_obj(bp, a, fr, st.size) }
+  ## Slice 3e: a literal of a `@packed` struct may leave TRAILING `@offset` fields unwritten — aliases of
+  ## bytes an earlier field writes (the parser emits the written fields as a declaration-order prefix and
+  ## refuses a gap). The object is zeroed first so no byte is undefined.
+  mut nfd : usize = 0
+  mut cf := d.fields_head
+  loop { match cf { Some(cq) => { cfd := deref(ast::fld_p(cq)); nfd = nfd + 1; cf = cfd.next }; None => { break } } }
+  if ib_struct_padded(bp, a, st) or nf < nfd { ib_zero_obj(bp, a, fr, st.size) }
   mut f := d.fields_head
   mut g : Option(ptr(mut Arg)) = fh
   loop {
@@ -1671,7 +1699,9 @@ ib_agg_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : Ib
             }
             g = ga.next
           }
-          None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
+          None => {
+            if lower_layout::field_offset_attr(bv.src, fd.ns) < 0 { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
+          }
         }
         f = fd.next
       }
@@ -2014,7 +2044,7 @@ ib_bx_index_global := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr),
   if not ib_ks_eq(k, dk) { return ib_no(bp, e, NyWhy.NwDisagree) }
   pa := ib_global_addr(bp, a, di, d)
   opa := o_vreg(pa)
-  ofd := IbFld(off = ByteOff(usize(iv) * 8), ty = k.ty, sg = k.sg)
+  ofd := IbFld(off = ByteOff(usize(iv) * 8), ty = k.ty, sg = k.sg, be = false)
   lv := ib_load_at(bp, a, opa, ofd)
   Option(VRegId).Some(lv)
 }
@@ -2264,7 +2294,7 @@ ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
       match eo {
         Some(el) => {
           eb := ib_elem_base(el)
-          lv := ib_load_at(bp, a, eb, IbFld(off = el.off, ty = ap.ty, sg = ap.sg))
+          lv := ib_load_at(bp, a, eb, IbFld(off = el.off, ty = ap.ty, sg = ap.sg, be = false))
           return Option(VRegId).Some(lv)
         }
         None => { return Option(VRegId).None }
@@ -2288,7 +2318,7 @@ ib_bs_index_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut St
         Some(vv) => {
           eo : Option(IbElem) = ib_arr_elem(bp, a, ix, ap, x)
           match eo {
-            Some(el) => { eb := ib_elem_base(el); ib_store_at(bp, a, eb, IbFld(off = el.off, ty = ap.ty, sg = ap.sg), vv) }
+            Some(el) => { eb := ib_elem_base(el); ib_store_at(bp, a, eb, IbFld(off = el.off, ty = ap.ty, sg = ap.sg, be = false), vv) }
             None => {}
           }
         }
@@ -2334,7 +2364,7 @@ ib_arr_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ap : Ib
             match prev { Some(pe) => { if pe == ga.e and not ib_fill_pure(ga.e) { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false } }; None => {} }
             vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, k)
             match vo {
-              Some(vv) => { ib_store_at(bp, a, ofr, IbFld(off = ByteOff(usize(ap.off) + i * ap.stride), ty = k.ty, sg = k.sg), vv) }
+              Some(vv) => { ib_store_at(bp, a, ofr, IbFld(off = ByteOff(usize(ap.off) + i * ap.stride), ty = k.ty, sg = k.sg, be = false), vv) }
               None => { return false }
             }
             prev = Option(ptr(Expr)).Some(ga.e)
@@ -2437,7 +2467,7 @@ ib_bx_arr_len := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ap :
 ## A one-word kernel scalar (8 bytes): what a pointer or an address-taken local may move (see above).
 ib_ks_word := fn(k : IbKS) -> bool { kty_bytes(k.ty) == 8 }
 ## The place-free field of a whole scalar at an address: offset 0, type `k`.
-ib_word_fld := fn(k : IbKS) -> IbFld { IbFld(off = ByteOff(0), ty = k.ty, sg = k.sg) }
+ib_word_fld := fn(k : IbKS) -> IbFld { IbFld(off = ByteOff(0), ty = k.ty, sg = k.sg, be = false) }
 
 ## `deref(p)` of a scalar: a `load` at sema's type of the read, which must be one word.
 ib_bx_deref := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pe : ptr(Expr)) -> Option(VRegId) {

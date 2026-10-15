@@ -541,6 +541,19 @@ sa_agg_ret := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> b
   if w == 2 { sa_put(sb, "  ldr x1, [x9, #8]\n") }
   true
 }
+## `%d = bswap T %a` (slice 3e, `@endian(big)`): the low `T`-width bytes reversed (`rev`/`rev16`; one
+## byte is itself), then canonical at `T`.
+sa_bswap := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sa_lda(sb, "x9", ip) { return false }
+  ty : ir::Kty = ir::i_ty(ip)
+  nb := ir::kty_bytes(ty)
+  if nb != 1 and nb != 2 and nb != 4 and nb != 8 { return false }
+  if nb == 8 { sa_put(sb, "  rev x9, x9\n") }
+  if nb == 4 { sa_put(sb, "  rev w9, w9\n") }
+  if nb == 2 { sa_put(sb, "  rev16 w9, w9\n") }
+  if not sa_canon(sb, "x11", "w11", "x9", "w9", ty, ir::i_sg(ip)) { return false }
+  sa_st11(sb, ip)
+}
 ## `%r = syscall %nr(args…)` (ABI §5): the Linux AArch64 system-call convention — the number in x8,
 ## up to six arguments in x0..x5, `svc #0`, the result in x0 (re-canonicalized from the destination's
 ## type, as a call's is).
@@ -701,6 +714,7 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
       sa_put(sb, "\n")
       true
     }
+    OpBSwap => { sa_bswap(sb, ip) }
     OpTrap => { sa_trap(sb, x, ir::i_tk(ip), ip); true }
     OpTrapIf => {
       if not sa_lda(sb, "x9", ip) { return false }
@@ -710,7 +724,7 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpCallInd
       | OpCallC | OpSwitch => { false }
   }
 }
