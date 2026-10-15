@@ -863,11 +863,11 @@ check_large_source() {
 check_ir_build() {
   local out="$T/ir_golden.out" rep="$T/ir_build.out" rc g ok=1
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_litfold ig_sys ig_agg ig_place ig_notyet; do
+  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_litfold ig_sys ig_agg ig_place ig_aggret ig_notyet; do
     grep -q "^ok   golden $g: " "$out" || ok=0
   done
-  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 10 ]; then
-    echo "ok   ir golden builds: 10 programs built, verified and printed exactly as reviewed"
+  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 11 ]; then
+    echo "ok   ir golden builds: 11 programs built, verified and printed exactly as reviewed"
   else
     echo "FAIL ir golden builds: rc=$rc"; grep -E '^(FAIL|ok   golden)' "$out" | head -12 | sed 's/^/     /'; fail=1
   fi
@@ -882,7 +882,7 @@ check_ir_build() {
 check_ir_dev_verb() {
   local out="$T/ir_selftest.out" rc
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 27 passed, 0 failed' "$out" \
+  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 28 passed, 0 failed' "$out" \
     && [ "$(grep -c '^ok   planted #' "$out")" = 14 ]; then
     echo "ok   ir --self-test: storage, verify, print, 14 planted violations each refused by its rule"
   else
@@ -8652,6 +8652,14 @@ run ir_agg_arg 42
 run_a64 ir_agg_arg 42
 run_rv64 ir_agg_arg 42
 run_wat ir_agg_arg 42
+## IR slice 3d step 2: a one- or two-word struct RESULT is returned in the result registers (x86_64
+## %rax/%rdx, aarch64 x0/x1, riscv64 a0/a1), the legacy convention, so IR-built and legacy functions
+## return structs to each other in both directions (Q4, proved here). `mk(…).f` straight off a call is
+## pinned by the `ig_aggret` IR golden: the legacy wasm emitter cannot lower that shape yet.
+run ir_agg_ret 42
+run_a64 ir_agg_ret 42
+run_rv64 ir_agg_ret 42
+run_wat ir_agg_ret 42
 run_x86_trap ir_array_bound 132
 run_a64 ir_array_bound 133
 run_rv64 ir_array_bound 133
