@@ -459,6 +459,24 @@ sr_args := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) {
 }
 ## A direct call: the arguments in a0..a7, `call` the callee's legacy label, the result from a0,
 ## re-canonicalized from the destination's type.
+## Slice 3d: a call's aggregate result — a0, then a1 for a two-word value — into its frame object.
+sr_agg_res := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
+  nb := ir::frame_bytes(x.f, usize(ir::i_dv(ip)))
+  if nb != 8 and nb != 16 { return false }
+  if not sr_base(sb, x, "t0", ir::i_dk(ip), ir::i_dv(ip)) { return false }
+  sr_put(sb, "  sd a0, 0(t0)\n")
+  if nb == 16 { sr_put(sb, "  sd a1, 8(t0)\n") }
+  true
+}
+## Slice 3d: `ret %p` of an aggregate result — its words, read through the address, into a0 (and a1).
+sr_agg_ret := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
+  w := ir::fn_ret_words(x.f)
+  if w != 1 and w != 2 { return false }
+  if not sr_base(sb, x, "t0", ir::i_ak(ip), ir::i_av(ip)) { return false }
+  sr_put(sb, "  ld a0, 0(t0)\n")
+  if w == 2 { sr_put(sb, "  ld a1, 8(t0)\n") }
+  true
+}
 sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
   n := ir::i_n(ip)
   if n > 8 { return false }
@@ -470,6 +488,8 @@ sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool
       sr_put(sb, "  call ")
       sr_put_label(sb, x.src, cd)
       sr_put(sb, "\n")
+      ## Slice 3d: an aggregate result arrives in a0 (and a1) and is stored into its frame object.
+      if ir::opndk_is_frame(ir::i_dk(ip)) { return sr_agg_res(sb, x, ip) }
       dv : Option(usize) = sr_dst(ip)
       mut ok := true
       match dv {
@@ -621,10 +641,15 @@ sr_inst := fn(in out sb : rt::StrBuf, x : SrX, in out a : rt::Arena, i : usize) 
     OpBr => { sr_br(sb, x, ip, false) }
     OpBrIf => { sr_br(sb, x, ip, true) }
     OpRet => {
-      match ir::i_ak(ip) {
-        OkVReg => { sr_ldv(sb, "a0", usize(ir::i_av(ip))) }
-        OkNone => {}
-        OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+      ## Slice 3d: an aggregate result's words go to the result registers instead of a value.
+      agg := ir::fn_ret_words(x.f) > 0
+      if agg { if not sr_agg_ret(sb, x, ip) { return false } }
+      if not agg {
+        match ir::i_ak(ip) {
+          OkVReg => { sr_ldv(sb, "a0", usize(ir::i_av(ip))) }
+          OkNone => {}
+          OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+        }
       }
       sr_put(sb, "  j ")
       sr_ret_lbl(sb, x)

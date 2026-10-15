@@ -131,7 +131,8 @@ ib_shift_is_rot := fn(s : ShiftK) -> bool {
 }
 
 ## What a call answered: its result value, no value (a function with no result), or a refusal.
-CallOut := enum { CoValue(VRegId), CoVoid, CoRefused }
+## `CoAgg`: an aggregate result, received in a fresh frame object (slice 3d).
+CallOut := enum { CoValue(VRegId), CoVoid, CoRefused, CoAgg(FrameId) }
 
 ## The builder's state for ONE function. Bindings and the loop stack are growing word buffers (no fixed
 ## capacity, docs/ir.md §7.2 slice 0a). `term` is whether the statement sequence being built has
@@ -159,6 +160,8 @@ IbB := struct {
   unch : bool, term : bool,
   failed : bool, fail_c : Construct, fail_w : NyWhy, fail_s : u64,
   span0 : u64,
+  ## Slice 3d: the declared spelling of an aggregate RESULT (`rn == 0`: a scalar result or none).
+  rs : usize, rn : usize,
 }
 
 ## Record reads, copy-then-read (#792: an enum or bool field read straight through `deref(p)` is wrong
@@ -517,6 +520,7 @@ ib_bx_callv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : u
     CoValue(v) => { Option(VRegId).Some(v) }
     CoVoid => { ib_no(bp, e, NyWhy.NwDisagree) }
     CoRefused => { Option(VRegId).None }
+    CoAgg(rf) => { ib_no(bp, e, NyWhy.NwOutside) }
   }
 }
 
@@ -1153,9 +1157,16 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
   ## The result first: a callee whose result is not a kernel scalar is outside the subset, and sema's
   ## record of the call must be that result.
   mut res : Option(IbKS) = Option(IbKS).None
+  ## Slice 3d: a one- or two-word struct result is received in a fresh frame object.
+  mut agg : Option(IbSt) = Option(IbSt).None
   if d.ret_tl != 0 {
-    res = ib_call_result(bp, e, d)
-    if ib_b_failed(bp) { return CallOut.CoRefused }
+    if ib_agg_ret_words(ib_b_decls(bp), src, d.ret_ts, d.ret_tl, a) > 0 {
+      agg = ib_struct_named(bp, a, d.ret_ts, d.ret_tl)
+      match agg { Some(st) => {}; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return CallOut.CoRefused } }
+    } else {
+      res = ib_call_result(bp, e, d)
+      if ib_b_failed(bp) { return CallOut.CoRefused }
+    }
   }
   ## The argument vregs are built first, then pushed onto the pool as one run.
   args := wb_new(a, 8)
@@ -1194,6 +1205,15 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
     j = j + 1
   }
   it.n = na
+  match agg {
+    Some(rst) => {
+      rf := ib_new_obj(bp, a, rst)
+      set_dst_frame(it, rf)
+      ia := emit(f, a, it)
+      return CallOut.CoAgg(rf)
+    }
+    None => {}
+  }
   match res {
     Some(kr) => {
       rv := ib_fresh(bp, a, kr)
@@ -1533,7 +1553,18 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
         BdNone => {}
       }
     }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field | Expr::EnumLit
+    Expr::Call(cs, cl, na, ah) => {
+      ## Slice 3d: the callee's declared struct result.
+      ci : Option(u64) = ib_callee_decl(bp, cs, cl)
+      match ci {
+        Some(di) => {
+          d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
+          if d.ret_tl != 0 { return ib_struct_named(bp, a, d.ret_ts, d.ret_tl) }
+        }
+        None => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field | Expr::EnumLit
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
@@ -1588,7 +1619,17 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
         BdNone => {}
       }
     }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field | Expr::EnumLit
+    Expr::Call(cs, cl, na, ah) => {
+      ## Slice 3d: a call's aggregate result, received in a fresh frame object.
+      co : CallOut = ib_call(bp, a, e, cs, cl, na, ah)
+      match co {
+        CoAgg(rf) => { return Option(IbObj).Some(IbObj(fr = rf, fresh = true)) }
+        CoRefused => { return Option(IbObj).None }
+        CoValue(v) => {}
+        CoVoid => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field | Expr::EnumLit
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
@@ -1804,7 +1845,21 @@ ib_place_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Opt
           | Expr::Loop => {}
       }
     }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+    Expr::Call(cs, cl, na, ah) => {
+      ## Slice 3d: `mk(…).f` — the call's aggregate result in a fresh frame object, read in place.
+      sto : Option(IbSt) = ib_agg_type_of(bp, a, b)
+      match sto {
+        Some(st) => {
+          oo : Option(IbObj) = ib_agg(bp, a, b, st)
+          match oo {
+            Some(o) => { return Option(IbPlace).Some(IbPlace(bk = OpndK.OkFrame, bv = i64(usize(o.fr)), di = st.di, s = st.s, n = st.n)) }
+            None => {}
+          }
+        }
+        None => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
@@ -2818,6 +2873,62 @@ ib_bs_tail_block := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : Option(ptr(m
   ib_bs_tail(bp, a, h)
   ib_scope_drop(bp, mark)
 }
+## Return the value of `e` as the function's result: a scalar at its declared type, or — for an aggregate
+## result (slice 3d) — the value built in (or copied into) a fresh frame object, whose ADDRESS `ret`
+## carries; the selector returns its words in the result registers.
+ib_ret_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
+  bv : IbB = deref(bp)
+  if bv.rn != 0 {
+    sto : Option(IbSt) = ib_struct_named(bp, a, bv.rs, bv.rn)
+    match sto {
+      Some(st) => {
+        oo : Option(IbObj) = ib_agg(bp, a, e, st)
+        match oo {
+          Some(o) => {
+            av := ib_addr_obj(bp, a, o.fr)
+            f := ib_b_f(bp)
+            oav := o_vreg(av)
+            i := e_ret(f, a, oav)
+            ib_b_set_term(bp, true)
+          }
+          None => {}
+        }
+      }
+      None => { ib_refuse_expr(bp, e, NyWhy.NwOutside) }
+    }
+    return
+  }
+  vo : Option(VRegId) = ib_bx(bp, a, e)
+  match vo { Some(v) => { ib_ret_value(bp, a, v, e) }; None => {} }
+}
+## The word count of an aggregate result type `[s, s+n)` the convention supports — a struct the builder
+## lays out in the WORD tier of one or two words (every legacy emitter returns those in two result
+## registers); 0 otherwise.
+ib_agg_ret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, in out a : rt::Arena) -> usize {
+  lk := lower_layout::layout_kind(decls, src, s, n, a)
+  if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return 0 }
+  sdi := lower_layout::struct_decl_of(decls, src, s, n)
+  if sdi < 0 { return 0 }
+  d : Decl = deref(ib_decl_ptr(decls, usize(sdi)))
+  if d.is_generic { return 0 }
+  mut nf : usize = 0
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        if fd.wsize != 1 { return 0 }
+        ko : Option(IbKS) = ib_name_ks(src, fd.ts, fd.tl)
+        match ko { Some(k) => { if not ib_ks_word(k) { return 0 } }; None => { return 0 } }
+        nf = nf + 1
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  if nf == 0 or nf > 2 { return 0 }
+  nf
+}
 ## Return `v` as the function's result, at its declared type.
 ib_ret_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : VRegId, at : ptr(Expr)) {
   f := ib_b_f(bp)
@@ -2850,10 +2961,7 @@ ib_bs_last := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
   }
 }
 ## The tail expression's value is the result.
-ib_bs_tail_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
-  vo : Option(VRegId) = ib_bx(bp, a, e)
-  match vo { Some(v) => { ib_ret_value(bp, a, v, e) }; None => {} }
-}
+ib_bs_tail_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) { ib_ret_expr(bp, a, e) }
 ## A tail `if … else …`: each arm's own tail is returned.
 ib_bs_tail_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), th : Option(ptr(mut Stmt)), el : Option(ptr(mut Stmt))) {
   co : Option(VRegId) = ib_bool_operand(bp, a, c)
@@ -2981,8 +3089,7 @@ ib_value_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), k : Ib
 ib_bs_return := fn(bp : ptr(mut IbB), in out a : rt::Arena, rv : ptr(Expr)) {
   f := ib_b_f(bp)
   if expr_present(rv) and not lower_layout::ex_is_no_tail(rv) {
-    vo : Option(VRegId) = ib_bx(bp, a, rv)
-    match vo { Some(v) => { ib_ret_value(bp, a, v, rv) }; None => {} }
+    ib_ret_expr(bp, a, rv)
     return
   }
   on := o_none()
@@ -3160,18 +3267,30 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
   mut rk := IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
   if d.ret_tl != 0 {
     rko : Option(IbKS) = ib_name_ks(src, d.ret_ts, d.ret_tl)
-    match rko { Some(kk) => { rk = kk; has_ret = true }; None => { why.c = Construct.CSignature; return BuildOut.Refused } }
+    match rko { Some(kk) => { rk = kk; has_ret = true }; None => {} }
   }
   fnm := str_at((src + d.name_start), d.name_len)
+  ## Slice 3d: an aggregate RESULT of one or two words (`ib_agg_ret_words`) is returned in the result
+  ## registers, the convention every legacy emitter shares; the function's IR result is the `ptr` to the
+  ## value and `ret_words` tells the selector to return the words.
+  mut rwords : usize = 0
+  if d.ret_tl != 0 and not has_ret {
+    rwords = ib_agg_ret_words(decls, src, d.ret_ts, d.ret_tl, a)
+    if rwords == 0 { why.c = Construct.CSignature; return BuildOut.Refused }
+    has_ret = true
+    rk = IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)
+  }
   f := fn_new(a, fnm.ptr, fnm.len, has_ret, rk.ty, rk.sg)
+  if rwords > 0 { fn_set_ret_words(f, rwords) }
   nb := IbB(f = f, p = p, src = src, decls = decls, mod_s = d.mod_start, mod_n = d.mod_len,
           bnames = wb_new(a, 16), blens = wb_new(a, 16), bvregs = wb_new(a, 16),
           bagg = wb_new(a, 16), bmem = wb_new(a, 16), barr = wb_new(a, 16), bsd = wb_new(a, 16), bts = wb_new(a, 16), btn = wb_new(a, 16),
           taken = wb_new(a, 8),
           lexit = wb_new(a, 8), lcont = wb_new(a, 8), lres = wb_new(a, 8), lhasres = wb_new(a, 8), lbroken = wb_new(a, 8),
           unch = false, term = false, failed = false, fail_c = Construct.CEmpty, fail_w = NyWhy.NwOutside,
-          fail_s = u64(d.name_start), span0 = u64(d.name_start))
+          fail_s = u64(d.name_start), span0 = u64(d.name_start), rs = 0, rn = 0)
   mut bb := nb
+  if rwords > 0 { bb.rs = d.ret_ts; bb.rn = d.ret_tl }
   bp := ptr(mut bb)
   ## The names `ptr(x)` takes, before any binding is made (an address-taken local lives in memory).
   ib_scan_stmts(bp, a, d.body_stmts)
@@ -3220,10 +3339,9 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
   if has_ret and not has_tail { ib_bs_tail(bp, a, d.body_stmts) } else { ib_bs(bp, a, d.body_stmts) }
   if not ib_b_failed(bp) and not ib_b_term(bp) {
     if has_tail {
-      tvo : Option(VRegId) = ib_bx(bp, a, d.value)
-      match tvo {
-        Some(tv) => { if has_ret { ib_ret_value(bp, a, tv, d.value) } else { on := o_none(); i2 := e_ret(f, a, on) } }
-        None => {}
+      if has_ret { ib_ret_expr(bp, a, d.value) } else {
+        tvo : Option(VRegId) = ib_bx(bp, a, d.value)
+        match tvo { Some(tv) => { on := o_none(); i2 := e_ret(f, a, on) }; None => {} }
       }
     } else {
       ## A body that neither returns nor yields its declared result on every path is not one the builder

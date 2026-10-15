@@ -482,6 +482,24 @@ sx_load := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
 ## A direct call: the arguments in the six argument registers, `call` the callee's legacy label, the
 ## result from %rax, re-canonicalized from the destination's type. A callee whose label the legacy
 ## emitter spells with a suffix or an alias is refused (`sx_plain_label`).
+## Slice 3d: a call's aggregate result — %rax, then %rdx for a two-word value — into its frame object.
+sx_agg_res := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
+  nb := ir::frame_bytes(x.f, usize(ir::i_dv(ip)))
+  if nb != 8 and nb != 16 { return false }
+  if not sx_base(sb, x, SxR.XrCx, ir::i_dk(ip), ir::i_dv(ip)) { return false }
+  sx_put(sb, "  movq %rax, (%rcx)\n")
+  if nb == 16 { sx_put(sb, "  movq %rdx, 8(%rcx)\n") }
+  true
+}
+## Slice 3d: `ret %p` of an aggregate result — its words, read through the address, into %rax (and %rdx).
+sx_agg_ret := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
+  w := ir::fn_ret_words(x.f)
+  if w != 1 and w != 2 { return false }
+  if not sx_base(sb, x, SxR.XrCx, ir::i_ak(ip), ir::i_av(ip)) { return false }
+  sx_put(sb, "  movq (%rcx), %rax\n")
+  if w == 2 { sx_put(sb, "  movq 8(%rcx), %rdx\n") }
+  true
+}
 sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
   n := ir::i_n(ip)
   if n > SX_MAX_ARGS { return false }
@@ -499,6 +517,9 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
       sx_put(sb, "  call ")
       emit_mangled_def(sb, x.src, cd.mod_start, cd.mod_len, cd.name_start, cd.name_len)
       sx_put(sb, "\n")
+      ## Slice 3d: an aggregate result arrives in %rax (and %rdx) — x86_64's legacy convention for a
+      ## struct of up to two words — and is stored into its frame object.
+      if ir::opndk_is_frame(ir::i_dk(ip)) { return sx_agg_res(sb, x, ip) }
       dv : Option(SxSlot) = sx_dst(ip)
       match dv {
         Some(d) => {
@@ -659,10 +680,15 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
     OpBr => { sx_br(sb, x, ip, false) }
     OpBrIf => { sx_br(sb, x, ip, true) }
     OpRet => {
-      match ir::i_ak(ip) {
-        OkVReg => { sx_ldv(sb, SxR.XrAx, sx_slot(usize(ir::i_av(ip)))) }
-        OkNone => {}
-        OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+      ## Slice 3d: an aggregate result's words go to the result registers instead of a value.
+      agg := ir::fn_ret_words(x.f) > 0
+      if agg { if not sx_agg_ret(sb, x, ip) { return false } }
+      if not agg {
+        match ir::i_ak(ip) {
+          OkVReg => { sx_ldv(sb, SxR.XrAx, sx_slot(usize(ir::i_av(ip)))) }
+          OkNone => {}
+          OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+        }
       }
       sx_put(sb, "  jmp ")
       sx_ret_lbl(sb, x)

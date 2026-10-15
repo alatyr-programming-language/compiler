@@ -122,6 +122,10 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64 and riscv64 return small structs from IR-built functions (IR slice 3d, step 2).** A function
+  whose result is a one- or two-word struct is built through the shared IR and returns the words in the
+  result registers — the convention the legacy emitters use — so IR-built and legacy functions return
+  structs to each other in both directions. x86_64 output is unchanged.
 - **aarch64 and riscv64 pass structs to and from IR-built functions (IR slice 3d, step 1).** A function
   with a struct parameter (word-sized fields) is now built through the shared IR: the parameter is read
   through the address the caller passed, and a struct argument is the address of a fresh copy — the

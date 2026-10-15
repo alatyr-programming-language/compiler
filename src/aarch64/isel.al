@@ -506,6 +506,8 @@ sa_call := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool
       sa_put(sb, "  bl ")
       a64_emit_fn_label(sb, x.src, cd)
       sa_put(sb, "\n")
+      ## Slice 3d: an aggregate result arrives in x0 (and x1) and is stored into its frame object.
+      if ir::opndk_is_frame(ir::i_dk(ip)) { return sa_agg_res(sb, x, ip) }
       dv : Option(usize) = sa_dst(ip)
       mut ok := true
       match dv {
@@ -519,6 +521,25 @@ sa_call := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool
     }
     None => { false }
   }
+}
+## Slice 3d: the words of a call's aggregate result — x0, then x1 for a two-word value — into the
+## frame object that receives it (the legacy emitters' convention for a struct of up to two words).
+sa_agg_res := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
+  nb := ir::frame_bytes(x.f, usize(ir::i_dv(ip)))
+  if nb != 8 and nb != 16 { return false }
+  if not sa_base(sb, x, "x9", ir::i_dk(ip), ir::i_dv(ip)) { return false }
+  sa_put(sb, "  str x0, [x9]\n")
+  if nb == 16 { sa_put(sb, "  str x1, [x9, #8]\n") }
+  true
+}
+## Slice 3d: `ret %p` of an aggregate result — its words, read through the address, into x0 (and x1).
+sa_agg_ret := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
+  w := ir::fn_ret_words(x.f)
+  if w != 1 and w != 2 { return false }
+  if not sa_base(sb, x, "x9", ir::i_ak(ip), ir::i_av(ip)) { return false }
+  sa_put(sb, "  ldr x0, [x9]\n")
+  if w == 2 { sa_put(sb, "  ldr x1, [x9, #8]\n") }
+  true
 }
 ## `%r = syscall %nr(args…)` (ABI §5): the Linux AArch64 system-call convention — the number in x8,
 ## up to six arguments in x0..x5, `svc #0`, the result in x0 (re-canonicalized from the destination's
@@ -665,10 +686,15 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
     OpBr => { sa_br(sb, x, ip, false) }
     OpBrIf => { sa_br(sb, x, ip, true) }
     OpRet => {
-      match ir::i_ak(ip) {
-        OkVReg => { sa_ldv(sb, "x0", usize(ir::i_av(ip))) }
-        OkNone => {}
-        OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+      ## Slice 3d: an aggregate result's words go to the result registers instead of a value.
+      agg := ir::fn_ret_words(x.f) > 0
+      if agg { if not sa_agg_ret(sb, x, ip) { return false } }
+      if not agg {
+        match ir::i_ak(ip) {
+          OkVReg => { sa_ldv(sb, "x0", usize(ir::i_av(ip))) }
+          OkNone => {}
+          OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+        }
       }
       sa_put(sb, "  b ")
       sa_ret_lbl(sb, x)

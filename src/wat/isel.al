@@ -567,6 +567,9 @@ sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> 
   ## `docs/ir.md` §6 — linear memory popped on return. Until it exists such a function keeps its
   ## legacy emission (`docs/ir-slice-3.md` §3.5), never the legacy bump allocator from the selector.
   if ir::fn_nframes(x.f) != 0 { return false }
+  ## Slice 3d: an aggregate result returns its words in registers on the register targets; wasm has no
+  ## convention for it yet (its legacy emitter returns a block's address), so such a function stays legacy.
+  if ir::fn_ret_words(x.f) != 0 { return false }
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   fname := str_at((x.src + d.name_start), d.name_len)
