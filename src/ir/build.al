@@ -356,7 +356,10 @@ ib_wrap_to := fn(bp : ptr(mut IbB), in out a : rt::Arena, x : VRegId, to : IbKS)
 ## declaration and type name span (slice 3a); an address-taken scalar local's frame object with its
 ## declaration's name offset (sema's binding record, slice 3b); a fixed array local's frame object
 ## with its `[T; N]` annotation span (slice 3c); or nothing.
-IbBind := enum { BdNone, BdVal(VRegId, usize, usize), BdAgg(FrameId, usize, usize, usize), BdMem(FrameId, usize), BdArr(FrameId, usize, usize) }
+## `BdRef`: a struct VALUE held by reference — an aggregate parameter, whose address the caller passed
+## (docs/ir.md §3.7: the address of a caller-owned copy; slice 3d). Its fields are places through that
+## pointer, exactly like `deref(p).f`; the value itself is never read or written whole here.
+IbBind := enum { BdNone, BdVal(VRegId, usize, usize), BdAgg(FrameId, usize, usize, usize), BdMem(FrameId, usize), BdArr(FrameId, usize, usize), BdRef(VRegId, usize, usize, usize) }
 
 ib_bind_push := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, w : usize, agg : usize, mem : usize, arr : usize, sd : usize, ts : usize, tn : usize) {
   bv : IbB = deref(bp)
@@ -376,6 +379,11 @@ ib_bind := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, v :
 ## Bind `[s, s+n)` to the vreg `v` of a scalar declared with the type spelled `[ts, ts+tn)`.
 ib_bind_typed := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, v : VRegId, ts : usize, tn : usize) {
   ib_bind_push(bp, a, s, n, usize(v), 0, 0, 0, 0, ts, tn)
+}
+## Bind `[s, s+n)` to the struct value whose address is in the `ptr` vreg `v` (an aggregate parameter,
+## slice 3d), of struct type `st`.
+ib_bind_ref := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, v : VRegId, st : IbSt) {
+  ib_bind_push(bp, a, s, n, usize(v), 2, 0, 0, st.di, st.s, st.n)
 }
 ## Bind `[s, s+n)` to the struct local in frame object `fr`, of struct type `st`.
 ib_bind_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, fr : FrameId, st : IbSt) {
@@ -398,6 +406,7 @@ ib_lookup := fn(bp : ptr(mut IbB), s : usize, n : usize) -> IbBind {
     if wb_get(bv.blens, i) == n and streq(bv.src, wb_get(bv.bnames, i), n, s, n) {
       w := wb_get(bv.bvregs, i)
       if wb_get(bv.bagg, i) == 1 { return IbBind.BdAgg(FrameId(w), wb_get(bv.bsd, i), wb_get(bv.bts, i), wb_get(bv.btn, i)) }
+      if wb_get(bv.bagg, i) == 2 { return IbBind.BdRef(VRegId(w), wb_get(bv.bsd, i), wb_get(bv.bts, i), wb_get(bv.btn, i)) }
       if wb_get(bv.bmem, i) == 1 { return IbBind.BdMem(FrameId(w), wb_get(bv.bsd, i)) }
       if wb_get(bv.barr, i) == 1 { return IbBind.BdArr(FrameId(w), wb_get(bv.bts, i), wb_get(bv.btn, i)) }
       return IbBind.BdVal(VRegId(w), wb_get(bv.bts, i), wb_get(bv.btn, i))
@@ -636,6 +645,7 @@ ib_bx_var := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s : usiz
     BdMem(mf, mns) => { return ib_bx_mem_read(bp, a, e, mf, mns) }
     ## A fixed array local is memory too: only an index, `.len` or a copy reads it (slice 3c).
     BdArr(af, ats, atn) => { return ib_no(bp, e, NyWhy.NwOutside) }
+    BdRef(rv, rsd, rts, rtn) => { return ib_no(bp, e, NyWhy.NwOutside) }
     BdNone => {}
   }
   ib_bx_global(bp, a, e, s, n)
@@ -1217,7 +1227,31 @@ ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param,
   pk : Option(IbKS) = ib_name_ks(ib_b_src(bp), pm.ts, pm.tl)
   match pk {
     Some(want) => { if pm.pmode == 0 { return ib_value_at(bp, a, ae, want) } }
-    None => {}
+    None => {
+      ## Slice 3d: an aggregate argument is passed as the address of a CALLER-OWNED COPY (docs/ir.md
+      ## §3.7): a fresh literal's own object, else a fresh object the value is copied into, so the callee
+      ## never sees memory the caller goes on to change. WORD tier only (Q4), as the callee requires.
+      if pm.pmode == 0 {
+        sto : Option(IbSt) = ib_struct_named(bp, a, pm.ts, pm.tl)
+        match sto {
+          Some(st) => {
+            if ib_struct_word(bp, a, st) {
+              oo : Option(IbObj) = ib_agg(bp, a, ae, st)
+              match oo {
+                Some(o) => {
+                  if o.fresh { return Option(VRegId).Some(ib_addr_obj(bp, a, o.fr)) }
+                  cf := ib_new_obj(bp, a, st)
+                  ib_copy_obj(bp, a, cf, o.fr, st.size)
+                  return Option(VRegId).Some(ib_addr_obj(bp, a, cf))
+                }
+                None => { return Option(VRegId).None }
+              }
+            }
+          }
+          None => {}
+        }
+      }
+    }
   }
   ib_no(bp, e, NyWhy.NwOutside)
 }
@@ -1460,11 +1494,16 @@ ib_load_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, base : Opnd, fd : IbFl
 }
 ## `copy $dst, $src, n` — a whole struct value.
 ib_copy_obj := fn(bp : ptr(mut IbB), in out a : rt::Arena, dst : FrameId, src : FrameId, n : usize) {
+  os := o_frame(src)
+  ib_copy_into(bp, a, dst, os, n)
+}
+## `copy $dst, <src>, n` from any address operand: a frame object, or a `ptr` vreg holding the address
+## of a struct value held by reference (an aggregate parameter, slice 3d).
+ib_copy_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, dst : FrameId, src : Opnd, n : usize) {
   mut it := inst0(Op.OpCopy)
   od := o_frame(dst)
-  os := o_frame(src)
   set_a(it, od)
-  set_b(it, os)
+  set_b(it, src)
   it.n = n
   i := emit(ib_b_f(bp), a, it)
 }
@@ -1490,6 +1529,7 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
         BdVal(v, vts, vtn) => {}
         BdMem(mf, mns) => {}
         BdArr(af, ats, atn) => {}
+        BdRef(rv, rsd, rts, rtn) => { return ib_struct_bound(bp, a, rsd, rts, rtn) }
         BdNone => {}
       }
     }
@@ -1537,6 +1577,14 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
         BdVal(v, vts, vtn) => {}
         BdMem(mf, mns) => {}
         BdArr(af, ats, atn) => {}
+        BdRef(rv, rsd, rts, rtn) => {
+          ## The value a parameter holds by reference, read whole: a fresh object copied from its address
+          ## (a value of the caller's memory is never aliased by a local or passed on uncopied).
+          cfr := ib_new_obj(bp, a, st)
+          orv := o_vreg(rv)
+          ib_copy_into(bp, a, cfr, orv, st.size)
+          return Option(IbObj).Some(IbObj(fr = cfr, fresh = true))
+        }
         BdNone => {}
       }
     }
@@ -1727,6 +1775,7 @@ ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
     }
     BdMem(mf, mns) => {}
     BdArr(af, ats, atn) => {}
+    BdRef(rv, rsd, rts, rtn) => { return Option(IbPlace).Some(IbPlace(bk = OpndK.OkVReg, bv = i64(usize(rv)), di = rsd, s = rts, n = rtn)) }
     BdNone => {}
   }
   Option(IbPlace).None
@@ -1745,6 +1794,7 @@ ib_place_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Opt
             BdAgg(fr, sd, ts, tn) => {}
             BdMem(mf, mns) => {}
             BdArr(af, ats, atn) => {}
+            BdRef(rv, rsd, rts, rtn) => {}
             BdNone => {}
           }
         }
@@ -1976,6 +2026,7 @@ ib_arr_local := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(IbSpan) {
   bd : IbBind = ib_lookup(bp, s, n)
   match bd {
     BdArr(af, ats, atn) => { return Option(IbSpan).Some(IbSpan(s = ats, n = atn)) }
+    BdRef(rv, rsd, rts, rtn) => {}
     BdNone => {}
     BdVal(v, vts, vtn) => {}
     BdAgg(fr, sd, ts, tn) => {}
@@ -1996,6 +2047,7 @@ ib_arr_place := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Op
           ro : Option(IbArr) = ib_arr_of(bp, a, ats, atn, false)
           match ro { Some(r) => { return Option(IbArrAt).Some(ib_arr_at(af, ByteOff(0), r)) }; None => {} }
         }
+        BdRef(rv, rsd, rts, rtn) => {}
         BdNone => {}
         BdVal(v, vts, vtn) => {}
         BdAgg(fr, sd, ts, tn) => {}
@@ -2012,6 +2064,7 @@ ib_arr_place := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Op
               sto : Option(IbSt) = ib_struct_bound(bp, a, sd, ts, tn)
               match sto { Some(st) => { return ib_arr_field(bp, a, fr, st, fs, fl) }; None => {} }
             }
+            BdRef(rv, rsd, rts, rtn) => {}
             BdNone => {}
             BdVal(v, vts, vtn) => {}
             BdMem(mf, mns) => {}
@@ -2264,6 +2317,7 @@ ib_arr_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : ptr(Expr), r : I
             so : Option(IbArr) = ib_arr_of(bp, a, ats, atn, false)
             match so { Some(sr) => { if ib_arr_same(sr, r) { return Option(FrameId).Some(af) } }; None => {} }
           }
+          BdRef(rv, rsd, rts, rtn) => {}
           BdNone => {}
           BdVal(bv2, vts, vtn) => {}
           BdAgg(fr2, sd, ts, tn) => {}
@@ -2383,6 +2437,7 @@ ib_ptr_pointee_ks := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> Option(IbKS) {
         BdAgg(fr, sd, ts, tn) => {}
         BdMem(mf, mns) => {}
         BdArr(af, ats, atn) => {}
+        BdRef(rv, rsd, rts, rtn) => {}
         BdNone => {}
       }
     }
@@ -2413,6 +2468,7 @@ ib_bx_addr_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pl :
         ## for that (Q4), so it is refused (the function falls back).
         BdArr(af, ats, atn) => {}
         BdVal(v, vts, vtn) => {}
+        BdRef(rv, rsd, rts, rtn) => {}
         BdNone => {}
       }
     }
@@ -2684,7 +2740,7 @@ ib_bx_layout_q := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), q :
   match deref(ae) {
     Expr::Var(s, n) => {
       bd : IbBind = ib_lookup(bp, s, n)
-      match bd { BdNone => {}; BdVal(v, vts, vtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdMem(mf, mns) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdArr(af, ats, atn) => { return ib_no(bp, e, NyWhy.NwOutside) } }
+      match bd { BdNone => {}; BdRef(rv, rsd, rts, rtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdVal(v, vts, vtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdMem(mf, mns) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdArr(af, ats, atn) => { return ib_no(bp, e, NyWhy.NwOutside) } }
       src := ib_b_src(bp)
       mut bytes : usize = 0
       ko : Option(IbKS) = ib_name_ks(src, s, n)
@@ -2897,6 +2953,7 @@ ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), n
     BdAgg(fr, sd, ts, tn) => { ib_bs_agg_assign(bp, a, h, fr, sd, ts, tn, v) }
     BdMem(mf, mns) => { ib_bs_mem_assign(bp, a, h, mf, mns, v) }
     BdArr(af, ats, atn) => { ib_bs_arr_assign(bp, a, h, af, ats, atn, v) }
+    BdRef(rv, rsd, rts, rtn) => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
     BdNone => { ib_bs_global_assign(bp, a, h, ns, nl, v) }
   }
 }
@@ -3136,7 +3193,23 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
               ib_bind_typed(bp, a, pm.ns, pm.nl, pv, pm.ts, pm.tl)
             }
           }
-          None => { why.c = Construct.CSignature; return BuildOut.Refused }
+          None => {
+            ## Slice 3d: an aggregate parameter arrives as the ADDRESS of a caller-owned copy (docs/ir.md
+            ## §3.7) — the convention every legacy emitter already uses for a struct argument (measured:
+            ## x86_64 `leaq`, aarch64/riscv64 the object's address in the argument register, wasm its
+            ## linear-memory address), so a legacy caller and an IR-built callee agree. Only the WORD tier
+            ## (the layout every legacy reader shares, Q4), an immutable parameter, and one whose address
+            ## is not taken (the value is the caller's memory, read through the pointer).
+            sto : Option(IbSt) = ib_struct_named(bp, a, pm.ts, pm.tl)
+            match sto {
+              Some(st) => {
+                if pm.pmode != 0 or not ib_struct_word(bp, a, st) or ib_is_taken(bp, pm.ns, pm.nl) { why.c = Construct.CSignature; return BuildOut.Refused }
+                rv := new_param(f, a, Kty.KPtr, Sgn.SgNone)
+                ib_bind_ref(bp, a, pm.ns, pm.nl, rv, st)
+              }
+              None => { why.c = Construct.CSignature; return BuildOut.Refused }
+            }
+          }
         }
         pp = pm.next
       }
