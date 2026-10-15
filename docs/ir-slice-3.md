@@ -2,7 +2,7 @@
 
 Status: **3a landed** (§5, #910), **3b landed** (§6, #921), **3c landed in part** (§7: first tier #925,
 fixed arrays #941; `str`/slices as two-word aggregates remain), **3d landed** (§8: #945 aggregate arguments, #947 aggregate
-results), **3w in review** (§9: wasm frame objects and memory). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
+results), **3w** (§9: wasm frame objects and memory), **3e in review** (§10: packed/offset/endian locals). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
 §0–§2 are the plan written at the end of the slice-2 lane, §3 what that lane measured, §4 the open
 questions, §5 onwards each PR as built.
 
@@ -410,3 +410,23 @@ literal in place and answers 22; the IR — on all three twins now — answers t
 plus 5 DETAIL-CHANGED rows that keep their phase and failure (`assemble/1`: overload labels, #475, and a
 package that still misses `$main`) and 1 OUTPUT-CHANGED (`ir_ptr_agree`: still the same trap, at a
 different instruction). No x86_64, aarch64 or riscv64 row moves. Counts and census are in the PR.
+
+## 10. 3e — layout attributes on struct locals (as built)
+
+- **Builder.** `ib_struct_named` admits a `@packed` struct and `@offset`/`@endian` fields (a struct-level
+  `@align` and a field `@align` still refuse). Every field's place is `lower_layout::field_byte_place`,
+  the one answer for every tier, so an `@offset` alias reads the bytes another field writes. A packed
+  struct's frame object is aligned to 1. It stays a LOCAL value: a place through a pointer and a call
+  crossing still need the WORD tier (`ib_struct_word`, Q4), so `packed_attr_param` (packed parameters)
+  keeps its legacy emission.
+- **`@endian(big)`.** A field's `IbFld.be`: its load is followed and its store preceded by
+  `bswap T` at the field's width. `bswap T` reverses the low `T`-width bytes and its result is canonical
+  at `T` — the op's definition, now in the verifier's canonical-ops set (V3). Selectors: aarch64
+  `rev`/`rev16`, x86-ir `bswapq`/`bswapl`/`rolw $8`, riscv64 and wasm a byte-by-byte shift sequence (no
+  byte-reverse instruction in the base ISA / in wasm); then the usual canonicalization.
+- **Partial literal.** A `@packed` literal may leave TRAILING `@offset` fields unwritten (aliases of bytes
+  an earlier field writes): the parser emits the written fields as a declaration-order prefix and
+  refuses a gap, and the object is zeroed first.
+- **Closes** the WRONG-VALUE paths `endian_struct`, `endian_offset_struct` and `fmt_agg_body_comment` on
+  all three twins (#709, #710's local half). Golden `ig_agg` now pins the packed struct it used as a
+  refusal example.

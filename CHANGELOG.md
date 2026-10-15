@@ -122,6 +122,10 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64, riscv64 and wasm honour `@packed`, `@offset` and `@endian(big)` on struct locals (IR slice
+  3e).** Such a struct is laid out byte-exactly through the shared IR and a big-endian field is
+  byte-reversed on store and load, so `endian_struct`, `endian_offset_struct` and `fmt_agg_body_comment`
+  answer what x86_64 answers (their legacy emitters answered 2, 2 and 1). x86_64 output is unchanged.
 - **wasm builds structs, arrays and pointers through the shared IR (IR slice 3w).** A function with a
   struct or array local, a pointer place or a struct argument is now selected from the IR on wasm too:
   its frame objects live in linear memory from the module's stack pointer. Eleven corpus programs that
