@@ -6007,13 +6007,20 @@ build_reject_has reject_agg_ctor_type_mismatch "requires both operands to name t
 ## than emit a word-copy against a broken read. (A str FIELD of a struct global works — global_str_field_write.)
 build_reject_has reject_global_str_whole_assign "whole-value assignment to a mutable STR global"
 ## §8 @endian(big) field byte order (wire formats): a @packed struct with a big-endian u32/u16 field
-## byte-reversed on store/load (bswap/rolw), the swap observed via native-order @offset overlay reads;
-## x86_64-only sized loads/stores at byte offsets, so run_x86 (sweep-excluded).
-run_x86 endian_struct 42
+## byte-reversed on store/load (bswap/rolw), the swap observed via native-order @offset overlay reads.
+## Since IR slice 3e the twins build it from the shared IR (byte-exact places, `bswap` at the field's
+## width); their legacy emitters answered 2.
+run endian_struct 42
+run_a64 endian_struct 42
+run_rv64 endian_struct 42
+run_wat endian_struct 42
 ## §8 a field carrying BOTH @endian and @offset (in either order): the chain walker finds each lever even
-## when another attribute sits adjacent to the field name (the former single-adjacent scan missed one);
-## x86_64-only byte-precise layout, so run_x86 (sweep-excluded).
-run_x86 endian_offset_struct 42
+## when another attribute sits adjacent to the field name (the former single-adjacent scan missed one).
+## All four backends since IR slice 3e (the legacy twins answered 2).
+run endian_offset_struct 42
+run_a64 endian_offset_struct 42
+run_rv64 endian_offset_struct 42
+run_wat endian_offset_struct 42
 ## §8 @repr(T) tagged-enum tag-representation lever: @repr(i32)/@repr(u8) enums constructed + matched;
 ## the match dispatch loads the tag at T's width (movslq/movzbl), x86_64-only, so run_x86 (sweep-excluded).
 run_x86 repr_enum 42
@@ -7891,6 +7898,10 @@ fmt_test_has fmt_unchecked_postfix 42 "unchecked (x.u)"
 ## an APOSTROPHE inside a struct-body comment opened a char literal in skip_balanced_group and swallowed
 ## the body, dropping @offset/@endian (42 -> 2).
 fmt_test_has fmt_agg_body_comment 42 "@offset(3) b3"
+## IR slice 3e: its `@packed` `@offset` overlay runs on every backend (the legacy twins answered 1).
+run_a64 fmt_agg_body_comment 42
+run_rv64 fmt_agg_body_comment 42
+run_wat fmt_agg_body_comment 42
 ## nothing is recorded on the Decl, so @convert/@require/@abi/@export/@extern and `when` guards were all
 ## dropped -- including a BODYLESS @extern that came back WITH a body, defining the symbol it imports.
 fmt_test_has fmt_decl_attrs 42 "@convert fn"
