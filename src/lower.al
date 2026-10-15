@@ -22019,6 +22019,44 @@ emit_tuple_byte_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
   }
 }
 
+## The words one element `e` of a WORD-LAYOUT array literal takes in `emit_array_assign`'s last path
+## (the one that advances `cumw`), in the same order of cases; `array_lit_words` sums them. The #909
+## temp block is sized by it, so the two cannot disagree.
+array_lit_elem_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> i64 {
+  esl := struct_lit_info(e)
+  if esl.is_s { return i64(struct_words(cx.decls, cx.src, esl.ss, esl.sl, a)) }
+  va := var_agg_info(e, cx.slots, cx.src)
+  if va.ek == 2 { return i64(struct_words(cx.decls, cx.src, va.s, va.n, a)) }
+  eil := enum_lit_info(e)
+  if eil.is_e { return 1 + i64(enum_inst_words(cx.decls, cx.src, eil.es, eil.el, a)) }
+  if va.ek == 3 { return 1 + i64(enum_inst_words(cx.decls, cx.src, va.s, va.n, a)) }
+  if str_lit_info(e).is_s { return 2 }
+  nai := array_lit_info(e)
+  if nai.is_a { return i64(nai.nel) }
+  1
+}
+array_lit_words := fn(v : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
+  mut n : i64 = 0
+  mut g : Option(ptr(mut Arg)) = array_lit_info(v).ehead
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        n += array_lit_elem_words(ga.e, cx, a)
+        g = ga.next
+      }
+      None => { break }
+    }
+  }
+  usize(n)
+}
+## Does the array local whose base slot is `base` take `emit_array_assign`'s WORD-LAYOUT path (none of
+## the byte-tuple, standard-byte, byte-packed or niche-folded layouts)?
+array_slot_is_word_layout := fn(base : i64, cx : ptr(LCtx), a : rt::Arena) -> bool {
+  if tuple_byte_slot_for_off(base, cx) >= 0 or standard_byte_array_slot_for_off(base, cx, a) >= 0 { return false }
+  packed_byte_slot_for_off(base, cx) < 0 and folded_array_elem_for_off(base, cx).n == 0
+}
+
 emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
   a := arena_of(cx)
   if tuple_byte_slot_for_off(base, cx) >= 0 {
@@ -22133,36 +22171,29 @@ emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
             va := var_agg_info(ga.e, cx.slots, cx.src)
             if esl.is_s {
               emit_struct_assign(ga.e, ebase, sb, cx, a, nl)
-              cumw += i64(struct_words(cx.decls, cx.src, esl.ss, esl.sl, a))
             } else if va.ek == 2 {
               emit_struct_assign(ga.e, ebase, sb, cx, a, nl)
-              cumw += i64(struct_words(cx.decls, cx.src, va.s, va.n, a))
             } else if eil.is_e {
               emit_enum_assign(ga.e, ebase, sb, cx, a, nl)
-              cumw += 1 + i64(enum_inst_words(cx.decls, cx.src, eil.es, eil.el, a))
             } else if va.ek == 3 {
               emit_enum_assign(ga.e, ebase, sb, cx, a, nl)
-              cumw += 1 + i64(enum_inst_words(cx.decls, cx.src, va.s, va.n, a))
             } else if esr.is_s {
               ## a str element: store the {ptr, len} pair into the element's two slots (ptr at
               ## `ebase`, len at `ebase+1`) — the same 2-word layout a str-local binding uses.
               emit_str_assign(ga.e, ebase, sb)
-              cumw += 2
             } else if array_lit_info(ga.e).is_a {
               ## a TUPLE / nested-ARRAY element (`[(a, b), …]`) — store its components at the element base
               ## via a recursive `emit_array_assign` (ascending within the element), then advance by the
               ## element's component count. Was `emit_gas` → `$0` (a bare ArrayLit has no frame home), so
               ## every tuple element stored one zero word and `xs[i].N` read 0.
-              nai := array_lit_info(ga.e)
               emit_array_assign(ga.e, ebase, sb, cx, nl)
-              cumw += i64(nai.nel)
             } else {
               emit_gas(ga.e, sb, cx, a, nl)
               push_str(sb, "  popq %rax\n  movq %rax, -")
               push_int(sb, (ebase + 1) * 8)
               push_str(sb, "(%rbp)\n")
-              cumw += 1
             }
+            cumw += array_lit_elem_words(ga.e, cx, a)
             g = ga.next
           }
           None => { break }

@@ -2592,7 +2592,32 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     emit_require_agg_assign(v, base, sb, cx, a, nl)
   } else if si.is_s {
     base := slot_of(cx.slots, cx.src, ns, nl2)
-    emit_struct_assign(v, base, sb, cx, a, nl)
+    ## #909: a literal that may READ the local it is assigned to (`p = P(a = p.b, b = p.a)`) is built in a
+    ## fresh agg-temp block and then copied, so no initializer reads a field an earlier one overwrote.
+    ## The word-layout writer stores field by field in declaration order, so only an initializer after
+    ## the first can be affected (`lit_tail_may_read_var`); the packed and byte-layout writers ZERO the
+    ## destination first, so there every initializer counts. Every other literal is still built in
+    ## place (the common case; no copy).
+    zeroes_first := is_packed(cx.decls, cx.src, si.ss, si.sl) or std_struct_has_direct_byte_layout(cx.decls, cx.src, si.ss, si.sl, a)
+    mut reads_dest := false
+    if zeroes_first { reads_dest = lower_layout::expr_may_read_var(v, cx.src, ns, nl2) }
+    if not zeroes_first { reads_dest = lower_layout::lit_tail_may_read_var(v, cx.src, ns, nl2) }
+    if reads_dest {
+      lnw := agg_lit_store_words(v, CSpan(s = 0, n = 0), cx, a)
+      if lnw == 0 { panic("selfhost: a struct literal reassignment whose width does not resolve (#909)") }
+      lsave := cx.agg_next
+      lbase := emit_agg_lit_temp(v, lnw, sb, cx, a, nl)
+      for k in 0..lnw {
+        push_str(sb, "  movq -")
+        push_frame_word(sb, usize(lbase), k)
+        push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
+        push_frame_word(sb, usize(base), k)
+        push_str(sb, "(%rbp)\n")
+      }
+      cx.agg_next = lsave
+    } else {
+      emit_struct_assign(v, base, sb, cx, a, nl)
+    }
   } else if ei.is_e {
     base := slot_of(cx.slots, cx.src, ns, nl2)
     ## §8 `@niche`: a NICHE-FOLDED `Option(ptr(T))` destination stores ONE word (no disc). Detect
@@ -2655,7 +2680,31 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
   } else if ai.is_a {
     ## a `name := [e0, …]` binding stores each element into the array local's slots
     base := slot_of(cx.slots, cx.src, ns, nl2)
-    emit_array_assign(v, base, sb, cx, nl)
+    ## #909, the array form: `xs = [xs[1] + 3, xs[0], xs[2]]` built in place let element 1 read the
+    ## element 0 the literal had just written. A word-layout literal that may read `xs` is built in a
+    ## fresh agg-temp block and copied; the byte layouts (packed, standard-byte, tuple-byte, folded)
+    ## have no temp-block writer yet, so such a literal fails loud there instead of answering wrong.
+    mut built := false
+    if array_slot_is_word_layout(base, cx, a) {
+      if lower_layout::lit_tail_may_read_var(v, cx.src, ns, nl2) {
+        anw := array_lit_words(v, cx, a)
+        asave := cx.agg_next
+        abase := agg_alloc_words(cx, anw)
+        emit_array_assign(v, abase, sb, cx, nl)
+        for k in 0..anw {
+          push_str(sb, "  movq -")
+          push_frame_word(sb, usize(abase), k)
+          push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
+          push_frame_word(sb, usize(base), k)
+          push_str(sb, "(%rbp)\n")
+        }
+        cx.agg_next = asave
+        built = true
+      }
+    } else if lower_layout::expr_may_read_var(v, cx.src, ns, nl2) {
+      panic("selfhost: an array literal that may read the byte-layout array it is assigned to is not supported yet (#909)")
+    }
+    if not built { emit_array_assign(v, base, sb, cx, nl) }
   } else if fixed_array_byte_return_len(v, cx.decls, cx.src, a) >= 1 {
     ## BYTES: the bounded `[u8; N]` return is one or two packed words in %rax/%rdx. The byte-array
     ## local's data block begins at `-(base*8)(%rbp)` (the filler below its metadata slot), exactly
