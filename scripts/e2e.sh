@@ -8261,14 +8261,18 @@ run sret_generic_decl_ret 42
 ## generic half still segfaulted. x86-only for the same reason as above: aarch64's ExprStmt arm never
 ## sets `A64_SRET_DST_ON` (#714), so this traps there; riscv64 and wasm already publish a destination.
 run_x86 sret_discard_generic 42
-run_x86 when_guard_binding 42
-## The SAME fixture on aarch64 answers 100, and that is its DESIGNED answer, not a divergence: it
-## declares `val : u64 = 42 when target.arch == Arch.x86_64` and `val : u64 = 100 when
-## target.arch == Arch.aarch64`, so the comptime guard selects a different binding per target.
-## Registering it here states that per-target answer instead of leaving the corpus walk to record an
-## unexplained disagreement (#683), and puts the fixture into the sweeps' corpus on both.
-run_a64 when_guard_binding 100
+## The `when` declaration-guard fixtures are TARGET-NEUTRAL (owner decision 2026-10-15): each target
+## declares its own binding / struct and checks it, so the guarded program answers 42 on every backend
+## that folds its guards (they used to answer a designed per-target value — 100 on aarch64 — which the
+## cross-backend counter could not tell from a wrong one). `when_guard_struct` declares no `Cfg` for wasm
+## (it has no `Arch` variant), so wasm refuses it loudly and it is not registered there.
+run when_guard_binding 42
+run_a64 when_guard_binding 42
+run_rv64 when_guard_binding 42
+run_wat when_guard_binding 42
 run_x86 when_guard_struct 42
+run_a64 when_guard_struct 42
+run_rv64 when_guard_struct 42
 run_x86 when_guard_enum 42
 ## CT-4/CT-5: a comptime PREDICATE on a GENERIC fn (`when size(T) <= 8`) gates INSTANTIATION — the
 ## guard is folded per-instance at monomorphization with `T` = the concrete type. ACCEPT: `pick(u64,42)`
