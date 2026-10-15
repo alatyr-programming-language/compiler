@@ -27,7 +27,9 @@
 
 ## What one function is selected against (see `aarch64::isel`'s `SaX`), plus the scratch local base
 ## and the module-global addresses (`gv[i]` holds the address of symbol `gs[i]`).
-SwX := struct { f : ptr(mut ir::IrFn), p : ir::IrProg, src : ptr(u8), decls : ptr(rt::Vec), fspan : usize, stk : ptr(mut ir::WBuf), s0 : usize, gv : ptr(mut ir::WBuf), gs : ptr(mut ir::WBuf) }
+## `fobj`: each frame object's byte offset from the frame base `fp` (a local, after the two scratch
+## locals); slice 3w: frame objects live on the shadow stack in linear memory (docs/ir.md §6).
+SwX := struct { f : ptr(mut ir::IrFn), p : ir::IrProg, src : ptr(u8), decls : ptr(rt::Vec), fspan : usize, stk : ptr(mut ir::WBuf), s0 : usize, gv : ptr(mut ir::WBuf), gs : ptr(mut ir::WBuf), fobj : ptr(mut ir::WBuf), fp : usize }
 
 sw_put := fn(in out sb : rt::StrBuf, s : str) { k := rt::push_str(sb, s) }
 sw_int := fn(in out sb : rt::StrBuf, n : i64) { k := rt::push_int(sb, n) }
@@ -365,48 +367,46 @@ sw_addr_of := fn(x : SwX, v : usize) -> Option(usize) {
   }
   Option(usize).None
 }
-## `load T [%a + 0]` of a module scalar's address: `global.get`, canonicalized at `T` by its spelled
-## signedness. A load from any other address is outside what this selector models before slice 3.
+## `load T [a + off]`. A module scalar is a wasm GLOBAL, not memory: `load [%g + 0]` of an address
+## `addr @g` gave is a `global.get`, canonicalized at `T` by its spelled signedness (slice 3b). Any other
+## address is linear memory (slice 3w): `i64.load*` of `T`'s width, sign- or zero-extended by `T`'s
+## spelled signedness — the canonical i64 form every other value of `T` has here.
 sw_load := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool {
-  if ir::i_off(ip) != 0 { return false }
-  match ir::i_ak(ip) {
-    OkVReg => {}
-    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
-  }
-  so : Option(usize) = sw_addr_of(x, usize(ir::i_av(ip)))
-  match so {
+  ty : ir::Kty = ir::i_ty(ip)
+  sg : ir::Sgn = ir::i_sg(ip)
+  gso : Option(usize) = sw_global_base(x, ir::i_ak(ip), ir::i_av(ip))
+  match gso {
     Some(s) => {
+      if ir::i_off(ip) != 0 { return false }
       di := ir::sym_decl(x.p, ir::SymId(s))
       g : Decl = deref(lower_ctx::decl_get(x.decls, di))
       gname := str_at((x.src + g.name_start), g.name_len)
       sw_put(sb, "    global.get $")
       sw_put(sb, gname)
       sw_put(sb, "\n")
-      ty : ir::Kty = ir::i_ty(ip)
-      sg : ir::Sgn = ir::i_sg(ip)
       if not sw_canon(sb, ty, sg) { return false }
-      sw_setd(sb, ip)
+      return sw_setd(sb, ip)
     }
-    None => { false }
+    None => {}
   }
+  if not sw_addr32(sb, x, ir::i_ak(ip), ir::i_av(ip), ir::i_off(ip)) { return false }
+  lio : Option(str) = sw_load_ins(ir::kty_bytes(ty), ir::sgn_eq(sg, ir::Sgn.SgS))
+  match lio { Some(ins) => { sw_op(sb, ins) }; None => { return false } }
+  sw_setd(sb, ip)
 }
-## `store T [%a + 0], v` into a module scalar (slice 3b): `global.set` of the whole `i64` cell. The
-## builder stores a module scalar's whole word (an integer widened to `i64`, a `bool`'s 0/1), so the
-## value is already the cell's canonical content. A store to any other address needs the shadow stack.
+## `store T [a + off], v`. Into a module scalar (slice 3b): `global.set` of the whole `i64` cell (the
+## builder stores a module scalar's whole word). Anywhere else, linear memory: `i64.store*` of `T`'s
+## width (slice 3w).
 sw_store := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool {
-  if ir::i_off(ip) != 0 { return false }
-  match ir::i_ak(ip) {
-    OkVReg => {}
-    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
-  }
   ty : ir::Kty = ir::i_ty(ip)
-  match ty {
-    KI64 | KBool => {}
-    KI8 | KI16 | KI32 | KPtr | KF32 | KF64 | KNone => { return false }
-  }
-  so : Option(usize) = sw_addr_of(x, usize(ir::i_av(ip)))
-  match so {
+  gso : Option(usize) = sw_global_base(x, ir::i_ak(ip), ir::i_av(ip))
+  match gso {
     Some(s) => {
+      if ir::i_off(ip) != 0 { return false }
+      match ty {
+        KI64 | KBool => {}
+        KI8 | KI16 | KI32 | KPtr | KF32 | KF64 | KNone => { return false }
+      }
       if not sw_ld(sb, ir::i_bk(ip), ir::i_bv(ip)) { return false }
       di := ir::sym_decl(x.p, ir::SymId(s))
       g : Decl = deref(lower_ctx::decl_get(x.decls, di))
@@ -414,14 +414,106 @@ sw_store := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> boo
       sw_put(sb, "    global.set $")
       sw_put(sb, gname)
       sw_put(sb, "\n")
-      true
+      return true
     }
-    None => { false }
+    None => {}
   }
+  if not sw_addr32(sb, x, ir::i_ak(ip), ir::i_av(ip), ir::i_off(ip)) { return false }
+  if not sw_ld(sb, ir::i_bk(ip), ir::i_bv(ip)) { return false }
+  sio : Option(str) = sw_store_ins(ir::kty_bytes(ty))
+  match sio { Some(ins) => { sw_op(sb, ins) }; None => { return false } }
+  true
+}
+## The load of an `nb`-byte value into the canonical i64 (extended by the spelled signedness).
+sw_load_ins := fn(nb : u64, signed : bool) -> Option(str) {
+  if nb == 8 { return Option(str).Some("i64.load") }
+  if nb == 4 and signed { return Option(str).Some("i64.load32_s") }
+  if nb == 4 { return Option(str).Some("i64.load32_u") }
+  if nb == 2 and signed { return Option(str).Some("i64.load16_s") }
+  if nb == 2 { return Option(str).Some("i64.load16_u") }
+  if nb == 1 and signed { return Option(str).Some("i64.load8_s") }
+  if nb == 1 { return Option(str).Some("i64.load8_u") }
+  Option(str).None
+}
+## The store of the low `nb` bytes of an i64.
+sw_store_ins := fn(nb : u64) -> Option(str) {
+  if nb == 8 { return Option(str).Some("i64.store") }
+  if nb == 4 { return Option(str).Some("i64.store32") }
+  if nb == 2 { return Option(str).Some("i64.store16") }
+  if nb == 1 { return Option(str).Some("i64.store8") }
+  Option(str).None
+}
+## The module scalar a base operand addresses, when it is a vreg `addr @g` gave (a wasm global, not
+## memory); `None` for every other base.
+sw_global_base := fn(x : SwX, k : ir::OpndK, v : i64) -> Option(usize) {
+  match k {
+    OkVReg => { return sw_addr_of(x, usize(v)) }
+    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => {}
+  }
+  Option(usize).None
+}
+## Push the i64 address `base + off`: a `ptr` vreg's value, or a frame object's place on the shadow
+## stack (`fp` + its offset). A vreg holding a module scalar's address names a wasm global, which has no
+## memory address, so it refuses.
+sw_addr64 := fn(in out sb : rt::StrBuf, x : SwX, k : ir::OpndK, v : i64, off : i64) -> bool {
+  match k {
+    OkVReg => {
+      gso : Option(usize) = sw_addr_of(x, usize(v))
+      match gso { Some(s) => { return false }; None => {} }
+      sw_get(sb, usize(v))
+    }
+    OkFrame => {
+      if v < 0 or usize(v) >= ir::wb_len(x.fobj) { return false }
+      sw_get(sb, x.fp)
+      sw_const(sb, i64(ir::wb_get(x.fobj, usize(v))))
+      sw_op(sb, "i64.add")
+    }
+    OkNone | OkImm | OkSym | OkFn | OkLabel => { return false }
+  }
+  if off != 0 {
+    sw_const(sb, off)
+    sw_op(sb, "i64.add")
+  }
+  true
+}
+## The same address as wasm's i32 memory index.
+sw_addr32 := fn(in out sb : rt::StrBuf, x : SwX, k : ir::OpndK, v : i64, off : i64) -> bool {
+  if not sw_addr64(sb, x, k, v, off) { return false }
+  sw_op(sb, "i32.wrap_i64")
+  true
+}
+## `copy dst, src, n` / `zero dst, n`: unrolled, 8-byte words when `n` is a multiple of 8, bytes
+## otherwise (`n` is the object's size, known here). A very large object refuses rather than emit a
+## page of code.
+sw_mem := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst), copy : bool) -> bool {
+  n := ir::i_n(ip)
+  words := n % 8 == 0
+  mut step : usize = 1
+  if words { step = 8 }
+  if n / step > 64 { return false }
+  mut lins := "i64.load8_u"
+  mut sins := "i64.store8"
+  if words { lins = "i64.load"; sins = "i64.store" }
+  mut o : usize = 0
+  while o < n {
+    if not sw_addr32(sb, x, ir::i_ak(ip), ir::i_av(ip), i64(o)) { return false }
+    if copy {
+      if not sw_addr32(sb, x, ir::i_bk(ip), ir::i_bv(ip), i64(o)) { return false }
+      sw_op(sb, lins)
+    }
+    if not copy { sw_const(sb, 0) }
+    sw_op(sb, sins)
+    o = o + step
+  }
+  true
 }
 ## A direct call: the arguments pushed in order, `call $<name>`, the result canonicalized from the
 ## destination's type (or dropped when the callee answers one nobody reads).
 sw_call := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool {
+  ## Slice 3d: a call whose aggregate result lands in a frame object. wasm has no convention for it yet
+  ## (its legacy emitter returns a block's address), and dropping the receiving object would read zeros:
+  ## a silent wrong value (measured on test/ir_agg_ret.al before this refusal). The caller stays legacy.
+  if ir::opndk_is_frame(ir::i_dk(ip)) { return false }
   cdo : Option(Decl) = sw_sym_decl(x, ip)
   match cdo {
     Some(cd) => {
@@ -516,6 +608,27 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
     OpAddrSym => { sw_addr(x, a, ip) }
     OpLoad => { sw_load(sb, x, ip) }
     OpStore => { sw_store(sb, x, ip) }
+    OpAddrFrame => {
+      if not sw_addr64(sb, x, ir::i_ak(ip), ir::i_av(ip), 0) { return false }
+      sw_setd(sb, ip)
+    }
+    OpGep => {
+      ## `gep a, i, stride`: `a + i * stride` (the stride is the op's offset), no check (§3.4)
+      if not sw_lda(sb, ip) or not sw_ldb(sb, ip) { return false }
+      sw_const(sb, ir::i_off(ip))
+      sw_op(sb, "i64.mul")
+      sw_op(sb, "i64.add")
+      sw_setd(sb, ip)
+    }
+    OpBound => {
+      ## `bound i, n`: trap with the op's kind unless `i < n`, read unsigned
+      if not sw_lda(sb, ip) or not sw_ldb(sb, ip) { return false }
+      sw_op(sb, "i64.ge_u")
+      sw_trap_on(sb, x, ir::i_tk(ip), ip)
+      true
+    }
+    OpCopy => { sw_mem(sb, x, ip, true) }
+    OpZero => { sw_mem(sb, x, ip, false) }
     OpCall => { sw_call(sb, x, ip) }
     OpBlock => { sw_open(sb, "block", ip); sw_push(x, a, i); true }
     OpLoop => { sw_open(sb, "loop", ip); sw_push(x, a, i); true }
@@ -554,8 +667,8 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
       sw_trap_on(sb, x, ir::i_tk(ip), ip)
       true
     }
-    OpFConst | OpAddrFrame | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpCopy | OpZero | OpGep | OpBound | OpCallInd
+    OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpCallInd
       | OpCallC | OpSyscall | OpSwitch => { false }
   }
 }
@@ -563,10 +676,22 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
 ## Select function `f` (declaration `d`) into `sb`. Answers false when the function is refused.
 sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> bool {
   if wat_ovl_is_marked(d.name_start) { return false }
-  ## A frame object (a struct local, an aggregate temporary: slice 3) needs the shadow stack of
-  ## `docs/ir.md` §6 — linear memory popped on return. Until it exists such a function keeps its
-  ## legacy emission (`docs/ir-slice-3.md` §3.5), never the legacy bump allocator from the selector.
-  if ir::fn_nframes(x.f) != 0 { return false }
+  ## Slice 3w: frame objects live on the shadow stack in linear memory (`docs/ir.md` §6), laid out from
+  ## `fp`, the value of the module's `$__sp` at entry. This first step does not pop the frame on return:
+  ## the legacy emitter bump-allocates the same way and never reclaims, and a legacy callee may hand back
+  ## a pointer into memory it bumped above our frame, so reclaiming needs a rule of its own (step 2).
+  nfr := ir::fn_nframes(x.f)
+  mut ftot : usize = 0
+  mut fk : usize = 0
+  while fk < nfr {
+    al := ir::frame_align_of(x.f, fk)
+    if al == 0 or al > 8 { return false }
+    ftot = (ftot + al - 1) / al * al
+    k1 := ir::wb_push(x.fobj, a, ftot)
+    ftot = ftot + ir::frame_bytes(x.f, fk)
+    fk = fk + 1
+  }
+  ftot = (ftot + 7) / 8 * 8
   ## Slice 3d: an aggregate result returns its words in registers on the register targets; wasm has no
   ## convention for it yet (its legacy emitter returns a block's address), so such a function stays legacy.
   if ir::fn_ret_words(x.f) != 0 { return false }
@@ -581,12 +706,20 @@ sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> 
   if has_ret { sw_put(sb, " (result i64)") }
   sw_put(sb, "\n    (local")
   mut li : usize = np
-  while li < nv + 2 { sw_put(sb, " i64"); li = li + 1 }
+  while li < nv + 3 { sw_put(sb, " i64"); li = li + 1 }
   sw_put(sb, ")\n")
   pi = 0
   while pi < np {
     if not sw_canon_local(sb, x, pi) { return false }
     pi = pi + 1
+  }
+  if nfr > 0 {
+    sw_op(sb, "global.get $__sp")
+    sw_set(sb, x.fp)
+    sw_get(sb, x.fp)
+    sw_const(sb, i64(ftot))
+    sw_op(sb, "i64.add")
+    sw_op(sb, "global.set $__sp")
   }
   ni := ir::fn_ninst(x.f)
   mut i : usize = 0
@@ -617,7 +750,7 @@ pub wat_isel_try := fn(decls : ptr(rt::Vec), di : usize, in out sb : rt::StrBuf,
     SiBuilt(f) => {
       d : Decl = deref(lower_ctx::decl_get(decls, di))
       nv := ir::fn_nvregs(f)
-      x := SwX(f = f, p = p, src = src, decls = decls, fspan = d.name_start, stk = ir::wb_new(ia, 16), s0 = nv, gv = ir::wb_new(ia, 8), gs = ir::wb_new(ia, 8))
+      x := SwX(f = f, p = p, src = src, decls = decls, fspan = d.name_start, stk = ir::wb_new(ia, 16), s0 = nv, gv = ir::wb_new(ia, 8), gs = ir::wb_new(ia, 8), fobj = ir::wb_new(ia, 8), fp = nv + 2)
       mark := sb.len
       if sw_fn(sb, x, d, ia) { return true }
       sb.len = mark

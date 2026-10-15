@@ -1,8 +1,8 @@
 # Shared IR, slice 3 — design note and HANDOFF (aggregates, places, layout)
 
 Status: **3a landed** (§5, #910), **3b landed** (§6, #921), **3c landed in part** (§7: first tier #925,
-fixed arrays #941; `str`/slices as two-word aggregates remain), **3d** (§8: step 1 #945 aggregate arguments; step 2 in review,
-aggregate results). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
+fixed arrays #941; `str`/slices as two-word aggregates remain), **3d landed** (§8: #945 aggregate arguments, #947 aggregate
+results), **3w in review** (§9: wasm frame objects and memory). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
 §0–§2 are the plan written at the end of the slice-2 lane, §3 what that lane measured, §4 the open
 questions, §5 onwards each PR as built.
 
@@ -367,3 +367,46 @@ A struct result of three or more words (needs a convention: sret, or x86's regis
 parameter that is address-taken, `in out` or assigned, a non-WORD tier (BYTE/PACKED) struct crossing a
 call, and every aggregate call on wasm (shadow stack). Arrays and `str` as arguments follow with 3c's
 two-word aggregates.
+
+## 9. 3w — wasm frame objects and linear memory (as built)
+
+`docs/ir.md` §6 puts wasm's frame objects on a shadow stack in linear memory. Before 3w the wasm selector
+refused every function with a frame object and modelled memory only for module scalars (wasm globals),
+so none of slices 3a–3d reached wasm.
+
+- **Frame.** Objects are laid out from `fp`, a local holding the module's `$__sp` at entry — the legacy
+  emitter's bump pointer, declared unconditionally after the aggregate globals — each at its alignment,
+  and `$__sp` moves past the frame. **Not popped on return** in this step: the legacy emitter
+  bump-allocates the same way and never reclaims, and a legacy callee may hand back a pointer into
+  memory it bumped above the frame, so reclaiming needs a rule of its own (escape of a frame address
+  and of a callee's block). Memory therefore grows per call exactly as legacy wasm's does.
+- **Memory ops.** `addr $k` is `fp + offset`; `load`/`store` at any address other than a module scalar's
+  are `i64.load*`/`i64.store*` of the type's width (a narrow load extended by the spelled signedness);
+  `gep`, `bound`, and `copy`/`zero` unrolled by words. An address `addr @g` gave names a wasm global and
+  has no memory address, so it never reaches linear-memory code.
+- **Calls.** An aggregate argument is the address of the caller's copy (3d) — the legacy wasm
+  convention for a struct argument. A call whose aggregate result lands in a frame object refuses on
+  wasm (legacy returns a block's address; the convention is a later step): measured, dropping the
+  receiving object read zeros on `test/ir_agg_ret.al` before the refusal.
+- **Found while measuring:** `test/p0_void_tail_call_side_effect.al` went from a legacy trap (134) to a
+  wrong value (1): with `main` IR-built, the legacy wasm `forward` turned out to have an EMPTY body — it
+  drops a void call that ends a function body (#946). The builder now builds such a tail as a statement
+  (all targets), so `forward` is IR-built and the row answers 42; #946 stays open for the legacy
+  emitter.
+
+### 9.1 Predicted manifest transitions (measured before the gate)
+
+All on wasm, every one to the x86_64 value except `ir_struct_assign_self` (#909: x86_64 builds the
+literal in place and answers 22; the IR — on all three twins now — answers the literal's value, 21):
+
+| path | before → after |
+|---|---|
+| `ir_struct_local`, `ir_ptr_place`, `deref_field_write`, `p0_parser_if_deref_store`, `p0_void_tail_call_side_effect`, `fmt_elseif_chain_stmt`, `array_lit_single_elem` | run/134 → run/42 |
+| `signedness_struct_field_array` | run/1 → run/42 (#707) |
+| `ir_struct_field_signed` | run/2 → run/42 (#765) |
+| `signedness_ptr_field` | run/134 → run/64 |
+| `ir_struct_assign_self` | run/0 → run/21 |
+
+plus 5 DETAIL-CHANGED rows that keep their phase and failure (`assemble/1`: overload labels, #475, and a
+package that still misses `$main`) and 1 OUTPUT-CHANGED (`ir_ptr_agree`: still the same trap, at a
+different instruction). No x86_64, aarch64 or riscv64 row moves. Counts and census are in the PR.
