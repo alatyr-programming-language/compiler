@@ -15,7 +15,7 @@
 ## Absence is a variant here, never a reserved value: an expression builder answers `Option(VRegId)`
 ## (`None` once the function is refused), a call answers `CallOut`, and every handle is a brand
 ## (`VRegId`, `LabelId`, `SymId`, `FnId`).
-(Arg, Decl, Expr, Param, Stmt) := ast
+(Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt) := ast
 arg_p := ast::arg_p
 arg_at := ast::arg_at
 stmt_p := ast::stmt_p
@@ -506,7 +506,8 @@ ib_bx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> Option(VR
     Expr::Index(b, ix) => { return ib_bx_index(bp, a, e, b, ix) }
     Expr::Deref(pe) => { return ib_bx_deref(bp, a, e, pe) }
     Expr::AddrOf(pl) => { return ib_bx_addr_of(bp, a, e, pl) }
-    Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit
+    Expr::Match(scr, arms) => { return ib_bx_match(bp, a, e, scr, arms) }
+    Expr::StructLit | Expr::EnumLit | Expr::StrLit
       | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
       | Expr::FnRef => { ib_refuse_expr(bp, e, NyWhy.NwOutside) }
   }
@@ -1567,7 +1568,7 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
       if ib_names_global(bp, s, n) { return Option(IbSt).None }
       b : IbBind = ib_lookup(bp, s, n)
       match b {
-        BdAgg(fr, sd, ts, tn) => { return ib_struct_bound(bp, a, sd, ts, tn) }
+        BdAgg(fr, sd, ts, tn) => { return ib_agg_bound(bp, a, sd, ts, tn) }
         BdVal(v, vts, vtn) => {}
         BdMem(mf, mns) => {}
         BdArr(af, ats, atn) => {}
@@ -1586,7 +1587,9 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
         None => {}
       }
     }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field | Expr::EnumLit
+    ## Slice 4a: an enum literal names its enum; a generic one names no instance, so only an annotation types it.
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { return ib_enum_named(bp, a, es, el) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
@@ -1608,6 +1611,9 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
     ib_refuse_expr(bp, e, w)
     return Option(IbObj).None
   }
+  ## Slice 4a: an enum literal is built at the type its position gives it (an instance, for a generic
+  ## enum), provided it names that enum.
+  if ib_is_enum_lit(e) { return ib_agg_enum_lit(bp, a, e, st) }
   et : Option(IbSt) = ib_agg_type_of(bp, a, e)
   match et {
     Some(x) => {
@@ -1734,7 +1740,7 @@ ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
     }
   }
   mut sto : Option(IbSt) = Option(IbSt).None
-  if lts.n != 0 { sto = ib_struct_named(bp, a, lts.s, lts.n) } else { sto = ib_agg_type_of(bp, a, v) }
+  if lts.n != 0 { sto = ib_agg_named(bp, a, lts.s, lts.n) } else { sto = ib_agg_type_of(bp, a, v) }
   match sto {
     Some(st) => {
       oo : Option(IbObj) = ib_agg(bp, a, v, st)
@@ -1754,7 +1760,7 @@ ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
 ## `s = e` into the struct local in object `fr`: the value is built in its own object first (a literal
 ## reading `s` itself sees the old value), then copied.
 ib_bs_agg_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), fr : FrameId, sd : usize, ts : usize, tn : usize, v : ptr(Expr)) {
-  sto : Option(IbSt) = ib_struct_bound(bp, a, sd, ts, tn)
+  sto : Option(IbSt) = ib_agg_bound(bp, a, sd, ts, tn)
   match sto {
     Some(st) => {
       oo : Option(IbObj) = ib_agg(bp, a, v, st)
@@ -1763,6 +1769,444 @@ ib_bs_agg_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt
     None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
   }
 }
+## ── enums and `match` (slice 4a, `docs/ir-slice-4.md`) ──
+##
+## An enum local is a FRAME OBJECT in the one layout every backend shares (`lower_layout::enum_layout`):
+## an 8-byte tag at byte 0 holding the variant's discriminant (`lower_layout::variant_index`, explicit
+## pins included), then the payload, one 8-byte word per component, from byte 8. 4a builds an enum
+## whose every variant component is a kernel scalar and that is neither a union nor niche-folded
+## (`Option(ptr(T))` is one word); a generic enum only through an instance span (`Option(u64)`, an
+## annotation's). In 4a an enum never crosses a call or a pointer — an enum parameter, result,
+## argument or `ptr(e)` stays `NotYet` (`ib_struct_bound`, which those paths ask, answers structs only)
+## — so the layout is internal to one function; it is the shared one, so 4b's crossings need no other.
+##
+## `match` evaluates its scrutinee once and tests the arms top to bottom (Control Flow §5.3) as a chain
+## of `if … else`: an integer literal arm compares for equality, a range arm `lo..hi` / `lo..=hi` tests
+## both bounds at the scrutinee's signedness, a variant arm compares the tag; `_` takes the rest. When no
+## arm is `_`, the chain ends in `trap match_no_arm` (D2: unreachable for a well-typed program). A
+## payload binding is a `load` of its component from the matched object, in the arm's own scope.
+
+## The enum type named `[s, s+n)`, when 4a builds it (see the band comment).
+ib_enum_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize) -> Option(IbSt) {
+  bv : IbB = deref(bp)
+  bn := lower_layout::base_type_name(bv.src, s, n)
+  edi := lower_layout::enum_decl_of(bv.decls, bv.src, bn.s, bn.n)
+  if edi < 0 { return Option(IbSt).None }
+  d : Decl = deref(ib_decl_ptr(bv.decls, usize(edi)))
+  if d.kind != lower_layout::DECL_KIND_ENUM { return Option(IbSt).None }
+  if lower_layout::is_union_decl(bv.decls, bv.src, bn.s, bn.n) { return Option(IbSt).None }
+  if lower_layout::is_niche_folded(bv.src, s, n) or lower_layout::is_bool_niche_pending(bv.src, s, n) { return Option(IbSt).None }
+  ## A generic enum is laid out only by an instance: `Option` alone names no payload type.
+  if d.is_generic and bn.n == n { return Option(IbSt).None }
+  st0 := IbSt(di = usize(edi), s = s, n = n, size = 0, align = 8)
+  mut mx : usize = 0
+  mut nv : usize = 0
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        mut i : usize = 0
+        while i < fd.arity {
+          ko : Option(IbKS) = ib_variant_comp(bp, a, st0, fq, i)
+          match ko { Some(k) => {}; None => { return Option(IbSt).None } }
+          i = i + 1
+        }
+        if fd.arity > mx { mx = fd.arity }
+        nv = nv + 1
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  if nv == 0 { return Option(IbSt).None }
+  ## The shared layout must be exactly the tag word plus one word per component of the widest variant.
+  w := lower_layout::enum_layout_words(bv.decls, bv.src, s, n, a)
+  if w != 1 + mx { return Option(IbSt).None }
+  Option(IbSt).Some(IbSt(di = usize(edi), s = s, n = n, size = w * 8, align = 8))
+}
+## Is `st` an enum type (`ib_enum_named`), not a struct?
+ib_st_is_enum := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
+  d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), st.di))
+  d.kind == lower_layout::DECL_KIND_ENUM
+}
+## The kernel type of component `i` of variant `vq` of enum `st`: read from the variant's own `( … )`
+## group (the parser keeps only a payload's head token), through the instance's type argument when the
+## component is a type parameter of a generic enum.
+ib_variant_comp := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbKS) {
+  bv : IbB = deref(bp)
+  fd := deref(ast::fld_p(vq))
+  if i >= fd.arity { return Option(IbKS).None }
+  end := ast::src_extent()
+  mut op := fd.ns + fd.nl
+  while op < end and str_at((bv.src + op), 1) != "(" { op = op + 1 }
+  if op >= end { return Option(IbKS).None }
+  comp := lower_layout::typearg_at(bv.src, op, 0, i)
+  if comp.n == 0 { return Option(IbKS).None }
+  mut ts := comp.s
+  mut tl := comp.n
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  if d.is_generic {
+    pos := lower_layout::param_pos(bv.decls, st.di, bv.src, ts, tl, a)
+    if pos >= 0 {
+      bn := lower_layout::base_type_name(bv.src, st.s, st.n)
+      ta := lower_layout::typearg_at(bv.src, bn.s, bn.n, usize(pos))
+      if ta.n == 0 { return Option(IbKS).None }
+      ts = ta.s
+      tl = ta.n
+    }
+  }
+  ib_name_ks(bv.src, ts, tl)
+}
+## The variant of enum `st` named `[vs, vs+vl)`.
+ib_variant_of := fn(bp : ptr(mut IbB), st : IbSt, vs : usize, vl : usize) -> Option(ptr(mut FieldDecl)) {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        if fd.nl == vl and streq(bv.src, fd.ns, fd.nl, vs, vl) { return Option(ptr(mut FieldDecl)).Some(fq) }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  Option(ptr(mut FieldDecl)).None
+}
+## The place of the tag, and of payload component `i` at kernel type `k`.
+ib_tag_fld := fn() -> IbFld { IbFld(off = ByteOff(0), ty = Kty.KI64, sg = Sgn.SgS, be = false) }
+ib_comp_fld := fn(i : usize, k : IbKS) -> IbFld { IbFld(off = ByteOff(8 + 8 * i), ty = k.ty, sg = k.sg, be = false) }
+## The enum type of a binding of declaration `sd` and type span `[ts, ts+tn)`.
+ib_enum_bound := fn(bp : ptr(mut IbB), in out a : rt::Arena, sd : usize, ts : usize, tn : usize) -> Option(IbSt) {
+  eo : Option(IbSt) = ib_enum_named(bp, a, ts, tn)
+  match eo { Some(st) => { if st.di == sd { return eo } }; None => {} }
+  Option(IbSt).None
+}
+## The aggregate type of a local bound with declaration `sd` and type span `[ts, ts+tn)`: a struct
+## (slice 3a) or an enum (4a).
+ib_agg_bound := fn(bp : ptr(mut IbB), in out a : rt::Arena, sd : usize, ts : usize, tn : usize) -> Option(IbSt) {
+  so : Option(IbSt) = ib_struct_bound(bp, a, sd, ts, tn)
+  match so { Some(st) => { return so }; None => {} }
+  ib_enum_bound(bp, a, sd, ts, tn)
+}
+## The aggregate type a declared type name `[s, s+n)` denotes: a struct, else an enum.
+ib_agg_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize) -> Option(IbSt) {
+  so : Option(IbSt) = ib_struct_named(bp, a, s, n)
+  match so { Some(st) => { return so }; None => {} }
+  ib_enum_named(bp, a, s, n)
+}
+## `E.V(e0, …)` into a fresh object of enum type `st`: zeroed, the tag stored, then each component in
+## order at its kernel type.
+ib_enum_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt, vs : usize, vl : usize, np : usize, ph : Option(ptr(mut Arg))) -> Option(IbObj) {
+  vo : Option(ptr(mut FieldDecl)) = ib_variant_of(bp, st, vs, vl)
+  match vo {
+    Some(vq) => { return ib_enum_lit_of(bp, a, e, st, vq, vs, vl, np, ph) }
+    None => {}
+  }
+  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  Option(IbObj).None
+}
+ib_enum_lit_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt, vq : ptr(mut FieldDecl), vs : usize, vl : usize, np : usize, ph : Option(ptr(mut Arg))) -> Option(IbObj) {
+  bv : IbB = deref(bp)
+  vfd := deref(ast::fld_p(vq))
+  if np != vfd.arity { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
+  tgo : Option(i64) = lower_layout::variant_disc(bv.decls, bv.src, st.s, st.n, vs, vl, a)
+  mut tag : i64 = 0
+  match tgo { Some(t) => { tag = t }; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None } }
+  fr := ib_new_obj(bp, a, st)
+  ib_zero_obj(bp, a, fr, st.size)
+  tv := ib_konst(bp, a, ib_ks_i64(Sgn.SgS), tag)
+  ib_store_field(bp, a, fr, ib_tag_fld(), tv)
+  mut g : Option(ptr(mut Arg)) = ph
+  mut i : usize = 0
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        ko : Option(IbKS) = ib_variant_comp(bp, a, st, vq, i)
+        mut k : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+        match ko { Some(kk) => { k = kk }; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None } }
+        v := ib_value_ctx(bp, a, ga.e, k)?
+        ib_store_field(bp, a, fr, ib_comp_fld(i, k), v)
+        i = i + 1
+        g = ga.next
+      }
+      None => { break }
+    }
+  }
+  Option(IbObj).Some(IbObj(fr = fr, fresh = true))
+}
+## A `match` arm the builder lowers: an integer or variant literal (kind 0), `_` (1), a range (5, 6). A
+## value `match` takes each arm's value from its expression (a block arm is outside 4a).
+ib_arms_ok := fn(bp : ptr(mut IbB), scr : ptr(Expr), arms : Option(ptr(mut Arm)), md : u8) -> bool {
+  mut g : Option(ptr(mut Arm)) = arms
+  mut n : usize = 0
+  loop {
+    match g {
+      Some(gq) => {
+        arm := deref(ast::arm_p(gq))
+        if arm.wild != 0 and arm.wild != 1 and arm.wild != 5 and arm.wild != 6 { ib_refuse_expr(bp, scr, NyWhy.NwOutside); return false }
+        if md == 2 and stmt_any(arm.body_stmts) { ib_refuse_expr(bp, scr, NyWhy.NwOutside); return false }
+        n = n + 1
+        g = arm.next
+      }
+      None => { break }
+    }
+  }
+  if n == 0 { ib_refuse_expr(bp, scr, NyWhy.NwOutside); return false }
+  true
+}
+## Does the literal `x` denote a value of kernel type `k` (a `bool` is 0 or 1; a 64-bit type takes any
+## pattern, the parser's for a `u64` literal above `i64`'s range included)?
+ib_lit_fits := fn(k : IbKS, x : i64) -> bool {
+  if kty_is_bool(k.ty) { return x == 0 or x == 1 }
+  nb := kty_bytes(k.ty)
+  if nb >= 8 { return true }
+  mut span : i64 = 4294967296
+  if nb == 1 { span = 256 }
+  if nb == 2 { span = 65536 }
+  if sgn_eq(k.sg, Sgn.SgS) { return x >= 0 - span / 2 and x < span / 2 }
+  x >= 0 and x < span
+}
+## `v == x` for the constant `x` at `v`'s own type.
+ib_eq_const := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : VRegId, x : i64) -> VRegId {
+  k : IbKS = ib_vreg_ks(ib_b_f(bp), v)
+  c := ib_konst(bp, a, k, x)
+  d := ib_fresh(bp, a, ib_bool_ks())
+  ov := o_vreg(v)
+  oc := o_vreg(c)
+  i := e_cmp(ib_b_f(bp), a, Cc.CcEq, Sgn.SgNone, k.ty, d, ov, oc)
+  d
+}
+## `v <cc> x` (an ordering at `v`'s signedness) for the constant `x` at `v`'s type.
+ib_ord_const := fn(bp : ptr(mut IbB), in out a : rt::Arena, cc : Cc, v : VRegId, x : i64) -> VRegId {
+  k : IbKS = ib_vreg_ks(ib_b_f(bp), v)
+  c := ib_konst(bp, a, k, x)
+  d := ib_fresh(bp, a, ib_bool_ks())
+  ov := o_vreg(v)
+  oc := o_vreg(c)
+  i := e_cmp(ib_b_f(bp), a, cc, k.sg, k.ty, d, ov, oc)
+  d
+}
+## The condition arm `arm` tests: on the scrutinee value `sv`, or on the tag `sv` of an enum `eo`.
+ib_arm_cond := fn(bp : ptr(mut IbB), in out a : rt::Arena, scr : ptr(Expr), arm : Arm, sv : VRegId, eo : Option(IbSt)) -> Option(VRegId) {
+  sk : IbKS = ib_vreg_ks(ib_b_f(bp), sv)
+  match eo {
+    Some(st) => {
+      if arm.wild != 0 or arm.vl == 0 { return ib_no(bp, scr, NyWhy.NwOutside) }
+      bv : IbB = deref(bp)
+      tgo : Option(i64) = lower_layout::variant_disc(bv.decls, bv.src, st.s, st.n, arm.vs, arm.vl, a)
+      match tgo { Some(tag) => { return Option(VRegId).Some(ib_eq_const(bp, a, sv, tag)) }; None => {} }
+      return ib_no(bp, scr, NyWhy.NwOutside)
+    }
+    None => {}
+  }
+  if arm.vl != 0 { return ib_no(bp, scr, NyWhy.NwOutside) }
+  if arm.wild == 0 {
+    if not ib_lit_fits(sk, arm.lit) { return ib_no(bp, scr, NyWhy.NwOutside) }
+    return Option(VRegId).Some(ib_eq_const(bp, a, sv, arm.lit))
+  }
+  ## A range arm (Control Flow §5.4): `lo <= x < hi` or `lo <= x <= hi`, at the scrutinee's signedness.
+  if not kty_is_int(sk.ty) or not ib_lit_fits(sk, arm.lit) or not ib_lit_fits(sk, arm.hi) { return ib_no(bp, scr, NyWhy.NwOutside) }
+  c1 := ib_ord_const(bp, a, Cc.CcGe, sv, arm.lit)
+  mut cc2 : Cc = Cc.CcLt
+  if arm.wild == 6 { cc2 = Cc.CcLe }
+  c2 := ib_ord_const(bp, a, cc2, sv, arm.hi)
+  both := ib_fresh(bp, a, ib_bool_ks())
+  ib_open_if(bp, a, c1)
+  ib_mov(bp, a, both, c2)
+  ib_plain(bp, a, Op.OpElse)
+  fz := ib_konst(bp, a, ib_bool_ks(), 0)
+  ib_mov(bp, a, both, fz)
+  ib_plain(bp, a, Op.OpEnd)
+  Option(VRegId).Some(both)
+}
+## Bind arm `arm`'s payload names to the components of the matched variant in object `fr`: each a load
+## at its component's kernel type. A binding list must name every component (or none).
+ib_arm_binds := fn(bp : ptr(mut IbB), in out a : rt::Arena, arm : Arm, st : IbSt, fr : FrameId) -> bool {
+  vo : Option(ptr(mut FieldDecl)) = ib_variant_of(bp, st, arm.vs, arm.vl)
+  match vo {
+    Some(vq) => {
+      vfd := deref(ast::fld_p(vq))
+      mut b : Option(ptr(mut Bind)) = arm.binds_head
+      mut i : usize = 0
+      loop {
+        match b {
+          Some(bq) => {
+            if i >= vfd.arity { return false }
+            ko : Option(IbKS) = ib_variant_comp(bp, a, st, vq, i)
+            match ko {
+              Some(k) => {
+                ofr := o_frame(fr)
+                v := ib_load_at(bp, a, ofr, ib_comp_fld(i, k))
+                ib_bind(bp, a, ast::bnd_ns(bq), ast::bnd_nl(bq), v)
+              }
+              None => { return false }
+            }
+            i = i + 1
+            b = ast::bnd_next(bq)
+          }
+          None => { break }
+        }
+      }
+      i == 0 or i == vfd.arity
+    }
+    None => { false }
+  }
+}
+## One arm's body in a scope of its own: its bindings, then its statements (`md` 0), its statements in
+## tail position (1), or its value moved into `res` (2).
+ib_arm_body := fn(bp : ptr(mut IbB), in out a : rt::Arena, scr : ptr(Expr), arm : Arm, md : u8, res : Option(VRegId), rk : IbKS, eo : Option(IbSt), fro : Option(FrameId)) {
+  mark := ib_scope_mark(bp)
+  match eo {
+    Some(st) => {
+      match fro {
+        Some(fr) => { if not ib_arm_binds(bp, a, arm, st, fr) { ib_refuse_expr(bp, scr, NyWhy.NwOutside) } }
+        None => { ib_refuse_expr(bp, scr, NyWhy.NwOutside) }
+      }
+    }
+    None => {}
+  }
+  if not ib_b_failed(bp) {
+    if md == 2 {
+      vo : Option(VRegId) = ib_bx(bp, a, arm.body)
+      match vo {
+        Some(v0) => {
+          co : Option(VRegId) = ib_coerce(bp, a, v0, rk, arm.body)
+          match co { Some(v) => { match res { Some(r) => { ib_mov(bp, a, r, v) }; None => {} } }; None => {} }
+        }
+        None => {}
+      }
+    }
+    if md == 1 { ib_bs_tail(bp, a, arm.body_stmts) }
+    if md == 0 { ib_bs(bp, a, arm.body_stmts) }
+  }
+  ib_scope_drop(bp, mark)
+}
+## The arm chain over scrutinee value (or tag) `sv`: `if c0 { … } else { if c1 { … } else { … } }`,
+## `_` as the last `else`, else `trap match_no_arm` there (D2).
+ib_match_chain := fn(bp : ptr(mut IbB), in out a : rt::Arena, scr : ptr(Expr), arms : Option(ptr(mut Arm)), md : u8, res : Option(VRegId), rk : IbKS, sv : VRegId, eo : Option(IbSt), fro : Option(FrameId)) {
+  mut opened : usize = 0
+  mut all_term := true
+  mut ended := false
+  mut g : Option(ptr(mut Arm)) = arms
+  loop {
+    match g {
+      Some(gq) => {
+        arm := deref(ast::arm_p(gq))
+        if arm.wild == 1 {
+          ib_b_set_term(bp, false)
+          ib_arm_body(bp, a, scr, arm, md, res, rk, Option(IbSt).None, Option(FrameId).None)
+          if not ib_b_term(bp) { all_term = false }
+          ended = true
+          break
+        }
+        co : Option(VRegId) = ib_arm_cond(bp, a, scr, arm, sv, eo)
+        match co { Some(c) => { ib_open_if(bp, a, c) }; None => { return } }
+        opened = opened + 1
+        ib_b_set_term(bp, false)
+        ib_arm_body(bp, a, scr, arm, md, res, rk, eo, fro)
+        if ib_b_failed(bp) { return }
+        if not ib_b_term(bp) { all_term = false }
+        ib_plain(bp, a, Op.OpElse)
+        ib_b_set_term(bp, false)
+        g = arm.next
+      }
+      None => { break }
+    }
+  }
+  if ib_b_failed(bp) { return }
+  if not ended {
+    mut it := inst0(Op.OpTrap)
+    it.tk = TrapKind.TkMatchNoArm
+    set_span(it, ib_span_of(bp, scr))
+    k := emit(ib_b_f(bp), a, it)
+  }
+  mut j : usize = 0
+  while j < opened { ib_plain(bp, a, Op.OpEnd); j = j + 1 }
+  if md == 2 { ib_b_set_term(bp, false) }
+  if md != 2 { ib_b_set_term(bp, all_term) }
+}
+## `match scr { … }`: the scrutinee once — an enum value in memory (its tag loaded), or an integer or
+## `bool` value — then the arm chain.
+ib_match := fn(bp : ptr(mut IbB), in out a : rt::Arena, scr : ptr(Expr), arms : Option(ptr(mut Arm)), md : u8, res : Option(VRegId), rk : IbKS) {
+  if not ib_arms_ok(bp, scr, arms, md) { return }
+  t : VTy = sty_get(scr)
+  if ib_vty_is_agg(t) {
+    sto : Option(IbSt) = ib_agg_type_of(bp, a, scr)
+    match sto {
+      Some(st) => {
+        if not ib_st_is_enum(bp, st) { ib_refuse_expr(bp, scr, NyWhy.NwOutside); return }
+        oo : Option(IbObj) = ib_agg(bp, a, scr, st)
+        match oo {
+          Some(o) => {
+            ofr := o_frame(o.fr)
+            tag := ib_load_at(bp, a, ofr, ib_tag_fld())
+            ib_match_chain(bp, a, scr, arms, md, res, rk, tag, Option(IbSt).Some(st), Option(FrameId).Some(o.fr))
+          }
+          None => {}
+        }
+      }
+      None => { ib_refuse_expr(bp, scr, NyWhy.NwOutside) }
+    }
+    return
+  }
+  so : Option(VRegId) = ib_bx(bp, a, scr)
+  match so {
+    Some(sv) => {
+      sk : IbKS = ib_vreg_ks(ib_b_f(bp), sv)
+      if not kty_is_int(sk.ty) and not kty_is_bool(sk.ty) { ib_refuse_expr(bp, scr, NyWhy.NwOutside); return }
+      ib_match_chain(bp, a, scr, arms, md, res, rk, sv, Option(IbSt).None, Option(FrameId).None)
+    }
+    None => {}
+  }
+}
+## A statement `match` (in tail position when `tail`: each arm's own tail is returned).
+ib_bs_match := fn(bp : ptr(mut IbB), in out a : rt::Arena, scr : ptr(Expr), arms : Option(ptr(mut Arm)), tail : bool) {
+  mut md : u8 = 0
+  if tail { md = 1 }
+  ib_match(bp, a, scr, arms, md, Option(VRegId).None, ib_bool_ks())
+}
+## A value `match`: one result vreg, assigned in each arm.
+ib_bx_match := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), scr : ptr(Expr), arms : Option(ptr(mut Arm))) -> Option(VRegId) {
+  k := ib_ty(bp, e)?
+  res := ib_fresh(bp, a, k)
+  ib_match(bp, a, scr, arms, 2, Option(VRegId).Some(res), k)
+  if ib_b_failed(bp) { return Option(VRegId).None }
+  Option(VRegId).Some(res)
+}
+## `e` (an enum literal) as the value of enum type `st`.
+ib_agg_enum_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) -> Option(IbObj) {
+  match deref(e) {
+    Expr::EnumLit(es, el, vs, vl, np, ph) => {
+      if ib_st_is_enum(bp, st) {
+        bv : IbB = deref(bp)
+        bn := lower_layout::base_type_name(bv.src, es, el)
+        edi := lower_layout::enum_decl_of(bv.decls, bv.src, bn.s, bn.n)
+        if edi >= 0 and usize(edi) == st.di { return ib_enum_lit(bp, a, e, st, vs, vl, np, ph) }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  Option(IbObj).None
+}
+## Is `e` an enum literal?
+ib_is_enum_lit := fn(e : ptr(Expr)) -> bool {
+  match deref(e) {
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+
 ## ── places (slice 3b, `docs/ir-slice-3.md` §6) ──
 ##
 ## A field is read or written at a PLACE: a base address — a struct local's frame object, or a `ptr`
@@ -2582,8 +3026,8 @@ ib_addr_frame := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), fr :
 ## A local whose address `ptr(x)` is taken anywhere in the function lives in a frame object (§3.3), so
 ## the pointer and the name see one memory. `ib_scan_taken` collects those names before the body is
 ## built — by NAME, so a shadowing local of the same name is put in memory too (correct, only slower).
-## The scan walks the constructs the builder builds; a `ptr(x)` hidden in one it does not (a `match`
-## arm) is never reached either, because the builder refuses that construct first, and `ptr(x)` of a
+## The scan walks the constructs the builder builds (`match` arms and enum literals since slice 4a); a
+## `ptr(x)` hidden in one it does not is never reached either, because the builder refuses that construct first, and `ptr(x)` of a
 ## local the scan missed is refused (`ib_bx_addr_of`), never a wrong address.
 
 ## Was `ptr([s, s+n))` seen by the scan?
@@ -2622,9 +3066,24 @@ ib_scan_stmt := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
     Stmt::ExprStmt(e, nx) => { ib_scan_expr(bp, a, e) }
     Stmt::Unchecked(b, nx) => { ib_scan_stmts(bp, a, b) }
     Stmt::IndexAssign(ib, ix, iv, nx) => { ib_scan_expr(bp, a, ib); ib_scan_expr(bp, a, ix); ib_scan_expr(bp, a, iv) }
+    Stmt::Match(scr, arms, nx) => { ib_scan_expr(bp, a, scr); ib_scan_arms(bp, a, arms) }
     ## Constructs the builder refuses before it reaches anything inside them (see the band comment).
-    Stmt::Match | Stmt::IndexFieldAssign | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+    Stmt::IndexFieldAssign | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
       | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => {}
+  }
+}
+ib_scan_arms := fn(bp : ptr(mut IbB), in out a : rt::Arena, arms : Option(ptr(mut Arm))) {
+  mut g : Option(ptr(mut Arm)) = arms
+  loop {
+    match g {
+      Some(gq) => {
+        arm := deref(ast::arm_p(gq))
+        ib_scan_stmts(bp, a, arm.body_stmts)
+        if not stmt_any(arm.body_stmts) { ib_scan_opt(bp, a, arm.body) }
+        g = arm.next
+      }
+      None => { break }
+    }
   }
 }
 ib_scan_args := fn(bp : ptr(mut IbB), in out a : rt::Arena, ah : Option(ptr(mut Arg))) {
@@ -2662,7 +3121,9 @@ ib_scan_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
     Expr::Loop(b) => { ib_scan_stmts(bp, a, b) }
     Expr::Index(ib, ix) => { ib_scan_expr(bp, a, ib); ib_scan_expr(bp, a, ix) }
     Expr::ArrayLit(nel, eh) => { ib_scan_args(bp, a, eh) }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::EnumLit | Expr::StrLit
+    Expr::Match(scr, arms) => { ib_scan_expr(bp, a, scr); ib_scan_arms(bp, a, arms) }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { ib_scan_args(bp, a, ph) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef => {}
   }
 }
@@ -2985,7 +3446,8 @@ ib_bs_last := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
       ib_b_set_unch(bp, ou)
       ib_plain(bp, a, Op.OpEnd)
     }
-    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::For | Stmt::DerefAssign
+    Stmt::Match(scr, arms, mx) => { ib_bs_match(bp, a, scr, arms, true) }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::For | Stmt::DerefAssign
       | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
       | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { ib_bs_one(bp, a, h) }
   }
@@ -3038,7 +3500,8 @@ ib_bs_one := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
     Stmt::DerefAssign(pe, dv, nx) => { ib_bs_deref_assign(bp, a, h, pe, dv) }
     Stmt::FieldPathAssign(pl, pv, nx) => { ib_bs_field_path_assign(bp, a, h, pl, pv) }
     Stmt::IndexAssign(ib, ix, iv, nx) => { ib_bs_index_assign(bp, a, h, ib, ix, iv) }
-    Stmt::Match | Stmt::IndexFieldAssign
+    Stmt::Match(scr, arms, nx) => { ib_bs_match(bp, a, scr, arms, false) }
+    Stmt::IndexFieldAssign
       | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange
       | Stmt::AllocWith => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
   }

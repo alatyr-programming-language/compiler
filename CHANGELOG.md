@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64, riscv64 and wasm build `match` and enum locals through the shared IR (IR slice 4a).** A
+  `match` over an integer or `bool` — literal arms, `_`, and range arms `lo..hi` / `lo..=hi`, which
+  trapped on all three (#821) — and over an enum local is built from the IR,
+  with enum locals laid out as every backend lays them out (a tag word, then one word per payload
+  component). `match_bool_neg` and `repr_enum` now answer what x86_64 answers there. x86_64 output is
+  unchanged.
+
 ## 0.2.16 — 2026-10-15
 
 - **x86_64 assigns a struct or array literal that reads its own destination by value (#909).**

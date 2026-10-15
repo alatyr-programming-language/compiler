@@ -5813,17 +5813,25 @@ pub enum_dup_disc := fn(src : ptr(u8), fields_head : Option(ptr(mut FieldDecl)))
 ## former positional behaviour, byte-identical. Enum construction (tag store), `match` dispatch, and any
 ## enum→int read all flow through here, so the pinned value is honoured consistently by one fix.
 pub variant_index := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, vs : usize, vl : usize, a : rt::Arena) -> i64 {
+  o : Option(i64) = variant_disc(decls, src, s, n, vs, vl, a)
+  match o { Some(x) => { x }; None => { 0 - 1 } }
+}
+## The discriminant of variant `[vs, vs+vl)` of the enum `[s, s+n)` — its pin, else one past the previous
+## variant's — or `None` when the enum does not resolve or names no such variant. `variant_index` is the
+## same answer with `-1` for `None`, for its legacy callers.
+pub variant_disc := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, vs : usize, vl : usize, a : rt::Arena) -> Option(i64) {
   ## STRIP `(…)` type-args so a parenthesized enum-instance span (`Option(u64)`) resolves the decl.
   ebn := base_type_name(src, s, n)
   if enum_ref_ambiguous(decls, src, ebn.s, ebn.n) {
     reject_type_ambiguous(src, ebn.s, ebn.n, "enum")
   }
   di := enum_decl_of(decls, src, ebn.s, ebn.n)
-  if di < 0 { return -1 }
+  if di < 0 { return Option(i64).None }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut running := 0
-  mut res := -1
+  mut res := 0
+  mut found := false
   loop {
     match f {
       Some(fq) => {
@@ -5831,14 +5839,15 @@ pub variant_index := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
         pin := variant_pin(src, fd.ns, fd.nl)
         mut disc := running
         if pin >= 0 { disc = pin }
-        if streq(src, fd.ns, fd.nl, vs, vl) { res = disc }
+        if streq(src, fd.ns, fd.nl, vs, vl) { res = disc; found = true }
         running = disc + 1
         f = fd.next
       }
       None => { break }
     }
   }
-  res
+  if found { return Option(i64).Some(res) }
+  Option(i64).None
 }
 
 ## ─── The module-CONSTANT arrival of an integer constant (#574) ──────────────

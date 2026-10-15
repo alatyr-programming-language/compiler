@@ -3,7 +3,8 @@
 ## for such a struct — so an IR-built function and a legacy-emitted one return structs to each other in
 ## both directions (docs/ir-slice-3.md Q4, proved here).
 ##
-## `lg_*` keep an `Option(u64)` local — an enum, slice 4's construct — so the shared IR refuses them and
+## `lg_*` keep a float local — slice 8's construct (an `Option(u64)` local served until slice 4a built
+## enums) — so the shared IR refuses them and
 ## they stay LEGACY-emitted; `mk`, `one`, `id` and `main` are IR-built.
 ##   * IR callee -> IR caller: `mk(…)` bound to a local and passed on as an argument (`take(mk(…))`);
 ##     a field read straight off the call (`mk(…).y`) is pinned by the `ig_agg_ret` IR golden instead,
@@ -22,12 +23,12 @@ id := fn(p : P) -> P { return p }
 take := fn(p : P) -> u64 { return p.x + p.y }
 
 lg_mk := fn(a : u64) -> P {
-  w : Option(u64) = Option(u64).Some(1)
+  w : f64 = 1.0
   return P(x = a, y = 7)
 }
 
 lg_use := fn() -> u64 {
-  w : Option(u64) = Option(u64).Some(1)
+  w : f64 = 1.0
   p := mk(10)
   return p.x + p.y
 }
