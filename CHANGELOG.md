@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64 and riscv64 pass structs to and from IR-built functions (IR slice 3d, step 1).** A function
+  with a struct parameter (word-sized fields) is now built through the shared IR: the parameter is read
+  through the address the caller passed, and a struct argument is the address of a fresh copy — the
+  convention the legacy emitters already use, so IR-built and legacy functions call each other in both
+  directions. x86_64 output is unchanged.
 ## 0.2.15 — 2026-10-14
 
 - **x86_64 divides, orders and shifts with the signedness sema recorded (IR slice 1 step e3, part 1).**

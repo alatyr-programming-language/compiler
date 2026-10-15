@@ -1,7 +1,8 @@
 # Shared IR, slice 3 — design note and HANDOFF (aggregates, places, layout)
 
-Status: **3a landed** (§5, #910), **3b landed** (§6, #921), **3c in progress** (§7: first tier landed in
-#925, fixed arrays in review). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
+Status: **3a landed** (§5, #910), **3b landed** (§6, #921), **3c landed in part** (§7: first tier #925,
+fixed arrays #941; `str`/slices as two-word aggregates remain), **3d step 1 in review** (§8: aggregate
+arguments). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
 §0–§2 are the plan written at the end of the slice-2 lane, §3 what that lane measured, §4 the open
 questions, §5 onwards each PR as built.
 
@@ -298,3 +299,50 @@ both close when wasm selects arrays (shadow stack).
 #707 stays open for wasm (both halves) and for the global-field shapes; `slice_field_compare` (a
 `Slice(u64)` field compared on wasm) needs wasm aggregates (the shadow stack), so it does not move in
 3c.
+
+## 8. 3d — the aggregate call convention (as built)
+
+### 8.1 What each legacy emitter does (measured on main 99a4237, `test/ir_agg_arg.al`'s shapes)
+
+| target | aggregate argument | aggregate result ≤ 2 words | aggregate result > 2 words |
+|---|---|---|---|
+| x86_64 | address of the caller's object in `%rdi`… (`leaq`), no copy | — (step 2) | — (step 2) |
+| aarch64 | address of the caller's object in `x0`…, no copy | `x0`, `x1` | not lowered (`brk`, "unsupported field access") |
+| riscv64 | address of the caller's object in `a0`…, no copy | `a0`, `a1` | not lowered (`ebreak`) |
+| wasm | linear-memory address, no copy | the address of a block | — |
+
+Every callee reads the fields through the address at the WORD tier's offsets (`[x2, #0]`, `#16`, …).
+§3.7 asks for the address of a caller-OWNED COPY; passing a copy's address is compatible with every
+legacy callee, and reading through the address is compatible with every legacy caller. So the IR
+adopts the address convention and makes the copy on its own side.
+
+### 8.2 Step 1 — aggregate arguments (this PR)
+
+- **Callee.** A parameter of a struct type `ib_struct_named` lays out in the WORD tier (`ib_struct_word`,
+  the tier every legacy reader shares — Q4), immutable (`pmode == 0`) and not address-taken, is a `ptr`
+  parameter bound as `BdRef(v, st)`: a struct value held by reference. `s.f` is a place through `v`
+  (`ib_place_name`), so a field read is a `load` at the field's place with the field's declared type,
+  exactly like `deref(p).f`. Reading `s` whole (`t := s`, passing it on) copies it into a fresh frame
+  object (`ib_copy_into` from the `ptr` operand). `size(s)` and an assignment to `s` refuse.
+- **Caller.** A struct argument is built into (a literal's own fresh object) or copied into a fresh frame
+  object, and `addr $k` is passed: the callee never sees memory the caller goes on to change.
+- **wasm** keeps refusing a function with a frame object (no shadow stack), so its callers stay legacy;
+  a wasm callee with a struct parameter builds only when its selector takes `ptr`-based loads.
+- **Proof (Q4)**: `test/ir_agg_arg.al` — IR-built `main`/`take`/`pass` call legacy `lg_take`/`lg_call` (an
+  `Option` local keeps them legacy) and back; 42 on all four backends and through `x86-ir`; the register
+  twins trapped (133) on the parent.
+
+### 8.3 Predicted manifest transitions (measured before the gate)
+
+23 pairs: the fixture's 4 ADDED rows (42 on every backend), and 19 DETAIL-CHANGED rows that keep their
+phase and failure (`assemble/1`, `link/1`): an operator/overload program whose operator label the
+assembler refuses (#475, slice 2b) and two FFI programs with an unresolved extern — a struct-parameter
+function earlier in the file is now IR-emitted with a different size, so the error's line number or
+`.text` offset moves. No row changes phase or exit; no x86_64 row moves. Census and `ir_diff` numbers
+are in the PR.
+
+### 8.4 Step 2 (next)
+
+Aggregate RESULTS: ≤ 2 words in the two result registers (the legacy convention on the register twins),
+more through a hidden first `ptr` (sret — legacy has no convention to meet there). It needs a call with
+two results in the IR, or the sret form for both.
