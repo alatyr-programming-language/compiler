@@ -6187,7 +6187,8 @@ run_rv64 p0_stmt_walk_index_assign 42
 ## P0 parser: terminal statement-if branches must retain deref(place) = value stores.
 ## The parser previously classified these branches as value expressions and dropped the stores.
 run p0_parser_if_deref_store 42
-run_wat p0_parser_if_deref_store 134
+## wasm: 42 since slice 3w (frame objects on the shadow stack; the stores go through linear memory).
+run_wat p0_parser_if_deref_store 42
 run_a64 p0_parser_if_deref_store 42
 run_rv64 p0_parser_if_deref_store 42
 ## P0 ABI: scalar in out write-back is by-place on AArch64/RV64, and the WASM backend
@@ -6198,7 +6199,9 @@ run_a64 p0_inout_scalar_writeback 42
 run_rv64 p0_inout_scalar_writeback 42
 ## P0 ABI: a final side-effecting call in a void function must not disappear.
 run p0_void_tail_call_side_effect 42
-run_wat p0_void_tail_call_side_effect 134
+## wasm: 42 since slice 3w — `forward` is built from the IR (its void tail call is a statement); the
+## legacy wasm emitter still drops such a call (#946), which the old 134 trap in legacy `main` masked.
+run_wat p0_void_tail_call_side_effect 42
 run_a64 p0_void_tail_call_side_effect 42
 run_rv64 p0_void_tail_call_side_effect 42
 ## #175: a nested WAT enum match must retain the outer payload binding while an inner same-name
@@ -8602,24 +8605,26 @@ run_rv64 ir_twins_short_circuit 42
 run_wat ir_twins_short_circuit 42
 ## IR slice 3a (`docs/ir-slice-3.md`): struct locals are frame objects on the register twins. Each twin
 ## is asserted by value; the legacy twin emitters trapped on `ir_struct_local` and `ir_size_align` and
-## divided the signed field of `ir_struct_field_signed` unsigned (#765). wasm keeps its legacy emission
-## for a function with a frame object until the shadow stack exists, so only `ir_size_align` (no frame
-## object) is asserted there. `ir_struct_field_signed` is asserted with `run_x86`, not `run`: on wasm it
-## is still #765's wrong value, and the wasm sweep walks every `run` row. `ir_struct_assign_self` is
+## divided the signed field of `ir_struct_field_signed` unsigned (#765). Since slice 3w wasm builds them
+## too (frame objects on the shadow stack), so each is asserted on wasm as well; legacy wasm answered
+## 134, 2 (#765's wrong value), 0. `ir_struct_assign_self` is
 ## #909: x86_64 and the legacy emitters build the literal in place (22); the IR-selected twins answer
 ## the literal's value (21).
 run ir_struct_local 42
 run_a64 ir_struct_local 42
 run_rv64 ir_struct_local 42
+run_wat ir_struct_local 42
 run_x86 ir_struct_field_signed 42
 run_a64 ir_struct_field_signed 42
 run_rv64 ir_struct_field_signed 42
+run_wat ir_struct_field_signed 42
 run ir_size_align 42
 run_a64 ir_size_align 42
 run_rv64 ir_size_align 42
 run_wat ir_size_align 42
 run_a64 ir_struct_assign_self 21
 run_rv64 ir_struct_assign_self 21
+run_wat ir_struct_assign_self 21
 ## IR slice 3b (`docs/ir-slice-3.md` §6): pointers as places. `ir_ptr_place` is IR-built end to end on
 ## the register twins (the legacy twins trapped on its field places). `ir_ptr_agree` writes in the IR
 ## and reads in a legacy function and the reverse; riscv64's legacy emitter has no field place through
@@ -8627,6 +8632,7 @@ run_rv64 ir_struct_assign_self 21
 run ir_ptr_place 42
 run_a64 ir_ptr_place 42
 run_rv64 ir_ptr_place 42
+run_wat ir_ptr_place 42
 run ir_ptr_agree 42
 run_a64 ir_ptr_agree 42
 run ir_global_mut 42
@@ -8746,10 +8752,11 @@ run_x86 signedness_byref_array 42
 ## Global/variadic/aggregate and non-builtin field elements remain outside this bounded lane.
 run_x86 signedness_struct_field_array 42
 ## IR slice 3c (`docs/ir-slice-3.md` §7): the register twins build `r.u[i]` from the shared IR, the
-## element's signedness from sema's record — the legacy twin emitters compared it signed (1). wasm keeps
-## its legacy emission (no frame objects yet), still 1, so it is not asserted there.
+## element's signedness from sema's record — the legacy twin emitters compared it signed (1). wasm too
+## since slice 3w (legacy wasm answered 1).
 run_a64 signedness_struct_field_array 42
 run_rv64 signedness_struct_field_array 42
+run_wat signedness_struct_field_array 42
 ## Indexed module-global fixed-array signedness: recover the declared builtin element type from the
 ## global `: [T; N]` annotation (there is no local SlotEntry). High-bit u64 ordering must be unsigned;
 ## i64 division must remain signed. Inferred/aggregate/non-builtin/global-field forms stay conservative.
