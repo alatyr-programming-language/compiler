@@ -871,10 +871,11 @@ check_ir_build() {
   else
     echo "FAIL ir golden builds: rc=$rc"; grep -E '^(FAIL|ok   golden)' "$out" | head -12 | sed 's/^/     /'; fail=1
   fi
-  ## A struct LOCAL builds since slice 3a; a struct PARAMETER is still outside the subset (3d).
+  ## A struct LOCAL builds since slice 3a; a struct PARAMETER (read through the address the caller
+  ## passed) and a struct ARGUMENT (the address of a caller-owned copy) since 3d step 1.
   "$CC" ir "$E2E_TEST/wasm_struct_param.al" > "$rep" 2>/dev/null; rc=$?
-  if [ "$rc" = 0 ] && grep -q 'NotYet(.*wasm_struct_param\.al:[0-9]*:[0-9]*)$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
-    echo "ok   ir wasm_struct_param: a struct parameter is outside slice 3a, refused NotYet with its location"
+  if [ "$rc" = 0 ] && grep -q '^fn wasm_struct_param::sum Built$' "$rep" && grep -q '^fn wasm_struct_param::main Built$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir wasm_struct_param: a struct parameter and a struct argument build (slice 3d step 1)"
   else echo "FAIL ir wasm_struct_param: rc=$rc"; fail=1; fi
 }
 
@@ -8643,6 +8644,14 @@ run_rv64 ir_array_local 42
 run ir_array_field 42
 run_a64 ir_array_field 42
 run_rv64 ir_array_field 42
+## IR slice 3d: an aggregate argument crosses a call as the ADDRESS of a caller-owned copy, the convention
+## every legacy emitter already uses, so IR-built and legacy-emitted functions call each other in both
+## directions (Q4, proved here). On the parent the register twins trapped (133) on this program; wasm
+## keeps its legacy emission for it (no shadow stack yet) and answers 42 there too.
+run ir_agg_arg 42
+run_a64 ir_agg_arg 42
+run_rv64 ir_agg_arg 42
+run_wat ir_agg_arg 42
 run_x86_trap ir_array_bound 132
 run_a64 ir_array_bound 133
 run_rv64 ir_array_bound 133
