@@ -8747,6 +8747,16 @@ sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut
     return
   }
   upto := rt::vec_len(deref(decls))
+  ## IR slice 5a: `B(v)` of a brand or required type over `U` (no function named `B`) — the argument's
+  ## context is `U` (Types §4.4 / §8.1: the source must be assignable to the immediate underlying type).
+  if na == 1 and cl != 0 and callee_fn_name_count(decls, upto, src, cs, cl) == 0 {
+    bu := lower_layout::brand_underlying(decls, src, cs, cl)
+    if bu.n != 0 {
+      ba0 := deref(arg_at(ah, "argument list ended early"))
+      sema_vty_ctx(ba0.e, bu.s, bu.n, decls, src)
+      return
+    }
+  }
   if cl == 0 or callee_fn_name_count(decls, upto, src, cs, cl) != 1 { return }
   mut i : usize = 0
   while i < upto {
@@ -8803,6 +8813,13 @@ sema_vty_name := fn(src : ptr(u8), s : usize, n : usize, decls : ptr(rt::Vec)) -
   }
   bu := sema_brand_underlying(decls, rt::vec_len(deref(decls)), src, s, n)
   if bu.n != 0 { return sema_vty_scalar(src, bu.s, bu.n) }
+  ## IR slice 5a: a REQUIRED type `R := @require(pred) U` (or `U.require(pred)`) has `U`'s exact
+  ## representation too (Types §8.1); its value type is `U`'s. (Its brand IDENTITY is not a brand's —
+  ## `sema_brand_underlying` keeps answering only `brand(…)` for the identity checks.)
+  if lower_layout::require_pred(decls, src, s, n).n != 0 {
+    ru := lower_layout::brand_underlying(decls, src, s, n)
+    if ru.n != 0 { return sema_vty_scalar(src, ru.s, ru.n) }
+  }
   ## a type alias `CheckErr := usize` names its target (an alias of an alias is refused, so one hop)
   at := sema_rec_alias_target(decls, src, s, n)
   if at.n != 0 {
@@ -9053,6 +9070,12 @@ sema_vty_call := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Opti
   r : ir::VTy = sema_vty_spell(sema_spell_call(e, cs, cl, na, decls, src), decls, src)
   sy : ir::VTy = sema_vty_syscall(cs, cl, ah, decls, src)
   if ir::vty_known(r) { return r }
+  ## IR slice 5a: `B(v)` of a brand or required type (no function named `B`) is a value of `B`, whose
+  ## value type is its underlying scalar's (`sema_vty_name`).
+  if na == 1 and cl != 0 and lower_layout::brand_underlying(decls, src, cs, cl).n != 0 and callee_fn_name_count(decls, rt::vec_len(deref(decls)), src, cs, cl) == 0 {
+    bt : ir::VTy = sema_vty_name(src, cs, cl, decls)
+    if ir::vty_known(bt) { return bt }
+  }
   sy
 }
 ## docs/ir-slice-2.md — the value type of a call to a bodyless `@abi(syscall)` declaration: its declared

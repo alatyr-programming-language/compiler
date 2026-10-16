@@ -8678,6 +8678,11 @@ run struct_assign_self_nested_struct 42
 run_a64 struct_assign_self_nested_struct 42
 run_rv64 struct_assign_self_nested_struct 42
 run_wat struct_assign_self_nested_struct 42
+## IR slice 5a: brands and required types (the @require gate) from the shared IR.
+run ir_brand 42
+run_a64 ir_brand 42
+run_rv64 ir_brand 42
+run_wat ir_brand 42
 ## #909, the zeroing writers (@packed, standard byte layout): the FIRST initializer reads the destination.
 run struct_assign_self_zeroing 42
 run_a64 struct_assign_self_zeroing 42

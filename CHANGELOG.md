@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64, riscv64 and wasm build brands and required types through the shared IR (IR slice 5a).** A
+  brand or `@require` type in a signature has its underlying scalar's representation, `B(v)` re-brands,
+  and a required type's construction runs its predicate and traps `require` when it answers false.
+  `require_ok`, `require_ufcs_ok` and `accept_brand_explicit_conversions` now answer what x86_64 answers
+  there. x86_64 output is unchanged.
+
 - **x86_64 stores a struct literal's enum field initialized from another struct's enum field (#958).**
   `Q(c = q.c)` stored nothing for `c`, so the field read as all zero and matched no payload — a silent
   wrong value, the constructor-side sibling of #465. The field now gets the source's words. The
