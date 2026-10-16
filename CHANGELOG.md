@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **x86_64 stores a struct literal's enum field initialized from another struct's enum field (#958).**
+  `Q(c = q.c)` stored nothing for `c`, so the field read as all zero and matched no payload — a silent
+  wrong value, the constructor-side sibling of #465. The field now gets the source's words. The
+  compiler's own code does not have the shape (fixpoint holds, no promotion).
+
 - **aarch64, riscv64 and wasm build structs with struct and enum fields through the shared IR (IR slice
   3n).** A field of a struct or enum type is a sub-object at the field's place: nested literals are built
   in place, `o.inner.x` reads and writes one place deeper, and `match o.c` matches an enum field. 30
