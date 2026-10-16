@@ -8668,6 +8668,16 @@ run ir_nested_field 42
 run_a64 ir_nested_field 42
 run_rv64 ir_nested_field 42
 run_wat ir_nested_field 42
+## #958: a struct literal's enum field from another struct's enum field (`Q(c = q.c)`).
+run struct_enum_field_from_field 42
+run_a64 struct_enum_field_from_field 42
+run_rv64 struct_enum_field_from_field 42
+run_wat struct_enum_field_from_field 42
+## #951: a nested struct literal as the first initializer of a self-reading reassignment.
+run struct_assign_self_nested_struct 42
+run_a64 struct_assign_self_nested_struct 42
+run_rv64 struct_assign_self_nested_struct 42
+run_wat struct_assign_self_nested_struct 42
 ## #909, the zeroing writers (@packed, standard byte layout): the FIRST initializer reads the destination.
 run struct_assign_self_zeroing 42
 run_a64 struct_assign_self_zeroing 42

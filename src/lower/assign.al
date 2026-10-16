@@ -891,6 +891,17 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
                   push_str(sb, "(%rbp)\n")
                 }
               }
+            } else if is_enum_fld and wsz > 1 {
+              ## ISSUE #958 — an ENUM field fed by any other enum value: another struct's enum field
+              ## (`Q(c = q.c)`), an enum array element, a branch value. None is a `StructLit`, `EnumLit`,
+              ## `Var` or call, so it fell to the ARRAY branch below, whose `emit_array_assign` matches only
+              ## an `ArrayLit` and stored NOTHING — the field read all-zero (a silent wrong value, the
+              ## constructor-side sibling of #465). `emit_enum_place_words_at` already delivers each of
+              ## those to a frame base (#465); `false` means nothing was emitted, so it is a located
+              ## reject, never the dropped store (#464).
+              if emit_enum_place_words_at(ga.e, base - off, sb, cx, a, nl) == false {
+                panic("selfhost: a struct field's enum value has no addressable words here (#958)")
+              }
             } else if wsz == 2 and pair_value_expr(ga.e, cx) {
               ## Types §9.4 — a 2-word `{ptr, len}` FIELD (`Slice(T)`, `lib/base/slice.al`) initialized from
               ## a VIEW value (`v = xs[lo..hi]`, or a slice/str `Var`). It is not a `StructLit`/`ArrayLit`
