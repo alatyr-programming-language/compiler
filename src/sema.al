@@ -20752,13 +20752,12 @@ sema_vis_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : p
 ## or an unresolved `::` head is written to the census channel as a `#semalib` row
 ## (`ir::sign_lib_row`), and §3.8.6 lists the ones measured, each with its issue. With records off —
 ## every ordinary x86_64 check and build — none of this runs: no verdict, no emitted byte, no cost moves.
-## The twins' record run always records, but not library bodies yet (`SEMA_LIB_RECORDS` below).
+## The twins' record run records library bodies as well (`SEMA_LIB_RECORDS` below).
 mut SEMA_LIB_RECORDING : bool = false
-## Whether this compilation records library bodies at all (§3.8.6). The twins' record run turns it off:
-## their IR builder would select from the IR every library function whose records the walk completes,
-## which moves twin emission — measured as 66 corpus outputs and 3 manifest rows (the link/assemble
-## diagnostics of already-failing builds; every run unchanged). That move is its own oracle transition,
-## so until it lands the twins keep their library functions where they are.
+## Whether this compilation records library bodies at all (§3.8.6). The twins' record run used to turn
+## it off so their IR builder would not select library functions from the IR before that transition was
+## gated on its own; it now keeps it on (measured: `char_class` moves from a trap to the x86_64 value on
+## the three twins, one wasm package row keeps its failure with a different detail).
 mut SEMA_LIB_RECORDS : bool = true
 pub set_lib_records := fn(on : bool) -> i64 {
   SEMA_LIB_RECORDS = on

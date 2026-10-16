@@ -6683,11 +6683,10 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## optional: `SEMA_INSTS` outlives one `check_program` call, and a list left over from an earlier
   ## program would index THIS tree's `decls` with another tree's `gi` — a wrong decl, or a crash.
   sic := sema::set_insts_clear()
-  ## docs/ir.md §3.8.6 — this run does not record library bodies yet (`sema::set_lib_records`): doing
-  ## so moves which library functions the twins select from the IR, an oracle transition of its own.
-  lro := sema::set_lib_records(false)
+  ## docs/ir.md §3.8.6 — this run records library bodies too, so the twins' IR builder can select a
+  ## library function whose records the walk completes (measured: `char_class` moves from a trap to the
+  ## x86_64 value on the three twins; no other run moves).
   styped := sema::check_program(ptr(decls), base, ptr(na))
-  lrb := sema::set_lib_records(true)
   ## Match the ordinary compile paths: lift parsed local lambdas before any lowering-side
   ## normalization or backend emission. This multi-file path previously passed Expr::Lambda
   ## through unchanged, while compile/compile_program/compile_files_mode all lift exactly once.
