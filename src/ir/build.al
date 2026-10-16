@@ -1395,7 +1395,17 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
           None => {
             ## Slice 3c: an array field of 8-byte kernel scalars (`ib_arr_field`).
             ro : Option(IbArr) = ib_arr_of(bp, a, fd.ts, fd.tl, true)
-            match ro { Some(r) => { if fd.wsize != r.n { return Option(IbSt).None } }; None => { return Option(IbSt).None } }
+            match ro {
+              Some(r) => { if fd.wsize != r.n { return Option(IbSt).None } }
+              None => {
+                ## Slice 3n: a field of a struct or enum type the builder lays out is a sub-object at the
+                ## field's place (`ib_field_agg`); not inside a `@packed` struct.
+                if packed { return Option(IbSt).None }
+                fsp : IbSpan = ib_type_span_full(bv.src, fd.ts, fd.tl)
+                so : Option(IbSt) = ib_agg_named(bp, a, fsp.s, fsp.n)
+                match so { Some(sub) => {}; None => { return Option(IbSt).None } }
+              }
+            }
           }
         }
         if lower_layout::field_align_attr(bv.src, fd.ns) >= 0 { return Option(IbSt).None }
@@ -1590,7 +1600,14 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
     }
     ## Slice 4a: an enum literal names its enum; a generic one names no instance, so only an annotation types it.
     Expr::EnumLit(es, el, vs, vl, np, ph) => { return ib_enum_named(bp, a, es, el) }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field
+    ## Slice 3n: `o.inner` — the sub-object's type, for a place rooted at a name (asking emits nothing).
+    Expr::Field(fb, ffs, ffl) => {
+      if ib_place_pure(fb) {
+        plo : Option(IbPlace) = ib_place_of(bp, a, e)
+        match plo { Some(pl) => { return ib_agg_bound(bp, a, pl.di, pl.s, pl.n) }; None => {} }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
@@ -1658,28 +1675,75 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
         CoVoid => {}
       }
     }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field | Expr::EnumLit
+    Expr::Field(fb, ffs, ffl) => {
+      ## Slice 3n: a sub-object read whole — copied out of its place into a fresh object.
+      if ib_place_pure(fb) {
+        plo : Option(IbPlace) = ib_place_of(bp, a, e)
+        match plo {
+          Some(pl) => {
+            cfr := ib_new_obj(bp, a, st)
+            src := ib_place_addr(bp, a, pl)
+            ocf := o_frame(cfr)
+            mut it := inst0(Op.OpCopy)
+            set_a(it, ocf)
+            set_b(it, src)
+            it.n = st.size
+            k := emit(ib_b_f(bp), a, it)
+            return Option(IbObj).Some(IbObj(fr = cfr, fresh = true))
+          }
+          None => {}
+        }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   ib_refuse_expr(bp, e, NyWhy.NwOutside)
   Option(IbObj).None
 }
+## Is the place expression `b` rooted at a name through field steps only (so resolving it emits nothing)?
+ib_place_pure := fn(b : ptr(Expr)) -> bool {
+  match deref(b) {
+    Expr::Var(s, n) => { true }
+    Expr::Field(fb, fs, fl) => { ib_place_pure(fb) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+## The address operand of place `pl` (its base advanced by the place's offset).
+ib_place_addr := fn(bp : ptr(mut IbB), in out a : rt::Arena, pl : IbPlace) -> Opnd {
+  if opndk_is_frame(pl.bk) { return ib_frame_at(bp, a, FrameId(usize(pl.bv)), pl.off) }
+  ib_ptr_plus(bp, a, VRegId(usize(pl.bv)), pl.off)
+}
 ## A struct literal `S(f0 = e0, …)` into a fresh object. The parser hands the initializers over in the
 ## struct's DECLARATION order (TYP-8), and they are evaluated and stored in that order; a literal that
 ## does not initialize every field is outside 3a. A struct with padding is zeroed first, so no byte of
 ## the object is undefined.
 ib_agg_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt, nf : usize, fh : Option(ptr(mut Arg))) -> Option(IbObj) {
-  bv : IbB = deref(bp)
-  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
   fr := ib_new_obj(bp, a, st)
-  ## Slice 3e: a literal of a `@packed` struct may leave TRAILING `@offset` fields unwritten — aliases of
-  ## bytes an earlier field writes (the parser emits the written fields as a declaration-order prefix and
-  ## refuses a gap). The object is zeroed first so no byte is undefined.
+  if ib_struct_padded(bp, a, st) or nf < ib_struct_nfields(bp, st) { ib_zero_obj(bp, a, fr, st.size) }
+  if not ib_agg_lit_into(bp, a, e, st, fh, fr, 0) { return Option(IbObj).None }
+  Option(IbObj).Some(IbObj(fr = fr, fresh = true))
+}
+## The number of fields struct `st` declares.
+ib_struct_nfields := fn(bp : ptr(mut IbB), st : IbSt) -> usize {
+  d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), st.di))
   mut nfd : usize = 0
   mut cf := d.fields_head
   loop { match cf { Some(cq) => { cfd := deref(ast::fld_p(cq)); nfd = nfd + 1; cf = cfd.next }; None => { break } } }
-  if ib_struct_padded(bp, a, st) or nf < nfd { ib_zero_obj(bp, a, fr, st.size) }
+  nfd
+}
+## The fields of struct literal `e` (type `st`) stored into object `fr` at byte offset `boff` — 0 for the
+## literal's own object, a field's place for a nested literal (slice 3n), which the outermost object's
+## zeroing already covers (`ib_struct_padded` counts a nested field as padding).
+## Slice 3e: a literal of a `@packed` struct may leave TRAILING `@offset` fields unwritten — aliases of
+## bytes an earlier field writes (the parser emits the written fields as a declaration-order prefix and
+## refuses a gap); the object was zeroed, so no byte is undefined.
+ib_agg_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt, fh : Option(ptr(mut Arg)), fr : FrameId, boff : usize) -> bool {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
   mut f := d.fields_head
   mut g : Option(ptr(mut Arg)) = fh
   loop {
@@ -1691,23 +1755,34 @@ ib_agg_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : Ib
             ga := deref(arg_p(gq))
             flo : Option(IbFld) = ib_field(bp, a, st, fd.ns, fd.nl)
             match flo {
-              Some(fld) => {
+              Some(fld0) => {
+                fld := ib_fld_plus(fld0, boff)
                 vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, IbKS(ty = fld.ty, sg = fld.sg))
-                match vo { Some(v) => { ib_store_field(bp, a, fr, fld, v) }; None => { return Option(IbObj).None } }
+                match vo { Some(v) => { ib_store_field(bp, a, fr, fld, v) }; None => { return false } }
               }
               None => {
                 ## Slice 3c: an array field takes an array literal, stored element by element.
                 afo : Option(IbArrAt) = ib_arr_field(bp, a, fr, st, fd.ns, fd.nl)
                 match afo {
-                  Some(ap) => { if not ib_arr_lit(bp, a, ga.e, ap) { return Option(IbObj).None } }
-                  None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
+                  Some(ap0) => {
+                    ap := IbArrAt(fr = ap0.fr, off = ByteOff(usize(ap0.off) + boff), n = ap0.n, ty = ap0.ty, sg = ap0.sg, stride = ap0.stride)
+                    if not ib_arr_lit(bp, a, ga.e, ap) { return false }
+                  }
+                  None => {
+                    ## Slice 3n: a struct or enum field, built at its place.
+                    sbo : Option(IbSub) = ib_field_agg(bp, a, st, fd.ns, fd.nl)
+                    match sbo {
+                      Some(sb) => { if not ib_agg_into(bp, a, ga.e, ib_sub_st(sb), fr, boff + sb.off) { return false } }
+                      None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+                    }
+                  }
                 }
               }
             }
             g = ga.next
           }
           None => {
-            if lower_layout::field_offset_attr(bv.src, fd.ns) < 0 { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
+            if lower_layout::field_offset_attr(bv.src, fd.ns) < 0 { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
           }
         }
         f = fd.next
@@ -1715,8 +1790,131 @@ ib_agg_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : Ib
       None => { break }
     }
   }
-  match g { Some(gx) => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }; None => {} }
-  Option(IbObj).Some(IbObj(fr = fr, fresh = true))
+  match g { Some(gx) => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }; None => {} }
+  true
+}
+## `fd` moved `off` bytes further into its object.
+ib_fld_plus := fn(fd : IbFld, off : usize) -> IbFld { IbFld(off = ByteOff(usize(fd.off) + off), ty = fd.ty, sg = fd.sg, be = fd.be) }
+
+## ── nested aggregate fields (slice 3n, `docs/ir-slice-4.md` §4) ──
+##
+## A field whose type is a struct or an enum the builder lays out is a SUB-OBJECT at the field's byte
+## place (`lower_layout::field_byte_place`, the one answer every tier gives): a literal for it is built in
+## place, a field read through it is a place one level deeper (`ib_place_of` on `o.inner`), and a whole
+## read or write of it is a `copy` of its bytes. A struct holding one is never a WORD-tier struct
+## (`ib_struct_scalar_fields`), so it crosses no call and no pointer: the sub-object's layout stays
+## internal to one function.
+
+## A sub-object: its byte offset in the enclosing object and its own type (flat, for the seed, #912).
+IbSub := struct { off : usize, di : usize, s : usize, n : usize, size : usize }
+ib_sub_st := fn(sb : IbSub) -> IbSt { IbSt(di = sb.di, s = sb.s, n = sb.n, size = sb.size, align = 8) }
+## Field `[fs, fs+fl)` of struct `st` when it is a struct or enum sub-object.
+ib_field_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, fs : usize, fl : usize) -> Option(IbSub) {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        if fd.nl == fl and streq(bv.src, fd.ns, fd.nl, fs, fl) {
+          ko : Option(IbKS) = ib_name_ks(bv.src, fd.ts, fd.tl)
+          match ko { Some(k) => { return Option(IbSub).None }; None => {} }
+          fsp : IbSpan = ib_type_span_full(bv.src, fd.ts, fd.tl)
+          so : Option(IbSt) = ib_agg_named(bp, a, fsp.s, fsp.n)
+          match so {
+            Some(sub) => {
+              fp := lower_layout::field_byte_place(bv.decls, bv.src, st.s, st.n, fs, fl, a)
+              if not fp.addressable or fp.off < 0 { return Option(IbSub).None }
+              if usize(fp.off) + sub.size > st.size { return Option(IbSub).None }
+              return Option(IbSub).Some(IbSub(off = usize(fp.off), di = sub.di, s = sub.s, n = sub.n, size = sub.size))
+            }
+            None => { return Option(IbSub).None }
+          }
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  Option(IbSub).None
+}
+## The value `e` of aggregate type `st` built into object `fr` at byte offset `off`: a struct or enum
+## literal in place, any other value built (or found) first and copied in.
+ib_agg_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt, fr : FrameId, off : usize) -> bool {
+  if ib_is_enum_lit(e) and ib_st_is_enum(bp, st) { return ib_agg_enum_lit_into(bp, a, e, st, fr, off) }
+  sl : Option(IbSpan) = ib_struct_lit_name(e)
+  match sl {
+    Some(nm) => {
+      so : Option(IbSt) = ib_struct_named(bp, a, nm.s, nm.n)
+      match so {
+        Some(lst) => {
+          if lst.di == st.di { return ib_agg_lit_into(bp, a, e, st, ib_struct_lit_args(e), fr, off) }
+        }
+        None => {}
+      }
+      ib_refuse_expr(bp, e, NyWhy.NwOutside)
+      return false
+    }
+    None => {}
+  }
+  oo : Option(IbObj) = ib_agg(bp, a, e, st)
+  match oo {
+    Some(o) => {
+      dst := ib_frame_at(bp, a, fr, off)
+      osrc := o_frame(o.fr)
+      mut it := inst0(Op.OpCopy)
+      set_a(it, dst)
+      set_b(it, osrc)
+      it.n = st.size
+      i := emit(ib_b_f(bp), a, it)
+      return true
+    }
+    None => {}
+  }
+  false
+}
+## The address operand of byte `off` of frame object `fr`: the object itself at 0, else a `ptr` to it
+## advanced by `off` (`gep`).
+ib_frame_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId, off : usize) -> Opnd {
+  if off == 0 { return o_frame(fr) }
+  base := ib_addr_obj(bp, a, fr)
+  ib_ptr_plus(bp, a, base, off)
+}
+## `p + off` for the `ptr` vreg `p`.
+ib_ptr_plus := fn(bp : ptr(mut IbB), in out a : rt::Arena, p : VRegId, off : usize) -> Opnd {
+  if off == 0 { return o_vreg(p) }
+  one := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), 1)
+  q := ib_fresh(bp, a, IbKS(ty = Kty.KPtr, sg = Sgn.SgNone))
+  mut gi := inst0(Op.OpGep)
+  gi.ty = Kty.KPtr
+  set_dst(gi, q)
+  ob := o_vreg(p)
+  oi := o_vreg(one)
+  set_a(gi, ob)
+  set_b(gi, oi)
+  gi.off = i64(off)
+  k := emit(ib_b_f(bp), a, gi)
+  o_vreg(q)
+}
+## The name a struct literal spells, and its initializers.
+ib_struct_lit_name := fn(e : ptr(Expr)) -> Option(IbSpan) {
+  match deref(e) {
+    Expr::StructLit(ss, sl, nf, fh) => { Option(IbSpan).Some(IbSpan(s = ss, n = sl)) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { Option(IbSpan).None }
+  }
+}
+ib_struct_lit_args := fn(e : ptr(Expr)) -> Option(ptr(mut Arg)) {
+  match deref(e) {
+    Expr::StructLit(ss, sl, nf, fh) => { fh }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { Option(ptr(mut Arg)).None }
+  }
 }
 
 ## `s := e` / `s : S = e` for a struct local: the struct type is the annotation's, else the one the
@@ -1921,16 +2119,22 @@ ib_enum_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : I
   Option(IbObj).None
 }
 ib_enum_lit_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt, vq : ptr(mut FieldDecl), vs : usize, vl : usize, np : usize, ph : Option(ptr(mut Arg))) -> Option(IbObj) {
-  bv : IbB = deref(bp)
-  vfd := deref(ast::fld_p(vq))
-  if np != vfd.arity { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
-  tgo : Option(i64) = lower_layout::variant_disc(bv.decls, bv.src, st.s, st.n, vs, vl, a)
-  mut tag : i64 = 0
-  match tgo { Some(t) => { tag = t }; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None } }
   fr := ib_new_obj(bp, a, st)
   ib_zero_obj(bp, a, fr, st.size)
+  if not ib_enum_lit_into(bp, a, e, st, vq, vs, vl, np, ph, fr, 0) { return Option(IbObj).None }
+  Option(IbObj).Some(IbObj(fr = fr, fresh = true))
+}
+## The tag and the components of enum literal `e` stored into object `fr` at byte offset `boff` (an
+## already zeroed object: a narrower variant leaves the rest of the payload zero).
+ib_enum_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt, vq : ptr(mut FieldDecl), vs : usize, vl : usize, np : usize, ph : Option(ptr(mut Arg)), fr : FrameId, boff : usize) -> bool {
+  bv : IbB = deref(bp)
+  vfd := deref(ast::fld_p(vq))
+  if np != vfd.arity { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+  tgo : Option(i64) = lower_layout::variant_disc(bv.decls, bv.src, st.s, st.n, vs, vl, a)
+  mut tag : i64 = 0
+  match tgo { Some(t) => { tag = t }; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false } }
   tv := ib_konst(bp, a, ib_ks_i64(Sgn.SgS), tag)
-  ib_store_field(bp, a, fr, ib_tag_fld(), tv)
+  ib_store_field(bp, a, fr, ib_fld_plus(ib_tag_fld(), boff), tv)
   mut g : Option(ptr(mut Arg)) = ph
   mut i : usize = 0
   loop {
@@ -1939,16 +2143,36 @@ ib_enum_lit_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st 
         ga := deref(arg_p(gq))
         ko : Option(IbKS) = ib_variant_comp(bp, a, st, vq, i)
         mut k : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
-        match ko { Some(kk) => { k = kk }; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None } }
-        v := ib_value_ctx(bp, a, ga.e, k)?
-        ib_store_field(bp, a, fr, ib_comp_fld(i, k), v)
+        match ko { Some(kk) => { k = kk }; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false } }
+        vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, k)
+        match vo { Some(v) => { ib_store_field(bp, a, fr, ib_fld_plus(ib_comp_fld(i, k), boff), v) }; None => { return false } }
         i = i + 1
         g = ga.next
       }
       None => { break }
     }
   }
-  Option(IbObj).Some(IbObj(fr = fr, fresh = true))
+  true
+}
+## Enum literal `e` of enum type `st` built into object `fr` at byte offset `off` (slice 3n).
+ib_agg_enum_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt, fr : FrameId, off : usize) -> bool {
+  match deref(e) {
+    Expr::EnumLit(es, el, vs, vl, np, ph) => {
+      bv : IbB = deref(bp)
+      bn := lower_layout::base_type_name(bv.src, es, el)
+      edi := lower_layout::enum_decl_of(bv.decls, bv.src, bn.s, bn.n)
+      if edi >= 0 and usize(edi) == st.di {
+        vo : Option(ptr(mut FieldDecl)) = ib_variant_of(bp, st, vs, vl)
+        match vo { Some(vq) => { return ib_enum_lit_into(bp, a, e, st, vq, vs, vl, np, ph, fr, off) }; None => {} }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  false
 }
 ## A `match` arm the builder lowers: an integer or variant literal (kind 0), `_` (1), a range (5, 6). A
 ## value `match` takes each arm's value from its expression (a block arm is outside 4a).
@@ -2364,7 +2588,7 @@ ib_bx_try_build := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), in
 ## A place: its base operand's kind and payload, and the struct type there. Flat — the base is not an
 ## `Opnd` field — because an `Option` of a struct holding a struct crashes the frozen seed's build (the
 ## note at `IbIntOp`, #912).
-IbPlace := struct { bk : OpndK, bv : i64, di : usize, s : usize, n : usize }
+IbPlace := struct { bk : OpndK, bv : i64, di : usize, s : usize, n : usize, off : usize }
 ib_place_base := fn(pl : IbPlace) -> Opnd { Opnd(k = pl.bk, v = pl.bv) }
 ## The struct type `pl` names.
 ib_place_st := fn(bp : ptr(mut IbB), in out a : rt::Arena, pl : IbPlace) -> Option(IbSt) { ib_struct_bound(bp, a, pl.di, pl.s, pl.n) }
@@ -2434,7 +2658,7 @@ ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
   if ib_names_global(bp, s, n) { return Option(IbPlace).None }
   bd : IbBind = ib_lookup(bp, s, n)
   match bd {
-    BdAgg(fr, sd, ts, tn) => { return Option(IbPlace).Some(IbPlace(bk = OpndK.OkFrame, bv = i64(usize(fr)), di = sd, s = ts, n = tn)) }
+    BdAgg(fr, sd, ts, tn) => { return Option(IbPlace).Some(IbPlace(bk = OpndK.OkFrame, bv = i64(usize(fr)), di = sd, s = ts, n = tn, off = 0)) }
     BdVal(v, vts, vtn) => {
       if not kty_is_ptr(vreg_ty(ib_b_f(bp), usize(v))) { return Option(IbPlace).None }
       po : Option(IbSpan) = ib_pointee(bp, vts, vtn)
@@ -2444,7 +2668,7 @@ ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
           match sto {
             Some(st) => {
               if not ib_struct_word(bp, a, st) { return Option(IbPlace).None }
-              return Option(IbPlace).Some(IbPlace(bk = OpndK.OkVReg, bv = i64(usize(v)), di = st.di, s = st.s, n = st.n))
+              return Option(IbPlace).Some(IbPlace(bk = OpndK.OkVReg, bv = i64(usize(v)), di = st.di, s = st.s, n = st.n, off = 0))
             }
             None => {}
           }
@@ -2454,7 +2678,7 @@ ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
     }
     BdMem(mf, mns) => {}
     BdArr(af, ats, atn) => {}
-    BdRef(rv, rsd, rts, rtn) => { return Option(IbPlace).Some(IbPlace(bk = OpndK.OkVReg, bv = i64(usize(rv)), di = rsd, s = rts, n = rtn)) }
+    BdRef(rv, rsd, rts, rtn) => { return Option(IbPlace).Some(IbPlace(bk = OpndK.OkVReg, bv = i64(usize(rv)), di = rsd, s = rts, n = rtn, off = 0)) }
     BdNone => {}
   }
   Option(IbPlace).None
@@ -2490,14 +2714,35 @@ ib_place_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Opt
         Some(st) => {
           oo : Option(IbObj) = ib_agg(bp, a, b, st)
           match oo {
-            Some(o) => { return Option(IbPlace).Some(IbPlace(bk = OpndK.OkFrame, bv = i64(usize(o.fr)), di = st.di, s = st.s, n = st.n)) }
+            Some(o) => { return Option(IbPlace).Some(IbPlace(bk = OpndK.OkFrame, bv = i64(usize(o.fr)), di = st.di, s = st.s, n = st.n, off = 0)) }
             None => {}
           }
         }
         None => {}
       }
     }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+    Expr::Field(fb, ffs, ffl) => {
+      ## Slice 3n: `o.inner` — a struct sub-object, one place deeper (only inside a frame object: a struct
+      ## reached through a pointer is WORD tier, which holds no sub-object).
+      plo : Option(IbPlace) = ib_place_of(bp, a, fb)
+      match plo {
+        Some(pl) => {
+          sto : Option(IbSt) = ib_place_st(bp, a, pl)
+          match sto {
+            Some(st) => {
+              sbo : Option(IbSub) = ib_field_agg(bp, a, st, ffs, ffl)
+              match sbo {
+                Some(sb) => { return Option(IbPlace).Some(IbPlace(bk = pl.bk, bv = pl.bv, di = sb.di, s = sb.s, n = sb.n, off = pl.off + sb.off)) }
+                None => {}
+              }
+            }
+            None => {}
+          }
+        }
+        None => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
@@ -2543,7 +2788,31 @@ ib_bs_store_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stm
           match flo {
             Some(fld) => {
               vo : Option(VRegId) = ib_value_ctx(bp, a, fv, IbKS(ty = fld.ty, sg = fld.sg))
-              match vo { Some(v) => { pb := ib_place_base(pl); ib_store_at(bp, a, pb, fld, v) }; None => {} }
+              match vo { Some(v) => { pb := ib_place_base(pl); ib_store_at(bp, a, pb, ib_fld_plus(fld, pl.off), v) }; None => {} }
+              return
+            }
+            None => {}
+          }
+          ## Slice 3n: `o.inner = v` — the value built in its own object first (it may read `o`, #909),
+          ## then copied into the sub-object's place.
+          sbo : Option(IbSub) = ib_field_agg(bp, a, st, fs, fl)
+          match sbo {
+            Some(sb) => {
+              sst := ib_sub_st(sb)
+              oo : Option(IbObj) = ib_agg(bp, a, fv, sst)
+              match oo {
+                Some(o) => {
+                  dpl := IbPlace(bk = pl.bk, bv = pl.bv, di = sb.di, s = sb.s, n = sb.n, off = pl.off + sb.off)
+                  dst := ib_place_addr(bp, a, dpl)
+                  osrc := o_frame(o.fr)
+                  mut it := inst0(Op.OpCopy)
+                  set_a(it, dst)
+                  set_b(it, osrc)
+                  it.n = sst.size
+                  k := emit(ib_b_f(bp), a, it)
+                }
+                None => {}
+              }
               return
             }
             None => {}
@@ -2582,7 +2851,7 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
               k := ib_ty(bp, e)?
               if not ib_ks_eq(k, IbKS(ty = fld.ty, sg = fld.sg)) { return ib_no(bp, e, NyWhy.NwDisagree) }
               pb := ib_place_base(pl)
-              lv := ib_load_at(bp, a, pb, fld)
+              lv := ib_load_at(bp, a, pb, ib_fld_plus(fld, pl.off))
               return Option(VRegId).Some(lv)
             }
             None => {}

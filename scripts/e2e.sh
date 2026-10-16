@@ -8663,6 +8663,11 @@ run ir_try 42
 run_a64 ir_try 42
 run_rv64 ir_try 42
 run_wat ir_try 42
+## IR slice 3n: struct and enum fields of a struct local (sub-objects).
+run ir_nested_field 42
+run_a64 ir_nested_field 42
+run_rv64 ir_nested_field 42
+run_wat ir_nested_field 42
 ## #909, the zeroing writers (@packed, standard byte layout): the FIRST initializer reads the destination.
 run struct_assign_self_zeroing 42
 run_a64 struct_assign_self_zeroing 42
@@ -9837,13 +9842,14 @@ run_x86 issue448_enum_place_match 42
 run_a64 issue448_enum_place_match 42
 run_rv64 issue448_enum_place_match 42
 run_wat issue448_enum_place_match 134
-## issue #448 CONTROL — the spelling neither backend can lower must STAY fail-loud. 133 is 128 + SIGTRAP,
-## asserted as the exact status rather than "nonzero", because a wildcard landing in a nonzero arm would
-## satisfy a nonzero-exit check and hide exactly the defect above.
+## issue #448 CONTROL — the spelling the legacy twins could not lower had to STAY fail-loud (133 = 128 +
+## SIGTRAP), asserted as the exact status because a wildcard landing in a nonzero arm would satisfy a
+## nonzero-exit check. Since IR slice 3n the twins build the enum field from the shared IR and answer the
+## program's value, 42 — still an exact status, which no wildcard arm answers.
 run_x86 issue448_enum_local_match_loud 42
-run_a64 issue448_enum_local_match_loud 133
-run_rv64 issue448_enum_local_match_loud 133
-run_wat issue448_enum_local_match_loud 134
+run_a64 issue448_enum_local_match_loud 42
+run_rv64 issue448_enum_local_match_loud 42
+run_wat issue448_enum_local_match_loud 42
 ## issue #461 — the ASSIGNMENT spelling of the same field: `mut h := Holder(t = Tag.Red) ; h.t = v`.
 ## Here x86_64 itself was wrong, and by a DIFFERENT mechanism from #448: `emit_enum_assign` matched only
 ## an `EnumLit`, so its wildcard arm emitted NO INSTRUCTION and the store was DROPPED — every later read
