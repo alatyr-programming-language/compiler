@@ -8653,6 +8653,11 @@ run ir_enum_local 42
 run_a64 ir_enum_local 42
 run_rv64 ir_enum_local 42
 run_wat ir_enum_local 42
+## IR slice 4b: enums cross calls between IR-built and legacy functions in both directions.
+run ir_enum_cross 42
+run_a64 ir_enum_cross 42
+run_rv64 ir_enum_cross 42
+run_wat ir_enum_cross 42
 ## #909, the zeroing writers (@packed, standard byte layout): the FIRST initializer reads the destination.
 run struct_assign_self_zeroing 42
 run_a64 struct_assign_self_zeroing 42

@@ -1162,7 +1162,7 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
   mut agg : Option(IbSt) = Option(IbSt).None
   if d.ret_tl != 0 {
     if ib_agg_ret_words(ib_b_decls(bp), src, d.ret_ts, d.ret_tl, a) > 0 {
-      agg = ib_struct_named(bp, a, d.ret_ts, d.ret_tl)
+      agg = ib_agg_named(bp, a, d.ret_ts, d.ret_tl)
       match agg { Some(st) => {}; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return CallOut.CoRefused } }
     } else {
       res = ib_call_result(bp, e, d)
@@ -1253,10 +1253,10 @@ ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param,
       ## §3.7): a fresh literal's own object, else a fresh object the value is copied into, so the callee
       ## never sees memory the caller goes on to change. WORD tier only (Q4), as the callee requires.
       if pm.pmode == 0 {
-        sto : Option(IbSt) = ib_struct_named(bp, a, pm.ts, pm.tl)
+        sto : Option(IbSt) = ib_agg_named(bp, a, pm.ts, pm.tl)
         match sto {
           Some(st) => {
-            if ib_struct_word(bp, a, st) {
+            if ib_st_is_enum(bp, st) or ib_struct_word(bp, a, st) {
               oo : Option(IbObj) = ib_agg(bp, a, ae, st)
               match oo {
                 Some(o) => {
@@ -1572,17 +1572,17 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
         BdVal(v, vts, vtn) => {}
         BdMem(mf, mns) => {}
         BdArr(af, ats, atn) => {}
-        BdRef(rv, rsd, rts, rtn) => { return ib_struct_bound(bp, a, rsd, rts, rtn) }
+        BdRef(rv, rsd, rts, rtn) => { return ib_agg_bound(bp, a, rsd, rts, rtn) }
         BdNone => {}
       }
     }
     Expr::Call(cs, cl, na, ah) => {
-      ## Slice 3d: the callee's declared struct result.
+      ## Slice 3d: the callee's declared struct result (slice 4b: or enum result).
       ci : Option(u64) = ib_callee_decl(bp, cs, cl)
       match ci {
         Some(di) => {
           d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
-          if d.ret_tl != 0 { return ib_struct_named(bp, a, d.ret_ts, d.ret_tl) }
+          if d.ret_tl != 0 { return ib_agg_named(bp, a, d.ret_ts, d.ret_tl) }
         }
         None => {}
       }
@@ -1789,13 +1789,21 @@ ib_bs_agg_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt
 ## The enum type named `[s, s+n)`, when 4a builds it (see the band comment).
 ib_enum_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize) -> Option(IbSt) {
   bv : IbB = deref(bp)
-  bn := lower_layout::base_type_name(bv.src, s, n)
-  edi := lower_layout::enum_decl_of(bv.decls, bv.src, bn.s, bn.n)
+  ib_enum_named_in(bv.decls, bv.src, a, s, n)
+}
+## The same, from the declarations and source alone (a function's result type is asked before its
+## builder exists).
+ib_enum_named_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, s0 : usize, n0 : usize) -> Option(IbSt) {
+  full : IbSpan = ib_type_span_full(src, s0, n0)
+  s := full.s
+  n := full.n
+  bn := lower_layout::base_type_name(src, s, n)
+  edi := lower_layout::enum_decl_of(decls, src, bn.s, bn.n)
   if edi < 0 { return Option(IbSt).None }
-  d : Decl = deref(ib_decl_ptr(bv.decls, usize(edi)))
+  d : Decl = deref(ib_decl_ptr(decls, usize(edi)))
   if d.kind != lower_layout::DECL_KIND_ENUM { return Option(IbSt).None }
-  if lower_layout::is_union_decl(bv.decls, bv.src, bn.s, bn.n) { return Option(IbSt).None }
-  if lower_layout::is_niche_folded(bv.src, s, n) or lower_layout::is_bool_niche_pending(bv.src, s, n) { return Option(IbSt).None }
+  if lower_layout::is_union_decl(decls, src, bn.s, bn.n) { return Option(IbSt).None }
+  if lower_layout::is_niche_folded(src, s, n) or lower_layout::is_bool_niche_pending(src, s, n) { return Option(IbSt).None }
   ## A generic enum is laid out only by an instance: `Option` alone names no payload type.
   if d.is_generic and bn.n == n { return Option(IbSt).None }
   st0 := IbSt(di = usize(edi), s = s, n = n, size = 0, align = 8)
@@ -1808,7 +1816,7 @@ ib_enum_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
         fd := deref(ast::fld_p(fq))
         mut i : usize = 0
         while i < fd.arity {
-          ko : Option(IbKS) = ib_variant_comp(bp, a, st0, fq, i)
+          ko : Option(IbKS) = ib_variant_comp_in(decls, src, a, st0, fq, i)
           match ko { Some(k) => {}; None => { return Option(IbSt).None } }
           i = i + 1
         }
@@ -1821,7 +1829,7 @@ ib_enum_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
   }
   if nv == 0 { return Option(IbSt).None }
   ## The shared layout must be exactly the tag word plus one word per component of the widest variant.
-  w := lower_layout::enum_layout_words(bv.decls, bv.src, s, n, a)
+  w := lower_layout::enum_layout_words(decls, src, s, n, a)
   if w != 1 + mx { return Option(IbSt).None }
   Option(IbSt).Some(IbSt(di = usize(edi), s = s, n = n, size = w * 8, align = 8))
 }
@@ -1835,28 +1843,31 @@ ib_st_is_enum := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
 ## component is a type parameter of a generic enum.
 ib_variant_comp := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbKS) {
   bv : IbB = deref(bp)
+  ib_variant_comp_in(bv.decls, bv.src, a, st, vq, i)
+}
+ib_variant_comp_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbKS) {
   fd := deref(ast::fld_p(vq))
   if i >= fd.arity { return Option(IbKS).None }
   end := ast::src_extent()
   mut op := fd.ns + fd.nl
-  while op < end and str_at((bv.src + op), 1) != "(" { op = op + 1 }
+  while op < end and str_at((src + op), 1) != "(" { op = op + 1 }
   if op >= end { return Option(IbKS).None }
-  comp := lower_layout::typearg_at(bv.src, op, 0, i)
+  comp := lower_layout::typearg_at(src, op, 0, i)
   if comp.n == 0 { return Option(IbKS).None }
   mut ts := comp.s
   mut tl := comp.n
-  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  d : Decl = deref(ib_decl_ptr(decls, st.di))
   if d.is_generic {
-    pos := lower_layout::param_pos(bv.decls, st.di, bv.src, ts, tl, a)
+    pos := lower_layout::param_pos(decls, st.di, src, ts, tl, a)
     if pos >= 0 {
-      bn := lower_layout::base_type_name(bv.src, st.s, st.n)
-      ta := lower_layout::typearg_at(bv.src, bn.s, bn.n, usize(pos))
+      bn := lower_layout::base_type_name(src, st.s, st.n)
+      ta := lower_layout::typearg_at(src, bn.s, bn.n, usize(pos))
       if ta.n == 0 { return Option(IbKS).None }
       ts = ta.s
       tl = ta.n
     }
   }
-  ib_name_ks(bv.src, ts, tl)
+  ib_name_ks(src, ts, tl)
 }
 ## The variant of enum `st` named `[vs, vs+vl)`.
 ib_variant_of := fn(bp : ptr(mut IbB), st : IbSt, vs : usize, vl : usize) -> Option(ptr(mut FieldDecl)) {
@@ -2264,6 +2275,30 @@ ib_ptr_type_span := fn(src : ptr(u8), ts : usize, tn : usize) -> IbSpan {
   IbSpan(s = ts, n = tn)
 }
 
+## A declared type span widened to its whole `Name( … )` instance: a parameter's or result's span may
+## cover only the head token (`Option` of `Option(u64)`), so the `( … )` group right after it is taken by
+## bracket depth, within the published source extent. A span that already ends its group, or that no
+## `(` follows, is answered unchanged.
+ib_type_span_full := fn(src : ptr(u8), ts : usize, tn : usize) -> IbSpan {
+  end := ast::src_extent()
+  if tn == 0 or ts + tn > end { return IbSpan(s = ts, n = tn) }
+  if str_at((src + ts + tn - 1), 1) == ")" { return IbSpan(s = ts, n = tn) }
+  mut p := ts + tn
+  while p < end and str_at((src + p), 1) == " " { p = p + 1 }
+  if p >= end or str_at((src + p), 1) != "(" { return IbSpan(s = ts, n = tn) }
+  mut depth : usize = 0
+  while p < end {
+    c := str_at((src + p), 1)
+    if c == "(" { depth = depth + 1 }
+    if c == ")" {
+      depth = depth - 1
+      if depth == 0 { return IbSpan(s = ts, n = p + 1 - ts) }
+    }
+    if c == "\n" or c == "=" or c == "{" { return IbSpan(s = ts, n = tn) }
+    p = p + 1
+  }
+  IbSpan(s = ts, n = tn)
+}
 ## The place a struct named `[s, s+n)` occupies: a struct local's object, or the struct a pointer
 ## local or parameter (declared `ptr(S)`) points at — WORD tier only through a pointer (see above).
 ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize) -> Option(IbPlace) {
@@ -3370,7 +3405,7 @@ ib_bs_tail_block := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : Option(ptr(m
 ib_ret_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
   bv : IbB = deref(bp)
   if bv.rn != 0 {
-    sto : Option(IbSt) = ib_struct_named(bp, a, bv.rs, bv.rn)
+    sto : Option(IbSt) = ib_agg_named(bp, a, bv.rs, bv.rn)
     match sto {
       Some(st) => {
         oo : Option(IbObj) = ib_agg(bp, a, e, st)
@@ -3396,6 +3431,17 @@ ib_ret_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
 ## lays out in the WORD tier of one or two words (every legacy emitter returns those in two result
 ## registers); 0 otherwise.
 ib_agg_ret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, in out a : rt::Arena) -> usize {
+  ## Slice 4b: an enum result is returned in up to eight result registers, tag first — the legacy
+  ## emitters' register enum-return convention (measured: aarch64 x0..x7, riscv64 a0..a7).
+  eo : Option(IbSt) = ib_enum_named_in(decls, src, a, s, n)
+  match eo {
+    Some(est) => {
+      ew := est.size / 8
+      if ew >= 1 and ew <= 8 { return ew }
+      return 0
+    }
+    None => {}
+  }
   lk := lower_layout::layout_kind(decls, src, s, n, a)
   if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return 0 }
   sdi := lower_layout::struct_decl_of(decls, src, s, n)
@@ -3812,10 +3858,13 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
             ## linear-memory address), so a legacy caller and an IR-built callee agree. Only the WORD tier
             ## (the layout every legacy reader shares, Q4), an immutable parameter, and one whose address
             ## is not taken (the value is the caller's memory, read through the pointer).
-            sto : Option(IbSt) = ib_struct_named(bp, a, pm.ts, pm.tl)
+            ## Slice 4b: an enum parameter likewise — every legacy emitter passes an enum by the address of
+            ## its {tag, payload…} words (measured), the layout `ib_enum_named` builds.
+            sto : Option(IbSt) = ib_agg_named(bp, a, pm.ts, pm.tl)
             match sto {
               Some(st) => {
-                if pm.pmode != 0 or not ib_struct_word(bp, a, st) or ib_is_taken(bp, pm.ns, pm.nl) { why.c = Construct.CSignature; return BuildOut.Refused }
+                if pm.pmode != 0 or ib_is_taken(bp, pm.ns, pm.nl) { why.c = Construct.CSignature; return BuildOut.Refused }
+                if not ib_st_is_enum(bp, st) and not ib_struct_word(bp, a, st) { why.c = Construct.CSignature; return BuildOut.Refused }
                 rv := new_param(f, a, Kty.KPtr, Sgn.SgNone)
                 ib_bind_ref(bp, a, pm.ns, pm.nl, rv, st)
               }

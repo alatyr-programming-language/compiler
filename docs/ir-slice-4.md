@@ -55,3 +55,45 @@ float local instead (slice 8's construct), as `test/ir_ptr_agree.al` already did
 
 Few corpus rows move because almost every corpus function that matches an enum also takes or returns
 one, which is 4b.
+
+## 2. 4b — enums across calls
+
+### 2.1 The legacy conventions (measured on `main`, `alatyr <target>` of one probe)
+
+The probe passes `E := enum { A, B(u64), C(u64, u64) }` to a function, and returns an `Option(u64)` and
+an `E` from two others.
+
+| target | enum argument | enum result |
+|---|---|---|
+| x86_64 | the address of the caller's {tag, payload…} words | `%rax` (tag), `%rdx`, `%rcx` |
+| aarch64 | the address, in the argument register | x0 (tag), x1, x2 — `emit_a64_enum_value`: up to eight words in x0..x7 |
+| riscv64 | the address, in the argument register | a0 (tag), a1, a2 — up to eight in a0..a7 |
+| wasm | the linear-memory address (`i64`) | the address of a block the callee bump-allocates from `$__sp` |
+
+Every target reads the words at the shared layout's offsets (tag at 0, component `i` at `8 + 8 i`). A
+caller stores all `1 + max arity` words of the result; a callee returning a narrow variant leaves the
+higher registers undefined, which no arm of that variant reads.
+
+### 2.2 As built
+
+- **Parameters.** An enum parameter arrives as the address of a caller-owned copy, bound by reference
+  (`BdRef`, slice 3d's struct path): a `match` on it copies the words into a fresh object first.
+- **Arguments.** The address of a fresh literal's object, else of a fresh copy (§3.7).
+- **Results.** `ret_words` is the enum's word count (at most eight); the aarch64 and riscv64 selectors
+  return and receive x0..x7 / a0..a7 (their struct path, which stays at two words for structs). wasm
+  keeps a legacy emission for a function that returns an enum or receives one (its selector refuses
+  `ret_words` and a frame-object call destination, as for structs), so its address convention is not
+  needed yet; x86-ir (dev) keeps its two-word limit.
+- **Instance spans.** A parameter's or result's type span may cover only its head token (`Option` of
+  `Option(u64)`); `ib_type_span_full` widens it to the whole `( … )` group, so a generic enum in a
+  signature is laid out by its instance.
+- **Proof (Q4).** `test/ir_enum_cross.al`: IR-built and legacy functions (held legacy by a float local)
+  pass enums to each other and return one- to three-word enums in both directions; 42 on all four
+  backends, and `alatyr ir` reports `take`, `pass`, `mk2`, `mk3` and `main` built, the `lg_*` legacy.
+
+### 2.3 Measured (omen, before the gate)
+
+`corpus_manifest --check` against `main` (4a landed): exactly 8 rows move, on aarch64 and riscv64, each
+from a trap (run/133) to the x86_64 value — `return_enum_lit_multiword` 42, `enum_match_call_scrut` 50,
+`nullary_enum_return` 42, `signedness_shadow_records` 42 — plus the new fixture's 4 rows. No x86_64 or
+wasm row moves.
