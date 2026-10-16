@@ -423,11 +423,12 @@ removes the question instead:
    library declaration is checked by `check_decl` exactly as a user one is, **for its records only**
    (`sema_lib_record`): the verdict stays TRUST and the census instruments the walk would move are
    restored. (When this landed the walk ran only when a consumer asked for records; since item 9
-   recording is on for every check.) The twins' record run (which always records) does
-   not walk library bodies yet (`sema::set_lib_records(false)`): with the walk, their builder selects
-   from the IR every library function whose records it completes, which moved 66 corpus outputs and 3
-   manifest rows (only the link/assemble diagnostics of builds that already failed; every run
-   unchanged) — an oracle transition of its own. What a user-code check would refuse is not dropped;
+   recording is on for every check.) The twins' record run walks library bodies too (since 2026-10-16;
+   it was held off by `sema::set_lib_records(false)` until then): their builder selects from the IR every
+   library function whose records it completes. When it was first measured that moved 66 corpus outputs
+   and 3 manifest rows (only diagnostics of builds that already failed); measured again after slices
+   3n–5a it moved `char_class` from a trap to the x86_64 value on all three twins and one wasm package
+   row's assemble diagnostic, and nothing else. What a user-code check would refuse is not dropped;
    it is reported on the census channel:
 
    ```

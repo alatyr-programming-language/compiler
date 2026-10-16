@@ -122,6 +122,10 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64, riscv64 and wasm select library functions from the shared IR.** The twins' compile now
+  records sema's value types for library bodies too, so a library function the IR builder can build is
+  selected from the IR; `char_class` now answers what x86_64 answers there. x86_64 output is unchanged.
+
 - **aarch64, riscv64 and wasm build brands and required types through the shared IR (IR slice 5a).** A
   brand or `@require` type in a signature has its underlying scalar's representation, `B(v)` re-brands,
   and a required type's construction runs its predicate and traps `require` when it answers false.
