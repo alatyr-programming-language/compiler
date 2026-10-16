@@ -944,14 +944,15 @@ check_trap_names() {
 # writes nothing extra. On the parent compiler fd 97 receives nothing.
 # From IR slice 1c a function the shared IR builds is selected from its IR on the twins, where every
 # signedness is sema's and no emitter decides one by shape, so the legacy aarch64 emitter reports only
-# the functions it still emits. The probe's `main` keeps an ENUM local (`w : Option(u64)`, slice 4's —
-# outside what the builder takes) so the builder refuses it and the legacy emitter's report stays
-# exercised. It was a fixed array until slice 3c taught the builder fixed arrays: the anchor must name
-# a construct no landed slice builds, and moves to a later slice's construct when one lands.
+# the functions it still emits. The probe's `main` keeps a FLOAT local (`w : f64`, slice 8's — outside
+# what the builder takes) so the builder refuses it and the legacy emitter's report stays exercised.
+# It was a fixed array until slice 3c and an enum local until slice 4a taught the builder each: the
+# anchor must name a construct no landed slice builds, and moves to a later slice's construct when one
+# lands.
 check_sign_census() {
   local d="$T/sign_census" rc
   mkdir -p "$d"
-  printf '%s\n' 'f := fn() -> i64 { return 0 - 7 }' 'main := fn() -> u64 {' '  w : Option(u64) = Option.Some(1)' '  a : i64 = f()' \
+  printf '%s\n' 'f := fn() -> i64 { return 0 - 7 }' 'main := fn() -> u64 {' '  w : f64 = 1.0' '  a : i64 = f()' \
     '  x : i64 = (0 - 7) % 9' '  q := a / 7' '  u : u64 = 5' '  if u < 3 { return 1 }' '  if x < 0 { return 42 }' '  7' '}' > "$d/p.al"
   "$CC" "$d/p.al" > "$d/x86.s" 2>/dev/null 97> "$d/x86.rows"; rc=$?
   "$CC" aarch64 "$d/p.al" > /dev/null 2>/dev/null 97> "$d/a64.rows"
@@ -8642,6 +8643,16 @@ run ir_struct_assign_self 21
 run_a64 ir_struct_assign_self 21
 run_rv64 ir_struct_assign_self 21
 run_wat ir_struct_assign_self 21
+## IR slice 4a (`docs/ir-slice-4.md`): `match` over integers (literal, range and `_` arms, #821) and over
+## enum locals, built from the shared IR on every twin.
+run ir_match_scalar 42
+run_a64 ir_match_scalar 42
+run_rv64 ir_match_scalar 42
+run_wat ir_match_scalar 42
+run ir_enum_local 42
+run_a64 ir_enum_local 42
+run_rv64 ir_enum_local 42
+run_wat ir_enum_local 42
 ## #909, the zeroing writers (@packed, standard byte layout): the FIRST initializer reads the destination.
 run struct_assign_self_zeroing 42
 run_a64 struct_assign_self_zeroing 42

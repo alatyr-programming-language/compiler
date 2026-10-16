@@ -3,7 +3,8 @@
 ## argument, so an IR-built function and a legacy-emitted one call each other in BOTH directions with the
 ## same layout (docs/ir-slice-3.md Q4: proved here, not assumed).
 ##
-## `lg_*` keep an `Option(u64)` local — an enum, slice 4's construct — so the shared IR refuses them and
+## `lg_*` keep a float local — slice 8's construct (an `Option(u64)` local served until slice 4a built
+## enums) — so the shared IR refuses them and
 ## they stay LEGACY-emitted on the twins; `take` and `pass` are IR-built (`alatyr ir` reports `Built`).
 ##   * IR -> legacy: `main` (IR) passes a local struct and a literal to `lg_take` (legacy);
 ##   * legacy -> IR: `lg_call` (legacy) passes a literal to `take` (IR);
@@ -24,12 +25,12 @@ pass := fn(s : S, k : i64) -> i64 {
 }
 
 lg_take := fn(s : S) -> i64 {
-  w : Option(u64) = Option(u64).Some(1)
+  w : f64 = 1.0
   return s.a - s.c
 }
 
 lg_call := fn() -> i64 {
-  w : Option(u64) = Option(u64).Some(1)
+  w : f64 = 1.0
   return take(S(a = 40, b = 7, c = 3))
 }
 
