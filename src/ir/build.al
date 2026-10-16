@@ -266,6 +266,25 @@ ib_name_ks := fn(src : ptr(u8), s : usize, n : usize) -> Option(IbKS) {
   t : VTy = sema::sema_vty_scalar(src, s, n)
   ib_vty_ks(t)
 }
+## The kernel type of a declared type in a signature (slice 5a): a scalar name, or a brand / required
+## type over one (`Id := brand(u64)`, `NonZero := @require(p) u64`), which has its underlying type's exact
+## representation (Types §4.4, §8.1) — the value is the underlying value. A chain of brands is followed
+## to a bounded depth; anything else is not a kernel type.
+ib_type_ks := fn(decls : ptr(rt::Vec), src : ptr(u8), s0 : usize, n0 : usize) -> Option(IbKS) {
+  mut s := s0
+  mut n := n0
+  mut depth : usize = 0
+  while depth < 8 {
+    ko : Option(IbKS) = ib_name_ks(src, s, n)
+    match ko { Some(k) => { return ko }; None => {} }
+    bu := lower_layout::brand_underlying(decls, src, s, n)
+    if bu.n == 0 { return Option(IbKS).None }
+    s = bu.s
+    n = bu.n
+    depth = depth + 1
+  }
+  Option(IbKS).None
+}
 ib_vreg_ks := fn(f : ptr(mut IrFn), v : VRegId) -> IbKS {
   t : Kty = vreg_ty(f, usize(v))
   s : Sgn = vreg_sg(f, usize(v))
@@ -515,6 +534,75 @@ ib_bx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> Option(VR
   Option(VRegId).None
 }
 
+## `B(v)` for a brand or required type `B` over the scalar `U` (slice 5a, Types §4.4 / §8.1): `v` at `U`
+## (assignable to the immediate underlying type — a value of another brand is not), then, for
+## `B := @require(pred) U`, the explicit gate: `pred(v)` is called and a false answer traps `require`.
+## The value is `v` itself — a brand has its underlying type's exact representation. A brand over a
+## brand, or a predicate that is not one `U` parameter returning `bool`, stays `NotYet`.
+ib_bx_brand_ctor := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, us : usize, un : usize, ah : Option(ptr(mut Arg))) -> Option(VRegId) {
+  bv : IbB = deref(bp)
+  uko : Option(IbKS) = ib_name_ks(bv.src, us, un)
+  mut uk : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+  match uko { Some(k) => { uk = k }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
+  ke := ib_ty(bp, e)?
+  if not ib_ks_eq(ke, uk) { return ib_no(bp, e, NyWhy.NwDisagree) }
+  mut ae : Option(ptr(Expr)) = Option(ptr(Expr)).None
+  match ah { Some(gq) => { ga := deref(arg_p(gq)); ae = Option(ptr(Expr)).Some(ga.e) }; None => {} }
+  match ae {
+    Some(x) => {
+      v := ib_value_at(bp, a, x, uk)?
+      ps := lower_layout::require_pred(bv.decls, bv.src, cs, cl)
+      if ps.n == 0 { return Option(VRegId).Some(v) }
+      if not ib_require_gate(bp, a, e, ps.s, ps.n, v, uk) { return Option(VRegId).None }
+      return Option(VRegId).Some(v)
+    }
+    None => {}
+  }
+  ib_no(bp, e, NyWhy.NwOutside)
+}
+## The `@require` gate on `v`: `%ok = call pred(v)`, `trap_if not %ok require`. The predicate must be
+## the one non-generic function of that name, of one immediate parameter of `v`'s type, returning `bool`.
+ib_require_gate := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ps : usize, pn : usize, v : VRegId, uk : IbKS) -> bool {
+  bv : IbB = deref(bp)
+  pdo : Option(u64) = ib_callee_decl(bp, ps, pn)
+  match pdo {
+    Some(pdi) => {
+      d : Decl = deref(ib_decl_ptr(bv.decls, usize(pdi)))
+      rko : Option(IbKS) = ib_name_ks(bv.src, d.ret_ts, d.ret_tl)
+      mut rok := false
+      match rko { Some(rk) => { rok = kty_is_bool(rk.ty) }; None => {} }
+      if d.arity != 1 or not rok or lower::extern_symbol(bv.src, d.name_start, d.name_len).n != 0 { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+      mut pok := false
+      match d.params_head {
+        Some(pq) => {
+          pm := deref(param_p(pq))
+          pko : Option(IbKS) = ib_name_ks(bv.src, pm.ts, pm.tl)
+          match pko { Some(pk) => { pok = pm.pmode == 0 and ib_ks_eq(pk, uk) }; None => {} }
+        }
+        None => {}
+      }
+      if not pok { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+      f := ib_b_f(bp)
+      mut it := inst0(Op.OpCall)
+      dnm := str_at((bv.src + d.name_start), d.name_len)
+      sym := prog_sym(ib_b_p(bp), a, usize(pdi), dnm.ptr, dnm.len)
+      ocallee := o_sym(sym)
+      set_a(it, ocallee)
+      slot := pool_push(f, a, usize(v))
+      it.pool = slot
+      it.n = 1
+      ok := ib_fresh(bp, a, ib_bool_ks())
+      set_dst(it, ok)
+      i1 := emit(f, a, it)
+      bad := ib_eq_const(bp, a, ok, 0)
+      i2 := e_trap_if(f, a, bad, TrapKind.TkRequire, ib_span_of(bp, e), true)
+      return true
+    }
+    None => {}
+  }
+  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  false
+}
 ## A call in value position: it must have a result.
 ib_bx_callv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg))) -> Option(VRegId) {
   co : CallOut = ib_call(bp, a, e, cs, cl, na, ah)
@@ -983,6 +1071,12 @@ ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize
     Some(to) => { cv : Option(VRegId) = ib_bx_conv(bp, a, e, to, na, ah); return ib_call_out(cv) }
     None => {}
   }
+  ## Slice 5a: `B(v)` of a brand or a required type — the contract construction of Types §8.1.
+  bu := lower_layout::brand_underlying(ib_b_decls(bp), src, cs, cl)
+  if bu.n != 0 and na == 1 and not ib_fn_named(bp, cs, cl) {
+    bcv : Option(VRegId) = ib_bx_brand_ctor(bp, a, e, cs, cl, bu.s, bu.n, ah)
+    return ib_call_out(bcv)
+  }
   nm := str_at((src + cs), cl)
   so : Option(ShiftK) = ib_shift_of(nm)
   match so {
@@ -1230,7 +1324,7 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
 }
 ## The kernel result of callee `d`, which must be sema's record of the call `e`.
 ib_call_result := fn(bp : ptr(mut IbB), e : ptr(Expr), d : Decl) -> Option(IbKS) {
-  rk : Option(IbKS) = ib_name_ks(ib_b_src(bp), d.ret_ts, d.ret_tl)
+  rk : Option(IbKS) = ib_type_ks(ib_b_decls(bp), ib_b_src(bp), d.ret_ts, d.ret_tl)
   match rk {
     Some(kr) => { return ib_call_result_is(bp, e, kr) }
     None => {}
@@ -1246,7 +1340,7 @@ ib_call_result_is := fn(bp : ptr(mut IbB), e : ptr(Expr), kr : IbKS) -> Option(I
 }
 ## One argument `ae` of the call `e`, at its parameter `pm`'s declared kernel type.
 ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param, ae : ptr(Expr)) -> Option(VRegId) {
-  pk : Option(IbKS) = ib_name_ks(ib_b_src(bp), pm.ts, pm.tl)
+  pk : Option(IbKS) = ib_type_ks(ib_b_decls(bp), ib_b_src(bp), pm.ts, pm.tl)
   match pk {
     Some(want) => { if pm.pmode == 0 { return ib_value_at(bp, a, ae, want) } }
     None => {
@@ -4204,7 +4298,7 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
   mut has_ret := false
   mut rk := IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
   if d.ret_tl != 0 {
-    rko : Option(IbKS) = ib_name_ks(src, d.ret_ts, d.ret_tl)
+    rko : Option(IbKS) = ib_type_ks(decls, src, d.ret_ts, d.ret_tl)
     match rko { Some(kk) => { rk = kk; has_ret = true }; None => {} }
   }
   fnm := str_at((src + d.name_start), d.name_len)
@@ -4238,7 +4332,7 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
     match pp {
       Some(pq) => {
         pm := deref(param_p(pq))
-        pk : Option(IbKS) = ib_name_ks(src, pm.ts, pm.tl)
+        pk : Option(IbKS) = ib_type_ks(decls, src, pm.ts, pm.tl)
         match pk {
           Some(kk) => {
             if pm.pmode != 0 { why.c = Construct.CSignature; return BuildOut.Refused }
