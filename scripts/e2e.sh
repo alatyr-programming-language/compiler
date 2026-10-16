@@ -8658,6 +8658,11 @@ run ir_enum_cross 42
 run_a64 ir_enum_cross 42
 run_rv64 ir_enum_cross 42
 run_wat ir_enum_cross 42
+## IR slice 4c: `?` on an Option and a Result, success and failure paths.
+run ir_try 42
+run_a64 ir_try 42
+run_rv64 ir_try 42
+run_wat ir_try 42
 ## #909, the zeroing writers (@packed, standard byte layout): the FIRST initializer reads the destination.
 run struct_assign_self_zeroing 42
 run_a64 struct_assign_self_zeroing 42

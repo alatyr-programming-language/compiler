@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64, riscv64 and wasm build `?` through the shared IR, and wasm returns structs and enums from
+  IR-built functions (IR slice 4c).** `x?` on an `Option` or a `Result` returns the failure in the
+  function's own result type (no conversion needed) and otherwise yields the payload. wasm now returns
+  an aggregate as the address of its block, the convention its legacy emitter already uses, so
+  `fmt_try`, `try_option_some_after`, `enum_match_call_scrut` and six more corpus programs that trapped on
+  wasm answer what x86_64 answers. x86_64 output is unchanged.
+
 - **aarch64 and riscv64 pass and return enums across IR-built functions (IR slice 4b).** An enum
   parameter is the address of the caller's copy and an enum result comes back in up to eight result
   registers, tag first — the conventions the legacy emitters already use — so IR-built and legacy

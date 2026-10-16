@@ -507,8 +507,9 @@ ib_bx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> Option(VR
     Expr::Deref(pe) => { return ib_bx_deref(bp, a, e, pe) }
     Expr::AddrOf(pl) => { return ib_bx_addr_of(bp, a, e, pl) }
     Expr::Match(scr, arms) => { return ib_bx_match(bp, a, e, scr, arms) }
+    Expr::Try(inner) => { return ib_bx_try(bp, a, e, inner) }
     Expr::StructLit | Expr::EnumLit | Expr::StrLit
-      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
       | Expr::FnRef => { ib_refuse_expr(bp, e, NyWhy.NwOutside) }
   }
   Option(VRegId).None
@@ -2218,6 +2219,134 @@ ib_is_enum_lit := fn(e : ptr(Expr)) -> bool {
   }
 }
 
+## ── `?` (slice 4c, `docs/ir-slice-4.md` §3) ──
+##
+## `x?` on an `Option` or a `Result` (Control Flow §8.2): on success (`Some v` / `Ok v`) its value is
+## `v`; on failure (`None` / `Err e`) the function returns that failure, wrapped in its own result type.
+## The success and failure variants are the `Option` / `Result` declaration's (`Some`/`None`,
+## `Ok`/`Err`), resolved to their discriminants by `variant_index`, never read off the operand. 4c builds
+## the forms that need no conversion: the enclosing result is an `Option` for an `Option` operand, or a
+## `Result` whose error component is the operand's own; a declared `OutErr` conversion, a user tryable
+## and a function with `defer`s are outside 4c.
+
+## 1 for an `Option`, 2 for a `Result`, 0 for any other enum.
+ib_try_kind := fn(bp : ptr(mut IbB), st : IbSt) -> u8 {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  nm := str_at((bv.src + d.name_start), d.name_len)
+  if nm == "Option" { return 1 }
+  if nm == "Result" { return 2 }
+  0
+}
+## The variant of enum `st` whose name is `nm`.
+ib_variant_named := fn(bp : ptr(mut IbB), st : IbSt, nm : str) -> Option(ptr(mut FieldDecl)) {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        if str_at((bv.src + fd.ns), fd.nl) == nm { return Option(ptr(mut FieldDecl)).Some(fq) }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  Option(ptr(mut FieldDecl)).None
+}
+## The discriminant of variant `vq` of enum `st`.
+ib_variant_disc := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl)) -> Option(i64) {
+  bv : IbB = deref(bp)
+  fd := deref(ast::fld_p(vq))
+  lower_layout::variant_disc(bv.decls, bv.src, st.s, st.n, fd.ns, fd.nl, a)
+}
+ib_bx_try := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), inner : ptr(Expr)) -> Option(VRegId) {
+  k := ib_ty(bp, e)?
+  bv : IbB = deref(bp)
+  if bv.rn == 0 { return ib_no(bp, e, NyWhy.NwOutside) }
+  sto : Option(IbSt) = ib_agg_type_of(bp, a, inner)
+  rto : Option(IbSt) = ib_enum_named(bp, a, bv.rs, bv.rn)
+  match sto {
+    Some(st) => {
+      match rto {
+        Some(rt) => { return ib_bx_try_on(bp, a, e, inner, st, rt, k) }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  ib_no(bp, e, NyWhy.NwOutside)
+}
+ib_bx_try_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), inner : ptr(Expr), st : IbSt, rt : IbSt, k : IbKS) -> Option(VRegId) {
+  if not ib_st_is_enum(bp, st) { return ib_no(bp, e, NyWhy.NwOutside) }
+  tk := ib_try_kind(bp, st)
+  if tk == 0 or ib_try_kind(bp, rt) != tk { return ib_no(bp, e, NyWhy.NwOutside) }
+  mut sn : str = "Some"
+  mut fnm : str = "None"
+  if tk == 2 { sn = "Ok"; fnm = "Err" }
+  so : Option(ptr(mut FieldDecl)) = ib_variant_named(bp, st, sn)
+  fo : Option(ptr(mut FieldDecl)) = ib_variant_named(bp, st, fnm)
+  ro : Option(ptr(mut FieldDecl)) = ib_variant_named(bp, rt, fnm)
+  match so {
+    Some(sq) => {
+      match fo {
+        Some(fq) => {
+          match ro {
+            Some(rq) => { return ib_bx_try_build(bp, a, e, inner, st, rt, tk, k, sq, fq, rq) }
+            None => {}
+          }
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  ib_no(bp, e, NyWhy.NwOutside)
+}
+ib_bx_try_build := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), inner : ptr(Expr), st : IbSt, rt : IbSt, tk : u8, k : IbKS, sq : ptr(mut FieldDecl), fq : ptr(mut FieldDecl), rq : ptr(mut FieldDecl)) -> Option(VRegId) {
+  so : Option(i64) = ib_variant_disc(bp, a, st, sq)
+  ro : Option(i64) = ib_variant_disc(bp, a, rt, rq)
+  mut sidx : i64 = 0
+  mut ridx : i64 = 0
+  match so { Some(x) => { sidx = x }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
+  match ro { Some(x) => { ridx = x }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
+  ## The success payload is the value of `x?`: sema's type of it must be the component's.
+  pko : Option(IbKS) = ib_variant_comp(bp, a, st, sq, 0)
+  match pko { Some(pk) => { if not ib_ks_eq(pk, k) { return ib_no(bp, e, NyWhy.NwDisagree) } }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
+  ## A `Result`'s error passes through unconverted only when both error components are one type.
+  mut ek : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+  if tk == 2 {
+    eko : Option(IbKS) = ib_variant_comp(bp, a, st, fq, 0)
+    rko : Option(IbKS) = ib_variant_comp(bp, a, rt, rq, 0)
+    match eko { Some(x) => { ek = x }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
+    match rko { Some(x) => { if not ib_ks_eq(ek, x) { return ib_no(bp, e, NyWhy.NwOutside) } }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
+  }
+  o := ib_agg(bp, a, inner, st)?
+  base := o_frame(o.fr)
+  tag := ib_load_at(bp, a, base, ib_tag_fld())
+  c := ib_eq_const(bp, a, tag, sidx)
+  ib_open_if(bp, a, c)
+  ib_plain(bp, a, Op.OpElse)
+  rf := ib_new_obj(bp, a, rt)
+  ib_zero_obj(bp, a, rf, rt.size)
+  tv := ib_konst(bp, a, ib_ks_i64(Sgn.SgS), ridx)
+  ib_store_field(bp, a, rf, ib_tag_fld(), tv)
+  if tk == 2 {
+    base2 := o_frame(o.fr)
+    ev := ib_load_at(bp, a, base2, ib_comp_fld(0, ek))
+    ib_store_field(bp, a, rf, ib_comp_fld(0, ek), ev)
+  }
+  av := ib_addr_obj(bp, a, rf)
+  oav := o_vreg(av)
+  ri := e_ret(ib_b_f(bp), a, oav)
+  ib_plain(bp, a, Op.OpEnd)
+  ib_b_set_term(bp, false)
+  base3 := o_frame(o.fr)
+  v := ib_load_at(bp, a, base3, ib_comp_fld(0, k))
+  Option(VRegId).Some(v)
+}
+
 ## ── places (slice 3b, `docs/ir-slice-3.md` §6) ──
 ##
 ## A field is read or written at a PLACE: a base address — a struct local's frame object, or a `ptr`
@@ -3158,8 +3287,9 @@ ib_scan_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
     Expr::ArrayLit(nel, eh) => { ib_scan_args(bp, a, eh) }
     Expr::Match(scr, arms) => { ib_scan_expr(bp, a, scr); ib_scan_arms(bp, a, arms) }
     Expr::EnumLit(es, el, vs, vl, np, ph) => { ib_scan_args(bp, a, ph) }
+    Expr::Try(tp) => { ib_scan_expr(bp, a, tp) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit
-      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef => {}
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef => {}
   }
 }
 
