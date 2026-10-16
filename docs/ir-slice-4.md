@@ -81,9 +81,8 @@ higher registers undefined, which no arm of that variant reads.
 - **Arguments.** The address of a fresh literal's object, else of a fresh copy (§3.7).
 - **Results.** `ret_words` is the enum's word count (at most eight); the aarch64 and riscv64 selectors
   return and receive x0..x7 / a0..a7 (their struct path, which stays at two words for structs). wasm
-  keeps a legacy emission for a function that returns an enum or receives one (its selector refuses
-  `ret_words` and a frame-object call destination, as for structs), so its address convention is not
-  needed yet; x86-ir (dev) keeps its two-word limit.
+  kept a legacy emission for a function that returns an enum or receives one until 4c gave it the
+  address convention (§3); x86-ir (dev) keeps its two-word limit.
 - **Instance spans.** A parameter's or result's type span may cover only its head token (`Option` of
   `Option(u64)`); `ib_type_span_full` widens it to the whole `( … )` group, so a generic enum in a
   signature is laid out by its instance.
@@ -97,3 +96,36 @@ higher registers undefined, which no arm of that variant reads.
 from a trap (run/133) to the x86_64 value — `return_enum_lit_multiword` 42, `enum_match_call_scrut` 50,
 `nullary_enum_return` 42, `signedness_shadow_records` 42 — plus the new fixture's 4 rows. No x86_64 or
 wasm row moves.
+
+## 3. 4c — `?` (as built)
+
+`x?` on an `Option` or a `Result` (Control Flow §8.2) is a `match` with an early return: the operand's
+value in its own object (a call's result, a local, a parameter), its tag loaded and compared with the
+success variant's discriminant; on success the value of `x?` is the payload component, loaded at sema's
+type of the expression; on failure the function returns a fresh object of its OWN result type holding
+the failure variant — `None`, or `Err` with the operand's error component copied.
+
+- **Variants by declaration.** The success and failure variants are the `Option` / `Result`
+  declaration's own (`Some`/`None`, `Ok`/`Err`), resolved to discriminants by `variant_disc`; nothing is
+  read off the operand's spelling.
+- **No conversion.** 4c builds the forms that need none: an `Option` operand in a function returning an
+  `Option`, a `Result` operand in a function returning a `Result` whose error component is the same
+  kernel type. A declared `OutErr` conversion, a user tryable (`from_failure`), an aggregate payload or
+  error, and a mismatch of the two kinds are `NotYet`.
+- **wasm aggregate results.** 4c also gives wasm the result convention 4b left out, measured from its
+  legacy emitter: a function returns the ADDRESS of a block in linear memory holding the words, and the
+  caller copies them out. An IR-built function returns its frame object's address — valid after the
+  return because 3w never reclaims the shadow stack, exactly as the legacy blocks are never reclaimed (a
+  step that reclaims frames must copy the result out first) — and a call with a frame-object destination
+  copies the words from the returned address (`sw_agg_res`). This covers struct results (slice 3d) as
+  well as enum results, so `?`, enum results and struct results are selected on all three twins.
+
+### 3.1 Measured (omen, before the gate)
+
+`corpus_manifest --check` against `main` (4b landed): 10 rows move from a trap to the x86_64 value —
+`try_option_some_after` on aarch64/riscv64 (run/133 → 42) and on wasm, and on wasm (run/134 →)
+`signedness_shadow_records` 42, `nullary_enum_return` 42, `enum_match_call_scrut` 50,
+`fmt_call_field` 42, `fmt_call_method` 42, `return_enum_lit_multiword` 42, `fmt_try` 42. Five wasm
+package rows keep `assemble/1` with a different detail (the missing `$main` they already reported), three
+keep their wasm trap with different captured output, and the new fixture adds four rows (42 everywhere).
+No x86_64 row moves.

@@ -563,13 +563,34 @@ sw_mem := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst), copy : b
   }
   true
 }
+## Slice 4c: the words of a call's aggregate result — at the address the callee returned (on the stack)
+## — copied into the frame object that receives it.
+sw_agg_res := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool {
+  nb := ir::frame_bytes(x.f, usize(ir::i_dv(ip)))
+  if nb == 0 or nb > 512 or nb % 8 != 0 { return false }
+  sw_set(sb, x.s0)
+  mut o : usize = 0
+  while o < nb {
+    if not sw_addr32(sb, x, ir::i_dk(ip), ir::i_dv(ip), i64(o)) { return false }
+    sw_get(sb, x.s0)
+    if o != 0 {
+      sw_const(sb, i64(o))
+      sw_op(sb, "i64.add")
+    }
+    sw_op(sb, "i32.wrap_i64")
+    sw_op(sb, "i64.load")
+    sw_op(sb, "i64.store")
+    o = o + 8
+  }
+  true
+}
 ## A direct call: the arguments pushed in order, `call $<name>`, the result canonicalized from the
 ## destination's type (or dropped when the callee answers one nobody reads).
 sw_call := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool {
-  ## Slice 3d: a call whose aggregate result lands in a frame object. wasm has no convention for it yet
-  ## (its legacy emitter returns a block's address), and dropping the receiving object would read zeros:
-  ## a silent wrong value (measured on test/ir_agg_ret.al before this refusal). The caller stays legacy.
-  if ir::opndk_is_frame(ir::i_dk(ip)) { return false }
+  ## Slice 4c: a call whose aggregate result lands in a frame object. wasm's convention (its legacy
+  ## emitter's, measured) returns the ADDRESS of a block in linear memory holding the words; the words
+  ## are copied from there into the receiving object (`sw_agg_res`).
+  fdst := ir::opndk_is_frame(ir::i_dk(ip))
   cdo : Option(Decl) = sw_sym_decl(x, ip)
   match cdo {
     Some(cd) => {
@@ -584,6 +605,7 @@ sw_call := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool
       sw_put(sb, "    call $")
       sw_put(sb, cname)
       sw_put(sb, "\n")
+      if fdst { return sw_agg_res(sb, x, ip) }
       dv : Option(usize) = sw_dst(ip)
       mut ok := true
       match dv {
@@ -749,9 +771,10 @@ sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> 
     fk = fk + 1
   }
   ftot = (ftot + 7) / 8 * 8
-  ## Slice 3d: an aggregate result returns its words in registers on the register targets; wasm has no
-  ## convention for it yet (its legacy emitter returns a block's address), so such a function stays legacy.
-  if ir::fn_ret_words(x.f) != 0 { return false }
+  ## Slice 4c: an aggregate result is returned as the ADDRESS of its frame object — wasm's convention
+  ## (its legacy emitter returns a bump-allocated block's address). The object stays valid after the
+  ## return because the shadow stack is never reclaimed (3w step 1, as the legacy blocks are not); a
+  ## step that reclaims frames must copy the result out first.
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   fname := str_at((x.src + d.name_start), d.name_len)
