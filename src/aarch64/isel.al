@@ -522,23 +522,38 @@ sa_call := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool
     None => { false }
   }
 }
-## Slice 3d: the words of a call's aggregate result — x0, then x1 for a two-word value — into the
-## frame object that receives it (the legacy emitters' convention for a struct of up to two words).
+## Slice 3d: the words of a call's aggregate result — x0, x1, … — into the frame object that receives
+## it: the legacy emitters' convention for a struct of up to two words and (slice 4b) an enum of up to
+## eight, tag first.
 sa_agg_res := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
   nb := ir::frame_bytes(x.f, usize(ir::i_dv(ip)))
-  if nb != 8 and nb != 16 { return false }
+  if nb == 0 or nb > 64 or nb % 8 != 0 { return false }
   if not sa_base(sb, x, "x9", ir::i_dk(ip), ir::i_dv(ip)) { return false }
-  sa_put(sb, "  str x0, [x9]\n")
-  if nb == 16 { sa_put(sb, "  str x1, [x9, #8]\n") }
+  mut k : usize = 0
+  while k * 8 < nb {
+    sa_put(sb, "  str x")
+    sa_u(sb, k)
+    sa_put(sb, ", [x9, #")
+    sa_u(sb, k * 8)
+    sa_put(sb, "]\n")
+    k = k + 1
+  }
   true
 }
-## Slice 3d: `ret %p` of an aggregate result — its words, read through the address, into x0 (and x1).
+## Slice 3d: `ret %p` of an aggregate result — its words, read through the address, into x0, x1, ….
 sa_agg_ret := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
   w := ir::fn_ret_words(x.f)
-  if w != 1 and w != 2 { return false }
+  if w == 0 or w > 8 { return false }
   if not sa_base(sb, x, "x9", ir::i_ak(ip), ir::i_av(ip)) { return false }
-  sa_put(sb, "  ldr x0, [x9]\n")
-  if w == 2 { sa_put(sb, "  ldr x1, [x9, #8]\n") }
+  mut k : usize = 0
+  while k < w {
+    sa_put(sb, "  ldr x")
+    sa_u(sb, k)
+    sa_put(sb, ", [x9, #")
+    sa_u(sb, k * 8)
+    sa_put(sb, "]\n")
+    k = k + 1
+  }
   true
 }
 ## `%d = bswap T %a` (slice 3e, `@endian(big)`): the low `T`-width bytes reversed (`rev`/`rev16`; one

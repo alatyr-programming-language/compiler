@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64 and riscv64 pass and return enums across IR-built functions (IR slice 4b).** An enum
+  parameter is the address of the caller's copy and an enum result comes back in up to eight result
+  registers, tag first — the conventions the legacy emitters already use — so IR-built and legacy
+  functions exchange enums in both directions. `return_enum_lit_multiword`, `enum_match_call_scrut`,
+  `nullary_enum_return` and `signedness_shadow_records` now answer what x86_64 answers there. x86_64
+  and wasm output are unchanged.
+
 - **aarch64, riscv64 and wasm build `match` and enum locals through the shared IR (IR slice 4a).** A
   `match` over an integer or `bool` — literal arms, `_`, and range arms `lo..hi` / `lo..=hi`, which
   trapped on all three (#821) — and over an enum local is built from the IR,

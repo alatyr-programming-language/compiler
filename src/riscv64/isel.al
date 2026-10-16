@@ -476,22 +476,37 @@ sr_bswap := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
   if not sr_canon(sb, "t2", "t1", ty, ir::i_sg(ip)) { return false }
   sr_st2(sb, ip)
 }
-## Slice 3d: a call's aggregate result — a0, then a1 for a two-word value — into its frame object.
+## Slice 3d: a call's aggregate result — a0, a1, … — into its frame object (a struct of up to two
+## words; slice 4b, an enum of up to eight, tag first).
 sr_agg_res := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
   nb := ir::frame_bytes(x.f, usize(ir::i_dv(ip)))
-  if nb != 8 and nb != 16 { return false }
+  if nb == 0 or nb > 64 or nb % 8 != 0 { return false }
   if not sr_base(sb, x, "t0", ir::i_dk(ip), ir::i_dv(ip)) { return false }
-  sr_put(sb, "  sd a0, 0(t0)\n")
-  if nb == 16 { sr_put(sb, "  sd a1, 8(t0)\n") }
+  mut k : usize = 0
+  while k * 8 < nb {
+    sr_put(sb, "  sd a")
+    sr_u(sb, k)
+    sr_put(sb, ", ")
+    sr_u(sb, k * 8)
+    sr_put(sb, "(t0)\n")
+    k = k + 1
+  }
   true
 }
-## Slice 3d: `ret %p` of an aggregate result — its words, read through the address, into a0 (and a1).
+## Slice 3d: `ret %p` of an aggregate result — its words, read through the address, into a0, a1, ….
 sr_agg_ret := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
   w := ir::fn_ret_words(x.f)
-  if w != 1 and w != 2 { return false }
+  if w == 0 or w > 8 { return false }
   if not sr_base(sb, x, "t0", ir::i_ak(ip), ir::i_av(ip)) { return false }
-  sr_put(sb, "  ld a0, 0(t0)\n")
-  if w == 2 { sr_put(sb, "  ld a1, 8(t0)\n") }
+  mut k : usize = 0
+  while k < w {
+    sr_put(sb, "  ld a")
+    sr_u(sb, k)
+    sr_put(sb, ", ")
+    sr_u(sb, k * 8)
+    sr_put(sb, "(t0)\n")
+    k = k + 1
+  }
   true
 }
 sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
