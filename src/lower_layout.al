@@ -4481,6 +4481,29 @@ _attr_decimal := fn(src : ptr(u8), sp : LSpan) -> i64 {
   i64(val)
 }
 
+## Does struct `[s, s+n)` carry a field-level layout lever — `@offset`, `@align` or `@endian` on any
+## field — or a struct-level `@align`? The legacy twin emitters reproduce a plain `@packed` image across a
+## by-value boundary but not these levers (#710's parameter half, `packed_attr_param`), so their ABI
+## fence traps on such a struct.
+pub struct_has_layout_lever := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  if struct_align_attr(decls, src, s, n) >= 1 { return true }
+  di := struct_decl_of(decls, src, s, n)
+  if di < 0 { return false }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if field_offset_attr(src, fd.ns) >= 0 or field_align_attr(src, fd.ns) >= 0 or field_endian_attr(src, fd.ns) >= 0 { return true }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+
 ## §8 `@offset(N)` — the explicit-byte-offset lever (spec Types §8; MMIO / register maps). The field
 ## whose NAME starts at source index `ns` carries an explicit offset iff its prefix chain includes
 ## `@offset(N)` (N decimal); found via `_field_attr_arg` so it is seen EVEN behind another attribute
