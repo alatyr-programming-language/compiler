@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64, riscv64 and wasm build structs with struct and enum fields through the shared IR (IR slice
+  3n).** A field of a struct or enum type is a sub-object at the field's place: nested literals are built
+  in place, `o.inner.x` reads and writes one place deeper, and `match o.c` matches an enum field. 30
+  corpus programs that trapped on a twin now answer what x86_64 answers there. x86_64 output is unchanged.
+
 - **aarch64, riscv64 and wasm build `?` through the shared IR, and wasm returns structs and enums from
   IR-built functions (IR slice 4c).** `x?` on an `Option` or a `Result` returns the failure in the
   function's own result type (no conversion needed) and otherwise yields the payload. wasm now returns

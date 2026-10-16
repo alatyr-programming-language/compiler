@@ -129,3 +129,40 @@ the failure variant — `None`, or `Err` with the operand's error component copi
 package rows keep `assemble/1` with a different detail (the missing `$main` they already reported), three
 keep their wasm trap with different captured output, and the new fixture adds four rows (42 everywhere).
 No x86_64 row moves.
+
+## 4. 3n — nested aggregate fields (slice 3's residue, as built)
+
+After 4b, the corpus's largest single `NotYet` was a struct literal with a field of a struct or enum
+type (`Outer(inner = Inner(…))`, 119 of 192 refused struct literals, measured on the census lines). It
+is slice 3's construct, built now because 4a gives enums a layout to nest.
+
+- **Sub-objects.** A field whose type is a struct or enum the builder lays out (`ib_agg_named`) is a
+  sub-object at the field's byte place (`lower_layout::field_byte_place` — the one answer every tier
+  gives, nested widths included). A `@packed` struct holding one stays `NotYet`.
+- **Literals.** A nested struct or enum literal is built in place, into the enclosing object at the
+  field's offset (`ib_agg_lit_into`, `ib_enum_lit_into`); any other value for the field is built or found
+  first and copied in. The outermost object is zeroed first (`ib_struct_padded` counts a nested field as
+  padding), so no byte is undefined.
+- **Places.** `o.inner` is a place one level deeper: the same base, offset by the field's place
+  (`IbPlace.off`). `o.inner.x` loads and `o.inner.x = v` stores there; `o.inner = v` and a whole read of
+  `o.inner` (an argument, a `match` scrutinee, a copy) move its bytes. A value is built in its own object
+  before it is copied in, so a literal that reads `o` sees its old fields (#909, and #951's nested form).
+- **No crossing.** A struct holding a sub-object is not WORD tier (`ib_struct_scalar_fields`), so it is
+  never a parameter, an argument, a result, or a place through a pointer: the sub-object layout stays
+  inside one function, and the legacy emitters' nested layouts are never relied on (Q4).
+
+### 4.1 Measured (omen, before the gate)
+
+`corpus_manifest --check` against `main` (4c landed): 32 rows move, every one from a trap to the x86_64
+value except two — 11 on aarch64, 11 on riscv64, 10 on wasm (`struct_enum_field`,
+`struct_enum_field_mutate`, `field_agg_extract`, `deep_field_agg_write`, `nested_field_assign`,
+`wasm_nested_field`, `wasm_nested_field_write`, `issue448_enum_local_match_loud`,
+`issue449_enum_field_control`, `issue693_enum_in_struct_field_control` 61, `struct_enum_value_match`,
+…). The two exceptions are `deep_field_agg_enum_reject` and `deep_field_agg_var_reject`: valid programs
+x86_64 refuses loudly for a lowering limit of its own (their headers say so), which the IR now builds
+to the program's value, 42 — they stay ACCEPTS disagreements, the class slice 9 closes. Four wasm rows
+keep their trap with different captured output. `xbackend_diff`: paths 921 → 910, rows 2537 → 2511.
+
+Found while measuring: x86_64 stores nothing for a struct literal's enum field initialized from another
+struct's enum field (`Q(c = q.c)`, #958, the constructor-side sibling of #465); the IR builds it right.
+The fixture names the variant directly until #958 lands.
