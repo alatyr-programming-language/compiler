@@ -4262,8 +4262,16 @@ a64_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : Option(ptr(mu
   bl := cmp_operand_bitcast_kind(l, src)
   br := cmp_operand_bitcast_kind(r, src)
   if bl == 1 or br == 1 { return false }
-  ul := bl == 2 or a64_operand_unsigned(l, params_head, body_head, src, a)
-  ur := br == 2 or a64_operand_unsigned(r, params_head, body_head, src, a)
+  if bl == 2 or br == 2 { return true }
+  ## #966 — then sema's RECORD of the pair, exactly where x86_64's `is_unsigned_cmp` asks it. The shape
+  ## query below proves nothing about an `Unchecked` node, so `1 > unchecked(u64 - u64)` took the signed
+  ## default and read a value above 2^63 as negative — a silent wrong value on all three twins. The shape
+  ## query stays the fallback for a node no record answers (the twins do not push x86's record contexts).
+  sg := lower_layout::ir_pair_sg_soft(l, r, src)
+  if ir::vs_unsigned(sg) { return true }
+  if ir::vs_signed(sg) { return false }
+  ul := a64_operand_unsigned(l, params_head, body_head, src, a)
+  ur := a64_operand_unsigned(r, params_head, body_head, src, a)
   if ul and ur { return true }
   if ul and ex_is_num_lit(r) { return true }
   if ur and ex_is_num_lit(l) { return true }

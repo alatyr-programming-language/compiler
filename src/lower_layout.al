@@ -36,6 +36,9 @@ pub ir_arith_signed := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : pt
 ## #964 — the twins' entry point: the same record, `VsNotInt` where no record answers instead of the e3
 ## stop (see `ir::arith_sg_soft`). The caller keeps its shape verdict there.
 pub ir_arith_sg_soft := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> ir::ValSg { ir::arith_sg_soft(be, l, r, src) }
+## #966 — the twins' comparison signedness: the same pair record x86_64's `is_unsigned_cmp` ends with,
+## `VsNotInt` where no record answers (see `ir::pair_sg_soft`). The caller keeps its shape verdict there.
+pub ir_pair_sg_soft := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> ir::ValSg { ir::pair_sg_soft(l, r, src) }
 ## docs/ir-slice-1.md §8.4 (e4) — the record context the x86 emitter keeps while it emits (`ir::rec_*`),
 ## and the census row of the records it can read at a signedness decision (`ir::sign_rec_row`).
 pub ir_sign_rec_row := fn(op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) { ir::sign_rec_row(op, l, r, src) }
