@@ -877,6 +877,16 @@ check_ir_build() {
   if [ "$rc" = 0 ] && grep -q '^fn wasm_struct_param::sum Built$' "$rep" && grep -q '^fn wasm_struct_param::main Built$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
     echo "ok   ir wasm_struct_param: a struct parameter and a struct argument build (slice 3d step 1)"
   else echo "FAIL ir wasm_struct_param: rc=$rc"; fail=1; fi
+  ## #973: an `if` in value position gives its own recorded type to its branches, so a bare literal
+  ## branch no longer refuses. This asserts the function is BUILT, not merely that it runs: the wrong
+  ## value lived in the FALLBACK, so a row that only checked the exit code would pass again the moment
+  ## the gap reopened on a backend whose legacy path happens to answer right.
+  "$CC" ir "$E2E_TEST/issue973_if_branch_context.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^fn issue973_if_branch_context::g13 Built$' "$rep" \
+     && grep -q '^fn issue973_if_branch_context::g17 Built$' "$rep" \
+     && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir issue973_if_branch_context: the if-in-argument function builds through the IR (no fallback)"
+  else echo "FAIL ir issue973_if_branch_context: rc=$rc"; grep -E 'NotYet|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
 }
 
 check_ir_dev_verb() {
@@ -11894,6 +11904,16 @@ run issue966_unchecked_cmp_unsigned 42
 run issue966_unchecked_div_signed 42
 run issue966_nested_agg_arg_wasm 11
 run issue966_enum_payload_literal_ctx 2
+
+## #973 — the same fallback, through a gap #966 did not close. `ib_bx_if` built each branch of an
+## `if`-in-value-position with `ib_bx`, which asks the expression its OWN type; the bare literal branch
+## `else { 1000 }` has none (`VcLit`), so the branch refused, `g13` was refused as `sema-gap literal`
+## at that `1000`, and the function fell back to a legacy emitter — where aarch64 and riscv64 built the
+## aggregate literal in argument position into the SAME frame slot as the nested call's own aggregate and
+## delivered `p15.k3` where 1 was due. NON-VACUOUS: before the fix those two twins answer **3 where 2
+## is due**, x86_64 and wasm answer 2. Progen seed 2074800535, reduced by the nightly reducer and then
+## by machine; hand-narrowing does not reproduce it — the shape needs the whole set of temporaries.
+run issue973_if_branch_context 2
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
