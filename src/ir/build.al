@@ -650,9 +650,17 @@ ib_lit_fold := fn(e : ptr(Expr)) -> Option(i64) {
         None => { Option(i64).None }
       }
     }
+    ## `unchecked` does not change the VALUE, only the guard around it — the same reading sema's shape
+    ## rule takes (`sema_vty_shape`: `Unchecked(inner) => child(inner)`) and `sema_vty_push` follows.
+    ## Without this arm a literal-only expression inside `unchecked` never folds: in a struct-literal
+    ## field position (`S(k1 = unchecked (10 | 0))`) the fold returned None, the walk descended into the
+    ## block and asked each `Num` its OWN type — which is `VcLit`, no context having reached it — and the
+    ## function was refused as `sema-gap literal` and fell back to the legacy emitter, which carries its
+    ## own silent wrong value (#967; progen seeds 2074802946 and 2074803225, #966).
+    Expr::Unchecked(inner) => { ib_lit_fold(inner) }
     Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf
       | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
-      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Call | Expr::Bitcast | Expr::Loop => { Option(i64).None }
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Call | Expr::Bitcast | Expr::Loop => { Option(i64).None }
   }
 }
 ## The bit pattern of a SOURCE literal above `i64`'s range: a `Num` whose word is negative and whose
@@ -691,7 +699,15 @@ ib_lit_step := fn(b : AstBin, x : i64, y : i64) -> Option(i64) {
       if x > IB_MUL_SAFE or x < 0 - IB_MUL_SAFE or y > IB_MUL_SAFE or y < 0 - IB_MUL_SAFE { return Option(i64).None }
       Option(i64).Some(x * y)
     }
-    BDiv | BRem | BBand | BBor | BBxor | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { Option(i64).None }
+    ## Bitwise over two constants is EXACT in i64 — no overflow is possible, so no guard is needed and
+    ## the folded value is the value the operation produces at any width (`ib_canon` maps it to the
+    ## position's width afterwards, and `~x` = `x ^ -1` relies on exactly this). They were not folded, so
+    ## `unchecked (10 | 0)` in a struct-literal field never folded and the function fell back to legacy
+    ## (#966 pg5; see `ib_lit_fold`'s `Unchecked` arm).
+    BBand => { Option(i64).Some(x & y) }
+    BBor => { Option(i64).Some(x | y) }
+    BBxor => { Option(i64).Some(x ^ y) }
+    BDiv | BRem | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { Option(i64).None }
   }
 }
 ## The folded value `v` of the literal-only expression `e` as a constant of sema's type for `e`. In a
