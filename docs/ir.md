@@ -796,7 +796,13 @@ for the same functions.
   (`00-overview.md` §4). x86 `div` traps on zero; aarch64 answers 0; riscv64 answers all-ones.
   Either (a) keep `hw` semantics and declare the four `unchecked_*div*` paths per backend
   (`run_a64`/`run_rv64` rows), or (b) define one result in the spec. The IR supports either; (a) needs
-  no spec change.
+  no spec change. *Decided as (a), and landed — recorded from the tree rather than asked again, because
+  re-asking a decided question is how a lane stalls: `scripts/xbackend_diff.sh` carries the four paths
+  in `HW_DEFINED` (`unchecked_div_zero`, `unchecked_udiv_zero`, `unchecked_rem_zero`,
+  `unchecked_div_min_neg1`), each registered per backend in `scripts/e2e.sh` with its own hardware
+  answer (x86_64 traps 136, aarch64 answers 0/41, riscv64 41/42), and the exemption is scoped to the
+  MISSING-TRAP shape only. The four paths are counted on the headline line as `hw-defined=8` and are
+  what #683 leaves standing when `rows=` reaches 0.*
 - **D2 — `match` with no arm taken.** The spec makes a non-exhaustive `match` a compile error
   (`60-control-flow.md` §5.1), so `default` is unreachable for a well-typed program. The IR lowers it to
   `trap match_no_arm`. Today x86 falls through (the observed `rc=255`, #544); any program that reaches
@@ -810,6 +816,10 @@ for the same functions.
   per-target in its instruction, but the numbers are data: a per-target table in the library (`when
   target.arch`), or a symbolic syscall name the selector maps? And on wasm: WASI imports for the few the
   library needs (`fd_write`, `memory.grow` for `mmap`), or a located refusal?
+  *Decided as the per-target table, and landed: `lib/std/sysno.al` is that table — one
+  `when target.arch == …` row per call and arch (owner decision D3, #786) — and `lib/std/os.al`
+  calls through it (`sys_mmap(std::sysno::MMAP, …)`), so no x86_64 number is baked into a call site.
+  wasm took the WASI half, per D4 below.*
 - **D4 — bodyless externs on wasm.** An `extern` the module cannot satisfy is a wasmtime `unknown import`
   at instantiation (LOUD-EXIT). Import from `env` and let the embedder fail (today), or refuse at compile
   time? *Decided (owner, 2026-10-14): refuse at compile time on wasm; see `docs/ir-slice-2.md` §4 Q2.
@@ -818,15 +828,29 @@ for the same functions.
   print verb and an x86-via-IR emit verb (next to `alatyr aarch64 <file>`), or an environment switch like
   `ALATYR_RA=0`. The spec's codegen purity ("no environment", `90-codegen.md` §3.1) argues for verbs.
   Are dev verbs acceptable CLI surface?
+  *Decided as verbs, and landed: `alatyr ir <file>` (the builder's answer) and `alatyr x86-ir <file>`
+  (the x86-via-IR differential) are CLI verbs, and `src/cli.al` states the rule at its verb table —
+  "a dev surface is a CLI verb listed here, never an env var" (#786). `ALATYR_RA=0` survives only as
+  the pre-existing OFF escape hatch of `lower.al`, not as the IR's dev surface.*
 - **D6 — where types come from.** This design has sema record the type it already synthesizes for every
   expression, and the builder resolve it to a kernel type through `lower_layout`. The alternative — a
   new type synthesis inside the builder — would be a fifth copy. Sema's `Ty` today is a tag plus a name
   span with a poison-tolerant "unknown"; the census will count the expressions sema leaves unknown, and
   each is a sema gap to close, never a default to pick (§3.8). Accept sema as the single source?
+  *Accepted (#786), and it is the rule the slices have built on since: the builder takes every value
+  type from sema (`docs/ir-slice-1.md` §6 Q2 is withdrawn by it, and the shape-based fallback there is
+  excluded), and each gap closed since — a required type's value type, an enum payload's context (#968),
+  a folded literal's context (#966) — was closed in sema's channel, never by the builder asking its own
+  shape query.*
 - **D7 — fallback granularity.** Function-level fallback in slice 1, statement barriers from slice 3.
   Alternatively barriers from the start (more coverage sooner, more coupling to legacy frame layouts).
+  *Accepted as proposed (#786) and followed: slice 1 falls back per function, and `docs/ir-slice-3.md`
+  §2 records the statement barriers as beginning only after the function-level PRs landed.*
 - **D8 — gating cadence.** Every slice carries intentional twin transitions, so every slice PR is gated
   alone and costs one oracle regeneration. Accept that cadence for the migration?
+  *Accepted, and it is the observed history: each slice landed as its own merge with its own ratchet
+  step — `4a` 930→928 paths / 2560→2555 rows, `4b` →2547, `4c` 928→921 / →2537, `3n` 921→910 /
+  →2511, `5a` 910→907 / →2502 — because a batched gate cannot say which slice moved a row.*
 
 ---
 

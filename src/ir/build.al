@@ -2860,12 +2860,28 @@ ib_place_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Opt
 }
 ## Is struct `st` in the WORD tier — every field one 8-byte word, the layout every emitter shares?
 ib_struct_word := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> bool {
+  wo : Option(Construct) = ib_struct_word_why(bp, a, st)
+  match wo { None => { true }; Some(wc) => { false } }
+}
+
+## Why the struct is NOT in the WORD tier, named — the shape `scripts/ir_census.sh` ranks (#683,
+## `docs/ir-slice-3.md` §12). `ib_struct_word` is its own predicate answer, so no caller changes; the
+## three refusals below were invisible under one `CSignature` label.
+ib_struct_word_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> Option(Construct) {
   bv : IbB = deref(bp)
   lk := lower_layout::layout_kind(bv.decls, bv.src, st.s, st.n, a)
-  if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return false }
-  ## An array field's place through a pointer is not proved against the legacy readers (Q4).
-  if not ib_struct_scalar_fields(bp, st) { return false }
-  not ib_struct_padded(bp, a, st)
+  ## A levered struct (`@packed`, or the byte tier `@offset`/`@endian` put it in) is laid out
+  ## byte-exactly for a LOCAL value only; every place through a pointer and every call crossing needs
+  ## the word layout the legacy readers share (Q4).
+  if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) {
+    return Option(Construct).Some(Construct.CSigParamLevered)
+  }
+  ## An array or nested-aggregate field: its place through a pointer is not proved against the legacy
+  ## readers (Q4).
+  if not ib_struct_scalar_fields(bp, st) { return Option(Construct).Some(Construct.CSigParamNestedField) }
+  ## Padding: the literal would leave bytes undefined, and the caller's words are not the callee's.
+  if ib_struct_padded(bp, a, st) { return Option(Construct).Some(Construct.CSigParamPadded) }
+  Option(Construct).None
 }
 
 ## `s.f = v` / `p.f = v` (FieldAssign): a `store` at the field's place, the value at its declared type.
@@ -4308,6 +4324,11 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
   d : Decl = deref(dp)
   why.span = u64(d.name_start)
   why.w = NyWhy.NwOutside
+  ## The fallback: a refusal that reached no shape below reports `CSignature`, so an unclassified
+  ## signature refusal shows up in the census as a row of its own instead of hiding inside a family.
+  ## Every refusal site in this function names its shape, so the census's `CSignature` count is the
+  ## measure of how much of the signature mass is still unexplained (it must stay 0).
+  why.c = Construct.CSignature
   if d.is_generic { why.c = Construct.CGeneric; return BuildOut.Refused }
   if d.is_fn and d.kind == lower_layout::DECL_KIND_SYSCALL { return ib_build_syscall(p, src, d, a, why) }
   if not d.is_fn or lower::extern_symbol(src, d.name_start, d.name_len).n != 0 { why.c = Construct.CBodyless; return BuildOut.Refused }
@@ -4324,7 +4345,7 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
   mut rwords : usize = 0
   if d.ret_tl != 0 and not has_ret {
     rwords = ib_agg_ret_words(decls, src, d.ret_ts, d.ret_tl, a)
-    if rwords == 0 { why.c = Construct.CSignature; return BuildOut.Refused }
+    if rwords == 0 { why.c = Construct.CSigResultWide; return BuildOut.Refused }
     has_ret = true
     rk = IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)
   }
@@ -4351,7 +4372,7 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
         pk : Option(IbKS) = ib_type_ks(decls, src, pm.ts, pm.tl)
         match pk {
           Some(kk) => {
-            if pm.pmode != 0 { why.c = Construct.CSignature; return BuildOut.Refused }
+            if pm.pmode != 0 { why.c = Construct.CSigParamMode; return BuildOut.Refused }
             pv := new_param(f, a, kk.ty, kk.sg)
             if ib_is_taken(bp, pm.ns, pm.nl) {
               if not ib_ks_word(kk) { why.c = Construct.EAddrOf; return BuildOut.Refused }
@@ -4372,12 +4393,16 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
             sto : Option(IbSt) = ib_agg_named(bp, a, pm.ts, pm.tl)
             match sto {
               Some(st) => {
-                if pm.pmode != 0 or ib_is_taken(bp, pm.ns, pm.nl) { why.c = Construct.CSignature; return BuildOut.Refused }
-                if not ib_st_is_enum(bp, st) and not ib_struct_word(bp, a, st) { why.c = Construct.CSignature; return BuildOut.Refused }
+                if pm.pmode != 0 { why.c = Construct.CSigParamMode; return BuildOut.Refused }
+                if ib_is_taken(bp, pm.ns, pm.nl) { why.c = Construct.CSigParamTaken; return BuildOut.Refused }
+                if not ib_st_is_enum(bp, st) {
+                  wo : Option(Construct) = ib_struct_word_why(bp, a, st)
+                  match wo { Some(wc) => { why.c = wc; return BuildOut.Refused }; None => {} }
+                }
                 rv := new_param(f, a, Kty.KPtr, Sgn.SgNone)
                 ib_bind_ref(bp, a, pm.ns, pm.nl, rv, st)
               }
-              None => { why.c = Construct.CSignature; return BuildOut.Refused }
+              None => { why.c = Construct.CSigParamUnresolved; return BuildOut.Refused }
             }
           }
         }
@@ -4420,7 +4445,10 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
 ## a caller — IR-built or legacy — calls the trampoline's label like any function. Every parameter and
 ## the result must be a one-word kernel scalar; a result the builder cannot build (`Never`) refuses.
 ib_build_syscall := fn(p : IrProg, src : ptr(u8), d : Decl, in out a : rt::Arena, in out why : BuildWhy) -> BuildOut {
-  why.c = Construct.CSignature
+  ## Every refusal below is the syscall's SIGNATURE (a parameter or result that is not a one-word
+  ## kernel scalar, a mode, or a non-integer call number) — named as its own class so the census does
+  ## not fold it into the aggregate-signature mass.
+  why.c = Construct.CSigSyscall
   mut has_ret := false
   mut rk := IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
   if d.ret_tl != 0 {
