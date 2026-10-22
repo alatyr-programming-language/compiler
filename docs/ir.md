@@ -63,20 +63,25 @@ observable lowering matches the rules". This document designs that IR.
 
 ## 2. Measurement
 
-### 2.1 Disagreements by class (`scripts/xbackend_diff.sh --count`, manifest of 2 186 sources)
+### 2.1 Disagreements by class (`scripts/xbackend_diff.sh --count`, manifest of 2 325 sources)
 
 ```
-xbackend diff: paths=958 rows=2656 sources=2186
+xbackend diff: paths=905 rows=2498 sources=2325 hw-defined=8
   class           paths   rows   aarch64 riscv64    wasm
-  WRONG-VALUE        10     24         8       7       9
-  MISSING-TRAP        7     14         7       7       0
-  CRASH               4      5         2       3       0
-  LOUD-EXIT           7     10         0       0      10
-  TRAP              757   1849       572     585     692
-  ASSEMBLE           84    141        29      29      83
-  LINK                4    380       190     190       0
-  ACCEPTS            85    233        74      78      81
+  LOUD-EXIT           3      3         0       0       3
+  TRAP              801   2181       715     728     738
+  ASSEMBLE           17     74        29      29      16
+  LINK                0      6         3       3       0
+  ACCEPTS            84    234        75      79      80
+  HW-DEFINED          4      8         4       4       0
 ```
+
+**There is no WRONG-VALUE row and no MISSING-TRAP or CRASH row: the classes are empty.** No path in the
+corpus answers a different value on a twin than on x86_64, no path fails to trap where x86_64 traps, and
+no twin dies on a foreign signal. What remains is the fail-loud mass (TRAP 801 paths) plus the classes
+below. The table below §2.2 and the capability matrix of §2.3 were measured on an earlier, smaller
+manifest (paths=958 rows=2656 sources=2186) and are kept as the design's starting evidence; the classes
+they list as WRONG, MISSING-TRAP and CRASH have since closed one by one.
 
 ### 2.2 TRAP rows by the feature the twin is missing
 
@@ -114,11 +119,15 @@ The non-TRAP classes, by cause:
   "$main"`) + overloads and operator functions the twins do not mangle (`symbol already defined`,
   labels like `f__+:`, #475) + the `movq` intrinsic spelled as an x86 mnemonic on the twins + two
   wasm type mismatches.
-- **WRONG-VALUE 24**: `@endian` / `@offset` / `@packed` ignored (#709, #710: `endian_struct`,
-  `endian_offset_struct`, `packed_attr_param`, `fmt_agg_body_comment`); signedness of an array element
-  (#707: `signedness_global_array`, `signedness_struct_field_array`); an unnarrowed narrow shift
-  (`unchecked_narrow_shift_wrap`); wasm's `Slice(T)` field compare; wasm's comptime-match template
-  (#712); `when_guard_binding` (aarch64's 100 is correct there, the fixture selects it).
+- **WRONG-VALUE 0** (this family was 24 rows): every path that once answered a different value on a twin
+  now agrees with x86_64 or traps. `endian_struct`, `endian_offset_struct`, `fmt_agg_body_comment` (#709),
+  `signedness_global_array`, `signedness_struct_field_array` (#707), `unchecked_narrow_shift_wrap` and
+  `when_guard_binding` answer x86's value today, having closed in the merges since this snapshot. The last
+  four closed at `0461d3b`: wasm's comptime-match template now answers x86's 7 (#712), and
+  `packed_attr_param` (#710, all three twins), wasm's `slice_field_compare` (#916) and wasm's
+  `issue826_option_ptr_global_struct_field` (#869) trap where they used to answer 1 or 100. A levered
+  struct is still read at its unlevered offsets in shapes the fence does not cover — the fence sits at the
+  by-value boundary, and the layout itself belongs to the shared IR (slice 3).
 - **MISSING-TRAP 14**: the narrow *checked* guard exists on x86 only (`checked_index_overflow`,
   `checked_index_bind_ovf`, `checked_narrow_shift_oob`), and four `unchecked` division shapes whose
   result is hardware-defined (§8, decision D1).
@@ -144,7 +153,7 @@ Read from the code and cross-checked against the TRAP sites above. **S** support
 | comparisons, signedness | S | P | P | P | three different "unknown" defaults (#766) |
 | `and` / `or` short-circuit | S | **W** | **W** | **W** | both sides always evaluated — #777, found while measuring |
 | floats | P | P | P | P | `f64 % f64` answers a wrong value on all four — #778; wasm treats `f32` as `f64` |
-| locals, globals, consts | S | S | S | P | one slot per *name* for the whole function on the twins (shadowing shares it) |
+| locals, globals, consts | S | S | S | P | one slot per *name* for the whole function on the twins (shadowing shares it); a global struct's niche-folded `Option(ptr)` field is laid at one word, as it is read (#869) |
 | `if` / `while` / `loop` / range `for` | S | S | S | S | |
 | `for`-in over an iterable | S | P | P | P | |
 | `break` / `continue`, labeled, with a value | S | P | P | P | |
@@ -154,14 +163,14 @@ Read from the code and cross-checked against the TRAP sites above. **S** support
 | `@abi(syscall)` | S | **LINK** | **LINK** | T | `lib/std/os.al` passes x86_64 syscall numbers |
 | structs, whole-value assign | S | P | P | P | |
 | arrays, bounds checks | S | S | S | P | ~40 separate inline bounds-check sites on x86 |
-| slices, strings | S | P | P | P | twins: `str` only as a `print` argument |
+| slices, strings | S | P | P | P | twins: `str` only as a `print` argument; a `Slice(T)` field of `==` is a loud trap on wasm, which loaded only the view's pointer word (#916) |
 | pointers, `&`, deref | S | P | P | T | |
 | enums, payloads, `@repr` tags | S | P | P | P | twins store a full-word tag, ignore `@repr` width |
-| `match` (value, statement, payload binding, ranges) | S | P | P | P | range arms trap on all twins |
+| `match` (value, statement, payload binding, ranges) | S | P | P | P | range arms trap on all twins; an arm template unrolled by `comptime for` chains with `else`, so a statement body is no longer swallowed by the trailing `_` (#712) |
 | `?` | S | T | T | P | wasm picks the success variant by the names `Some`/`Ok` |
 | brands, `T(v)` constructors, `@convert` | S | T | T | T | |
 | `size(T)`, `align(T)` | S | T | T | T | |
-| `@endian`, `@offset`, `@packed` | S | **W** | **W** | **W** | |
+| `@endian`, `@offset`, `@packed` | S | P | P | P | honoured in a local; across a **by-value** call boundary the twins now trap instead of reading unlevered words (#710) |
 | generics / monomorphisation | S | P | P | P | three private monomorphisers |
 | comptime `if` / `for` / `match typeinfo` | S | P | P | P | three private folders |
 | fn values, lifted lambdas, indirect calls | S | P | P | P | no indirect call (`blr`) on aarch64 |
