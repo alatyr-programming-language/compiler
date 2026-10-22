@@ -945,6 +945,11 @@ rv_struct_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
 ## differently laid-out value to the caller or callee, so emit a target trap instead of a wrong value.
 rv_standard_byte_abi_fence := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
   if struct_decl_of(decls, src, s, n) < 0 { return false }
+  ## A struct with an `@offset` / `@align` / `@endian` lever (a struct-level `@align` too) has a §8 byte
+  ## image this emitter does not reproduce across a by-value boundary: `packed_attr_param` read the
+  ## levered fields at their unlevered places and answered 1 where 42 is due — a silent wrong value
+  ## (#710's parameter half). Trap at the boundary until the shared IR builds the crossing (Q4).
+  if lower_layout::struct_has_layout_lever(decls, src, s, n) { return true }
   if not layout_kind_is_byte(layout_kind(decls, src, s, n, a)) { return false }
   if std_struct_is_native_u8_pair(decls, src, s, n, a) { return false }
   if std_struct_has_byte_layout(decls, src, s, n, a) { return false }

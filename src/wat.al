@@ -2173,6 +2173,10 @@ wat_is_agg_place := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body
   ## ISSUE #449: an ENUM-typed FIELD read (`h.t`) loads a by-reference BLOCK ADDRESS, not a scalar.
   fe := wat_field_enum_type(e, params_head, body_head, src, a, decls)
   if fe.n != 0 { return true }
+  ## #916: a `Slice(T)` FIELD read loads the view's data-pointer word, so the scalar compare below
+  ## compared ADDRESSES — equal slices at different addresses compared unequal (a silent wrong value).
+  ## As an aggregate place it reaches the structural-compare arm: a user operator, else a loud trap.
+  if wat_field_is_slice(e, params_head, body_head, src, a, decls) { return true }
   vn := expr_var_name(e)
   if vn.n == 0 { return false }
   et := base_enum_type(params_head, body_head, src, vn.s, vn.n, a, decls, false)
@@ -2229,6 +2233,15 @@ wat_field_enum_type := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), b
   WSpan(s = rs, n = rn)
 }
 
+## Is `e` a FIELD read `<place>.<f>` whose declared field type is a `Slice( … )` view (#916)?
+wat_field_is_slice := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+  if not ex_is_field(e) { return false }
+  bt := expr_struct_type_of(expr_field_base(e), params_head, body_head, src, a, decls)
+  if bt.n == 0 { return false }
+  fsp := expr_field_span(e)
+  ft := struct_field_type(decls, src, bt.s, bt.n, fsp.s, fsp.n, a)
+  ft.n >= 5 and str_at((src + ft.s), 5) == "Slice"
+}
 ## Is the LOCAL `[ns, ns+nl)` bound to an ENUM-typed FIELD read (`x := h.t`)? ISSUE #449 — its WASM
 ## slot then carries the same by-reference block ADDRESS the field held, so it is an aggregate place
 ## for the compare arm even though `base_enum_type` cannot name its enum (that resolver reads an `:=`
@@ -4442,6 +4455,11 @@ struct_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
 ## #169 must trap at the function boundary instead of exposing a differently-laid-out value.
 wat_standard_byte_abi_fence := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena, allow_native_pair : bool) -> bool {
   if struct_decl_of(decls, src, s, n) < 0 { return false }
+  ## A struct with an `@offset` / `@align` / `@endian` lever (a struct-level `@align` too) has a §8 byte
+  ## image this emitter does not reproduce across a by-value boundary: `packed_attr_param` read the
+  ## levered fields at their unlevered places and answered 1 where 42 is due — a silent wrong value
+  ## (#710's parameter half). Trap at the boundary until the shared IR builds the crossing (Q4).
+  if lower_layout::struct_has_layout_lever(decls, src, s, n) { return true }
   if not layout_kind_is_byte(layout_kind(decls, src, s, n, a)) { return false }
   if allow_native_pair and std_struct_is_native_u8_pair(decls, src, s, n, a) { return false }
   if std_struct_has_byte_layout(decls, src, s, n, a) { return false }
@@ -6810,14 +6828,18 @@ emit_wat_stmt_match := fn(arm : Option(ptr(mut Arm)), es : usize, en : usize, si
         ## UNROLL into one dispatch per variant of the scrutinee enum `es/en` (concrete in a mono instance).
         ## Each generated arm binds the payload `p` (bind_base = sidx, word 1) + sets the WAT_ARM_*/WAT_CFVAR
         ## context so an IMPLICIT `hash(p)` in the body infers its type-arg from the variant's payload type.
-        ## FLAT ifs — the derive bodies `return`, so no else-nesting is needed. A non-concrete-enum scrutinee
-        ## is a fail-loud `(unreachable)` (never the `-1` never-matching arm that sank the reverted attempt).
+        ## #712: an if/else CHAIN, the rest of the match in the last `else` — first match wins (Control
+        ## Flow §5.3). The derive bodies `return`, so flat ifs once sufficed, but a STATEMENT body
+        ## (`out = local - 1`) fell through into the trailing `_ =>` arm, which overwrote it (wasm answered
+        ## 99 where 7 is due: a silent wrong value). A non-concrete-enum scrutinee is a fail-loud
+        ## `(unreachable)` (never the `-1` never-matching arm that sank the reverted attempt).
         edi := enum_decl_of(decls, src, es, en)
         if edi < 0 {
           push_str(sb, "    (unreachable) (; comptime-variant unroll: scrutinee enum not concrete ;)\n")
         } else {
           edd := deref(decl_get(decls, usize(edi)))
           mut vf := edd.fields_head
+          mut nopen : usize = 0
           loop {
             match vf {
               Some(vfq) => {
@@ -6837,13 +6859,16 @@ emit_wat_stmt_match := fn(arm : Option(ptr(mut Arm)), es : usize, en : usize, si
                 wat_bind_pop(am.binds_head)
                 WAT_ARM_ENS = oens ; WAT_ARM_ENL = oenl ; WAT_ARM_VS = ovs ; WAT_ARM_VL = ovl
                 WAT_ARM_BINDS = obinds ; WAT_CFVAR_S = ocvs ; WAT_CFVAR_L = ocvl
-                push_str(sb, "    ))\n")
+                push_str(sb, "    ) (else\n")
+                nopen = nopen + 1
                 vf = vfm.next
               }
               None => { break }
             }
           }
           emit_wat_stmt_match(am.next, es, en, sidx, fn_head, vyield, sb, a, src, params_head, pcount, decls)
+          mut ci : usize = 0
+          while ci < nopen { push_str(sb, "    ))\n"); ci = ci + 1 }
         }
       } else {
         vidx := variant_index(decls, src, es, en, am.vs, am.vl, a)
@@ -8332,8 +8357,43 @@ emit_wat_agg_cells := fn(e : ptr(Expr), in out sb : rt::StrBuf, decls : ptr(rt::
   sn := expr_struct_name(e)
   en := expr_enum_name(e)
   if sn.n != 0 {
+    ## #869 — a field is laid down at its DECLARED width (`struct_words` sized the global so): a
+    ## niche-folded `Option(ptr(T))` field is ONE word (None = 0). Its bare `Option.None` initializer
+    ## used to be emitted as a two-word enum cell, shifting every later field by a word — `G.k` read
+    ## the pad word (a silent wrong value). A folded field's `Some` in a global's initializer has no
+    ## address to lay down here and is refused loudly.
+    sdi := struct_decl_of(decls, src, sn.s, sn.n)
+    mut fd : Option(ptr(mut FieldDecl)) = Option(ptr(mut FieldDecl)).None
+    if sdi >= 0 {
+      sdd := deref(decl_get(decls, usize(sdi)))
+      fd = sdd.fields_head
+    }
     mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(e)
-    loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; emit_wat_agg_cells(ga.e, sb, decls, src, a) ; g = ga.next }; None => { break } } }
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          mut folded := false
+          match fd {
+            Some(fq) => {
+              fdd := deref(fld_p(fq))
+              folded = is_niche_folded(src, fdd.ts, fdd.tl)
+              fd = fdd.next
+            }
+            None => {}
+          }
+          if folded {
+            ev := expr_enum_variant(ga.e)
+            is_none := ev.n == 4 and str_at((src + ev.s), 4) == "None"
+            if not is_none { panic("selfhost: wasm: a global struct's Option(ptr) field initialized with a value other than None is not supported (#869)") }
+            emit_i64_le(sb, 0)
+          }
+          if not folded { emit_wat_agg_cells(ga.e, sb, decls, src, a) }
+          g = ga.next
+        }
+        None => { break }
+      }
+    }
   } else if ex_is_array_lit(e) {
     mut ag : Option(ptr(mut Arg)) = ex_array_lit_ehead(e)
     loop { match ag { Some(agq) => { aga := deref(arg_p(agq)) ; emit_wat_agg_cells(aga.e, sb, decls, src, a) ; ag = aga.next }; None => { break } } }

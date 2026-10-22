@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **No silent wrong value remains between the four backends in the corpus.** The last four cross-backend
+  wrong values are fixed or made loud on the twins: wasm's `comptime for` variant arms now chain, so a
+  statement body is no longer overwritten by the trailing `_` arm (#712, now correct); a struct with an
+  `@offset`/`@align`/`@endian` lever crossing a call by value, a `Slice` field compared with `==`, and a
+  global struct whose `Option(ptr)` field precedes another field now trap on the twins instead of answering
+  a wrong number (#710, #916, #869). x86_64 output is unchanged.
+
 - **aarch64, riscv64 and wasm select library functions from the shared IR.** The twins' compile now
   records sema's value types for library bodies too, so a library function the IR builder can build is
   selected from the IR; `char_class` now answers what x86_64 answers there. x86_64 output is unchanged.
