@@ -11868,6 +11868,33 @@ check_accept issue693_union_member_control
 ## which the sweeps accept — the forbidden verdict is a normal wrong exit, not a trap.
 run issue913_struct_lit_nested_field 42
 
+## #966 — the `unchecked` literal fold, and the fallback it caused. Four shapes, each pinned to the
+## value the model and x86_64 agree on. The fold did not look through `Unchecked` (`ib_lit_fold`
+## answered None for the block), so a literal-only expression inside `unchecked` never folded: the walk
+## descended and asked each `Num` its OWN type — `VcLit`, no context having reached it, Types §2.3 —
+## and the function was refused as `sema-gap literal: expr Num`. Falling back to the LEGACY emitter is
+## where the value went wrong, and it went wrong SILENTLY:
+##  * `unchecked_cmp_unsigned` (#969): the legacy comparison materialized its operands as SIGNED, so
+##    `unchecked (1 - v24) > p22.k2` — unsigned operands, where the subtraction wraps to a huge value
+##    and the test is false — read as signed and came out TRUE. NON-VACUOUS: the frozen seed answers
+##    **101 on aarch64, riscv64 AND wasm** where 42 is due; x86_64 was already right.
+##  * `unchecked_div_signed` (#965): the legacy signed `%` / `/` emitted a bare `cdq`, which traps on
+##    INT64_MIN and, worse, disagrees with the truncated rule the language states. NON-VACUOUS: the
+##    frozen seed answers **50 on all three twins** where 42 is due.
+##  * `nested_agg_arg` (#967): the same refusal pushed the function onto the legacy wasm emitter,
+##    which builds an aggregate in expression position through the single global `$__tmp`; the nested
+##    enum-literal arguments overwrite it and the outer struct literal yields the INNER block's address
+##    (the un-reduced program answered 2 where 11 was due). Progen seed 2074802946, reduced by hand:
+##    the frozen seed TRAPS on all three twins here, so this row holds the shape ANSWERED and correct.
+##  * `enum_payload_literal_ctx`: the same refusal through an enum PAYLOAD argument, where the payload
+##    type is the context of the expression in that position. The frozen seed TRAPS here (loud, not
+##    wrong); the row holds the shape so it stays answered on all four.
+## Closing the fold/context gap removes the fallback, so every one of these is built by the shared IR.
+run issue966_unchecked_cmp_unsigned 42
+run issue966_unchecked_div_signed 42
+run issue966_nested_agg_arg_wasm 11
+run issue966_enum_payload_literal_ctx 2
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================
