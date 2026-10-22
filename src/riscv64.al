@@ -4672,7 +4672,12 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       if (not iscmp) and (not isflt) and (not isnot) {
         dl := rv_operand_signed(l, params_head, body_head, src, a)
         dr := rv_operand_signed(r, params_head, body_head, src, a)
-        dsigned := dl or dr
+        ## #964 — the rule and its reason are written out in `aarch64.al`: `/ %` read sema's RECORD of
+        ## the operator (`lower_layout::ir_arith_signed`, docs/ir.md §3.8 e3) as x86_64 does. The shape
+        ## query proved nothing about a literal-only `Bin` dividend and answered unsigned — a silent wrong
+        ## value. `+ - *` keep the shape query until #943 closes, as on x86_64.
+        mut dsigned := dl or dr
+        if op == 19 or op == 29 { dsigned = lower_layout::ir_arith_signed(e, l, r, src) }
         if op == 19 or op == 29 { ir::sign_row("riscv64", op, l, r, src, dsigned) }
         ## NARROW-WIDTH WRAP (§4 value model): truncate a narrow-typed (uN/iN, N<64) +/-/* result.
         ## Computed BEFORE the arith so the checked overflow guard (native-width only) can skip a narrow op.

@@ -5453,7 +5453,15 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       } else {
         dl := a64_operand_signed(l, params_head, body_head, src, a)
         dr := a64_operand_signed(r, params_head, body_head, src, a)
-        dsigned := dl or dr
+        ## #964 — `/ %` take their signedness from sema's RECORD of the operator, exactly as x86_64
+        ## already does at its own division site (`lower.al`, `ir_arith_signed`; docs/ir.md §3.8 e3).
+        ## The shape query proves a `Var` signed from its annotation and nothing about a literal-only
+        ## `Bin` dividend, so `(0 - 65535) % 7` fell to its unsigned default and answered 6 where 1 is
+        ## due — a silent wrong value, found by progen on all three twins. `+ - *` keep the shape query
+        ## until #943 closes, as on x86_64. `arith_sg_cur` always answers an integer `/ %` (it walks the
+        ## operator's record, then its operands, then two literals), so there is no gap to fall back on.
+        mut dsigned := dl or dr
+        if op == 19 or op == 29 { dsigned = lower_layout::ir_arith_signed(e, l, r, src) }
         if op == 19 or op == 29 { ir::sign_row("aarch64", op, l, r, src, dsigned) }
         ## NARROW-WIDTH WRAP (§4 value model): truncate a narrow-typed (uN/iN, N<64) +/-/* result to its
         ## width — the x86_64 built-in dual. Computed BEFORE the arith so the checked overflow guard
