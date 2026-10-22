@@ -3430,8 +3430,13 @@ rv_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : Option(ptr(mut
   bl := cmp_operand_bitcast_kind(l, src)
   br := cmp_operand_bitcast_kind(r, src)
   if bl == 1 or br == 1 { return false }
-  ul := bl == 2 or rv_operand_unsigned(l, params_head, body_head, src, a)
-  ur := br == 2 or rv_operand_unsigned(r, params_head, body_head, src, a)
+  if bl == 2 or br == 2 { return true }
+  ## #966 — the record, then the shape query as the fallback; the rule and its reason are in `aarch64.al`.
+  sg := lower_layout::ir_pair_sg_soft(l, r, src)
+  if ir::vs_unsigned(sg) { return true }
+  if ir::vs_signed(sg) { return false }
+  ul := rv_operand_unsigned(l, params_head, body_head, src, a)
+  ur := rv_operand_unsigned(r, params_head, body_head, src, a)
   if ul and ur { return true }
   if ul and ex_is_num_lit(r) { return true }
   if ur and ex_is_num_lit(l) { return true }

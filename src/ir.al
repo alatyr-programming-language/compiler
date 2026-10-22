@@ -2986,6 +2986,27 @@ pub arith_sg_soft := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(
   }
   ValSg.VsNotInt
 }
+## The twins' `pair_sg_cur` (#966): the same record walk, `VsNotInt` where no record answers instead of
+## the e3 stop — see `arith_sg_soft` for why the twins cannot stop here. x86_64's `is_unsigned_cmp` ends
+## by asking THIS record; the twins' `*_cmp_unsigned` asked only their shape query and never reached it,
+## so `1 > unchecked(u64 - u64)` — a literal against an `Unchecked` node, which the shape query proves
+## nothing about — took the signed default and read a value above 2^63 as negative (#966 pg8).
+pub pair_sg_soft := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> ValSg {
+  lt : VTy = sty_get_cur(l)
+  rt0 : VTy = sty_get_cur(r)
+  lc : VCls = lt.cls
+  rc : VCls = rt0.cls
+  if vcls_is_int(lc) { match lt.sg { SgS => { return ValSg.VsSigned }; SgU => { return ValSg.VsUnsigned }; SgNone => {} } }
+  if vcls_is_int(rc) { match rt0.sg { SgS => { return ValSg.VsSigned }; SgU => { return ValSg.VsUnsigned }; SgNone => {} } }
+  if vcls_is_lit(lc) and vcls_is_lit(rc) { return ValSg.VsSigned }
+  if vcls_is_lit(lc) { match rt0.sg { SgS => { return ValSg.VsSigned }; SgU => { return ValSg.VsUnsigned }; SgNone => {} } }
+  if vcls_is_lit(rc) { match lt.sg { SgS => { return ValSg.VsSigned }; SgU => { return ValSg.VsUnsigned }; SgNone => {} } }
+  ## Neither side is an integer or a literal: `val_sg_of` answers `VsNotInt` for bool/ptr/float/aggregate
+  ## and stops only on absent/unknown, so the signedness is read from an INTEGER class alone.
+  if vcls_is_int(lc) { return ValSg.VsNotInt }
+  if vcls_is_int(rc) { return ValSg.VsNotInt }
+  ValSg.VsNotInt
+}
 pub vs_unsigned := fn(v : ValSg) -> bool { match v { VsUnsigned => { true }; VsSigned | VsNotInt => { false } } }
 pub sty_bind_put_cur := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), rec_inst_word(), rec_iter_word(), t) }
 ## A BINDING's records are written in the context it is declared in, and a use reads them there. A
