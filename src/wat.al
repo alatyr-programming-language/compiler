@@ -5537,8 +5537,17 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       } else if is_arith_op(op) and (not wat_operand_is_aggregate(l, params_head, body_head, src, a, decls)) and (not wat_operand_is_aggregate(r, params_head, body_head, src, a, decls)) {
         dl := wat_operand_signed(l, params_head, body_head, src, a)
         dr := wat_operand_signed(r, params_head, body_head, src, a)
-        opname := wat_binop(op, dl or dr)
-        if op == 19 or op == 29 { ir::sign_row("wasm", op, l, r, src, dl or dr) }
+        ## #964 — as in `aarch64.al`: `/ %` read sema's RECORD of the operator
+        ## (`lower_layout::ir_arith_signed`, docs/ir.md §3.8 e3) as x86_64 does; the shape query proved
+        ## nothing about a literal-only `Bin` dividend and answered unsigned. `+ - *` keep it until #943.
+        mut dsigned := dl or dr
+        if op == 19 or op == 29 {
+          sg := lower_layout::ir_arith_sg_soft(e, l, r, src)
+          if ir::vs_signed(sg) { dsigned = true }
+          if ir::vs_unsigned(sg) { dsigned = false }
+        }
+        opname := wat_binop(op, dsigned)
+        if op == 19 or op == 29 { ir::sign_row("wasm", op, l, r, src, dsigned) }
         ## NARROW-WIDTH WRAP (§4 value model): a +/-/* over a narrow-typed (uN/iN, N<64) operand truncates
         ## its result — the wat dual is an `(i64.and … mask)` / `(i64.extendN_s …)` WRAPPING the binop.
         mut nw := ""
