@@ -4677,7 +4677,11 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         ## query proved nothing about a literal-only `Bin` dividend and answered unsigned — a silent wrong
         ## value. `+ - *` keep the shape query until #943 closes, as on x86_64.
         mut dsigned := dl or dr
-        if op == 19 or op == 29 { dsigned = lower_layout::ir_arith_signed(e, l, r, src) }
+        if op == 19 or op == 29 {
+          sg := lower_layout::ir_arith_sg_soft(e, l, r, src)
+          if ir::vs_signed(sg) { dsigned = true }
+          if ir::vs_unsigned(sg) { dsigned = false }
+        }
         if op == 19 or op == 29 { ir::sign_row("riscv64", op, l, r, src, dsigned) }
         ## NARROW-WIDTH WRAP (§4 value model): truncate a narrow-typed (uN/iN, N<64) +/-/* result.
         ## Computed BEFORE the arith so the checked overflow guard (native-width only) can skip a narrow op.

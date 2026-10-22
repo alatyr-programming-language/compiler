@@ -5541,7 +5541,11 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## (`lower_layout::ir_arith_signed`, docs/ir.md §3.8 e3) as x86_64 does; the shape query proved
         ## nothing about a literal-only `Bin` dividend and answered unsigned. `+ - *` keep it until #943.
         mut dsigned := dl or dr
-        if op == 19 or op == 29 { dsigned = lower_layout::ir_arith_signed(e, l, r, src) }
+        if op == 19 or op == 29 {
+          sg := lower_layout::ir_arith_sg_soft(e, l, r, src)
+          if ir::vs_signed(sg) { dsigned = true }
+          if ir::vs_unsigned(sg) { dsigned = false }
+        }
         opname := wat_binop(op, dsigned)
         if op == 19 or op == 29 { ir::sign_row("wasm", op, l, r, src, dsigned) }
         ## NARROW-WIDTH WRAP (§4 value model): a +/-/* over a narrow-typed (uN/iN, N<64) operand truncates

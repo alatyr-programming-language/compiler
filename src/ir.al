@@ -2957,6 +2957,35 @@ pub arith_sg_cur := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(u
   pair_sg_cur(l, r, src)
 }
 pub vs_signed := fn(v : ValSg) -> bool { match v { VsSigned => { true }; VsUnsigned | VsNotInt => { false } } }
+## The twins' `arith_sg_cur` (#964): the same record, but a value no record answers is `VsNotInt`
+## instead of the e3 stop. x86 owns the record-CONTEXT stack (`rec_enter_inst`, §8.3) and stops at a gap
+## it truly cannot answer; the twins do not push those contexts yet, so at a node they never entered an
+## absent record is not a sema gap — stopping there turned a running program into a compile failure
+## (`inline_stmt_body`, `issue532_wasm_mul_family`, measured). The caller keeps its shape verdict when
+## this answers `VsNotInt`, so the twin gets the record where one exists and today's bytes where it does
+## not. The literals rule mirrors `val_sg_of`: two literals are the native signed integer.
+pub arith_sg_soft := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> ValSg {
+  tb : VTy = sty_get_cur(be)
+  match tb.cls {
+    VcInt => { match tb.sg { SgS => { return ValSg.VsSigned }; SgU => { return ValSg.VsUnsigned }; SgNone => {} } }
+    VcLit => { return ValSg.VsSigned }
+    VcBool | VcPtr | VcFloat | VcAgg => { return ValSg.VsNotInt }
+    VcAbsent | VcUnknown => {}
+  }
+  tl : VTy = sty_get_cur(l)
+  match tl.cls {
+    VcInt => { match tl.sg { SgS => { return ValSg.VsSigned }; SgU => { return ValSg.VsUnsigned }; SgNone => {} } }
+    VcLit => { return ValSg.VsSigned }
+    VcBool | VcPtr | VcFloat | VcAgg | VcAbsent | VcUnknown => {}
+  }
+  tr : VTy = sty_get_cur(r)
+  match tr.cls {
+    VcInt => { match tr.sg { SgS => { return ValSg.VsSigned }; SgU => { return ValSg.VsUnsigned }; SgNone => {} } }
+    VcLit => { return ValSg.VsSigned }
+    VcBool | VcPtr | VcFloat | VcAgg | VcAbsent | VcUnknown => {}
+  }
+  ValSg.VsNotInt
+}
 pub vs_unsigned := fn(v : ValSg) -> bool { match v { VsUnsigned => { true }; VsSigned | VsNotInt => { false } } }
 pub sty_bind_put_cur := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), rec_inst_word(), rec_iter_word(), t) }
 ## A BINDING's records are written in the context it is declared in, and a use reads them there. A
