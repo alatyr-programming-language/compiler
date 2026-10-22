@@ -440,3 +440,33 @@ declared before it), so `wat.al` hands the selector a table of (declaration inde
 word-array global and `addr @G` becomes `i64.const base`. The layout stays the legacy emitter's one
 decision (Q4); the selector only reads it. Closes `signedness_global_array` on wasm (#707's global
 half), the last twin of that path.
+
+## 12. Where the signature gate stands, measured at `ad28b09` (the next cut's input)
+
+`scripts/ir_census.sh` on this tree: corpus 3 328 functions, **1 215 built**, 2 097 `NotYet` (1 957
+outside the subset, 140 sema gaps); `lib/` 681 / 90 built; `src/` 4 894 / 48. The largest single reason
+on every set is `signature (a parameter or result that is not a kernel scalar)` — corpus **465**, `src`
+**2 547**, `lib` 170 — so the next slice is the aggregate signature, §3.7's remaining tiers.
+
+What `ib_build_fn` accepts today (`src/ir/build.al:4295` onward), and therefore what the 465 are *not*:
+
+- a kernel-scalar param or result (`ib_type_ks`);
+- an aggregate **result** of one or two words, returned in the result registers (3d, `ib_agg_ret_words`);
+- an aggregate **param** passed as the address of a caller-owned copy (3d), but only when
+  `ib_struct_word` holds: not packed/byte layout, **every field a kernel scalar**, and **no padding**
+  (`ib_struct_padded` compares the sum of the field bytes with the layout's size); an enum param is
+  accepted by `ib_st_is_enum` (4b). `pmode != 0` and an address-taken aggregate param stay refused.
+
+So the refused mass is: padded structs, structs with an array or nested-aggregate field, levered
+(`@packed`/`@offset`) structs, params with a mode (`in`/`out`/`by-ref`), results wider than two words,
+pointers and `Slice(T)` across a boundary, and every generic instance (refused earlier, as `CGeneric`).
+
+**The census cannot say which of those dominates.** A static scan of the 2 362 corpus+`lib` sources puts
+1 136 non-scalar param/result slots on names the scanner cannot resolve (a type declared in another
+module, or a generic instance), so it cannot separate padded from array-field from levered. The builder
+could answer this exactly — it has the layout in hand at the refusal — but it has no channel today:
+`src/ir/build.al` reads no environment, and `NyWhy`/`Construct` carry one `CSignature` for all of them.
+**The first task of the next slice is therefore to split `CSignature` into the shapes above** (a
+refusal-class change, so the golden files and `ir_census.sh`'s ranked list move with it), re-run the
+census, and cut the biggest class first. Guessing the order without that split is how a slice ends up
+built for 12 paths.
