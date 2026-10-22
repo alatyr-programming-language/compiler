@@ -470,3 +470,34 @@ could answer this exactly — it has the layout in hand at the refusal — but i
 refusal-class change, so the golden files and `ir_census.sh`'s ranked list move with it), re-run the
 census, and cut the biggest class first. Guessing the order without that split is how a slice ends up
 built for 12 paths.
+
+## 13. The `CSignature` split, as built (the next cut's input, §12's first task)
+
+`Construct` now names the shape it met. `CSignature` remains, set at the entry of `ib_build_one`, as
+the fallback: every refusal site below names its own shape, so the census's `CSignature` row is exactly
+how much of the signature mass is still unclassified, and it must stay 0.
+
+| class | the shape refused | where |
+|---|---|---|
+| `CSigResultWide` | an aggregate result whose word count `ib_agg_ret_words` cannot deliver (> 2 words) | `ib_build_one`, the result tier |
+| `CSigParamMode` | a parameter declared with a mode (`in`/`out`/by-ref), scalar or aggregate | both param arms |
+| `CSigParamTaken` | an address-taken aggregate parameter — the callee would hold the caller's memory | the aggregate param arm |
+| `CSigParamLevered` | `@packed`, or the byte tier `@offset`/`@endian` put it in: byte-exact for a LOCAL value only (Q4) | `ib_struct_word_why` |
+| `CSigParamNestedField` | an array or nested-aggregate field, whose place through a pointer is unproved (Q4) | `ib_struct_word_why` |
+| `CSigParamPadded` | padding the literal would leave undefined, so the caller's words are not the callee's | `ib_struct_word_why` |
+| `CSigParamUnresolved` | the type name resolves to no struct or enum HERE — another module, a generic instance, `Slice(T)`, `str` | `ib_agg_named` → `None` |
+| `CSigSyscall` | a syscall declaration whose signature cannot be trampolined (a non-one-word scalar, a mode, a non-integer call number) | `ib_build_syscall` |
+
+`ib_struct_word` keeps its `bool` answer and delegates to the new `ib_struct_word_why`, so no caller
+moved; the three refusals it hid are now three rows. `CSigParamUnresolved` is the residual and is
+labelled as such: §12's scanner could not separate it, and this slice does not guess inside it either —
+if it dominates, splitting IT (cross-module declaration vs generic instance vs `Slice`) is the next
+measurement, not a lowering chosen by taste.
+
+**Reporting-only by construction, and that is checkable:** no instruction moves, and no oracle file
+contains a reason string (`grep -rl "not a kernel scalar" .` matches only `docs/ir-slice-3.md` and
+`docs/ir-slice-4.md`). The prediction for the gate is therefore `0 CHANGED` on the corpus check, made
+before it ran.
+
+**Measured (omen).** _pending — filled in from `scripts/ir_census.sh --reasons` after the gate's build;
+no number is written here before it is taken._
