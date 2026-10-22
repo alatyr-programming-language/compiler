@@ -528,3 +528,47 @@ warned. `CSigParamUnresolved` (894 in `src/`, 181 in the corpus) is now the resi
 is a name that resolves to no struct or enum HERE, and the builder knows which of cross-module, generic
 instance, `Slice(T)` or `str` it met — that is the following measurement, and this slice does not guess
 inside it either.
+
+## 14. The next cut, chosen by §13.1's measurement: aggregate results wider than two words (sret)
+
+§13.1 measured `CSigResultWide` as the dominant signature shape outside the residual: **193 corpus +
+124 `lib/` = 317 refusals**. It is one line in the builder today:
+
+```
+ib_agg_ret_words := …  if nf == 0 or nf > 2 { return 0 }      # src/ir/build.al:3999
+```
+
+Two words in the result registers is a legacy-compatibility shortcut, not the design. §3.7 already says
+what an aggregate result is: **a hidden first `ptr` parameter (sret) into a caller frame object**. So this
+slice is not an ABI question for the owner — the design states the answer; it is the work of implementing
+the tier §3.7 names and retiring the shortcut.
+
+What the slice must do, in the order that keeps every step gated alone:
+
+1. **Builder.** A struct result of >2 scalar words (and, later, one with a nested-aggregate field) stops
+   returning 0 from `ib_agg_ret_words` and instead marks the function `ret_sret`: the IR result becomes a
+   `ptr` to a caller-owned frame object, and the hidden pointer becomes parameter 0. The existing
+   `ib_agg_ret_words` register tier stays for ≤2 words — it is what today's callers and callees already
+   agree on, and removing it before every backend adopts sret would break the mixed-call rule (§3.7's
+   "each selector adopts its target's existing convention").
+2. **Callers.** An IR-built call site of such a function reserves a frame object, passes its address as
+   the hidden first argument, and uses the object as the call's value. A legacy caller of an IR-built
+   callee, and an IR caller of a legacy callee, must keep working: the tier boundary is the word count, so
+   until a backend implements sret it must REFUSE the signature (a located `CSigResultWide`, which is what
+   it does today) rather than emit a register sequence that drops words. That refusal is the safety of the
+   whole slice — no partial implementation may answer quietly.
+3. **Selectors, one backend per PR.** aarch64 (`x8`), riscv64, wasm — each adopts the hidden pointer and
+   returns the address; x86_64 keeps its legacy emission until slice 9 (7.4), where the same tier arrives
+   with the flip. Each step is its own PR through the full gate (D8), each with its rows read before the
+   oracle moves.
+
+**What it does NOT include**, and stays refused with its own named class: a result whose fields are not
+all one-word kernel scalars (nested aggregate — `CSigParamNestedField`'s sibling), a levered struct
+(`CSigParamLevered`), and every generic instance (`CGeneric`). Those are separate tiers with separate
+proofs; folding them in here would repeat the mistake §12 warns about.
+
+**Why this and not `CSigParamUnresolved` (894 in `src/`, 181 corpus).** The residual is larger on
+`src/`, but `src/` is the compiler's own source and its rows are not what the xbackend counters are made
+of; the counters that criterion 3 drives to zero are corpus and `lib/`, where wide results dominate. The
+residual's own split (cross-module declaration vs generic instance vs `Slice(T)` vs `str`) is the
+measurement that must precede it, exactly as §13 did for the signature family.
