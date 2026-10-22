@@ -8727,10 +8727,40 @@ sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)
   if sema_vty_site(e, src) { ir::sign_site(e) }
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { sema_vty_call_args(cs, cl, na, ah, decls, src) }
+    ## #968 — an enum construction's declared payload types are the CONTEXT of its arguments, exactly as a
+    ## call's parameter types are (`sema_vty_call_args` below). Without it `E1.V2(1, unchecked (7 ^ 0))`
+    ## leaves its second argument `VcLit`, the builder reports `sema-gap literal: expr Num`, and the whole
+    ## function falls back to the legacy emitter — which carries its own silent wrong value (#967).
+    Expr::EnumLit(es, el, vs, vl, np, gh) => { sema_vty_enum_args(es, el, vs, vl, np, gh, decls, src) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => {}
+  }
+}
+## #968 — each declared payload type of the variant `E.V(…)` is the context of its argument (Types §2.3,
+## the rule `sema_vty_call_args` applies to a call). Only a variant whose declaration sema found and whose
+## arity fits; a raw union is excluded, as in the checker's arity verdict (§6.3's byte-clear is a
+## different operation). `sema_vty_ctx` rewrites a literal-only record and nothing else.
+sema_vty_enum_args := fn(es : usize, el : usize, vs : usize, vl : usize, np : usize, gh : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) {
+  if not ir::sty_on() { return }
+  if is_union_decl(decls, src, es, el) { return }
+  upto := rt::vec_len(deref(decls))
+  eva := sema_enum_variant_arity(decls, upto, src, es, el, vs, vl, np)
+  if not eva.known or eva.amb or not eva.fits { return }
+  mut g : Option(ptr(mut Arg)) = gh
+  mut k : usize = 0
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        pt := sema_enum_payload_ty(eva, k, decls, upto, src)
+        if pt.nl != 0 { sema_vty_ctx(ga.e, pt.ns, pt.nl, decls, src) }
+        k += 1
+        g = ga.next
+      }
+      None => { break }
+    }
   }
 }
 ## docs/ir-slice-1.md §2 — each parameter's declared type is the context of a literal argument
