@@ -499,5 +499,32 @@ contains a reason string (`grep -rl "not a kernel scalar" .` matches only `docs/
 `docs/ir-slice-4.md`). The prediction for the gate is therefore `0 CHANGED` on the corpus check, made
 before it ran.
 
-**Measured (omen).** _pending — filled in from `scripts/ir_census.sh --reasons` after the gate's build;
-no number is written here before it is taken._
+### 13.1 Measured (omen, `scripts/ir_census.sh --reasons 14` at `fd41e10`, after the green gate)
+
+| shape | corpus | lib/ | src/ |
+|---|---|---|---|
+| `CSigResultWide` | **193** | **124** | 704 |
+| `CSigParamUnresolved` | 181 | 36 | **894** |
+| `CSigParamMode` | 76 | 8 | 879 |
+| `CSigParamNestedField` | – | – | 60 |
+| `CSigParamLevered` | – | – | 9 |
+| `CSigSyscall` | – | 1 | – |
+| `CSignature` (unclassified) | **0** | **0** | **0** |
+
+**The last row is the point of the slice:** the old family label appears nowhere in the census, so every
+signature refusal now names a shape. Before the split this was one row of 465 on the corpus (§12); it
+is now 193 + 181 + 76 = 450 plus the same split on `lib/` and `src/`.
+
+**What it says about where to cut next, and what it kills.** On the corpus and `lib/` — the sets the
+xbackend counters are made of — the dominant signature shape is `CSigResultWide`: an aggregate RESULT
+wider than two words, 193 + 124 = 317 refusals. That is §3.7's wide-result tier (sret beyond the two
+result registers), and it is the next cut.
+
+It also falsifies a guess recorded in §12. There the refused mass was listed as "padded structs, structs
+with an array or nested-aggregate field, levered (`@packed`/`@offset`) structs, params with a mode …",
+in that order of plausibility. Measured, padded is **absent from the corpus entirely**, levered is 9 and
+nested-field 60, both only in `src/` — three shapes that would have been cut for 12 paths, exactly as §12
+warned. `CSigParamUnresolved` (894 in `src/`, 181 in the corpus) is now the residual to split next: it
+is a name that resolves to no struct or enum HERE, and the builder knows which of cross-module, generic
+instance, `Slice(T)` or `str` it met — that is the following measurement, and this slice does not guess
+inside it either.
