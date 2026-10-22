@@ -1650,6 +1650,13 @@ pub verify_prog := fn(p : IrProg, in out a : rt::Arena, in out sb : rt::StrBuf) 
 ## The construct a `NotYet` names.
 pub Construct := enum {
   CGeneric, CEmpty, CSignature, CBodyless,
+  ## The signature family (#683, `docs/ir-slice-3.md` §12): `CSignature` was ONE label for every
+  ## refused parameter and result shape, so the census could not say which shape dominates and a slice
+  ## could be cut for 12 paths. Each arm below is the shape the builder actually met; `CSignature`
+  ## stays as the label of a refusal no shape was found for, so an unclassified refusal is visible
+  ## rather than folded into a family.
+  CSigResultWide, CSigParamMode, CSigParamTaken, CSigParamLevered, CSigParamNestedField,
+  CSigParamPadded, CSigParamUnresolved, CSigSyscall,
   SAssign, SWhile, SFieldAssign, SReturn, SIf, SMatch, SFor, SDerefAssign, SIndexAssign, SIndexFieldAssign,
   SFieldPathAssign, SLoop, SBreak, SContinue, SExprStmt, SCompIf, SCompFor, SCompMatch, SCompForRange,
   SUnchecked, SAllocWith,
@@ -1660,6 +1667,14 @@ pub construct_name := fn(c : Construct) -> str {
   match c {
     CGeneric => { "generic function (needs a mono instance)" }; CEmpty => { "empty body" }
     CSignature => { "signature (a parameter or result that is not a kernel scalar)" }
+    CSigResultWide => { "signature: aggregate result wider than two words" }
+    CSigParamMode => { "signature: parameter with a mode (in/out/by-ref)" }
+    CSigParamTaken => { "signature: address-taken aggregate parameter" }
+    CSigParamLevered => { "signature: @packed/@offset/@endian (byte-layout) struct parameter" }
+    CSigParamNestedField => { "signature: struct parameter with an array or aggregate field" }
+    CSigParamPadded => { "signature: padded struct parameter" }
+    CSigParamUnresolved => { "signature: parameter type names no struct or enum resolvable here" }
+    CSigSyscall => { "signature: a syscall declaration the builder cannot tramp" }
     CBodyless => { "a declaration with no body (an `@extern` import: slice 2's `call_c`)" }
     SAssign => { "stmt Assign" }; SWhile => { "stmt While" }; SFieldAssign => { "stmt FieldAssign" }
     SReturn => { "stmt Return" }; SIf => { "stmt If" }; SMatch => { "stmt Match" }; SFor => { "stmt For" }
