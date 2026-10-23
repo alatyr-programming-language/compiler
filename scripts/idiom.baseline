@@ -113,3 +113,8 @@ TABLE	src/lower/fnval.al	ecallee_ident_char	src/wat.al	wat_export_name	6	-	425:7
 TABLE	src/lower_attrs.al	fn_is_inline	src/sema.al	export_name	8	-	11:8000
 TABLE	src/lower_attrs.al	fn_is_inline	src/wat.al	wat_export_name	8	-	11:75
 TABLE	src/sema.al	export_name	src/wat.al	wat_export_name	8	-	8000:75
+TABLE	src/ast.al	compound_assign_op_at	src/ir.al	put_symbol_name	8	-	191:2013
+TABLE	src/fmt.al	fmt_op	src/ir.al	put_symbol_name	11	-	159:2013
+TABLE	src/ir.al	cc_name	src/ir.al	put_symbol_name	4	-	138:2013
+TABLE	src/ir.al	put_symbol_name	src/lower.al	op_symbol	11	-	2013:552
+TABLE	src/ir.al	put_symbol_name	src/sema.al	sema_op_symbol	8	-	2013:5285
