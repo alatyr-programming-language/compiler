@@ -94,7 +94,46 @@ seed_identity_check() { # version-file package-file seed-binary
     echo "      the seed's and Stage1's output identically, so the fixpoint below would NOT catch this."
     return 6
   fi
-  echo "seed identity ok: sha256 ${have_sha:0:16}… version $have_ver (seed/VERSION agrees)"
+  # THE THIRD AXIS — ASK THE ARTIFACT (#586). The two comparisons above are claims checked against
+  # claims: the block's version against package.al's. Both can agree while the binary they describe
+  # answers a THIRD thing, and that is exactly the state #586 recorded — `seed/VERSION` said 0.2.0
+  # and `./seed/alatyr --version` answered `alatyr 0.1.0`, each true under its own definition, and
+  # nothing anywhere noticing. The seed answers now (TOOL-21 was promoted into it), so the claim is
+  # checkable, and a green run must not keep saying it cannot be.
+  #
+  # On a host that cannot execute the seed — it is a static x86_64 ELF, so an arm64 macOS cannot —
+  # this half SKIPS and SAYS SO in the verdict line. A skipped check is not a passed check; that is
+  # the rule sweeps.sh already follows for a skipped sweep, and the ok line must not claim an asking
+  # that did not happen. rc 126/127 is the shell's "cannot execute"; any other status is a real
+  # answer from the seed and is judged.
+  local ans rc_ask asked=""
+  ans="$("$SEED" --version 2>/dev/null)"; rc_ask=$?
+  if [ "$rc_ask" = 126 ] || [ "$rc_ask" = 127 ]; then
+    echo "note: the seed was NOT asked — this host cannot execute $SEED (rc $rc_ask)."
+    echo "      The version cross-check below is therefore UNVERIFIED here; it runs on x86_64 Linux"
+    echo "      (the gate box, or the gate.yml runner)."
+  elif [ "$rc_ask" != 0 ]; then
+    echo "FAIL: asking the seed its version failed (rc $rc_ask); it must answer and exit 0."
+    echo "      output: ${ans:-<empty>}"
+    return 6
+  else
+    asked="${ans#alatyr }"
+    if [ "$asked" != "$want_ver" ]; then
+      echo "FAIL: the seed answers a different version than seed/VERSION records."
+      echo "      ./seed/alatyr --version:         $asked"
+      echo "      seed/VERSION current-seed-version: $want_ver"
+      echo "      The block is a claim ABOUT THE ARTIFACT, so the artifact governs: either the block is"
+      echo "      stale, or the promoted binary is not the one the block describes. AGENTS.md's"
+      echo "      bump-precedes-the-build order makes the promoted Stage2 answer the version it is"
+      echo "      released under; a disagreement here means that order was not followed, which is #586."
+      return 6
+    fi
+  fi
+  if [ -n "$asked" ]; then
+    echo "seed identity ok: sha256 ${have_sha:0:16}… version $have_ver (seed/VERSION agrees; the seed was asked and answered $asked)"
+  else
+    echo "seed identity ok: sha256 ${have_sha:0:16}… version $have_ver (seed/VERSION agrees; the seed was NOT asked on this host)"
+  fi
   return 0
 }
 
@@ -102,7 +141,7 @@ seed_identity_check() { # version-file package-file seed-binary
 ## invocation, BEFORE the decision it is about — and in a SUBSHELL, because a `set -u` unbound
 ## variable or an arithmetic error inside a driven function unwinds to top level and ENDS THE
 ## SCRIPT, printing nothing at all; the completion marker below is what notices instead.
-FIXPOINT_SELFTEST_EXPECTED=17
+FIXPOINT_SELFTEST_EXPECTED=25
 fixpoint_seed_identity_selftest() { # work-dir
   local st="$1" bad="" k=0 out rc
   rm -rf "$st"; mkdir -p "$st" || return 1
@@ -166,6 +205,37 @@ fixpoint_seed_identity_selftest() { # work-dir
   [ "$rc" = 6 ]; _ck $? identity-accepted-a-package.al-with-no-version
   case "$out" in *'no version field'*) _ck 0 x ;; *) _ck 1 identity-did-not-name-the-missing-version-field ;; esac
 
+  # 6 · THE THIRD AXIS (#586): the seed is ASKED. A block and a manifest can agree with each other
+  #     while the binary they describe answers a third thing — the exact state #586 recorded
+  #     (block 0.2.0, `seed/alatyr --version` → 0.1.0). A fake seed answers, so the comparison is
+  #     driven rather than assumed, and the skip path is driven too: a host that cannot execute the
+  #     seed must say it skipped, not claim an asking that never happened.
+  _ans() { # version -> an executable answering `alatyr <version>`; re-record the digest it carries
+    printf '#!/bin/sh\nprintf "alatyr %s\\n" "%s"\n' "$1" "$1" > "$st/seed"; chmod +x "$st/seed"
+    sha="$(sha256sum "$st/seed" | cut -d' ' -f1)"; _vf "$sha" 0.4.2
+  }
+  _pkg 0.4.2; _ans 0.4.2
+  out="$(seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 0 ]; _ck $? "identity-refused-a-seed-answering-the-recorded-version(rc=$rc)"
+  case "$out" in *'was asked and answered 0.4.2'*) _ck 0 x ;;
+                 *) _ck 1 "identity-ok-line-did-not-report-the-asking($out)" ;; esac
+  _ans 0.1.0
+  out="$(seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 6 ]; _ck $? "identity-accepted-a-seed-answering-another-version(rc=$rc)"
+  case "$out" in *0.1.0*0.4.2*) _ck 0 x ;;
+                 *) _ck 1 "identity-did-not-name-both-the-asked-and-the-recorded($out)" ;; esac
+  printf '#!/bin/sh\nprintf "alatyr 0.4.2\\n"\nexit 3\n' > "$st/seed"; chmod +x "$st/seed"
+  sha="$(sha256sum "$st/seed" | cut -d' ' -f1)"; _vf "$sha" 0.4.2
+  out="$(seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 6 ]; _ck $? "identity-accepted-a-seed-that-failed-to-answer(rc=$rc)"
+  case "$out" in *'asking the seed its version failed'*) _ck 0 x ;;
+                 *) _ck 1 "identity-did-not-name-the-failed-asking($out)" ;; esac
+  _ans 0.4.2; chmod -x "$st/seed"
+  out="$(seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 0 ]; _ck $? "identity-failed-on-a-host-that-cannot-execute-the-seed(rc=$rc)"
+  case "$out" in *'NOT asked'*) _ck 0 x ;;
+                 *) _ck 1 "identity-claimed-an-asking-it-could-not-do($out)" ;; esac
+
   printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
   if [ -n "$bad" ]; then echo "*** fixpoint seed-identity selftest: FAILED —$bad ***"; return 1; fi
   if [ "$k" -lt "$FIXPOINT_SELFTEST_EXPECTED" ]; then
@@ -176,7 +246,8 @@ fixpoint_seed_identity_selftest() { # work-dir
   fi
   echo "fixpoint seed-identity selftest: $k checks — the version cross-check in BOTH directions, the"
   echo "  digest comparison and its case-insensitivity, the two duplicate-line guards, a missing"
-  echo "  block, a missing file and a manifest with no version"
+  echo "  block, a missing file, a manifest with no version, and the seed ASKED in all four states:"
+  echo "  answers right, answers wrong, fails to answer, and cannot be executed (the skip says so)"
   return 0
 }
 
