@@ -40,3 +40,10 @@ scripts/needle.baseline  -merge
 # is not wired into `full.sh`, so this file gates nothing yet; promoting it is a maintainer decision and
 # a separate change. This line is the part that is safe and useful today.
 scripts/axis.baseline -merge
+
+# The PREDICTED DELTA a behaviour-changing feature PR declares (scripts/corpus_manifest.sh,
+# "THE PREDICTED DELTA"). Deliberately NOT `-diff`: its rows are the transitions the reviewer must
+# read in the feature PR, and they are a handful where the manifest is thousands. `-merge` for the
+# oracles' reason — two branches declaring DISJOINT rows must not merge clean into a prediction
+# neither of them made; it is not an oracle, and land.sh does not treat it as one.
+scripts/corpus.expected-delta -merge

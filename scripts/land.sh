@@ -25,16 +25,28 @@
 #
 # ## Usage
 #
-#   scripts/land.sh <pr-number>          prepare + gate the merge, print the push command, stop
-#   scripts/land.sh <pr-number> --push   the same, then publish it if the gate was green
-#   scripts/land.sh --self-test          exercise the message-shape detector without GitHub or a merge
+#   scripts/land.sh <pr-number> [--push] [--no-rewalk]
+#       prepare + gate the merge, print the push command, stop; with --push, publish it if green.
+#       --no-rewalk skips the ~160 s corpus re-walk that spot-checks a predicted oracle commit (below).
+#   scripts/land.sh --self-test          exercise the PR-shape, provenance and oracle-commit deciders
+#                                        without GitHub or a merge
 #
-# An intentional behavior change that updates an oracle uses the first form as a pre-oracle
-# inspection step. The feature PR must contain no oracle file. If the first full gate fails only on
-# the expected oracle mismatch, this script leaves the exact merged tree detached and refuses to
-# publish it; the maintainer reviews the joined transition, creates a separate one-file oracle commit,
-# reruns the complete gate, and publishes that final object with the saved lease. Never pass
-# `--push` on that first pre-oracle run. An unexplained non-oracle failure remains a refusal.
+#   ALATYR_LAND_ACCEPT_BASE=<sha>  acknowledge, for this one run, that origin/main's tip <sha> did NOT
+#                                  come through a pull request (see "PHASE 1 — provenance" below)
+#
+# An intentional behaviour change that moves `scripts/corpus.manifest` is gated ONCE. The feature PR
+# stays oracle-free and DECLARES the shift in `scripts/corpus.expected-delta` (written by
+# `scripts/corpus_manifest.sh --emit-expected`, reviewed in the PR's diff, part of the gated object).
+# When the gate on the merge is green and its corpus stage reports `match by the declared delta`,
+# PHASE 6a commits the fresh manifest that run generated as a one-file oracle commit on top of the merge,
+# proves it is that file byte for byte and touches nothing else, runs the `xbackend_diff.sh` ratchet on
+# it, and publishes THAT object. The second full gate it replaces could only ever have differed from
+# the first in those two manifest-reading checks; everything else the gate runs is a function of the
+# source tree, and an oracle commit changes no source byte.
+#
+# Without a delta file nothing changed: an oracle mismatch is a red gate, the merged tree is left
+# detached for inspection, and the maintainer's separate oracle commit plus a complete second gate is
+# the path (alatyr-integrate §4). `idiom.baseline` and `needle.baseline` always take that path.
 #
 # Run it from the integration checkout, inside `nix develop` (or it re-enters via `nix develop -c`).
 # This helper fetches one selected PR snapshot and deliberately leaves it for alatyr-integrate §5;
@@ -155,11 +167,63 @@ pr_oracle_commit_isolation_check() { # oracle-path commit other-file-count
   return 1
 }
 
+## The predicted delta must have been predicted against the oracle this merge starts from. Refused
+## here, before a 55-minute gate, because the gate would only reach the same verdict at its end: a
+## delta whose base is not the committed manifest is INERT, so the walk then needs a byte-for-byte
+## match it cannot have. The cure is a rebase and a fresh `--emit-expected`, never a hand edit.
+DELTA_REL=scripts/corpus.expected-delta
+pr_delta_base_check() { # changed-paths declared-base-sha|absent base-manifest-sha
+  printf '%s\n' "$1" | grep -qx "$DELTA_REL" || return 0
+  [ "$2" = absent ] && return 0          # the PR deletes a spent delta: nothing is declared
+  [ -n "$2" ] && [ "$2" = "$3" ] && return 0
+  echo "  REFUSE: $DELTA_REL was predicted against manifest ${2:-<no base_sha256>},"
+  echo "          but this merge starts from ${3:-<unknown>}. Rebase onto main and re-emit it with"
+  echo "          scripts/corpus_manifest.sh --emit-expected from a walk of the rebased branch."
+  return 1
+}
+
+## The oracle commit PHASE 6a makes changes the corpus manifest and NOTHING else — the whole argument
+## that its source tree was already gated rests on that set being exactly one path.
+oracle_commit_paths_check() { # changed-paths-of-the-oracle-commit
+  [ "$1" = scripts/corpus.manifest ] && return 0
+  echo "  REFUSE: the oracle commit changes {$(printf '%s' "$1" | tr '\n' ' ')} — it must change exactly"
+  echo "          {scripts/corpus.manifest}, or the gate on its parent is not a verdict on it."
+  return 1
+}
+
+## PROVENANCE. `main` is advanced only over commits that came through a pull request: the merge this
+## script (or a batch) makes, plus the integrator's own TAIL on top of such a merge — a one-oracle
+## commit (the manifest, optionally with the xbackend ratchet line it moves) or a reseed. A direct push
+## of anything else was never gated as a landing, and building the next merge on it would quietly make
+## the next gate its first one. One step of the first-parent walk from origin/main's tip:
+##   0  a merge whose second parent is the head of a PR merged into main — provenance established
+##   3  an integrator tail commit — keep walking to its first parent
+##   1  anything else — refuse
+LAND_TAIL_ORACLE_RE='^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline|scripts/xbackend_diff\.baseline)$'
+LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|scripts/package_cli_test\.sh|CHANGELOG\.md)$'
+main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
+  if [ "$1" -ge 2 ]; then
+    [ "$2" = yes ] && return 0
+    echo "  REFUSE: main's merge $4 merges a head that is not the head of any PR merged into main."
+    return 1
+  fi
+  if [ "$1" = 1 ] && [ -n "$3" ]; then
+    printf '%s\n' "$3" | grep -Evq "$LAND_TAIL_ORACLE_RE" || return 3
+    printf '%s\n' "$3" | grep -Evq "$LAND_TAIL_RESEED_RE" || {
+      printf '%s\n' "$3" | grep -qx seed/alatyr && return 3; }
+  fi
+  echo "  REFUSE: main's $4 did not come through a pull request — it is neither a PR merge nor an"
+  echo "          oracle or reseed commit on top of one (it changes: $(printf '%s' "$3" | tr '\n' ' '))."
+  echo "          Land it through a PR, or, if the owner accepts it as it is, re-run with"
+  echo "          ALATYR_LAND_ACCEPT_BASE=<origin/main's full sha> to acknowledge it for this one landing."
+  return 1
+}
+
 # ------------------------------------------------------------------------------------------------
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=22
+LAND_SELFTEST_EXPECTED=43
 land_shape_self_test() { # work-dir
   local st="$1" bad="" k=0 out
   rm -rf "$st"; mkdir -p "$st" || return 1
@@ -213,6 +277,54 @@ land_shape_self_test() { # work-dir
   pr_oracle_commit_isolation_check scripts/corpus.manifest deadbeef 0 >/dev/null 2>&1
   _ck $? oracle-commit-refused-a-one-file-oracle-commit
 
+  # ---- 5 · the predicted delta's base, checked before the gate. ----------------------------
+  out="$(pr_delta_base_check "$(printf '%s\n%s' src/lower.al "$DELTA_REL")" aaaa bbbb 2>&1)"
+  [ $? = 1 ]; _ck $? delta-base-allowed-a-delta-predicted-against-another-manifest
+  case "$out" in *'predicted against manifest aaaa'*'starts from bbbb'*) _ck 0 x ;;
+                 *) _ck 1 delta-base-did-not-name-both-manifests ;; esac
+  pr_delta_base_check "$(printf '%s\n%s' src/lower.al "$DELTA_REL")" bbbb bbbb >/dev/null 2>&1
+  _ck $? delta-base-refused-a-delta-predicted-against-this-merge-base
+  pr_delta_base_check "$(printf '%s\n%s' src/lower.al "$DELTA_REL")" '' bbbb >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? delta-base-allowed-a-delta-with-no-base
+  pr_delta_base_check src/lower.al aaaa bbbb >/dev/null 2>&1
+  _ck $? delta-base-fired-on-a-PR-that-does-not-carry-a-delta
+  pr_delta_base_check "$DELTA_REL" absent bbbb >/dev/null 2>&1
+  _ck $? delta-base-refused-the-deletion-of-a-spent-delta
+
+  # ---- 6 · the oracle commit PHASE 6a makes is exactly one path. ----------------------------
+  oracle_commit_paths_check scripts/corpus.manifest >/dev/null 2>&1
+  _ck $? oracle-paths-refused-a-manifest-only-commit
+  oracle_commit_paths_check "$(printf '%s\n%s' scripts/corpus.manifest src/lower.al)" >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? oracle-paths-allowed-a-source-file-beside-the-manifest
+  oracle_commit_paths_check "$(printf '%s\n%s' scripts/corpus.manifest scripts/xbackend_diff.baseline)" >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? oracle-paths-allowed-the-ratchet-line-beside-the-manifest
+  oracle_commit_paths_check '' >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? oracle-paths-allowed-an-empty-commit
+
+  # ---- 7 · provenance of origin/main's tip. ------------------------------------------------
+  main_provenance_step 2 yes '' m1 >/dev/null 2>&1; _ck $? provenance-refused-a-PR-merge
+  main_provenance_step 2 no '' m2 >/dev/null 2>&1; [ $? = 1 ]; _ck $? provenance-allowed-a-merge-of-no-PR
+  out="$(main_provenance_step 1 - docs/ir-slice-3.md 3381d25 2>&1)"
+  [ $? = 1 ]; _ck $? provenance-allowed-a-direct-push
+  case "$out" in *3381d25*'docs/ir-slice-3.md'*ALATYR_LAND_ACCEPT_BASE*) _ck 0 x ;;
+                 *) _ck 1 provenance-did-not-name-the-commit-its-paths-and-the-acknowledgement ;; esac
+  main_provenance_step 1 - scripts/corpus.manifest o1 >/dev/null 2>&1
+  [ $? = 3 ]; _ck $? provenance-stopped-at-an-oracle-commit
+  main_provenance_step 1 - "$(printf '%s\n%s' scripts/corpus.manifest scripts/xbackend_diff.baseline)" o2 >/dev/null 2>&1
+  [ $? = 3 ]; _ck $? provenance-stopped-at-a-manifest-plus-ratchet-commit
+  main_provenance_step 1 - "$(printf '%s\n' package.al seed/alatyr seed/VERSION scripts/package_cli_test.sh CHANGELOG.md)" r1 >/dev/null 2>&1
+  [ $? = 3 ]; _ck $? provenance-stopped-at-a-reseed-commit
+  main_provenance_step 1 - CHANGELOG.md c1 >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? provenance-allowed-a-direct-CHANGELOG-push-as-a-reseed
+  main_provenance_step 1 - "$(printf '%s\n%s' scripts/corpus.manifest src/lower.al)" x1 >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? provenance-allowed-a-source-change-riding-an-oracle-commit
+  main_provenance_step 0 - '' root >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? provenance-allowed-a-root-commit
+
+  # ---- 8 · the predicted-delta decider in corpus_manifest.sh, which PHASE 6a relies on. ------
+  bash "$ROOT/scripts/corpus_manifest.sh" --delta-self-test >"$st/delta.out" 2>&1
+  _ck $? "corpus-manifest-predicted-delta-self-test($(tail -3 "$st/delta.out" | tr '\n' ' '))"
+
   printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
   if [ -n "$bad" ]; then echo "*** land self-test: FAILED —$bad ***" >&2; return 1; fi
   if [ "$k" -lt "$LAND_SELFTEST_EXPECTED" ]; then
@@ -221,7 +333,8 @@ land_shape_self_test() { # work-dir
     return 1
   fi
   echo "ok   land PR-shape self-test: $k checks — the oracle-mixing, seed-binary, seed/VERSION"
-  echo "     append-only and one-file-oracle-commit refusals, each in both directions"
+  echo "     append-only, one-file-oracle-commit, predicted-delta base, oracle-commit path-set and"
+  echo "     main-provenance refusals, each in both directions, and the predicted-delta decider"
   return 0
 }
 
@@ -249,7 +362,15 @@ case "$PR" in
   ''|*[!0-9]*) sed -n '/^# ## Usage/,/^set -u/p' "$SELF" | sed -e 's/^# \{0,1\}//' -e '$d'; exit 2 ;;
 esac
 DO_PUSH=0
-[ "${2:-}" = "--push" ] && DO_PUSH=1
+DO_REWALK=1
+for a in "${@:2}"; do
+  case "$a" in
+    --push) DO_PUSH=1 ;;
+    --no-rewalk) DO_REWALK=0 ;;
+    *) die "unknown option: $a" ;;
+  esac
+done
+sha256_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi; }
 
 # --- PHASE 0 — preconditions ----------------------------------------------------------------------
 # Each of these has cost somebody a measurement. A dirty tree makes "the gate ran on the merge" false;
@@ -296,6 +417,49 @@ HEAD_SHA="$(git rev-parse "$PR_REF")"
 echo "  base=$BASE"
 echo "  head=$HEAD_SHA"
 
+# --- PHASE 1b — provenance of the base -------------------------------------------------------------
+# The merge below is built ON origin/main, and the push advances main over it, so whatever sits at
+# origin/main's tip is published again under this PR's gate. A commit pushed straight to main never
+# went through a landing — no PR, no audit, no gate on that object as a landing — and building on it
+# silently makes this PR's gate its first one. Walk the first-parent chain from the tip: the
+# integrator's tail commits (an oracle or a reseed) are passed over, and the first other commit must be
+# a merge of a PR that GitHub records as merged into main. Earlier history is not rescanned; each
+# landing proves its own base, so the chain is proved one link at a time from here on.
+say "PHASE 1b — provenance: origin/main's tip came through a pull request"
+prov_c="$BASE"; prov_ok=1; prov_n=0
+while :; do
+  set -- $(git rev-list --parents -n 1 "$prov_c")
+  prov_np=$(($# - 1)); prov_v=-; prov_files=
+  if [ "$prov_np" -ge 2 ]; then
+    prov_p2="$3"
+    prov_count="$(gh api "repos/$REPO/commits/$prov_p2/pulls" \
+      --jq "[.[] | select(.merged_at != null and .head.sha == \"$prov_p2\" and .base.ref == \"main\")] | length" \
+      2>/dev/null)" || die "could not ask GitHub which PR merged $prov_p2; provenance unknown, refusing"
+    case "$prov_count" in ''|*[!0-9]*) die "unreadable PR association for $prov_p2; refusing" ;; esac
+    [ "$prov_count" -ge 1 ] && prov_v=yes || prov_v=no
+  else
+    prov_files="$(git diff-tree --no-commit-id --name-only -r "$prov_c")"
+  fi
+  main_provenance_step "$prov_np" "$prov_v" "$prov_files" "$(git rev-parse --short "$prov_c")"; prov_rc=$?
+  case "$prov_rc" in
+    0) echo "  $(git rev-parse --short "$prov_c") merges a PR head GitHub records as merged into main"; break ;;
+    3) echo "  $(git rev-parse --short "$prov_c") is an integrator tail commit ($(printf '%s' "$prov_files" | tr '\n' ' '))"
+       prov_c="$(git rev-parse "$prov_c^")"; prov_n=$((prov_n + 1))
+       [ "$prov_n" -le 8 ] || { echo "  REFUSE: more than 8 tail commits above the last PR merge"; prov_ok=0; break; } ;;
+    *) prov_ok=0; break ;;
+  esac
+done
+if [ "$prov_ok" = 0 ]; then
+  if [ -n "${ALATYR_LAND_ACCEPT_BASE:-}" ] && [ "$ALATYR_LAND_ACCEPT_BASE" = "$BASE" ]; then
+    echo "  ACKNOWLEDGED by the operator (ALATYR_LAND_ACCEPT_BASE=$BASE): main's tip is accepted as it is."
+    echo "  Record that acknowledgement in this PR's acceptance comment."
+  else
+    [ -n "${ALATYR_LAND_ACCEPT_BASE:-}" ] && echo "  (ALATYR_LAND_ACCEPT_BASE=$ALATYR_LAND_ACCEPT_BASE is not origin/main's tip $BASE)"
+    verdict "LAND REFUSED (provenance of main) — nothing was merged"
+    exit 1
+  fi
+fi
+
 # The shape checks that are cheap, mechanical, and each anchored to an incident.
 say "PHASE 2 — PR shape"
 shape_fail=0
@@ -317,6 +481,14 @@ done
 # are individually one-file-shaped.
 pr_oracle_mix_check "$CHANGED" || shape_fail=1
 pr_seed_binary_check "$CHANGED" || shape_fail=1
+DELTA_DECLARED_BASE=absent
+if git cat-file -e "$HEAD_SHA:$DELTA_REL" 2>/dev/null; then
+  DELTA_DECLARED_BASE="$(git show "$HEAD_SHA:$DELTA_REL" | sed -n 's/^base_sha256=//p' | head -n 1)"
+fi
+BASE_MANIFEST_SHA="$(git show "$BASE:scripts/corpus.manifest" | sha256_of)"
+pr_delta_base_check "$CHANGED" "$DELTA_DECLARED_BASE" "$BASE_MANIFEST_SHA" || shape_fail=1
+printf '%s\n' "$CHANGED" | grep -qx "$DELTA_REL" && [ "$DELTA_DECLARED_BASE" != absent ] &&
+  echo "  predicted delta: $DELTA_REL declares $(git show "$HEAD_SHA:$DELTA_REL" | sed -n 's/^pairs=//p') pair(s) against main's manifest"
 dels=0
 printf '%s\n' "$CHANGED" | grep -qx 'seed/VERSION' &&
   dels="$(git diff --numstat "$BASE...$HEAD_SHA" -- seed/VERSION | awk '{print $2}')"
@@ -365,6 +537,8 @@ echo "  so that the fixpoint that is verified is the fixpoint that ships."
 
 # --- PHASE 4 — the authoritative gate, on the merge -----------------------------------------------
 say "PHASE 4 — the authoritative gate, on the merged tree"
+GATE_STAMP="$ROOT/target/land-gate.stamp"
+mkdir -p "$ROOT/target" && : > "$GATE_STAMP"
 ( ulimit -c 0; nix develop -c bash scripts/full.sh --force-sweeps )
 gate_rc=$?
 echo "  full.sh exited $gate_rc"
@@ -390,13 +564,85 @@ if [ "$gate_rc" != 0 ] || [ "$post_fail" != 0 ]; then
   exit 1
 fi
 
-verdict "GATE GREEN on the merged tree — $M is landable"
+# --- PHASE 6a — the predicted oracle commit, when the gate realised a declared delta ----------------
+# The corpus stage passed by `match by the declared delta`: the fresh walk differs from the committed
+# manifest by exactly the rows the feature declared, and it left that fresh manifest in target/. That
+# file IS the oracle. Commit it byte for byte on top of M, prove the commit is that file and changes
+# nothing else, and run the one other gate check that reads the manifest as data — the xbackend
+# ratchet, which is arithmetic over the manifest and needs no compiler. Every other stage of a second
+# full gate is a function of the source tree, which this commit does not touch. A re-walk of the
+# corpus on the new object (~160 s, not ~55 min) is kept as a DETERMINISM spot-check of the walk, not
+# as the verdict. M alone is never published from here: its committed oracle would be stale.
+CM_LOG="$ROOT/target/full_corpus_manifest.log"
+FRESH="$ROOT/target/corpus-manifest/corpus.manifest"
+PUBLISH="$M"
+if [ -f "$CM_LOG" ] && [ "$CM_LOG" -nt "$GATE_STAMP" ] && grep -q '^corpus manifest: match by the declared delta' "$CM_LOG"; then
+  say "PHASE 6a — the predicted oracle commit (the gate realised $DELTA_REL exactly)"
+  o_fail=0
+  [ -f "$FRESH" ] && [ "$FRESH" -nt "$GATE_STAMP" ] || die "the gate's fresh manifest $FRESH is missing or older than this gate"
+  # Re-decide from the files rather than trusting the log line.
+  bash scripts/corpus_manifest.sh --check-delta scripts/corpus.manifest "$FRESH" "$DELTA_REL" || {
+    verdict "NOT LANDABLE — the fresh manifest does not realise $DELTA_REL when re-checked"; exit 1; }
+  O_RESULT="$(sed -n 's/^result_sha256=//p' "$DELTA_REL" | head -n 1)"
+  [ "$(sha256_of < "$FRESH")" = "$O_RESULT" ] || { echo "  FAIL: fresh manifest is not result_sha256"; o_fail=1; }
+  O_RATCHET="$(bash scripts/xbackend_diff.sh --self-test >/dev/null 2>&1 && bash scripts/xbackend_diff.sh --ratchet "$FRESH" 2>&1)"
+  o_ratchet_rc=$?
+  printf '%s\n' "$O_RATCHET" | grep -E '^xbackend (diff|ratchet):' | sed 's/^/  /'
+  [ "$o_ratchet_rc" = 0 ] || { echo "  FAIL: the xbackend ratchet refuses the new manifest (rc $o_ratchet_rc)"; o_fail=1; }
+  [ "$o_fail" = 0 ] || { verdict "NOT LANDABLE — the predicted oracle failed its checks; $M left detached"; exit 1; }
+
+  O_EXPLAIN="$(ALATYR_CORPUS_EXPLAIN_CAP=400 bash scripts/corpus_manifest.sh --explain scripts/corpus.manifest "$FRESH")"
+  O_PAIRS="$(sed -n 's/^pairs=//p' "$DELTA_REL" | head -n 1)"
+  O_MSG="$ROOT/target/land-oracle-commit.msg"
+  {
+    printf 'chore(oracle): record the corpus transitions #%s predicted\n\n' "$PR"
+    printf 'The corpus manifest the full gate generated on merge %s, committed byte for byte. That\n' "$(git rev-parse --short "$M")"
+    printf 'walk differed from the committed manifest by exactly the %s pair(s) declared in\n' "$O_PAIRS"
+    printf '%s (base %s, result %s), so this commit\n' "$DELTA_REL" "$(printf '%s' "$BASE_MANIFEST_SHA" | cut -c1-12)" "$(printf '%s' "$O_RESULT" | cut -c1-12)"
+    printf 'changes no source byte and the gate on its parent is its verdict (scripts/land.sh PHASE 6a).\n\n'
+    printf 'scripts/corpus_manifest.sh --explain <baseline> <new>, verbatim:\n\n'
+    printf '%s\n' "$O_EXPLAIN" | sed 's/^/  /'
+    printf '\nVerification: cmp against the gated run'"'"'s fresh manifest; the commit changes\n'
+    printf 'scripts/corpus.manifest alone; xbackend_diff.sh --ratchet on it:\n'
+    printf '%s\n' "$O_RATCHET" | grep -E '^xbackend (diff|ratchet):' | sed 's/^/  /'
+    [ -n "$ISSUE" ] && printf '\nRefs #%s\n' "$ISSUE"
+  } > "$O_MSG"
+  cp "$FRESH" scripts/corpus.manifest
+  git add scripts/corpus.manifest
+  git commit --quiet --no-verify -F "$O_MSG" || die "could not create the oracle commit"
+  O="$(git rev-parse HEAD)"
+  message_shape_check "oracle commit $O" "$(git log -1 --format=%b "$O")" || o_fail=1
+  [ "$(git rev-parse "$O^")" = "$M" ] || { echo "  FAIL: the oracle commit's parent is not the gated merge"; o_fail=1; }
+  oracle_commit_paths_check "$(git diff --name-only "$M" "$O")" || o_fail=1
+  git show "$O:scripts/corpus.manifest" | cmp -s - "$FRESH" || { echo "  FAIL: the committed oracle is not the fresh manifest"; o_fail=1; }
+  [ "$o_fail" = 0 ] || { verdict "NOT LANDABLE — the oracle commit $O failed its shape checks"; exit 1; }
+  echo "  oracle commit $O: scripts/corpus.manifest alone, byte-identical to the gated run's fresh walk"
+
+  if [ "$DO_REWALK" = 1 ]; then
+    say "PHASE 6b — determinism spot-check: one corpus re-walk on $O (not the verdict)"
+    ( ulimit -c 0; nix develop -c bash scripts/corpus_manifest.sh --check ) > "$ROOT/target/land-rewalk.log" 2>&1
+    rw_rc=$?
+    grep -E '^corpus manifest: (rows=|match|MISMATCH|note)' "$ROOT/target/land-rewalk.log" | sed 's/^/  /'
+    if [ "$rw_rc" != 0 ] || ! grep -q '^corpus manifest: match (' "$ROOT/target/land-rewalk.log"; then
+      verdict "NOT LANDABLE — a second walk of the same tree did not reproduce the oracle (rc $rw_rc); the walk is not deterministic here, see target/land-rewalk.log"
+      exit 1
+    fi
+  else
+    echo "  re-walk skipped (--no-rewalk)"
+  fi
+  git diff --exit-code --quiet && git diff --cached --exit-code --quiet && [ "$(git rev-parse HEAD)" = "$O" ] ||
+    { verdict "NOT LANDABLE — the tree moved after the oracle commit"; exit 1; }
+  PUBLISH="$O"
+fi
+
+verdict "GATE GREEN on the merged tree — $PUBLISH is landable"
+[ "$PUBLISH" != "$M" ] && echo "  ($PUBLISH = gated merge $M + its predicted one-file oracle commit)"
 cat <<EOF
 
 Publish EXACTLY this object. The lease is the integrator token: it fails, server-side, if main moved
 after $BASE was read, and then this PR must be re-merged and re-gated.
 
-    git push origin $M:refs/heads/main --force-with-lease=refs/heads/main:$BASE
+    git push origin $PUBLISH:refs/heads/main --force-with-lease=refs/heads/main:$BASE
 
 Afterwards, follow alatyr-integrate §5. It re-reads the branch and performs the separately
 preconditioned remote-branch deletion, claim release, acceptance readback, selected snapshot cleanup,
@@ -405,11 +651,11 @@ EOF
 
 if [ "$DO_PUSH" = 1 ]; then
   say "PHASE 7 — publish"
-  git push origin "$M:refs/heads/main" --force-with-lease=refs/heads/main:"$BASE" || {
+  git push origin "$PUBLISH:refs/heads/main" --force-with-lease=refs/heads/main:"$BASE" || {
     verdict "PUSH REJECTED — main moved after $BASE. Re-run: the merge must be re-gated."
     exit 1
   }
-  verdict "LANDED — main is now $M"
+  verdict "LANDED — main is now $PUBLISH"
   echo "The selected PR snapshot $PR_REF is deliberately retained after this push."
   echo "Follow alatyr-integrate §5 for feature-branch/local worktree cleanup, claim release,"
   echo "acceptance readback, and exact snapshot cleanup; retain dirty, diverged, or ambiguous state."

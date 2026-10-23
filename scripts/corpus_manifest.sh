@@ -83,8 +83,22 @@
 #     --explain A B      read two manifests JOINED on (backend, path), grouped by severity class.
 #                        A regeneration's commit message carries this output verbatim.
 #     --self-test        run the detector, classifier, normalization, stream-separation, re-observation,
-#                        body-shape and frame-layout self-tests only; never walk the corpus or write
-#                        scripts/corpus.manifest
+#                        body-shape, predicted-delta and frame-layout self-tests only; never walk the
+#                        corpus or write scripts/corpus.manifest
+#
+#   The predicted delta (an intentional behaviour change gated ONCE — see "THE PREDICTED DELTA" below).
+#   These three need no compiler, no cross tool and no `nix develop`:
+#     --emit-expected COMMITTED FRESH      print the delta that takes COMMITTED to FRESH, in --explain's
+#                        classes; a PR author redirects it into scripts/corpus.expected-delta
+#     --check-delta COMMITTED FRESH DELTA  0 = FRESH differs from COMMITTED by exactly DELTA; 1 = it does
+#                        not (the report names every pair); 2 = malformed; 3 = DELTA is inert here
+#     --delta-self-test  the predicted-delta decider's planted self-test alone
+#
+#   With scripts/corpus.expected-delta present and LIVE (its base_sha256 is the committed manifest),
+#   --check passes exactly when the fresh walk realises the declared delta, and says so on a
+#   `match by the declared delta` line: the oracle commit is then OWED, and the fresh manifest it
+#   left at target/corpus-manifest/corpus.manifest is that oracle, byte for byte. An absent, spent or
+#   stale delta leaves --check exactly as it was: the manifest must match.
 #
 #   ALATYR_CORPUS_CC        absolute compiler to exercise (default: this checkout's target/debug/alatyr)
 #   ALATYR_CORPUS_TIMEOUT   seconds per child process, build phases included (default: 30)
@@ -324,6 +338,13 @@ while [ "$#" -gt 0 ]; do
     --explain)
       [ "$#" -ge 3 ] || { echo "corpus manifest: --explain needs two manifest files" >&2; exit 2; }
       MODE=explain; EXPLAIN_A="$2"; EXPLAIN_B="$3"; shift 2 ;;
+    --emit-expected)
+      [ "$#" -ge 3 ] || { echo "corpus manifest: --emit-expected needs the committed and the fresh manifest" >&2; exit 2; }
+      MODE=emit-expected; EXPLAIN_A="$2"; EXPLAIN_B="$3"; shift 2 ;;
+    --check-delta)
+      [ "$#" -ge 4 ] || { echo "corpus manifest: --check-delta needs the committed manifest, the fresh one and a delta file" >&2; exit 2; }
+      MODE=check-delta; EXPLAIN_A="$2"; EXPLAIN_B="$3"; DELTA_ARG="$4"; shift 3 ;;
+    --delta-self-test) MODE=delta-selftest ;;
     --help|-h) usage; exit 0 ;;
     *) echo "corpus manifest: unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -331,6 +352,499 @@ while [ "$#" -gt 0 ]; do
 done
 
 die() { echo "corpus manifest: $*" >&2; exit 2; }
+
+# ===================================================================================================
+# The JOIN, the predicted delta, and the modes that need no compiler.
+#
+# Everything from here to the tool checks below is pure manifest arithmetic: it reads two or three
+# text files and runs no compiler, no cross tool and no program. So these modes are dispatched BEFORE
+# the toolchain is resolved — `--explain` used to resolve all eight cross tools and build a compiler
+# it never ran — and they work on a machine with no `nix develop` at all.
+# ===================================================================================================
+TAB="$(printf '\t')"
+
+sha_file() { # file -> its sha256
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+## THE CLASSIFIER — the one place a (backend, path) transition gets its name. `--explain`, the
+## predicted delta's emitter and its checker all read these rows, so a declared expectation and an
+## observed transition are compared in the same vocabulary by construction, never by two copies of
+## the rules that could drift apart.
+##
+## Join two manifests on (backend, path) and print one TAB row per differing pair:
+##   class <TAB> backend <TAB> path <TAB> before <TAB> after
+## where before/after are `phase/exit/stdout_sha256/stderr_sha256`, or `-` for an absent pair.
+## Sorted on (backend, path) so that the output is a function of the two inputs alone.
+## Reading the raw `diff -u` positionally is WRONG and has nearly cost a landing: added and removed
+## rows do not pair up, so a shifted row invents transitions that are not there, and a global `head`
+## can truncate away an entire severity class. Eight `run -> assemble/1` regressions once sat inside
+## 23 genuine wins.
+delta_rows() { # baseline candidate
+  awk 'BEGIN { FS = "\t"; OFS = "\t" }
+function emit(c, k, ov, nv,   kk) { split(k, kk, SUBSEP); print c, kk[1], kk[2], ov, nv }
+## `side`, set by an operand assignment, and neither FNR == NR (an EMPTY baseline would read the
+## candidate as the baseline) nor FILENAME (the SAME file given twice would be read as two baselines).
+side == 1 {
+  if (NF == 6 && $1 ~ /^(x86_64|aarch64|riscv64|wasm)$/) o[$1 SUBSEP $2] = $3 "/" $4 "/" $5 "/" $6
+  next
+}
+NF == 6 && $1 ~ /^(x86_64|aarch64|riscv64|wasm)$/ { n[$1 SUBSEP $2] = $3 "/" $4 "/" $5 "/" $6 }
+END {
+  for (k in o) if (!(k in n)) emit("REMOVED", k, o[k], "-")
+  for (k in n) {
+    if (!(k in o)) { emit("ADDED", k, "-", n[k]); continue }
+    if (o[k] == n[k]) continue
+    split(o[k], a, "/"); split(n[k], b, "/")
+    orun = (a[1] == "run"); nrun = (b[1] == "run")
+    ## A `*_timeout` in the FRESH run gets its own class, ahead of every other test. It is not a
+    ## regression class: `rc == 124 after the ceiling` says the child did not finish, and nothing about
+    ## it says the compiler refused the program. Folding it into NO-LONGER-RUNS reported a conclusion
+    ## the stage had disclaimed in the same output (issue #537); the walk now re-observes such a row
+    ## serially first, so one that reaches here has breached the ceiling twice.
+    if (b[1] ~ /_timeout$/)        c = "TIMED-OUT"
+    else if (orun && !nrun)        c = "NO-LONGER-RUNS"
+    else if (!orun && nrun)        c = "NOW-RUNS"
+    else if (orun && a[2] != b[2]) c = "EXIT-CHANGED"
+    else if (orun)                 c = "OUTPUT-CHANGED"
+    else if (a[1] != b[1])         c = "PHASE-CHANGED"
+    else                           c = "DETAIL-CHANGED"
+    emit(c, k, o[k], n[k])
+  }
+}' side=1 "$1" side=2 "$2" | sort -t "$TAB" -k2,2 -k3,3
+}
+
+## Join two manifests on (backend, path) and print each difference under its severity class.
+## `--explain <old> <new>` exposes it directly; `--check` calls it on a mismatch. EXPLAIN_CAP
+## bounds the sample PER CLASS, never globally: a global bound can hide a whole class.
+EXPLAIN_CAP="${ALATYR_CORPUS_EXPLAIN_CAP:-12}"
+explain_manifest() { # baseline candidate
+  delta_rows "$1" "$2" | awk -v CAP="$EXPLAIN_CAP" 'BEGIN { FS = "\t" }
+{
+  total++; c = $1; cnt[c]++; bk[c SUBSEP $2]++
+  if (shown[c] + 0 < CAP) {
+    split($4, a, "/"); split($5, b, "/")
+    smp[c] = smp[c] sprintf("      %-8s %-52s %s -> %s\n", $2, $3, \
+      ($4 == "-" ? "-" : a[1] "/" a[2]), ($5 == "-" ? "-" : b[1] "/" b[2]))
+    shown[c]++
+  }
+}
+END {
+  nc = split("TIMED-OUT NO-LONGER-RUNS EXIT-CHANGED REMOVED PHASE-CHANGED DETAIL-CHANGED OUTPUT-CHANGED NOW-RUNS ADDED", ord, " ")
+  desc["TIMED-OUT"]      = "did not finish inside the per-child ceiling — a HANG, or a machine loaded from outside this gate"
+  desc["NO-LONGER-RUNS"] = "was running, now refused by an earlier phase — a REGRESSION"
+  desc["EXIT-CHANGED"]   = "ran before and after, different exit — a VALUE change"
+  desc["REMOVED"]        = "the pair is gone from the fresh run — coverage lost"
+  desc["PHASE-CHANGED"]  = "refused before and after, at a different phase"
+  desc["DETAIL-CHANGED"] = "same phase, different exit or captured streams"
+  desc["OUTPUT-CHANGED"] = "ran with the same exit, different stdout/stderr"
+  desc["NOW-RUNS"]       = "was refused, now runs — a WIN"
+  desc["ADDED"]          = "new pair in the fresh run — new coverage"
+  if (total == 0) { print "corpus manifest: no (backend,path) pair differs"; exit 0 }
+  printf "corpus manifest: %d differing pairs, joined on (backend, path)\n", total
+  nb = split("x86_64 aarch64 riscv64 wasm", bo, " ")
+  for (i = 1; i <= nc; i++) {
+    c = ord[i]; if (!(c in cnt)) continue
+    line = ""
+    for (j = 1; j <= nb; j++) if ((c SUBSEP bo[j]) in bk) line = line sprintf(" %s %d", bo[j], bk[c SUBSEP bo[j]])
+    printf "\n  %-15s %4d pair(s)  [%s ]\n      %s\n", c, cnt[c], line, desc[c]
+    printf "%s", smp[c]
+    if (cnt[c] > shown[c]) printf "      … %d more in this class (the count above is complete)\n", cnt[c] - shown[c]
+  }
+}'
+}
+
+# ---------------------------------------------------------------------------------------------------
+# THE PREDICTED DELTA (`scripts/corpus.expected-delta`).
+#
+# An intentional behaviour change used to cost TWO full gates: the first one went red on the expected
+# manifest mismatch, the maintainer committed the regenerated oracle, and the whole gate ran again on
+# an object whose only new byte was the oracle. That second run could only ever differ from the first
+# in the two stages that READ the manifest as data — this one and the `xbackend_diff.sh` ratchet —
+# because an oracle commit changes no source byte, and the fixpoint, e2e, the sweeps, the formatter,
+# the idiom/strict-form/wildcard checks and the IR verifier are functions of the source tree alone.
+#
+# So the feature PR now DECLARES the manifest shift it causes, in a file that is part of the gated
+# object and is reviewed in the PR's diff (it is deliberately not `-diff`, unlike the manifest). The
+# gate then asks the stronger question "is the fresh-vs-committed difference EXACTLY the declared
+# one?" — no undeclared pair, no unrealised one, every declared value equal to the observed one, down
+# to the stream hashes — and the fresh manifest it generated IS the oracle, which `scripts/land.sh`
+# commits byte for byte and checks with `cmp`, not with a second walk.
+#
+#   # comments
+#   format=alatyr-corpus-delta-v1
+#   base_sha256=<sha256 of the committed scripts/corpus.manifest the prediction was made against>
+#   result_sha256=<sha256 of the whole manifest the change produces>
+#   pairs=<number of rows below>
+#   columns=class<TAB>backend<TAB>path<TAB>before<TAB>after
+#   <delta_rows row> …
+#
+# The rows are `delta_rows` output verbatim: the class is `--explain`'s, and before/after are the full
+# `phase/exit/stdout/stderr` of the pair, so an expectation and an observation compare as text.
+#
+# A delta is LIVE only while the committed manifest is byte-identical to the one it names in
+# `base_sha256`. Once the oracle commit it predicted has landed, or once any other oracle moves under
+# it, it is INERT and the plain byte-for-byte match is required again — so a delta left behind on
+# `main` can never make a later mismatch pass, and a stale prediction can only ever turn a gate red.
+# Write one with `--emit-expected`; never by hand.
+# ---------------------------------------------------------------------------------------------------
+DELTA_FORMAT=alatyr-corpus-delta-v1
+DELTA_FILE_REL=scripts/corpus.expected-delta
+
+delta_field() { sed -n "s/^$2=//p" "$1" | head -n 1; }    # delta-file key
+
+## A file is a usable manifest for this purpose: the v2 marker, and a row_count its body agrees with.
+## (The delta arithmetic is not the gate of the gate — `check_body_shape` is — but a delta computed
+## against a truncated file would declare the truncation.)
+manifest_usable() { # file label
+  local declared actual
+  [ -f "$1" ] || { echo "corpus delta: no such manifest: $1" >&2; return 2; }
+  grep -qx 'format=alatyr-corpus-manifest-v2' "$1" ||
+    { echo "corpus delta: $2 $1 is not an alatyr-corpus-manifest-v2 file" >&2; return 2; }
+  declared="$(sed -n 's/^row_count=//p' "$1" | head -n 1)"
+  actual="$(awk -F'\t' 'NF==6 && $1 ~ /^(x86_64|aarch64|riscv64|wasm)$/ {n++} END{print n+0}' "$1")"
+  [ "${declared:-x}" = "$actual" ] ||
+    { echo "corpus delta: $2 $1 is inconsistent: row_count=${declared:-<absent>} but it holds $actual rows" >&2; return 2; }
+  return 0
+}
+
+## Write the delta that takes <committed> to <fresh>, on stdout. Refuses (rc 2) a TIMED-OUT pair — a
+## contention artifact must never be declared as the intended behaviour — and (rc 1) an empty delta,
+## which is not a prediction of anything and would only make the plain match harder to read.
+emit_expected() { # committed fresh
+  local rows timed
+  manifest_usable "$1" committed || return 2
+  manifest_usable "$2" fresh || return 2
+  rows="$(delta_rows "$1" "$2")"
+  if [ -z "$rows" ]; then
+    echo "corpus delta: no (backend, path) pair differs between $1 and $2 — there is nothing to declare." >&2
+    echo "  A change that moves no row needs no delta file; do not commit an empty one." >&2
+    return 1
+  fi
+  timed="$(printf '%s\n' "$rows" | awk -F'\t' '$1 == "TIMED-OUT"' | grep -c '' || true)"
+  if [ "$timed" != 0 ]; then
+    echo "corpus delta: REFUSED — $timed pair(s) in $2 are TIMED-OUT. A timeout is a measurement that did" >&2
+    echo "  not finish, not a behaviour; re-run the walk on a quiet machine before predicting anything." >&2
+    printf '%s\n' "$rows" | awk -F'\t' '$1 == "TIMED-OUT" {print "    " $2 "  " $3}' >&2
+    return 2
+  fi
+  printf '# Alatyr predicted corpus-manifest delta; generated by scripts/corpus_manifest.sh --emit-expected.\n'
+  printf '# The feature PR declares the transitions it causes; the gate requires the fresh manifest to differ\n'
+  printf '# from the committed one by EXACTLY these rows, and scripts/land.sh then commits that fresh manifest as\n'
+  printf '# the oracle. Inert once the committed manifest is no longer base_sha256. Regenerate, never hand-edit.\n'
+  printf '%s\n' "$rows" | awk -F'\t' '{c[$1]++; b[$1 FS $2]++}
+    END {
+      n = split("TIMED-OUT NO-LONGER-RUNS EXIT-CHANGED REMOVED PHASE-CHANGED DETAIL-CHANGED OUTPUT-CHANGED NOW-RUNS ADDED", o, " ")
+      m = split("x86_64 aarch64 riscv64 wasm", bo, " ")
+      for (i = 1; i <= n; i++) if (o[i] in c) {
+        s = ""; for (j = 1; j <= m; j++) if ((o[i] FS bo[j]) in b) s = s " " bo[j] " " b[o[i] FS bo[j]]
+        printf "#   %-15s %4d pair(s)  [%s ]\n", o[i], c[o[i]], s
+      }
+    }'
+  printf 'format=%s\n' "$DELTA_FORMAT"
+  printf 'base_sha256=%s\n' "$(sha_file "$1")"
+  printf 'result_sha256=%s\n' "$(sha_file "$2")"
+  printf 'pairs=%s\n' "$(printf '%s\n' "$rows" | grep -c '')"
+  printf 'columns=class<TAB>backend<TAB>path<TAB>before<TAB>after\n'
+  printf '%s\n' "$rows"
+  return 0
+}
+
+## The delta file's rows, sorted the way `delta_rows` sorts — or rc 2 with the reason on stderr when
+## the file is not a well-formed v1 delta. Everything that is not a comment, a known header key or a
+## five-field row is a refusal: a parser that skipped what it did not understand could be fed a row it
+## silently ignored.
+delta_declared_rows() { # delta-file
+  awk -F'\t' -v FMT="$DELTA_FORMAT" '
+    /^#/ || /^$/ { next }
+    /^(format|base_sha256|result_sha256|pairs|columns)=/ && NF == 1 { next }
+    NF == 5 && $1 ~ /^(TIMED-OUT|NO-LONGER-RUNS|EXIT-CHANGED|REMOVED|PHASE-CHANGED|DETAIL-CHANGED|OUTPUT-CHANGED|NOW-RUNS|ADDED)$/ \
+            && $2 ~ /^(x86_64|aarch64|riscv64|wasm)$/ && $3 != "" && $4 != "" && $5 != "" { print; next }
+    { printf "corpus delta: line %d of %s is neither a header nor a delta row: %s\n", NR, FILENAME, $0 > "/dev/stderr"; bad = 1 }
+    END { exit bad ? 2 : 0 }' "$1" > "$1.rows.$$" || { rm -f "$1.rows.$$"; return 2; }
+  sort -t "$TAB" -k2,2 -k3,3 "$1.rows.$$"
+  rm -f "$1.rows.$$"
+}
+
+## THE DECIDER. Returns
+##   0  LIVE and REALISED — <fresh> differs from <committed> by exactly the declared rows, and is the
+##      byte-exact manifest the delta names in result_sha256;
+##   1  LIVE and NOT realised — the report lists every UNDECLARED, UNREALISED and MISPREDICTED pair;
+##   2  the delta or a manifest is malformed (a refusal, never an inert pass);
+##   3  INERT — the committed manifest is not the delta's base, so the delta says nothing here. Sets
+##      DELTA_STATE to `spent` (the committed manifest IS the predicted result: the oracle landed) or
+##      `stale` (some other oracle).
+## Reads only its arguments, so the self-test drives the real decision on synthetic files.
+DELTA_STATE=
+DELTA_PAIRS=
+delta_check() { # committed fresh delta-file
+  local committed="$1" fresh="$2" delta="$3" fmt base result pairs csha fsha tmp n
+  DELTA_STATE=malformed; DELTA_PAIRS=
+  [ -f "$delta" ] || { echo "corpus delta: no such delta file: $delta" >&2; return 2; }
+  fmt="$(delta_field "$delta" format)"
+  [ "$fmt" = "$DELTA_FORMAT" ] ||
+    { echo "corpus delta: $delta is not an $DELTA_FORMAT file (format=${fmt:-<absent>})" >&2; return 2; }
+  base="$(delta_field "$delta" base_sha256)"; result="$(delta_field "$delta" result_sha256)"
+  pairs="$(delta_field "$delta" pairs)"
+  case "$base" in *[!0-9a-f]*|'') base=bad ;; esac
+  case "$result" in *[!0-9a-f]*|'') result=bad ;; esac
+  if [ "${#base}" != 64 ] || [ "${#result}" != 64 ]; then
+    echo "corpus delta: $delta must name base_sha256 and result_sha256 as 64 hex digits" >&2; return 2
+  fi
+  case "$pairs" in ''|*[!0-9]*) echo "corpus delta: $delta has no numeric pairs= line" >&2; return 2 ;; esac
+  manifest_usable "$committed" committed || return 2
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/corpus-delta.XXXXXX")" || return 2
+  cp "$delta" "$tmp/delta"
+  delta_declared_rows "$tmp/delta" > "$tmp/declared" || { rm -rf "$tmp"; return 2; }
+  n="$(grep -c '' < "$tmp/declared" || true)"
+  if [ "$n" != "$pairs" ] || [ "$n" = 0 ]; then
+    echo "corpus delta: $delta declares pairs=$pairs but holds $n row(s)" >&2; rm -rf "$tmp"; return 2
+  fi
+  if awk -F'\t' '$1 == "TIMED-OUT" {f = 1} END {exit !f}' "$tmp/declared"; then
+    echo "corpus delta: $delta declares a TIMED-OUT pair. A timeout is never an intended behaviour;" >&2
+    echo "  regenerate the delta from a walk that finished." >&2
+    rm -rf "$tmp"; return 2
+  fi
+  DELTA_PAIRS="$n"
+  csha="$(sha_file "$committed")"
+  if [ "$csha" != "$base" ]; then
+    if [ "$csha" = "$result" ]; then DELTA_STATE=spent; else DELTA_STATE=stale; fi
+    rm -rf "$tmp"; return 3
+  fi
+  DELTA_STATE=live
+  manifest_usable "$fresh" fresh || { rm -rf "$tmp"; return 2; }
+  delta_rows "$committed" "$fresh" > "$tmp/observed"
+  if cmp -s "$tmp/declared" "$tmp/observed"; then
+    fsha="$(sha_file "$fresh")"
+    rm -rf "$tmp"
+    [ "$fsha" = "$result" ] && return 0
+    echo "corpus delta: every declared row was observed, but the fresh manifest is not the one the delta" >&2
+    echo "  names (sha256 $fsha, declared result_sha256 $result) — its header or row order moved." >&2
+    return 1
+  fi
+  awk -F'\t' '
+    function v(s,   x) { if (s == "-") return "-"; split(s, x, "/"); return x[1] "/" x[2] " out:" substr(x[3], 1, 8) " err:" substr(x[4], 1, 8) }
+    side == 1 { d[$2 FS $3] = $0; next }
+    { o[$2 FS $3] = $0 }
+    END {
+      ## rank TAB backend TAB path TAB text (the key holds FS itself), sorted and cut, so the order of the report is a function of its inputs.
+      for (k in o) if (!(k in d)) { split(o[k], r, FS); nu++
+        printf "1\t%s\t  UNDECLARED    %-8s %-46s observed %s  %s -> %s\n", k, r[2], r[3], r[1], v(r[4]), v(r[5]) }
+      for (k in d) if (!(k in o)) { split(d[k], r, FS); nr++
+        printf "2\t%s\t  UNREALISED    %-8s %-46s declared %s  %s -> %s\n", k, r[2], r[3], r[1], v(r[4]), v(r[5]) }
+      for (k in o) if ((k in d) && d[k] != o[k]) { split(d[k], r, FS); split(o[k], q, FS); nm++
+        printf "3\t%s\t  MISPREDICTED  %-8s %-46s declared %s  %s -> %s\n", k, r[2], r[3], r[1], v(r[4]), v(r[5])
+        printf "3\t%s\t  %-13s %-8s %-46s observed %s  %s -> %s\n", k "~", "", "", "", q[1], v(q[4]), v(q[5]) }
+      printf "9\t~\t~\tcorpus delta: %d undeclared, %d unrealised, %d mispredicted pair(s)\n", nu, nr, nm
+    }' side=1 "$tmp/declared" side=2 "$tmp/observed" | sort -t "$TAB" -k1,1 -k3,3 -k2,2 | cut -f4- > "$tmp/report"
+  echo "corpus delta: the fresh manifest does NOT differ from the committed one by exactly the declared delta" >&2
+  echo "  ($delta, $n declared pair(s)). Joined on (backend, path):" >&2
+  grep -v '^corpus delta:' "$tmp/report" >&2
+  grep '^corpus delta:' "$tmp/report" >&2
+  echo "  An undeclared pair is a behaviour change nobody predicted; an unrealised one is a predicted change" >&2
+  echo "  that did not happen. Either is a red gate: fix the change, or regenerate the delta with" >&2
+  echo "  --emit-expected and read its rows in the PR diff before the next gate." >&2
+  rm -rf "$tmp"
+  return 1
+}
+
+## The predicted delta's own gate of the gate. Synthetic manifests, no compiler, no walk: every way the
+## decider must refuse, planted, and the controls it must accept — an always-refusing decider loses
+## the controls, an always-accepting one loses the plants. Run on every `--check`/`--self-test` and by
+## `--delta-self-test` alone (which is also what `scripts/land.sh --self-test` drives).
+CM_DELTA_SELFTEST_EXPECTED=35
+delta_selftest() { # work-dir
+  local st="$1" bad="" k=0 out rc
+  rm -rf "$st"; mkdir -p "$st" || return 1
+  _dk() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
+  _mf() { # out-file body-file -- wraps a body in the v2 header
+    { printf '# synthetic\nformat=alatyr-corpus-manifest-v2\nsource_glob=test/*.al\n'
+      printf 'source_count=%s\n' "$(awk -F'\t' '$1=="x86_64"' "$2" | grep -c '')"
+      printf 'backend_order=x86_64,aarch64,riscv64,wasm\nexcluded_pairs=0\n'
+      printf 'row_count=%s\n' "$(grep -c '' < "$2")"
+      printf 'columns=backend<TAB>path<TAB>phase<TAB>exit<TAB>stdout_sha256<TAB>stderr_sha256\n'
+      cat "$2"; } > "$1"
+  }
+  local h0 h1 h2 e0
+  h0=0000000000000000000000000000000000000000000000000000000000000000
+  h1=1111111111111111111111111111111111111111111111111111111111111111
+  h2=2222222222222222222222222222222222222222222222222222222222222222
+  e0=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  awk -v H="$h1" -v E="$e0" 'BEGIN { OFS = "\t"
+    split("a b c d", f, " "); split("x86_64 aarch64 riscv64 wasm", b, " ")
+    for (j = 1; j <= 4; j++) for (i = 1; i <= 4; i++) {
+      ph = "run"; ex = 42
+      if (f[j] == "b" && b[i] != "x86_64") { ph = "assemble"; ex = 1 }
+      print b[i], "test/" f[j] ".al", ph, ex, H, E } }' > "$st/base.body"
+  _mf "$st/base" "$st/base.body"
+  ## The intended change: test/b.al now RUNS on the three twins (133, a trap), test/c.al answers 7 on
+  ## wasm, and a new fixture test/e.al adds its four rows.
+  awk -F'\t' -v E="$e0" 'BEGIN { OFS = "\t" }
+    $2 == "test/b.al" && $1 != "x86_64" { $3 = "run"; $4 = 133 }
+    $2 == "test/c.al" && $1 == "wasm"   { $4 = 7 }
+    { print }
+    END { split("x86_64 aarch64 riscv64 wasm", b, " ")
+          for (i = 1; i <= 4; i++) print b[i], "test/e.al", "run", 42, "3333333333333333333333333333333333333333333333333333333333333333", E }' \
+    "$st/base.body" > "$st/fresh.body"
+  _mf "$st/fresh" "$st/fresh.body"
+
+  # 1 · the emitter writes a v1 delta, and it is the classifier's rows.
+  emit_expected "$st/base" "$st/fresh" > "$st/delta" 2>"$st/e"; rc=$?
+  [ "$rc" = 0 ]; _dk $? "emit-refused-a-real-change(rc=$rc: $(cat "$st/e"))"
+  [ "$(delta_field "$st/delta" pairs)" = 8 ]; _dk $? "emit-miscounted(pairs=$(delta_field "$st/delta" pairs), want 3+1+4)"
+  [ "$(awk -F'\t' '$1=="NOW-RUNS"' "$st/delta" | grep -c '')" = 3 ] &&
+  [ "$(awk -F'\t' '$1=="EXIT-CHANGED"' "$st/delta" | grep -c '')" = 1 ] &&
+  [ "$(awk -F'\t' '$1=="ADDED"' "$st/delta" | grep -c '')" = 4 ]
+  _dk $? emit-did-not-use-the-explain-classes
+  out="$(explain_manifest "$st/base" "$st/fresh")"
+  case "$out" in *'8 differing pairs'*'EXIT-CHANGED       1 pair(s)'*'NOW-RUNS           3 pair(s)'*'ADDED              4 pair(s)'*) _dk 0 x ;;
+                 *) _dk 1 "explain-and-the-delta-disagree($out)" ;; esac
+
+  # 2 · CONTROL: the declared change, observed exactly, is accepted.
+  delta_check "$st/base" "$st/fresh" "$st/delta" 2>"$st/e"; rc=$?
+  [ "$rc" = 0 ]; _dk $? "check-refused-an-exactly-realised-delta(rc=$rc: $(cat "$st/e"))"
+  [ "$DELTA_STATE" = live ] && [ "$DELTA_PAIRS" = 8 ]; _dk $? "check-misreported-state($DELTA_STATE/$DELTA_PAIRS)"
+
+  # 3 · nothing happened: the fresh run equals the committed manifest, the delta is live. Every
+  #     declared pair is unrealised, so this must be RED — a plain `cmp` would have called it a match.
+  out="$(delta_check "$st/base" "$st/base" "$st/delta" 2>&1)"; rc=$?
+  [ "$rc" = 1 ]; _dk $? "check-accepted-a-live-delta-on-an-unchanged-manifest(rc=$rc)"
+  case "$out" in *'0 undeclared, 8 unrealised, 0 mispredicted'*) _dk 0 x ;; *) _dk 1 "unrealised-not-counted($out)" ;; esac
+
+  # 4 · an UNDECLARED pair: the delta forgets one row the change moved.
+  grep -v "^EXIT-CHANGED${TAB}" "$st/delta" | sed 's/^pairs=8$/pairs=7/' > "$st/d.short"
+  out="$(delta_check "$st/base" "$st/fresh" "$st/d.short" 2>&1)"; rc=$?
+  [ "$rc" = 1 ]; _dk $? "check-accepted-an-undeclared-pair(rc=$rc)"
+  case "$out" in *'UNDECLARED    wasm     test/c.al'*'1 undeclared, 0 unrealised'*) _dk 0 x ;;
+                 *) _dk 1 "undeclared-pair-not-named($out)" ;; esac
+
+  # 5 · an UNREALISED pair: the delta predicts one more row than moved.
+  { cat "$st/delta"; printf 'NOW-RUNS\tx86_64\ttest/a.al\tcompile/1/%s/%s\trun/42/%s/%s\n' "$h1" "$e0" "$h1" "$e0"; } |
+    sed 's/^pairs=8$/pairs=9/' > "$st/d.long"
+  out="$(delta_check "$st/base" "$st/fresh" "$st/d.long" 2>&1)"; rc=$?
+  [ "$rc" = 1 ]; _dk $? "check-accepted-an-unrealised-pair(rc=$rc)"
+  case "$out" in *'UNREALISED    x86_64   test/a.al'*) _dk 0 x ;; *) _dk 1 "unrealised-pair-not-named($out)" ;; esac
+
+  # 6 · MISPREDICTED: right pair, wrong value — the exit, then (same phase/exit) only a stream hash.
+  sed "s|^\(EXIT-CHANGED${TAB}wasm${TAB}test/c.al${TAB}.*${TAB}run/\)7/|\18/|" "$st/delta" > "$st/d.exit"
+  cmp -s "$st/delta" "$st/d.exit"; [ $? = 1 ]; _dk $? selftest-failed-to-plant-a-wrong-exit
+  out="$(delta_check "$st/base" "$st/fresh" "$st/d.exit" 2>&1)"; rc=$?
+  [ "$rc" = 1 ]; _dk $? "check-accepted-a-wrong-exit(rc=$rc)"
+  case "$out" in *'MISPREDICTED  wasm     test/c.al'*) _dk 0 x ;; *) _dk 1 "misprediction-not-named($out)" ;; esac
+  sed "s|^\(ADDED${TAB}wasm${TAB}test/e.al${TAB}-${TAB}run/42/\)3333|\14444|" "$st/delta" > "$st/d.hash"
+  cmp -s "$st/delta" "$st/d.hash"; [ $? = 1 ]; _dk $? selftest-failed-to-plant-a-wrong-hash
+  delta_check "$st/base" "$st/fresh" "$st/d.hash" >/dev/null 2>&1
+  [ $? = 1 ]; _dk $? check-accepted-a-pair-whose-only-difference-is-a-stream-hash
+  # …and a class relabelled without its values (EXIT-CHANGED declared as OUTPUT-CHANGED).
+  sed "s|^EXIT-CHANGED${TAB}|OUTPUT-CHANGED${TAB}|" "$st/delta" > "$st/d.class"
+  delta_check "$st/base" "$st/fresh" "$st/d.class" >/dev/null 2>&1
+  [ $? = 1 ]; _dk $? check-accepted-a-relabelled-class
+
+  # 7 · every row realised, but the result is not the declared object (a header that moved).
+  sed "s/^result_sha256=.*/result_sha256=$h2/" "$st/delta" > "$st/d.result"
+  out="$(delta_check "$st/base" "$st/fresh" "$st/d.result" 2>&1)"; rc=$?
+  [ "$rc" = 1 ]; _dk $? "check-accepted-a-fresh-manifest-that-is-not-result_sha256(rc=$rc)"
+
+  # 8 · INERT, both ways, and inert is never a pass by itself: the caller still needs a match.
+  delta_check "$st/fresh" "$st/fresh" "$st/delta" >/dev/null 2>&1; rc=$?
+  [ "$rc" = 3 ] && [ "$DELTA_STATE" = spent ]; _dk $? "check-did-not-call-a-landed-delta-spent(rc=$rc state=$DELTA_STATE)"
+  sed "s/^base_sha256=.*/base_sha256=$h2/" "$st/delta" > "$st/d.stale"
+  delta_check "$st/base" "$st/fresh" "$st/d.stale" >/dev/null 2>&1; rc=$?
+  [ "$rc" = 3 ] && [ "$DELTA_STATE" = stale ]; _dk $? "check-did-not-call-a-foreign-base-stale(rc=$rc state=$DELTA_STATE)"
+
+  # 9 · malformed is a refusal (rc 2), never inert.
+  sed 's/^pairs=8$/pairs=5/' "$st/delta" > "$st/d.count"
+  delta_check "$st/base" "$st/fresh" "$st/d.count" >/dev/null 2>&1; [ $? = 2 ]; _dk $? check-accepted-a-wrong-pairs-count
+  sed "s/^format=.*/format=alatyr-corpus-delta-v0/" "$st/delta" > "$st/d.fmt"
+  delta_check "$st/base" "$st/fresh" "$st/d.fmt" >/dev/null 2>&1; [ $? = 2 ]; _dk $? check-accepted-an-unknown-format
+  { cat "$st/delta"; echo 'this line is not a row'; } > "$st/d.junk"
+  delta_check "$st/base" "$st/fresh" "$st/d.junk" >/dev/null 2>&1; [ $? = 2 ]; _dk $? check-skipped-a-line-it-did-not-understand
+  sed "s/^NOW-RUNS${TAB}aarch64/BETTER${TAB}aarch64/" "$st/delta" > "$st/d.vocab"
+  delta_check "$st/base" "$st/fresh" "$st/d.vocab" >/dev/null 2>&1; [ $? = 2 ]; _dk $? check-accepted-a-class-outside-the-explain-vocabulary
+  sed '/^base_sha256=/d' "$st/delta" > "$st/d.nobase"
+  delta_check "$st/base" "$st/fresh" "$st/d.nobase" >/dev/null 2>&1; [ $? = 2 ]; _dk $? check-accepted-a-delta-with-no-base
+
+  # 10 · a TIMED-OUT pair is never declarable: the emitter refuses it and the checker refuses it.
+  awk -F'\t' 'BEGIN{OFS="\t"} $1=="x86_64" && $2=="test/d.al" {$3="compile_timeout"; $4=124} {print}' "$st/fresh.body" > "$st/to.body"
+  _mf "$st/to" "$st/to.body"
+  emit_expected "$st/base" "$st/to" > "$st/d.to" 2>/dev/null; [ $? = 2 ]; _dk $? emit-declared-a-TIMED-OUT-pair
+  { sed 's/^pairs=8$/pairs=9/' "$st/delta"
+    printf 'TIMED-OUT\tx86_64\ttest/d.al\trun/42/%s/%s\tcompile_timeout/124/%s/%s\n' "$h1" "$e0" "$h1" "$e0"; } > "$st/d.to2"
+  delta_check "$st/base" "$st/to" "$st/d.to2" >/dev/null 2>&1; [ $? = 2 ]; _dk $? check-accepted-a-declared-TIMED-OUT-pair
+
+  # 11 · nothing to declare is not a delta, and a truncated manifest is not a fresh run.
+  emit_expected "$st/base" "$st/base" > /dev/null 2>&1; [ $? = 1 ]; _dk $? emit-wrote-an-empty-delta
+  head -n 12 "$st/fresh" > "$st/trunc"
+  emit_expected "$st/base" "$st/trunc" > /dev/null 2>&1; [ $? = 2 ]; _dk $? emit-accepted-a-truncated-fresh-manifest
+  delta_check "$st/base" "$st/trunc" "$st/delta" > /dev/null 2>&1; [ $? = 2 ]; _dk $? check-accepted-a-truncated-fresh-manifest
+
+  # 12 · REMOVED and PHASE-CHANGED/DETAIL-CHANGED round-trip too (a deleted fixture, a moved refusal).
+  awk -F'\t' 'BEGIN{OFS="\t"} $2=="test/d.al" {next} $2=="test/b.al" && $1=="aarch64" {$3="link"} $2=="test/b.al" && $1=="riscv64" {$4=2} {print}' \
+    "$st/base.body" > "$st/rm.body"
+  _mf "$st/rm" "$st/rm.body"
+  emit_expected "$st/base" "$st/rm" > "$st/d.rm" 2>/dev/null; rc=$?
+  [ "$rc" = 0 ] && [ "$(awk -F'\t' '$1=="REMOVED"' "$st/d.rm" | grep -c '')" = 4 ] &&
+    [ "$(awk -F'\t' '$1=="PHASE-CHANGED"' "$st/d.rm" | grep -c '')" = 1 ] &&
+    [ "$(awk -F'\t' '$1=="DETAIL-CHANGED"' "$st/d.rm" | grep -c '')" = 1 ]
+  _dk $? "emit-misclassified-removals-or-refusal-moves(rc=$rc)"
+  delta_check "$st/base" "$st/rm" "$st/d.rm" >/dev/null 2>&1; [ $? = 0 ]; _dk $? check-refused-a-realised-removal-delta
+  # …and one delta cannot license another change: the removal delta against the feature's fresh run.
+  delta_check "$st/base" "$st/fresh" "$st/d.rm" >/dev/null 2>&1; [ $? = 1 ]; _dk $? check-accepted-another-changes-delta
+
+  # 13 · the emitter's output is deterministic (row order is a function of the inputs alone).
+  emit_expected "$st/base" "$st/fresh" > "$st/delta2" 2>/dev/null
+  cmp -s "$st/delta" "$st/delta2"; _dk $? emit-is-not-deterministic
+
+  printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
+  unset -f _dk _mf
+  if [ -n "$bad" ]; then echo "corpus manifest: predicted-delta self-test FAILED —$bad" >&2; return 1; fi
+  if [ "$k" -lt "$CM_DELTA_SELFTEST_EXPECTED" ]; then
+    echo "corpus manifest: predicted-delta self-test FAILED — ran $k checks, expected at least $CM_DELTA_SELFTEST_EXPECTED" >&2
+    return 1
+  fi
+  echo "corpus manifest: predicted-delta self-test ok ($k checks — exact realisation accepted; undeclared,"
+  echo "  unrealised, mispredicted (exit, hash, class), wrong result, malformed and TIMED-OUT deltas refused;"
+  echo "  spent and stale deltas inert)"
+  return 0
+}
+
+## Run the delta self-test the way the other deciders are run: in a SUBSHELL, verdict read from FILES,
+## because an unbound variable inside a driven function unwinds to top level and ends the script.
+run_delta_selftest() {
+  local st rc
+  st="$(mktemp -d "${TMPDIR:-/tmp}/corpus-delta-selftest.XXXXXX")" || return 2
+  ( delta_selftest "$st/w" ); rc=$?
+  if [ ! -f "$st/w/complete" ]; then
+    echo "corpus manifest: the predicted-delta self-test did NOT run to completion (rc=$rc)" >&2; rm -rf "$st"; return 2
+  fi
+  if [ -s "$st/w/bad" ] || [ "$(cat "$st/w/checks")" -lt "$CM_DELTA_SELFTEST_EXPECTED" ] || [ "$rc" != 0 ]; then
+    echo "corpus manifest: the predicted-delta self-test recorded failures —$(cat "$st/w/bad")" >&2; rm -rf "$st"; return 2
+  fi
+  rm -rf "$st"
+  return 0
+}
+
+case "$MODE" in
+  explain)
+    for f in "$EXPLAIN_A" "$EXPLAIN_B"; do [ -f "$f" ] || die "no such manifest: $f"; done
+    explain_manifest "$EXPLAIN_A" "$EXPLAIN_B"
+    exit 0 ;;
+  emit-expected)
+    emit_expected "$EXPLAIN_A" "$EXPLAIN_B"
+    exit $? ;;
+  check-delta)
+    delta_check "$EXPLAIN_A" "$EXPLAIN_B" "$DELTA_ARG"; drc=$?
+    case "$drc" in
+      0) echo "corpus delta: REALISED — $EXPLAIN_B differs from $EXPLAIN_A by exactly the $DELTA_PAIRS declared pair(s)" ;;
+      3) echo "corpus delta: INERT ($DELTA_STATE) — $EXPLAIN_A is not the manifest $DELTA_ARG was predicted against" ;;
+    esac
+    exit "$drc" ;;
+  delta-selftest)
+    run_delta_selftest || exit 2
+    exit 0 ;;
+esac
+
 
 for t in sha256sum timeout xargs nproc; do
   command -v "$t" >/dev/null 2>&1 || die "$t is required"
@@ -513,89 +1027,6 @@ check_body_shape() { # body-file expect-rows src-count excluded-pairs
 ## `diff -u | head -80` with no count, so a 24-row change was reported as 15 rows with nothing saying
 ## that 9 were hidden. Sets DIFF_LINES.
 DIFF_SHOW="${ALATYR_CORPUS_DIFF_SHOW:-60}"
-## Join two manifests on (backend, path) and print each difference under its severity class.
-## `--explain <old> <new>` exposes it directly; `--check` calls it on a mismatch. EXPLAIN_CAP
-## bounds the sample PER CLASS, never globally: a global bound can hide a whole class.
-EXPLAIN_CAP="${ALATYR_CORPUS_EXPLAIN_CAP:-12}"
-explain_manifest() { # baseline candidate
-  awk -v CAP="$EXPLAIN_CAP" '## Join two manifests on (backend, path) and classify each difference. Reading the raw `diff -u`
-## positionally is WRONG and has nearly cost a landing: added and removed rows do not pair up, so a
-## shifted row invents transitions that are not there, and a global `head` can truncate away an entire
-## severity class. Eight `run -> assemble/1` regressions once sat inside 23 genuine wins.
-BEGIN { FS = "\t"; OFS = "\t" }
-FNR == NR {
-  if (NF == 6 && $1 ~ /^(x86_64|aarch64|riscv64|wasm)$/) { k = $1 SUBSEP $2; o[k] = $3 "/" $4 "/" $5 "/" $6 }
-  next
-}
-NF == 6 && $1 ~ /^(x86_64|aarch64|riscv64|wasm)$/ {
-  k = $1 SUBSEP $2; n[k] = $3 "/" $4 "/" $5 "/" $6
-}
-END {
-  for (k in o) if (!(k in n)) cls[k] = "REMOVED"
-  for (k in n) {
-    if (!(k in o)) { cls[k] = "ADDED"; continue }
-    if (o[k] == n[k]) continue
-    split(o[k], a, "/"); split(n[k], b, "/")
-    orun = (a[1] == "run"); nrun = (b[1] == "run")
-    ## A `*_timeout` in the FRESH run gets its own class, ahead of every other test. It is not a
-    ## regression class: `rc == 124 after the ceiling` says the child did not finish, and nothing about
-    ## it says the compiler refused the program. Folding it into NO-LONGER-RUNS reported a conclusion
-    ## the stage had disclaimed in the same output (issue #537); the walk now re-observes such a row
-    ## serially first, so one that reaches here has breached the ceiling twice.
-    if (b[1] ~ /_timeout$/)       cls[k] = "TIMED-OUT"
-    else if (orun && !nrun)       cls[k] = "NO-LONGER-RUNS"
-    else if (!orun && nrun)       cls[k] = "NOW-RUNS"
-    else if (orun && a[2] != b[2]) cls[k] = "EXIT-CHANGED"
-    else if (orun)                cls[k] = "OUTPUT-CHANGED"
-    else if (a[1] != b[1])        cls[k] = "PHASE-CHANGED"
-    else                          cls[k] = "DETAIL-CHANGED"
-  }
-  nc = split("TIMED-OUT NO-LONGER-RUNS EXIT-CHANGED REMOVED PHASE-CHANGED DETAIL-CHANGED OUTPUT-CHANGED NOW-RUNS ADDED", ord, " ")
-  desc["TIMED-OUT"]      = "did not finish inside the per-child ceiling — a HANG, or a machine loaded from outside this gate"
-  desc["NO-LONGER-RUNS"] = "was running, now refused by an earlier phase — a REGRESSION"
-  desc["EXIT-CHANGED"]   = "ran before and after, different exit — a VALUE change"
-  desc["REMOVED"]        = "the pair is gone from the fresh run — coverage lost"
-  desc["PHASE-CHANGED"]  = "refused before and after, at a different phase"
-  desc["DETAIL-CHANGED"] = "same phase, different exit or captured streams"
-  desc["OUTPUT-CHANGED"] = "ran with the same exit, different stdout/stderr"
-  desc["NOW-RUNS"]       = "was refused, now runs — a WIN"
-  desc["ADDED"]          = "new pair in the fresh run — new coverage"
-  total = 0
-  for (k in cls) { total++; cnt[cls[k]]++; split(k, kk, SUBSEP); per[cls[k]] SUBSEP kk[1]; bk[cls[k] SUBSEP kk[1]]++ }
-  if (total == 0) { print "corpus manifest: no (backend,path) pair differs"; exit 0 }
-  printf "corpus manifest: %d differing pairs, joined on (backend, path)\n", total
-  for (i = 1; i <= nc; i++) {
-    c = ord[i]; if (!(c in cnt)) continue
-    line = ""
-    nb = split("x86_64 aarch64 riscv64 wasm", bo, " ")
-    for (j = 1; j <= nb; j++) if ((c SUBSEP bo[j]) in bk) line = line sprintf(" %s %d", bo[j], bk[c SUBSEP bo[j]])
-    printf "\n  %-15s %4d pair(s)  [%s ]\n      %s\n", c, cnt[c], line, desc[c]
-    shown = 0
-    for (k in cls) {
-      if (cls[k] != c) continue
-      if (shown >= CAP) continue
-      split(k, kk, SUBSEP)
-      ov = (k in o) ? o[k] : "-"; nv = (k in n) ? n[k] : "-"
-      split(ov, a, "/"); split(nv, b, "/")
-      printf "      %-8s %-52s %s -> %s\n", kk[1], kk[2], \
-        (ov == "-" ? "-" : a[1] "/" a[2]), (nv == "-" ? "-" : b[1] "/" b[2])
-      shown++
-    }
-    if (cnt[c] > shown) printf "      … %d more in this class (the count above is complete)\n", cnt[c] - shown
-  }
-  exit 0
-}
-' "$1" "$2"
-}
-
-if [ "$MODE" = explain ]; then
-  for f in "$EXPLAIN_A" "$EXPLAIN_B"; do
-    [ -f "$f" ] || die "no such manifest: $f"
-  done
-  explain_manifest "$EXPLAIN_A" "$EXPLAIN_B"
-  exit 0
-fi
-
 compare_manifest() { # baseline candidate label
   local a="$1" b="$2" label="${3:-}" d
   DIFF_LINES=0
@@ -1248,6 +1679,7 @@ fi
 [ "$(cat "$CM_BST/checks")" -ge "$CM_BODY_SELFTEST_EXPECTED" ] || {
   echo "corpus manifest: body-shape self-test recorded $(cat "$CM_BST/checks") checks, expected at least $CM_BODY_SELFTEST_EXPECTED" >&2; exit 2; }
 [ "$CM_BST_RC" = 0 ] || exit 2
+run_delta_selftest || exit 2
 
 frame_perturbation_selftest || exit 2
 if [ "$MODE" = selftest ]; then
@@ -1368,10 +1800,42 @@ if [ "$MODE" = write ]; then
   exit 0
 fi
 
+## The predicted delta, when the feature declares one. LIVE means the committed manifest is exactly
+## the one the prediction was made against, and then the delta — not a byte-for-byte match — is the
+## verdict: a fresh run that equals the committed manifest is RED here (every declared pair went
+## unrealised), and one that differs by anything but the declared rows is RED too. Spent or stale, the
+## delta says nothing about this tree and the ordinary match below decides, so a delta file left on
+## `main` after its oracle commit can never turn a later mismatch green.
+DELTA_FILE="$ROOT/$DELTA_FILE_REL"
+if [ -f "$DELTA_FILE" ]; then
+  delta_check "$MANIFEST" "$GENERATED" "$DELTA_FILE"; drc=$?
+  case "$drc" in
+    0)
+      echo "corpus manifest: match by the declared delta — the fresh walk differs from the committed manifest"
+      echo "corpus manifest:   by exactly the $DELTA_PAIRS pair(s) of $DELTA_FILE_REL ($ROWS rows, $SRC_COUNT sources, all four backends ran)"
+      echo "corpus manifest:   ORACLE COMMIT OWED — $GENERATED (sha256 $(sha_file "$GENERATED"))"
+      echo "corpus manifest:   is the oracle, byte for byte; scripts/land.sh commits it and checks it with cmp."
+      explain_manifest "$MANIFEST" "$GENERATED"
+      exit 0 ;;
+    1)
+      echo "corpus manifest: MISMATCH against the declared delta in $DELTA_FILE_REL (report above)" >&2
+      explain_manifest "$MANIFEST" "$GENERATED" >&2
+      exit 1 ;;
+    3)
+      echo "corpus manifest: note — $DELTA_FILE_REL is INERT ($DELTA_STATE): it was predicted against another"
+      echo "corpus manifest:   committed manifest, so the fresh walk must match byte for byte." ;;
+    *)
+      echo "corpus manifest: $DELTA_FILE_REL is malformed (see above); refusing to read it as a prediction" >&2
+      exit 2 ;;
+  esac
+fi
+
 if compare_manifest "$MANIFEST" "$GENERATED" "corpus manifest: MISMATCH"; then
   echo "corpus manifest: match ($ROWS rows, $SRC_COUNT sources, all four backends ran)"
   exit 0
 fi
 echo "  Re-run with ALATYR_CORPUS_KEEP=1 to retain each pair's artifacts under $WORK." >&2
-echo "  An INTENTIONAL behaviour change owns a reviewed 'scripts/corpus_manifest.sh --write'." >&2
+echo "  An INTENTIONAL behaviour change declares it: from a native x86_64 walk of the PR," >&2
+echo "    scripts/corpus_manifest.sh --emit-expected scripts/corpus.manifest $GENERATED > $DELTA_FILE_REL" >&2
+echo "  and commits that file in the PR (CONTRIBUTING.md, \"An intentional behaviour change\")." >&2
 exit 1
