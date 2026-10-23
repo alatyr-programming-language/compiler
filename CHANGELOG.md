@@ -41,8 +41,12 @@ generation together with the tree that seed reproduces — not an individual com
 direction — a promotion that forgets the bump, and a `package.al` bump made on its own — before it
 builds anything. The fixpoint itself would not catch either: the version IS part of the emission (a
 compile-time constant, TOOL-21), but changing it moves the seed's output and Stage1's identically, so
-they stay byte-equal. What that check does **not** see is a tree where both fields agree and the seed
-answers a third thing; that is the state `main` is in today, and #586 is that hole.
+they stay byte-equal. The third way it could break — both fields agreeing while the seed answers a
+different thing, which is what #586 recorded — is now checked too: the same stage runs
+`./seed/alatyr --version` and refuses unless the answer equals `current-seed-version`, so the claim is
+measured against the artifact rather than against another claim. On a host that cannot execute the seed
+(it is a static x86_64 ELF) that half **skips and says so in its verdict line** — a skipped check is not
+a passed one — and it runs for real on x86_64 Linux, the gate box and the `gate.yml` runner.
 
 **The bump comes first, before the stages are built.** `src/cli.al`'s `cli_version` answers
 `app.version`, which TOOL-15 injects as a compile-time constant, so a compiler reports the version of
