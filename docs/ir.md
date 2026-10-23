@@ -161,9 +161,12 @@ The non-TRAP classes, by cause:
   `fmt_comptime_arm_template`.
 - **LOUD-EXIT 10** (wasm): an `unknown import` for a bodyless extern (3), and wasm's `_start` passing the
   whole `i64` to `proc_exit` (7) — which hides the value, and in two `@convert` cases hides a wrong one.
-- **ACCEPTS 233**: mostly `reject_*` fixtures that x86 refuses **in its lowering** (232
-  `codegen_reject`/`panic("selfhost…")` sites in `src/lower.al`) while the twins compile them. A located
-  refusal is a semantic decision too, and it lives in one emitter.
+- **ACCEPTS 233** (snapshot; **179 rows / 64 paths** today): mostly `reject_*` fixtures that x86 refuses
+  **in its lowering** (232 `codegen_reject`/`panic("selfhost…")` sites in `src/lower.al`) while the twins
+  compile them. A located refusal is a semantic decision too, and it lives in one emitter. #1018 moved 55
+  of those rows out of the class: once x86_64 abstains and a twin becomes the reference, a row no longer
+  blames a twin for x86_64's abstention — 20 of them now read `REFUSED:x86_64`, an over-refusal three
+  twins outvoted, which is the shape worth fixing.
 
 ### 2.3 Construct support today
 
@@ -223,7 +226,7 @@ Each row is one decision the language makes once and the compiler makes four tim
 | enum size for generic instances | `enum_inst_words` | `enum_inst_words` | `1 + enum_max_arity` (not instance-aware) | |
 | callee choice, overloads, symbol names | `callee_decl_idx`, `overload_resolve_idx`, `emit_generic_label` | first name match, `<module>__<name>` | `$name__<paramtypes>` (written twice inside `wat.al`) | #475, ASSEMBLE |
 | aggregate call convention | `fn_returns_sret`, `emit_struct_to_sret`, `abi_c.al` | `a64_ret_struct_words`, `a64_ret_sret_words` | by address, tuples 1..7 words | CRASH rows |
-| located refusals of invalid programs | 232 sites in `src/lower.al` | – | – | ACCEPTS 233 rows |
+| located refusals of invalid programs | 232 sites in `src/lower.al` | – | – | ACCEPTS 179 rows; REFUSED 20 rows on x86_64 (#1018) |
 
 `scripts/idiom_gate.sh` sees part of this — its baseline carries SCAN/TABLE clusters for
 `emit_a64_expr`/`emit_rv_expr`/`emit_wat_expr`, `emit_*_fn`, `*_comp_range_bound`, `*_ann_span`, the
