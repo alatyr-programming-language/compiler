@@ -8732,10 +8732,48 @@ sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)
     ## leaves its second argument `VcLit`, the builder reports `sema-gap literal: expr Num`, and the whole
     ## function falls back to the legacy emitter — which carries its own silent wrong value (#967).
     Expr::EnumLit(es, el, vs, vl, np, gh) => { sema_vty_enum_args(es, el, vs, vl, np, gh, decls, src) }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+    ## Each field's declared type is the CONTEXT of the matching struct-literal argument, exactly as a
+    ## call's parameter types are (`sema_vty_call_args`) and an enum payload's are (#968 above). Without
+    ## it `S2(k3 = unchecked (100 / ...))` leaves that argument's LITERAL parts `VcLit`: the builder's
+    ## `ib_value_at` hands the context to `ib_bx`, which drops it and asks every node its own type, so
+    ## `ib_bx_num` on the `100` reports `sema-gap literal: expr Num` and the whole function falls back
+    ## to the legacy emitter — which carries its own silent wrong value (#973, progen seed 2074800535).
+    Expr::StructLit(ss, sl, nf, fh) => { sema_vty_struct_args(ss, sl, fh, decls, src) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Field
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => {}
+  }
+}
+## Each field's declared type is the context of the matching struct-literal argument (Types §2.3, the
+## rule `sema_vty_call_args` applies to a call and `sema_vty_enum_args` to an enum payload). Fields and
+## arguments are matched POSITIONALLY, the way `ib_agg_lit_into` walks them — an `Arg` carries no name
+## span, the parser has already checked the names agree. Only a struct whose declaration sema found; a
+## generic's field types are type parameters, which `sema_vty_ctx` leaves unknown rather than guessing.
+sema_vty_struct_args := fn(ss : usize, sl : usize, fh : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) {
+  if not ir::sty_on() or sl == 0 { return }
+  upto := rt::vec_len(deref(decls))
+  di := type_decl_index(decls, upto, src, ss, sl)
+  if di == 0 { return }
+  d := deref(decl_get(decls, di - 1))
+  mut f := d.fields_head
+  mut g : Option(ptr(mut Arg)) = fh
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if fd.tl != 0 { sema_vty_ctx(ga.e, fd.ts, fd.tl, decls, src) }
+            g = ga.next
+          }
+          None => { break }
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
 }
 ## #968 — each declared payload type of the variant `E.V(…)` is the context of its argument (Types §2.3,
