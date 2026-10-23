@@ -805,3 +805,52 @@ The 46 `assemble-UNASSERTED` rows are worth naming separately: they include the 
 (`operator_bitwise`, `operator_overload`, `operator_vec2`, `overload_float_arg`, …), where the twins emit
 assembly the assembler rejects. Nothing asserts that today, so it reads as a corpus that "traps" when in
 fact three backends cannot build the program at all.
+
+## 20. The counter is a projection of the oracle, not of behaviour — and named blockers beat node kinds
+
+Two things learned landing slice 2's `@align` gap (#995, oracle in `d8707b1`), both of which change how the
+numbers in this document must be read.
+
+### `xbackend_diff` reads the committed manifest, so a held number is not "no progress"
+
+After the fix made `accept_known_attrs` and `attr_prefix_layout` answer 42 on all four backends, the gate
+still reported `xbackend diff: paths=905 rows=2498 … held at the baseline`. The compiler's behaviour had
+changed; the counter had not, because it computes disagreements from `scripts/corpus.manifest`, which still
+recorded the twins trapping at 133/134. After the separate oracle commit the same command reported:
+
+```
+xbackend diff: paths=903 rows=2492 sources=2331 hw-defined=8
+xbackend ratchet: held, and LOWER than the baseline (905 -> 903 paths, 2498 -> 2492 rows).
+```
+
+So between landing a behaviour fix and seeing the counter move there is an oracle commit, and the gate's
+`EXIT-CHANGED` list is the human review point that stands between them. Reading `held` as "nothing changed"
+sends the reader to the wrong place; reading it as "the oracle has not been updated yet" sends them to the
+right one. §7.2's ratchet should carry that sentence next to it.
+
+### A refusal must name what it refused, or the slice choice is a guess
+
+`alatyr ir` reports `NotYet(<construct>, <span>)`, and the construct is a NODE KIND. `expr Call` cannot
+select work; the span can, because the source text at it names the callee. `scripts/refusal_detail.sh` reads
+that text — no compiler change, no emitted byte, no golden. On `main` = `3b42a71`, 548 refusals over the
+first 400 corpus programs:
+
+```
+    38  signature: aggregate result wider than two words   arena_over := fn(buf : ptr(mut bits8), c…
+    14  signature: aggregate result wider than two words   strbuf := fn(a : ptr(mut Arena), cap : u…
+     5  signature: aggregate result wider than two words   spawn := fn(fn_ptr : usize, arg : usize)
+     4  signature: aggregate result wider than two words   mk := fn(k : u64) -> Result(u64, E) {
+    13  signature: parameter type names no struct or enum resolvable here   print := fn(s : str) -> isize {
+     7  expr Bitcast   ptr(mut std::channel::Channel(u64))
+```
+
+Grouping the sret rows gives **61 rows naming four library functions**, and sret is slice 2 by §7.2's own
+order — the first time this session that the prescribed order and the measurement picked the same target.
+It was still not the right first cut: the only four corpus programs blocked solely by sret are library files
+absent from the manifest, so its payoff arrives late through the libraries, exactly as §3 warned. The cut
+that landed took the top **named twin-trap** cause that was bounded instead — `size`/`align`, 52 rows — and
+moved two paths out of the counter.
+
+**The general rule this suggests for §7.2:** before claiming a slice's rows, name them. A family whose rows
+cannot be listed by callee or construct is a family whose size is not known, and §14, §15, §17 and §18 are
+four corrections that each began as a number read at the wrong granularity.
