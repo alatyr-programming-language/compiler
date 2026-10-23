@@ -4226,15 +4226,21 @@ cli_command_help := fn(in out a : rt::Arena, v : CliVerb) -> usize {
   return 0
 }
 
-## TOOL-21 — the version is the compiler package's manifest version. `app.version` is injected as a
-## compile-time constant for modules owned by this package (TOOL-15), so this command neither opens
-## package.al nor depends on the current working directory at runtime.
+## TOOL-21 — the version line identifies the implementation AND names the specification revision it is
+## answerable to. `app.version` is injected as a compile-time constant for modules owned by this package
+## (TOOL-15), and `spec_revision::SPEC_REVISION` is an ordinary source constant pinned to a tagged
+## specification release, so this command neither opens package.al nor depends on the current working
+## directory at runtime (issue #1000). Both numbers are compile-time constants of the same kind: the two
+## axes TOOL-21 names — what the tool is, and what it implements.
 cli_version := fn(in out a : rt::Arena, fd : usize) -> usize {
   version := app.version
-  mut b := rt::strbuf(a, version.len + 16)
+  spec := spec_revision::SPEC_REVISION
+  mut b := rt::strbuf(a, version.len + spec.len + 24)
   k0 := rt::push_str(b, "alatyr ")
   k1 := rt::push_str(b, version)
-  k2 := rt::push_byte(b, 10)
+  k2 := rt::push_str(b, ", spec ")
+  k3 := rt::push_str(b, spec)
+  k4 := rt::push_byte(b, 10)
   kf := diag_flush(b, fd)
   if kf != 0 { return kf }
   return 0

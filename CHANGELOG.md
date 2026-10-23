@@ -131,6 +131,26 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   and `new --help` created a package named `--help`. After `run … --`, a `--help` still belongs to the
   program.
 
+- **`alatyr version` now names the specification revision it conforms to, not only its own version
+  (#1000, Tooling §4 / TOOL-21).** The command answered `alatyr 0.2.16` and nothing else, where TOOL-21
+  says `version` MUST identify the implementation **and** MUST report the revision of the specification it
+  conforms to, because "an implementation's own version and the revision are separate axes, and reporting
+  only the former leaves a user unable to tell what the toolchain implements". It now answers
+  **`alatyr 0.2.16, spec 1.1.0`** — the first number still `app.version` (TOOL-15), the second a new
+  constant in `src/spec_revision.al`, pinned to a tagged specification release (`v1.1.0`, spec commit
+  `65a0c9b`); this tree no longer cites an untagged branch head. The pin itself moves in the next
+  commit of this PR, alone, as AGENTS.md requires.
+  **Classified PATCH, not MINOR**, and the argument is worth recording because the two readings are real:
+  no CLI verb, flag or accepted construct appears — `version` already existed, every program that
+  compiled still compiles, and the policy's MINOR is about surface a program can *use*. What changed is
+  that an existing command's output now carries a field the specification already required it to carry, and
+  TOOL-21 makes the content and formatting of introspection output explicitly quality-of-implementation —
+  tooling MUST NOT parse it, so no caller gains or loses anything to depend on. Read the other way, every
+  "diagnostic improved" that this file's own PATCH definition admits would be a MINOR. `package.al`'s
+  version does **not** move here: it moves on a seed promotion and only on one. One honest caveat for the
+  gate: baking a new string is **not emission-neutral** — expect a non-zero seed→Stage1 GAS delta from
+  this tree, and read it as the two new string constants plus their addressing, nothing else.
+
 - **A program that overloads an operator now assembles and runs on aarch64 and riscv64 (#475).** An
   operator glyph is a declaration's *name* (`@inline + := fn(…)`), and the name reached the assembler raw:
   GAS read `opni__&:` as a mnemonic, so every such program failed at `phase=assemble` on both register
