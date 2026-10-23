@@ -2014,7 +2014,13 @@ pub put_symbol_name := fn(in out sb : rt::StrBuf, src : ptr(u8), s : usize, n : 
   mut k : usize = 0
   while k < n {
     c := str_at((src + s + k), 1)
-    if c == "+" { rt::push_str(sb, "_plus") }
+    b := bytes(c)[0]
+    ## A valid C-identifier byte passes through UNCHANGED. This is the overwhelmingly common case and
+    ## the rule that keeps `main` from becoming `_h109_h97_h105_h110`: without it the table renamed
+    ## every letter and no call site could resolve its callee (found by running the operator corpus,
+    ## where riscv64's `_start` then failed to LINK against `main`).
+    if (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95 { rt::push_str(sb, c) }
+    else if c == "+" { rt::push_str(sb, "_plus") }
     else if c == "-" { rt::push_str(sb, "_minus") }
     else if c == "*" { rt::push_str(sb, "_star") }
     else if c == "/" { rt::push_str(sb, "_slash") }
@@ -2031,7 +2037,7 @@ pub put_symbol_name := fn(in out sb : rt::StrBuf, src : ptr(u8), s : usize, n : 
     else if c == "@" { rt::push_str(sb, "_at") }
     else if c == "." { rt::push_str(sb, "_") }
     else if c == ":" { rt::push_str(sb, "__") }
-    else { rt::push_str(sb, "_h"); rt::push_int(sb, i64(bytes(str_at((src + s + k), 1))[0])) }
+    else { rt::push_str(sb, "_h"); rt::push_int(sb, i64(b)) }
     k += 1
   }
 }
