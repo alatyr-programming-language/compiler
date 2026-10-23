@@ -422,7 +422,9 @@ emit_mangled_def := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ms : usize, ml
     push_str(sb, "lam")
     push_int(sb, i64(ns))
   } else {
-    push_str(sb, str_at((src + ns), nl))
+    ## the fn NAME through the one symbol table (#475) — an operator decl's glyph must not reach GAS
+    ## raw here either; x86 only escapes it today because `@inline` operators are inlined, not emitted
+    ir::put_symbol_name(sb, src, ns, nl)
   }
 }
 

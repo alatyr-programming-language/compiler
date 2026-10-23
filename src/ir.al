@@ -2031,7 +2031,7 @@ pub put_symbol_name := fn(in out sb : rt::StrBuf, src : ptr(u8), s : usize, n : 
     else if c == "@" { rt::push_str(sb, "_at") }
     else if c == "." { rt::push_str(sb, "_") }
     else if c == ":" { rt::push_str(sb, "__") }
-    else { rt::push_str(sb, "_h"); rt::push_int(sb, i64(k)) }
+    else { rt::push_str(sb, "_h"); rt::push_int(sb, i64(bytes(str_at((src + s + k), 1))[0])) }
     k += 1
   }
 }
