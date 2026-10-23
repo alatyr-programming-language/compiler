@@ -5819,7 +5819,12 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           push_str(sb, "  bl ") ; a64_emit_lambda_label(sb, src, td.mod_start, td.mod_len, td.name_start) ; push_str(sb, "\n")
         }
       } else if not a64_callee_defined(decls, src, cs, cl, a) {
-        push_str(sb, "  brk #0 // undefined/builtin callee\n")
+        ## The trap NAMES what it could not resolve (slice 0's rule, and #979 B): wasm already writes the
+        ## callee here, while a bare "undefined/builtin callee" left 398 of the family's 623 rows
+        ## unattributable — the triage in scripts/sites_triage.sh could only describe the wasm third.
+        push_str(sb, "  brk #0 // undefined/builtin callee ")
+        push_str(sb, str_at((src + cs), cl))
+        push_str(sb, "\n")
       } else if arg_list_count(args_head, a) > 8 {
         ## >8 args of a class (AAPCS64): first 8 int in x0-x7, first 8 float in d0-d7 (independent
         ## counters); an arg whose class index reaches 8 overflows to the outgoing stack block. Stack
