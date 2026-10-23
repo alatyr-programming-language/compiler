@@ -553,6 +553,15 @@ ib_bx_brand_ctor := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), c
       v := ib_value_at(bp, a, x, uk)?
       ps := lower_layout::require_pred(bv.decls, bv.src, cs, cl)
       if ps.n == 0 { return Option(VRegId).Some(v) }
+      ## §8.1: an `unchecked` grant REMOVES the check at the site. Under `unchecked` the gate is not
+      ## emitted AT ALL — neither the trap nor the predicate call, since a removed check must not still
+      ## run its predicate (a predicate is not promised pure). The mode is the builder's `unch` flag,
+      ## set by the `Expr::Unchecked` arm of `ib_bx` above, so this reads the same mode the arithmetic
+      ## guards already read — which is what S-B1/CG-13 means by "the guard is a property of the
+      ## checked operation (op + operand type + mode)". Before this the gate was emitted unconditionally
+      ## and `unchecked { NonZero(0) }` trapped `require` on aarch64, riscv64 and wasm while x86_64
+      ## answered 42 (#1007).
+      if ib_b_unch(bp) { return Option(VRegId).Some(v) }
       if not ib_require_gate(bp, a, e, ps.s, ps.n, v, uk) { return Option(VRegId).None }
       return Option(VRegId).Some(v)
     }
