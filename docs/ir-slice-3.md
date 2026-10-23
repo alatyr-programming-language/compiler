@@ -757,3 +757,51 @@ right and x86's `build_reject_has` is the stale entry.
 The callee histogram §17 printed (`sys_mmap 83`, `alloc 56`, `size 35`) survives, but it now describes
 `undeclared-here(x86-only)` rows, not gaps — the names came from #981's trap naming, which is what made
 them visible at all.
+
+## 19. The whole-corpus twin coverage map: zero silent wrong values, 1032 unasserted agreements
+
+`twin_coverage.sh` joins the two committed files — `scripts/corpus.manifest` (what each backend did) and
+`scripts/e2e.sh`'s registrations (what each backend was promised) — and asks, for every program whose
+x86_64 answer is declared by `run <name> <want>`, what each twin did with no assertion on it. No compiler
+runs: both inputs are committed, so the answer cannot drift from what the gate observed.
+
+```
+     0  WRONG-VALUE-UNASSERTED
+  1367  TRAP-UNASSERTED          a64=454 rv=463 wasm=450
+  1032  PROMOTABLE-NOW           a64=348 rv=343 wasm=341
+    46  assemble-UNASSERTED      a64=19 rv=19 wasm=8
+     2  link-UNASSERTED          a64=1 rv=1
+   450  ALREADY-DECLARED         a64=141 rv=132 wasm=177
+```
+
+**Zero silent wrong values.** Wherever x86_64 has a declared answer and a twin ran at all, the twin either
+answered the same value or trapped. Every divergence in this corpus is loud — a trap, or a build failure —
+which is what AGENTS.md accepts and what criterion 3 is actually about. That assurance did not exist before
+this join: nothing had ever asked the question across the whole corpus.
+
+**1032 agreements nobody tests.** The twin already answers x86_64's declared value and no `run_a64` /
+`run_rv64` / `run_wat` names it. A regression there would be silent, and it is the same class this project
+keeps rediscovering. Registering them costs no code — but it does not move `xbackend_diff`, because these
+programs already agree; they are coverage, not divergence.
+
+**1367 traps and 48 build failures are the divergences**, and they are where criterion 3's 905 paths live.
+They need lowering, not registration. The callee names #981 made visible point at the order: `sys_mmap` 83,
+`alloc` 56, `size` 35.
+
+### Two measurement errors this script made and corrected, in the same session
+
+Both are the same species — reading an exit code without asking what produced it — and both were caught by
+re-reading the row rather than by the script objecting:
+
+1. `WRONG-VALUE-UNASSERTED` first read **48**, and the list looked like a broken-operator-overload scandal:
+   `operator_bitwise.al`, `want=42 got=1`. The manifest row says `phase=assemble exit=1` — the twin **could
+   not assemble** it. Exit 1 there is a build failure, not a computed value. The verdict now keys on
+   `phase`, and the honest count of silent wrong values is **0**. The 46 assemble and 2 link rows are kept as
+   their own classes, because "cannot build" is a real defect that wants a different fix.
+2. `operator_bitwise.al` has no `return 1` path at all — its last expression is `r.v` — which is what made
+   the phase check non-negotiable rather than a refinement.
+
+The 46 `assemble-UNASSERTED` rows are worth naming separately: they include the operator-overload family
+(`operator_bitwise`, `operator_overload`, `operator_vec2`, `overload_float_arg`, …), where the twins emit
+assembly the assembler rejects. Nothing asserts that today, so it reads as a corpus that "traps" when in
+fact three backends cannot build the program at all.
