@@ -87,6 +87,63 @@ run_help_version() {
   rm -rf "$tmp"
 }
 
+# TOOL-21 — top-level help names the options the dispatcher parses, and `<command> --help`/`-h` and
+# `help <command>` answer that command's usage on stdout with rc 0, from an empty directory, reading
+# no manifest and creating nothing (`new --help` used to scaffold a package named `--help`). Only a
+# few anchors are asserted: the spec makes the wording quality-of-implementation. Measured on the
+# parent (seed 0.2.16, empty directory): `build --help` rc 40 "unrecognised command or flag",
+# `new --help` rc 0 with a `--help/` package created, `fmt --help` rc 1 "cannot open source file",
+# `help build` rc 0 with the top-level text, which named none of the options.
+run_command_help() {
+  tmp=$(mktemp -d)
+  out=$(mktemp)
+  err=$(mktemp)
+  ok=1
+  why=""
+  (cd "$tmp" && "$CC" --help) >"$out" 2>"$err"
+  rc=$?
+  for anchor in '--manifest <path>' '--target <name>' '--release' '--profile <name>' \
+    '-o <exe>' '  help ' '  version ' '-V'; do
+    grep -qF -- "$anchor" "$out" || { ok=0; why="$why top:$anchor"; }
+  done
+  [ "$rc" = "0" ] && [ ! -s "$err" ] || { ok=0; why="$why top:rc=$rc"; }
+  for verb in new build run test check plan fmt; do
+    for form in "$verb --help" "$verb -h" "help $verb"; do
+      # shellcheck disable=SC2086 # $form is two words by construction
+      (cd "$tmp" && "$CC" $form) >"$out" 2>"$err"
+      rc=$?
+      if [ "$rc" != "0" ] || [ -s "$err" ] || ! grep -qF "Usage: alatyr $verb" "$out"; then
+        ok=0; why="$why [$form]:rc=$rc"
+      fi
+    done
+  done
+  (cd "$tmp" && "$CC" build --release -h) >"$out" 2>"$err"
+  rc=$?
+  { [ "$rc" = "0" ] && grep -qF 'Usage: alatyr build' "$out"; } || { ok=0; why="$why build-late-h:rc=$rc"; }
+  (cd "$tmp" && "$CC" test --help) >"$out" 2>&1
+  { grep -qF -- '-j <n>' "$out" && grep -qF -- '-k ' "$out"; } || { ok=0; why="$why test-flags"; }
+  (cd "$tmp" && "$CC" run --help) >"$out" 2>&1
+  grep -qF -- '-- <args>' "$out" || { ok=0; why="$why run-sep"; }
+  [ -z "$(find "$tmp" -mindepth 1 -print -quit)" ] || { ok=0; why="$why side-effect"; }
+  # An unknown help topic is a Config diagnostic, not help.
+  (cd "$tmp" && "$CC" help biuld) >"$out" 2>"$err"
+  rc=$?
+  { [ "$rc" = "40" ] && [ ! -s "$out" ] && [ -s "$err" ]; } || { ok=0; why="$why topic:rc=$rc"; }
+  # After `run`'s `--`, a `--help` belongs to the program, not to the compiler.
+  (cd "$tmp" && "$CC" new demo) >/dev/null 2>&1
+  (cd "$tmp" && "$CC" run demo/package.al -- --help) >"$out" 2>"$err"
+  rc=$?
+  { [ "$rc" = "0" ] && grep -qF 'Alatyr package ready' "$out"; } || { ok=0; why="$why run-tail:rc=$rc"; }
+  if [ "$ok" = "1" ]; then
+    echo "ok   command_help: help lists parsed options; per-command usage rc 0 on stdout, no side effects"
+  else
+    echo "FAIL command_help:$why"
+    fail=1
+  fi
+  rm -f "$out" "$err"
+  rm -rf "$tmp"
+}
+
 run_new_scaffold() {
   tmp=$(mktemp -d)
   new_out=$(mktemp)
@@ -2426,6 +2483,7 @@ fi
 # manifest flag reaches `build.*` before lowering.
 run_noarg_help
 run_help_version
+run_command_help
 run_new_scaffold
 run_zero_tests
 run_cross_target_test

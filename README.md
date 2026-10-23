@@ -40,8 +40,10 @@ The language is defined by the [specification](https://github.com/alatyr-program
 which is the source of truth: the toolchain conforms to it, never the other way round. This tree
 is answerable to spec revision **1.0.0** (tag `v1.0.0`) plus the post-tag commits up to spec `main`
 `b4e7979` — `AGENTS.md` carries the full pin and moves it in its own commit. The pin is an obligation,
-not a claim of completeness: where the tree lags it, the gap is an open issue — today that is the
-`help`/`version` surface and the diagnostic for an unrecognised argument
-([#192](https://github.com/alatyr-programming-language/compiler/issues/192)). The Rust
+not a claim of completeness: where the tree lags it, the gap is an open issue. `alatyr help` (and
+`alatyr <command> --help` for one command), `alatyr version` and the diagnostic for an unrecognised
+argument are implemented; what remains of TOOL-21 is that `version` does not yet report the
+specification revision
+([#1000](https://github.com/alatyr-programming-language/compiler/issues/1000)). The Rust
 compiler that bootstrapped the first self-host binary is frozen and not published; `seed/VERSION`
 records the lineage.
