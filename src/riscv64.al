@@ -5046,7 +5046,10 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           push_str(sb, "  call ") ; rv_emit_lambda_label(sb, src, td.mod_start, td.mod_len, td.name_start) ; push_str(sb, "\n")
         }
       } else if not rv_callee_defined(decls, src, cs, cl, a) {
-        push_str(sb, "  ebreak # undefined/builtin callee\n")
+        ## The trap NAMES what it could not resolve (slice 0's rule, and #979 B) — see aarch64.al.
+        push_str(sb, "  ebreak # undefined/builtin callee ")
+        push_str(sb, str_at((src + cs), cl))
+        push_str(sb, "\n")
       } else if arg_list_count(args_head, a) > 8 or (direct_sretcall and arg_list_count(args_head, a) > 7) {
         ## >8 args of a class (LP64D): first 8 int in a0-a7, first 8 float in fa0-fa7 (independent
         ## counters); an arg whose class index reaches 8 overflows to the outgoing stack block. Stack

@@ -93,9 +93,11 @@ BEGIN {
   ## a REGEX so both spellings are in scope, and the per-backend counts below make a backend that drops
   ## out visible rather than merely absent. (No apostrophes in this block: it lives in single quotes.)
   if (!all && match(tolower(w), reason_re) == 0) next
-  ## the callee named in the reason, when the reason names one
+  ## the callee named in the reason, when the reason names one — wasm spells it "builtin fn X", the
+  ## twins now spell it "callee X" (#979 B); before that they named nothing and the list was wasm-only
   cal = "-"
   if (match(w, /builtin fn [A-Za-z0-9_]+/)) cal = substr(w, RSTART + 11, RLENGTH - 11)
+  else if (match(w, /callee [A-Za-z0-9_]+/)) cal = substr(w, RSTART + 7, RLENGTH - 7)
   base = p; sub(/^.*\//, "", base); sub(/\.al$/, "", base)
   rows[p SUBSEP b] = rows[p SUBSEP b] " " cal
   seen[p SUBSEP b] = 1
