@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64, riscv64 and wasm build programs with an `@align` struct instead of trapping (IR slice 2,
+  layout).** A struct declared `@align(N)` was refused by the IR builder even though the layout's single
+  source already answered its raised alignment, so any function mentioning it fell back to a legacy emitter
+  that could not handle it and trapped. `accept_known_attrs` and `attr_prefix_layout` now answer 42 on all
+  four backends, where aarch64 and riscv64 trapped 133 and wasm 134. x86_64 output is unchanged.
+
 - **A struct literal whose field holds a literal under `unchecked` or an arithmetic expression now answers
   the same value on all four backends (#977).** `S2(k3 = unchecked (100 / ...))` left the literal inside
   that field without a type: sema propagated a declared type into a call's arguments and into an enum
