@@ -881,3 +881,14 @@ more — the emitted asm names the callee and the trap is `bare struct/array val
 the aggregate-copy gap, a different row in §2.3. #475's own claim is narrower and now true: no operator
 glyph reaches GAS or wat2wasm raw on any backend. Writing the narrower claim is the point — §18 and §19
 are both corrections that began by crediting a fix with the rows that merely moved next to it.
+
+**Residual, named rather than papered over.** Two sites still write a generic INSTANCE label from the raw
+name span — `aarch64.al:9299` and `riscv64.al:8311` (`<fn>__<tag>`, §8). A glyph-named GENERIC function
+that actually instantiates would therefore still emit `&__T` raw. No corpus program reaches them: the
+operator fixtures that carry a generic (`uint_generic_op`) emit `uint_generic_op___plus` and
+`uint_generic_op___eq_eq` — the multi-char rule holds, `==` → `_eq_eq` — and those are plain labels, not
+instance labels. Both sites carry the same documented scar twice over: *"a helper taking the span through
+extra params is miscompiled by the frozen seed (the type-arg args arrive as stack garbage)"*. Routing them
+through `put_symbol_name` is a span-through-params call in exactly that position, so it needs a reproducer
+first — a fixpoint run that happens to stay green would not prove the label right, only that this build
+reproduced itself. Writing the hole down is cheaper than buying it with a silent label.
