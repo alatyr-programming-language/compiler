@@ -39,6 +39,17 @@
             # its own flake — https://github.com/alatyr-programming-language/benchmarks
             pkgsCross.aarch64-multiplatform.buildPackages.binutils
             pkgsCross.riscv64.buildPackages.binutils
+            # `gh` is REQUIRED by scripts/land.sh, and its absence made that script unrunnable on the
+            # only machine where the gate can run. land.sh's PHASE 0 dies with "gh is required to resolve
+            # PR #N"; the gate cannot run on macOS because seed/alatyr is a static Linux x86-64 ELF
+            # ("Exec format error"), so there was no machine on which the declared "only path to main"
+            # could execute end-to-end, and every merge so far went through the GitHub button instead —
+            # including the ones this script exists to prevent. Its --self-test stayed green throughout,
+            # because it deliberately exercises the message-shape detector "without GitHub or a merge":
+            # a green self-test on a script whose real path cannot start. Declared here so the devShell
+            # that runs the gate is the same shell that can resolve a PR. Needs GH_TOKEN (or
+            # `gh auth login`) in the environment; see CONTRIBUTING.
+            gh
           ];
         };
       });
