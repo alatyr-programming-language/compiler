@@ -974,3 +974,33 @@ the agreement it can unlock.
 
 Manifest assemble rows: **202 → 172** (aarch64 35 → 20, riscv64 34 → 19, wasm 133 unchanged — wasm was
 never in this family; its package-root refusals are the `"$main"` cause, §2.3).
+
+## §25 — slice 9 is NOT ready to flip: 5 of the 6 x86↔IR disagreements are IR defects
+
+Earlier in this session the six were recorded as "4 stale `build_reject_has` rows where the IR path is
+right". Reading the six fixtures says the opposite for five of them. The gate's `ir diff` on `addafdc`:
+
+| path | x86 legacy | x86 via IR | who is right, from the fixture's own first lines |
+|---|---|---|---|
+| `reject_local_name_two_aggregate_types` | build 1 | **run 109** | **IR.** "Declarations §5/§6.1 make the program valid… the x86_64 slot map keys a frame slot by NAME alone" — the refusal IS the defect |
+| `packed_in_plain_struct` | build 1 | run 20 | **legacy.** "§8 … must FAIL LOUD … a SILENT WRONG VALUE (0)" — the IR now accepts it |
+| `deep_field_agg_enum_reject` | build 1 | run 42 | **legacy.** "must FAIL LOUD … can only produce garbage" |
+| `deep_field_agg_var_reject` | build 1 | run 42 | **legacy.** "never a silent word-0-only store" |
+| `require_unchecked` | run 42 | run 132 | **legacy.** "the `unchecked` scope drops the checked predicate … does NOT trap — `main` returns 42 (a trap would give 132)" |
+| `lower_bugA_neg_operand` | run 25 | run 132 | **legacy.** "must NOT spuriously trap the checked-add guard … Expected exit: 25" |
+
+**So flipping x86 to the IR today would, in one step:** silently ACCEPT three programs the spec says must
+fail loud (three new wrong values, the class this project treats as most urgent), introduce TWO spurious
+traps on programs that must run, and fix ONE program. The net is not a win, and the ACCEPTS rows §7.2
+slice 9 promises are not free — they are gated on the builder refusing what legacy refuses.
+
+**The order slice 9 therefore has:** (a) three refusals in the builder — packed-field-in-plain-struct,
+deep enum final-field assign, multi-word struct-var field source; (b) two guard fixes — `unchecked` must
+drop a `@require` predicate at the site, and a unary-minus operand must select the SIGNED overflow guard;
+(c) then the one acceptance, `reject_local_name_two_aggregate_types`, which needs x86's frame slot map
+keyed by scope rather than by name — that one is a legacy deletion, the actual prize.
+
+**The correction's shape is the lesson:** "the IR path is right" was inferred from the direction of the
+diff (legacy refuses, IR runs) without reading what each fixture asserts. Half of these fixtures are named
+`*_reject` precisely because refusing is their expected outcome. A disagreement's direction is not its
+verdict — §14, §18 and §19 again.
