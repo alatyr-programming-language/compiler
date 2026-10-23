@@ -1041,11 +1041,19 @@ ib_bx_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), c : ptr(E
   res := ib_fresh(bp, a, k)
   cv := ib_bool_operand(bp, a, c)?
   ib_open_if(bp, a, cv)
-  tv0 := ib_bx(bp, a, t)?
+  ## The `if`'s OWN recorded type is the CONTEXT of its branches (#966, D6: sema is the single source).
+  ## Building a branch with `ib_bx` asked that branch its own type, so a bare literal branch (`else { 1000 }`)
+  ## answered `VcLit` — no context having reached it — and the whole function was refused as
+  ## `sema-gap literal` and fell back to a legacy emitter, which on the twins builds an aggregate literal in
+  ## argument position into the SAME frame slot as the nested call's own aggregate and delivers a clobbered
+  ## word (#973: `g8(1, 1, S2(k1 = 1, …, k3 = g3(S2(k1 = p15.k3, …), …)))` returned `p15.k3`, a silent
+  ## wrong value on aarch64 and riscv64 where x86_64 and the model answer 1). `ib_value_ctx` folds a
+  ## literal at `k` and otherwise builds it and coerces, so nothing else about the branch changes.
+  tv0 := ib_value_ctx(bp, a, t, k)?
   tv := ib_coerce(bp, a, tv0, k, t)?
   ib_mov(bp, a, res, tv)
   ib_plain(bp, a, Op.OpElse)
-  xv0 := ib_bx(bp, a, x)?
+  xv0 := ib_value_ctx(bp, a, x, k)?
   xv := ib_coerce(bp, a, xv0, k, x)?
   ib_mov(bp, a, res, xv)
   ib_plain(bp, a, Op.OpEnd)
