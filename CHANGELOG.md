@@ -122,6 +122,16 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A struct literal whose field holds a literal under `unchecked` or an arithmetic expression now answers
+  the same value on all four backends (#977).** `S2(k3 = unchecked (100 / ...))` left the literal inside
+  that field without a type: sema propagated a declared type into a call's arguments and into an enum
+  payload's, but not into a struct literal's fields. The function was refused by the IR builder and fell
+  back to a legacy emitter, which on aarch64 and riscv64 answered a different number from x86_64 — a
+  silent wrong value, found by progen seed 2074800535. The field's declared type is now the context of its
+  argument, so the function builds through the shared IR and all four agree. Programs that previously
+  compiled to a backend-specific answer now compile to one answer; no program that compiled correctly
+  before stops compiling.
+
 - **No silent wrong value remains between the four backends in the corpus.** The last four cross-backend
   wrong values are fixed or made loud on the twins: wasm's `comptime for` variant arms now chain, so a
   statement body is no longer overwritten by the trailing `_` arm (#712, now correct); a struct with an

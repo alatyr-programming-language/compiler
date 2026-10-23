@@ -892,7 +892,7 @@ check_ir_build() {
   ## a field is exactly what made the function fall back, and the fallback is where the value went wrong.
   "$CC" ir "$E2E_TEST/issue977_struct_lit_field_ctx.al" > "$rep" 2>/dev/null; rc=$?
   if [ "$rc" = 0 ] && grep -q '^fn issue977_struct_lit_field_ctx::g13 Built$' "$rep" \
-     && grep -q 'sema_gaps=0$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
+     && grep -q 'sema_gaps=0 verify_failed=0$' "$rep"; then
     echo "ok   ir issue977_struct_lit_field_ctx: the struct-literal field literal builds through the IR, no sema gap"
   else echo "FAIL ir issue977_struct_lit_field_ctx: rc=$rc"; grep -E 'NotYet|sema_gaps|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
 }
