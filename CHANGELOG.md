@@ -122,6 +122,15 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`alatyr help` lists the options, and `alatyr <command> --help` (or `-h`, or `alatyr help
+  <command>`) prints that command's usage (TOOL-21).** The top-level help used to name only the
+  commands; it now also lists `help`/`version` with `-h`/`-V`, `--manifest`, `--target`,
+  `--target-dir`, `--release`/`--profile`, the bare-file `-o <exe>` form and the dev verbs. Each
+  command's usage names its own flags (`build`'s `--plan`/`-v`/`-q`, `test`'s `-j <n>`/`-k`, `run`'s
+  `--`), goes to stdout with exit 0, and reads no manifest — `build --help` used to fail with exit 40,
+  and `new --help` created a package named `--help`. After `run … --`, a `--help` still belongs to the
+  program.
+
 - **A program that overloads an operator now assembles and runs on aarch64 and riscv64 (#475).** An
   operator glyph is a declaration's *name* (`@inline + := fn(…)`), and the name reached the assembler raw:
   GAS read `opni__&:` as a mnemonic, so every such program failed at `phase=assemble` on both register

@@ -4121,9 +4121,13 @@ parse_uint_arg := fn(s : str) -> usize {
 ## command and the `run --` argument boundary, but does not read package input or create artifacts.
 ## `fd`/`status` let the no-argument path reuse the exact same material while remaining a failing
 ## invocation-level diagnostic.
+##
+## Every option listed here is one `run_cli`, `scan_cli_inputs` or the `test` option scan actually
+## parses; a flag the dispatcher does not accept is never advertised. `cli_command_help` holds the
+## per-command half, so a flag is described in one place per command.
 cli_help := fn(in out a : rt::Arena, fd : usize, status : usize) -> usize {
-  mut b := rt::strbuf(a, 1024)
-  k0 := rt::push_str(b, "Usage: alatyr <command> [options]\n\nCommands:\n")
+  mut b := rt::strbuf(a, 4096)
+  k0 := rt::push_str(b, "Usage: alatyr <command> [options] [<package.al> | <file.al>...]\n\nCommands:\n")
   k1 := rt::push_str(b, "  new      create a package\n")
   k2 := rt::push_str(b, "  build    build a package\n")
   k3 := rt::push_str(b, "  run      build and run a program\n")
@@ -4131,14 +4135,95 @@ cli_help := fn(in out a : rt::Arena, fd : usize, status : usize) -> usize {
   k5 := rt::push_str(b, "  check    type-check a package\n")
   k6 := rt::push_str(b, "  plan     write a deterministic build plan\n")
   k7 := rt::push_str(b, "  fmt      format package sources\n")
+  kh := rt::push_str(b, "  help     show this help (also --help, -h); help <command> for one command\n")
+  kv := rt::push_str(b, "  version  show the compiler version (also --version, -V)\n\n")
+  ko := rt::push_str(b, "Options of build, run, test, check and plan:\n")
+  km := rt::push_str(b, "  --manifest <path>    use this package.al instead of searching upward from .\n")
+  kt := rt::push_str(b, "  --target <name>      select a manifest Target (build and plan also take `all`)\n")
+  kd := rt::push_str(b, "  --target-dir <dir>   put artifacts under <dir> instead of the manifest's target_dir\n")
+  kr := rt::push_str(b, "  --release            select the release profile\n")
+  kp := rt::push_str(b, "  --profile <name>     select a named profile (default: debug)\n")
+  kc := rt::push_str(b, "  -h, --help           show the command's usage and options\n\n")
+  ks := rt::push_str(b, "Source files without a package:\n")
+  ke := rt::push_str(b, "  alatyr <file.al>                emit x86_64 assembly to stdout\n")
+  kx := rt::push_str(b, "  alatyr -o <exe> <file.al>...    build an executable\n\n")
   ## D5 (`docs/ir.md` §8, owner decision on #786): a dev surface is a CLI verb listed here, never an
   ## environment switch (Codegen §3.1).
-  k9 := rt::push_str(b, "  ir       report the shared IR builder's answer per function (dev)\n")
-  ka := rt::push_str(b, "  x86-ir   emit x86_64 with IR-built functions selected from the shared IR (dev)\n\n")
+  kq := rt::push_str(b, "Developer commands:\n")
+  kw := rt::push_str(b, "  wat | aarch64 | riscv64 <file.al>  emit that backend's output to stdout\n")
+  k9 := rt::push_str(b, "  ir       report the shared IR builder's answer per function\n")
+  ka := rt::push_str(b, "  x86-ir   emit x86_64 with IR-built functions selected from the shared IR\n\n")
   k8 := rt::push_str(b, "Run program arguments after `--`: alatyr run <program> -- <args>\n")
   kf := diag_flush(b, fd)
   if kf != 0 { return kf }
   return status
+}
+
+## TOOL-21 — the seven public commands of Tooling §4, for the per-command usage surface.
+CliVerb := enum { CvNew, CvBuild, CvRun, CvTest, CvCheck, CvPlan, CvFmt }
+
+cli_verb := fn(s : str) -> Option(CliVerb) {
+  if s == "new" { return Option(CliVerb).Some(CliVerb.CvNew) }
+  if s == "build" { return Option(CliVerb).Some(CliVerb.CvBuild) }
+  if s == "run" { return Option(CliVerb).Some(CliVerb.CvRun) }
+  if s == "test" { return Option(CliVerb).Some(CliVerb.CvTest) }
+  if s == "check" { return Option(CliVerb).Some(CliVerb.CvCheck) }
+  if s == "plan" { return Option(CliVerb).Some(CliVerb.CvPlan) }
+  if s == "fmt" { return Option(CliVerb).Some(CliVerb.CvFmt) }
+  Option(CliVerb).None
+}
+
+## `alatyr <command> … --help` (or `-h`): the scan stops at `run`'s `--`, so a program argument
+## spelled `--help` still reaches the program.
+cli_help_requested := fn(cmd : str, n : usize) -> bool {
+  mut i : usize = 2
+  while i < n {
+    x := arg_at(cmd, i)
+    if x == "--" { return false }
+    if x == "--help" or x == "-h" { return true }
+    i += 1
+  }
+  false
+}
+
+## TOOL-21 — one command's usage, on stdout with success, like `help` itself: it reads no manifest
+## and performs no discovery, so it answers from any working directory.
+cli_command_help := fn(in out a : rt::Arena, v : CliVerb) -> usize {
+  mut b := rt::strbuf(a, 2048)
+  usage := match v {
+    CvNew => { "Usage: alatyr new <name>\n\nCreate the package directory <name> with a package.al and src/main.al.\n" }
+    CvBuild => { "Usage: alatyr build [--release | --profile <name>] [options] [<package.al> | <file.al>...]\n\nBuild the package's artifact into <target_dir>.\n" }
+    CvRun => { "Usage: alatyr run [--release | --profile <name>] [options] [<package.al> | <file.al>...] [-- <args>...]\n\nBuild the program and run it; its exit status is the command's.\n" }
+    CvTest => { "Usage: alatyr test [-j <n>] [-k] [--release | --profile <name>] [options] [<package.al> | <file.al>...] [<filter>]\n\nBuild and run the @test functions, or only those whose description contains <filter>.\n" }
+    CvCheck => { "Usage: alatyr check [--release | --profile <name>] [options] [<package.al> | <file.al>...]\n\nParse and type-check; no artifact is produced.\n" }
+    CvPlan => { "Usage: alatyr plan [--release | --profile <name>] [options] [<package.al> | <file.al>...]\n\nWrite the deterministic build plan (plan.tsv) without building.\n" }
+    CvFmt => { "Usage: alatyr fmt [<file.al>]\n\nFormat <file.al> to stdout, or every .al file below the current directory in place.\n" }
+  }
+  k0 := rt::push_str(b, usage)
+  pkg_opts := match v {
+    CvBuild | CvRun | CvTest | CvCheck | CvPlan => { true }
+    CvNew | CvFmt => { false }
+  }
+  k1 := rt::push_str(b, "\nOptions:\n")
+  if pkg_opts {
+    k2 := rt::push_str(b, "  --manifest <path>    use this package.al instead of searching upward from .\n")
+    k3 := rt::push_str(b, "  --target <name>      select a manifest Target\n")
+    k4 := rt::push_str(b, "  --target-dir <dir>   put artifacts under <dir>\n")
+    k5 := rt::push_str(b, "  --release            select the release profile\n")
+    k6 := rt::push_str(b, "  --profile <name>     select a named profile (default: debug)\n")
+  }
+  extra := match v {
+    CvBuild => { "  --target all         build every Target\n  --plan               also write the build plan\n  -v, --verbose        report the resolved modules and artifact\n  -q, --quiet          omit the build summary\n" }
+    CvPlan => { "  --target all         plan every Target\n" }
+    CvTest => { "  -j <n>, -j<n>        run up to <n> tests at once (before the package)\n  -k                   keep going after a failing test (before the package)\n" }
+    CvRun => { "  -- <args>...         pass the remaining arguments to the program\n" }
+    CvNew | CvCheck | CvFmt => { "" }
+  }
+  k7 := rt::push_str(b, extra)
+  k8 := rt::push_str(b, "  -h, --help           show this usage\n")
+  kf := diag_flush(b, 1)
+  if kf != 0 { return kf }
+  return 0
 }
 
 ## TOOL-21 — the version is the compiler package's manifest version. `app.version` is injected as a
@@ -5612,6 +5697,21 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   mut test_jobs := 1
   mut test_keep_going := false
   if n == 1 { return cli_help(a, 2, 40) }
+  ## TOOL-21 — `alatyr help <command>` and `alatyr <command> … --help` answer that command's usage
+  ## before any operand is read, so `new --help` creates nothing and `build -h` discovers no manifest.
+  if n >= 3 and arg_at(cmd, 1) == "help" {
+    topic := arg_at(cmd, 2)
+    match cli_verb(topic) {
+      Some(hv) => { return cli_command_help(a, hv) }
+      None => { return cli_unknown_arg_diag(a, topic) }
+    }
+  }
+  if n >= 3 and cli_help_requested(cmd, n) {
+    match cli_verb(arg_at(cmd, 1)) {
+      Some(cv) => { return cli_command_help(a, cv) }
+      None => { }
+    }
+  }
   if n >= 2 {
     a1 := arg_at(cmd, 1)
     if a1 == "--help" or a1 == "-h" or a1 == "help" { return cli_help(a, 1, 0) }
