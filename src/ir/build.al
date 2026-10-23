@@ -1527,7 +1527,18 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
                 ## Slice 3n: a field of a struct or enum type the builder lays out is a sub-object at the
                 ## field's place (`ib_field_agg`); not inside a `@packed` struct.
                 if packed { return Option(IbSt).None }
+                ## A `@packed` struct as a FIELD of a NON-packed struct is DEFERRED (spec Types §8) and
+                ## must fail loud — the outer lays its fields out WORD-wise while the packed field is
+                ## stored BYTE-precise, so write and read disagree (#1007). Legacy refuses this at the
+                ## field-read site (`lower.al:20118`), which is x86-only: the IR read route never passes
+                ## through it, so the same program BUILT and answered 20 on the IR path while x86 refused
+                ## it. Refusing HERE, at the declaration of the outer struct's layout, is emitter-
+                ## independent — which is what slice 9 needs ("the refusals move into the builder or
+                ## sema"), and it is no broader than legacy: a packed type that is never a field of a
+                ## plain struct, and a plain struct nested INSIDE a packed one (the supported mirror),
+                ## are both untouched.
                 fsp : IbSpan = ib_type_span_full(bv.src, fd.ts, fd.tl)
+                if lower_layout::layout_kind_is_packed(lower_layout::layout_kind(bv.decls, bv.src, fsp.s, fsp.n, a)) { return Option(IbSt).None }
                 so : Option(IbSt) = ib_agg_named(bp, a, fsp.s, fsp.n)
                 match so { Some(sub) => {}; None => { return Option(IbSt).None } }
               }
