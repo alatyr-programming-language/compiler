@@ -695,11 +695,16 @@ wat_cmp_glyph := fn(op : u8) -> str {
 ## Is there a user OPERATOR-OVERLOAD fn decl named exactly the glyph `g` whose FIRST parameter is
 ## declared with the struct type `[ss,sn)`? (Stdlib §2 operator overloading.) The type match is what
 ## keeps an unrelated overload from capturing a comparison over a different struct.
-wat_op_fn_match := fn(decls : ptr(rt::Vec), src : ptr(u8), g : str, ss : usize, sn : usize) -> bool {
-  if sn == 0 { return false }
+## Returns the matched operator fn's NAME SPAN (`n == 0` when there is none) rather than a bool, so
+## the `(call $…)` site mangles it through `ir::put_symbol_name` — the SAME table the definition label
+## uses. A bool here would force that site to emit the glyph raw: `mod__&` is not a valid symbol and
+## GAS reads it as a mnemonic (#475). A struct, not a tuple — the signature has no tuple return type.
+OpFnSpan := struct { s : usize, n : usize }
+wat_op_fn_match := fn(decls : ptr(rt::Vec), src : ptr(u8), g : str, ss : usize, sn : usize) -> OpFnSpan {
+  if sn == 0 { return OpFnSpan(s = 0, n = 0) }
   cnt := rt::vec_len(deref(decls))
   mut i : usize = 0
-  mut found := false
+  mut found := OpFnSpan(s = 0, n = 0)
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 1 {
@@ -707,7 +712,7 @@ wat_op_fn_match := fn(decls : ptr(rt::Vec), src : ptr(u8), g : str, ss : usize, 
         match d.params_head {
           Some(p0q) => {
             pm := deref(param_p(p0q))
-            if streq(src, pm.ts, pm.tl, ss, sn) { found = true }
+            if streq(src, pm.ts, pm.tl, ss, sn) { found = OpFnSpan(s = d.name_start, n = d.name_len) }
           }
           None => {}
         }
@@ -5507,13 +5512,12 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## {ptr,len} under the seed (the documented wat-emit scar).
         gly := wat_cmp_glyph(op)
         lsty := expr_struct_type_of(l, params_head, body_head, src, a, decls)
-        mut opok := false
-        if gly != "" {
-          if wat_op_fn_match(decls, src, gly, lsty.s, lsty.n) { opok = true }
-        }
-        if opok {
+        ## the matched decl's name span doubles as the "is there an overload" test — one value, no flag
+        mut ofn := OpFnSpan(s = 0, n = 0)
+        if gly != "" { ofn = wat_op_fn_match(decls, src, gly, lsty.s, lsty.n) }
+        if ofn.n != 0 {
           push_str(sb, "(call $")
-          push_str(sb, gly)
+          ir::put_symbol_name(sb, src, ofn.s, ofn.n)
           push_str(sb, " ")
           emit_wat_expr(l, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           push_str(sb, " ")
@@ -5809,7 +5813,9 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
             if cntc == 1 and leadc == 0 { erase_one = usize(decl_tparam_pos(gd, src)) }
           }
           push_str(sb, "(call $")
-          push_str(sb, str_at((src + gd.name_start), gd.name_len))
+          ## the generic instance's NAME through the same table as its def label (#475); the `__<tag>`
+          ## suffix stays inline exactly as the def label emits it.
+          ir::put_symbol_name(sb, src, gd.name_start, gd.name_len)
           push_str(sb, "__")
           ## type TAG — INLINE (see the def-label site; a StrBuf helper segfaults under the seed). MUST
           ## match the def label exactly: bare / `Tuple_…` / `Array_<elem>_<N>`.
@@ -8537,8 +8543,7 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   if wrbn.n != 0 and wat_standard_byte_abi_fence(decls, src, wrbn.s, wrbn.n, a, true) { standard_byte_abi_fence = true }
   if wat_params_need_standard_byte_abi_fence(ephead, src, decls, a) { standard_byte_abi_fence = true }
   push_str(sb, "  (func $")
-  fname := str_at((src + d.name_start), d.name_len)
-  if d.name_len == 0 { wat_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) }
+  if d.name_len == 0 { wat_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { ir::put_symbol_name(sb, src, d.name_start, d.name_len) }
   ## OVERLOAD SUFFIX (#567): a member of a driver-disambiguated overload set carries its parameter
   ## signature, so the set's two definitions get distinct labels instead of one `$name`. Marked spans
   ## only — an unregistered name is untouched, so ordinary emission is byte-identical.
@@ -8654,7 +8659,8 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
       push_str(sb, "  (export \"")
       push_str(sb, str_at((src + xn.s), xn.n))
       push_str(sb, "\" (func $")
-      push_str(sb, fname)
+      ## must match the func label above exactly, so the same table (#475)
+      ir::put_symbol_name(sb, src, d.name_start, d.name_len)
       push_str(sb, "))\n")
     }
   }
@@ -8745,8 +8751,7 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
     ## linear-memory offsets they compute stay in agreement.
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.name_len != 0 and ex_value_is_scalar(d.value) {
       push_str(sb, "  (global $")
-      gname := str_at((src + d.name_start), d.name_len)
-      push_str(sb, gname)
+      ir::put_symbol_name(sb, src, d.name_start, d.name_len)
       push_str(sb, " (mut i64) (i64.const ")
       push_int(sb, ex_value_init(d.value, decls, src))
       push_str(sb, "))\n")
@@ -8761,7 +8766,7 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
       init := wat_float_global_init(src, d.name_start, d.name_len)
       if init.n != 0 {
         push_str(sb, "  (global $")
-        push_str(sb, str_at((src + d.name_start), d.name_len))
+        ir::put_symbol_name(sb, src, d.name_start, d.name_len)
         push_str(sb, " (mut f64) (f64.const ")
         push_str(sb, str_at((src + init.s), init.n))
         push_str(sb, "))\n")

@@ -122,6 +122,17 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A program that overloads an operator now assembles and runs on aarch64 and riscv64 (#475).** An
+  operator glyph is a declaration's *name* (`@inline + := fn(…)`), and the name reached the assembler raw:
+  GAS read `opni__&:` as a mnemonic, so every such program failed at `phase=assemble` on both register
+  twins, and wasm emitted `(func $<)` beside a call for `$_lt`. All function symbols now go through one
+  table, so a definition label and its call targets cannot drift; valid identifier bytes pass through
+  unchanged, `==` becomes `_eq_eq`, and any other byte becomes `_h<decimal>`, so no glyph can reach the
+  assembler raw. 15 corpus paths moved `assemble/1` → `run`; two of them now agree with x86_64 and left
+  the cross-backend counter, which reads **905 → 901 paths / 2498 → 2488 rows**. x86_64 output is
+  unchanged — it escaped this all along by inlining the operator and never emitting the label. Most of
+  those 15 paths still stop at an aggregate copy, which is a different gap and stays open.
+
 - **aarch64, riscv64 and wasm build programs with an `@align` struct instead of trapping (IR slice 2,
   layout).** A struct declared `@align(N)` was refused by the IR builder even though the layout's single
   source already answered its raised alignment, so any function mentioning it fell back to a legacy emitter

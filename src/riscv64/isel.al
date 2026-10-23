@@ -722,8 +722,10 @@ sr_sp_adjust := fn(in out sb : rt::StrBuf, frame : i64, down : bool) {
 ## same call is declared in more than one module (`docs/ir-slice-2.md`).
 sr_put_label := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
   if d.kind == lower_layout::DECL_KIND_SYSCALL { ir::put_fn_symbol(sb, src, d); return }
-  nm := str_at((src + d.name_start), d.name_len)
-  sr_put(sb, nm)
+  ## The ONE symbol table (#475): this is the label the IR selector defines, and it must be spelled
+  ## exactly as `rv_emit_call_target` spells the call — an operator-glyph name reaching GAS raw here is
+  ## what made every operator-overload program fail to assemble.
+  ir::put_symbol_name(sb, src, d.name_start, d.name_len)
 }
 ## Select function `f` (declaration `d`) into `sb`. Answers false when the function is refused.
 sr_fn := fn(in out sb : rt::StrBuf, x : SrX, d : Decl, in out a : rt::Arena) -> bool {

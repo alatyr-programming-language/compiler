@@ -854,3 +854,123 @@ moved two paths out of the counter.
 **The general rule this suggests for §7.2:** before claiming a slice's rows, name them. A family whose rows
 cannot be listed by callee or construct is a family whose size is not known, and §14, §15, §17 and §18 are
 four corrections that each began as a number read at the wrong granularity.
+
+## §21 — #475 closed at the symbol level: the prediction written before the gate ran
+
+Measured on `main` = `8dd77d0`, 15 corpus paths declare an operator-glyph function. The oracle recorded
+`assemble/1` for every one of them on **aarch64 and riscv64** (30 rows); x86_64 answered `run/42` on 14
+and `run/2` on `width_wrap_arith`; wasm ran 14 at `run/134`, one (`operator_compare`) at `run/42`.
+
+Written down **before** the gate, so a surprise is visible as a surprise:
+
+1. **fixpoint stays green.** `put_symbol_name` is the identity on every byte of `[A-Za-z0-9_]`, and no
+   ordinary identifier contains a glyph — so the emitted bytes of every non-operator program must not
+   change. If the fixpoint moves, the pass-through is wrong and it is wrong everywhere at once.
+2. **30 rows move `assemble/1` → `run/…`** (15 paths × aarch64 + riscv64): `run/133` on 14 of them,
+   `run/2` on `width_wrap_arith`. The gate must show these as oracle mismatches until the revision lands.
+3. **wasm: 15 rows change their asm hash, none changes its verdict.** The labels are mangled, the
+   behaviour is not — `operator_compare` stays 42, the rest stay 134.
+4. **x86_64: 0 rows change.** `emit_mangled_def` is now routed through the table, but every x86 program
+   in the corpus has an ordinary name, so its bytes are identical.
+5. **`xbackend_diff` paths 903 → 902.** `width_wrap_arith` is the one path where all four backends then
+   agree (`run/2`) and it leaves the counter. `operator_compare` stays: x86 and wasm say 42, the twins
+   say 133. The other 13 stay because x86 says 42 and the twins trap.
+
+**What this slice does NOT claim.** The 13 `run/133` twins and the 14 `run/134` wasm are not #475 any
+more — the emitted asm names the callee and the trap is `bare struct/array value (copy/arg deferred)`,
+the aggregate-copy gap, a different row in §2.3. #475's own claim is narrower and now true: no operator
+glyph reaches GAS or wat2wasm raw on any backend. Writing the narrower claim is the point — §18 and §19
+are both corrections that began by crediting a fix with the rows that merely moved next to it.
+
+**Residual, named rather than papered over.** Two sites still write a generic INSTANCE label from the raw
+name span — `aarch64.al:9299` and `riscv64.al:8311` (`<fn>__<tag>`, §8). A glyph-named GENERIC function
+that actually instantiates would therefore still emit `&__T` raw. No corpus program reaches them: the
+operator fixtures that carry a generic (`uint_generic_op`) emit `uint_generic_op___plus` and
+`uint_generic_op___eq_eq` — the multi-char rule holds, `==` → `_eq_eq` — and those are plain labels, not
+instance labels. Both sites carry the same documented scar twice over: *"a helper taking the span through
+extra params is miscompiled by the frozen seed (the type-arg args arrive as stack garbage)"*. Routing them
+through `put_symbol_name` is a span-through-params call in exactly that position, so it needs a reproducer
+first — a fixpoint run that happens to stay green would not prove the label right, only that this build
+reproduced itself. Writing the hole down is cheaper than buying it with a silent label.
+
+## §22 — S-B1 decided by the owner: the guard belongs to the operation, not to the emitter
+
+Recorded here because it constrains slice 9 (the x86 flip), which is next in §7.2's order. **Decided but
+unmerged** — the spec text is on `spec/audit-blockers` and goes up as a spec PR; until it merges this is
+the working reading, not a citation.
+
+1. **One guard model: CG-13.** For built-in numeric types the compiler emits the guard at the operation
+   site, *before* the op, as the per-arch direct inline trap (170 §2). A **routed operator body carries
+   none**, and instruction intrinsics never carry one. `comptime if verify.checked` survives only for a
+   library's OWN checks.
+2. **`trap() -> Never`** joins the prelude: the same trap instruction, no message, valid freestanding.
+   Library numeric types fail through `trap()`, never `panic` — so `lib/base/u128.al:121/180`
+   `panic("uint(N) division by zero")` becomes `trap()` once the spec lands.
+3. **Checked `MIN % -1` yields 0 with no trap**, guarded by the same compare as `MIN / -1`. Unchecked it
+   is hardware-defined: x86 faults, aarch64/riscv64 give 0.
+
+**What this settles for slice 9.** The guard is a property of the checked operation — op, operand type,
+mode — carried by the IR value, and emitted by the compiler. It is never a property of whichever emitter
+happens to be in place. That is the reason the flip can be a lowering change at all: if guards lived in
+the x86 emitter, moving x86 onto the shared IR would silently drop them.
+
+Two checks this section can already make without waiting for the flip:
+- The twins already follow CG-13 — `adds x11, x9, x10` / `b.cc 1f` / `brk #0 // overflow` is the guard
+  at the op site, before the op. So the decision does not reopen #475 and does not move slice 9's target.
+- "A routed operator body carries none" is the half that touches #475's family: `@inline +` over a user
+  type routes to the user's fn, and that body must not acquire a guard when x86 lowers through the IR.
+
+**C-1, measured rather than read** (probe `/tmp/c1/f2i.al`, Stage1 of this branch): `u64(1.0e30)` then
+`shr(x, 61)` exits **4**. `cvttsd2si` returns the integer-indefinite sentinel `0x8000…0`, and
+`0x8000000000000000 >> 61 = 4`; saturating to `u64::MAX` would have given **7**, a trap **133**. The
+number therefore separates "no guard" from "wrong guard" — a saturating conversion would have looked just
+as untrapped at the exit code alone. Filed by panel 15; slice 9 links to it rather than opening a second.
+
+## §23 — the fired site, measured: §21's "aggregate-copy" was a guess about 13 paths
+
+§21 said the twins' `run/133` is `bare struct/array value (copy/arg deferred)`. That was read off the
+FIRST `brk` in one file's text, and the first trap in a file is not the trap that fires. Re-measured with
+the mechanism §2.3 already uses (`xbackend_diff.sh --sites`: rewrite the k-th trap to `exit(k)`, run, map
+`k` back to its line) on this branch's Stage1:
+
+| fired site | paths |
+|---|---:|
+| `bare struct/array value (copy/arg deferred)` | 9 |
+| `unsupported expr StructLit` | 3 (`fmt_comptime_param`, `query_constructor_binary_positive`, `routed_op_aggregate`) |
+| `bare aggregate comparison needs structural eq/lt (Stdlib 2.6)` | 1 (`operator_compare`) |
+| `trap overflow …:LINE` | 1 (`checked_custom_routed_narrow`) |
+| not a trap at all — `rc=2`, zero `brk` sites | 1 (`width_wrap_arith`, which now agrees with x86_64's `run/2`) |
+
+Three corrections in one table, and the one that matters is the fourth row: **`checked_custom_routed_narrow`
+traps on an OVERFLOW guard**, not on an aggregate. Reading the fixture settles it the other way from how §21
+left it — that file *is* the CG-13 fixture ("a user-provided routed native-integer operator cannot bypass the
+operation-site guard"; its `@inline +` body deliberately wraps with `x86_64.addl`, and on aarch64 the
+`comptime if target.arch` does not even fire, so the body adds nothing). The trap is the guard working:
+`u32 MAX + 3` must stop before the routed body. All four backends agree it must stop — x86_64 `run/132`
+(SIGILL), aarch64 and riscv64 `run/133` (SIGTRAP), wasm `run/134` — so the only cross-backend difference is
+**which signal a trap is**, which is hardware-defined by §2.3's own exemption. If the counter does not
+already carry it as such, that is a classification gap worth one line, not a defect worth a slice.
+
+The rest stand: 13 of 15 paths stop at aggregate places, which is the §2.3 aggregate family and not #475.
+#475's own claim is unchanged and narrower — no glyph reaches GAS or wat2wasm raw on any backend.
+
+## §24 — the counter moved twice as far as predicted: 903 → 901
+
+§21 predicted `xbackend_diff` 903 → 902 paths, crediting only `width_wrap_arith`. Measured on the
+revised manifest, **two** paths left and none entered:
+
+| path | why it left |
+|---|---|
+| `test/width_wrap_arith.al` | all four backends now `run/2` — agreement, as predicted |
+| `test/checked_custom_routed_narrow.al` | the twins moved `assemble/1` → `run/133`; x86_64 was already `run/132` and wasm `run/134`, so **all four now trap** and the path has no differing backend left |
+
+`paths 903 → 901, rows 2492 → 2488` (−2 paths, −4 rows: each path carried an aarch64 and a riscv64 row).
+The mechanism §21 missed is in `xbackend_diff.sh`'s own classifier: any signal 129–192 on x86_64, `133` on
+a twin and `134` on wasm all classify **K** — one "traps" class, not three signal-specific ones. So a path
+whose twins previously failed to *assemble* leaves the counter as soon as they reach any trap, even a
+different signal from x86_64's. That is the right rule (§2.3 exempts which signal a trap is), and it means
+**every assemble/1 row on the twins is worth two counter rows when fixed**: one for the phase and one for
+the agreement it can unlock.
+
+Manifest assemble rows: **202 → 172** (aarch64 35 → 20, riscv64 34 → 19, wasm 133 unchanged — wasm was
+never in this family; its package-root refusals are the `"$main"` cause, §2.3).
