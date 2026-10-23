@@ -601,3 +601,49 @@ naming was for.
 sret stays a real task — it is §3.7's stated convention and the twins' legacy sret copies are exactly the
 "private copies of a shared decision" criterion 2 removes — but it is scheduled by criterion 2, not by
 criterion 3, and its PR must say so rather than promise rows.
+
+## 16. §15's table replaced by a measurement anyone can re-take
+
+§15 corrected §14 but kept §15's own numbers from §2.2 — and §2.2's map came from a handoff whose helper
+scripts lived in `~/alatyr/ir2/` on omen and are **gone** (`ls ~/alatyr/ir2/sites.sh`: no such file). A
+plan resting on numbers nobody can re-take is the same fault as §14's, one level down.
+
+The map is reproducible from the repository after all — the tool was committed, and §2.2 named a different
+path for it:
+
+```
+nix develop -c bash scripts/xbackend_diff.sh --sites "$PWD/target/debug/alatyr"
+```
+
+It prints one row per fired site: `backend  path  SITE|ASSEMBLE  <the trap comment itself>  <fn>`, because
+slice 0 made every trap name its reason. Re-taken on `main` = `9d04a4b` (after #977), 2264 site/assemble
+rows, grouped by reason across all three non-x86 backends:
+
+| family | rows | paths |
+|---|---:|---:|
+| **undefined/builtin callee** (`size`, `answer`, `sys_mmap` …) | **623** | **263** |
+| addr-of place (`unsupported expr AddrOf`, `unresolved address-of place`, `unsupported addr-of`) | 246 | 116 |
+| `StrLit` in value position | 201 | 82 |
+| `match` shapes (#577) | 190 | 82 |
+| field access | 129 | 54 |
+| unresolved var | 53 | 29 |
+| `StructLit` / `EnumLit` in value position | 52 / 48 | 30 / 25 |
+| `comptime-if`: unfoldable condition (needs mono context) | 72 | ~49 |
+| index / array-element argument | 75 | ~49 |
+
+§15's "aggregates and places, 239 paths / 512 rows" is not what the committed tool says: split the way the
+emitters actually name their traps, places are addr-of 246 + field access 129 + index/array-element 75 ≈
+450 rows over ~170 paths — real, but second, and split across three separate emitter decisions rather than
+one. The mass is in **calls to a callee the emitter does not know**.
+
+**What the count does NOT tell you, and why it must not be read as a defect list.** A trap reason is not a
+verdict. `when_guard.al` traps on `answer`, and `zst_and_empty_ctor.al` traps on `size`: those are test
+scaffolding that calls a deliberately undefined callee, and "fixing" them would delete the thing under test.
+The filter that separates a gap from scaffolding is the fixture's OWN registration in `scripts/e2e.sh`
+(`run_a64 <name> <want>` says the program is expected to run and what it must answer; `build_reject_has`
+says it must be refused). Any cut taken from the table above must apply that filter first, per path, and
+report how many rows survived it — otherwise the number is a count of comments, not of defects.
+
+So the next cut by this map is `undefined/builtin callee`, and its first step is not code: it is listing
+the 263 paths, splitting them by what the fixture registers, and naming which callees are missing from the
+emitters. That list is the deliverable of the next slice's first PR, and it is cheap to produce.
