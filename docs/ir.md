@@ -174,7 +174,7 @@ Read from the code and cross-checked against the TRAP sites above. **S** support
 | generics / monomorphisation | S | P | P | P | three private monomorphisers |
 | comptime `if` / `for` / `match typeinfo` | S | P | P | P | three private folders |
 | fn values, lifted lambdas, indirect calls | S | P | P | P | no indirect call (`blr`) on aarch64 |
-| overloads, operator functions | S | **ASM** | **ASM** | **ASM** | unmangled (#475) |
+| overloads, operator functions | S | P | P | P | symbols go through the ONE table `ir::put_symbol_name` (#475) — no glyph reaches GAS or wat2wasm raw; the twins still trap on the aggregate arg/return copy |
 | package roots via the emit verbs | S | **LINK** | **LINK** | **ASM** | |
 | `asm`, raw `jmp`/`@label`, `@abi(naked)` | S | P | P | – | a target capability by the spec, never portable |
 

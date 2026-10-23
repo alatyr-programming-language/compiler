@@ -892,3 +892,36 @@ extra params is miscompiled by the frozen seed (the type-arg args arrive as stac
 through `put_symbol_name` is a span-through-params call in exactly that position, so it needs a reproducer
 first — a fixpoint run that happens to stay green would not prove the label right, only that this build
 reproduced itself. Writing the hole down is cheaper than buying it with a silent label.
+
+## §22 — S-B1 decided by the owner: the guard belongs to the operation, not to the emitter
+
+Recorded here because it constrains slice 9 (the x86 flip), which is next in §7.2's order. **Decided but
+unmerged** — the spec text is on `spec/audit-blockers` and goes up as a spec PR; until it merges this is
+the working reading, not a citation.
+
+1. **One guard model: CG-13.** For built-in numeric types the compiler emits the guard at the operation
+   site, *before* the op, as the per-arch direct inline trap (170 §2). A **routed operator body carries
+   none**, and instruction intrinsics never carry one. `comptime if verify.checked` survives only for a
+   library's OWN checks.
+2. **`trap() -> Never`** joins the prelude: the same trap instruction, no message, valid freestanding.
+   Library numeric types fail through `trap()`, never `panic` — so `lib/base/u128.al:121/180`
+   `panic("uint(N) division by zero")` becomes `trap()` once the spec lands.
+3. **Checked `MIN % -1` yields 0 with no trap**, guarded by the same compare as `MIN / -1`. Unchecked it
+   is hardware-defined: x86 faults, aarch64/riscv64 give 0.
+
+**What this settles for slice 9.** The guard is a property of the checked operation — op, operand type,
+mode — carried by the IR value, and emitted by the compiler. It is never a property of whichever emitter
+happens to be in place. That is the reason the flip can be a lowering change at all: if guards lived in
+the x86 emitter, moving x86 onto the shared IR would silently drop them.
+
+Two checks this section can already make without waiting for the flip:
+- The twins already follow CG-13 — `adds x11, x9, x10` / `b.cc 1f` / `brk #0 // overflow` is the guard
+  at the op site, before the op. So the decision does not reopen #475 and does not move slice 9's target.
+- "A routed operator body carries none" is the half that touches #475's family: `@inline +` over a user
+  type routes to the user's fn, and that body must not acquire a guard when x86 lowers through the IR.
+
+**C-1, measured rather than read** (probe `/tmp/c1/f2i.al`, Stage1 of this branch): `u64(1.0e30)` then
+`shr(x, 61)` exits **4**. `cvttsd2si` returns the integer-indefinite sentinel `0x8000…0`, and
+`0x8000000000000000 >> 61 = 4`; saturating to `u64::MAX` would have given **7**, a trap **133**. The
+number therefore separates "no guard" from "wrong guard" — a saturating conversion would have looked just
+as untrapped at the exit code alone. Filed by panel 15; slice 9 links to it rather than opening a second.
