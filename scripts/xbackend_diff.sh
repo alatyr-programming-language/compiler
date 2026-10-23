@@ -32,7 +32,7 @@
 # Exit 255 is deliberately a VALUE, not a signal: it is exit(-1), which is exactly what a `match` with
 # no arm taken returns (AGENTS.md, #544). Folding it into K would hide that silent class.
 #
-# ## The classes (per twin row, against the REFERENCE row), in priority order
+# ## The classes (per judged backend, against the REFERENCE row), in priority order
 #
 # The reference is x86_64 WHEN IT RAN. When x86_64 abstained (`compile/1`, a refusal), the reference
 # is the FIRST twin, in the fixed order aarch64, riscv64, wasm, that answered a value quietly — and
@@ -42,6 +42,12 @@
 # disagreed, and `test/naked_a64.al` — aarch64 42, riscv64 40, a real silent wrong value — was
 # invisible to the class. The reference is chosen by a fixed order, never by data, so the verdict is
 # reproducible (FND-3) and does not depend on manifest row order.
+#
+# The backend column names the backend being JUDGED. On paths where the reference moved to a twin, that
+# includes x86_64 itself: it is judged in a second pass, because it is not one of the twins and would
+# otherwise never be compared with anything. A count that reaches zero by not looking at a backend does
+# not mean zero disagreements (I4) — it means the counter went blind, which is exactly what the first
+# cut of #1018 did to 10 over-refusal paths.
 #
 #   WRONG-VALUE   ref V<a>, twin V<b>, a != b, quiet       — the twin answers something else
 #   MISSING-TRAP  ref K,    twin V<b>, quiet               — the reference refuses at run time, the twin answers
@@ -55,8 +61,10 @@
 #   TIMEOUT       ref V|K,  twin T  (or the reverse)
 #   ASSEMBLE      ref V|K,  twin A                         — the twin emitted text `as` refuses
 #   LINK          ref V|K,  twin L                         — e.g. a runtime symbol the twin lacks
-#   REFUSED       ref V|K,  twin C                         — the twin refuses to compile what the reference runs;
-#                                                            the acceptable end state IF it is located
+#   REFUSED       ref V|K,  backend C                      — the judged backend refuses to compile what the
+#                                                            reference runs; the acceptable end state IF it is
+#                                                            located. On x86_64 this is an OVER-refusal: three
+#                                                            twins compiled and ran it (the #1014 fallback).
 #   ACCEPTS       ref C,    twin V|K|S|T                   — a twin builds a program the reference refuses
 #   HW-DEFINED    a MISSING-TRAP row on a path in the `HW_DEFINED` list below: `unchecked` division by
 #                 zero / `MIN / -1`, which the specification makes target-specific (Concurrency §6.2).
@@ -253,6 +261,24 @@ xb_rows() { # manifest all [hw-defined-list]
           if (refbe != "x86_64") tag = tag " ref=" refbe
           printf "%s\t%s\t%s\t%s\t%s\t%s\n", c, b, p, ref, st[k], tag
         }
+        ## ...AND x86_64 ITSELF, when the reference moved away from it. x86_64 is not in `tw`: it is
+        ## only ever the reference, so the loop above never judges it. Without this second step a path
+        ## where x86_64 refuses and the three twins agree on one quiet value produces NO row at all and
+        ## leaves the counter — ten such paths did when #1018 first landed, and they are the over-
+        ## refusals the corpus names for what they are (`accept_issue623_nested_array_field_store`,
+        ## `packed_ret_value`, …): three backends compile and run it, x86_64 will not. A count that
+        ## reaches zero by not looking at a backend does not mean zero disagreements (I4); it means the
+        ## counter went blind. So x86_64 is judged against the reference like any other backend, and the
+        ## REFUSED row names the backend that actually refused — which the old ACCEPTS rows, blaming a
+        ## twin for the abstention of x86_64, did not.
+        if (refbe != "x86_64") {
+          k = p "\t" "x86_64"
+          c = klass(ref, x, se[k] != empty)
+          if (c == "MISSING-TRAP" && (p in hw)) c = "HW-DEFINED"
+          if (c != "" && !(c == "REFUSED-LATE" && all != 1))
+            printf "%s\t%s\t%s\t%s\t%s\t%s\n", c, "x86_64", p, ref, x,
+              ((x ~ /^V/) ? ((se[k] == empty) ? "quiet" : "loud") : "-") " ref=" refbe
+        }
       }
     }' "$1"
 }
@@ -329,17 +355,27 @@ if [ "$MODE" = selftest ]; then
   ## disagreed — `test/naked_a64.al` (aarch64 42, riscv64 40) was invisible to WRONG-VALUE.
   ok "x86 abstains, twins disagree on a value: WRONG-VALUE, not ACCEPTS" \
      "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 42)" "$(q riscv64 run 40)")" \
-     "WRONG-VALUE:riscv64"
+     "WRONG-VALUE:riscv64 REFUSED:x86_64"
   ok "a twin that traps where the reference answers is TRAP, not ACCEPTS" \
-     "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 7)" "$(q wasm run 134)")" "TRAP:wasm"
-  ok "twins agreeing while x86 abstains is silent" \
-     "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 42)" "$(q riscv64 run 42)")" ""
+     "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 7)" "$(q wasm run 134)")" "TRAP:wasm REFUSED:x86_64"
+  ## x86_64 is never in `tw`, so it is judged in a second step (see the END block): its refusal is a
+  ## disagreement with the twin that ran, and it names the backend that actually refused. Without that
+  ## step, a path where x86 refuses and the twins AGREE produces no row at all and leaves the counter —
+  ## ten such paths did on the first cut of #1018, all of them over-refusals (`packed_ret_value`,
+  ## `accept_issue623_nested_array_field_store`, …): three backends compile and run it, x86_64 will not.
+  ## A count that reaches zero by not looking at a backend is not a count of zero disagreements (I4).
+  ok "twins agreeing while x86 abstains: the twins are silent, the refusal of x86 is NOT" \
+     "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 42)" "$(q riscv64 run 42)" "$(q wasm run 42)")" \
+     "REFUSED:x86_64"
+  ok "...and the row names the twin it refused, so the reader knows what x86_64 said no to" \
+     "$(printf '%s\n' "$H" "$(q x86_64 compile 1)" "$(q aarch64 run 42)" "$(q riscv64 run 42)" "$(q wasm run 42)" > "$T/m2"; xb_rows "$T/m2" 0 | awk -F'\t' '$2 == "x86_64" { print $1 "\t" $4 "\t" $5 "\t" $6 }')" \
+     "REFUSED	V42	C	- ref=aarch64"
   ## The reference is chosen by FIXED ORDER, never by data, so the verdict does not depend on the
   ## order of rows in the manifest (FND-3). A LOUD twin is never the reference: a runner that
   ## printed why it failed hid its value, so it cannot vouch for one.
   ok "the reference is the first QUIET value in fixed order, not the first row" \
      "$(rows_of "$(q x86_64 compile 1)" "$(q wasm run 9)" "$(q aarch64 run 42)")" \
-     "WRONG-VALUE:wasm"
+     "WRONG-VALUE:wasm REFUSED:x86_64"
   ## The row says WHICH backend the value was compared against, so a reader can tell that the
   ## reference was aarch64 and not the x86_64 that abstained.
   printf '%s\n' "$H" "$(q x86_64 compile 1)" "$(q wasm run 9)" "$(q aarch64 run 42)" > "$T/m"
@@ -348,7 +384,7 @@ if [ "$MODE" = selftest ]; then
      "wasm	V42	V9	quiet ref=aarch64"
   ok "a loud twin cannot be the reference: a quiet one is, and the loud one is LOUD-EXIT" \
      "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 42 "$L")" "$(q riscv64 run 41)")" \
-     "LOUD-EXIT:aarch64"
+     "LOUD-EXIT:aarch64 REFUSED:x86_64"
   ok "a build timeout is a refusal, a run timeout is TIMEOUT" \
      "$(rows_of "$(q x86_64 run 42)" "$(q aarch64 compile_timeout 124)" "$(q wasm run_timeout 124)")" "REFUSED:aarch64 TIMEOUT:wasm"
   ok "no x86_64 row, no verdict" "$(rows_of "$(q aarch64 run 1)")" ""
@@ -504,21 +540,26 @@ PATHCLASS="$(printf '%s\n' "$ROWS" | awk -F'\t' -v ord="$CLASS_ORDER" '
   { k = ($1 in r) ? r[$1] : 99; if (!($3 in best) || k < best[$3]) { best[$3] = k; cls[$3] = $1 } }
   END { for (p in cls) printf "%s\t%s\n", cls[p], p }')"
 
-printf '  %-14s %6s %6s   %7s %7s %7s\n' class paths rows aarch64 riscv64 wasm
+printf '  %-14s %6s %6s   %7s %7s %7s %7s\n' class paths rows x86_64 aarch64 riscv64 wasm
 for c in $CLASS_ORDER UNCLASSIFIED; do
   r="$(printf '%s\n' "$ROWS" | awk -F'\t' -v c="$c" '$1 == c')"
   [ -n "$r" ] || continue
   pp="$(printf '%s\n' "$PATHCLASS" | awk -F'\t' -v c="$c" '$1 == c' | wc -l | tr -d ' ')"
-  printf '  %-14s %6s %6s   %7s %7s %7s\n' "$c" "$pp" "$(printf '%s\n' "$r" | wc -l | tr -d ' ')" \
+  printf '  %-14s %6s %6s   %7s %7s %7s %7s\n' "$c" "$pp" "$(printf '%s\n' "$r" | wc -l | tr -d ' ')" \
+    "$(printf '%s\n' "$r" | awk -F'\t' '$2 == "x86_64"' | wc -l | tr -d ' ')" \
     "$(printf '%s\n' "$r" | awk -F'\t' '$2 == "aarch64"' | wc -l | tr -d ' ')" \
     "$(printf '%s\n' "$r" | awk -F'\t' '$2 == "riscv64"' | wc -l | tr -d ' ')" \
     "$(printf '%s\n' "$r" | awk -F'\t' '$2 == "wasm"' | wc -l | tr -d ' ')"
 done
-echo "  (paths: each path counted once, under its highest-priority class; rows: path x twin)"
+echo "  (paths: each path counted once, under its highest-priority class; rows: path x judged backend."
+echo "   x86_64 is a JUDGED backend once the reference moves to a twin (#1014): REFUSED there means x86_64"
+echo "   refused what a twin compiled and ran — the over-refusal worth fixing, which ACCEPTS used to hide.)"
 [ "$MODE" = count ] && exit 0
 
 ## The table: every disagreeing path with all four states, so "agreed", "trapped" and "never ran"
-## stay distinguishable. `*` marks the twin states that disagree with x86_64.
+## stay distinguishable. `ref=` names the reference — x86_64 when it ran, otherwise the twin the
+## classifier fell back to (#1014). `*` marks the BACKENDS that disagree with that reference; x86_64
+## is one of them once the reference has moved, and its REFUSED row is an over-refusal worth fixing.
 echo
 for c in $CLASS_ORDER UNCLASSIFIED; do
   pp="$(printf '%s\n' "$PATHCLASS" | awk -F'\t' -v c="$c" '$1 == c' | cut -f2 | sort)"
@@ -526,10 +567,13 @@ for c in $CLASS_ORDER UNCLASSIFIED; do
   echo "## $c"
   printf '%s\n' "$pp" | while read -r p; do
     printf '%s\n' "$ROWS" | awk -F'\t' -v p="$p" '
-      $3 == p { x = $4; t[$2] = $5 (($6 != "-") ? "(" $6 ")" : "") "*" }
-      END { printf "  %-60s x86=%-5s", p, x
-            split("aarch64 riscv64 wasm", b, " ")
-            for (i = 1; i <= 3; i++) printf " %s=%-12s", b[i], ((b[i] in t) ? t[b[i]] : "=") ; printf "\n" }'
+      $3 == p { x = $4; tg = $6; sub(/ ref=.*/, "", tg)
+                t[$2] = $5 ((tg != "-") ? "(" tg ")" : "") "*"
+                if ($6 ~ /ref=/) rb = substr($6, index($6, "ref=") + 4) }
+      END { if (rb == "") rb = "x86_64"
+            printf "  %-60s ref=%s:%-4s", p, rb, x
+            split("x86_64 aarch64 riscv64 wasm", b, " ")
+            for (i = 1; i <= 4; i++) printf " %s=%-10s", b[i], ((b[i] in t) ? t[b[i]] : "=") ; printf "\n" }'
   done
 done
 exit 0
