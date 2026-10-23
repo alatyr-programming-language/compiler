@@ -408,9 +408,8 @@ sw_load := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool
       if ir::i_off(ip) != 0 { return false }
       di := ir::sym_decl(x.p, ir::SymId(s))
       g : Decl = deref(lower_ctx::decl_get(x.decls, di))
-      gname := str_at((x.src + g.name_start), g.name_len)
       sw_put(sb, "    global.get $")
-      sw_put(sb, gname)
+      ir::put_symbol_name(sb, x.src, g.name_start, g.name_len)
       sw_put(sb, "\n")
       if not sw_canon(sb, ty, sg) { return false }
       return sw_setd(sb, ip)
@@ -438,9 +437,8 @@ sw_store := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> boo
       if not sw_ld(sb, ir::i_bk(ip), ir::i_bv(ip)) { return false }
       di := ir::sym_decl(x.p, ir::SymId(s))
       g : Decl = deref(lower_ctx::decl_get(x.decls, di))
-      gname := str_at((x.src + g.name_start), g.name_len)
       sw_put(sb, "    global.set $")
-      sw_put(sb, gname)
+      ir::put_symbol_name(sb, x.src, g.name_start, g.name_len)
       sw_put(sb, "\n")
       return true
     }
@@ -601,9 +599,8 @@ sw_call := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool
         sw_get(sb, ir::pool_get(x.f, ir::i_pool(ip) + j))
         j = j + 1
       }
-      cname := str_at((x.src + cd.name_start), cd.name_len)
       sw_put(sb, "    call $")
-      sw_put(sb, cname)
+      ir::put_symbol_name(sb, x.src, cd.name_start, cd.name_len)
       sw_put(sb, "\n")
       if fdst { return sw_agg_res(sb, x, ip) }
       dv : Option(usize) = sw_dst(ip)
@@ -777,9 +774,11 @@ sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> 
   ## step that reclaims frames must copy the result out first.
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
-  fname := str_at((x.src + d.name_start), d.name_len)
+  ## the NAME through the one symbol table (#475) — this is the IR path's own def label, and it
+  ## wrote the raw span: an operator decl emitted `(func $<`, which wat2wasm rejects while the call
+  ## site already asked for `$_lt`. Same table, so label and target cannot drift.
   sw_put(sb, "  (; ir: selected from the shared IR ;)\n  (func $")
-  sw_put(sb, fname)
+  ir::put_symbol_name(sb, x.src, d.name_start, d.name_len)
   mut pi : usize = 0
   while pi < np { sw_put(sb, " (param i64)"); pi = pi + 1 }
   has_ret := ir::fn_has_ret(x.f)
@@ -815,7 +814,7 @@ sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> 
     sw_put(sb, "  (export \"")
     sw_put(sb, str_at((x.src + xn.s), xn.n))
     sw_put(sb, "\" (func $")
-    sw_put(sb, fname)
+    ir::put_symbol_name(sb, x.src, d.name_start, d.name_len)
     sw_put(sb, "))\n")
   }
   true

@@ -8751,8 +8751,7 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
     ## linear-memory offsets they compute stay in agreement.
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.name_len != 0 and ex_value_is_scalar(d.value) {
       push_str(sb, "  (global $")
-      gname := str_at((src + d.name_start), d.name_len)
-      push_str(sb, gname)
+      ir::put_symbol_name(sb, src, d.name_start, d.name_len)
       push_str(sb, " (mut i64) (i64.const ")
       push_int(sb, ex_value_init(d.value, decls, src))
       push_str(sb, "))\n")
@@ -8767,7 +8766,7 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
       init := wat_float_global_init(src, d.name_start, d.name_len)
       if init.n != 0 {
         push_str(sb, "  (global $")
-        push_str(sb, str_at((src + d.name_start), d.name_len))
+        ir::put_symbol_name(sb, src, d.name_start, d.name_len)
         push_str(sb, " (mut f64) (f64.const ")
         push_str(sb, str_at((src + init.s), init.n))
         push_str(sb, "))\n")
