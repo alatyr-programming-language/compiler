@@ -714,3 +714,46 @@ types are permitted" — so the refusal is not a spec gap.
 What the spec does NOT settle is how a ZST crosses a call. x86_64 today passes the **address of a scratch
 stack slot** (`leaq -8(%rbp), %rax; movq %rax, %rdi`), so it consumes a register while the type occupies no
 bytes. That is an implementation choice, not a spec rule, and it is the owner's to make — see #979.
+
+## 18. §17's headline number was wrong, and why it mattered
+
+§17 reported **363 `GAP:declared-run` rows** — "the fixture says run <name> <want>, this backend traps".
+That was read out of a wrong premise in `scripts/sites_triage.sh`: it treated `run <name> <want>` as an
+**all-backend** declaration. It is not. `run()` in `scripts/e2e.sh` compiles with `"$CC"`, the default
+target, which is x86_64:
+
+```
+run() { # name, want
+  "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL $1: compile/link"; fail=1; return; }
+```
+
+The twins are spoken for only by `run_a64` / `run_rv64` / `run_wat` (and `*_out`, `*_trap`). Re-measured on
+`main` = `d03e80f` with the premise fixed, the same 623 rows classify as:
+
+```
+623 rows triaged, 263 distinct paths
+   198  backend riscv64     226  backend wasm     199  backend aarch64
+    30  declared-package-build
+   503  undeclared-here(x86-only)      ← nothing says what the twins must do
+    90  UNREGISTERED
+     0  GAP:<backend>                  ← not one twin trap contradicts a declaration
+```
+
+**Zero.** So the family's shape is not "the twins fail an expectation" — it is "**no expectation for the
+twins was ever written**". That is a different task, and it is the real one: 503 sites where x86_64 has a
+declared answer and the twins have no test at all. The divergence persists not because a test fails but
+because nothing asserts the twins' behaviour, which is exactly what criterion 3's "unexplained" means.
+
+The actionable move follows from the shape, not from taste: for each such program, x86_64's declared answer
+is the candidate expected value for the twins; promote `run <name> <want>` to `run_a64`/`run_rv64`/`run_wat`
+**only where the twin actually answers it**, and leave a `*_trap` registration where it does not. Each
+promotion turns an undeclared divergence into a tested requirement; each one that is promoted without the twin
+passing would be a false declaration, so promotion order is: measure per backend, then register.
+
+Verified for four programs already, in #980: `packed_in_plain_struct` returns `u64(g.p.b)` = 20 and the
+twins answer 20; `deep_field_agg_var_reject` returns 12 + 30 = 42 and they answer 42 — there the twins are
+right and x86's `build_reject_has` is the stale entry.
+
+The callee histogram §17 printed (`sys_mmap 83`, `alloc 56`, `size 35`) survives, but it now describes
+`undeclared-here(x86-only)` rows, not gaps — the names came from #981's trap naming, which is what made
+them visible at all.

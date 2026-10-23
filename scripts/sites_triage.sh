@@ -66,7 +66,7 @@ E2E="scripts/e2e.sh"
 awk -F'\t' -v e2e="$E2E" -v reason_re="$REASON" -v all="$ALL" '
 BEGIN {
   ## backend -> the registration form that speaks for THAT backend
-  forms["x86_64"]   = "run_x86 run_x86_out"
+  forms["x86_64"]   = "run run_x86 run_x86_out run_ffi"
   forms["aarch64"] = "run_a64 run_a64_out"
   forms["riscv64"] = "run_rv64 run_rv64_out"
   forms["wasm"]    = "run_wat run_wat_out"
@@ -78,7 +78,12 @@ BEGIN {
     if (form == "build_reject" || form == "build_reject_has") rej[name] = rej[name] " build_reject"
     else if (form ~ /_trap$/)                          trap[name] = trap[name] " " form
     else if (form == "root_package_test")            pkg[name] = 1
-    else if (form == "run" || form == "run_ffi")     allrun[name] = 1
+    ## run() compiles with "$CC", the DEFAULT target — x86_64. It says NOTHING about the twins;
+    ## treating it as an all-backend declaration attributed x86-only expectations to aarch64, riscv64
+    ## and wasm and inflated the gap count. run_ffi is x86_64-only too (see check_export above).
+    else if (form == "run" || form == "run_ffi" || form == "run_x86" || form == "run_x86_out") {
+      if (name != "") x86[name] = 1
+    }
     else                                                per[name] = per[name] " " form
   }
   close(e2e)
@@ -114,11 +119,12 @@ END {
     if (base == "package") { base = p; sub(/\/package\.al$/, "", base); sub(/^.*\//, "", base) }
     if (rej[base] != "")                          v = "EXPECTED-REFUSE"   # the program must not build at all
     else if (trap[base] ~ ("(^| )" b "_trap"))  v = "EXPECTED-TRAP"
-    else if (pkg[base])                          v = "declared-package-build"
-    else if (allrun[base])                       v = "GAP:declared-run"
-    else if (per[base] ~ ("(^| )" forms[b]))   v = "GAP:declared-per-backend"
-    else if (per[base] != "")                   v = "undeclared-here"     # another backend is asserted, not this one
-    else                                        v = "UNREGISTERED"
+    ## a row is a GAP only where the registration names THIS backend
+    if (pkg[base])                             v = "declared-package-build"
+    else if (per[base] ~ ("(^| )" forms[b])) v = "GAP:" b
+    else if (x86[base] != "")                  v = "undeclared-here(x86-only)"
+    else if (per[base] != "")                  v = "undeclared-here(other backend)"
+    else                                       v = "UNREGISTERED"
     if (asm[p SUBSEP b]) v = v "+ASSEMBLE"
     n = split(rows[p SUBSEP b], u, " ")
     cs = ""; delete s
