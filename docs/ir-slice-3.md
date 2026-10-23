@@ -528,3 +528,122 @@ warned. `CSigParamUnresolved` (894 in `src/`, 181 in the corpus) is now the resi
 is a name that resolves to no struct or enum HERE, and the builder knows which of cross-module, generic
 instance, `Slice(T)` or `str` it met — that is the following measurement, and this slice does not guess
 inside it either.
+
+## 14. The next cut, chosen by §13.1's measurement: aggregate results wider than two words (sret)
+
+§13.1 measured `CSigResultWide` as the dominant signature shape outside the residual: **193 corpus +
+124 `lib/` = 317 refusals**. It is one line in the builder today:
+
+```
+ib_agg_ret_words := …  if nf == 0 or nf > 2 { return 0 }      # src/ir/build.al:3999
+```
+
+Two words in the result registers is a legacy-compatibility shortcut, not the design. §3.7 already says
+what an aggregate result is: **a hidden first `ptr` parameter (sret) into a caller frame object**. So this
+slice is not an ABI question for the owner — the design states the answer; it is the work of implementing
+the tier §3.7 names and retiring the shortcut.
+
+What the slice must do, in the order that keeps every step gated alone:
+
+1. **Builder.** A struct result of >2 scalar words (and, later, one with a nested-aggregate field) stops
+   returning 0 from `ib_agg_ret_words` and instead marks the function `ret_sret`: the IR result becomes a
+   `ptr` to a caller-owned frame object, and the hidden pointer becomes parameter 0. The existing
+   `ib_agg_ret_words` register tier stays for ≤2 words — it is what today's callers and callees already
+   agree on, and removing it before every backend adopts sret would break the mixed-call rule (§3.7's
+   "each selector adopts its target's existing convention").
+2. **Callers.** An IR-built call site of such a function reserves a frame object, passes its address as
+   the hidden first argument, and uses the object as the call's value. A legacy caller of an IR-built
+   callee, and an IR caller of a legacy callee, must keep working: the tier boundary is the word count, so
+   until a backend implements sret it must REFUSE the signature (a located `CSigResultWide`, which is what
+   it does today) rather than emit a register sequence that drops words. That refusal is the safety of the
+   whole slice — no partial implementation may answer quietly.
+3. **Selectors, one backend per PR.** aarch64 (`x8`), riscv64, wasm — each adopts the hidden pointer and
+   returns the address; x86_64 keeps its legacy emission until slice 9 (7.4), where the same tier arrives
+   with the flip. Each step is its own PR through the full gate (D8), each with its rows read before the
+   oracle moves.
+
+**What it does NOT include**, and stays refused with its own named class: a result whose fields are not
+all one-word kernel scalars (nested aggregate — `CSigParamNestedField`'s sibling), a levered struct
+(`CSigParamLevered`), and every generic instance (`CGeneric`). Those are separate tiers with separate
+proofs; folding them in here would repeat the mistake §12 warns about.
+
+## 15. Correction to §14 — wide results are the biggest REFUSAL but not a driver of the counter
+
+§14 is wrong about what it leverages, and the error is worth keeping visible because it is the same
+mistake §12 warns about, made while claiming to have escaped it.
+
+`CSigResultWide` is the largest **builder refusal** on corpus+`lib/`. A refused function does not trap:
+it falls back to a legacy emitter, and the legacy emitters ALREADY implement sret for wide aggregate
+results — `a64_ret_sret_words` and `a64_call_ret_sret_span` in `src/aarch64.al`, with the enum analogue
+at `a64_ret_enum_sret_words`. So those 317 refusals produce **no TRAP row, no WRONG-VALUE row and no
+ASSEMBLE row**: they are invisible to `xbackend_diff`. Closing the tier would move functions onto the IR
+(criterion 2's substance, worth doing on its own) while leaving criterion 3's `paths=`/`rows=` exactly
+where they are. §14's "the counters that criterion 3 drives to zero are corpus and lib/, where wide
+results dominate" conflates two different measurements: the census counts refusals, `xbackend_diff`
+counts observed (phase, exit) disagreements.
+
+**Where the counter actually is** — §2.2's `--sites` map, which names the emitter comment at each fired
+trap rather than guessing:
+
+| family | paths | rows |
+|---|---:|---:|
+| aggregates and places (field access, index, addr-of, field assign, struct construct, deref-store, aggregate compare, bitcast) | **239** | **512** |
+| `unsupported expr` catch-all (twins' value-position arm) | 209 | 370 |
+| undefined/builtin callee (`movq`, `unwrap`, `map`, `sort`, `len` …) | 97 | 235 |
+| `match` shapes (#577) | 72 | 174 |
+| wasm `@abi(syscall)` externs | 109 | 109 |
+
+So the next cut by the counter is **slice 3's remaining aggregate-place rows** (512) — the same slice,
+but entered through places rather than through the result tier. The `unsupported expr` catch-all (370)
+sits behind it and shrinks as the arms above are claimed by name, which is what slice 0's trap-comment
+naming was for.
+
+sret stays a real task — it is §3.7's stated convention and the twins' legacy sret copies are exactly the
+"private copies of a shared decision" criterion 2 removes — but it is scheduled by criterion 2, not by
+criterion 3, and its PR must say so rather than promise rows.
+
+## 16. §15's table replaced by a measurement anyone can re-take
+
+§15 corrected §14 but kept §15's own numbers from §2.2 — and §2.2's map came from a handoff whose helper
+scripts lived in `~/alatyr/ir2/` on omen and are **gone** (`ls ~/alatyr/ir2/sites.sh`: no such file). A
+plan resting on numbers nobody can re-take is the same fault as §14's, one level down.
+
+The map is reproducible from the repository after all — the tool was committed, and §2.2 named a different
+path for it:
+
+```
+nix develop -c bash scripts/xbackend_diff.sh --sites "$PWD/target/debug/alatyr"
+```
+
+It prints one row per fired site: `backend  path  SITE|ASSEMBLE  <the trap comment itself>  <fn>`, because
+slice 0 made every trap name its reason. Re-taken on `main` = `9d04a4b` (after #977), 2264 site/assemble
+rows, grouped by reason across all three non-x86 backends:
+
+| family | rows | paths |
+|---|---:|---:|
+| **undefined/builtin callee** (`size`, `answer`, `sys_mmap` …) | **623** | **263** |
+| addr-of place (`unsupported expr AddrOf`, `unresolved address-of place`, `unsupported addr-of`) | 246 | 116 |
+| `StrLit` in value position | 201 | 82 |
+| `match` shapes (#577) | 190 | 82 |
+| field access | 129 | 54 |
+| unresolved var | 53 | 29 |
+| `StructLit` / `EnumLit` in value position | 52 / 48 | 30 / 25 |
+| `comptime-if`: unfoldable condition (needs mono context) | 72 | ~49 |
+| index / array-element argument | 75 | ~49 |
+
+§15's "aggregates and places, 239 paths / 512 rows" is not what the committed tool says: split the way the
+emitters actually name their traps, places are addr-of 246 + field access 129 + index/array-element 75 ≈
+450 rows over ~170 paths — real, but second, and split across three separate emitter decisions rather than
+one. The mass is in **calls to a callee the emitter does not know**.
+
+**What the count does NOT tell you, and why it must not be read as a defect list.** A trap reason is not a
+verdict. `when_guard.al` traps on `answer`, and `zst_and_empty_ctor.al` traps on `size`: those are test
+scaffolding that calls a deliberately undefined callee, and "fixing" them would delete the thing under test.
+The filter that separates a gap from scaffolding is the fixture's OWN registration in `scripts/e2e.sh`
+(`run_a64 <name> <want>` says the program is expected to run and what it must answer; `build_reject_has`
+says it must be refused). Any cut taken from the table above must apply that filter first, per path, and
+report how many rows survived it — otherwise the number is a count of comments, not of defects.
+
+So the next cut by this map is `undefined/builtin callee`, and its first step is not code: it is listing
+the 263 paths, splitting them by what the fixture registers, and naming which callees are missing from the
+emitters. That list is the deliverable of the next slice's first PR, and it is cheap to produce.
