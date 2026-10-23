@@ -169,6 +169,11 @@ oracle commit.
    ```
 
    It refuses a `TIMED-OUT` row and an empty delta. Its comment lines count the rows per class.
+
+   **A `TIMED-OUT` row is never a declaration of intended behaviour.** A timeout is a measurement
+   that did not finish, not a result: on a contended machine a program that runs fine can be recorded
+   as timing out, and blessing that row would write a machine's slowness into the oracle as if it were
+   the language's behaviour. Re-run on an unloaded native x86_64 until the walk is clean, then emit.
 3. Read every row before you commit. They are `--explain`'s joined transitions. A `NO-LONGER-RUNS`
    or a `run → assemble/*` row is a regression you are about to bless, even when it sits among
    twenty wins. Commit the file in the feature PR and list the transitions in the PR description.
@@ -186,8 +191,11 @@ Three things follow from how the delta is checked:
 - **Leave `scripts/xbackend_diff.baseline` alone in the feature PR.** The gate's ratchet reads the
   committed (old) manifest. `scripts/land.sh` runs the ratchet on the new manifest when it writes
   the oracle commit, and a lowered baseline follows in its own commit after that.
-- **`scripts/idiom.baseline` and `scripts/needle.baseline` have no delta.** Moving one of them still
-  takes the maintainer's separate oracle commit and a second full gate.
+- **`scripts/idiom.baseline` and `scripts/needle.baseline` need no delta, and no second gate.** They
+  are static text walks — neither runs the compiler — so regenerate them **in your branch, as their
+  own commit, before you ask for the gate**, and that one gate covers code and baseline together. The
+  delta exists only for `scripts/corpus.manifest`, whose content is produced *by compiling*: you
+  cannot know the fresh manifest without doing the walk, and that is the whole of the two-gate cost.
 
 ## Pull-request checklist
 
