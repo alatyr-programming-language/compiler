@@ -695,14 +695,16 @@ wat_cmp_glyph := fn(op : u8) -> str {
 ## Is there a user OPERATOR-OVERLOAD fn decl named exactly the glyph `g` whose FIRST parameter is
 ## declared with the struct type `[ss,sn)`? (Stdlib §2 operator overloading.) The type match is what
 ## keeps an unrelated overload from capturing a comparison over a different struct.
-## Returns the matched operator fn's NAME SPAN (0,0 when there is none) rather than a bool, so the
-## `(call $…)` site mangles it through `ir::put_symbol_name` — the SAME table the definition label uses.
-## A bool here would force the call site to emit the glyph raw, which is exactly what GAS rejects (#475).
-wat_op_fn_match := fn(decls : ptr(rt::Vec), src : ptr(u8), g : str, ss : usize, sn : usize) -> (usize, usize) {
-  if sn == 0 { return (0usize, 0usize) }
+## Returns the matched operator fn's NAME SPAN (`n == 0` when there is none) rather than a bool, so
+## the `(call $…)` site mangles it through `ir::put_symbol_name` — the SAME table the definition label
+## uses. A bool here would force that site to emit the glyph raw: `mod__&` is not a valid symbol and
+## GAS reads it as a mnemonic (#475). A struct, not a tuple — the signature has no tuple return type.
+OpFnSpan := struct { s : usize, n : usize }
+wat_op_fn_match := fn(decls : ptr(rt::Vec), src : ptr(u8), g : str, ss : usize, sn : usize) -> OpFnSpan {
+  if sn == 0 { return OpFnSpan(s = 0, n = 0) }
   cnt := rt::vec_len(deref(decls))
   mut i : usize = 0
-  mut found : (usize, usize) = (0usize, 0usize)
+  mut found := OpFnSpan(s = 0, n = 0)
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 1 {
@@ -710,7 +712,7 @@ wat_op_fn_match := fn(decls : ptr(rt::Vec), src : ptr(u8), g : str, ss : usize, 
         match d.params_head {
           Some(p0q) => {
             pm := deref(param_p(p0q))
-            if streq(src, pm.ts, pm.tl, ss, sn) { found = (d.name_start, d.name_len) }
+            if streq(src, pm.ts, pm.tl, ss, sn) { found = OpFnSpan(s = d.name_start, n = d.name_len) }
           }
           None => {}
         }
@@ -5511,11 +5513,11 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         gly := wat_cmp_glyph(op)
         lsty := expr_struct_type_of(l, params_head, body_head, src, a, decls)
         ## the matched decl's name span doubles as the "is there an overload" test — one value, no flag
-        mut ofn : (usize, usize) = (0usize, 0usize)
+        mut ofn := OpFnSpan(s = 0, n = 0)
         if gly != "" { ofn = wat_op_fn_match(decls, src, gly, lsty.s, lsty.n) }
-        if ofn.0 != 0 {
+        if ofn.n != 0 {
           push_str(sb, "(call $")
-          ir::put_symbol_name(sb, src, ofn.0, ofn.1)
+          ir::put_symbol_name(sb, src, ofn.s, ofn.n)
           push_str(sb, " ")
           emit_wat_expr(l, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           push_str(sb, " ")
