@@ -854,3 +854,30 @@ moved two paths out of the counter.
 **The general rule this suggests for §7.2:** before claiming a slice's rows, name them. A family whose rows
 cannot be listed by callee or construct is a family whose size is not known, and §14, §15, §17 and §18 are
 four corrections that each began as a number read at the wrong granularity.
+
+## §21 — #475 closed at the symbol level: the prediction written before the gate ran
+
+Measured on `main` = `8dd77d0`, 15 corpus paths declare an operator-glyph function. The oracle recorded
+`assemble/1` for every one of them on **aarch64 and riscv64** (30 rows); x86_64 answered `run/42` on 14
+and `run/2` on `width_wrap_arith`; wasm ran 14 at `run/134`, one (`operator_compare`) at `run/42`.
+
+Written down **before** the gate, so a surprise is visible as a surprise:
+
+1. **fixpoint stays green.** `put_symbol_name` is the identity on every byte of `[A-Za-z0-9_]`, and no
+   ordinary identifier contains a glyph — so the emitted bytes of every non-operator program must not
+   change. If the fixpoint moves, the pass-through is wrong and it is wrong everywhere at once.
+2. **30 rows move `assemble/1` → `run/…`** (15 paths × aarch64 + riscv64): `run/133` on 14 of them,
+   `run/2` on `width_wrap_arith`. The gate must show these as oracle mismatches until the revision lands.
+3. **wasm: 15 rows change their asm hash, none changes its verdict.** The labels are mangled, the
+   behaviour is not — `operator_compare` stays 42, the rest stay 134.
+4. **x86_64: 0 rows change.** `emit_mangled_def` is now routed through the table, but every x86 program
+   in the corpus has an ordinary name, so its bytes are identical.
+5. **`xbackend_diff` paths 903 → 902.** `width_wrap_arith` is the one path where all four backends then
+   agree (`run/2`) and it leaves the counter. `operator_compare` stays: x86 and wasm say 42, the twins
+   say 133. The other 13 stay because x86 says 42 and the twins trap.
+
+**What this slice does NOT claim.** The 13 `run/133` twins and the 14 `run/134` wasm are not #475 any
+more — the emitted asm names the callee and the trap is `bare struct/array value (copy/arg deferred)`,
+the aggregate-copy gap, a different row in §2.3. #475's own claim is narrower and now true: no operator
+glyph reaches GAS or wat2wasm raw on any backend. Writing the narrower claim is the point — §18 and §19
+are both corrections that began by crediting a fix with the rows that merely moved next to it.
