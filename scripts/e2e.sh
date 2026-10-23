@@ -887,6 +887,14 @@ check_ir_build() {
      && grep -q 'verify_failed=0$' "$rep"; then
     echo "ok   ir issue973_if_branch_context: the if-in-argument function builds through the IR (no fallback)"
   else echo "FAIL ir issue973_if_branch_context: rc=$rc"; grep -E 'NotYet|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
+  ## #977: a struct literal's field types are the context of its arguments, as a call's parameters and an
+  ## enum payload's types already were. `sema_gaps=0` is asserted by name: a literal left `VcLit` inside
+  ## a field is exactly what made the function fall back, and the fallback is where the value went wrong.
+  "$CC" ir "$E2E_TEST/issue977_struct_lit_field_ctx.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^fn issue977_struct_lit_field_ctx::g13 Built$' "$rep" \
+     && grep -q 'sema_gaps=0$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir issue977_struct_lit_field_ctx: the struct-literal field literal builds through the IR, no sema gap"
+  else echo "FAIL ir issue977_struct_lit_field_ctx: rc=$rc"; grep -E 'NotYet|sema_gaps|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
 }
 
 check_ir_dev_verb() {
@@ -11914,6 +11922,7 @@ run issue966_enum_payload_literal_ctx 2
 ## is due**, x86_64 and wasm answer 2. Progen seed 2074800535, reduced by the nightly reducer and then
 ## by machine; hand-narrowing does not reproduce it — the shape needs the whole set of temporaries.
 run issue973_if_branch_context 2
+run issue977_struct_lit_field_ctx 2
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
