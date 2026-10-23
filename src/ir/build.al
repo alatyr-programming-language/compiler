@@ -1500,7 +1500,15 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
   ## answer for every tier), `@offset` and `@endian` fields included. It stays a LOCAL value: every place
   ## through a pointer and every call crossing requires the WORD tier (`ib_struct_word`, Q4).
   packed := lower_layout::layout_kind_is_packed(lk)
-  if lower_layout::struct_align_attr(bv.decls, bv.src, s, n) >= 1 { return Option(IbSt).None }
+  ## A raised `@align` is answered by the BYTE tier's own single source: `standard_struct_align` reads
+  ## the attribute itself (`if sa >= 1 { mx = usize(sa) }`) and the alignment below comes from that call,
+  ## so refusing every `@align` struct refused what the one answer already gave. A WORD-tier struct keeps
+  ## the fixed 8 below and would silently disagree with a raised alignment, and a `@packed` struct takes
+  ## `al = 1`; both still refuse. The kinds are exclusive (`k == 1` packed, `k == 2` byte), so this cannot
+  ## let a packed struct through. Refs #980.
+  if lower_layout::struct_align_attr(bv.decls, bv.src, s, n) >= 1 and not lower_layout::layout_kind_is_byte(lk) {
+    return Option(IbSt).None
+  }
   mut f := d.fields_head
   mut nf : usize = 0
   loop {

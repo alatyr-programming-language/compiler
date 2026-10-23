@@ -7237,6 +7237,14 @@ check_located reject_unknown_attr_decl 11
 check_located reject_unknown_attr_fn 7
 check_accept accept_userdef_attr
 run accept_known_attrs 42
+## #980 slice: the twins now answer this too, so the agreement is asserted rather than observed. Before
+## `ib_struct_named` stopped refusing a BYTE-tier `@align` struct, `Al.align()` could not be named, the
+## whole function fell back to legacy and all three twins trapped (133/133/134 where x86_64 answered 42).
+## Measured on the fixed build: aarch64 42, riscv64 42, wasm 42. `run` alone declares x86_64 only (§18),
+## so without these three lines nothing at all would notice a regression back to the trap.
+run_a64 accept_known_attrs 42
+run_rv64 accept_known_attrs 42
+run_wat accept_known_attrs 42
 ## Types §9.1 -- an integer literal's representability in the type it takes from CONTEXT went unchecked
 ## below 64 bits: `x : u8 = 300` ran on a truncated 44. resolve_ty collapses every integer WIDTH onto one
 ## tag, so the width is read from the type NAME instead. Four sinks: annotated local, module-scope
@@ -7664,6 +7672,11 @@ check_reject reject_int_lit_overflow_hex
 ## NOT registered as fmt_test ON PURPOSE: `alatyr fmt` still drops the prefix spelling (verified here:
 ## run(fmt(x)) = 2 vs run(x) = 42), because this form only BECAME meaningful with this change. Recorded.
 run attr_prefix_layout 42
+## #980 slice: same cause as accept_known_attrs above — a BYTE-tier `@align` struct was unnameable, so the
+## function fell back to legacy and the twins trapped. Measured on the fixed build: 42 / 42 / 42.
+run_a64 attr_prefix_layout 42
+run_rv64 attr_prefix_layout 42
+run_wat attr_prefix_layout 42
 check_reject reject_attr_prefix_repr_narrow
 ## Types §8 / Declarations §2.3 -- a DECLARATION-PREFIX `@packed` must enable the FIELD byte-layout
 ## attributes inside the body exactly like the value-position spelling. It did not: `sm_packed` was
