@@ -4374,6 +4374,24 @@ no_input_diag_test() {
   ## This directory must not live below the checkout: TOOL-14 deliberately discovers an ancestor
   ## package.al, so `$T/e2e_no_input` would be a package invocation rather than a no-input case.
   d=$(mktemp -d /tmp/alatyr-e2e-no-input.XXXXXX) || { echo "FAIL no_input_diag: mktemp"; fail=1; return; }
+  ## The isolation holds only while no ANCESTOR of $d carries a package.al — and the ancestor of
+  ## `/tmp/alatyr-e2e-no-input.XXXXXX` is `/tmp`. A stray `/tmp/package.al` (written by any ad-hoc
+  ## command; no script here writes one) turns all four verbs into a real package invocation, and the
+  ## gate then reports four FAILs whose cause is a file that is in no commit and nowhere in the diff
+  ## (#1015 — it cost a full gate cycle to find). Named loudly rather than skipped: a silent skip
+  ## would be the same failure wearing a quieter voice.
+  polluter=""
+  a="$d"
+  while [ -n "$a" ] && [ "$a" != "/" ]; do
+    if [ -f "$a/package.al" ]; then polluter="$a/package.al"; fi
+    a=$(dirname "$a")
+  done
+  if [ -n "$polluter" ]; then
+    echo "FAIL no_input_diag: BAD ENVIRONMENT — an ancestor package.al exists at $polluter"
+    echo "       the no-input case cannot be observed while it does; remove that file and re-run."
+    echo "       (this is not a compiler result; nothing in the tree produced it)"
+    rm -rf "$d"; fail=1; return
+  fi
   for c in run build check test; do
     if [ "$c" = run ] || [ "$c" = test ]; then
       out_file="$T/no_input_$c.err"
