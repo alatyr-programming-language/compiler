@@ -567,8 +567,37 @@ all one-word kernel scalars (nested aggregate — `CSigParamNestedField`'s sibli
 (`CSigParamLevered`), and every generic instance (`CGeneric`). Those are separate tiers with separate
 proofs; folding them in here would repeat the mistake §12 warns about.
 
-**Why this and not `CSigParamUnresolved` (894 in `src/`, 181 corpus).** The residual is larger on
-`src/`, but `src/` is the compiler's own source and its rows are not what the xbackend counters are made
-of; the counters that criterion 3 drives to zero are corpus and `lib/`, where wide results dominate. The
-residual's own split (cross-module declaration vs generic instance vs `Slice(T)` vs `str`) is the
-measurement that must precede it, exactly as §13 did for the signature family.
+## 15. Correction to §14 — wide results are the biggest REFUSAL but not a driver of the counter
+
+§14 is wrong about what it leverages, and the error is worth keeping visible because it is the same
+mistake §12 warns about, made while claiming to have escaped it.
+
+`CSigResultWide` is the largest **builder refusal** on corpus+`lib/`. A refused function does not trap:
+it falls back to a legacy emitter, and the legacy emitters ALREADY implement sret for wide aggregate
+results — `a64_ret_sret_words` and `a64_call_ret_sret_span` in `src/aarch64.al`, with the enum analogue
+at `a64_ret_enum_sret_words`. So those 317 refusals produce **no TRAP row, no WRONG-VALUE row and no
+ASSEMBLE row**: they are invisible to `xbackend_diff`. Closing the tier would move functions onto the IR
+(criterion 2's substance, worth doing on its own) while leaving criterion 3's `paths=`/`rows=` exactly
+where they are. §14's "the counters that criterion 3 drives to zero are corpus and lib/, where wide
+results dominate" conflates two different measurements: the census counts refusals, `xbackend_diff`
+counts observed (phase, exit) disagreements.
+
+**Where the counter actually is** — §2.2's `--sites` map, which names the emitter comment at each fired
+trap rather than guessing:
+
+| family | paths | rows |
+|---|---:|---:|
+| aggregates and places (field access, index, addr-of, field assign, struct construct, deref-store, aggregate compare, bitcast) | **239** | **512** |
+| `unsupported expr` catch-all (twins' value-position arm) | 209 | 370 |
+| undefined/builtin callee (`movq`, `unwrap`, `map`, `sort`, `len` …) | 97 | 235 |
+| `match` shapes (#577) | 72 | 174 |
+| wasm `@abi(syscall)` externs | 109 | 109 |
+
+So the next cut by the counter is **slice 3's remaining aggregate-place rows** (512) — the same slice,
+but entered through places rather than through the result tier. The `unsupported expr` catch-all (370)
+sits behind it and shrinks as the arms above are claimed by name, which is what slice 0's trap-comment
+naming was for.
+
+sret stays a real task — it is §3.7's stated convention and the twins' legacy sret copies are exactly the
+"private copies of a shared decision" criterion 2 removes — but it is scheduled by criterion 2, not by
+criterion 3, and its PR must say so rather than promise rows.
