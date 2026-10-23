@@ -83,6 +83,19 @@ below. The table below §2.2 and the capability matrix of §2.3 were measured on
 manifest (paths=958 rows=2656 sources=2186) and are kept as the design's starting evidence; the classes
 they list as WRONG, MISSING-TRAP and CRASH have since closed one by one.
 
+**Correction (#1014, spec 1.1.0).** The sentence above — "no path in the corpus answers a different value
+on a twin than on x86_64" — was never what the classifier measured. It compared every twin against
+x86_64 alone, so on a path x86_64 *refused to compile* the twins were never compared with each other at
+all: whatever they answered, the path landed in ACCEPTS. `test/naked_a64.al` is such a path — aarch64
+exits 42, riscv64 exits 40, silently — and it sat in ACCEPTS while this section said the WRONG-VALUE
+class was empty. Since #1014 the reference is x86_64 **when it ran**, otherwise the first twin in the
+fixed order aarch64, riscv64, wasm that answered a value quietly; the row names that backend in its tag.
+On the manifest of 2 331 sources that moves 20 paths out of ACCEPTS: 9 become TRAP, 1 becomes
+WRONG-VALUE (`test/naked_a64.al`, riscv64 against the aarch64 reference), 10 fall silent because their
+twins agree. `paths=` goes 905 → 890 and `rows=` 2498 → 2449, so the ratchet line moved down while the
+class stopped being blind. The empty WRONG-VALUE class was not evidence of agreement; it was evidence
+that nothing had been compared.
+
 ### 2.2 TRAP rows by the feature the twin is missing
 
 Each TRAP row was rebuilt with `--sites` (every trap instruction rewritten to `exit(k)`), which names the
