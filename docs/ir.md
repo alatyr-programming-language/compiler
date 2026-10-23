@@ -90,11 +90,24 @@ all: whatever they answered, the path landed in ACCEPTS. `test/naked_a64.al` is 
 exits 42, riscv64 exits 40, silently — and it sat in ACCEPTS while this section said the WRONG-VALUE
 class was empty. Since #1014 the reference is x86_64 **when it ran**, otherwise the first twin in the
 fixed order aarch64, riscv64, wasm that answered a value quietly; the row names that backend in its tag.
-On the manifest of 2 331 sources that moves 20 paths out of ACCEPTS: 9 become TRAP, 1 becomes
-WRONG-VALUE (`test/naked_a64.al`, riscv64 against the aarch64 reference), 10 fall silent because their
-twins agree. `paths=` goes 905 → 890 and `rows=` 2498 → 2449, so the ratchet line moved down while the
-class stopped being blind. The empty WRONG-VALUE class was not evidence of agreement; it was evidence
-that nothing had been compared.
+
+On the manifest of 2 331 sources, 20 paths leave ACCEPTS and **none of them disappears**:
+
+| where they go | paths | what it means |
+|---|---|---|
+| `WRONG-VALUE` | 1 | `test/naked_a64.al`: riscv64 `V40` against the aarch64 reference `V42` |
+| `TRAP` | 9 | a twin traps where a twin answered quietly |
+| `REFUSED`, **attributed to x86_64** | 10 | x86_64 refuses; all three twins compile it and agree on one value |
+
+That last row is the reason x86_64 is judged in a second pass. It is not one of the twins, so once the
+reference moves it would never be compared with anything — and those 10 paths, `accept_issue623_nested_array_field_store`
+and `packed_ret_value` among them, would have left the counter entirely. The first cut of #1018 did
+exactly that: paths 905 → 890. A count that reaches zero by not looking at a backend does not record
+zero disagreements (I4); it records that the counter went blind. Judging x86_64 too costs 10 paths of
+apparent progress and buys the only honest number: **paths 900 → 900, rows 2485 → 2469** on this
+manifest, against a committed baseline of 905/2498 written when the manifest was smaller (the remaining
+−5 paths and −13 rows are manifest drift, not this change). The ratchet line moves down by less, and
+sees more.
 
 ### 2.2 TRAP rows by the feature the twin is missing
 
