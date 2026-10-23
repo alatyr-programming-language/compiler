@@ -942,10 +942,35 @@ the mechanism §2.3 already uses (`xbackend_diff.sh --sites`: rewrite the k-th t
 | not a trap at all — `rc=2`, zero `brk` sites | 1 (`width_wrap_arith`, which now agrees with x86_64's `run/2`) |
 
 Three corrections in one table, and the one that matters is the fourth row: **`checked_custom_routed_narrow`
-traps on an OVERFLOW guard**, not on an aggregate. Under S-B1 (§22) that is a live question rather than a
-closed one — if the guard is a property of the checked operation and this is a routed operator body, then
-"routed operator bodies carry none" and this trap must move or disappear. It is the only path in the family
-where #475's fix and the guard decision touch the same instruction, so it is the one to watch in slice 9.
+traps on an OVERFLOW guard**, not on an aggregate. Reading the fixture settles it the other way from how §21
+left it — that file *is* the CG-13 fixture ("a user-provided routed native-integer operator cannot bypass the
+operation-site guard"; its `@inline +` body deliberately wraps with `x86_64.addl`, and on aarch64 the
+`comptime if target.arch` does not even fire, so the body adds nothing). The trap is the guard working:
+`u32 MAX + 3` must stop before the routed body. All four backends agree it must stop — x86_64 `run/132`
+(SIGILL), aarch64 and riscv64 `run/133` (SIGTRAP), wasm `run/134` — so the only cross-backend difference is
+**which signal a trap is**, which is hardware-defined by §2.3's own exemption. If the counter does not
+already carry it as such, that is a classification gap worth one line, not a defect worth a slice.
 
 The rest stand: 13 of 15 paths stop at aggregate places, which is the §2.3 aggregate family and not #475.
 #475's own claim is unchanged and narrower — no glyph reaches GAS or wat2wasm raw on any backend.
+
+## §24 — the counter moved twice as far as predicted: 903 → 901
+
+§21 predicted `xbackend_diff` 903 → 902 paths, crediting only `width_wrap_arith`. Measured on the
+revised manifest, **two** paths left and none entered:
+
+| path | why it left |
+|---|---|
+| `test/width_wrap_arith.al` | all four backends now `run/2` — agreement, as predicted |
+| `test/checked_custom_routed_narrow.al` | the twins moved `assemble/1` → `run/133`; x86_64 was already `run/132` and wasm `run/134`, so **all four now trap** and the path has no differing backend left |
+
+`paths 903 → 901, rows 2492 → 2488` (−2 paths, −4 rows: each path carried an aarch64 and a riscv64 row).
+The mechanism §21 missed is in `xbackend_diff.sh`'s own classifier: any signal 129–192 on x86_64, `133` on
+a twin and `134` on wasm all classify **K** — one "traps" class, not three signal-specific ones. So a path
+whose twins previously failed to *assemble* leaves the counter as soon as they reach any trap, even a
+different signal from x86_64's. That is the right rule (§2.3 exempts which signal a trap is), and it means
+**every assemble/1 row on the twins is worth two counter rows when fixed**: one for the phase and one for
+the agreement it can unlock.
+
+Manifest assemble rows: **202 → 172** (aarch64 35 → 20, riscv64 34 → 19, wasm 133 unchanged — wasm was
+never in this family; its package-root refusals are the `"$main"` cause, §2.3).
