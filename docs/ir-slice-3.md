@@ -647,3 +647,70 @@ report how many rows survived it — otherwise the number is a count of comments
 So the next cut by this map is `undefined/builtin callee`, and its first step is not code: it is listing
 the 263 paths, splitting them by what the fixture registers, and naming which callees are missing from the
 emitters. That list is the deliverable of the next slice's first PR, and it is cheap to produce.
+
+## 17. The largest family, triaged: 363 of its 623 rows are declared-run gaps
+
+§16 said the first step of this cut is not code but splitting the paths by what each fixture registers,
+and said some of them are scaffolding whose trap is the thing under test. **That last part was wrong**, and
+the tool caught it: `zst_and_empty_ctor.al` is registered `run … 42` — every backend must answer 42 — so
+its trap on `size` is a defect, not scaffolding. Writing the filter down as code rather than as prose is
+what made the error visible; §16's examples were hand-read and hand-wrong.
+
+The filter is now committed: `scripts/sites_triage.sh`, reporting-only, joining
+`xbackend_diff.sh --sites` with `scripts/e2e.sh`'s own registration forms.
+
+```
+nix develop -c bash scripts/xbackend_diff.sh --sites "$PWD/target/debug/alatyr" > sites.txt
+bash scripts/sites_triage.sh --sites sites.txt
+```
+
+Measured on `main` = `5bcb96f`, the `undefined/builtin callee` family (matched as a REGEX — x86/aarch64/
+riscv64 write `undefined/builtin callee`, wasm writes `call to undefined/builtin fn X`, and a plain
+substring silently drops wasm, which is how the first run of this tool lost 226 rows):
+
+```
+623 rows triaged, 263 distinct paths
+   198  backend riscv64     226  backend wasm     199  backend aarch64
+   363  GAP:declared-run        ← the fixture says run <name> <want>; this backend traps
+   140  undeclared-here            another backend is asserted, not this one
+   120  UNREGISTERED               no registration names it (packages included)
+```
+
+So the answer to "how much of criterion 3's largest family is real" is **363 rows**, not 623 and not zero.
+The per-backend line is in the output on purpose: a family spread over all three twins is one task, and a
+backend missing from that list means the matcher dropped it.
+
+### What the twins are stuck on, and why the list is incomplete
+
+The callee histogram the tool prints is **wasm-only**: wasm writes the callee's name into its trap comment,
+while aarch64 and riscv64 write a fixed string with no name —
+
+```
+src/wat.al:5898      (unreachable) (; call to undefined/builtin fn <name> ;)
+src/aarch64.al:5822  brk #0 // undefined/builtin callee
+src/riscv64.al:5049  ebreak # undefined/builtin callee
+```
+
+So 398 of the 623 rows name no callee, and the histogram (sys_mmap 83, size 11, unwrap 7 …) describes only
+the wasm third of the family. Naming the callee in the twins' comment would fix that, and it is exactly what
+slice 0's trap-naming rule exists for — but it changes emitted text, which moves the corpus manifest hashes
+for every affected path: an oracle regeneration, not a free change. It is therefore listed as a decision
+below rather than done here.
+
+### The first concrete gap, root-caused
+
+`zst_and_empty_ctor.al` (registered `run … 42`; x86_64 answers 42, aarch64 and riscv64 trap 133, wasm 134):
+
+```
+fn zst_and_empty_ctor::take_marker NotYet(signature: parameter type names no struct or enum resolvable here, :23:1)
+```
+
+`take_marker := fn(z : Z)` with `Z := struct {}`. `ib_struct_named` returns `None` when a struct has no
+fields (`if nf == 0 { return None }`), so a ZERO-SIZED struct is not a type the builder can name — and that
+refuses every function mentioning `Z`, including `size(Z)` and `align(Z)`, which the builder otherwise folds
+(`ib_bx_layout_q`, `LayoutQ.LqSize/LqAlign`). Spec §6.5 settles the layout — size 0, alignment 1, "zero-sized
+types are permitted" — so the refusal is not a spec gap.
+
+What the spec does NOT settle is how a ZST crosses a call. x86_64 today passes the **address of a scratch
+stack slot** (`leaq -8(%rbp), %rax; movq %rax, %rdi`), so it consumes a register while the type occupies no
+bytes. That is an implementation choice, not a spec rule, and it is the owner's to make — see #979.
