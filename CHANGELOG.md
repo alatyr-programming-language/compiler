@@ -117,8 +117,8 @@ The full delta audit stays in `seed/VERSION`. A tag is not in the input tree —
 it, and a tag can be moved with a force-push — so it is navigation, not the record.
 
 Two numbers that are **not** the compiler's version: the specification revision (this build cites it,
-`README.md` carries the badge) and the seed lineage in `seed/VERSION`. The specification's own `v1.0.0`
-tag lives in the sibling repository; a `v1.0.0` here would mean something else entirely.
+`README.md` carries the badge) and the seed lineage in `seed/VERSION`. The specification's own tags
+(`v1.0.0`, `v1.1.0`, …) live in the sibling repository; a `v1.1.0` here would mean something else entirely.
 
 ## Unreleased
 
@@ -150,6 +150,18 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   version does **not** move here: it moves on a seed promotion and only on one. One honest caveat for the
   gate: baking a new string is **not emission-neutral** — expect a non-zero seed→Stage1 GAS delta from
   this tree, and read it as the two new string constants plus their addressing, nothing else.
+
+- **The specification pin moves to 1.1.0, and a gate check now keeps its five statements in step.**
+  The tree was answerable to `1.0.0` plus post-tag commits up to an untagged branch head — a citation
+  that resolves to nothing permanent. It is answerable to `v1.1.0` (spec commit `65a0c9b`) now, in
+  AGENTS.md "The pin", CONTRIBUTING.md and a `spec-pin:` key line in `seed/VERSION`'s CURRENT SEED
+  block. `scripts/spec_pin_check.sh`, wired into `scripts/full.sh` before the build stages, refuses a
+  tree where the constant in `src/spec_revision.al` and those prose statements — README's badge and pin
+  sentence, AGENTS.md, `scripts/package_cli_test.sh`'s expected `--version` line — disagree, and checks
+  the `v<revision>` tag exists wherever a checkout of the specification repository is reachable (it says
+  so out loud where none is, rather than passing quietly). Its planted self-test — 13 trees: 4 controls,
+  6 disagreements named, 3 refusals — is what makes the green mean something. Under `scripts/`, so no
+  version moves.
 
 - **A program that overloads an operator now assembles and runs on aarch64 and riscv64 (#475).** An
   operator glyph is a declaration's *name* (`@inline + := fn(…)`), and the name reached the assembler raw:

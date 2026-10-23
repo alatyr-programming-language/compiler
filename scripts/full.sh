@@ -4,7 +4,10 @@
 # The INPUT-SET check first (scripts/corpus_enum_check.sh: the git index and the worktree must name
 # the same `.al` corpus, 0.085 s measured, no compiler needed — a fixture that is written but never `git
 # add`ed is invisible to the two oracle stages and visible to e2e and all three sweeps, and no later
-# stage can see that, issue #645). Then fixpoint (byte-for-byte self-reproduction: seed == Stage1 == Stage2) + the full e2e suite + the
+# stage can see that, issue #645). Then the SPEC-PIN join (scripts/spec_pin_check.sh: the five places
+# that state the specification revision — `src/spec_revision.al`, README.md, AGENTS.md "The pin",
+# scripts/package_cli_test.sh's expected `--version` line, seed/VERSION — must name ONE number, no
+# compiler needed, issue #1000). Then fixpoint (byte-for-byte self-reproduction: seed == Stage1 == Stage2) + the full e2e suite + the
 # per-file four-backend CORPUS MANIFEST (scripts/corpus_manifest.sh: every tracked test/*.al on all four
 # backends, ~1.5 min) + the `fmt` ARBITER over both corpora (scripts/fmt_corpus.sh: `run(fmt(x)) == run(x)`
 # and `fmt(fmt(x)) == fmt(x)` over every tracked test/*.al, plus idempotence over the compiler's own
@@ -102,6 +105,14 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/seed_forms_check.sh" --self-test
   _full_seed_forms_self_test_rc=$?
   [ "$_full_seed_forms_self_test_rc" = 0 ] || exit "$_full_seed_forms_self_test_rc"
+  # The SPEC-PIN decider's gate-of-the-gate (issue #1000), for the enumeration check's reason: on a tree
+  # that agrees, the pin check never reaches its own failure verdict, so a neutered decider would print
+  # the same green line forever. Thirteen planted trees drive it — FOUR controls that must stay green (two
+  # of them the halves that must SKIP out loud rather than pass quietly), SIX disagreements each named
+  # with both numbers, and THREE refusals for a constant that is absent, doubled or malformed.
+  bash "$ROOT/scripts/spec_pin_check_test.sh"
+  _full_spec_pin_self_test_rc=$?
+  [ "$_full_spec_pin_self_test_rc" = 0 ] || exit "$_full_spec_pin_self_test_rc"
   bash "$ROOT/scripts/land.sh" --self-test
   _full_land_self_test_rc=$?
   [ "$_full_land_self_test_rc" = 0 ] || exit "$_full_land_self_test_rc"
@@ -150,6 +161,33 @@ if [ -z "$ce_cover" ]; then
   echo "*** FULL GATE: REFUSED — scripts/corpus_enum_check.sh printed no 'index=' coverage line, so"
   echo "    what it compared is unknown. ***"
   exit 1
+fi
+
+# The SPEC-PIN check (issue #1000). A text join over the five places this repository states one number —
+# `src/spec_revision.al`, README.md, AGENTS.md "The pin", scripts/package_cli_test.sh's expected
+# `--version` line, and seed/VERSION's CURRENT SEED note — so it needs no compiler and costs well under a
+# second, which is why it sits here with the other cheap pre-build stages rather than after six minutes of
+# building. TOOL-21 makes `version` report the specification revision it conforms to; this is what stops
+# that reported number from being a different one from the prose's. Like the wildcard check below and
+# UNLIKE the enumeration check above it does not stop the gate: a disagreement cannot make the later
+# stages measure the wrong tree, it just must not reach `main` unremarked. The tag half SKIPs out loud on
+# a machine that holds only this repository — every gate runner — and the skip is carried in the same
+# coverage line so a green here says what was and was not compared.
+echo '### SPEC PIN (one revision, five places) ###'
+SP_LOG="$LOGDIR/full_spec_pin.log"
+bash scripts/spec_pin_check.sh > "$SP_LOG" 2>&1
+sp_rc=$?
+grep -E "^(spec pin:|\*\*\* spec pin)" "$SP_LOG"
+sp_cover="$(grep -E "^spec pin: revision=" "$SP_LOG" | tail -1 | sed 's/^spec pin: //')"
+if [ "$sp_rc" != "0" ]; then
+  echo "  FAILURES (from $SP_LOG):"; grep -E "^spec pin: FAIL" "$SP_LOG" | head -20 | sed 's/^/    /'
+  fail=1
+fi
+# The same proof-of-work rule as every stage above: agreement with nothing must not read as agreement.
+if [ -z "$sp_cover" ]; then
+  echo "  (scripts/spec_pin_check.sh printed no 'revision=' coverage line — what it compared is unknown,"
+  echo "   treating as a failure)"
+  fail=1; sp_cover="UNKNOWN — no coverage line"
 fi
 
 # The WILDCARD-ARM check (issue #658). A pure source scan like the idiom gate — no compiler, ~8 s —
@@ -514,6 +552,7 @@ if [ "$fail" != 0 ]; then
 elif [ "$sw_status" = "RAN" ]; then
   echo "*** FULL GATE: GREEN (sweeps RAN) ***"
   echo "    corpus enum:     $ce_cover"
+  echo "    spec pin:        $sp_cover"
   echo "    wildcard arms:   $wa_cover"
   echo "    strict forms:    $sf_cover"
   echo "    strict typed:    $st_cover"
@@ -528,6 +567,7 @@ else
   echo "    riscv64/wasm backends were NOT exercised by the sweeps. Re-run with --force-sweeps before"
   echo "    landing any change that can reach a backend. ***"
   echo "    corpus enum:     $ce_cover"
+  echo "    spec pin:        $sp_cover"
   echo "    wildcard arms:   $wa_cover"
   echo "    strict forms:    $sf_cover"
   echo "    strict typed:    $st_cover"

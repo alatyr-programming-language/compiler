@@ -64,6 +64,16 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 current-seed-sha256: 7014c5a2353d52ddb83b2f0bc3ffced069c9298f8c15068ca3b145682b89d42b
 current-seed-version: 0.2.16
 #
+# spec-pin: 1.1.0 (tag v1.1.0, spec commit 65a0c9b)
+#
+# `spec-pin` is the SPECIFICATION revision this tree is answerable to — a DIFFERENT axis from
+# `current-seed-version` above, which is the compiler's own version and moves on a seed promotion and
+# only on one (CHANGELOG.md, "Versioning policy"). `src/spec_revision.al` carries this same number and
+# `alatyr version` prints both, per Tooling §4 / TOOL-21 (#1000); `scripts/spec_pin_check.sh` refuses a
+# tree where the two, or the prose in README.md and AGENTS.md, drift apart. The dated promotion entries
+# below keep the pin as it stood when each was written — APPEND-ONLY history; this line, not those, is
+# the current claim.
+#
 # Promoted:      2026-10-15 (see the last entry in this file)
 # Promoted stage: Stage2, of a Stage1 == Stage2 == Stage3 convergence
 # GAS at promotion: 1596638 lines
