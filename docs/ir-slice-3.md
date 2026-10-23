@@ -925,3 +925,27 @@ Two checks this section can already make without waiting for the flip:
 `0x8000000000000000 >> 61 = 4`; saturating to `u64::MAX` would have given **7**, a trap **133**. The
 number therefore separates "no guard" from "wrong guard" — a saturating conversion would have looked just
 as untrapped at the exit code alone. Filed by panel 15; slice 9 links to it rather than opening a second.
+
+## §23 — the fired site, measured: §21's "aggregate-copy" was a guess about 13 paths
+
+§21 said the twins' `run/133` is `bare struct/array value (copy/arg deferred)`. That was read off the
+FIRST `brk` in one file's text, and the first trap in a file is not the trap that fires. Re-measured with
+the mechanism §2.3 already uses (`xbackend_diff.sh --sites`: rewrite the k-th trap to `exit(k)`, run, map
+`k` back to its line) on this branch's Stage1:
+
+| fired site | paths |
+|---|---:|
+| `bare struct/array value (copy/arg deferred)` | 9 |
+| `unsupported expr StructLit` | 3 (`fmt_comptime_param`, `query_constructor_binary_positive`, `routed_op_aggregate`) |
+| `bare aggregate comparison needs structural eq/lt (Stdlib 2.6)` | 1 (`operator_compare`) |
+| `trap overflow …:LINE` | 1 (`checked_custom_routed_narrow`) |
+| not a trap at all — `rc=2`, zero `brk` sites | 1 (`width_wrap_arith`, which now agrees with x86_64's `run/2`) |
+
+Three corrections in one table, and the one that matters is the fourth row: **`checked_custom_routed_narrow`
+traps on an OVERFLOW guard**, not on an aggregate. Under S-B1 (§22) that is a live question rather than a
+closed one — if the guard is a property of the checked operation and this is a routed operator body, then
+"routed operator bodies carry none" and this trap must move or disappear. It is the only path in the family
+where #475's fix and the guard decision touch the same instruction, so it is the one to watch in slice 9.
+
+The rest stand: 13 of 15 paths stop at aggregate places, which is the §2.3 aggregate family and not #475.
+#475's own claim is unchanged and narrower — no glyph reaches GAS or wat2wasm raw on any backend.
