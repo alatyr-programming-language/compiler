@@ -2000,13 +2000,50 @@ pub put_inst_loc := fn(in out sb : rt::StrBuf, src : ptr(u8), ip : ptr(mut IrIns
 ## (`docs/ir.md` §3.7). A bodyless `@abi(syscall)` trampoline is named by it on aarch64 AND riscv64
 ## (`docs/ir-slice-2.md`), because the same call can be declared in two modules (`std::io` and
 ## `std::fmt` both declare `sys_write`).
+## The linker symbol for a declaration NAME, with every non-identifier byte replaced. Modules §6.1
+## requires the symbol to be **a valid C identifier**; Grammar §2.2's exception makes an operator glyph
+## the declaration's NAME (`& := fn(…)`), and GAS then reads `mod__&:` as a mnemonic — which is why
+## aarch64 and riscv64 failed to assemble every program that overloads an operator (#475, the ASM rows
+## in docs/ir.md §2.3). ONE table, used by every emitter that writes a function symbol — the definition
+## label and the call target go through it, so they cannot drift apart (the private-copy pattern
+## criterion 2 removes: riscv64 wrote the raw name span at two sites before this).
+## Multi-char glyphs fall out of the per-byte table: `==` → `_eq_eq`, `<=` → `_lt_eq`. An unmapped
+## byte becomes `_h<decimal>`, so the mapping is total and no glyph can reach the assembler raw.
+## Rename a spelling HERE, in one place, if the ABI ever wants a different one.
+pub put_symbol_name := fn(in out sb : rt::StrBuf, src : ptr(u8), s : usize, n : usize) {
+  mut k : usize = 0
+  while k < n {
+    c := str_at((src + s + k), 1)
+    if c == "+" { rt::push_str(sb, "_plus") }
+    else if c == "-" { rt::push_str(sb, "_minus") }
+    else if c == "*" { rt::push_str(sb, "_star") }
+    else if c == "/" { rt::push_str(sb, "_slash") }
+    else if c == "%" { rt::push_str(sb, "_percent") }
+    else if c == "&" { rt::push_str(sb, "_amp") }
+    else if c == "|" { rt::push_str(sb, "_pipe") }
+    else if c == "^" { rt::push_str(sb, "_caret") }
+    else if c == "<" { rt::push_str(sb, "_lt") }
+    else if c == ">" { rt::push_str(sb, "_gt") }
+    else if c == "=" { rt::push_str(sb, "_eq") }
+    else if c == "!" { rt::push_str(sb, "_bang") }
+    else if c == "~" { rt::push_str(sb, "_tilde") }
+    else if c == "?" { rt::push_str(sb, "_q") }
+    else if c == "@" { rt::push_str(sb, "_at") }
+    else if c == "." { rt::push_str(sb, "_") }
+    else if c == ":" { rt::push_str(sb, "__") }
+    else { rt::push_str(sb, "_h"); rt::push_int(sb, i64(k)) }
+    k += 1
+  }
+}
+
 pub put_fn_symbol := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
   if not lower::is_root_mod(d.mod_start, d.mod_len) {
     if d.mod_len == 0 { put(sb, "main") } else { mn := str_at((src + d.mod_start), d.mod_len); put(sb, mn) }
     put(sb, "__")
   }
-  nm := str_at((src + d.name_start), d.name_len)
-  put(sb, nm)
+  ## The name goes through the ONE symbol table above, not verbatim: an operator-glyph name would
+  ## otherwise reach the assembler raw (#475).
+  put_symbol_name(sb, src, d.name_start, d.name_len)
 }
 
 ## Build declaration `di` of `decls` and verify it, for a selector.

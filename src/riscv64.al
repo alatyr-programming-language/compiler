@@ -8119,7 +8119,10 @@ rv_emit_call_target := fn(in out sb : rt::StrBuf, decls : ptr(rt::Vec), src : pt
     }
     i += 1
   }
-  if en != 0 { push_str(sb, str_at((src + es), en)) } else { push_str(sb, str_at((src + cs), cl)) }
+  ## An `@extern`/`@export` symbol stays VERBATIM (Modules §6.3: the exact supplied foreign/linker name);
+  ## a path-derived callee goes through the ONE symbol table, so an operator-glyph name never reaches GAS
+  ## raw (#475) and this target cannot drift from the definition label in emit_rv_fn.
+  if en != 0 { push_str(sb, str_at((src + es), en)) } else { ir::put_symbol_name(sb, src, cs, cl) }
 }
 emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), decls : ptr(rt::Vec)) {
   ## an `@extern` fn (Modules §7.2) is a bodyless import — emit nothing (calls route to the external symbol).
@@ -8146,7 +8149,7 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
     ## SUPPORTED: a single type-param (any position), OR a leading RUN of 2..3 type-params (cnt == lead).
     gok := RV_SUB_ITL != 0 and cnt >= 1 and cnt <= 3 and (cnt == lead or cnt == 1)
     if not gok {
-      push_str(sb, fname) ; push_str(sb, ":\n  ebreak # generic fn: unsupported type-param shape\n  ret\n")
+      ir::put_symbol_name(sb, src, d.name_start, d.name_len) ; push_str(sb, ":\n  ebreak # generic fn: unsupported type-param shape\n  ret\n")
       return
     }
     inst = true
@@ -8244,7 +8247,7 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   ## `@abi(naked)` (spec ch.80): label + raw body (asm() lines) + trailing value only; no prologue/epilogue.
   if rv_fn_is_naked(src, d.name_start, d.name_len) {
     emit_rv_export(sb, src, d.name_start, d.name_len)
-    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(RV_TEST_DECL_INDEX)) } else if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
+    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(RV_TEST_DECL_INDEX)) } else if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { ir::put_symbol_name(sb, src, d.name_start, d.name_len) } ; push_str(sb, ":\n")
     emit_rv_stmts(d.body_stmts, sb, a, src, ephead, pcount, d.body_stmts, decls, frame, Option.None, 0)
     if not ex_is_no_tail(d.value) { emit_rv_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, Option.None, 0) }
     return
@@ -8366,7 +8369,7 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
     push_str(sb, ":\n")
   } else {
     emit_rv_export(sb, src, d.name_start, d.name_len)
-    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(RV_TEST_DECL_INDEX)) } else if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
+    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(RV_TEST_DECL_INDEX)) } else if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { ir::put_symbol_name(sb, src, d.name_start, d.name_len) } ; push_str(sb, ":\n")
   }
   if standard_byte_abi_fence { push_str(sb, "  ebreak # unsupported standard-byte by-value ABI boundary (#169)\n") }
   push_str(sb, "  addi sp, sp, -") ; push_int(sb, frame) ; push_str(sb, "\n")
