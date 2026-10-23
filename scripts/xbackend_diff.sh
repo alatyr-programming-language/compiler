@@ -32,39 +32,52 @@
 # Exit 255 is deliberately a VALUE, not a signal: it is exit(-1), which is exactly what a `match` with
 # no arm taken returns (AGENTS.md, #544). Folding it into K would hide that silent class.
 #
-# ## The classes (per twin row, against the x86_64 row), in priority order
+# ## The classes (per twin row, against the REFERENCE row), in priority order
 #
-#   WRONG-VALUE   x86 V<a>, twin V<b>, a != b, quiet       — the twin answers something else
-#   MISSING-TRAP  x86 K,    twin V<b>, quiet               — x86 refuses at run time, the twin answers
-#   CRASH         x86 V,    twin S                         — a fault, not a trap
-#   LOUD-EXIT     x86 V|K,  twin V<b> != x86, with stderr  — the RUNNER failed and said so. Measured
+# The reference is x86_64 WHEN IT RAN. When x86_64 abstained (`compile/1`, a refusal), the reference
+# is the FIRST twin, in the fixed order aarch64, riscv64, wasm, that answered a value quietly — and
+# the tag names which backend that was. This is the owner's decision on #1014: a value disagreement
+# between two backends is WRONG-VALUE no matter which backend abstained. Before it, the reference was
+# hard-wired to x86_64, so every path x86_64 refused fell into ACCEPTS however much the twins
+# disagreed, and `test/naked_a64.al` — aarch64 42, riscv64 40, a real silent wrong value — was
+# invisible to the class. The reference is chosen by a fixed order, never by data, so the verdict is
+# reproducible (FND-3) and does not depend on manifest row order.
+#
+#   WRONG-VALUE   ref V<a>, twin V<b>, a != b, quiet       — the twin answers something else
+#   MISSING-TRAP  ref K,    twin V<b>, quiet               — the reference refuses at run time, the twin answers
+#   CRASH         ref V,    twin S                         — a fault, not a trap
+#   LOUD-EXIT     ref V|K,  twin V<b> != ref, with stderr  — the RUNNER failed and said so. Measured
 #                 on wasm: wasmtime exits 1 both for an `unknown import` at instantiation (an FFI or
 #                 bodyless extern the twin cannot satisfy) and for `exit with invalid exit status
 #                 outside of [0..126)` — a program whose exit value wasmtime refuses to deliver, which
 #                 HIDES the value and so may itself be a wrong value. `--sites` prints which.
-#   TRAP          x86 V,    twin K                         — unimplemented lowering (fail-loud stub)
-#   TIMEOUT       x86 V|K,  twin T  (or the reverse)
-#   ASSEMBLE      x86 V|K,  twin A                         — the twin emitted text `as` refuses
-#   LINK          x86 V|K,  twin L                         — e.g. a runtime symbol the twin lacks
-#   REFUSED       x86 V|K,  twin C                         — the twin refuses to compile what x86 runs;
+#   TRAP          ref V,    twin K                         — unimplemented lowering (fail-loud stub)
+#   TIMEOUT       ref V|K,  twin T  (or the reverse)
+#   ASSEMBLE      ref V|K,  twin A                         — the twin emitted text `as` refuses
+#   LINK          ref V|K,  twin L                         — e.g. a runtime symbol the twin lacks
+#   REFUSED       ref V|K,  twin C                         — the twin refuses to compile what the reference runs;
 #                                                            the acceptable end state IF it is located
-#   ACCEPTS       x86 C,    twin V|K|S|T                   — a twin builds a program x86_64 refuses
+#   ACCEPTS       ref C,    twin V|K|S|T                   — a twin builds a program the reference refuses
 #   HW-DEFINED    a MISSING-TRAP row on a path in the `HW_DEFINED` list below: `unchecked` division by
 #                 zero / `MIN / -1`, which the specification makes target-specific (Concurrency §6.2).
 #                 Listed and counted (`hw-defined=`), but not part of `paths=`/`rows=`.
 #
-# Not a disagreement: equal states (V<a>/V<a>, K/K, C/C), and x86 C against twin A, L or a loud
+# Not a disagreement: equal states (V<a>/V<a>, K/K, C/C), and ref C against twin A, L or a loud
 # exit — every backend refused, only at a different step. `--all` lists those as REFUSED-LATE.
 #
 # "quiet"/"loud" is the twin row's stderr digest: empty or not. A runner that exited and printed why
-# is a loud failure, not a silent answer (#683's triage measured that split on the wasm column).
+# is a loud failure, not a silent answer (#683's triage measured that split on the wasm column). When
+# the reference is a twin, the tag carries ` ref=<backend>` as well, so a reader of `--rows` can see
+# what the row was compared against without recomputing it.
 # A path is listed under its highest-priority class; `--count` counts rows (path × twin) and paths.
 #
 # ## Usage
 #
 #   scripts/xbackend_diff.sh [--all] [--class C] [<manifest>]   per-path table, grouped by class
 #   scripts/xbackend_diff.sh --count [<manifest>]               counts only, per class and backend
-#   scripts/xbackend_diff.sh --rows [--all] [<manifest>]        machine rows: class TAB backend TAB path TAB x86 TAB twin TAB tag
+#   scripts/xbackend_diff.sh --rows [--all] [<manifest>]        machine rows: class TAB backend TAB path TAB ref TAB twin TAB tag
+#       `ref` is the x86_64 state when x86_64 ran, otherwise the value of the twin taken as reference
+#       (#1014); the tag then carries ` ref=<backend>` so the row says what it was judged against.
 #   scripts/xbackend_diff.sh --sites <compiler> [--class C] [<manifest>]
 #       for every TRAP/CRASH row, rebuild that source for that twin with every trap instruction
 #       rewritten into `exit(k)` (k = the site's ordinal), run it, and print WHICH site fired and the
@@ -218,14 +231,27 @@ xb_rows() { # manifest all [hw-defined-list]
         p = order[i]
         if (!((p "\t" "x86_64") in st)) continue
         x = st[p "\t" "x86_64"]
+        ## THE REFERENCE (#1014). x86_64 when it ran. When it abstained (compile/1), the first twin
+        ## in this FIXED order that answered a value QUIETLY — a loud exit is a runner failure that
+        ## hid its value, not an answer to compare against. Fixed order, never data: the verdict is
+        ## reproducible and does not depend on manifest row order (FND-3).
+        ref = x; refbe = "x86_64"
+        if (x == "C") {
+          for (j = 1; j <= 3; j++) {
+            b = tw[j]; k = p "\t" b
+            if ((k in st) && st[k] ~ /^V/ && se[k] == empty) { ref = st[k]; refbe = b; break }
+          }
+        }
         for (j = 1; j <= 3; j++) {
           b = tw[j]; k = p "\t" b
           if (!(k in st)) continue
-          c = klass(x, st[k], se[k] != empty)
+          if (b == refbe) continue
+          c = klass(ref, st[k], se[k] != empty)
           if (c == "MISSING-TRAP" && (p in hw)) c = "HW-DEFINED"
           if (c == "" || (c == "REFUSED-LATE" && all != 1)) continue
           tag = (st[k] ~ /^V/) ? ((se[k] == empty) ? "quiet" : "loud") : "-"
-          printf "%s\t%s\t%s\t%s\t%s\t%s\n", c, b, p, x, st[k], tag
+          if (refbe != "x86_64") tag = tag " ref=" refbe
+          printf "%s\t%s\t%s\t%s\t%s\t%s\n", c, b, p, ref, st[k], tag
         }
       }
     }' "$1"
@@ -295,8 +321,34 @@ if [ "$MODE" = selftest ]; then
      "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 compile 1)" "$(q riscv64 compile 1)" "$(q wasm compile 1)")" ""
   ok "refusing at a later build step is silent by default" "$(rows_of "$(q x86_64 compile 14)" "$(q aarch64 link 1)")" ""
   ok "... and listed as REFUSED-LATE under --all" "$(ALLX=1 rows_of "$(q x86_64 compile 14)" "$(q aarch64 link 1)")" "REFUSED-LATE:aarch64"
-  ok "a twin that builds what x86_64 refuses is ACCEPTS" \
-     "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 7)" "$(q wasm run 134)")" "ACCEPTS:aarch64 ACCEPTS:wasm"
+  ok "x86 refuses and NO twin answers quietly: both are ACCEPTS (#1014 keeps this)" \
+     "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 133)" "$(q wasm run 134)")" "ACCEPTS:aarch64 ACCEPTS:wasm"
+  ## THE TWIN REFERENCE (#1014, owner decision). When x86_64 abstains, the reference is the FIRST
+  ## twin in the fixed order that answered a value QUIETLY, and the remaining twins are judged
+  ## against IT. Before this, every path x86_64 refused fell into ACCEPTS however much the twins
+  ## disagreed — `test/naked_a64.al` (aarch64 42, riscv64 40) was invisible to WRONG-VALUE.
+  ok "x86 abstains, twins disagree on a value: WRONG-VALUE, not ACCEPTS" \
+     "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 42)" "$(q riscv64 run 40)")" \
+     "WRONG-VALUE:riscv64"
+  ok "a twin that traps where the reference answers is TRAP, not ACCEPTS" \
+     "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 7)" "$(q wasm run 134)")" "TRAP:wasm"
+  ok "twins agreeing while x86 abstains is silent" \
+     "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 42)" "$(q riscv64 run 42)")" ""
+  ## The reference is chosen by FIXED ORDER, never by data, so the verdict does not depend on the
+  ## order of rows in the manifest (FND-3). A LOUD twin is never the reference: a runner that
+  ## printed why it failed hid its value, so it cannot vouch for one.
+  ok "the reference is the first QUIET value in fixed order, not the first row" \
+     "$(rows_of "$(q x86_64 compile 1)" "$(q wasm run 9)" "$(q aarch64 run 42)")" \
+     "WRONG-VALUE:wasm"
+  ## The row says WHICH backend the value was compared against, so a reader can tell that the
+  ## reference was aarch64 and not the x86_64 that abstained.
+  printf '%s\n' "$H" "$(q x86_64 compile 1)" "$(q wasm run 9)" "$(q aarch64 run 42)" > "$T/m"
+  ok "...and the row names the backend it was compared against" \
+     "$(xb_rows "$T/m" 0 | awk -F'\t' '$1 == "WRONG-VALUE" { print $2 "\t" $4 "\t" $5 "\t" $6 }')" \
+     "wasm	V42	V9	quiet ref=aarch64"
+  ok "a loud twin cannot be the reference: a quiet one is, and the loud one is LOUD-EXIT" \
+     "$(rows_of "$(q x86_64 compile 1)" "$(q aarch64 run 42 "$L")" "$(q riscv64 run 41)")" \
+     "LOUD-EXIT:aarch64"
   ok "a build timeout is a refusal, a run timeout is TIMEOUT" \
      "$(rows_of "$(q x86_64 run 42)" "$(q aarch64 compile_timeout 124)" "$(q wasm run_timeout 124)")" "REFUSED:aarch64 TIMEOUT:wasm"
   ok "no x86_64 row, no verdict" "$(rows_of "$(q aarch64 run 1)")" ""
