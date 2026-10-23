@@ -40,7 +40,12 @@
 # When the gate on the merge is green and its corpus stage reports `match by the declared delta`,
 # PHASE 6a commits the fresh manifest that run generated as a one-file oracle commit on top of the merge,
 # proves it is that file byte for byte and touches nothing else, runs the `xbackend_diff.sh` ratchet on
-# it, and publishes THAT object. The second full gate it replaces could only ever have differed from
+# it, and publishes THAT object. The ratchet runs on the FRESH manifest, never on the committed one:
+# while the oracle commit is still pending, the committed manifest still contains the rows that have
+# demonstrably moved, so a ratchet run before it cannot see the improvement — it reports the old count
+# unchanged through the whole gate and drops only after the oracle commit. Ordering is the assertion.
+#
+# The second full gate it replaces could only ever have differed from
 # the first in those two manifest-reading checks; everything else the gate runs is a function of the
 # source tree, and an oracle commit changes no source byte.
 #

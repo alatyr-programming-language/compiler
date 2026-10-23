@@ -174,7 +174,15 @@ oracle commit.
    that did not finish, not a result: on a contended machine a program that runs fine can be recorded
    as timing out, and blessing that row would write a machine's slowness into the oracle as if it were
    the language's behaviour. Re-run on an unloaded native x86_64 until the walk is clean, then emit.
-3. Read every row before you commit. They are `--explain`'s joined transitions. A `NO-LONGER-RUNS`
+3. **Never write or edit a class by hand — the generator derives it, and it will disagree with you.**
+   Measured on the first real run: an author declared `NOW-RUNS` for three pairs whose twins had
+   *already been running* and stopped at `brk #0`; a trap is a run, so the transition is
+   `EXIT-CHANGED` — "ran before and after, different exit", not "refused → runs". The pairs and the
+   exit codes were predicted correctly; the class was not, and care cannot fix that: a class is a
+   function of the before/after pair, so it must come from the diff. This is why `--emit-expected` is
+   the only writer of this file, and it is a correctness rule, not a style preference.
+
+   Read every row before you commit. They are `--explain`'s joined transitions. A `NO-LONGER-RUNS`
    or a `run → assemble/*` row is a regression you are about to bless, even when it sits among
    twenty wins. Commit the file in the feature PR and list the transitions in the PR description.
 4. Check the result yourself. A delta that does not match its own walk is a red gate:
