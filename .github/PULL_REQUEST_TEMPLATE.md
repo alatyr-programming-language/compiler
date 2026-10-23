@@ -42,9 +42,13 @@ for docs-only, list the classifier verdict, changed paths, hunk/mode review, ref
 ```
 
 For an intentional behavior change whose expected result updates an oracle, this feature-only PR must
-not contain an oracle file. Instead, state the joined expected transitions or reviewed baseline
-findings here and say that the maintainer will create the separate one-file oracle commit after the
-local merge; the final complete gate is run on that merge plus oracle commit.
+not contain an oracle file. If it moves `scripts/corpus.manifest`, commit the
+`scripts/corpus_manifest.sh --emit-expected` output as `scripts/corpus.expected-delta`
+(CONTRIBUTING, "An intentional behaviour change"). Paste its per-class counts here: one full gate
+on the merge then lands the feature together with its oracle commit. A moved `idiom.baseline` or
+`needle.baseline` has no delta. State the reviewed findings here instead: the maintainer makes the
+separate one-file oracle commit after the local merge, and the final complete gate runs on that
+merge plus oracle commit.
 
 ## Checklist
 
@@ -69,7 +73,8 @@ local merge; the final complete gate is run on that merge plus oracle commit.
       needs three-stage evidence — say so rather than doing it. For docs-only, record why fixpoint is
       inapplicable.
 - [ ] The corpus manifest matches for an ordinary full-gate PR, is inapplicable to independently
-      classified inert prose, or the expected transition is explained here and
+      classified inert prose, or this PR carries a `scripts/corpus.expected-delta` emitted against the
+      current `main` and `--check-delta` exits 0 on it, or the expected transition is explained here and
       the maintainer will regenerate it in a separate one-file commit after the local merge. The
       message for that commit carries the `scripts/corpus_manifest.sh --explain` output verbatim (it
       joins on `(backend, path)` and separates severity classes; reading the raw diff positionally
