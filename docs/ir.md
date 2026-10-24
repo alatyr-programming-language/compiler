@@ -165,11 +165,15 @@ The non-TRAP classes, by cause:
   **in its lowering** (232 `codegen_reject`/`panic("selfhost…")` sites in `src/lower.al`) while the twins
   compile them. A located refusal is a semantic decision too, and it lives in one emitter. #1018 moved 55
   of those rows out of the class: once x86_64 abstains and a twin becomes the reference, a row no longer
-  blames a twin for x86_64's abstention. Of the 55, 13 became TRAP, 1 became WRONG-VALUE and 41 dropped
-  out because the twins agree with the new reference. Separately, the 20 `REFUSED:x86_64` rows are
-  **new** rows: x86_64 had never been judged before, so none of them is a reclassified ACCEPTS row. All
-  20 paths that carry one were ACCEPTS before, though. Each is an over-refusal the twins outvoted, which
-  is the shape worth fixing.
+  blames a twin for x86_64's abstention. Measured, not carried over — the SAME committed oracle manifest
+  classified by the pre-#1018 script (`ee751e2`) and by today's, since #1018 changed the classifier and not
+  the emission: ACCEPTS **234 rows / 84 paths** before, **179 / 64** after. Of the 55 that left,
+  **13 became TRAP** (2198 → 2211), **1 became WRONG-VALUE** (`naked_a64`, riscv64 `V40` against the
+  aarch64 `V42`), **5 became ASSEMBLE** (44 → 49) and **36 dropped out** because the twins agree with the
+  new reference. Separately, the **20 `REFUSED:x86_64` rows sit on 10 paths** and are new rows: x86_64 had
+  never been judged before, so none of them is a reclassified ACCEPTS row — though all **10 paths** that
+  carry one were ACCEPTS before. Each is an over-refusal the twins outvoted, which is the shape worth
+  fixing.
 
 ### 2.3 Construct support today
 
