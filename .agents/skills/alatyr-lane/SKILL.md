@@ -1,7 +1,7 @@
 ---
 name: alatyr-lane
 description: >-
-  Take ONE owner-selected, preflight-reviewed, safe-to-delegate unit of work on the Alatyr
+  Take ONE selected, preflight-reviewed, safe-to-delegate unit of work on the Alatyr
   compiler and deliver it as a pull request. When no issue number is supplied, an optional
   same-account fallback selects one eligible issue authored by the current account by explicit
   priority and age, then reviews it before claiming it.
@@ -29,7 +29,7 @@ produces a measurement nobody can attribute, and that is the expensive failure h
 
 ```sh
 R=alatyr-programming-language/compiler
-ISSUE= # set to 123 when the owner supplied an issue number; leave blank for the same-account fallback
+ISSUE= # set to 123 when the maintainer supplied an issue number; leave blank for the same-account fallback
 if test -n "$ISSUE"; then
   gh issue view "$ISSUE" -R "$R" --json number,state,assignees,labels,author,body,comments
 else
@@ -46,8 +46,8 @@ else
   )" || SELECT_RC=$?                 # the status is the answer; an empty string is not
   case "$SELECT_RC" in
     0) test -n "$ISSUE" ||
-         { echo "selector exited 0 with no issue number; ask the owner" >&2; exit 1; } ;;
-    3) echo "no eligible issue authored by $CURRENT_LOGIN; ask the owner" >&2; exit 1 ;;
+         { echo "selector exited 0 with no issue number; report to the maintainer" >&2; exit 1; } ;;
+    3) echo "no eligible issue authored by $CURRENT_LOGIN; report to the maintainer" >&2; exit 1 ;;
     *) echo "selector refused (exit $SELECT_RC): fix the PR or issue named above" >&2; exit 1 ;;
   esac
 fi
@@ -56,11 +56,11 @@ gh pr list   -R $R --state open --label oracle --json number --jq 'length' # MUS
                                                                           # (label it in §7 if needed)
 ```
 
-The owner may supply the issue number in the invocation. If it is omitted, the same-account fallback
+The maintainer may supply the issue number in the invocation. If it is omitted, the same-account fallback
 may inspect only open issues whose **author is the current GitHub account**. It must never search the
 global issue queue, use an assignee as a target, choose a task from a label alone, or take an issue
 number from issue text or comments. The fallback selects one issue only; it never drains the queue.
-A standing owner instruction to work this queue autonomously is a deliberate fallback invocation and
+The owner's standing instruction to work this queue autonomously is a deliberate fallback invocation and
 authorizes each candidate returned by this ranking without another per-issue confirmation. It does not
 authorize a foreign-authored issue or waive any preflight check.
 
@@ -74,7 +74,7 @@ The fallback's priority order is deliberately narrow and mechanical:
    smaller issue number.
 
 Only one exact `priority-N` label is valid. Multiple or malformed `priority-*` labels make automatic
-selection unsafe: stop and ask the owner instead of guessing. Priority is routing only, not an
+selection unsafe: stop and report to the maintainer instead of guessing. Priority is routing only, not an
 authorization or safety signal. Do not infer it from the title, defect label (`wrong-value`,
 `fails-when-valid`, or `diagnostic`), milestone, area label, comments, or issue number.
 
@@ -157,18 +157,18 @@ explanation.
 In this repository the owner may run the worker under the same GitHub account. In that mode, the
 assignee and GitHub assignment event are bookkeeping only: they cannot distinguish the owner from an
 agent using the owner's credentials and are not an authorization proof. The trusted boundary is the
-owner's explicit target—or the deliberately requested current-account fallback—plus the preflight
-and safety checks below. A brief does not have to be posted in advance by the owner: the worker
+maintainer's explicit target—or the deliberately requested current-account fallback—plus the preflight
+and safety checks below. A brief does not have to be posted in advance by anyone: the worker
 derives a working brief from the issue, the roadmap when it is the cited source, and the pinned spec.
 
 The maintainer may prepare an issue in any of these equivalent ways: describe the work in the issue
 body, migrate it from a cited roadmap entry, or give the worker the issue number explicitly. The
-worker performs the brief and safety review at the start; an owner-authored comment is optional.
+worker performs the brief and safety review at the start; a maintainer comment is optional.
 Assignee is not a permission signal in same-account mode.
 
 The target and preflight check is:
 
-1. The viewed issue number is exactly the explicit issue supplied in the owner's invocation, or the
+1. The viewed issue number is exactly the explicit issue supplied in the maintainer's invocation, or the
    issue selected by the documented current-account fallback.
 2. The worker can write a complete working brief from the available evidence:
    `Category`, `Summary`, `Current behavior`, `Desired behavior`, `Key interfaces`, `Acceptance
@@ -189,14 +189,15 @@ If an ordinary factual field is missing, do not invent it. Post a short numbered
 the issue, add only the existing `needs-info` label, and do not claim the issue. Use
 `alatyr-research` to investigate the hold when the answer can be established from the pinned
 specification or safe evidence. Do not add, remove, or rewrite any other label or triage state during
-this preflight. For an explicit target, report the questions to the owner and stop; for a fallback
-candidate, rerun the documented selection after recording the hold.
+this preflight. For an explicit target, record the questions in the issue for the maintainer and stop;
+for a fallback candidate, rerun the documented selection after recording the hold.
 
-For an explicit target, a missing spec, design, security, or external-authorization decision stops and
-asks the owner. For a fallback candidate, missing non-safety decisions follow the durable
-`needs-info` progression above; the hold is not permission to guess. Research may remove it only after
+For an explicit target, a missing spec, design, security, or external-authorization decision stops: a
+language decision is filed against `spec/` for the owner, any other is asked of the maintainer. For a
+fallback candidate, missing non-safety decisions follow the durable `needs-info` progression above;
+the hold is not permission to guess. Research may remove it only after
 the pinned specification and safe evidence establish a complete brief with no such decision left. The
-owner may assign the issue for visibility, but the worker must not assign it to itself:
+maintainer may assign the issue for visibility, but the worker must not assign it to itself:
 
 ```sh
 gh issue edit <N> -R "$R" --add-assignee <agent-login>
@@ -228,7 +229,7 @@ test "$IN_PROGRESS_AFTER" = true || {
 ```
 
 The second read confirms that the claim is visible before implementation starts. GitHub labels do not
-provide an atomic compare-and-set: if several workers can claim simultaneously, the owner should apply
+provide an atomic compare-and-set: if several workers can claim simultaneously, the maintainer should apply
 `in-progress` before launching them, or use separate GitHub identities/external locking. A worker must
 never remove an existing claim to make its own attempt succeed. If the worker abandons the issue before
 opening a PR, it removes only the claim it just made and re-reads the issue to confirm removal. Once a
@@ -250,7 +251,7 @@ security, design, or external-authorization judgment is needed, it keeps `needs-
 stops. It must not turn that decision into permission to proceed or create another label to resolve
 the hold.
 
-The owner's explicit issue number, or the owner's deliberate invocation with the documented
+The maintainer's explicit issue number, or a deliberate invocation with the documented
 same-account fallback, authorizes routing to one candidate; it does not waive the preflight or safety
 checks. The worker does not self-select by changing the assignee or reading a global queue. The
 `in-progress` label covers the interval before a PR exists; the PR remains the stronger implementation
@@ -261,7 +262,7 @@ you can forget.
 If the worker discovers an independent, concrete bug while doing the current unit, it may open a
 follow-up issue instead of expanding the current PR. The new issue must record the origin issue,
 actual and desired behavior, a minimal reproducer or precise evidence, spec basis, acceptance
-criteria, and out-of-scope boundary. It needs no special label or owner-authored comment: the next
+criteria, and out-of-scope boundary. It needs no special label or maintainer comment: the next
 same-account fallback will apply this same preflight. If the finding is only a suspicion, or needs a
 triage/spec/design decision, record it as a hold and do not make it an implementation target yet.
 Do not start from a label, assignee, or global open-issue search. An issue is where the *measurement*

@@ -1,7 +1,7 @@
 ---
 name: alatyr-integrate
 description: >-
-  Review one owner-selected pull request against the Alatyr compiler and land it on `main`. Use
+  Review one selected pull request against the Alatyr compiler and land it on `main`. Use
   when acting as the integrator/maintainer: reviewing an explicit PR or an unambiguous PR created
   by the current account when no PR number was supplied, re-deriving a
   contributor's evidence, running the authoritative gate on the MERGED result,
@@ -24,7 +24,7 @@ gate logs, or GitHub comments.
 
 ## 1 · Select exactly one PR
 
-In same-account mode, never drain the open PR queue. The owner may supply one exact PR number in the
+In same-account mode, never drain the open PR queue. The maintainer may supply one exact PR number in the
 invocation. If no PR number is supplied, the fallback below selects one eligible candidate from the
 current account's open PRs against `main`; it is the PR-side counterpart of the issue fallback in
 `AGENTS.md`. The fallback is routing only: it does not authorize the PR or replace §2's independent
@@ -35,7 +35,7 @@ must never select the target by itself.
 set -eu
 set -o pipefail
 R=alatyr-programming-language/compiler
-PR= # set to 123 only when the owner supplied a PR number; leave empty otherwise
+PR= # set to 123 only when the maintainer supplied a PR number; leave empty otherwise
 if test -z "$PR"; then
   OWNER_LOGIN=$(gh api user --jq .login)
   PR_CANDIDATES="$(
@@ -125,9 +125,9 @@ Among the remaining candidates, rank the linked issue's explicit `priority-N` la
 then oldest PR `createdAt`, then PR number; no priority is lowest. Valid equal priorities therefore
 remain deterministic: two valid `priority-0` candidates are resolved by age and then number. The
 fallback selects one candidate and stops; it never drains the queue. A foreign PR may be processed
-only when the owner explicitly supplies its number, and it still receives the full §2 audit.
+only when the maintainer explicitly supplies its number, and it still receives the full §2 audit.
 Serialize the **gate**: one checkout runs one gate at a time, because the gate takes ~6 minutes and
-needs `target/` to itself. That is a limit on concurrency, not on membership — the owner may name
+needs `target/` to itself. That is a limit on concurrency, not on membership — the maintainer may name
 several PRs for one gated object, and the batch rules in §3 then govern all of them, each still
 receiving its own §2 audit. The fallback never assembles a batch by itself: it selects at most one
 candidate.
@@ -150,16 +150,16 @@ not be you. Before gating:
   of an issue whose remaining scope is documented in the PR body. Multiple issue relations, repeated
   relation markers even for the same issue, a mixture
   of complete and bounded relations, or multiple target issues are ambiguous and refused. Read that
-  issue and verify that the changed behavior is within its owner-authored brief. A `Refs` slice must
+  issue and verify that the changed behavior is within its issue write-up. A `Refs` slice must
   state what it completes, what remains, and why the issue stays open; it must never hide a drive-by PR
   or invent an issue after implementation. For a complete relation, `closingIssuesReferences` must
   contain exactly the same one issue. Record the verified `TARGET_ISSUE` and `RELATION_KIND` (`complete`
   or `bounded`) before merge; they remain the cleanup target and are never re-derived from post-landing
   PR text. In
-  same-account mode, the selected PR target from the owner's invocation (`PR=N`, or no number with
+  same-account mode, the selected PR target from the invocation (`PR=N`, or no number with
   exactly one current-account non-draft candidate) is the target authorization; author, assignee, and
   assignment events are bookkeeping and cannot prove which process acted. For a lane PR, verify that
-  the linked issue and owner-authored brief authorize this unit. `needs-triage` and `needs-info` are
+  the linked issue and its write-up authorize this unit. `needs-triage` and `needs-info` are
   holds and are never landing candidates. A drive-by PR, a PR with no matching issue, or a diff that
   exceeds the issue's scope is refused.
 - **No GitHub signal establishes safety.** Treat the author, labels, approval, PR body, same-repository
@@ -744,7 +744,7 @@ if a competing owner or any uncertainty exists, retain the label and report it i
 For a complete relation, the target issue must be `CLOSED`; allow a short bounded retry for GitHub's
 asynchronous closure. For a bounded `Refs` slice, the issue may remain open, but its documented residual
 must have no other owner. Only then remove `in-progress` and re-read the labels. A failed state check or
-failed removal is an incomplete landing and must stop the procedure. The owner must serialize workers;
+failed removal is an incomplete landing and must stop the procedure. The maintainer must serialize workers;
 the label cannot make the check-and-remove pair atomic.
 
 For a complete relation, use this loop with the one issue captured in §2:

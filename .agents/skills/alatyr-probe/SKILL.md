@@ -135,7 +135,8 @@ the issue if its title carries the error.
 - The `in-progress` label. Probe does not claim issues; it has nothing to claim. An issue already carrying
   a claim may still be *measured*, but the finding goes in a comment, never in a competing issue.
 - `needs-info` on someone else's hold. Probe reports evidence; routing is research's job.
-- Any issue where the required next step is an owner decision. State the decision needed and stop.
+- Any issue where the required next step is a language decision in the specification (the owner's)
+  or a maintainer decision. State the decision needed and stop.
 
 ## 7 · Coordinate
 
