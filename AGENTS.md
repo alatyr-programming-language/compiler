@@ -9,13 +9,19 @@ step-by-step procedures live in `.agents/skills/`.
   the compiler conforms to it, never the reverse.
 - Decide language questions in the specification before changing `src/`. If the specification is silent,
   stop and get the decision recorded; do not infer semantics from current behavior.
-- **The pin.** This repository is answerable to specification revision **1.0.0** (tag `v1.0.0`,
-  `4e46f04`) plus the post-tag commits up to spec `main` **`b4e7979`**, which added TOOL-21
+- **The pin.** This repository is answerable to specification revision **1.1.0** (tag `v1.1.0`,
+  `65a0c9b`). The pin names a TAGGED RELEASE and never a moving branch head: the post-tag range that
+  used to live in this sentence — the commits up to spec `main` `b4e7979`, which added TOOL-21
   (`help`/`version` introspection), TOOL-22 (output verbosity may not affect a build) and the TOOL-14
-  clarification (an unrecognised argument is an invocation-level Config diagnostic, never a source path).
+  clarification (an unrecognised argument is an invocation-level Config diagnostic, never a source path) —
+  is inside `v1.1.0` now, so one number says what a range and two hashes used to.
 - The pin records what the compiler is **answerable to**, not what it has already implemented: the tree
-  may lag it, and each gap is an open issue (TOOL-21 and the TOOL-14 clarification are #192). Move the
-  pin only in a separate, explicit commit; never silently update it in a feature. Cite specification
+  may lag it, and each gap is an open issue. The number the compiler *reports* lives in
+  `src/spec_revision.al` and is printed by `alatyr version` beside its own version, per TOOL-21
+  (#1000); `scripts/spec_pin_check.sh` refuses a tree where that constant and the prose statements of
+  it — README.md, this bullet, `scripts/package_cli_test.sh`'s expected `--version` line, and
+  `seed/VERSION`'s CURRENT SEED pin note — drift apart. Move the pin only in a separate, explicit
+  commit; never silently update it in a feature. Cite specification
   anchors, chapter sections, or issue numbers. Repository workstream tags are search tags, not
   specification citations.
 

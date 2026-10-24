@@ -20,9 +20,11 @@ If you find that the spec does not answer a question you need answered, **stop**
 semantics and do not infer them from the current behaviour: open an issue against the specification,
 get it decided there, then implement. That rule is why this compiler can claim conformance at all.
 
-**Which revision, and how to cite it.** This tree implements spec revision **1.0.0** (tag `v1.0.0`,
-`4e46f0489ffddb8060d87451ed3aa65c15646885`) plus the post-tag editorial commits up to spec `main`
-`b4e797910584333844e04362705d881313846e37`. The spec's citation anchors are theme-prefixed — `FND-*`,
+**Which revision, and how to cite it.** This tree implements spec revision **1.1.0** (tag `v1.1.0`,
+`65a0c9be0ad27c3e2b9ed622634ded38d3ddf7e9`). The pin names a **tagged release**, never a moving branch
+head; `AGENTS.md` carries the full pin and moves it in its own commit, `src/spec_revision.al` is the
+constant the compiler bakes, and `alatyr version` prints both numbers (Tooling §4 / TOOL-21, #1000). The
+spec's citation anchors are theme-prefixed — `FND-*`,
 `TYP-*`, `MOD-*`, `TOOL-*`, `CG-*`, `CF-*`, `CT-*`, `FN-*`, `MEM-*`, `OP-*`, `SYN-*`, `STD-*`, `CC-*`,
 `PRIN-*` — and a new comment or issue cites one of those, or an issue number.
 

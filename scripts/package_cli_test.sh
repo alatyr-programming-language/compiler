@@ -67,7 +67,12 @@ run_help_version() {
       help_ok=0
     fi
   done
-  printf 'alatyr 0.2.16\n' >"$want"
+  # TOOL-21 (issue #1000): the line carries TWO axes — the implementation's own version (`app.version`,
+  # TOOL-15) and the specification revision it is answerable to (`src/spec_revision.al`). Both numbers
+  # here are hardcoded on purpose, exactly as the version has always been: `scripts/spec_pin_check.sh`
+  # is what keeps this line and that constant in step, so a pin move that forgets this file fails the
+  # cheap pre-build stage instead of going red here with a diagnostic that never names a version.
+  printf 'alatyr 0.2.16, spec 1.1.0\n' >"$want"
   version_ok=1
   for arg in --version -V version; do
     (cd "$tmp" && "$CC" "$arg") >"$out" 2>"$err"

@@ -1,6 +1,6 @@
 # Alatyr compiler (self-hosted)
 
-![conforms to spec 1.0.0](https://img.shields.io/badge/spec-1.0.0-blue)
+![conforms to spec 1.1.0](https://img.shields.io/badge/spec-1.1.0-blue)
 ![status: self-hosted, pre-release](https://img.shields.io/badge/status-self--hosted%2C%20pre--release-orange)
 ![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green)
 
@@ -38,12 +38,26 @@ Cross-language benchmarks live in a separate repository,
 
 The language is defined by the [specification](https://github.com/alatyr-programming-language/spec),
 which is the source of truth: the toolchain conforms to it, never the other way round. This tree
-is answerable to spec revision **1.0.0** (tag `v1.0.0`) plus the post-tag commits up to spec `main`
-`b4e7979` — `AGENTS.md` carries the full pin and moves it in its own commit. The pin is an obligation,
-not a claim of completeness: where the tree lags it, the gap is an open issue. `alatyr help` (and
-`alatyr <command> --help` for one command), `alatyr version` and the diagnostic for an unrecognised
-argument are implemented; what remains of TOOL-21 is that `version` does not yet report the
-specification revision
-([#1000](https://github.com/alatyr-programming-language/compiler/issues/1000)). The Rust
-compiler that bootstrapped the first self-host binary is frozen and not published; `seed/VERSION`
-records the lineage.
+is answerable to specification revision **1.1.0** (tag `v1.1.0`, spec commit `65a0c9b`) — a tagged
+release, because this compiler pins tagged releases and never a moving branch head. `AGENTS.md` carries
+the full pin and moves it in its own commit; `src/spec_revision.al` is the constant the binary answers
+with. The pin is an obligation, not a claim of completeness: where the tree lags it, the gap is an open
+issue. `alatyr help` (and `alatyr <command> --help` for one command), `alatyr version` and the
+diagnostic for an unrecognised argument are implemented. The Rust compiler that bootstrapped the first
+self-host binary is frozen and not published; `seed/VERSION` records the lineage.
+
+## Version, and the two numbers `--version` prints
+
+```sh
+$ target/debug/alatyr --version
+alatyr 0.2.16, spec 1.1.0
+```
+
+Two axes, per Tooling §4 (TOOL-21): **`0.2.16`** is this implementation's own version, injected from
+`package.al` (TOOL-15), and it moves on a seed promotion and only on one; **`1.1.0`** is the
+specification revision this build conforms to, pinned in `src/spec_revision.al`, and it moves with the
+pin. Reporting only the first leaves a user unable to tell what the toolchain implements, which is why
+the second is now on the line (#1000). `scripts/spec_pin_check.sh` refuses a tree where those two
+numbers are stated differently in the places that state them — the constant, this file, `AGENTS.md`,
+`scripts/package_cli_test.sh` and `seed/VERSION`. Neither number is parsed by anything: the content of
+introspection output is quality-of-implementation, and it is not a build input.
