@@ -458,10 +458,100 @@ AL
   return 0
 }
 
+## THE GATE MODE (#529 step 3, criterion 3 of the strict-compiler goal).
+##
+## Until now `full.sh` ran only `planted`: it proves the counter CAN fire, and pins nothing. No ptrint
+## number was ever in the gate, so "OP-CMP = 0" was a sentence about a run nobody repeated. This mode
+## puts the number in the gate AND refuses to let an unmeasured zero read as a clean one.
+##
+## The honesty rule, which is the whole point of the mode: `planted` proves each class's hook fires,
+## per direction. A class it cannot make fire has NO COVERAGE, and its zero over the real tree is
+## silence, not cleanliness — `planted` already says so in its own report. So the gate line prints
+## `op-cmp=UNMEASURED` while OP-CMP is unproven, and the ratchet applies only to what is measured:
+## `places` (distinct seam places) and `blind-lib` (tracked lib modules the census could not check
+## standalone, 12 today — including alloc/vec, alloc/string, alloc/strbuf, std/fmt, std/io, the
+## pointer-densest files in the tree). Neither may grow. When scar #2 is fixed and the OP-CMP hook
+## fires on a planted program, `UNMEASURED` becomes a number in the same commit that proves it.
+gate() {
+  local CC="${2:-$ROOT/target/debug/alatyr}"
+  [ -x "$CC" ] || { echo "ptrint census gate: no compiler at $CC" >&2; return 1; }
+  local CLOG="$OUT/gate_census.log" PLOG="$OUT/gate_planted.log"
+  census "$CC" > "$CLOG" 2>&1
+  local crc=$?
+  planted "$CC" > "$PLOG" 2>&1
+  local prc=$?
+  [ "$crc" = 0 ] || { echo "ptrint census gate: the census exited $crc — no number to judge" >&2; return 1; }
+  [ "$prc" = 0 ] || { echo "ptrint census gate: planted non-vacuity FAILED (rc=$prc) — every zero below is unproven" >&2; return 1; }
+
+  local places opcmp proven unproven blind tracked
+  places=$( [ -f "$OUT/places.tsv" ] && wc -l < "$OUT/places.tsv" | tr -d ' ' || echo 0 )
+  opcmp=$(awk '/^  OP-CMP/{print $5}' "$CLOG" | head -1)
+  [ -n "$opcmp" ] || opcmp=0
+  proven=$(grep -c 'PROVEN  ' "$PLOG")
+  unproven=$(grep -oE '^    [A-Z-]+ +NOT PROVEN' "$PLOG" | awk '{print $1}' | sort -u | tr '\n' ',' | sed 's/,$//')
+  tracked=$(git ls-files 'lib/**/*.al' 'lib/*.al' | wc -l | tr -d ' ')
+  blind=0; local blindlist=""
+  while read -r f; do
+    [ -n "$f" ] || continue
+    grep -q "^lib $f " "$OUT/summaries.txt" || { blind=$((blind+1)); blindlist="$blindlist $f"; }
+  done < <(git ls-files 'lib/**/*.al' 'lib/*.al')
+
+  echo "ptrint census gate: places=$places op-cmp=$opcmp proven=$proven/$(set -- $CLASSES; echo $#) blind-lib=$blind/$tracked"
+  if [ -n "$unproven" ]; then
+    echo "  op-cmp=UNMEASURED — these hooks were never proven to fire, so their zero is silence, not"
+    echo "    cleanliness: $unproven"
+    echo "    (scar #2: they live in check_expr's big \`match deref(e)\`, not dispatched under the seed.)"
+  fi
+  if [ "$blind" != 0 ]; then
+    echo "  coverage: $blind lib module(s) were NOT checked standalone — their places are unknown, not"
+    echo "    zero:$blindlist"
+  fi
+
+  xb_ratchet_gate "$ROOT/scripts/ptrint_census.baseline" "$places" "$blind"
+  local rrc=$?
+  [ "$rrc" = 0 ] || fail_note=1
+  return $rrc
+}
+
+## The ratchet. `places` and `blind-lib` may not grow; a missing or malformed baseline is not a pass.
+xb_ratchet_gate() { # baseline-file places blind — 0 held, 1 GREW, 2 unusable
+  bf="$1"; p="$2"; b="$3"
+  if [ ! -f "$bf" ]; then echo "ptrint ratchet: FAIL — no baseline at $bf"; return 2; fi
+  bp=$(sed -n 's/^places=//p' "$bf" | head -1); bb=$(sed -n 's/^blind-lib=//p' "$bf" | head -1)
+  case "$bp$bb" in *[!0-9]*|"") echo "ptrint ratchet: FAIL — malformed baseline ($bf)"; return 2 ;; esac
+  [ -n "$bp" ] && [ -n "$bb" ] || { echo "ptrint ratchet: FAIL — malformed baseline ($bf)"; return 2; }
+  if [ "$p" -gt "$bp" ]; then echo "ptrint ratchet: FAIL — seam places GREW $bp -> $p"; return 1; fi
+  if [ "$b" -gt "$bb" ]; then echo "ptrint ratchet: FAIL — blind lib modules GREW $bb -> $b"; return 1; fi
+  echo "ptrint ratchet: held at the baseline (places=$bp blind-lib=$bb)$([ "$p" -lt "$bp" ] && echo " — LOWER, tighten the baseline in the same PR")"
+  return 0
+}
+
+## The gate-of-the-gate for the ratchet above: every decision it can make, driven with synthetic
+## numbers. A ratchet nobody has seen fail is a ratchet that has never been checked.
+self_test() {
+  T="$(mktemp -d)"; k=0; bad=0
+  ok() { k=$((k+1)); [ "$2" = "$3" ] || { echo "  FAIL $1: expected rc=$3, got $2"; bad=$((bad+1)); }; }
+  printf 'places=3\nblind-lib=12\n' > "$T/b"
+  out=$(xb_ratchet_gate "$T/b" 3 12); ok "held at the baseline" "$?" 0
+  out=$(xb_ratchet_gate "$T/b" 2 11); ok "held when LOWER" "$?" 0
+  case "$out" in *LOWER*) : ;; *) echo "  FAIL a lower reading must say to tighten the baseline"; bad=$((bad+1));; esac
+  out=$(xb_ratchet_gate "$T/b" 4 12); ok "FAIL on one more place" "$?" 1
+  case "$out" in *GREW*) : ;; *) echo "  FAIL a growth must be named"; bad=$((bad+1));; esac
+  out=$(xb_ratchet_gate "$T/b" 3 13); ok "FAIL on one more blind module" "$?" 1
+  out=$(xb_ratchet_gate "$T/nope" 3 12); ok "a missing baseline is not a pass" "$?" 2
+  printf 'places=abc\nblind-lib=12\n' > "$T/m"; xb_ratchet_gate "$T/m" 3 12 >/dev/null; ok "a malformed baseline is not a pass" "$?" 2
+  printf 'places=3\n' > "$T/p"; xb_ratchet_gate "$T/p" 3 12 >/dev/null; ok "a baseline missing blind-lib is not a pass" "$?" 2
+  rm -rf "$T"
+  echo "ptrint ratchet self-test: $([ "$bad" = 0 ] && echo "$k/$k ok" || echo "$bad of $k check(s) FAILED — this ratchet proves nothing")"
+  [ "$bad" = 0 ]
+}
+
 case "$MODE" in
-  census)  census "$@" ;;
-  report)  report ;;
-  neutral) neutral "$@" ;;
-  planted) planted "$@" ;;
-  *) echo "usage: ptrint_census.sh census|report|neutral|planted" >&2; exit 2 ;;
+  census)    census "$@" ;;
+  report)    report ;;
+  neutral)   neutral "$@" ;;
+  planted)   planted "$@" ;;
+  gate)      gate "$@" ;;
+  self-test) self_test ;;
+  *) echo "usage: ptrint_census.sh census|report|neutral|planted|gate|self-test" >&2; exit 2 ;;
 esac

@@ -1,0 +1,14 @@
+# The #529 ptrint census baseline — scripts/ptrint_census.sh gate mode.
+#
+# MEASURED, not chosen: `places` is the distinct seam places the census reported over src/, lib/ and
+# every tracked fixture on main at 7aae8b3 (1 BIND i2p + 2 RESULT-TAIL p2i, all in test/, all OUTSIDE
+# an `unchecked` grant); `blind-lib` is the tracked lib/ modules the census could NOT check standalone,
+# so their places are unknown rather than zero.
+#
+# Neither number may grow. This file does NOT claim OP-CMP is clean: the census's own `planted` proof
+# reports OP-CMP NOT PROVEN (its hook sits in check_expr's big `match deref(e)`, not dispatched under
+# the bootstrap seed — scar #2), so gate mode prints `op-cmp=UNMEASURED` and no ratchet covers it.
+# Tighten `places` when a fixture is rewritten to explicit form; tighten `blind-lib` when a lib module
+# becomes standalone-checkable, in the same PR that does it.
+places=3
+blind-lib=12
