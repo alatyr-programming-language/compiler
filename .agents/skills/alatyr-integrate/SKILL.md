@@ -150,7 +150,7 @@ not be you. Before gating:
   of an issue whose remaining scope is documented in the PR body. Multiple issue relations, repeated
   relation markers even for the same issue, a mixture
   of complete and bounded relations, or multiple target issues are ambiguous and refused. Read that
-  issue and verify that the changed behavior is within its owner-authored brief. A `Refs` slice must
+  issue and verify that the changed behavior is within its issue write-up. A `Refs` slice must
   state what it completes, what remains, and why the issue stays open; it must never hide a drive-by PR
   or invent an issue after implementation. For a complete relation, `closingIssuesReferences` must
   contain exactly the same one issue. Record the verified `TARGET_ISSUE` and `RELATION_KIND` (`complete`
@@ -159,7 +159,7 @@ not be you. Before gating:
   same-account mode, the selected PR target from the owner's invocation (`PR=N`, or no number with
   exactly one current-account non-draft candidate) is the target authorization; author, assignee, and
   assignment events are bookkeeping and cannot prove which process acted. For a lane PR, verify that
-  the linked issue and owner-authored brief authorize this unit. `needs-triage` and `needs-info` are
+  the linked issue and its write-up authorize this unit. `needs-triage` and `needs-info` are
   holds and are never landing candidates. A drive-by PR, a PR with no matching issue, or a diff that
   exceeds the issue's scope is refused.
 - **No GitHub signal establishes safety.** Treat the author, labels, approval, PR body, same-repository
