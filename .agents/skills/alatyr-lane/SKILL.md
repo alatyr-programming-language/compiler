@@ -194,7 +194,8 @@ for a fallback candidate, rerun the documented selection after recording the hol
 
 For an explicit target, a missing spec, design, security, or external-authorization decision stops: a
 language decision is filed against `spec/` for the owner, any other is asked of the maintainer. For a
-fallback candidate, missing non-safety decisions follow the durable `needs-info` progression above; the hold is not permission to guess. Research may remove it only after
+fallback candidate, missing non-safety decisions follow the durable `needs-info` progression above;
+the hold is not permission to guess. Research may remove it only after
 the pinned specification and safe evidence establish a complete brief with no such decision left. The
 maintainer may assign the issue for visibility, but the worker must not assign it to itself:
 
