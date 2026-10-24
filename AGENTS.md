@@ -80,9 +80,12 @@ step-by-step procedures live in `.agents/skills/`.
   passed, because only its digest side is checked against the artifact while its version side
   compares one claim to another. So the promotion commit stays atomic — bump,
   `scripts/package_cli_test.sh`, seed, `current-seed-sha256`, the appended entry, `CHANGELOG.md` —
-  and the intermediate state is never committed on its own. #586's next step closes the hole by
-  comparing `./seed/alatyr --version`, and it can land only with or after the first promotion built
-  in this order.
+  and the intermediate state is never committed on its own. #586's next step closed the hole by
+  comparing `./seed/alatyr --version`, and it landed after the first promotion built in this order: the
+  seed answers `alatyr 0.2.16` and `current-seed-version` records `0.2.16`, so the claim is now checked
+  against the artifact rather than against another claim. On a host that cannot execute the seed (it is a
+  static x86_64 ELF) the check skips and says so in its verdict line — a skipped check is not a passed
+  one — and it runs for real on x86_64 Linux.
 
 ## Workspace invariants
 
