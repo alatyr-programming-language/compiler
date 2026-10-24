@@ -55,7 +55,10 @@ aarch64, riscv64 and wasm implement a scalar core plus struct locals, by-value s
 enum locals with `match`; a function RETURNING a struct, an enum or a `Result`, and any brand
 construction, is lowered to a deliberate trap there (`brk`/`unreachable`, exit 133/134). A trap is
 fail-loud and is not a disagreement, so on those shapes the check compares nothing beyond x86_64 until
-the backend grows the shape — at which point the same seeds start comparing, with no change here.
+the backend grows the shape — at which point the same seeds start comparing, with no change here. How
+much of a run that was is no longer left unsaid: every run prints `progen coverage: attempted=…
+compared=… vacuous=… answered=x86_64/aarch64/riscv64/wasm=…`, and a run that attempted programs but
+compared none across two backends exits non-zero rather than reporting a green night.
 
 THE MODEL
 ---------
@@ -907,6 +910,22 @@ def disagreement(res):
     return len(set(vals.values())) > 1
 
 
+def answered(res):
+    """The backends that FINISHED with an integer answer — the ones that actually took part in the
+    comparison. A trap, a hang and a refused build answer nothing (AGENTS.md: fail-loud is allowed), so
+    they are absent here. This set is the denominator the summary line owed: `agree=1000` on its own
+    could not tell four backends agreeing from one backend agreeing with itself."""
+    return [b for b, v in res.items() if isinstance(v, int)]
+
+
+def vacuous(res):
+    """True when the run would report agreement but FEWER THAN TWO backends answered: there is no pair
+    that could disagree, so `disagreement` cannot fire and the agreement proves nothing about the twins.
+    Not a failure — the twins refuse these shapes today (the module docstring lists them) — but it is
+    reported, so a green run states how much of it was actually compared."""
+    return len(answered(res)) < 2
+
+
 def crashed(res):
     """Some backend's COMPILER crashed on the program (`build:crash:`)."""
     return any(isinstance(v, str) and v.startswith('build:crash') for v in res.values())
@@ -1257,6 +1276,11 @@ def cmd_run(a):
     os.makedirs(a.out, exist_ok=True)
     tsv = open(os.path.join(a.out, 'findings.tsv'), 'a')
     counts = {'ok': 0, 'WRONG': 0, 'REFUSED': 0, 'CRASH': 0, 'HANG': 0, 'MODEL': 0}
+    # Coverage of the differential check itself. `agree` alone was not a claim: on a program where only
+    # x86_64 answers, `disagreement` has no pair to compare and cannot fire, so the program counts as
+    # agreement while nothing was compared. `compared` counts the programs where AT LEAST TWO backends
+    # answered an integer; `vacuous` counts the agreements that compared one backend with itself.
+    cov = {'answered': {b: 0 for b in BACKENDS}, 'attempted': 0, 'compared': 0, 'vacuous': 0}
     seeds = range(a.seed, a.seed + a.count)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(a.jobs, 1)) as ex:
         futs = [ex.submit(one_seed, cc, s, forms, a.reduce) for s in seeds]
@@ -1264,6 +1288,15 @@ def cmd_run(a):
             o = fu.result()
             verdict, seed, res, sres = o['verdict'], o['seed'], o['res'], o['sres']
             counts[verdict] += 1
+            if not x86_refused(res):
+                cov['attempted'] += 1
+                ans = answered(res)
+                for b in ans:
+                    cov['answered'][b] += 1
+                if len(ans) >= 2:
+                    cov['compared'] += 1
+                else:
+                    cov['vacuous'] += 1
             if verdict == 'ok':
                 if a.verbose:
                     print(f'ok       seed={seed} {tagof(res)} model={o["model"]}')
@@ -1283,9 +1316,20 @@ def cmd_run(a):
             tsv.write(f'{verdict}\t{seed}\t{tagof(res)}\t{o["model"]}\t'
                       f'{tagof(sres) if sres else "-"}\t{o["smodel"] if sres else "-"}\n')
             tsv.flush()
+    ans = cov['answered']
     print(f'progen: seeds={a.seed}..{a.seed + a.count - 1} agree={counts["ok"]} wrong={counts["WRONG"]} '
           f'x86_refused={counts["REFUSED"]} crash={counts["CRASH"]} hang={counts["HANG"]} '
           f'model_only={counts["MODEL"]} out={a.out}')
+    # The coverage line. It is printed even on a green run, because `agree=N` without it cannot say how
+    # many of those N were real cross-backend comparisons. A run that attempted programs but compared none
+    # is NOT green: it proved nothing about any twin, and saying so is the whole point of the number.
+    print(f'progen coverage: attempted={cov["attempted"]} compared={cov["compared"]} '
+          f'vacuous={cov["vacuous"]} answered='
+          f'{ans["x86_64"]}/{ans["aarch64"]}/{ans["riscv64"]}/{ans["wasm"]}')
+    if cov['attempted'] > 0 and cov['compared'] == 0:
+        print('progen: NO program was compared across two backends — the differential check proved '
+              'nothing this run; that is a failure, not a green night')
+        return 1
     return 1 if (counts['WRONG'] or counts['REFUSED'] or counts['CRASH']) else 0
 
 
@@ -1312,10 +1356,36 @@ def cmd_self_test(a):
         ({'x86_64': 42, 'aarch64': 'trap', 'riscv64': 42, 'wasm': 'trap'}, False, 'traps are allowed'),
         ({'x86_64': 7, 'aarch64': 'build:reject: as', 'riscv64': 9, 'wasm': 7}, True, 'differs past a refusal'),
     ]
+    # The coverage half of non-vacuity. Each row is (result, answered-count, vacuous?, name). The pair
+    # that matters is the first: a program where only x86_64 answers is NOT a disagreement (correct) and
+    # is NOT a comparison either — without this row the run could print `agree=1000` having compared one
+    # backend with itself, which is the hole the coverage counter exists to close.
+    vcases = [
+        ({'x86_64': 42, 'aarch64': 'trap', 'riscv64': 'trap', 'wasm': 'trap'}, 1, True,
+         'only x86_64 answered — agreement proves nothing'),
+        ({'x86_64': 42, 'aarch64': 'build:reject: as', 'riscv64': 'build:skipped',
+          'wasm': 'build:skipped'}, 1, True, 'twins refused — nothing compared'),
+        ({'x86_64': 'trap', 'aarch64': 'trap', 'riscv64': 'trap', 'wasm': 'trap'}, 0, True,
+         'nothing answered'),
+        ({'x86_64': 42, 'aarch64': 42, 'riscv64': 'trap', 'wasm': 'trap'}, 2, False,
+         'two backends answered — a real comparison'),
+        ({'x86_64': 42, 'aarch64': 42, 'riscv64': 42, 'wasm': 42}, 4, False, 'all four answered'),
+    ]
     for res, want, name in cases:
         got = disagreement(res)
         print(f'  comparator  {name:26s} {"ok" if got == want else "FAIL"} (disagreement={got})')
         bad += got != want
+    for res, nans, want_v, name in vcases:
+        got_n, got_v = len(answered(res)), vacuous(res)
+        ok = got_n == nans and got_v == want_v
+        print(f'  coverage    {name:44s} {"ok" if ok else "FAIL"} '
+              f'(answered={got_n}/{nans} vacuous={got_v}/{want_v})')
+        bad += not ok
+        # a single-backend result must never be reported as a comparison, and must never be reported
+        # as a disagreement either: the two halves have to hold together or `agree` is meaningless.
+        if want_v and disagreement(res):
+            print(f'  coverage    {name:44s} FAIL (vacuous AND disagreement)')
+            bad += 1
     # reproducibility: the same seed renders the same text, and --forms narrowing is a restriction
     same = render(generate(12345), 12345) == render(generate(12345), 12345)
     print(f'  generator   seed determinism          {"ok" if same else "FAIL"}')
