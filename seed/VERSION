@@ -61,8 +61,8 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
 # file quietly describing a different compiler.
 #
-current-seed-sha256: 7014c5a2353d52ddb83b2f0bc3ffced069c9298f8c15068ca3b145682b89d42b
-current-seed-version: 0.2.16
+current-seed-sha256: ce7dca80b820918d80a0fab5c18460d74dd23d370700392558cb853e30e9dd0c
+current-seed-version: 0.2.17
 #
 # spec-pin: 1.1.0 (tag v1.1.0, spec commit 65a0c9b)
 #
@@ -1813,3 +1813,42 @@ current-seed-version: 0.2.16
 #
 # VERSION 0.2.15 -> 0.2.16, PATCH: x86_64 assigned a self-reading struct or array literal in place.
 # The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.16 -> 0.2.17   promoted 2026-10-24   seed/alatyr := Stage2
+#
+# WHY: #943 — the x86_64 checked-overflow guard of `+ - *` was switched on by the SHAPE of an operand.
+# Both emitters computed `gsigned := dsigned or expr_is_uneg(l) or expr_is_uneg(r)`, so an operand
+# merely spelled `-x` pulled the guard toward signedness regardless of what sema had recorded, and the
+# fallback for an unrecognised shape was one default rather than a question. `+ - *` now ask sema's
+# record of the value first, through one shared helper (`lower_layout::ir_arith_signed_or`) so the
+# three guard sites cannot each invent their own rule; `expr_is_uneg` and `uneg_body_ok` leave the tree.
+# The compiler's own emission changes, so the frozen seed must carry it.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k>): 1687 hunks, 2372 added, 2372 removed. One sentence:
+# every changed line is the checked-overflow guard of `+ - *` moving from unsigned to signed, and no
+# other line shape moves at all. Two sites make it up: 1408 add/sub sites where only the guard flips,
+# `jnc Nf` -> `jno Nf`, sitting directly after `addq` (1101) or `subq` (307); and 482 multiply sites
+# where the instruction and its guard flip together, `mulq %rbx` + `jnc Nf` -> `imulq %rbx, %rax` +
+# `jno Nf`, each preceded by `popq %rax`. 1408 + 482 = 1890 guard flips, plus the 482 multiply
+# instructions, is the 2372. Sizes are equal on both sides because every change is a substitution in
+# place: no frame size, no label count and no data moved. The census of changed shapes is exactly two
+# entries plus their normalized twins — one recognizable pattern, repeated.
+#
+# CONVERGENCE (bump first; native x86_64 omen):
+# Stage1 == Stage2 == Stage3 GAS byte-identical RAW at 1613694 lines.
+# GAS SHA-256: 079e55b4f39a187790ebc39168f9b78b0302b79d5a3d3a50e28352f1743efc26.
+# Stage2 == Stage3 BINARY SHA-256:
+# ce7dca80b820918d80a0fab5c18460d74dd23d370700392558cb853e30e9dd0c (6144152 B).
+# All three answer `alatyr 0.2.17, spec 1.1.0`. smoke = 42.
+# Superseded seed (0.2.16) SHA-256:
+# 7014c5a2353d52ddb83b2f0bc3ffced069c9298f8c15068ca3b145682b89d42b (6071840 B).
+#
+# Full e2e ran green on this tree before Stage2 was copied over seed/alatyr: rows=3026 executed=3026
+# lost=0 assertions=4108 failed=0. The forced sweeps ran clean: aarch64 match=423 trap=468 reject=9,
+# riscv64 match=412 trap=479 reject=9, wasm match=435 trap=457 reject=8, missing=0 timeout=0
+# reobserved=0 over corpus=900. `scripts/fixpoint.sh` was then re-run on the promoted tree, and that
+# run — not this label — is the proof.
+#
+# VERSION 0.2.16 -> 0.2.17, PATCH: a silent wrong value on x86_64 became a loud trap. The specification
+# pin (1.1.0, tag v1.1.0, spec commit 65a0c9b) did not move.
