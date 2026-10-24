@@ -299,7 +299,8 @@ class is invisible.
 
 The screening is where the safety lives, and all of it happens before anything is merged:
 
-1. No candidate touches an oracle file, and each carries exactly one line-initial relation marker.
+1. No candidate touches an oracle file or `scripts/corpus.expected-delta` (a predicted change is
+   gated alone), and each carries exactly one line-initial relation marker.
    Every candidate still receives its own full §2 review — batching is not a shared authorization.
 2. Run `git merge-tree` pairwise across the candidates, then merge them one at a time into the
    dedicated integration worktree in a fixed order, stopping at the first conflict rather than
@@ -488,9 +489,10 @@ The same gate may run remotely: push the merged object (and later the object wit
 to a `gate/<name>` branch and `.github/workflows/gate.yml` runs `scripts/full.sh --force-sweeps` on a
 GitHub-hosted x86_64 runner. Read its `gate.log` artifact — the verdict is the `*** FULL GATE` line
 for that exact commit, never the check's colour — and `explain.txt` for the joined transitions. When
-they are the predicted ones, the run's `corpus.manifest` artifact IS the regenerated oracle: commit it
-alone and push that object to `gate/<name>` for the final run. Several `gate/*` branches run at once,
-so a chain of landings can be gated speculatively (`main+A`, `main+A+B`, …) and published in order.
+they are the predicted ones, the run's `corpus.manifest` artifact IS the regenerated oracle. With a
+predicted delta, the hand-run PHASE 6a below makes it the oracle commit with no second run. Without
+one, commit it alone and push that object to `gate/<name>` for the final run. Several `gate/*`
+branches run at once, so a chain of landings can be gated speculatively (`main+A`, `main+A+B`, …) and published in order.
 Delete the `gate/*` branch after the landing. Never gate on an emulated x86_64.
 
 Then, as separate statements — **never chained to the push**:
@@ -512,25 +514,62 @@ removed rows do not pair up, so a positional read invents transitions that are n
 `run → assemble/*` transition is a **regression** even when it arrives among two dozen wins — that
 exact shape, 8 among 23, once nearly landed.
 
-There are three landing paths. An independently classified inert-prose PR must report
-`docs-only PASS`; an ordinary PR's first merged-tree full gate must be green. For an
-intentional behavior change whose feature-only PR explicitly records an oracle transition, run
-`scripts/land.sh <pr>` **without `--push`**. Its first gate may report the expected oracle mismatch and
-leave the exact merge commit detached; that result is an inspection stop, not a landing failure to
-wave through. Confirm that no non-oracle gate failed, inspect the joined transitions with
-`scripts/corpus_manifest.sh --explain` (or the corresponding reviewed baseline finding), and reject
-anything not explained by the PR's intended behavior. Then, still on that detached merged tree, have
-the maintainer regenerate the affected oracle, inspect the result, and commit that one oracle alone.
-Rerun the complete gate on the merge plus oracle commit. Only that final green HEAD may be pushed;
-never use `--push` on the first pre-oracle run, and never put the oracle change into the feature PR.
-The same rule applies to an intentional `idiom.baseline` or `needle.baseline` regeneration.
+There are four landing paths. An independently classified inert-prose PR must report
+`docs-only PASS`; an ordinary PR's first merged-tree full gate must be green. An intentional
+behaviour change takes one of the two oracle paths below.
 
-`scripts/land.sh <pr>` performs the local merge and first gate with the verdict printed between phases.
-For a normal PR, `--push` is available after its green verdict. For an intentional oracle transition,
-use the detached result as the documented pre-oracle inspection point, complete the separate maintainer
-oracle commit and final gate manually, then publish that final exact object with the saved lease.
-The script is full-gate only; an inert-prose candidate uses the manual merge, independent
+**Predicted (one gate).** The feature PR carries `scripts/corpus.expected-delta` (CONTRIBUTING, "An
+intentional behaviour change") and no oracle file. Review its rows in the PR diff like code: they
+are `--explain`'s joined transitions, and a regression row is refused here, before anything runs.
+Then run `scripts/land.sh <pr>`. Every step is a check that stops on failure:
+
+- **PHASE 2** checks that the delta's `base_sha256` is `BASE`'s manifest. A delta emitted against an
+  older `main` is refused before the gate; the author re-emits it.
+- **The gate.** The corpus stage must print `corpus manifest: match by the declared delta`. That
+  means the fresh manifest differs from the committed one by exactly the declared rows. A
+  mismatch is red, with UNDECLARED / UNREALISED / MISPREDICTED lines. Nothing about it is
+  waved through.
+- **PHASE 6a** runs only on that green verdict. It re-runs `--check-delta`, checks the fresh
+  manifest's sha against `result_sha256`, and runs `xbackend_diff.sh --ratchet` on the new manifest.
+  It then commits that manifest byte for byte as `chore(oracle): record the corpus transitions #PR
+  predicted`, with the explain output and the ratchet lines in the message. Finally it checks that
+  the commit's only file is `scripts/corpus.manifest`, that its parent is the merge, and that
+  `cmp` against the fresh manifest succeeds.
+- **PHASE 6b** re-walks the corpus on the oracle commit (~160 s) and requires a plain `match`. This
+  is a determinism spot-check, not a gate. `--no-rewalk` skips it.
+
+The published object is merge + oracle commit, after ONE full gate. Without `--push`, land.sh
+prints the push command for that exact object. If the ratchet shows the baseline can go down, lower
+`scripts/xbackend_diff.baseline` in a follow-up commit; the feature PR never lowers it.
+
+When the gate ran on `.github/workflows/gate.yml` rather than locally, do PHASE 6a by hand on the
+detached merge. Run `--check-delta "$BASE_MANIFEST" corpus.manifest scripts/corpus.expected-delta`
+on the artifact (it must exit 0), copy the artifact over `scripts/corpus.manifest`, and commit that
+one file. Then `cmp` it against the artifact and run `xbackend_diff.sh --ratchet`. No second
+`gate/*` run is owed.
+
+**Unpredicted (two gates).** The path for a feature PR without a delta file, and always for
+`idiom.baseline` or `needle.baseline`. Run `scripts/land.sh <pr>` **without `--push`**. Its first gate
+reports the expected oracle mismatch and leaves the exact merge commit detached. That result is an
+inspection stop, not a landing failure to wave through. Confirm that no non-oracle gate failed,
+inspect the joined transitions with `scripts/corpus_manifest.sh --explain` (or the corresponding
+reviewed baseline finding), and reject anything not explained by the PR's intended behaviour. Then,
+still on that detached merged tree, have the maintainer regenerate the affected oracle, inspect the
+result, and commit that one oracle alone. Rerun the complete gate on the merge plus oracle commit.
+Only that final green HEAD may be pushed. Never use `--push` on the first pre-oracle run, and never
+put an oracle file into the feature PR. Then complete the push manually with the saved lease.
+
+`scripts/land.sh <pr>` performs the local merge and the full gate with the verdict printed between
+phases. With `--push`, it publishes the gated object (merge, or merge + predicted oracle commit) when
+green. It is full-gate only; an inert-prose candidate uses the manual merge, independent
 classification, docs-only gate, snapshot comparison, and leased push in this procedure.
+
+**Provenance (PHASE 1b).** land.sh refuses to build on a `main` whose tip did not come through a pull
+request. It asks GitHub for the tip's PR. It also accepts a short tail of the commits this procedure
+appends after a PR merge: a one-file oracle commit, an `xbackend_diff.baseline` commit, and a reseed
+(`seed/alatyr` plus its companions). Anything else is a direct push that no gate saw. Find out what
+it is. If it is acceptable, acknowledge it for one run with `ALATYR_LAND_ACCEPT_BASE=<that sha>
+scripts/land.sh <pr>`, and say so in the landing report. A GitHub API failure is a refusal, not a pass.
 
 If any reseed or oracle commit was added after the initial merge, refresh the object to publish only
 after the final green gate:

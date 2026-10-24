@@ -109,7 +109,9 @@ looks. Everything else is triaged by what it blocks.
   and `scripts/needle.baseline` are line-oriented, so two branches regenerating *different* rows would
   merge clean into a file that is the output of neither compiler. `.gitattributes` marks all three
   `-merge` so git refuses instead, and by convention at most one open PR touches them, in a commit
-  that touches nothing else. `scripts/land.sh` refuses a PR that mixes one with anything else.
+  that touches nothing else. `scripts/land.sh` refuses a PR that mixes one with anything else. A
+  feature PR that moves the corpus manifest does not touch it at all: it declares the shift instead
+  (see "An intentional behaviour change" below).
 - **The fixture comes first, and it must fail.** A test that passes before your fix proves nothing
   about your fix. Put the measured pre-fix outcome in the fixture's header, in words: `built rc 0 and
   ran to 0 where 42 was due` is evidence; `was broken` is not.
@@ -146,6 +148,63 @@ Two rules about the oracle, and they are not negotiable:
   removed rows do not pair up, and a positional read misaligns and invents transitions that are not
   there.
 
+## An intentional behaviour change
+
+If your change is *meant* to move `scripts/corpus.manifest` (a fixture now runs, an exit code is
+now the right one), the PR declares that move in `scripts/corpus.expected-delta`, and the manifest
+itself stays untouched. The gate then checks that the fresh manifest differs from the committed one
+by **exactly** the declared rows. No undeclared pair, no unrealised one, and every value matches
+down to the stream hashes. That single green gate is enough to land the feature together with its
+oracle commit.
+
+1. Get a fresh manifest from a **native x86_64** walk of your branch: run
+   `scripts/corpus_manifest.sh --check` there (it leaves `target/corpus-manifest/corpus.manifest`), or
+   download the `corpus.manifest` artifact of a `.github/workflows/gate.yml` run. An emulated x86_64
+   gives different values, and they will not match the maintainer's gate.
+2. Write the delta with the helper. Do not write it by hand:
+
+   ```sh
+   scripts/corpus_manifest.sh --emit-expected scripts/corpus.manifest \
+     target/corpus-manifest/corpus.manifest > scripts/corpus.expected-delta
+   ```
+
+   It refuses a `TIMED-OUT` row and an empty delta. Its comment lines count the rows per class.
+
+   **A `TIMED-OUT` row is never a declaration of intended behaviour.** A timeout is a measurement
+   that did not finish, not a result: on a contended machine a program that runs fine can be recorded
+   as timing out, and blessing that row would write a machine's slowness into the oracle as if it were
+   the language's behaviour. Re-run on an unloaded native x86_64 until the walk is clean, then emit.
+3. **Never write or edit a class by hand — the generator derives it, and it will disagree with you.**
+   Measured on the first real run: an author declared `NOW-RUNS` for three pairs whose twins had
+   *already been running* and stopped at `brk #0`; a trap is a run, so the transition is
+   `EXIT-CHANGED` — "ran before and after, different exit", not "refused → runs". The pairs and the
+   exit codes were predicted correctly; the class was not, and care cannot fix that: a class is a
+   function of the before/after pair, so it must come from the diff. This is why `--emit-expected` is
+   the only writer of this file, and it is a correctness rule, not a style preference.
+
+   Read every row before you commit. They are `--explain`'s joined transitions. A `NO-LONGER-RUNS`
+   or a `run → assemble/*` row is a regression you are about to bless, even when it sits among
+   twenty wins. Commit the file in the feature PR and list the transitions in the PR description.
+4. Check the result yourself. A delta that does not match its own walk is a red gate:
+   `scripts/corpus_manifest.sh --check-delta scripts/corpus.manifest target/corpus-manifest/corpus.manifest scripts/corpus.expected-delta`
+   must exit 0.
+
+Three things follow from how the delta is checked:
+
+- **A rebase means re-emitting the delta.** The delta names the manifest it was computed against
+  (`base_sha256`). Once `main`'s manifest moves, your delta is *inert*, and the gate wants a plain
+  match again. A delta left behind can never make a mismatch pass, so a stale one only turns your
+  gate red. `.gitattributes` marks the file `-merge`, so two feature PRs that both declare one
+  conflict instead of merging into a prediction neither of them made.
+- **Leave `scripts/xbackend_diff.baseline` alone in the feature PR.** The gate's ratchet reads the
+  committed (old) manifest. `scripts/land.sh` runs the ratchet on the new manifest when it writes
+  the oracle commit, and a lowered baseline follows in its own commit after that.
+- **`scripts/idiom.baseline` and `scripts/needle.baseline` need no delta, and no second gate.** They
+  are static text walks — neither runs the compiler — so regenerate them **in your branch, as their
+  own commit, before you ask for the gate**, and that one gate covers code and baseline together. The
+  delta exists only for `scripts/corpus.manifest`, whose content is produced *by compiling*: you
+  cannot know the fresh manifest without doing the walk, and that is the whole of the two-gate cost.
+
 ## Pull-request checklist
 
 - [ ] `./scripts/full.sh --force-sweeps` is green, and `git diff --exit-code` is clean **afterwards**
@@ -160,7 +219,8 @@ Two rules about the oracle, and they are not negotiable:
       Normalize the `.L<N>` **and** `.Lra<N>_<k>` label families first.
 - [ ] Fixpoint still green. If it is not, a reseed may be owed — that is the maintainer's call, never
       a contributor's, and it needs three-stage evidence.
-- [ ] The manifest either matches, or its regeneration is a separate reviewed commit.
+- [ ] The manifest either matches, or the PR carries a `scripts/corpus.expected-delta` emitted
+      against the current `main` and `--check-delta` exits 0 on it (never the manifest itself).
 - [ ] User-visible? Then `CHANGELOG.md`'s `## Unreleased` gained its line, in this same commit.
 
 ## How your change lands
