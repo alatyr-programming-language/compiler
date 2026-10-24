@@ -9364,10 +9364,18 @@ check_accept deep_arr_elem_runtime_idx
 check_accept deep_arr_elem_field_write
 run arr_field_elem_write 116
 check_accept arr_field_elem_write
-## unary-minus as a binary operand `30 + -a` = 25 (was a SILENT 0: the SIGILL was masked by wexit) — the neg
-## operand now forces the SIGNED overflow guard. a64/rv64/wasm trap (x86-only fix); 25 < 126 WASI-safe.
-run lower_bugA_neg_operand 25
+## unary-minus as a binary operand `u64(30 + -a)`. This line used to want 25, on the reasoning that the
+## negated operand forces the SIGNED overflow guard so the "signed sum" 30 + (-5) fits. Spec §6.5 (v1.2.0,
+## owner decision A) says the guard follows the OPERAND TYPE and a subexpression's spelling is not its type:
+## at `u64` the value `-a` IS 2^64-5, the sum IS 2^64+25, it does not fit, and the carry is real — so this
+## program has overflowed an unsigned integer and MUST trap. All four backends now agree on the trap (the
+## twins trapped before; x86 was the outlier). The signed sibling below pins the other half: at `i64` the
+## same shape answers 25, so this is a guard chosen by type, not guards switched off.
+run lower_bugA_neg_operand 132
 check_accept lower_bugA_neg_operand
+## the other half of §6.5: `i64(30 + -a)` is a signed sum, `-5` is `-5`, 25 fits, and it must run.
+run accept_neg_operand_signed_guard 25
+check_accept accept_neg_operand_signed_guard
 ## Types §9.4: a LOCAL struct with a `[Struct; N]` field — field_words now sizes it N*struct_words(elem) and the
 ## element stride is struct_words-aware. Construction, s.cells[i].m read + write round-trip, neighbours + pad/tail
 ## intact, whole-struct copy. 42 < 126 WASI-safe; a64/rv64/wasm trap (x86-only). (cfd5d39)

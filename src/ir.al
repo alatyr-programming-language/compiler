@@ -3044,6 +3044,19 @@ pub arith_sg_soft := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(
   }
   ValSg.VsNotInt
 }
+## #943 — the record answers only where it NAMES an integer type with a spelled sign. A folded literal
+## (`VcLit`) carries no sign of its own — spec §6.5 says the TYPE gives it one — so this returns
+## `VsNotInt` there and the caller keeps its shape verdict. x86 cannot use `arith_sg_soft` directly for
+## `+ - *`: its literals rule answers signed for a folded literal, and `Q : u64 = 4294967295 *
+## 4294967295` then took `imulq` + `jno` and trapped on a product that fits `u64` exactly (measured on
+## omen against `accept_comptime_unchecked_wrap.al`, which ran 42 on main and 132 under that rule).
+pub arith_sg_typed := fn(be : ptr(Expr)) -> ValSg {
+  t : VTy = sty_get_cur(be)
+  if vcls_is_int(t.cls) {
+    match t.sg { SgS => { return ValSg.VsSigned }; SgU => { return ValSg.VsUnsigned }; SgNone => {} }
+  }
+  ValSg.VsNotInt
+}
 ## The twins' `pair_sg_cur` (#966): the same record walk, `VsNotInt` where no record answers instead of
 ## the e3 stop — see `arith_sg_soft` for why the twins cannot stop here. x86_64's `is_unsigned_cmp` ends
 ## by asking THIS record; the twins' `*_cmp_unsigned` asked only their shape query and never reached it,
