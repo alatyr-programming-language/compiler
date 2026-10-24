@@ -126,6 +126,21 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **The #529 ptrint census is in the gate, and it no longer lets an unmeasured zero read as clean
+  (#529 step 3).** The gate ran `ptrint_census.sh planted` only — the proof that the counter *can*
+  fire — so no ptrint number was ever pinned, and `OP-CMP = 0` described a run nobody repeated.
+  `scripts/ptrint_census.sh gate` now runs the census over `src/`, `lib/` and every tracked fixture in
+  every gate, and ratchets two numbers against `scripts/ptrint_census.baseline`: **`places=3`** (the
+  distinct implicit `usize ↔ ptr(T)` seam places, all in `test/`, all outside an `unchecked` grant) and
+  **`blind-lib=12`** (tracked `lib/` modules the census cannot check standalone — `alloc/vec`,
+  `alloc/string`, `alloc/strbuf`, `std/fmt`, `std/io` and friends, the pointer-densest files in the
+  tree — whose places are therefore *unknown*, not zero). Neither may grow. The stage prints
+  **`op-cmp=UNMEASURED`**, not `0`, because `planted` reports the OP-CMP hook NOT PROVEN: it sits in
+  `check_expr`'s big `match deref(e)`, which sema's own header records as not dispatched under the
+  bootstrap seed (scar #2). Fixing scar #2 turns that word into a number, in the commit that proves it.
+  The ratchet is proven to refuse before it is trusted to hold: `ptrint_census.sh self-test`, 7 checks,
+  runs in the gate itself.
+
 - **`alatyr help` lists the options, and `alatyr <command> --help` (or `-h`, or `alatyr help
   <command>`) prints that command's usage (TOOL-21).** The top-level help used to name only the
   commands; it now also lists `help`/`version` with `-h`/`-V`, `--manifest`, `--target`,

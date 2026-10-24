@@ -330,6 +330,30 @@ if ! grep -qE "^  NEGATIVE fixture \(explicit bitcasts only\): check rc=0 rows=0
   fail=1
 fi
 
+# THE CENSUS ITSELF, in the gate (#529 step 3). The stage above proves the counter CAN fire; it pins
+# nothing, so no ptrint number was ever in the gate and "OP-CMP = 0" described a run nobody repeated.
+# `gate` runs the census over src/, lib/ and every tracked fixture, ratchets `places` and `blind-lib`
+# against scripts/ptrint_census.baseline, and prints `op-cmp=UNMEASURED` while the OP-CMP hook is
+# unproven — a zero from a hook that has never fired is silence, and this line must not let it read as
+# cleanliness. Same Stage2 compiler; writes only under target/ptrint_census. ~5 min at jobs=8.
+echo "### PTRINT CENSUS GATE (places and blind-lib ratcheted; unproven classes reported UNMEASURED) ###"
+# Prove the ratchet can refuse BEFORE trusting it to hold: a ratchet nobody has seen fail is a ratchet
+# that has never been checked, and this stage's whole claim is that growth becomes impossible.
+bash scripts/ptrint_census.sh self-test || fail=1
+PCG_LOG="$LOGDIR/full_ptrint_gate.log"
+bash scripts/ptrint_census.sh gate > "$PCG_LOG" 2>&1
+pcg_rc=$?
+grep -E "^ptrint census gate:|^ptrint ratchet:|^  op-cmp=UNMEASURED|^  coverage:" "$PCG_LOG"
+if [ "$pcg_rc" != 0 ]; then
+  echo "  FAILURES (from $PCG_LOG): scripts/ptrint_census.sh gate exited $pcg_rc"
+  fail=1
+fi
+if ! grep -q "^ptrint census gate: places=[0-9]* op-cmp=" "$PCG_LOG"; then
+  echo "  (scripts/ptrint_census.sh printed no 'ptrint census gate: places=… op-cmp=…' line —"
+  echo "   the census produced no number, treating as a failure)"
+  fail=1
+fi
+
 # The SEED-FORMS registry (strict_forms.md §8; owner decision on #785). Each form the frozen seed
 # miscompiles has a planted program under scripts/seed_forms/ (outside the `test/*.al` corpus), and
 # scripts/seed_forms.tsv gives its due exit value. A `seed` row needs the Stage2 compiler the fixpoint
