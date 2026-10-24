@@ -1016,7 +1016,7 @@ fixture's prose and stopped there. Computing what each program **returns** inver
 | `deep_field_agg_enum_reject` | `o.mid.c = Col.G(42)`, matched back → **42** | yes | `compile/1` / `run/42` ×3 |
 | `deep_field_agg_var_reject` | `o.mid.inner = Rec(12,30)`, `a + b` → **42** | yes | `compile/1` / `run/42` ×3 |
 | `reject_local_name_two_aggregate_types` | → **109** | yes | `compile/1` / `run/109` ×3 |
-| `require_unchecked` | **42** (§8.1: `unchecked` drops the predicate) | IR traps 132 | `run/42` / `run/133`,`134` ×3 |
+| `require_unchecked` | **42** (§8.1: `unchecked` drops the predicate) | yes, since #1007 | `run/42` / `run/42` ×3 |
 | `lower_bugA_neg_operand` | **25** (signed wrapping sub) | IR traps 132 | `run/25` / `run/133`,`134` ×3 |
 
 **Four of six are the flip's prize, not its blocker.** The twins and wasm are *already* on the IR for
@@ -1026,11 +1026,15 @@ disagree (lower.al:20118 and its neighbours). So flipping x86 to the IR fixes fo
 refuse", which was true of x86's lowering, not of the construct. This is #980's shape again, which is what
 was said earlier in this session before §25 "corrected" it the wrong way.
 
-**Two are real, and they are live today.** `require_unchecked` and `lower_bugA_neg_operand` trap on
-aarch64, riscv64 **and wasm right now** — `run/133`/`run/134` where x86 answers 42 and 25. They are not
-flip-preparation; they are current over-traps on three backends, six counter rows. Fixing them is the cut
-that pays before any flip: an over-trap is a program the spec calls valid that three backends refuse to
-run.
+**One is real, and it is live today.** `lower_bugA_neg_operand` traps on aarch64, riscv64 **and wasm
+right now** — `run/133`/`run/134` where x86 answers 25. It is not flip-preparation; it is a current
+over-trap on three backends, three counter rows (TRAP ×3). Fixing it is the cut that pays before any
+flip: an over-trap is a program the spec calls valid that three backends refuse to run.
+
+*Correction after review:* this section first said `require_unchecked` was the second live over-trap, at
+"six counter rows". That row was carried over from §25 without being recomputed. `e997993` (#1007), already
+in main when §26 merged, made it `run/42` on all three twins, and the counter has no row for it. That is
+the very mistake this section is titled against.
 
 **The method lesson, stated once more because it is the fifth time on this branch:** a fixture's prose
 describes the defect the fixture was written *against*, which is not necessarily the defect that exists
