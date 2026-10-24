@@ -404,7 +404,16 @@ IR signature onto registers or wasm params:
 
 - scalars by value;
 - an aggregate argument by the address of a caller-owned copy (the spec's documented byte-copy);
-- an aggregate result through a hidden first `ptr` parameter (sret) into a caller frame object;
+- an aggregate result of **one to eight words** in the result registers (`x0..x7` on aarch64,
+  `a0..a7` on riscv64): the IR result is the `ptr` to the value and `ret_words` — recorded once by the
+  builder, never recomputed by a backend — tells the selector how many words to read through it. The
+  ceiling is the register-return set, and it is a decision, not an accident: it was widened from two
+  words to eight by the owner on #1026, after measuring that the selectors already emitted eight
+  (`sa_agg_ret` / `sr_agg_ret`: `if w == 0 or w > 8`) while the builder refused past two, leaving
+  **1022 refusals** in the family `signature: aggregate result wider than two words`. The golden
+  `ig_notyet`, which pinned the refusal, moved with it;
+- an aggregate result **wider than eight words**, or one the caller asks to receive by address, through a
+  hidden first `ptr` parameter (sret) into a caller frame object;
 - the callee symbol — module path, overload suffix, generic instance tag — is computed by the builder,
   once, so all four targets name a function the same way (the ASSEMBLE class and the twins'
   first-name-match go away together);

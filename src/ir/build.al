@@ -4013,7 +4013,10 @@ ib_agg_ret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
       None => { break }
     }
   }
-  if nf == 0 or nf > 2 { return 0 }
+  ## The ceiling is the register-return set: aarch64 x0..x7 and riscv64 a0..a7, which is what
+  ## `sa_agg_ret` / `sr_agg_ret` emit (their `if w == 0 or w > 8` is the same bound). Widened
+  ## from two words by owner decision on #1026; `ig_notyet`'s golden moved with it.
+  if nf == 0 or nf > 8 { return 0 }
   nf
 }
 ## Return `v` as the function's result, at its declared type.
@@ -4364,7 +4367,7 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
     match rko { Some(kk) => { rk = kk; has_ret = true }; None => {} }
   }
   fnm := str_at((src + d.name_start), d.name_len)
-  ## Slice 3d: an aggregate RESULT of one or two words (`ib_agg_ret_words`) is returned in the result
+  ## Slice 2: an aggregate RESULT of ONE TO EIGHT words (`ib_agg_ret_words`) is returned in the result
   ## registers, the convention every legacy emitter shares; the function's IR result is the `ptr` to the
   ## value and `ret_words` tells the selector to return the words.
   mut rwords : usize = 0
