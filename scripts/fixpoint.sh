@@ -117,10 +117,17 @@ seed_identity_check() { # version-file package-file seed-binary
     echo "      output: ${ans:-<empty>}"
     return 6
   else
+    # The CLI cites the spec revision it conforms to after a comma — `alatyr 0.2.17, spec 1.1.0`
+    # (TOOL-21; scripts/package_cli_test.sh pins that exact line). The seed's VERSION block records
+    # the compiler's own version on its own axis, so the comparison is on the part BEFORE the comma.
+    # A seed that answers only a spec suffix, or nothing before it, still fails: the version must be
+    # there and must match.
     asked="${ans#alatyr }"
+    asked="${asked%%,*}"
+    asked="$(printf '%s' "$asked" | tr -d '[:space:]')"
     if [ "$asked" != "$want_ver" ]; then
       echo "FAIL: the seed answers a different version than seed/VERSION records."
-      echo "      ./seed/alatyr --version:         $asked"
+      echo "      ./seed/alatyr --version:         $ans"
       echo "      seed/VERSION current-seed-version: $want_ver"
       echo "      The block is a claim ABOUT THE ARTIFACT, so the artifact governs: either the block is"
       echo "      stale, or the promoted binary is not the one the block describes. AGENTS.md's"
@@ -141,7 +148,7 @@ seed_identity_check() { # version-file package-file seed-binary
 ## invocation, BEFORE the decision it is about — and in a SUBSHELL, because a `set -u` unbound
 ## variable or an arithmetic error inside a driven function unwinds to top level and ENDS THE
 ## SCRIPT, printing nothing at all; the completion marker below is what notices instead.
-FIXPOINT_SELFTEST_EXPECTED=25
+FIXPOINT_SELFTEST_EXPECTED=30
 fixpoint_seed_identity_selftest() { # work-dir
   local st="$1" bad="" k=0 out rc
   rm -rf "$st"; mkdir -p "$st" || return 1
@@ -224,6 +231,28 @@ fixpoint_seed_identity_selftest() { # work-dir
   [ "$rc" = 6 ]; _ck $? "identity-accepted-a-seed-answering-another-version(rc=$rc)"
   case "$out" in *0.1.0*0.4.2*) _ck 0 x ;;
                  *) _ck 1 "identity-did-not-name-both-the-asked-and-the-recorded($out)" ;; esac
+  # THE SPEC SUFFIX (the 0.2.17 promotion met this): the CLI answers `alatyr <ver>, spec <pin>`, so a
+  # check that compares the whole answer against the recorded version refuses its own compiler. Both
+  # directions are driven here — a suffixed answer that carries the recorded version must pass, and one
+  # that carries another must still fail, or the parse would be a rubber stamp.
+  _ans_suffix() { # answer -> an executable answering exactly that line; re-record the digest it carries
+    printf "#!/bin/sh\nprintf '%s\\\\n'\n" "$1" > "$st/seed"; chmod +x "$st/seed"
+    sha="$(sha256sum "$st/seed" | cut -d' ' -f1)"; _vf "$sha" 0.4.2
+  }
+  _ans_suffix 'alatyr 0.4.2, spec 1.1.0'
+  out="$(seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 0 ]; _ck $? "identity-refused-a-seed-answering-the-recorded-version-with-a-spec-suffix(rc=$rc)"
+  case "$out" in *'was asked and answered 0.4.2'*) _ck 0 x ;;
+                 *) _ck 1 "identity-ok-line-did-not-report-the-suffixed-asking($out)" ;; esac
+  _ans_suffix 'alatyr 0.1.0, spec 1.1.0'
+  out="$(seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 6 ]; _ck $? "identity-accepted-a-suffixed-answer-naming-another-version(rc=$rc)"
+  case "$out" in *0.1.0*0.4.2*) _ck 0 x ;;
+                 *) _ck 1 "identity-did-not-name-both-sides-of-a-suffixed-disagreement($out)" ;; esac
+  _ans_suffix 'alatyr , spec 1.1.0'
+  out="$(seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 6 ]; _ck $? "identity-accepted-an-answer-with-no-version-before-the-comma(rc=$rc)"
+
   printf '#!/bin/sh\nprintf "alatyr 0.4.2\\n"\nexit 3\n' > "$st/seed"; chmod +x "$st/seed"
   sha="$(sha256sum "$st/seed" | cut -d' ' -f1)"; _vf "$sha" 0.4.2
   out="$(seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
@@ -247,7 +276,9 @@ fixpoint_seed_identity_selftest() { # work-dir
   echo "fixpoint seed-identity selftest: $k checks — the version cross-check in BOTH directions, the"
   echo "  digest comparison and its case-insensitivity, the two duplicate-line guards, a missing"
   echo "  block, a missing file, a manifest with no version, and the seed ASKED in all four states:"
-  echo "  answers right, answers wrong, fails to answer, and cannot be executed (the skip says so)"
+  echo "  answers right, answers wrong, fails to answer, and cannot be executed (the skip says so);"
+  echo '  and the spec suffix the CLI cites (`alatyr <ver>, spec <pin>`), in both directions and with'
+  echo "  no version before the comma, so the parse cannot become a rubber stamp"
   return 0
 }
 
