@@ -337,14 +337,15 @@ ir_emit_div_guard := fn(rok : usize, rov : i64, signed : bool) {
 ## vs unsigned (`jnc`), matching the text path where `ovf_narrow`/pointer are both false. A literal-`0`
 ## LEFT operand (`0 - x` / `0 * x`) skips the guard, exactly as the text path's `expr_is_zero(l)` does.
 ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx), unch : bool) -> IROperand {
-  ## e3 (in parts): `/ %` read sema's record of the operator; `+ - *` keep the shape test (#943).
-  dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx) } else { false }
+  ## e3 (in parts): `/ %` read sema's record of the operator; `+ - *` now ask it first and keep the
+  ## shape verdict only where the record is `VsNotInt` (#943).
+  dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { lower_layout::ir_arith_signed_or(be, shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx)) } else { false }
   ## docs/ir.md §3.8.5 — the census row for this division's signedness (no-op unless fd 97 is open).
   if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
-  ## A NEGATED operand (`30 + -a`) forces the SIGNED overflow guard — `-a`'s runtime word is a large
-  ## unsigned pattern, so the unsigned CARRY guard would spuriously trap a sum that fits as a signed
-  ## wrapping subtraction (mirrors the text-path `gsigned` rule).
-  gsigned := dsigned or expr_is_uneg(l) or expr_is_uneg(r)
+  ## The guard's signedness is `dsigned` and nothing else (spec §6.5): a subexpression spelled as a
+  ## negation is not thereby signed, and at `u64` the value `-a` IS `2^64-5`, so an enclosing `+` that
+  ## overflows carries and must trap. The `gsigned := dsigned or expr_is_uneg(...)` override that used
+  ## to sit here mirrored the text path's, and is removed with it; #943 closes the shape lane itself.
   if op == 16 or op == 17 {
     ## Preserve a literal left operand as an immediate. The destination still receives a fresh vreg, so the
     ## arithmetic instruction remains valid (`mov t, $lhs; op t, R`) and the scalar-IR constant fold can
@@ -359,7 +360,7 @@ ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : p
     regalloc::ra_ir_emit(iop, 3, i64(t), ro.k, ro.v)           ## t (+|-)= R  (sets OF/CF)
     ## CHECKED overflow (I11 / CG-8): trap on native-width `+`/`-` overflow — unless `unchecked` or a
     ## `0 - x` negation. Signed → `jno`; unsigned → `jnc` (carry/borrow).
-    if (not unch) and (not expr_is_zero(l)) { ir_emit_ovf_guard(gsigned) }
+    if (not unch) and (not expr_is_zero(l)) { ir_emit_ovf_guard(dsigned) }
     return IROperand(k = 3, v = i64(t))
   }
   if op == 18 {

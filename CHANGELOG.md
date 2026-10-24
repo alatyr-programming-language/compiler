@@ -257,6 +257,21 @@ Two numbers that are **not** the compiler's version: the specification revision 
   component). `match_bool_neg` and `repr_enum` now answer what x86_64 answers there. x86_64 output is
   unchanged.
 
+## 0.2.17 — 2026-10-24
+
+- **x86_64 chooses the checked-overflow guard of `+ - *` from the type, not from how an operand is
+  spelled (#943).** Both x86 paths computed the guard as signed when the destination was signed **or**
+  when an operand merely looked like a negation, and fell back to a single default for every shape they
+  did not recognise. A program could therefore add or multiply with the wrong overflow check: the
+  fixture `lower_bugA_neg_operand` answered a number (exit 25) where the checked wrap is due, and now
+  traps (exit 132). `+ - *` ask sema's record of the value first, through one shared helper so the
+  three guard sites cannot diverge; the two shape helpers are gone. This is the PATCH the versioning
+  policy calls most urgent — a silent wrong value turned into a loud failure. What still reads the
+  shape, untouched here: a checked conversion's source and a `match` range arm, both already named as
+  open in the 0.2.15 entry, and every operator whose operands sema leaves untyped — #943 stays open.
+  The compiler's own GAS changes (1890 guards and 482 multiplies move from unsigned to signed, nothing
+  else), so the seed is promoted to 0.2.17.
+
 ## 0.2.16 — 2026-10-15
 
 - **x86_64 assigns a struct or array literal that reads its own destination by value (#909).**

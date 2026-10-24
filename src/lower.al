@@ -16006,38 +16006,13 @@ expr_is_pos_num := fn(e : ptr(Expr)) -> bool {
   }
   r
 }
-## Is `e` a UNARY NEGATION `-x`? The parser desugars unary `-x` to `Unchecked(Bin(17, Num(0), x))`
-## (a 2's-complement wrapping `0 - x`), so a NEGATED VALUE used as an operand of an enclosing `+`/`-`
-## (`30 + -a`, `10 + -3`) rides in as this exact shape. Its runtime word is a large unsigned pattern
-## (`-5` = `2^64-5`), so an UNSIGNED overflow guard (`jnc`) on the enclosing add sees a spurious CARRY
-## and traps (`ud2`) even though the SIGNED sum (`30 + (-5) = 25`) fits with no signed overflow. The
-## caller uses this to pick the SIGNED guard (`jno`) for a `+`/`-` whose operand is a negation, so
-## `30 + -a` yields 25 (wrapping subtraction) instead of a spurious checked-overflow trap.
-## Does `inner` have the `Bin(17, Num(0), _)` shape of a unary-minus body? A SINGLE-match helper —
-## keeping this OUT of `expr_is_uneg`'s `Unchecked` arm avoids the seed's nested-`match`-on-a-bound-
-## child miscompile (a `match deref(child)` inside another match arm mis-lowers on the frozen seed).
-uneg_body_ok := fn(inner : ptr(Expr)) -> bool {
-  mut r := false
-  match deref(inner) {
-    Expr::Bin(op, l, rr) => { if op == 17 { r = expr_is_zero(l) } }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
-expr_is_uneg := fn(e : ptr(Expr)) -> bool {
-  mut r := false
-  match deref(e) {
-    Expr::Unchecked(inner) => { r = uneg_body_ok(inner) }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
-      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
-      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
+## `expr_is_uneg` / `uneg_body_ok` used to live here. They answered "is this operand spelled as a
+## negation?" so that x86's checked `+`/`-` could switch to the SIGNED guard (`jno`) and let
+## `30 + -a` answer 25. That is falsified: at type `u64` the value `-a` IS `2^64-5`, so the sum overflows
+## and must trap, and spec §6.5 states plainly that a subexpression's spelling is not its type — the
+## guard follows the operand TYPE. The predicate had no other caller, so it goes with the override.
+## (The parser still desugars `-x` to `Unchecked(Bin(17, Num(0), x))`; making that grant visible, and
+## the signedness of `+ - *` a sema record rather than a shape, are §6.6 and #943.)
 ## Recover the declared array type of `Field(Var, field)` for the indexed-field signedness lane. Keep
 ## the variant destructure in a standalone one-level helper: the frozen seed mis-lowers a nested match
 ## over `Expr::Field` when it is placed inside another expression match arm.
@@ -17372,9 +17347,11 @@ routed_int_name := fn(l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx)) -> str {
 ## need the pre-operation zero / MIN÷-1 tests. Every failure is the direct inline trap (CG-13), never the
 ## routed body's library logic.
 emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)) {
-  ## e3 (in parts): `/ %` read sema's record of the operator; `+ - *` keep the shape test (#943).
-  dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx) } else { false }
-  gsigned := dsigned or expr_is_uneg(l) or expr_is_uneg(r)
+  ## e3 (in parts): `/ %` read sema's record of the operator. `+ - *` now ask the record FIRST and keep
+  ## the shape verdict only where sema still answers `VsNotInt` (#943). What is gone is the negation
+  ## override that used to sit below: an operand spelled `-x` no longer forces `jno`, because at `u64`
+  ## the value `-x` IS `2^64-5` and the sum overflows — spec §6.5, a spelling is not a type.
+  dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { lower_layout::ir_arith_signed_or(be, shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx)) } else { false }
   narrow := typ == "u8" or typ == "u16" or typ == "u32" or typ == "i8" or typ == "i16" or typ == "i32"
   mut bits := 64
   if typ == "u8" or typ == "i8" { bits = 8 }
@@ -17395,7 +17372,7 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
       }
     } else if not expr_is_zero(l) {
       push_str(sb, "  movq %rax, %rcx\n  addq %rbx, %rcx\n")
-      if gsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") }
+      if dsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") }
       else { push_str(sb, "  jnc 1f\n  ud2\n1:\n") }
     }
   }
@@ -17414,7 +17391,7 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
       }
     } else if not expr_is_zero(l) {
       push_str(sb, "  movq %rax, %rcx\n  subq %rbx, %rcx\n")
-      if gsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") }
+      if dsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") }
       else { push_str(sb, "  jnc 1f\n  ud2\n1:\n") }
     }
   }
@@ -18411,9 +18388,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## §4/I11: operand signedness + narrow-width, needed by the checked OVERFLOW guard (native-width
       ## `+`, below) AND by division signedness (op 19/29). Overflow traps at NATIVE width only; a
       ## narrow-typed op keeps its §4 value-model WRAP (the truncation below), not a trap.
-      ## e3 (in parts): `/ %` read sema's record of the operator; the overflow guard of `+ - *` keeps the
-      ## transitional shape test until #943 closes; nothing else asks.
-      dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(e, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx) } else { false }
+      ## e3 (in parts): `/ %` read sema's record of the operator. `+ - *` ask it first too and fall back
+      ## to the transitional shape test only where the record is `VsNotInt` (#943); nothing else asks.
+      dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(e, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { lower_layout::ir_arith_signed_or(e, shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx)) } else { false }
       ## docs/ir.md §3.8.5 — the census row for this division's signedness (no-op unless fd 97 is open).
       if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
       mut ovf_narrow := false
@@ -18439,10 +18416,14 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         rpt := expr_type_span(r, cx)
         if rpt.n != 0 { rpb := base_type_name(cx.src, rpt.s, rpt.n); if str_at((cx.src + rpb.s), rpb.n) == "ptr" { ovf_narrow = true } }
       }
-      ## A NEGATED operand (`30 + -a`) forces the SIGNED overflow check: `-a`'s runtime word is a
-      ## large unsigned pattern, so the unsigned CARRY guard (`jnc`) would spuriously trap a sum that
-      ## fits as a signed wrapping subtraction. `jno` sees `30 + (-5) = 25` as no signed overflow.
-      gsigned := dsigned or expr_is_uneg(l) or expr_is_uneg(r)
+      ## The guard's signedness is the OPERAND TYPE's, and nothing else (spec §6.5, owner decision A).
+      ## There used to be a second term here: an operand whose SHAPE was a negation (`30 + -a`) forced
+      ## `jno`, because `-a` desugars to a wrapping `0 - a` whose runtime word is `2^64-5` and the
+      ## unsigned carry guard would then trap. That reasoning read the sum as the SIGNED `30 + (-5) = 25`
+      ## — but at type `u64` the value `-a` IS `2^64-5`, the sum IS `2^64+25`, and the carry is not
+      ## spurious: the program has overflowed an unsigned 64-bit integer and must trap. A subexpression's
+      ## spelling is not its type (§6.5), so the shape term is gone and `dsigned` alone decides, exactly
+      ## as `*` below already decides. Closing the rest of the shape lane is #943.
       if op == 16 {
         push_str(sb, "  addq %rbx, %rax\n")
         ## CHECKED overflow (I11 / CG-8): trap when the native-width sum overflows — unsigned CARRY
@@ -18450,7 +18431,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## (cx.vchk false) and skipped for a narrow width (its wrap IS the value model). `ud2` faults.
         ## POINTER offsetting routes through `rt::addr` (unchecked), so address arithmetic never reaches here.
         if cx.vchk and (not ovf_narrow) {
-          if gsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") } else { push_str(sb, "  jnc 1f\n  ud2\n1:\n") }
+          if dsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") } else { push_str(sb, "  jnc 1f\n  ud2\n1:\n") }
         }
       }
       if op == 17 {
@@ -18459,7 +18440,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## (`jno`). Dropped under `unchecked`; narrow width wraps (value model). Pointer DIFFERENCE
         ## (`target - src`, the rebased-handle constructor) routes through `rt::off` (unchecked).
         if cx.vchk and (not ovf_narrow) {
-          if gsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") } else { push_str(sb, "  jnc 1f\n  ud2\n1:\n") }
+          if dsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") } else { push_str(sb, "  jnc 1f\n  ud2\n1:\n") }
         }
       }
       if op == 18 {
