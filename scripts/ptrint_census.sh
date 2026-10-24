@@ -324,6 +324,27 @@ ret_p2i := fn() -> usize { pp : ptr(u8) = give_ptr() ; return pp }
 ## RESULT-TAIL, both directions: the declared result and the tail expression differ.
 tail_i2p := fn() -> ptr(u8) { give_int() }
 tail_p2i := fn() -> usize { give_ptr() }
+## OP-CMP / OP-IF / OP-MATCH: the OPERAND-PAIR classes. Each spelling was found by measurement and is
+## load-bearing: OP-CMP fires on a pointer meeting an INTEGER LITERAL (`p == 0`), not on two pointer
+## parameters; OP-MATCH fires on an ENUM scrutinee bound to a local, not on an integer scrutinee and
+## not in tail position. All three were reported NOT PROVEN until this fixture planted them — the hooks
+## were never dead, nothing reached them.
+cmp_ptr_zero := fn(p : ptr(u8)) -> bool { return p == 0 }
+if_pair := fn(c : bool) -> usize { if c { give_ptr() } else { give_int() } }
+Flag := enum { A, B }
+match_pair := fn(k : Flag) -> usize {
+  x := match k {
+    Flag.A => { give_ptr() }
+    Flag.B => { give_int() }
+  }
+  unchecked bitcast(usize, x)
+}
+## FIELD-LIT, both directions: a struct LITERAL whose field value is the other kind from the declared
+## field type. The `Holder` literal below has both sides agreeing, which is why this class never fired
+## either. PLACE-ARRNESTED needs a THREE-part place: an owner struct, an array-of-struct field, and a
+## leaf field inside the element.
+Leaf := struct { p : ptr(u8), h : usize }
+Owner := struct { items : [Leaf; 2] }
 
 pub main := fn() -> i32 {
   p : ptr(u8) = give_ptr()
@@ -362,7 +383,18 @@ pub main := fn() -> i32 {
   c1 := ret_p2i()
   c2 := tail_i2p()
   c3 := tail_p2i()
-  if a0 + a1 + a2 + b1 + r1 + c1 + c3 == 0 { return 1 }
+  ## OP-CMP / OP-IF / OP-MATCH, through the three helpers above.
+  d0 := cmp_ptr_zero(p)
+  d1 := if_pair(d0)
+  d2 := match_pair(Flag.A)
+  ## FIELD-LIT, both directions, and PLACE-ARRNESTED, both directions.
+  f0 := Holder(p = 4096, h = 1)
+  f1 := Holder(p = give_ptr(), h = p)
+  mut ow := Owner(items = [Leaf(p = give_ptr(), h = 1), Leaf(p = give_ptr(), h = 2)])
+  ow.items[0].p = 4096
+  ow.items[1].h = p
+  if a0 + a1 + a2 + b1 + r1 + c1 + c3 + d1 + d2 + f0.h + f1.h + ow.items[0].h
+     + unchecked bitcast(usize, ow.items[1].p) == 0 { return 1 }
   0
 }
 AL
@@ -382,10 +414,15 @@ AL
     else printf '    %-16s NOT PROVEN — a zero for this class over the real tree means NO COVERAGE, not clean\n' "$c"; unproven=$((unproven+1)); fi
   done
   echo "    classes whose hook this proof could not make fire: $unproven of $(set -- $CLASSES; echo $#)"
-  echo "    (the five OP-*/FIELD-LIT/ARG-callarm hooks live in check_expr's big \`match deref(e)\`"
-  echo "     region, which sema's own header records as NOT DISPATCHED under the bootstrap seed"
-  echo "     (scar #2) — so at those sites neither this census NOR the checker's own conformance"
-  echo "     test runs today. That is a gap in the CHECKER, reported here rather than hidden.)"
+  ## CORRECTION (measured, #529). This block used to print that the five OP-*/FIELD-LIT hooks were
+  ## "NOT DISPATCHED under the bootstrap seed (scar #2)" and that neither this census nor the checker's
+  ## conformance test ran at those sites. That was FALSE, and it is the exact failure mode this census
+  ## exists to catch: a zero explained by a story instead of by a measurement. Both the tree compiler
+  ## and the committed seed (`seed/alatyr 0.2.16`) fire all five hooks with `check` rc=0 — OP-CMP on
+  ## `p == 0`, OP-IF on an if/else pair, OP-MATCH on an enum-scrutinee match bound to a local,
+  ## FIELD-LIT on a struct literal whose field value is the other kind, PLACE-ARRNESTED on
+  ## `owner.items[i].leaf = v`. The hooks were never dead: the planted fixture simply never planted a
+  ## place that reaches them, so their zero was silence reported as a property of the checker.
 
   local hits i2p p2i gin
   hits=$(awk '!/ SUMMARY /' "$OUT/planted.rows" | wc -l)
@@ -500,7 +537,8 @@ gate() {
   if [ -n "$unproven" ]; then
     echo "  op-cmp=UNMEASURED — these hooks were never proven to fire, so their zero is silence, not"
     echo "    cleanliness: $unproven"
-    echo "    (scar #2: they live in check_expr's big \`match deref(e)\`, not dispatched under the seed.)"
+    echo "    (a class lands here only if the planted fixture has no place that reaches its hook; the"
+    echo "     hooks themselves are live — measured on both the tree compiler and the committed seed.)"
   fi
   if [ "$blind" != 0 ]; then
     echo "  coverage: $blind lib module(s) were NOT checked standalone — their places are unknown, not"
