@@ -17351,7 +17351,7 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
   ## the shape verdict only where sema still answers `VsNotInt` (#943). What is gone is the negation
   ## override that used to sit below: an operand spelled `-x` no longer forces `jno`, because at `u64`
   ## the value `-x` IS `2^64-5` and the sum overflows — spec §6.5, a spelling is not a type.
-  dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { lower_layout::ir_arith_signed_or(be, l, r, cx.src, shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx)) } else { false }
+  dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { lower_layout::ir_arith_signed_or(be, shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx)) } else { false }
   narrow := typ == "u8" or typ == "u16" or typ == "u32" or typ == "i8" or typ == "i16" or typ == "i32"
   mut bits := 64
   if typ == "u8" or typ == "i8" { bits = 8 }
@@ -18390,7 +18390,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## narrow-typed op keeps its §4 value-model WRAP (the truncation below), not a trap.
       ## e3 (in parts): `/ %` read sema's record of the operator. `+ - *` ask it first too and fall back
       ## to the transitional shape test only where the record is `VsNotInt` (#943); nothing else asks.
-      dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(e, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { lower_layout::ir_arith_signed_or(e, l, r, cx.src, shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx)) } else { false }
+      dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(e, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { lower_layout::ir_arith_signed_or(e, shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx)) } else { false }
       ## docs/ir.md §3.8.5 — the census row for this division's signedness (no-op unless fd 97 is open).
       if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
       mut ovf_narrow := false

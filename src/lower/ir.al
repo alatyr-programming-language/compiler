@@ -339,7 +339,7 @@ ir_emit_div_guard := fn(rok : usize, rov : i64, signed : bool) {
 ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx), unch : bool) -> IROperand {
   ## e3 (in parts): `/ %` read sema's record of the operator; `+ - *` now ask it first and keep the
   ## shape verdict only where the record is `VsNotInt` (#943).
-  dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { lower_layout::ir_arith_signed_or(be, l, r, cx.src, shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx)) } else { false }
+  dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { lower_layout::ir_arith_signed_or(be, shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx)) } else { false }
   ## docs/ir.md §3.8.5 — the census row for this division's signedness (no-op unless fd 97 is open).
   if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
   ## The guard's signedness is `dsigned` and nothing else (spec §6.5): a subexpression spelled as a

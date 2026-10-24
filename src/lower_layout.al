@@ -36,13 +36,15 @@ pub ir_arith_signed := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : pt
 ## #964 — the twins' entry point: the same record, `VsNotInt` where no record answers instead of the e3
 ## stop (see `ir::arith_sg_soft`). The caller keeps its shape verdict there.
 pub ir_arith_sg_soft := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> ir::ValSg { ir::arith_sg_soft(be, l, r, src) }
-## #943 — the record decides `+ - *` where it answers, and `keep` (the shape verdict) survives only
-## where sema still leaves the operator untyped (`VsNotInt`). This is the twins' rule already
-## (`riscv64.al`, `wat.al`: `if vs_signed { true }; if vs_unsigned { false }`), written once so x86's
-## three guard sites cannot each invent their own. Spec §6.5: the guard follows the operand TYPE, and a
+## #943 — the record decides `+ - *` where it NAMES an integer type, and `keep` (the shape verdict)
+## survives everywhere else: a folded literal has no sign of its own (§6.5), and the ~15 shapes #943
+## lists are still untyped. Written once so x86's three guard sites cannot each invent their own. It asks
+## `ir::arith_sg_typed`, NOT `arith_sg_soft`: the soft record's literals rule answers signed for a folded
+## literal, which would take `imulq`+`jno` on `Q : u64 = 4294967295 * 4294967295` and trap a product
+## that fits `u64` exactly (measured). Spec §6.5: the guard follows the operand TYPE, and a
 ## subexpression's spelling — a negation included — is not its type.
-pub ir_arith_signed_or := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(u8), keep : bool) -> bool {
-  sg := ir::arith_sg_soft(be, l, r, src)
+pub ir_arith_signed_or := fn(be : ptr(Expr), keep : bool) -> bool {
+  sg := ir::arith_sg_typed(be)
   if ir::vs_signed(sg) { return true }
   if ir::vs_unsigned(sg) { return false }
   keep
