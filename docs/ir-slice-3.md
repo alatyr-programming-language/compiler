@@ -1004,3 +1004,40 @@ keyed by scope rather than by name — that one is a legacy deletion, the actual
 diff (legacy refuses, IR runs) without reading what each fixture asserts. Half of these fixtures are named
 `*_reject` precisely because refusing is their expected outcome. A disagreement's direction is not its
 verdict — §14, §18 and §19 again.
+
+## §26 — §25 was wrong about four of its six rows: compute the value, then read the prose
+
+§25 classified three paths as "IR accepts what must fail loud → three new wrong values". It read each
+fixture's prose and stopped there. Computing what each program **returns** inverts all three:
+
+| path | what `main` returns | correct? | manifest today (x86 legacy / twins+wasm on IR) |
+|---|---|:-:|---|
+| `packed_in_plain_struct` | `u64(g.p.b)` with `Pk(a=10, b=20, c=12)` → **20** | yes | `compile/1` / `run/20` ×3 |
+| `deep_field_agg_enum_reject` | `o.mid.c = Col.G(42)`, matched back → **42** | yes | `compile/1` / `run/42` ×3 |
+| `deep_field_agg_var_reject` | `o.mid.inner = Rec(12,30)`, `a + b` → **42** | yes | `compile/1` / `run/42` ×3 |
+| `reject_local_name_two_aggregate_types` | → **109** | yes | `compile/1` / `run/109` ×3 |
+| `require_unchecked` | **42** (§8.1: `unchecked` drops the predicate) | IR traps 132 | `run/42` / `run/133`,`134` ×3 |
+| `lower_bugA_neg_operand` | **25** (signed wrapping sub) | IR traps 132 | `run/25` / `run/133`,`134` ×3 |
+
+**Four of six are the flip's prize, not its blocker.** The twins and wasm are *already* on the IR for
+these and already answer correctly; `compile/1` is x86 legacy refusing because its own write/read layouts
+disagree (lower.al:20118 and its neighbours). So flipping x86 to the IR fixes four paths, and the three
+`build_reject_has` assertions at e2e.sh:5918 and its siblings are the stale half — they encode "x86 must
+refuse", which was true of x86's lowering, not of the construct. This is #980's shape again, which is what
+was said earlier in this session before §25 "corrected" it the wrong way.
+
+**Two are real, and they are live today.** `require_unchecked` and `lower_bugA_neg_operand` trap on
+aarch64, riscv64 **and wasm right now** — `run/133`/`run/134` where x86 answers 42 and 25. They are not
+flip-preparation; they are current over-traps on three backends, six counter rows. Fixing them is the cut
+that pays before any flip: an over-trap is a program the spec calls valid that three backends refuse to
+run.
+
+**The method lesson, stated once more because it is the fifth time on this branch:** a fixture's prose
+describes the defect the fixture was written *against*, which is not necessarily the defect that exists
+now. §25's error was inferring a verdict from prose plus the direction of a diff. The value the program
+returns is the oracle; compute it first.
+
+**What was almost shipped:** PR #1008 added a builder refusal for packed-field-in-plain-struct, which
+would have moved three rows `run/20` → `compile/1` — three backends refusing a program they run
+correctly, and the counter improving by deleting working behaviour. Closed before merge; §18 and §19 are
+the same mistake wearing different numbers.
