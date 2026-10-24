@@ -1002,24 +1002,10 @@ rv_ret_enum_sret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n :
   if w > 8 { return w }
   0
 }
-rv_field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, fs : usize, fl : usize, a : rt::Arena) -> bool {
-  di := struct_decl_of(decls, src, s, n)
-  if di < 0 { return false }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
-  mut f := d.fields_head
-  mut r := false
-  loop {
-    match f {
-      Some(fq) => {
-        fd := deref(fld_p(fq))
-        if streq(src, fd.ns, fd.nl, fs, fl) and field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) == 1 { r = true }
-        f = fd.next
-      }
-      None => { break }
-    }
-  }
-  r
-}
+## The decision lives in ONE place, `lower_layout::field_is_scalar`; this is an alias, not a copy
+## (#1027, criterion 2). Its body and `a64_field_is_scalar`'s were compared over their full 18 lines
+## and differed by nothing once the `rv_`/`a64_` prefix was normalized, so no emitted byte moves.
+rv_field_is_scalar := lower_layout::field_is_scalar
 
 ## STANDARD BYTE-LAYOUT PLACE RESOLUTION (CLAYOUT S3a). A standard-byte struct local remains an
 ## inline frame value on RV64; only the FIELD offsets change from words to bytes. Keep this tier narrow:
