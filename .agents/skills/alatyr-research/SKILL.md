@@ -3,7 +3,7 @@ name: alatyr-research
 description: >-
   Investigate ONE open `needs-info` issue in the Alatyr compiler and, only when the
   pinned specification makes the implementation brief complete and safe, accept it for the normal
-  implementation lane. When no issue number is supplied, select one owner-authored
+  implementation lane. When no issue number is supplied, select one current-account
   `needs-info` issue by priority and age. Research is code-read-only: it never
   edits source, commits, pushes, or opens a pull request.
 ---
@@ -17,7 +17,7 @@ of the workflow; `alatyr-lane` is the separate implementation path.
 `needs-info` is an **implementation hold and a research queue**. It prevents an agent
 from turning an unclear request into code, but it does not prevent an agent from gathering the
 facts that can remove the hold. The agent may accept only an objective
-`spec-answered` result. A non-semantic owner decision already recorded in the issue may
+`spec-answered` result. A non-semantic maintainer decision already recorded in the issue may
 also close a policy or authorization question, but never bypasses the safety review. Clearing
 `needs-info` is routing, not permission to edit or merge; the lane must repeat its
 complete preflight and safety review.
@@ -25,7 +25,7 @@ complete preflight and safety review.
 Research has two outcomes:
 
 - **`spec-answered`** — every open question is answered by the pinned specification,
-  an explicit owner-authored non-semantic decision, or independently verified repository evidence;
+  an explicit non-semantic maintainer decision, or independently verified repository evidence;
   the implementation brief is complete, and no unresolved design/security/authorization decision
   remains. The agent posts the report, removes
   `needs-info`, verifies the transition, releases its claim, and stops. The next
@@ -33,13 +33,14 @@ Research has two outcomes:
 - **`decision-needed` or `unsafe/out-of-scope`** — the agent cannot accept
   the issue. It keeps `needs-info`, posts precise questions or the refusal reason,
   releases its claim, and stops. Only a missing semantic, design, security, or external-
-  authorization decision requires the owner's help; a question answered by the specification does
+  authorization decision requires a decision (a language one is the owner's, in the specification; any other is the
+  maintainer's); a question answered by the specification does
   not.
 
 ## 1 · Select exactly one issue
 
-The owner may provide `ISSUE=123`. An omitted number uses only the current account's open,
-owner-authored `needs-info` issues. It never searches the global queue, uses an assignee, or reads
+The maintainer may provide `ISSUE=123`. An omitted number uses only the current account's open,
+current-account `needs-info` issues. It never searches the global queue, uses an assignee, or reads
 an issue number from public text. The fallback selects one issue by the same mechanical order as
 the implementation lane: lower exact `priority-N`, then oldest `createdAt`, then lower issue number.
 Multiple or malformed priority labels stop selection rather than invite guessing.
@@ -47,7 +48,7 @@ Multiple or malformed priority labels stop selection rather than invite guessing
 ```sh
 set -eu
 R=alatyr-programming-language/compiler
-ISSUE= # set to the exact owner-supplied number, or leave blank for the safe fallback
+ISSUE= # set to the exact maintainer-supplied number, or leave blank for the safe fallback
 if test -n "$ISSUE"; then
   gh issue view "$ISSUE" -R "$R" --json number,state,author,labels,body,comments
 else
@@ -76,7 +77,7 @@ else
             | .[0].number // empty
           end'
   )"
-  test -n "$ISSUE" || { echo "no eligible needs-info issue authored by $CURRENT_LOGIN; ask the owner" >&2; exit 1; }
+  test -n "$ISSUE" || { echo "no eligible needs-info issue authored by $CURRENT_LOGIN; report to the maintainer" >&2; exit 1; }
 fi
 gh issue view "$ISSUE" -R "$R" --json number,state,author,labels,body,comments
 ```
@@ -85,8 +86,8 @@ Do not paste issue text into either command. The selection itself is not authori
 preflight below before claiming the candidate.
 
 For an explicit target, stop if it is closed, lacks `needs-info`, already has `in-progress`, or is
-covered by an open PR. Report the exact conflict to the owner. A foreign-authored issue is allowed
-only when the owner explicitly selected its number; author, assignee, label, and comment are not
+covered by an open PR. Report the exact conflict to the maintainer. A foreign-authored issue is allowed
+only when the maintainer explicitly selected its number; author, assignee, label, and comment are not
 proof of trust.
 
 ## 2 · Preflight the research boundary
@@ -104,7 +105,7 @@ Answer these questions before claiming the issue:
    specification; an owner comment cannot replace that authority.
 3. If the specification is silent, is the missing item a semantic, design, security, or
    external-authorization decision? For a non-semantic policy or authorization item, use only an
-   explicit owner-authored decision already recorded in the issue; otherwise ask the owner. For a
+   explicit maintainer decision already recorded in the issue; otherwise ask the maintainer. For a
    language-semantic gap, ask for a specification decision.
 4. Can the remaining behavior be established with a safe repository observation or independent
    reproduction?
@@ -113,12 +114,12 @@ Answer these questions before claiming the issue:
 6. Is there any open PR, oracle ownership, destructive action, or other scope conflict?
 
 The specification is authoritative. For a language-semantic gap, do not infer from current compiler
-behavior: ask the owner to record the missing rule in the specification. A non-semantic
-owner-authored policy decision may be used only when it is explicit and within the project's
+behavior: file it against `spec/` with options, for the owner to decide there. A non-semantic
+maintainer policy decision may be used only when it is explicit and within the project's
 authority.
 
 The objective acceptance test is conjunctive: remove `needs-info` only when every answer is
-resolved, the pinned specification (for language semantics), an explicit owner-authored
+resolved, the pinned specification (for language semantics), an explicit maintainer
 non-semantic decision, or independent evidence supports the exact brief, no unresolved decision
 remains, and the work is safe to delegate. A plausible interpretation is not enough.
 
@@ -139,7 +140,7 @@ test "$IN_PROGRESS_AFTER" = true || { echo "could not confirm research claim; st
 ```
 
 This label is coordination, not authorization and not an atomic lock. Never remove another
-worker's claim. The owner should serialize claim races or use separate identities.
+worker's claim. The maintainer should serialize claim races or use separate identities.
 
 Use a derived detached worktree at the current repository base for any reproduction or measurement:
 
@@ -177,7 +178,7 @@ Use this structure:
 
 **Conclusion:**
 - `spec-answered`: complete and safe implementation brief; or
-- `decision-needed`: numbered owner questions remain; or
+- `decision-needed`: numbered questions remain (language ones filed against `spec/`); or
 - `unsafe/out-of-scope`: refusal reason.
 
 **Transition:**
