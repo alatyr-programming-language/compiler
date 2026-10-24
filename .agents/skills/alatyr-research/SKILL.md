@@ -33,9 +33,8 @@ Research has two outcomes:
 - **`decision-needed` or `unsafe/out-of-scope`** — the agent cannot accept
   the issue. It keeps `needs-info`, posts precise questions or the refusal reason,
   releases its claim, and stops. Only a missing semantic, design, security, or external-
-  authorization decision requires a decision (a language one is the owner's, in the specification; any other is the
-  maintainer's); a question answered by the specification does
-  not.
+  authorization decision needs someone to decide: a language one is the owner's, filed against
+  `spec/`; any other is the maintainer's. A question answered by the specification does not.
 
 ## 1 · Select exactly one issue
 
