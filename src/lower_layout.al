@@ -5036,6 +5036,50 @@ pub enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   res
 }
 
+## The discriminant of the SUCCESS variant of a tryable enum span `[s,n)` for the `?` operator
+## (Control-Flow §8.2 — success is `Some` (Option) / `Ok` (Result); failure `None`/`Err` early-returns
+## the enclosing fn). The SHIPPED stdlib Option is `enum { None, Some(T) }` (Some = variant 1) while the
+## compiler-INTERNAL Option (ast.al) is `enum { Some(T), None }` (Some = variant 0), and Result is
+## `enum { Ok(T), Err(E) }` (Ok = variant 0) in BOTH — so `?` MUST resolve the success discriminant by
+## variant NAME, never assume variant 0. (Assuming 0 mis-tested a stdlib `Some(x)` as failure and
+## propagated the whole enum verbatim, so a later `Option.Some(<expr>)` in the same fn was discarded.)
+## Returns 0 when the type is unresolved or is neither Some- nor Ok-bearing — and the self-host source's
+## Option is Some=0 / Result is Ok=0, so every `?` in src/ resolves to 0 and the self-build stays
+## byte-identical / fixpoint-neutral.
+##
+## ONE copy (#683, criterion 2). It lived twice: `lower.al` (x86_64) and `wat_try_success_disc` in
+## `wat.al`, 23 lines each, byte-identical apart from the function name. Identical text in two modules is
+## not proof of one decision — the old x86 copy resolved `base_type_name` to `lower.al`'s own `CSpan`
+## version while wasm's resolved to this module's `LSpan` one — so the copies were checked callee by
+## callee, not by diff: both versions scan for `(` and return the span up to it, both carry `.s`/`.n`,
+## and only those two fields are read here, so the two copies computed the same number by the same route.
+## `enum_decl_of`, `fld_p`, `str_at` and `decl_at` all resolve to the same definitions from either side
+## (`enum_decl_of` is defined HERE), which is why this module, not `lower.al`, is where it belongs: the
+## wasm copy already reached every callee through it.
+pub try_success_disc := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> i64 {
+  ebn := base_type_name(src, s, n)
+  di := enum_decl_of(decls, src, ebn.s, ebn.n)
+  if di < 0 { return 0 }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  mut f := d.fields_head
+  mut idx := 0
+  mut res := 0
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        nm := str_at((src + fd.ns), fd.nl)
+        if nm == "Some" { res = idx }
+        if nm == "Ok" { res = idx }
+        idx += 1
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  res
+}
+
 ## Module-exact enum lookup for a qualified generic TYPE ARGUMENT. This is intentionally separate
 ## from the legacy tail-only `enum_decl_of`: changing every qualified annotation in the self-host
 ## tree is a broader namespace migration. The generic substitution path calls this helper only for

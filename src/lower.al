@@ -10251,7 +10251,7 @@ emit_try_check := fn(inner : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
   ## SUCCESS = the operand enum's Some/Ok variant, NOT positionally variant 0 (a stdlib Option is
   ## `{None, Some}` → Some = 1). Resolve it from the operand's type; unresolved folds to 0.
   tsp := try_operand_ty_span(inner, cx, a)
-  sdisc := try_success_disc(cx.decls, cx.src, tsp.s, tsp.n, a)
+  sdisc := lower_layout::try_success_disc(cx.decls, cx.src, tsp.s, tsp.n, a)
   lok := nl
   nl += 1
   push_str(sb, "  cmpq $")
@@ -10983,39 +10983,11 @@ call_ret_ty_span := fn(recv : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
   }
 }
 
-## The discriminant of the SUCCESS variant of a tryable enum span `[s,n)` for the `?` operator
-## (Control-Flow §8.2 — success is `Some` (Option) / `Ok` (Result); failure `None`/`Err` early-returns
-## the enclosing fn). The SHIPPED stdlib Option is `enum { None, Some(T) }` (Some = variant 1) while the
-## compiler-INTERNAL Option (ast.al) is `enum { Some(T), None }` (Some = variant 0), and Result is
-## `enum { Ok(T), Err(E) }` (Ok = variant 0) in BOTH — so `?` MUST resolve the success discriminant by
-## variant NAME, never assume variant 0. (Assuming 0 mis-tested a stdlib `Some(x)` as failure and
-## propagated the whole enum verbatim, so a later `Option.Some(<expr>)` in the same fn was discarded.)
-## Returns 0 when the type is unresolved or is neither Some- nor Ok-bearing (the toy default — and the
-## self-host source's Option is Some=0 / Result is Ok=0, so every `?` in src/ resolves to 0 → the
-## self-build stays byte-identical / fixpoint-neutral).
-try_success_disc := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> i64 {
-  ebn := base_type_name(src, s, n)
-  di := enum_decl_of(decls, src, ebn.s, ebn.n)
-  if di < 0 { return 0 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
-  mut f := d.fields_head
-  mut idx := 0
-  mut res := 0
-  loop {
-    match f {
-      Some(fq) => {
-        fd := deref(fld_p(fq))
-        nm := str_at((src + fd.ns), fd.nl)
-        if nm == "Some" { res = idx }
-        if nm == "Ok" { res = idx }
-        idx += 1
-        f = fd.next
-      }
-      None => { break }
-    }
-  }
-  res
-}
+## `try_success_disc` moved to `lower_layout::try_success_disc` (#683, criterion 2), together with the
+## note above it that documents it: it was duplicated byte-for-byte by `wat.al` as
+## `wat_try_success_disc`, and `lower_layout` is where its callees (`enum_decl_of`, the span helpers)
+## already live — the wasm copy already reached every one of them through that module. The x86_64 call
+## site in `emit_gas` now calls the shared one.
 
 ## The tryable ENUM type span of a `?` operand `inner` — a call's declared return type
 ## (`call_ret_ty_span`), or, for `?` on an enum LOCAL, that local's declared type span. Feeds
