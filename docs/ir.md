@@ -166,11 +166,15 @@ The non-TRAP classes, by cause:
   compile them. A located refusal is a semantic decision too, and it lives in one emitter. #1018 moved 55
   of those rows out of the class: once x86_64 abstains and a twin becomes the reference, a row no longer
   blames a twin for x86_64's abstention. Measured, not carried over — the SAME committed oracle manifest
-  classified by the pre-#1018 script (`ee751e2`) and by today's, since #1018 changed the classifier and not
-  the emission: ACCEPTS **234 rows / 84 paths** before, **179 / 64** after. Of the 55 that left,
-  **13 became TRAP** (2198 → 2211), **1 became WRONG-VALUE** (`naked_a64`, riscv64 `V40` against the
+  classified by the pre-#1018 script (blob `78486d9b`, the revision at `7aae8b3^`) and by today's (blob
+  `e091adb2`), since #1018 changed the classifier and not the emission: ACCEPTS **234 rows / 84 paths**
+  before, **179 / 64** after. Of the 55 that left,
+  **13 became TRAP** (TRAP rows 2195 → 2208), **1 became WRONG-VALUE** (`naked_a64`, riscv64 `V40` against the
   aarch64 `V42`), **5 became ASSEMBLE** (44 → 49) and **36 dropped out** because the twins agree with the
-  new reference. Separately, the **20 `REFUSED:x86_64` rows sit on 10 paths** and are new rows: x86_64 had
+  new reference. Both columns are read off today's oracle (`0dba07d1`); the +13 is the same 13 rows under
+  either oracle, and the totals sit 3 below the 2198 → 2211 this paragraph first recorded because #943 took
+  `lower_bugA_neg_operand` out of TRAP on all three twins after it was written. Separately, the
+  **20 `REFUSED:x86_64` rows sit on 10 paths** and are new rows: x86_64 had
   never been judged before, so none of them is a reclassified ACCEPTS row — though all **10 paths** that
   carry one were ACCEPTS before. Each is an over-refusal the twins outvoted, which is the shape worth
   fixing.
