@@ -264,6 +264,18 @@ obs_gas() { # rel id backend emit as ld runner
   record "$backend" "$rel" run "$?" "$d/r.out" "$d/r.err"
 }
 
+## wasm's instantiate failure, told from a program that ran. wasmtime reports a module it could not
+## instantiate as `Error: failed to run main module …` / `Caused by: 0: failed to instantiate "…"` /
+## `1: unknown import: \`env::sym\` has not been defined`, and exits 1 WITHOUT ever reaching `_start`; a
+## program that traps prints `wasm trap` and exits 134, and a program that returns 1 leaves stderr to its
+## own output. Those three are different facts and the manifest must not write them with one word, so the
+## test is wasmtime's own wording and nothing else. The residual risk is a guest that prints this exact
+## phrasing and exits nonzero — it would be filed under `link` while it ran; the stderr hash still records
+## it, so the row would move and be seen rather than silently agree.
+wasm_link_failed() { # stderr-file
+  grep -qE 'failed to instantiate|unknown import:' "$1"
+}
+
 obs_wasm() { # rel id
   local rel="$1" id="$2" d="$WORK/wasm/$2"
   mkdir -p "$d"
@@ -277,7 +289,19 @@ obs_wasm() { # rel id
   ## program while still passing a "the backend reached phase run" check. Disabling the cache also
   ## removes a directory two lanes would otherwise share.
   run_prog "$d/r.out" "$d/r.err" "$WASMTIME" -C cache=n "$d/prog.wasm"
-  record wasm "$rel" run "$?" "$d/r.out" "$d/r.err"
+  local rrc=$?
+  ## A wasmtime exit that comes from a module which never INSTANTIATED is not a program answer. wasm has
+  ## no `link` step of its own — the twins get theirs from `ld` — so instantiate IS wasm's link, and a
+  ## refusal there belongs in the `link` phase the vocabulary already carries for the other backends.
+  ## Recorded as `run` instead, an unresolved `@extern` import (Modules §7.2) reads as "wasm ran and
+  ## quietly returned 1 where x86_64 returned 42": a silent wrong value that never happened. Measured on
+  ## the committed manifest, 34 of the 37 wasm `run` rows at exit 1 are this, and they are the whole of
+  ## the cross-backend quiet-disagreement set outside the four hardware-defined `unchecked` divisions.
+  if [ "$rrc" != 0 ] && wasm_link_failed "$d/r.err"; then
+    record wasm "$rel" link "$rrc" "$d/r.out" "$d/r.err"
+    return
+  fi
+  record wasm "$rel" run "$rrc" "$d/r.out" "$d/r.err"
 }
 
 ## One unit of parallel work: all four backends for one source, in the fixed backend order, into one
@@ -1679,6 +1703,29 @@ fi
 [ "$(cat "$CM_BST/checks")" -ge "$CM_BODY_SELFTEST_EXPECTED" ] || {
   echo "corpus manifest: body-shape self-test recorded $(cat "$CM_BST/checks") checks, expected at least $CM_BODY_SELFTEST_EXPECTED" >&2; exit 2; }
 [ "$CM_BST_RC" = 0 ] || exit 2
+## Planted self-test for wasm's phase fidelity (#683's oracle half): the three terminal facts a wasm
+## program can end on must not collapse into one word. Each is planted as the stderr a real wasmtime
+## produces, measured against the wording quoted in `wasm_link_failed`'s comment.
+wasm_phase_selftest() {
+  local d rc=0
+  d="$(mktemp -d "${TMPDIR:-/tmp}/corpus-wasm-phase.XXXXXX")" || return 2
+  printf '%s\n' "Error: failed to run main module \`prog.wasm\`" "" "Caused by:" \
+    '    0: failed to instantiate "prog.wasm"' \
+    '    1: unknown import: `env::shared_impl` has not been defined' > "$d/instantiate.err"
+  printf '%s\n' "Error: failed to run main module \`prog.wasm\`" "" "Caused by:" \
+    "    0: wasm trap: unreachable" > "$d/trap.err"
+  : > "$d/ran.err"
+  wasm_link_failed "$d/instantiate.err"; rc=$?
+  [ "$rc" = 0 ] || { echo "corpus manifest: wasm-phase self-test FAILED — an unresolved @extern import was NOT recognised as a link failure, so it would be recorded as a run that never happened" >&2; rm -rf "$d"; return 1; }
+  wasm_link_failed "$d/trap.err"; rc=$?
+  [ "$rc" != 0 ] || { echo "corpus manifest: wasm-phase self-test FAILED — a program that TRAPPED (exit 134) would be refiled as a link failure, hiding a real run" >&2; rm -rf "$d"; return 1; }
+  wasm_link_failed "$d/ran.err"; rc=$?
+  [ "$rc" != 0 ] || { echo "corpus manifest: wasm-phase self-test FAILED — a program that ran and returned 1 would be refiled as a link failure" >&2; rm -rf "$d"; return 1; }
+  rm -rf "$d"
+  echo "corpus manifest: wasm-phase self-test ok (an uninstantiated module is recorded as link; a trap and a real exit-1 run stay run)"
+  return 0
+}
+wasm_phase_selftest || exit 2
 run_delta_selftest || exit 2
 
 frame_perturbation_selftest || exit 2
