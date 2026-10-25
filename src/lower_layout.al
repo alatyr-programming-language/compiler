@@ -5486,6 +5486,136 @@ pub base_type_name := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
   LSpan(s = s, n = n)
 }
 
+## Resolve a comptime-for RANGE BOUND to its constant value: a literal, a module-level const `N := k`
+## resolved by name (comptime_for_range's `0..N`), or CONST ARITHMETIC over either (`N - 1`, `2 + 2`,
+## `0 - 2`, `N * 2`). Mirrors the x86 lower's `global_init_value` fold set (`+ - * / %`), because the
+## bound is a COMPTIME value and Comptime §8.3 emits the body once per element of the half-open
+## `lo .. hi` (Control Flow §5.4/§6): the element count is a property of the SOURCE, not of the
+## selected backend, so all four surfaces MUST agree on it. Until #672 the `Bin` form was absorbed and
+## the function's initial `mut r := 0` was returned as if it were the bound: `comptime for i in
+## 0 .. N - 1` with `N := 5` ran FOUR times on x86_64 and ZERO times on aarch64, riscv64 and wasm,
+## with a clean compile, exit 0 and no diagnostic on any of them.
+## ONE DECISION, IN ONE PLACE (#1054). This used to be `a64_comp_range_bound` / `rv_comp_range_bound`
+## / `wat_comp_range_bound`, three ~106-line copies whose code differed ONLY in the active generic
+## substitution table they handed to `typeinfo_arg_span` — 320 duplicated lines, the largest family in
+## `scripts/copy_lift.py`'s census. The substitution table is backend STATE supplied as ordinary scalar
+## arguments (the same shape `param_ann_unsigned_inst` at :3238 already takes), so the fold itself is
+## backend-independent and moves whole; each emitter now keeps a one-line wrapper naming its own table.
+## `base_type_name` resolves here to this file's `LSpan` version (:5480) rather than `lower.al`'s
+## `CSpan` version (lower.al:26802): the two scan for the same `(` and return the same `{s, n}`, only
+## the struct differs, and the fixpoint gate proves the emitted bytes did not move.
+## A ZERO divisor is NOT folded — it declines, leaving today's value — because x86's
+## `unchecked (lv / rv)` SIGFPEs the compiler on that operand and propagating a crash to three more
+## surfaces is a different repair (Comptime §2.6 wants a located diagnostic there, on all four).
+## Independent guard-then-act `if`s, matching `lower/ctfold::ct_bound_fold`: a nested `if…else`
+## inside an `if`-then is not a lowerable shape under the self-host lower.
+pub comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize) -> i64 {
+  mut r := 0
+  match deref(e) {
+    Expr::Num(x, s, n) => { r = i64(x) }
+    Expr::BoolLit(x) => { r = i64(x) }
+    Expr::Var(vs, vn) => {
+      cnt := rt::vec_len(deref(decls))
+      mut i : usize = 0
+      while i < cnt {
+        d := deref(decl_get(decls, i))
+        if d.kind == 0 and d.is_fn == false and streq(src, d.name_start, d.name_len, vs, vn) {
+          if unchecked bitcast(usize, d.value) != 0 { r = ex_value_init(d.value, decls, src) }
+        }
+        i = i + 1
+      }
+    }
+    ## GENERICS (§8): `typeinfo(X).n` / `typeinfo(X).fields.len` / `typeinfo(X).variants.len` — the
+    ## comptime MEMBER COUNT of the explicit X type argument, not automatically the current monomorph
+    ## instance. STRUCT → field count, ENUM → variant count, TUPLE → component count, ARRAY → length N.
+    Expr::Field(b, fs, fl) => {
+      fnm := str_at((src + fs), fl)
+      rt := typeinfo_arg_span(src, fs, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
+      if (fnm == "n" or fnm == "len") and rt.n != 0 {
+        itb := base_type_name(src, rt.s, rt.n)
+        sd := struct_decl_of(decls, src, itb.s, itb.n)
+        ed := enum_decl_of(decls, src, itb.s, itb.n)
+        if sd >= 0 {
+          sdd := deref(decl_get(decls, usize(sd)))
+          mut fc := 0
+          mut f := sdd.fields_head
+          loop { match f { Some(fq) => { fc = fc + 1 ; f = deref(fld_p(fq)).next }; None => { break } } }
+          r = i64(fc)
+        } else if ed >= 0 {
+          edd := deref(decl_get(decls, usize(ed)))
+          mut vc := 0
+          mut vf := edd.fields_head
+          loop { match vf { Some(vfq) => { vc = vc + 1 ; vf = deref(fld_p(vfq)).next }; None => { break } } }
+          r = i64(vc)
+        } else if str_at((src + rt.s), 1) == "(" {
+          ## TUPLE component count = top-level commas + 1. Scanned inline over the `(…)` source span (NOT
+          ## via `typearg_at`, whose LSpan return is truncated in the a64 emit context it was written for — a seed landmine).
+          mut tdepth := 0
+          mut tcnt := 1
+          mut tp := rt.s + 1
+          mut tgo := true
+          while tgo {
+            tc := str_at((src + tp), 1)
+            if tc == ")" and tdepth == 0 { tgo = false }
+            else {
+              if tc == "(" or tc == "[" { tdepth = tdepth + 1 }
+              else if (tc == ")" or tc == "]") and tdepth > 0 { tdepth = tdepth - 1 }
+              else if tc == "," and tdepth == 0 { tcnt = tcnt + 1 }
+              tp = tp + 1
+            }
+          }
+          r = i64(tcnt)
+        } else if str_at((src + rt.s), 1) == "[" {
+          ## ARRAY `[E; N]` element COUNT = the length N (the `typeinfo([E;N]).n` `comptime for` bound the
+          ## `Array(_)` eq/lt derive unrolls over). Scanned INLINE: find the top-level `;`, parse the digits.
+          mut ndep := 0
+          mut nsemi := rt.s + 1
+          mut np := rt.s + 1
+          mut ngo := true
+          while ngo {
+            nc := str_at((src + np), 1)
+            if nc == "(" or nc == "[" { ndep = ndep + 1 }
+            else if (nc == ")" or nc == "]") and ndep > 0 { ndep = ndep - 1 }
+            else if nc == ";" and ndep == 0 { nsemi = np ; ngo = false }
+            np = np + 1
+          }
+          mut nlp := nsemi + 1
+          while str_at((src + nlp), 1) == " " { nlp = nlp + 1 }
+          mut nval := 0
+          mut ndg := true
+          while ndg { nbs := bytes(str_at((src + nlp), 1)) ; nb := nbs[0] ; if nb >= 48 and nb <= 57 { nval = nval * 10 + i64(nb - 48) ; nlp = nlp + 1 } else { ndg = false } }
+          r = nval
+        }
+      }
+    }
+    ## CONST ARITHMETIC (#672): fold `+ - * / %` over already-folded operands, the same op set and the
+    ## same recursion as `global_init_value`, so `0 .. N - 1` names the same element set on every
+    ## backend. A ZERO divisor is NOT folded — it declines, leaving today's value — because x86's
+    ## `unchecked (lv / rv)` SIGFPEs the compiler on that operand and propagating a crash to three more
+    ## surfaces is a different repair (Comptime §2.6 wants a located diagnostic there, on all four).
+    ## Independent guard-then-act `if`s, matching `lower/ctfold::ct_bound_fold`: a nested `if…else`
+    ## inside an `if`-then is not a lowerable shape under the self-host lower.
+    Expr::Bin(bop, bl, brr) => {
+      lv := comp_range_bound(bl, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
+      rv := comp_range_bound(brr, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
+      mut dz := false
+      if (bop == 19 or bop == 29) and rv == 0 { dz = true }
+      if dz == false {
+        if bop == 16 { r = unchecked (lv + rv) }
+        if bop == 17 { r = unchecked (lv - rv) }
+        if bop == 18 { r = unchecked (lv * rv) }
+        if bop == 19 { r = unchecked (lv / rv) }
+        if bop == 29 { r = unchecked (lv % rv) }
+      }
+    }
+    Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf
+      | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  r
+}
+
 ## §8 `@niche` — is the type span `[s, s+n)` a NICHE-FOLDED `Option(ptr(T))`? The spec-flagship folded
 ## enum (Types §6.2/§8, Memory §4.2): `Option(T)` adds one `None` variant and folds it into the
 ## payload's null niche IFF `T` provides one; a `ptr(T)` provides the all-zero (null) pattern
