@@ -1,26 +1,30 @@
-5
+4
 # ir_diff: programs where the x86 emitter and the x86-via-IR path disagree, held so the count cannot
-# grow. Measured on a clean checkout of upstream main 950a1c41, corpus 2331 programs
-# (with-ir=638, ir-fns=1129, agree=633). Each row below is named in the gate output; four of the
-# five are ONE class, and naming it is what makes the fifth worth reading on its own.
+# grow. MEASURED on a clean checkout of upstream main fdc40f6 (the reseed + #943 revision), corpus 2332
+# programs (with-ir=639, ir-fns=1130, agree=635), Stage1 from scripts/fixpoint.sh.
 #
-# CLASS ACCEPT-WHEN-EMITTER-REFUSES (4 rows) — x86 refuses the program (build 1) and the shared-IR
-# path accepts it and runs, answering a value. A rejection the emitter enforces and the IR path does
-# not is unsoundness in the IR path: the program reaches a binary. These are not "the IR path is
-# more permissive, fine" — for reject_local_name_two_aggregate_types.al the file's own header says
-# the program is VALID per Declarations §5/§6.1 and that the other three backends answer 109, so the
-# test encodes x86's refusal as expected while the spec says the run should succeed. Either the
-# refusal is the defect and the test is a workaround, or the IR path is wrong to run it; that is a
-# decision to take in the spec, not to guess, and it is why these rows are held rather than waived.
-#   test/deep_field_agg_enum_reject.al        x86 build 1   x86-ir run 42
-#   test/deep_field_agg_var_reject.al         x86 build 1   x86-ir run 42
-#   test/packed_in_plain_struct.al            x86 build 1   x86-ir run 20
-#   test/reject_local_name_two_aggregate_types.al  x86 build 1   x86-ir run 109
+# It was 5 and it is 4 because #943 landed: `lower_bugA_neg_operand.al` — where legacy x86 answered 25
+# while the file declares TRAP per spec §6.5 and owner decision A, and all four other paths trapped — now
+# emits `jnc` and traps on both paths. That was the one silently-wrong value in the set, and it was in
+# the path that ships by default. Its row left by being FIXED, which is the only way a row leaves here.
 #
-# WRONG EXIT CODE (1 row) — both paths build and run, and answer differently: 25 against 132. This
-# is a value the program gets wrong on one of the two paths, and the file names the mechanism (a
-# negated operand), the same family as the `neg` mnemonic that exists on x86_64 and i386 alone.
-#   test/lower_bugA_neg_operand.al            x86 run 25    x86-ir run 132
+# The four that remain are ONE class, and the spec already decides them — x86 is the ONLY path that
+# refuses, while x86-ir, aarch64, riscv64 and wasm agree on the value read off the source:
+#   STOPGAP-IR-RUNS (3) — the file documents its own refusal ("refuse rather than emit a silent
+#   word-0-only store"), and the IR path does not need the stopgap because it lowers the shape correctly:
+#     test/deep_field_agg_enum_reject.al        x86 build 1   x86-ir run 42
+#     test/deep_field_agg_var_reject.al         x86 build 1   x86-ir run 42
+#     test/packed_in_plain_struct.al            x86 build 1   x86-ir run 20
+#   These are stopgaps in the legacy emitter, which §7.2 moves into the builder or sema at slice 9 when
+#   the legacy emitter goes. Nothing to decide, nothing to guess: corroboration.sh shows four backends
+#   agreeing on the value.
+#   UNEXPLAINED (1) — `test/reject_local_name_two_aggregate_types.al` (x86 build 1, x86-ir run 109)
+#   carries no machine-readable declaration in its header, so `oracle` cannot attribute it even though its
+#   prose cites Declarations §5/§6.1 and the other three backends answer 109. It is NOT an open language
+#   question — spec/spec/40-declarations.md allows shadowing across scopes and rejects only same-scope
+#   redeclaration, so the program is VALID and x86's refusal is the defect (its slot map keys a frame
+#   slot by NAME for the whole function, §2.4 row 6). Closing it is two ordered steps: make x86's slot
+#   map per-binding like collect_slots, then reclassify the fixture from reject_* to accept — the second
+#   before the first would turn the gate red, since reject_* is the corpus manifest's "must refuse" class.
 #
-# Lowering the number means fixing a row, not editing this file: a row leaves by being fixed, and
-# the class it belonged to should be gone with it.
+# Lowering the number means fixing a row, not editing this file.
