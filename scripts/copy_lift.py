@@ -250,6 +250,42 @@ def self_test():
     return 0 if bad == 0 else 1
 
 
+def gate(root, baseline_path):
+    """Hold the LIFTABLE count: once a family CAN be deleted, leaving it in place is a finding the gate
+    refuses. BLOCKED families are reported but never fail — they name what the next slice must move.
+    rc: 0 held, 1 grew, 2 unusable (no baseline, no parse, or a baseline that names no ceiling)."""
+    liftable, blocked, ok = classify(root, FAMILIES)
+    if not ok:
+        print('copy lift gate: the tree did not parse — nothing is known, which is not a pass')
+        return 2
+    n = len(liftable)
+    if not os.path.isfile(baseline_path):
+        print('copy lift gate: FAIL — no baseline at %s. Record it with:' % baseline_path)
+        print("  printf 'liftable=%%d\\n' %d > %s" % (n, baseline_path))
+        print('  after lifting every family it reports, or set it to what is explained.')
+        return 2
+    base = None
+    for ln in io.open(baseline_path, encoding='utf-8'):
+        if ln.startswith('liftable='):
+            base = ln.strip()[len('liftable='):].strip()
+    if base is None or not base.isdigit():
+        print('copy lift gate: FAIL — baseline holds no numeric `liftable=` ceiling (%s)' % baseline_path)
+        return 2
+    print('copy lift gate: liftable=%d baseline %s blocked=%d' % (n, base, len(blocked)))
+    for fam, lines in sorted(liftable):
+        print('  LIFTABLE %-26s %4d lines  — identical x3, closure free of backend state: DELETE IT' % (fam, lines))
+    if n > int(base):
+        print('copy lift gate: FAIL — %d families can be deleted and were not (baseline %s). Each one is a'
+              % (n, base))
+        print('  decision still made four times; lifting it is a byte-neutral refactor, and raising this')
+        print('  ceiling would be recording the duplication as acceptable.')
+        return 1
+    print('  blocked (each names what the next slice must move first):')
+    for fam in sorted(blocked):
+        print('    %-26s %s' % (fam, '; '.join(blocked[fam][:3])))
+    return 0
+
+
 if __name__ == '__main__':
     args = sys.argv[1:]
     root = '.'
@@ -260,5 +296,8 @@ if __name__ == '__main__':
         args.remove('--verbose')
     if '--self-test' in args:
         sys.exit(self_test())
+    if '--gate' in args:
+        args.remove('--gate')
+        sys.exit(gate(root, os.path.join(root, 'scripts', 'copy_lift.baseline')))
     fams = args if args else FAMILIES
     sys.exit(analyse(root, fams, verbose))
