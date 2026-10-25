@@ -39,6 +39,9 @@ FAMILIES = [
     'ann_arr_words', 'local_ann_span', 'slice_elem_span', 'tyname_words',
     'emit_narrow', 'emit_narrow_trap', 'local_scan', 'inst_add',
     'comp_cond_fold', 'comp_range_bound', 'emit_{p}_match_arms', 'try_success_disc',
+    # hoisted by #1045 for two backends only — kept in the list so the census sees the third, not so it
+    # can be forgotten: see §2.4, a family is closed when the LAST private copy is gone.
+    'field_is_scalar',
 ]
 KEYWORDS = {'if', 'else', 'while', 'for', 'match', 'loop', 'return', 'break', 'continue',
             'and', 'or', 'not', 'in', 'fn', 'mut', 'pub', 'unchecked', 'bitcast', 'deref',
@@ -124,8 +127,21 @@ def classify(root, families):
                 copies[pfx] = defs[name][0]
         label = fam.replace('{p}', '*') if tmpl else fam
         if len(copies) != 3:
-            if fam in defs or any(n in defs for n in own):
-                continue          # already one shared copy — nothing to report as a defect
+            shared = fam in defs
+            if shared and copies:
+                # THE HALF-HOIST. A shared definition exists AND a backend still carries its own — which the
+                # previous condition read as "already one shared copy, nothing to report" and stayed silent
+                # about, because it tested the BACKEND-LOCAL names for presence: the very thing to report was
+                # what silenced it. `wat_field_is_scalar` is this: #1045 hoisted field_is_scalar into
+                # lower_layout and deleted the aarch64 and riscv64 copies, leaving wasm's, and the census
+                # called the family clean. "Decided once" is not true of three backends until the last copy
+                # is gone, and a criterion met twice out of three is not met.
+                blocked[label] = ['shared copy exists, but %d backend(s) still keep their own: %s'
+                                  % (len(copies), ', '.join('%s (%s:%d)' % (n, copies[n]['file'], copies[n]['start'])
+                                                          for n in sorted(copies)))]
+                continue
+            if shared:
+                continue          # fully hoisted: one shared definition, no private copies left
             blocked[label] = ['only %d of 3 copies present' % len(copies)]
             continue
         # normalise BOTH the lowercase call prefix and the uppercase global prefix: a family whose three
@@ -259,8 +275,18 @@ def self_test():
     chk('an unknown option is refused, not eaten', rc != 0 and 'unknown option' in out)
     rc, out = run(t)
     chk('a bare directory is the root, not a phantom family', 'no family' not in out and 'copy lift:' in out)
+    # The half-hoist. A shared definition plus ONE surviving private copy used to be reported as nothing at
+    # all, because the condition tested the backend-local names for presence and treated a hit as "already
+    # shared" — so the copy that was left behind was exactly what silenced the report. `wat_field_is_scalar`
+    # is that case, found in the tree and invisible to the census.
+    w('lower_layout.al', 'half := fn(x : ptr(u8)) -> bool {\n  false\n}\n')
+    w('wat.al', 'wat_half := fn(x : ptr(u8)) -> bool {\n  false\n}\n')
+    l2, b2, _ = classify(t, ['half'])
+    chk('a HALF-hoist is reported, not called clean', 'half' not in {f for f, _ in l2}
+        and b2.get('half') and 'still keep their own' in b2['half'][0]
+        and 'wat.al' in b2['half'][0])
     shutil.rmtree(t)
-    print('copy lift self-test: %d checks, %d failed' % (11, bad))
+    print('copy lift self-test: %d checks, %d failed' % (12, bad))
     return 0 if bad == 0 else 1
 
 
