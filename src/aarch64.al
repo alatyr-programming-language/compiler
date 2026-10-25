@@ -3906,25 +3906,6 @@ a64_deep_scalar_ok := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src :
 
 
 
-a64_local_ann_unsigned := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := false
-  match d {
-    Some(dq) => {
-      st := deref(stmt_p(Stmt, dq))
-      match st {
-        Stmt::Assign(ans, anl, v, nx) => { if ann_scan_unsigned(src, ans + anl) { r = true } }
-        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-      }
-    }
-    None => {}
-  }
-  r
-}
 ## `v` is the `:=` RHS of an UN-annotated local and it is an `unchecked (<inner>)` SCOPE —
 ## which changes only the VERIFICATION mode of the expression it wraps, never its TYPE, so the inner's
 ## unsignedness IS the binding's. The SHAPE GATE that keeps the peel narrow: only an `unchecked`-shaped
@@ -3999,7 +3980,7 @@ a64_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
       ## signedness question is answered from it here. Outside instance mode `A64_SUB_ITL == 0`
       ## and the call is inert, so no non-generic site changes.
       if r == false { if lower_layout::param_ann_unsigned_inst(params_head, src, s, n, a, A64_SUB_GPS, A64_SUB_GPL, A64_SUB_ITS, A64_SUB_ITL, A64_SUB_GPS2, A64_SUB_GPL2, A64_SUB_ITS2, A64_SUB_ITL2, A64_SUB_GPS3, A64_SUB_GPL3, A64_SUB_ITS3, A64_SUB_ITL3) { r = true } }
-      if a64_local_ann_unsigned(body_head, src, s, n, a) { r = true }
+      if lower_layout::local_ann_unsigned(body_head, src, s, n, a) { r = true }
       ## un-annotated `s := unchecked (<init>)` — recover the unsignedness the wrapper swallowed
       ## (mirrors the SIGNED side's `lower_layout::shift_call_signed` recovery two functions above).
       if r == false { rhs := lower_layout::local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if a64_unchecked_init_unsigned(rhs, params_head, body_head, src, a) { r = true } } }

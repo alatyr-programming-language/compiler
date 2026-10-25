@@ -2868,6 +2868,33 @@ pub local_ann_signed := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usi
   r
 }
 
+## THE UNSIGNED MIRROR OF `local_ann_signed`, and the same story: three byte-identical copies
+## (`a64_local_ann_unsigned`, `rv_local_ann_unsigned`, `wat_local_ann_unsigned`) that read no backend
+## state and call only shared primitives (`local_decl_assign`, `ann_scan_unsigned`). It is the one family
+## in docs/ir.md §2.4 that lifts today by `scripts/copy_lift.py`'s closure test — its neighbours all reach
+## a backend-local function (`*_local_arrty_span`, *_operand_unsigned`) or read the instance globals, so
+## they stay until those move. Same one-directional rule: it answers true only on a PROVEN unsigned
+## annotation, and an unrecognised statement falls through to false, the pre-existing default.
+pub local_ann_unsigned := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+  d : Option(ptr(mut Stmt)) = local_decl_assign(head, src, ns, nl)
+  mut r := false
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => { if ann_scan_unsigned(src, ans + anl) { r = true } }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
+    }
+    None => {}
+  }
+  r
+}
+
 pub local_rhs := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> ptr(Expr) {
   d : Option(ptr(mut Stmt)) = local_decl_assign(head, src, ns, nl)
   mut r := unchecked bitcast(ptr(Expr), 0)
