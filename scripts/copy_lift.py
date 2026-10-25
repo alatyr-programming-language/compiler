@@ -228,7 +228,6 @@ def self_test():
     w('lower_layout.al', 'shared_q := fn(x : ptr(u8)) -> bool {\n  false\n}\n')
     fams = ['clean', 'chain', 'glob', 'diff', 'deep', 'self', 'shared_q']
     liftable, blocked, ok = classify(t, fams)
-    shutil.rmtree(t)
     L = {f for f, _ in liftable}
     bad = 0
     def chk(name, cond):
@@ -246,7 +245,22 @@ def self_test():
     chk('a self-call is internal, not a blocker', 'self' in L)
     chk('an already-lifted family is not reported', 'shared_q' not in L and 'shared_q' not in blocked)
     chk('the run parsed something', ok)
-    print('copy lift self-test: 8 checks, %d failed' % bad)
+    # The argument trap. `copy_lift.py .` once reported "1 family, blocked: `.`" and that number reached the
+    # spec, because a positional was read as a family name and `.` is not one — the command invented a finding
+    # instead of refusing. These three checks hold the refusal, so the lie cannot come back quietly.
+    import subprocess
+    me = os.path.abspath(__file__)
+    def run(*a):
+        p = subprocess.run([sys.executable, me] + list(a), capture_output=True, text=True)
+        return p.returncode, (p.stdout + p.stderr)
+    rc, out = run('no_such_family_xyz')
+    chk('an unknown family name is refused, not answered', rc != 0 and 'no family' in out)
+    rc, out = run('--jobs', '4')
+    chk('an unknown option is refused, not eaten', rc != 0 and 'unknown option' in out)
+    rc, out = run(t)
+    chk('a bare directory is the root, not a phantom family', 'no family' not in out and 'copy lift:' in out)
+    shutil.rmtree(t)
+    print('copy lift self-test: %d checks, %d failed' % (11, bad))
     return 0 if bad == 0 else 1
 
 
@@ -289,8 +303,9 @@ def gate(root, baseline_path):
 if __name__ == '__main__':
     args = sys.argv[1:]
     root = '.'
+    root_set = False
     if '--root' in args:
-        i = args.index('--root'); root = args[i + 1]; del args[i:i + 2]
+        i = args.index('--root'); root = args[i + 1]; root_set = True; del args[i:i + 2]
     verbose = '--verbose' in args
     if verbose:
         args.remove('--verbose')
@@ -299,5 +314,23 @@ if __name__ == '__main__':
     if '--gate' in args:
         args.remove('--gate')
         sys.exit(gate(root, os.path.join(root, 'scripts', 'copy_lift.baseline')))
-    fams = args if args else FAMILIES
+    # A positional is a FAMILY NAME, not a path — which is how `copy_lift.py .` came to report one blocked
+    # family named `.` and a human to write that number into the spec: the command answered a question nobody
+    # asked, in a format that looked like an answer. So: a directory is the root, an unknown flag is an error,
+    # and a family name must be one this tool knows. A typo in a family name is not a finding about that family.
+    fams = []
+    for a in args:
+        if a.startswith('--'):
+            sys.exit('copy lift: unknown option %s — known: --root DIR, --gate, --verbose, --self-test' % a)
+        if os.path.isdir(a):
+            if root_set and root != a:
+                sys.exit('copy lift: root given twice (--root %s and %s)' % (root, a))
+            root, root_set = a, True
+            continue
+        known = [f for f in FAMILIES if f == a or ('{p}' in f and f.replace('{p}', '*') == a)]
+        if not known:
+            sys.exit('copy lift: no family %r in this tool\'s list — pass a name from FAMILIES, or nothing '
+                     'to check them all' % a)
+        fams.append(a)
+    fams = fams if fams else FAMILIES
     sys.exit(analyse(root, fams, verbose))
