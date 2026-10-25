@@ -2066,6 +2066,35 @@ pub field_words := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usiz
   if es.n != 0 { return wsize * field_words(decls, src, es.s, es.n, 1, a) }
   wsize
 }
+## Is field `[fs,fl)` of struct `[s,n)` a single-word scalar? The query that lets a scalar field of a
+## struct which ALSO has an aggregate field (`s.n` where `S = { c : Col, n : u64 }`) read at its layout
+## offset, while a non-scalar field stays unhandled. Panic-free even for a comptime-value-param type-fn
+## (`uint(N)`), unlike a fresh layout resolve.
+##
+## This was two functions, `a64_field_is_scalar` (`src/aarch64.al`) and `rv_field_is_scalar`
+## (`src/riscv64.al`), compared over their full bodies: **zero differing lines** once the `a64_`/`rv_`
+## prefixes are normalized. One copy now; each emitter keeps its local name as an alias, so no call site
+## moved and no emitted byte can differ (#1027, criterion 2). `struct_all_scalar` cannot join this file
+## for the same reason it is still duplicated: its body calls `field_type_span`, which is `pub` in
+## `lower.al`, and `lower.al` imports this module — hoisting it would make the graph circular.
+pub field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, fs : usize, fl : usize, a : rt::Arena) -> bool {
+  di := struct_decl_of(decls, src, s, n)
+  if di < 0 { return false }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  mut f := d.fields_head
+  mut r := false
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) and field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) == 1 { r = true }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  r
+}
 
 pub struct_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> usize {
   ## STRIP `(…)` type-args for the struct-decl LOOKUP so a parenthesized generic-struct instance
