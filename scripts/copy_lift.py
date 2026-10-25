@@ -26,7 +26,7 @@ usage:
 Exit code: 0 if the run completed (a BLOCKED family is a finding, not an error); 2 if it could not
 parse the tree — an instrument that reads nothing reports nothing, and silence is not a pass.
 """
-import io, os, re, sys
+import io, os, re, sys, difflib
 
 BACKENDS = {'aarch64.al': 'a64', 'riscv64.al': 'rv', 'wat.al': 'wat'}
 # Families from docs/ir.md §2.4 — the decisions named there, prefix-normalised.
@@ -107,6 +107,84 @@ def load(root):
     return defs, byfile
 
 
+def strip_comments(body):
+    """Drop `##` line comments and indentation — neither reaches the emitted output.
+
+    String literals are NOT touched, deliberately: `strip_noise` above blanks them out, and that
+    would be unsound here. Two backends whose bodies differ ONLY in a string they emit would look
+    identical, and the whole point of this test is to refuse a hoist that would change bytes. A
+    `##` inside a string is likewise not a comment, so the scan tracks quote state rather than
+    cutting at the first `##` it sees.
+    """
+    out = []
+    for line in body.splitlines():
+        kept, i, instr = [], 0, False
+        while i < len(line):
+            ch = line[i]
+            if instr:
+                if ch == '\\':
+                    i += 2
+                    continue
+                if ch == '"':
+                    instr = False
+            elif ch == '"':
+                instr = True
+            elif ch == '#' and line[i:i + 2] == '##':
+                break
+            kept.append(ch)
+            i += 1
+        if ''.join(kept).strip():
+            out.append(''.join(kept).strip())
+    return '\n'.join(out)
+
+
+def diff_detail(norm):
+    """Say WHAT differs, not just that it does.
+
+    `bodies DIFFER between backends` was true and useless: it did not tell a lane whether the
+    difference is a spelling (a register name, a comment, one extra guard) — which a hoist absorbs
+    by keeping the shared decision and parameterising the rest — or a different DECISION, which
+    needs a spec answer first. #1056 is exactly that case: `field_is_scalar` differs between wasm
+    and the twins, and it took reading both bodies to see that wasm asks `not an aggregate` where
+    the twins ask `== 1`, and that wasm's own comment calls the weaker question unsafe. No
+    instrument said it, because none was asked to.
+
+    So: compare every pair, report the CLOSEST one (where a hoist would start), how many lines
+    apart they are, and the first few differing lines verbatim. A one-line difference reads as a
+    spelling; a dozen scattered lines that change control flow reads as a decision.
+    """
+    names = sorted(norm)
+    scored = []
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            la = [l.strip() for l in norm[a].splitlines() if l.strip()]
+            lb = [l.strip() for l in norm[b].splitlines() if l.strip()]
+            only_a, only_b = [], []
+            for line in difflib.unified_diff(la, lb, lineterm='', n=0):
+                if line.startswith('---') or line.startswith('+++'):
+                    continue
+                if line.startswith('-'):
+                    only_a.append(line[1:].strip())
+                elif line.startswith('+'):
+                    only_b.append(line[1:].strip())
+            scored.append((len(only_a) + len(only_b), a, b, only_a, only_b))
+    scored.sort(key=lambda t: (t[0], t[1], t[2]))
+    scored = [s for s in scored if s[0] > 0]
+    if not scored:
+        # Every pair's code lines match, yet the raw bodies differ: the difference is in
+        # whitespace or comments that `strip_comments` kept (a string literal, most likely — it is
+        # deliberately not blanked out, because a string can reach the emitted output). Say so;
+        # "0 lines apart" on its own reads as a contradiction.
+        return 'bodies DIFFER in non-code text only (a string literal?); code lines match x3'
+    n, a, b, only_a, only_b = scored[0]
+    out = 'bodies DIFFER: closest pair %s/%s, %d line(s) apart' % (a, b, n)
+    for l in only_a[:3]:
+        out += ' | %s-only: %s' % (a, l[:90])
+    for l in only_b[:3]:
+        out += ' | %s-only: %s' % (b, l[:90])
+    return out
+
+
 def classify(root, families):
     """-> (liftable[(fam,lines)], blocked{fam:[blockers]}, ok) — the verdicts, unprefixed by printing."""
     defs, _ = load(root)
@@ -152,10 +230,10 @@ def classify(root, families):
         for p, c in copies.items():
             b = re.sub(r'\b%s_' % p, 'X_', c['body'])
             b = re.sub(r'\b%s_' % {'a64': 'A64', 'rv': 'RV', 'wat': 'WAT'}[p], 'X_', b)
-            norm[p] = b
+            norm[p] = strip_comments(b)
         vals = list(norm.values())
         if any(v != vals[0] for v in vals):
-            blocked[label] = ['bodies DIFFER between backends']
+            blocked[label] = [diff_detail(norm)]
             continue
         seen, stack, blockers = set(), [], []
         for p, c in copies.items():
@@ -242,22 +320,55 @@ def self_test():
         w(f'{f}.al', f'{pfx}_self := fn(x : ptr(u8), d : i64) -> bool {{\n  mut r := false\n  if d > 0 {{ r = {pfx}_self(x, d - 1) }}\n  r\n}}\n')
     # 7. already lifted: one shared copy, no backend copies -> not reported at all
     w('lower_layout.al', 'shared_q := fn(x : ptr(u8)) -> bool {\n  false\n}\n')
-    fams = ['clean', 'chain', 'glob', 'diff', 'deep', 'self', 'shared_q']
+    # 8. identical code, DIFFERENT comments -> LIFTABLE. A `##` comment never reaches the emitted
+    #    output, so blocking on one was a false blocker; `comp_range_bound` (320 lines) sat behind
+    #    exactly this on the real tree.
+    for pfx, f, cmt in (('a64', 'aarch64', 'x86-shaped note'), ('rv', 'riscv64', 'riscv note'),
+                        ('wat', 'wat', 'wasm note')):
+        w(f'{f}.al', f'{pfx}_cmt := fn(x : ptr(u8)) -> bool {{\n  ## {cmt}\n  true\n}}\n')
+    # 9. identical code, DIFFERENT string literal -> BLOCKED. This is the soundness half of #8:
+    #    a string CAN reach the emitted output, so the stripper must not blank strings out. If it
+    #    did, this family would read LIFTABLE and the hoist would silently change bytes.
+    for pfx, f, s in (('a64', 'aarch64', 'aarch64'), ('rv', 'riscv64', 'riscv64'),
+                      ('wat', 'wat', 'wasm')):
+        w(f'{f}.al', f'{pfx}_str := fn(x : ptr(u8)) -> ptr(u8) {{\n  "{s}"\n}}\n')
+    # 10. a `##` INSIDE a string is not a comment: the stripper tracks quote state, and if it cut
+    #     at the first `##` it saw, two different strings would compare equal.
+    w('aarch64.al', 'a64_hash := fn(x : ptr(u8)) -> ptr(u8) {\n  "a ## b"\n}\n')
+    w('riscv64.al', 'rv_hash := fn(x : ptr(u8)) -> ptr(u8) {\n  "a ## c"\n}\n')
+    w('wat.al', 'wat_hash := fn(x : ptr(u8)) -> ptr(u8) {\n  "a ## b"\n}\n')
+    fams = ['clean', 'chain', 'glob', 'diff', 'deep', 'self', 'shared_q', 'cmt', 'str', 'hash']
     liftable, blocked, ok = classify(t, fams)
     L = {f for f, _ in liftable}
     bad = 0
-    def chk(name, cond):
+    seen_n = [0]
+
+    def chk(name, cond, note=''):
         nonlocal bad
+        seen_n[0] += 1
         if cond:
             print('  ok   %s' % name)
         else:
-            print('  FAIL %s — liftable=%s blocked=%s' % (name, sorted(L), {k: v[:2] for k, v in blocked.items()}))
+            print('  FAIL %s — %s' % (name, note) if note else '  FAIL %s' % name)
+            print('       liftable=%s' % sorted(L))
+            print('       blocked=%s' % {k: v[:1] for k, v in blocked.items()})
             bad += 1
     chk('a clean identical triple is LIFTABLE', 'clean' in L)
     chk('a call to a backend-local helper BLOCKS it', blocked.get('chain') and any('chain_helper' in b or 'helper' in b for b in blocked['chain']))
     chk('a backend global read BLOCKS it', blocked.get('glob') and any('SUB_N' in b for b in blocked['glob']))
-    chk('differing bodies BLOCK it', blocked.get('diff') == ['bodies DIFFER between backends'])
+    difftxt = ' '.join(blocked.get('diff', []))
+    chk('differing bodies BLOCK it', difftxt.startswith('bodies DIFFER'))
+    chk('and SAY what differs: the closest pair', 'closest pair a64/rv' in difftxt,
+        'naming the pair is what makes the blocker actionable')
+    chk('and quote the differing line', 'rv-only: false' in difftxt,
+        'a lane must see the difference without opening three files')
     chk('the closure is transitive, not one hop', blocked.get('deep') and any('tail' in b for b in blocked['deep']))
+    chk('a comment-only difference is LIFTABLE, not a blocker', 'cmt' in L,
+        'a `##` never reaches the emitted output; blocking on it hid 320 lines on the real tree')
+    chk('a DIFFERENT STRING LITERAL still BLOCKS', 'str' in blocked and 'str' not in L,
+        'the soundness half: a string can reach the output, so the stripper must not blank strings')
+    chk('a `##` inside a string is not cut as a comment', 'hash' in blocked and 'hash' not in L,
+        'cutting at the first `##` seen would make two different strings compare equal')
     chk('a self-call is internal, not a blocker', 'self' in L)
     chk('an already-lifted family is not reported', 'shared_q' not in L and 'shared_q' not in blocked)
     chk('the run parsed something', ok)
@@ -286,7 +397,7 @@ def self_test():
         and b2.get('half') and 'still keep their own' in b2['half'][0]
         and 'wat.al' in b2['half'][0])
     shutil.rmtree(t)
-    print('copy lift self-test: %d checks, %d failed' % (12, bad))
+    print('copy lift self-test: %d checks, %d failed' % (seen_n[0], bad))
     return 0 if bad == 0 else 1
 
 
