@@ -219,7 +219,10 @@ wat_extern_symbol := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WSpan 
 ## becomes `0` on all four backends. Per `wildcard_enumeration.md` §6 that is its own issue with its
 ## own fixture, never a row inside this refactor, so nothing here changes behaviour.
 ##
-## BAND — THE SIGNEDNESS / NARROWNESS PROOF BAND (`wat_local_ann_signed` … `wat_operand_narrow`).
+## BAND — THE SIGNEDNESS PROOF BAND (`wat_local_ann_signed` … `wat_operand_unsigned`). The narrowness
+## half of this band is gone: `wat_operand_narrow` and its `wat_local_narrow` wrapper were byte-identical
+## to the aarch64 and riscv64 copies and delegated every arm to `lower_layout` already, so they are now
+## the single `lower_layout::operand_narrow` (docs/ir.md §2.4 row 1, §7.2).
 ## Every function here is a PREDICATE ("is this operand provably signed / unsigned / narrow?") or a
 ## PROJECTION of an annotation span, and every proof is ONE-DIRECTIONAL: it can move an operand OFF
 ## the conservative default, never onto it. So for each form the band does not recognise, the
@@ -582,28 +585,6 @@ wat_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : Option(ptr(mu
   if ul and ex_is_num_lit(r) { return true }
   if ur and ex_is_num_lit(l) { return true }
   false
-}
-wat_local_narrow := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> str {
-  ## The annotation's sub-word name, or an unannotated `x := xs[i]`'s element — `lower_layout` owns it.
-  lower_layout::local_narrow(head, src, ns, nl)
-}
-wat_operand_narrow := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> str {
-  mut r := ""
-  match deref(e) {
-    Expr::Var(s, n) => {
-      mut p := params_head
-      loop { match p { Some(pq) => { pm := deref(param_p(pq)) ; if streq(src, pm.ns, pm.nl, s, n) { nn := scalar_name_narrow(src, pm.ts, pm.tl) ; if nn != "" { r = nn } } ; p = pm.next }; None => { break } } }
-      if r == "" { r = wat_local_narrow(body_head, src, s, n, a) }
-    }
-    Expr::Call(cs, cl, na, ah) => { r = scalar_name_narrow(src, cs, cl) }
-    ## `xs[i]` over a local `[uN; K]`: the element's width (#683 — was the native default).
-    Expr::Index(ib, ii) => { r = lower_layout::index_read_narrow(e, body_head, src) }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
 }
 
 wat_binop := fn(op : u8, dsigned : bool) -> str {
@@ -5564,8 +5545,8 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## mask rides the plain fallback pre/post path below, NOT the checked-overflow blocks (a bit op
         ## never overflows), so the two checked blocks are gated to arith 16/17/18 only.
         if op == 16 or op == 17 or op == 18 or op == 36 {
-          nw = wat_operand_narrow(l, params_head, body_head, src, a)
-          if nw == "" { nw = wat_operand_narrow(r, params_head, body_head, src, a) }
+          nw = lower_layout::operand_narrow(l, params_head, body_head, src)
+          if nw == "" { nw = lower_layout::operand_narrow(r, params_head, body_head, src) }
         }
         ## CHECKED overflow on `+` (I11 / CG-8): WASM has no flags, so mirror num.al's comparison. Both
         ## operands are evaluated onto the VALUE STACK first, THEN captured straight-line into the scratch
@@ -5645,8 +5626,8 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## globals the checked `+`/`-`/`*` blocks above use.
         mut dvmin : i64 = 0
         if op == 19 {
-          mut dvn := wat_operand_narrow(l, params_head, body_head, src, a)
-          if dvn == "" { dvn = wat_operand_narrow(r, params_head, body_head, src, a) }
+          mut dvn := lower_layout::operand_narrow(l, params_head, body_head, src)
+          if dvn == "" { dvn = lower_layout::operand_narrow(r, params_head, body_head, src) }
           dvmin = narrow_signed_min(dvn)
         }
         if dvmin != 0 and WAT_CHK {
@@ -5743,7 +5724,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## A SUB-WORD operand bounds the count by ITS width (Concurrency §6.1) and its result is
         ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual (#683).
         mut wsnw := ""
-        if wscn == "shl" or wscn == "shr" { wsnw = wat_operand_narrow(wsv, params_head, body_head, src, a) }
+        if wscn == "shl" or wscn == "shr" { wsnw = lower_layout::operand_narrow(wsv, params_head, body_head, src) }
         wspre := wat_narrow_pre(wsnw)
         wspost := wat_narrow_post(wsnw)
         push_str(sb, wspre)

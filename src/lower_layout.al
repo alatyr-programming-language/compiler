@@ -2801,8 +2801,37 @@ pub local_narrow := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, 
   r
 }
 
+## Narrow type name of operand `e` (param `: uN`, local `: uN`, or an `uN(x)` conversion), or "".
+## THE ONE COPY. This was three byte-identical copies — `a64_operand_narrow` (src/aarch64.al),
+## `rv_operand_narrow` (src/riscv64.al), `wat_operand_narrow` (src/wat.al) — whose every arm already
+## delegated here (`local_narrow`, `index_read_narrow`, `scalar_name_narrow`) and which read no backend
+## state at all: not a `*_SUB_*` instance span, not a `*_CHK` scope, not a frame. Same signature in all
+## three, diff empty after prefix normalisation. docs/ir.md §2.4 row 1 lists it as a quadruplicated
+## decision and §7.2 defers deleting it to slice 3, but the census never needed deferring this part:
+## nothing here waits for the front half to be shared, so it goes now. The `a` arena parameter is gone
+## because no arm used it — the twins' copies carried it only to pass it to their `*_local_narrow`
+## wrapper, which forwarded it to `local_narrow`, which does not take it.
+pub operand_narrow := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8)) -> str {
+  mut r := ""
+  match deref(e) {
+    Expr::Var(s, n) => {
+      mut p := params_head
+      loop { match p { Some(pq) => { pm := deref(param_p(pq)) ; if streq(src, pm.ns, pm.nl, s, n) { nn := scalar_name_narrow(src, pm.ts, pm.tl) ; if nn != "" { r = nn } } ; p = pm.next }; None => { break } } }
+      if r == "" { r = local_narrow(body_head, src, s, n) }
+    }
+    Expr::Call(cs, cl, na, ah) => { r = scalar_name_narrow(src, cs, cl) }
+    ## `xs[i]` over a local `[uN; K]`: the element's width (#683 — was the native default).
+    Expr::Index(ib, ii) => { r = index_read_narrow(e, body_head, src) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+
 ## The bit width a shift's OPERAND bounds its count by (Concurrency §6.1: "a shift amount ≥ the
-## width" traps): 8/16/32 for the sub-word name `nw` a twin's `*_operand_narrow` answered, else 64.
+## width" traps): 8/16/32 for the sub-word name `nw` `operand_narrow` answered, else 64.
 pub shift_width_bits := fn(nw : str) -> i64 {
   w := bitcast_narrow_bytes(nw)
   if nw == "" or w == 0 { return 64 }

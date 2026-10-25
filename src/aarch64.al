@@ -4278,29 +4278,6 @@ a64_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : Option(ptr(mu
   false
 }
 
-a64_local_narrow := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> str {
-  ## The annotation's sub-word name, or an unannotated `x := xs[i]`'s element — `lower_layout` owns it.
-  lower_layout::local_narrow(head, src, ns, nl)
-}
-## Narrow type name of operand `e` (param `: uN`, local `: uN`, or an `uN(x)` conversion), or "".
-a64_operand_narrow := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> str {
-  mut r := ""
-  match deref(e) {
-    Expr::Var(s, n) => {
-      mut p := params_head
-      loop { match p { Some(pq) => { pm := deref(param_p(pq)) ; if streq(src, pm.ns, pm.nl, s, n) { nn := scalar_name_narrow(src, pm.ts, pm.tl) ; if nn != "" { r = nn } } ; p = pm.next }; None => { break } } }
-      if r == "" { r = a64_local_narrow(body_head, src, s, n, a) }
-    }
-    Expr::Call(cs, cl, na, ah) => { r = scalar_name_narrow(src, cs, cl) }
-    ## `xs[i]` over a local `[uN; K]`: the element's width (#683 — was the native default).
-    Expr::Index(ib, ii) => { r = lower_layout::index_read_narrow(e, body_head, src) }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
 
 emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out sb : rt::StrBuf) {
   ## CHECKED div-by-zero (I11 / CG-7): `sdiv`/`msub`-remainder by 0 on AArch64 returns 0 (NO hardware
@@ -5482,16 +5459,16 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## (native-width only) can be skipped for a narrow op.
         mut nw := ""
         if op == 16 or op == 17 or op == 18 {
-          nw = a64_operand_narrow(l, params_head, body_head, src, a)
-          if nw == "" { nw = a64_operand_narrow(r, params_head, body_head, src, a) }
+          nw = lower_layout::operand_narrow(l, params_head, body_head, src)
+          if nw == "" { nw = lower_layout::operand_narrow(r, params_head, body_head, src) }
         }
         ## The narrow signed DIVIDEND's own minimum for the `MIN / -1` guard (#606); 0 for a native
         ## or unsigned width, which keeps the emitter's previous native-width bytes. Kept out of
         ## `nw` above because `nw` also selects the value-model wrap, which division does not need.
         mut dvmin : i64 = 0
         if op == 19 {
-          mut dvn := a64_operand_narrow(l, params_head, body_head, src, a)
-          if dvn == "" { dvn = a64_operand_narrow(r, params_head, body_head, src, a) }
+          mut dvn := lower_layout::operand_narrow(l, params_head, body_head, src)
+          if dvn == "" { dvn = lower_layout::operand_narrow(r, params_head, body_head, src) }
           dvmin = narrow_signed_min(dvn)
         }
         emit_a64_arith(op, dsigned, (nw != "") or ex_is_zero_lit(l), dvmin, sb)
@@ -5502,8 +5479,8 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## narrow `~`/`^`: mask the xor result to the operand width (the `x^(-1)` desugar carries 64-bit
         ## ones, so a narrow `~` would otherwise keep the high bits). Same-width `^` = identity mask.
         if op == 36 {
-          mut xw := a64_operand_narrow(l, params_head, body_head, src, a)
-          if xw == "" { xw = a64_operand_narrow(r, params_head, body_head, src, a) }
+          mut xw := lower_layout::operand_narrow(l, params_head, body_head, src)
+          if xw == "" { xw = lower_layout::operand_narrow(r, params_head, body_head, src) }
           if xw != "" { a64_emit_narrow(xw, sb) }
         }
       }
@@ -5593,7 +5570,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## A SUB-WORD operand bounds the count by ITS width (Concurrency §6.1) and its result is
         ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual.
         ## Before #683 both were native here: `shl(u8(1), 8)` ran, and `unchecked shl(u8(1), 9)` kept 512.
-        snw := a64_operand_narrow(sv, params_head, body_head, src, a)
+        snw := lower_layout::operand_narrow(sv, params_head, body_head, src)
         if A64_CHK and (nm == "shl" or nm == "shr") {
           push_str(sb, "  cmp x1, #") ; push_int(sb, lower_layout::shift_width_bits(snw)) ; push_str(sb, "\n  b.lo 1f\n  brk #0 // shift_range\n1:\n")
         }
