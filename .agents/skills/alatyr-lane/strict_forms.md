@@ -29,8 +29,8 @@ issue in the marker's reason. Do not quietly route around it.
 | 2 | a kind is an enum, not an integer; flags are not packed into it | #583 (134 literal `.tag` sites), #626, `+128` mut flag | `strict_forms_check.sh` `kind-literal` |
 | 3 | decide with an exhaustive `match` on the value | #544 (249 blind wildcard arms), #716, #464 | `wildcard_arm_check.sh`; the rest by review |
 | 4 | one decision, one place | the #540 family, #539 | `idiom_gate.sh` (for the shapes it knows) |
-| 5 | width and signedness are spelled, never inferred from a form | #546, #608, #707, #764–#766 | review |
-| 6 | `unchecked` is explicit and justified; no implicit `usize` ↔ `ptr` | #529, #610 | `strict_forms_check.sh` `unchecked`, `ptrint` |
+| 5 | width and signedness are spelled, never inferred from a form | #546, #608, #707, #764–#766 | signedness: `sign_census.sh --gate` (4/0/0/0 measured on `fdc40f6`); width: review until slices 3 and 6 |
+| 6 | `unchecked` is explicit and justified; no implicit `usize` ↔ `ptr` | #529, #610 | `strict_forms_check.sh` `unchecked`, `ptrint`; the count by `ptrint_census.sh gate` (`op-cmp=0`, held only while `planted` proves the hook fires) |
 | 7 | bind a `?` before using its value | #752 | `strict_forms_check.sh` `try-inline` |
 | 8 | do not write the forms the frozen seed miscompiles | no live rows; seven retired by 0.2.5, two (#790, #791) by 0.2.7 | `seed_forms_check.sh` (the registry, `scripts/seed_forms.tsv`); a comment at every workaround |
 | 9 | an AST handle has its node's own type | #760 (12 walkers), the `usize` pass-plumbing | the checker (since #760), review; §9 has the proposal |
