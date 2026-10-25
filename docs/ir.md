@@ -309,6 +309,26 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   declarations in a comptime-for. And `a64_emit_bl_target`'s not-found fallback pushes the callee span
   VERBATIM, bypassing `ir::put_symbol_name`, where riscv64 routes the same fallback through the table:
   a #475-class hole, one line wide. Both belong in the drift column, not in a footnote.
+- **what can be deleted NOW is answered by a closure, not by reading bodies.** `scripts/copy_lift.py`
+  lifts a family only if all three copies exist, are identical after prefix normalisation (lowercase call
+  prefix AND uppercase global prefix — a family differing only in its own backend's global is one shape
+  blocked BY that global, not "bodies differ"), read no `A64_*`/`RV_*`/`WAT_*` global, and call no
+  backend-local function anywhere in its **transitive closure**. The closure is the whole point: a copy
+  that calls `a64_local_arrty_span` is two decisions, and lifting it would leave a "shared" copy answering
+  from a different place per target — the bug class this exercise removes, reintroduced by the removal.
+  Measured on this tree: **1 family liftable, 18 blocked**, each blocker named — `*_operand_unsigned` and
+  the span chain (`*_local_arrty_span`, `*_slice_elem_span`, *_ann_span`) block `index_elem_unsigned`,
+  `unchecked_init_unsigned` and `hole_index_signed`; `*_inst_add` is blocked by its own instance-table
+  globals; `local_scan` and `emit_narrow` are not even triples (wasm's differ in NAME, `local_slot_scan`,
+  `wat_narrow_pre/post`, so they are different decisions wearing a family's clothes). The one liftable
+  family, `local_ann_unsigned`, is lifted on the slice branch that carries the src change
+  (`slice/signed-band-one-copy`), not here — this branch is src-free, and a note about what is deleted
+  belongs where the deletion is. After the lift the instrument reports the family gone from its own list,
+  so the deletion is confirmed by the measurement that proposed it.
+  A first pass at this question, done by hand, called four families liftable (201 lines) because it
+  checked identity and globals but not callees; three of the four reach a backend-local function. That is
+  recorded here because it is the same failure as §3.8's dirty-tree number: a verdict taken from one
+  property of a thing, when the thing has several.
 - the selectors themselves are clean: `src/{lower,aarch64,riscv64,wat}/isel.al` contain zero `Expr::`
   and `Stmt::` references, so every shape query in this table is legacy-emitter-only — which is what
   makes slice 9's deletion the whole story rather than a partial one.
