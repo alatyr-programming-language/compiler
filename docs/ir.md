@@ -218,6 +218,44 @@ Read from the code and cross-checked against the TRAP sites above. **S** support
 | package roots via the emit verbs | S | **LINK** | **LINK** | **ASM** | |
 | `asm`, raw `jmp`/`@label`, `@abi(naked)` | S | P | P | – | a target capability by the spec, never portable |
 
+### 2.3.1 How much each backend lowers from the IR, measured
+
+§2.3 reads the **legacy** emitters. The IR path needed its own measurement, and had none: §7.2 says
+the per-target census columns "arrive with the selectors", the selectors arrived with slice 1c, and the
+columns did not. `scripts/ir_census.sh --targets` closes that — it emits every corpus program through
+each backend's own verb and counts the marker that backend's selector writes once per function it takes
+from the shared IR. Measured over the corpus of 2 331 programs, on a clean checkout of upstream
+`main` (`950a1c41`):
+
+| backend | verb | programs | with ≥1 IR fn | functions from IR | refused by the verb |
+|---|---|--:|--:|--:|--:|
+| x86_64 | `x86-ir` | 2 331 | 638 | **1 129** | 697 |
+| aarch64 | `aarch64` | 2 331 | 790 | **1 739** | 625 |
+| riscv64 | `riscv64` | 2 331 | 790 | **1 739** | 625 |
+| wasm | `wat` | 2 331 | 666 | **1 207** | 623 |
+
+Three things follow, and the third is the one the deletion rule needs.
+
+**The count is real.** x86_64's two numbers match `scripts/ir_diff.sh`'s independent count exactly
+(`with-ir=638`, `ir-fns=1 129`) — that script compares the two x86 paths program by program, and never
+looked at markers. Two measurements of different things agreeing on both numbers is the check that
+counting the marker counts selections.
+
+**The twins are further along than x86, not behind.** 1 739 functions against x86's 1 129. That is the
+shape §7.4 predicts: x86's IR path is a dev verb selected by a conservative predicate, while each twin
+selects every function whose records it completes. It is worth knowing before slice 9 flips x86's
+default emission and starts deleting: the flip has the most to gain and the most to break, and it is
+the only step that owes a seed promotion (§7.4).
+
+**This is the number §7.2 waits for.** That table deletes a backend's private copies of a decision
+"when the census allows", and until now there was no census to allow it — the deletion could only be
+argued from reading the emitter. Now each backend's count is in the gate and ratcheted
+(`scripts/ir_census.targets.baseline`): it may not shrink, a backend at zero fails the gate outright
+(a selector that selects nothing is not lowering from the shared IR whatever its file weighs), and the
+baseline must name all four backends or it is unusable — a backend missing from a baseline is a backend
+nothing holds. A backend's count reaching the builder's `built` is the point where its legacy emitter
+has nothing left to emit, and §7.2 may delete it.
+
 ### 2.4 The duplicated decisions
 
 Each row is one decision the language makes once and the compiler makes four times.
@@ -234,24 +272,82 @@ Each row is one decision the language makes once and the compiler makes four tim
 | comptime folds | `lower/ctfold.al` `comptime_cond_eval`, `ct_bound_fold` | `a64_/rv_comp_cond_fold`, `_comp_range_bound` | `wat_comp_cond_fold`, `wat_comp_range_bound` | #672 |
 | `match` dispatch, variant-arm expansion | `lower/enum_match.al` `expand_variant_arms`, `emit_enum_match` | `emit_a64_/rv_match_arms` | `emit_wat_match_arms` | #577 shapes |
 | `?` success variant | `try_success_disc` | – (traps) | `wat_try_success_disc` (by name) | |
-| enum size for generic instances | `enum_inst_words` | `enum_inst_words` | `1 + enum_max_arity` (not instance-aware) | |
+| enum size for generic instances | `enum_inst_words` (shared) | `enum_inst_words` (shared) | calls `enum_max_arity` instead; its `enum_inst_words` import is dead | `generic call: unresolved type-arg` |
 | callee choice, overloads, symbol names | `callee_decl_idx`, `overload_resolve_idx`, `emit_generic_label` | first name match, `<module>__<name>` | `$name__<paramtypes>` (written twice inside `wat.al`) | #475, ASSEMBLE |
 | aggregate call convention | `fn_returns_sret`, `emit_struct_to_sret`, `abi_c.al` | `a64_ret_struct_words`, `a64_ret_sret_words` | by address, tuples 1..7 words | CRASH rows |
 | located refusals of invalid programs | 232 sites in `src/lower.al` | – | – | ACCEPTS 179 rows; REFUSED 20 rows on x86_64 (#1018) |
 
-**Two rows of this table are closed on this branch.** Row 1's narrowness half — `a64_operand_narrow`,
-`rv_operand_narrow`, `wat_operand_narrow` and their `*_local_narrow` wrappers (63 lines) — is now the
-single `lower_layout::operand_narrow`; and row 1's signedness half, the whole proof band —
-`*_local_ann_signed`, `*_local_rhs`, `*_shift_call_signed`, `*_bin_init_signed`, `*_operand_signed`,
-`*_operand_signed_dep` (270 lines → 90) — is now `lower_layout`'s. Each copy was located by definition
-and diffed against its twins, not read off this table: byte-identical after prefix normalisation, identical
-signatures, and no backend state read anywhere in either family — no `*_SUB_*` instance span, no `*_CHK`
-scope, no frame. §7.2 defers row 1 to slice 3, and that deferral belongs to `*_operand_unsigned`, which
-DOES read the twelve instance-substitution globals (slice 6); it never applied to what is deleted here,
-none of which waited on the front half being shared. `*_emit_narrow` stays — per-target ISA spelling is
-not a duplicated decision. Both lifts are byte-neutral over the whole corpus across all five verbs
-(`scripts/bytecmp.sh`: same=9590 byte-diff=0 rc-diff=0) and self-reproducing (`scripts/fixpoint.sh`:
-seed == Stage1 == Stage2).
+**What an inventory of this table found, and one row it got wrong.** Every named copy was located by
+definition and diffed against its twins (prefix-normalised), not read off this table:
+
+- **row 1 is now partly closed.** `a64_operand_narrow` / `rv_operand_narrow` / `wat_operand_narrow` and
+  their `*_local_narrow` wrappers are deleted: byte-identical, every arm already delegating to
+  `lower_layout`, identical signatures, no backend state read at all — so §7.2's slice-3 deferral never
+  applied to them and they are now the single `lower_layout::operand_narrow`. Its neighbours do have to
+  wait, and for named reasons: `*_operand_unsigned` reads the twelve instance-substitution globals
+  (slice 6), and `*_emit_narrow` is per-target ISA spelling, which is not a duplicated decision at all.
+- **the four `x86 REFUSE / everything else RUNS` rows are one class, and the spec already decides
+  them.** `corroboration.sh` shows x86 is the ONLY path that refuses, while x86-ir, aarch64, riscv64 and
+  wasm agree on the value read off the source — so these are stopgaps in the legacy emitter, which §7.2
+  says move into the builder or sema at slice 9; nothing waits on a language decision. `reject_local_name_two_aggregate_types.al`
+  is the sharpest of the four and it is NOT an open question either: `spec/spec/40-declarations.md` says
+  a declaration in an inner scope may shadow an outer name and that same-scope redeclaration is what is
+  rejected, so a nested declaration followed by an enclosing-scope declaration of a different enum type is
+  VALID — the fixture's own header cites exactly this and records that the other three backends answer
+  109. The program is valid, x86 refuses it because its slot map keys a frame slot by NAME for the whole
+  function (§2.4 row 6), and the fixture asserts the refusal: the name `reject_*` is the corpus manifest's
+  authoritative "must refuse" class, so the repository currently encodes the workaround as the requirement.
+  Closing it is two steps in one order, not a decision: make x86's slot map per-binding like
+  `collect_slots`, then reclassify the fixture to accept. Until the first is done the second would turn
+  the gate red, and until both are done this row stays a disagreement with a named cause — which is what
+  §3.8's attribution is for.
+- **row 11 was wrong as written.** `enum_inst_words` has ONE definition (`src/lower_layout.al`), imported
+  by all three twins; there is no copy to delete. wasm's real gap is that it calls `enum_max_arity`
+  instead, leaving its `enum_inst_words` import dead — a call-site fix, not a deletion.
+- **two live divergences the table hides by treating a family as one row.** `a64_local_scan` descends
+  into `Stmt::CompFor` and scans its body; `rv_local_scan` stops there — a twin that silently misses
+  declarations in a comptime-for. And `a64_emit_bl_target`'s not-found fallback pushes the callee span
+  VERBATIM, bypassing `ir::put_symbol_name`, where riscv64 routes the same fallback through the table:
+  a #475-class hole, one line wide. Both belong in the drift column, not in a footnote.
+- **what can be deleted NOW is answered by a closure, not by reading bodies.** `scripts/copy_lift.py`
+  lifts a family only if all three copies exist, are identical after prefix normalisation (lowercase call
+  prefix AND uppercase global prefix — a family differing only in its own backend's global is one shape
+  blocked BY that global, not "bodies differ"), read no `A64_*`/`RV_*`/`WAT_*` global, and call no
+  backend-local function anywhere in its **transitive closure**. The closure is the whole point: a copy
+  that calls `a64_local_arrty_span` is two decisions, and lifting it would leave a "shared" copy answering
+  from a different place per target — the bug class this exercise removes, reintroduced by the removal.
+  Measured on main `fdc40f6`: **24 families reported — 4 liftable (183 lines of definition), 20 blocked**,
+  each blocker named: `*_operand_unsigned` and the span chain (`*_local_arrty_span`, `*_slice_elem_span`,
+  `*_ann_span`) block `index_elem_unsigned`, `unchecked_init_unsigned` and `hole_index_signed`; `*_inst_add`
+  is blocked by its own instance-table globals (`WAT_INST_TL3`, `WAT_INST_TS3`, `WAT_INST_TL`); `local_scan`
+  and `emit_narrow` are not even triples (wasm's differ in NAME, `local_slot_scan`, `wat_narrow_pre/post`, so
+  they are different decisions wearing a family's clothes).
+- **the blocked set contains a ring, and the ring is why a per-family answer is the wrong question.** Five of
+  the twenty — `operand_narrow`, `operand_signed`, `operand_signed_dep`, `shift_call_signed`,
+  `bin_init_signed` — are blocked by *each other*: `operand_signed` calls `operand_signed_dep`, which calls
+  `bin_init_signed`, which calls `shift_call_signed`, which calls back. Every one of them bottoms out in a
+  backend-local callee that happens to be another member of the same signedness decision, so no single family
+  can ever be lifted alone and the census would report them blocked forever. They move as one unit or not at
+  all — which is what `slice/signed-band-one-copy` does: it puts the whole mutually-recursive set into
+  `lower_layout`, where the closure closes over shared code instead of over three targets. Measured there:
+  **0 liftable, 15 blocked** — nine families gone from the report (the four mechanically liftable plus those
+  five), none added, and `bytecmp.sh` over the whole corpus × five verbs reports `same=9590 byte-diff=0`,
+  so the unit that moved is proven to emit the same bytes. A tool that answers "can THIS family be lifted"
+  is not yet a tool that answers "which copies can go away"; the ring is the difference, and it was invisible
+  until the closure was walked.
+  The gate holds `liftable=0` and has teeth: run against main it exits 1 naming all four (`DELETE IT`), run
+  against the slice branch it exits 0.
+  A first pass at this question, done by hand, picked four families and called three of them liftable when
+  they were not, because it checked identity and globals but not callees — the four it happened to pick were
+  not the four the closure finds. That is recorded here because it is the same failure as §3.8's dirty-tree
+  number: a verdict taken from one property of a thing, when the thing has several.
+  What moved in numbers: the narrowness half is 63 lines of three emitters into one
+  `lower_layout::operand_narrow`, and the signedness proof band is 270 lines into 90 in
+  `lower_layout` — the whole mutually-recursive set, because a member lifted alone would still answer
+  from a backend-local twin. `scripts/fixpoint.sh` on the result: seed == Stage1 == Stage2.
+- the selectors themselves are clean: `src/{lower,aarch64,riscv64,wat}/isel.al` contain zero `Expr::`
+  and `Stmt::` references, so every shape query in this table is legacy-emitter-only — which is what
+  makes slice 9's deletion the whole story rather than a partial one.
 
 `scripts/idiom_gate.sh` sees part of this — its baseline carries SCAN/TABLE clusters for
 `emit_a64_expr`/`emit_rv_expr`/`emit_wat_expr`, `emit_*_fn`, `*_comp_range_bound`, `*_ann_span`, the
@@ -487,6 +583,37 @@ removes the question instead:
    change), a reporting script can compare, for every `/ % >> < <= > >=` in the corpus, `lib/` and
    `src/`, sema's recorded signedness against what each legacy emitter's shape inference answers. Every
    disagreement is a #764-class wrong value found mechanically instead of by a generator's luck.
+   **Measured over the corpus of 2 331 programs, on a CLEAN checkout of upstream `main` (`950a1c41`)**
+   — `scripts/sign_census.sh --gate`, ratcheted at `scripts/sign_census.baseline`:
+
+   | backend | decisions | agree with sema | DISAGREE | share taken from shape |
+   |---|--:|--:|--:|--:|
+   | x86_64 | 17 598 | 17 594 | **4** | 0.02 % |
+   | aarch64 | 448 | 448 | **0** | 0 % |
+   | riscv64 | 424 | 424 | **0** | 0 % |
+   | wasm | 435 | 435 | **0** | 0 % |
+
+   So the clause holds on all four backends today: every signedness decision the twins take matches the
+   type sema recorded for the same operand, and x86_64 has four rows left. #764/#765/#766 are closed, and
+   the ratchet is what keeps them closed — the number is in the gate so the family cannot grow, and a
+   backend that answers nothing fails rather than reading as a zero.
+
+   **How this number was wrong once, and what that is worth** — an earlier revision of this section
+   recorded 165/156/158 disagreements on the twins, over a third of their decisions, with three probes to
+   back it: a top-level annotated local answering `u`, a local declared inside `loop { … }` answering
+   `s`, and `p.k` on a `struct { k : u64 }` answering `s`. All three probes were run in the **shared
+   working tree** on the build machine, which at that moment carried another panel's uncommitted changes.
+   On a clean checkout of the same revision every probe answers `u` and all three counts are zero; the
+   probes, the counts and the mechanism inferred from them were artifacts of code that was never
+   committed. The section they had been written into was wrong for a full cycle before a clean worktree
+   caught it.
+
+   The rule this buys, and the reason §7.2's gate runs from a clean checkout rather than a working tree:
+   **a measurement taken in a shared tree is not a fact about the repository.** A number that appears only
+   there describes someone's in-progress work, and acting on it lands a change justified by a phantom —
+   including, here, an emitter patch that turned out to alter no output at all. Re-measure on the pinned
+   revision in a clean worktree before any of this becomes a claim, a defect or a fix.
+
 6. **Library bodies are recorded too.** `check_program` TRUSTS a declaration of an ambient library
    module — it resolves against it but does not refuse a program over its body, so a check gap on a
    stdlib feature cannot reject a well-typed user program. Until slice 1e's prerequisite (a) that also

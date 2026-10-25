@@ -1,0 +1,30 @@
+4
+# ir_diff: programs where the x86 emitter and the x86-via-IR path disagree, held so the count cannot
+# grow. MEASURED on a clean checkout of upstream main fdc40f6 (the reseed + #943 revision), corpus 2332
+# programs (with-ir=639, ir-fns=1130, agree=635), Stage1 from scripts/fixpoint.sh.
+#
+# It was 5 and it is 4 because #943 landed: `lower_bugA_neg_operand.al` — where legacy x86 answered 25
+# while the file declares TRAP per spec §6.5 and owner decision A, and all four other paths trapped — now
+# emits `jnc` and traps on both paths. That was the one silently-wrong value in the set, and it was in
+# the path that ships by default. Its row left by being FIXED, which is the only way a row leaves here.
+#
+# The four that remain are ONE class, and the spec already decides them — x86 is the ONLY path that
+# refuses, while x86-ir, aarch64, riscv64 and wasm agree on the value read off the source:
+#   STOPGAP-IR-RUNS (3) — the file documents its own refusal ("refuse rather than emit a silent
+#   word-0-only store"), and the IR path does not need the stopgap because it lowers the shape correctly:
+#     test/deep_field_agg_enum_reject.al        x86 build 1   x86-ir run 42
+#     test/deep_field_agg_var_reject.al         x86 build 1   x86-ir run 42
+#     test/packed_in_plain_struct.al            x86 build 1   x86-ir run 20
+#   These are stopgaps in the legacy emitter, which §7.2 moves into the builder or sema at slice 9 when
+#   the legacy emitter goes. Nothing to decide, nothing to guess: corroboration.sh shows four backends
+#   agreeing on the value.
+#   UNEXPLAINED (1) — `test/reject_local_name_two_aggregate_types.al` (x86 build 1, x86-ir run 109)
+#   carries no machine-readable declaration in its header, so `oracle` cannot attribute it even though its
+#   prose cites Declarations §5/§6.1 and the other three backends answer 109. It is NOT an open language
+#   question — spec/spec/40-declarations.md allows shadowing across scopes and rejects only same-scope
+#   redeclaration, so the program is VALID and x86's refusal is the defect (its slot map keys a frame
+#   slot by NAME for the whole function, §2.4 row 6). Closing it is two ordered steps: make x86's slot
+#   map per-binding like collect_slots, then reclassify the fixture from reject_* to accept — the second
+#   before the first would turn the gate red, since reject_* is the corpus manifest's "must refuse" class.
+#
+# Lowering the number means fixing a row, not editing this file.

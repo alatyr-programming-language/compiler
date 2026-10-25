@@ -59,13 +59,18 @@ JOBS=8
 ONLY=both
 LIST=40
 SELFTEST=0
+GATE=0
+RATCHET_WRITE=0
+BASELINE="$ROOT/scripts/sign_census.baseline"
 while [ $# -gt 0 ]; do
   case "$1" in
     --self-test) SELFTEST=1; shift ;;
+    --gate) GATE=1; shift ;;
+    --ratchet-write) RATCHET_WRITE=1; shift ;;
     --jobs) JOBS="$2"; shift 2 ;;
     --only) ONLY="$2"; shift 2 ;;
     --list) LIST="$2"; shift 2 ;;
-    *) echo "usage: $0 [--jobs N] [--only corpus|self] [--list N] | --self-test" >&2; exit 2 ;;
+    *) echo "usage: $0 [--jobs N] [--only corpus|self] [--list N] [--gate] [--ratchet-write] | --self-test" >&2; exit 2 ;;
   esac
 done
 case "$ONLY" in both|corpus|self) ;; *) echo "usage: --only corpus|self" >&2; exit 2 ;; esac
@@ -153,7 +158,14 @@ report() { # set
         b = B[i]; if (!(b in n)) continue
         printf "  %-8s %8d %8d %9d %9d %12d %12d %15d\n", b, n[b], k[b, "agree"], k[b, "DISAGREE"], k[b, "sema-lit"], k[b, "sema-unknown"], k[b, "sema-absent"], k[b, "sema-ambiguous"]
       }
-    }' "$f"
+      ## Machine-readable: the DISAGREE count per backend, for the gate ratchet. A backend that made
+      ## NO decision at all prints -1, never a skipped line: an absent backend is not a zero, and a
+      ## zero here would read as "this emitter now agrees with sema everywhere" when it simply did not
+      ## answer. The gate turns -1 into a failure.
+      printf "sign census counts %s:", SET
+      for (i = 1; i <= 4; i++) { b = B[i]; printf " %s=%d", b, (b in n) ? k[b, "DISAGREE"] : -1 }
+      printf "\n"
+    }' SET="$set" "$f"
   # The x86 records report: residue decisions (rows) and distinct source lines (file + line text),
   # under each context; "known with the iteration" is the residue the iteration key (e4) answers.
   awk -F'\t' '
@@ -242,13 +254,92 @@ AL
   check member "field a: unknown in the instance alone, unsigned in its iteration" '^#signrec 24 [0-9]+ [0-9]+ U,U U,U Iu,Iu '
   check member "field b: unknown in the instance alone, signed in its iteration" '^#signrec 24 [0-9]+ [0-9]+ U,U U,U Is,Is '
   check pack "pack element: no record outside its iteration, unsigned in it" '^#signrec 25 [0-9]+ [0-9]+ U,Iu U,Iu Iu,Iu '
+  # The ratchet over the planted counts: held, grown-closed, FAIL on growth, and never a pass when a
+  # backend is unheld or the census answered nothing there (-1).
+  printf 'x86_64=4 aarch64=165 riscv64=156 wasm=158\n' > "$W/corpus.counts"
+  printf 'x86_64=4\naarch64=165\nriscv64=156\nwasm=158\n' > "$W/sb_ok"
+  printf 'x86_64=4\naarch64=165\nriscv64=156\n' > "$W/sb_unheld"
+  printf 'x86_64=9\naarch64=165\nriscv64=156\nwasm=158\n' > "$W/sb_high"
+  printf 'x86_64=x\naarch64=165\nriscv64=156\nwasm=158\n' > "$W/sb_bad"
+  sign_ratchet "$W/sb_ok" >/dev/null 2>&1; rc=$?
+  checks=$((checks + 1)); [ "$rc" = 0 ] && echo "ok   sign ratchet self-test: held at the line" || { echo "FAIL sign ratchet held (rc=$rc)"; fails=$((fails + 1)); }
+  printf 'x86_64=3 aarch64=100 riscv64=156 wasm=158\n' > "$W/corpus.counts"
+  sign_ratchet "$W/sb_ok" >/dev/null 2>&1; rc=$?
+  checks=$((checks + 1)); [ "$rc" = 0 ] && echo "ok   sign ratchet self-test: closing disagreements is not a failure" || { echo "FAIL sign ratchet closed (rc=$rc)"; fails=$((fails + 1)); }
+  printf 'x86_64=5 aarch64=165 riscv64=156 wasm=158\n' > "$W/corpus.counts"
+  out="$(sign_ratchet "$W/sb_ok" 2>&1)"; rc=$?
+  checks=$((checks + 1))
+  if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'x86_64 disagrees'; then echo "ok   sign ratchet self-test: FAIL when a backend grows its disagreements, and names it"
+  else echo "FAIL sign ratchet grew (rc=$rc)"; fails=$((fails + 1)); fi
+  printf 'x86_64=4 aarch64=165 riscv64=156 wasm=-1\n' > "$W/corpus.counts"
+  sign_ratchet "$W/sb_ok" >/dev/null 2>&1; rc=$?
+  checks=$((checks + 1)); [ "$rc" = 2 ] && echo "ok   sign ratchet self-test: a blind backend (-1) is not a pass" || { echo "FAIL sign ratchet blind (rc=$rc)"; fails=$((fails + 1)); }
+  printf 'x86_64=4 aarch64=165 riscv64=156 wasm=158\n' > "$W/corpus.counts"
+  sign_ratchet "$W/sb_unheld" >/dev/null 2>&1; rc=$?
+  checks=$((checks + 1)); [ "$rc" = 2 ] && echo "ok   sign ratchet self-test: a baseline naming no wasm leaves it unheld" || { echo "FAIL sign ratchet unheld (rc=$rc)"; fails=$((fails + 1)); }
+  sign_ratchet "$W/sb_bad" >/dev/null 2>&1; rc=$?
+  checks=$((checks + 1)); [ "$rc" = 2 ] && echo "ok   sign ratchet self-test: a malformed baseline is not a pass" || { echo "FAIL sign ratchet malformed (rc=$rc)"; fails=$((fails + 1)); }
+  sign_ratchet "$W/sb_high" >/dev/null 2>&1; rc=$?
+  checks=$((checks + 1)); [ "$rc" = 0 ] && echo "ok   sign ratchet self-test: a baseline above the measurement holds" || { echo "FAIL sign ratchet above (rc=$rc)"; fails=$((fails + 1)); }
   echo "sign_census self-test: $checks checks, $fails failed"
   [ "$fails" = 0 ]
 }
+# The ratchet over the corpus table. Each backend's DISAGREE count may not GROW: every disagreement is
+# one `/ % < > <= >=` where the emitter chose a signedness from the expression's SHAPE that differs from
+# the type sema recorded — a #764/#765/#766-class wrong value, found by the census instead of by a
+# generator's luck. A backend at -1 answered no decisions at all: the census went blind, which is not a
+# zero and never a pass. 0 held, 1 GREW, 2 the baseline is unusable.
+sign_ratchet() { # baseline-file  reads "$W/corpus.counts" (backend=count pairs)
+  local f="$1"
+  [ -s "$f" ] || { echo "sign ratchet: NO baseline at $f — write it with:" \
+    ; echo "  scripts/sign_census.sh --gate --ratchet-write" >&2; return 2; }
+  local be want have rc=0 seen=""
+  while read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in *=*) ;; *) echo "sign ratchet: malformed baseline line '$line'" >&2; return 2 ;; esac
+    be="${line%%=*}"; want="${line#*=}"
+    case "$want" in ''|*[!0-9]*) echo "sign ratchet: malformed baseline line '$line'" >&2; return 2 ;; esac
+    case "$be" in x86_64|aarch64|riscv64|wasm) ;; *) echo "sign ratchet: unknown backend '$be'" >&2; return 2 ;; esac
+    seen="$seen $be"
+    have=$(tr ' ' '\n' < "$W/corpus.counts" | grep "^$be=" | head -1 | cut -d= -f2)
+    case "$have" in ''|*-*) echo "sign ratchet: no measurement for $be (blank or -1 — the census did not answer there)" >&2; return 2 ;; esac
+    if [ "$have" -gt "$want" ]; then
+      echo "sign ratchet: FAIL — $be disagrees with sema's recorded signedness MORE than the baseline: $want -> $have"
+      echo "  Each new disagreement is one signedness chosen from shape instead of from the type (§3.8)."
+      rc=1
+    elif [ "$have" -lt "$want" ]; then
+      echo "sign ratchet: $be CLOSED some disagreements $want -> $have; lower the baseline."
+    fi
+  done < "$f"
+  for be in x86_64 aarch64 riscv64 wasm; do
+    case " $seen " in *" $be "*) ;; *) echo "sign ratchet: baseline names no $be — that backend is unheld" >&2; return 2 ;; esac
+  done
+  return $rc
+}
+
 if [ "$SELFTEST" = 1 ]; then self_test; exit $?; fi
 
 [ "$ONLY" = self ] || run_corpus
 [ "$ONLY" = corpus ] || run_self
-[ "$ONLY" = self ] || report corpus
+if [ "$ONLY" = self ]; then
+  [ "$ONLY" = corpus ] || report self
+  exit 0
+fi
+report corpus | tee "$W/corpus.report"
+grep '^sign census counts corpus:' "$W/corpus.report" | tail -1 | sed 's/^sign census counts corpus://' > "$W/corpus.counts"
+if [ "$RATCHET_WRITE" = 1 ]; then
+  tr ' ' '\n' < "$W/corpus.counts" | grep -v '^$' > "$BASELINE" || exit 2
+  echo "sign ratchet: WROTE $BASELINE ($(tr '\n' ' ' < "$BASELINE"))"
+  exit 0
+fi
 [ "$ONLY" = corpus ] || report self
+if [ "$GATE" = 1 ]; then
+  sign_ratchet "$BASELINE"; rc=$?
+  case "$rc" in
+    0) echo "sign census gate: no backend grew its disagreement with sema's recorded signedness" ;;
+    1) echo "*** sign census gate: FAIL — a backend chose signedness from shape where sema recorded otherwise (§3.8) ***" ;;
+    *) echo "*** sign census gate: FAIL — the ratchet could not judge (above); an unheld backend is not a pass ***" ;;
+  esac
+  exit $rc
+fi
 exit 0

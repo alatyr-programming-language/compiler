@@ -504,11 +504,16 @@ AL
 ## The honesty rule, which is the whole point of the mode: `planted` proves each class's hook fires,
 ## per direction. A class it cannot make fire has NO COVERAGE, and its zero over the real tree is
 ## silence, not cleanliness — `planted` already says so in its own report. So the gate line prints
-## `op-cmp=UNMEASURED` while OP-CMP is unproven, and the ratchet applies only to what is measured:
-## `places` (distinct seam places) and `blind-lib` (tracked lib modules the census could not check
-## standalone, 12 today — including alloc/vec, alloc/string, alloc/strbuf, std/fmt, std/io, the
-## pointer-densest files in the tree). Neither may grow. When scar #2 is fixed and the OP-CMP hook
-## fires on a planted program, `UNMEASURED` becomes a number in the same commit that proves it.
+## `op-cmp=UNMEASURED` while OP-CMP is unproven, and the ratchet applies only to what is measured.
+##
+## STATE, MEASURED (band worktree, Stage1 from scripts/fixpoint.sh): `proven=13/13` and `op-cmp=0` —
+## every class's hook, OP-CMP included, is now proven to fire by the planted fixture, so the zero is a
+## measurement and it is HELD: `op-cmp=0` is in the baseline and the ratchet fails if a pointer meets an
+## integer at a comparison without an explicit conversion. An earlier revision of this comment and of the
+## baseline said OP-CMP could not be held because its hook sat undispatched under the bootstrap seed
+## ("scar #2"); that story was false — both the tree compiler and the seed fire it on `p == 0` — and the
+## ceiling is what stops the false story from coming back as a silent pass. If the fixture ever loses its
+## OP-CMP place, `ocp` goes 0 and the ratchet returns 2 rather than holding a silence-zero.
 gate() {
   local CC="${2:-$ROOT/target/debug/alatyr}"
   [ -x "$CC" ] || { echo "ptrint census gate: no compiler at $CC" >&2; return 1; }
@@ -545,22 +550,44 @@ gate() {
     echo "    zero:$blindlist"
   fi
 
-  xb_ratchet_gate "$ROOT/scripts/ptrint_census.baseline" "$places" "$blind"
+  ## Is OP-CMP's hook PROVEN to fire by the planted fixture? Only then is a zero over the real tree a
+  ## measurement; otherwise it is silence and the ratchet refuses to hold it (see xb_ratchet_gate).
+  ocp=0
+  grep -q '^OP-CMP' "$OUT/planted_cov.tsv" && ocp=1
+  xb_ratchet_gate "$ROOT/scripts/ptrint_census.baseline" "$places" "$blind" "$opcmp" "$ocp"
   local rrc=$?
   [ "$rrc" = 0 ] || fail_note=1
   return $rrc
 }
 
-## The ratchet. `places` and `blind-lib` may not grow; a missing or malformed baseline is not a pass.
-xb_ratchet_gate() { # baseline-file places blind — 0 held, 1 GREW, 2 unusable
-  bf="$1"; p="$2"; b="$3"
+## The ratchet. `places`, `blind-lib` and `op-cmp` may not grow; a missing or malformed baseline is not
+## a pass. `op-cmp` is held ONLY while its hook is proven to fire — the fourth argument says whether it
+## is. An unproven class's zero is silence, not cleanliness, so an unproven OP-CMP makes the ratchet
+## unusable (rc=2) rather than pass: that is the honesty rule this census was written for, applied to the
+## ratchet itself instead of only to the report line.
+xb_ratchet_gate() { # baseline-file places blind op-cmp opcmp-proven(0/1) — 0 held, 1 GREW, 2 unusable
+  bf="$1"; p="$2"; b="$3"; oc="$4"; ocp="$5"
   if [ ! -f "$bf" ]; then echo "ptrint ratchet: FAIL — no baseline at $bf"; return 2; fi
   bp=$(sed -n 's/^places=//p' "$bf" | head -1); bb=$(sed -n 's/^blind-lib=//p' "$bf" | head -1)
-  case "$bp$bb" in *[!0-9]*|"") echo "ptrint ratchet: FAIL — malformed baseline ($bf)"; return 2 ;; esac
+  bo=$(sed -n 's/^op-cmp=//p' "$bf" | head -1)
+  case "$bp$bb$bo" in *[!0-9]*|"") echo "ptrint ratchet: FAIL — malformed baseline ($bf)"; return 2 ;; esac
   [ -n "$bp" ] && [ -n "$bb" ] || { echo "ptrint ratchet: FAIL — malformed baseline ($bf)"; return 2; }
+  [ -n "$bo" ] || { echo "ptrint ratchet: FAIL — baseline holds no op-cmp ceiling"; return 2; }
+  if [ "$ocp" != 1 ]; then
+    echo "ptrint ratchet: FAIL — OP-CMP's hook is NOT proven to fire, so op-cmp=$oc is silence, not"
+    echo "  cleanliness. Plant a place that reaches the hook (a pointer meeting an integer literal, e.g."
+    echo "  \`p == 0\`, outside any \`unchecked\` grant) in the planted fixture, then hold the number."
+    return 2
+  fi
+  case "$oc" in ''|*[!0-9]*) echo "ptrint ratchet: FAIL — op-cmp is not a number ('$oc')"; return 2 ;; esac
   if [ "$p" -gt "$bp" ]; then echo "ptrint ratchet: FAIL — seam places GREW $bp -> $p"; return 1; fi
   if [ "$b" -gt "$bb" ]; then echo "ptrint ratchet: FAIL — blind lib modules GREW $bb -> $b"; return 1; fi
-  echo "ptrint ratchet: held at the baseline (places=$bp blind-lib=$bb)$([ "$p" -lt "$bp" ] && echo " — LOWER, tighten the baseline in the same PR")"
+  if [ "$oc" -gt "$bo" ]; then
+    echo "ptrint ratchet: FAIL — OP-CMP GREW $bo -> $oc: a pointer meeting an integer at a comparison"
+    echo "  with no explicit conversion (#529). Fix the program or grant it explicitly; do not raise the ceiling."
+    return 1
+  fi
+  echo "ptrint ratchet: held at the baseline (places=$bp blind-lib=$bb op-cmp=$oc)$([ "$p" -lt "$bp" ] && echo " — places LOWER, tighten the baseline in the same PR")"
   return 0
 }
 
@@ -569,16 +596,23 @@ xb_ratchet_gate() { # baseline-file places blind — 0 held, 1 GREW, 2 unusable
 self_test() {
   T="$(mktemp -d)"; k=0; bad=0
   ok() { k=$((k+1)); [ "$2" = "$3" ] || { echo "  FAIL $1: expected rc=$3, got $2"; bad=$((bad+1)); }; }
-  printf 'places=3\nblind-lib=12\n' > "$T/b"
-  out=$(xb_ratchet_gate "$T/b" 3 12); ok "held at the baseline" "$?" 0
-  out=$(xb_ratchet_gate "$T/b" 2 11); ok "held when LOWER" "$?" 0
+  printf 'places=3\nblind-lib=12\nop-cmp=0\n' > "$T/b"
+  out=$(xb_ratchet_gate "$T/b" 3 12 0 1); ok "held at the baseline" "$?" 0
+  out=$(xb_ratchet_gate "$T/b" 2 11 0 1); ok "held when LOWER" "$?" 0
   case "$out" in *LOWER*) : ;; *) echo "  FAIL a lower reading must say to tighten the baseline"; bad=$((bad+1));; esac
-  out=$(xb_ratchet_gate "$T/b" 4 12); ok "FAIL on one more place" "$?" 1
+  out=$(xb_ratchet_gate "$T/b" 4 12 0 1); ok "FAIL on one more place" "$?" 1
   case "$out" in *GREW*) : ;; *) echo "  FAIL a growth must be named"; bad=$((bad+1));; esac
-  out=$(xb_ratchet_gate "$T/b" 3 13); ok "FAIL on one more blind module" "$?" 1
-  out=$(xb_ratchet_gate "$T/nope" 3 12); ok "a missing baseline is not a pass" "$?" 2
-  printf 'places=abc\nblind-lib=12\n' > "$T/m"; xb_ratchet_gate "$T/m" 3 12 >/dev/null; ok "a malformed baseline is not a pass" "$?" 2
-  printf 'places=3\n' > "$T/p"; xb_ratchet_gate "$T/p" 3 12 >/dev/null; ok "a baseline missing blind-lib is not a pass" "$?" 2
+  out=$(xb_ratchet_gate "$T/b" 3 13 0 1); ok "FAIL on one more blind module" "$?" 1
+  out=$(xb_ratchet_gate "$T/b" 3 12 1 1); ok "FAIL on one more OP-CMP" "$?" 1
+  case "$out" in *OP-CMP*) : ;; *) echo "  FAIL an OP-CMP growth must be named"; bad=$((bad+1));; esac
+  ## the honesty rule, applied to the ratchet: an unproven hook is not a held zero
+  out=$(xb_ratchet_gate "$T/b" 3 12 0 0); ok "an unproven OP-CMP is not a pass" "$?" 2
+  case "$out" in *silence*) : ;; *) echo "  FAIL an unproven zero must be called silence"; bad=$((bad+1));; esac
+  out=$(xb_ratchet_gate "$T/b" 3 12 x 1); ok "a non-numeric op-cmp is not a pass" "$?" 2
+  out=$(xb_ratchet_gate "$T/nope" 3 12 0 1); ok "a missing baseline is not a pass" "$?" 2
+  printf 'places=abc\nblind-lib=12\nop-cmp=0\n' > "$T/m"; xb_ratchet_gate "$T/m" 3 12 0 1 >/dev/null; ok "a malformed baseline is not a pass" "$?" 2
+  printf 'places=3\nblind-lib=12\n' > "$T/p"; xb_ratchet_gate "$T/p" 3 12 0 1 >/dev/null; ok "a baseline missing blind-lib is not a pass" "$?" 2
+  printf 'places=3\nblind-lib=12\n' > "$T/q"; xb_ratchet_gate "$T/q" 3 12 0 1 >/dev/null; ok "a baseline missing op-cmp is not a pass" "$?" 2
   rm -rf "$T"
   echo "ptrint ratchet self-test: $([ "$bad" = 0 ] && echo "$k/$k ok" || echo "$bad of $k check(s) FAILED — this ratchet proves nothing")"
   [ "$bad" = 0 ]

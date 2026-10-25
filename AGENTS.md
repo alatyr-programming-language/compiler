@@ -136,8 +136,14 @@ around it.
 4. **One decision, one place.** `grep` for the question before you answer it again (#540, #539). Held,
    for the shapes it knows, by `scripts/idiom_gate.sh`.
 5. **Width and signedness are spelled.** Annotate a local before `/`, `%` or an ordering. Never infer
-   them from the form of an operand (#546, #608, #764–#766). **Review-only** today; the shared IR
-   (docs/ir.md §3.8) makes it structural by taking both from sema's side table.
+   them from the form of an operand (#546, #608, #764–#766). The **signedness** half is held by
+   `scripts/sign_census.sh --gate`: it compares every signedness decision each backend takes against the
+   type sema recorded for the same operand, and the ratchet (`scripts/sign_census.baseline`, measured on
+   a clean checkout of the pinned revision) holds `x86_64=4 aarch64=0 riscv64=0 wasm=0` — a backend that
+   answers nothing fails rather than reading as a zero, and a new shape-derived choice fails. The
+   **width** half stays **review-only** until the aggregates and instance slices (docs/ir.md §7.2
+   slices 3 and 6) take it from sema's side table too; `scripts/ir_census.sh --targets` measures how much
+   each backend lowers from the shared IR, but it does not judge width, so it is coverage and not a pin.
 6. **`unchecked` is explicit and justified.** No implicit `usize` ↔ `ptr(T)` (#529, Types §4.3). Held by
    `unchecked` (marker `unchecked-ok`) and the typed `ptrint` rule (no marker: write it explicitly).
 7. **Bind a `?` before using its value** (`x := f()?`), never `f()?.a` or `g(f()?)` (#752). Seed

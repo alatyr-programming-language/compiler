@@ -252,7 +252,16 @@ v : i64 = if c { a } else { b }
 q := v / k
 ```
 
-**Check.** None. Held by review. A typed rule is possible over a census channel, as for §6.
+**Check.** The signedness half is held by `scripts/sign_census.sh --gate` — the census-channel rule this
+section once said was only "possible". It reads the `#sign` channel each backend writes at every
+signedness decision and compares the emitter's choice with the type sema recorded for the SAME operand,
+per backend, and `scripts/sign_census.baseline` ratchets the disagreement count: measured on a clean
+checkout of the pinned revision it holds `x86_64=4 aarch64=0 riscv64=0 wasm=0`. A backend that answers
+nothing fails rather than reading as a zero, so the ceiling cannot be met by going quiet; a new
+shape-derived choice fails. Run it after touching any `*_operand_signed*`, `*_cmp_unsigned` or guard
+site. The width half is still held by review: no check judges whether a narrow width was spelled, only
+whether signedness was guessed. `scripts/ir_census.sh --targets` counts what each backend lowers from the
+shared IR — coverage, not a width pin.
 
 ## 6 · `unchecked` is explicit and justified, and there is no implicit `usize` ↔ `ptr`
 
@@ -282,6 +291,11 @@ Before you write the marker, check whether the operand already has the right typ
 **Check.** The `unchecked` rule (marker `## unchecked-ok: <reason>`). An `unchecked` that only spells a
 §1 null form is counted under `null` instead, so one line never needs two markers. The typed `ptrint`
 rule refuses any new implicit crossing and has no marker: write the crossing explicitly instead.
+Alongside them `scripts/ptrint_census.sh gate` holds the COUNT: `op-cmp=0` is in
+`scripts/ptrint_census.baseline` together with `places` and `blind-lib`, so a pointer meeting an integer
+literal at a comparison outside any grant fails the gate by number, not by review. The ceiling applies
+only while `planted` proves the hook fires — an unproven zero is silence, not cleanliness, and the
+ratchet returns "unusable" rather than passing it.
 
 ## 7 · Bind a `?` before using its value
 

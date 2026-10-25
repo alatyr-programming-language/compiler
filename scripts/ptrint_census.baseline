@@ -5,10 +5,15 @@
 # an `unchecked` grant); `blind-lib` is the tracked lib/ modules the census could NOT check standalone,
 # so their places are unknown rather than zero.
 #
-# Neither number may grow. This file does NOT claim OP-CMP is clean: the census's own `planted` proof
-# reports OP-CMP NOT PROVEN (its hook sits in check_expr's big `match deref(e)`, not dispatched under
-# the bootstrap seed — scar #2), so gate mode prints `op-cmp=UNMEASURED` and no ratchet covers it.
-# Tighten `places` when a fixture is rewritten to explicit form; tighten `blind-lib` when a lib module
-# becomes standalone-checkable, in the same PR that does it.
+# Neither number may grow.
+#
+# `op-cmp` IS now claimed clean, and held: the planted fixture plants a pointer meeting an integer
+# literal outside any `unchecked` grant, `planted` reports the hook PROVEN (`proven=13/13` — every class,
+# OP-CMP included), and the census reports `op-cmp=0` over src/, lib/ and every tracked fixture. The
+# ratchet holds that 0 and REFUSES to hold it while the hook is unproven — an unproven zero is silence,
+# not cleanliness, so the ceiling returns rc=2 rather than passing. An earlier revision of this file said
+# OP-CMP could not be claimed because its hook sat undispatched under the bootstrap seed ("scar #2");
+# that was false — both the tree compiler and `seed/alatyr 0.2.16` fire it on `p == 0`.
 places=3
 blind-lib=12
+op-cmp=0
