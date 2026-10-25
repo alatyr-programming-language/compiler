@@ -1016,8 +1016,8 @@ fixture's prose and stopped there. Computing what each program **returns** inver
 | `deep_field_agg_enum_reject` | `o.mid.c = Col.G(42)`, matched back → **42** | yes | `compile/1` / `run/42` ×3 |
 | `deep_field_agg_var_reject` | `o.mid.inner = Rec(12,30)`, `a + b` → **42** | yes | `compile/1` / `run/42` ×3 |
 | `reject_local_name_two_aggregate_types` | → **109** | yes | `compile/1` / `run/109` ×3 |
-| `require_unchecked` | **42** (§8.1: `unchecked` drops the predicate) | IR traps 132 | `run/42` / `run/133`,`134` ×3 |
-| `lower_bugA_neg_operand` | **25** (signed wrapping sub) | IR traps 132 | `run/25` / `run/133`,`134` ×3 |
+| `require_unchecked` | **42** (§8.1: `unchecked` drops the predicate) | yes, since #1007 | `run/42` / `run/42` ×3 |
+| `lower_bugA_neg_operand` | **25** (signed wrapping sub) | traps on all four, since #943 | `run/132` / `run/133`,`133`,`134` → **0 rows** |
 
 **Four of six are the flip's prize, not its blocker.** The twins and wasm are *already* on the IR for
 these and already answer correctly; `compile/1` is x86 legacy refusing because its own write/read layouts
@@ -1026,11 +1026,24 @@ disagree (lower.al:20118 and its neighbours). So flipping x86 to the IR fixes fo
 refuse", which was true of x86's lowering, not of the construct. This is #980's shape again, which is what
 was said earlier in this session before §25 "corrected" it the wrong way.
 
-**Two are real, and they are live today.** `require_unchecked` and `lower_bugA_neg_operand` trap on
-aarch64, riscv64 **and wasm right now** — `run/133`/`run/134` where x86 answers 42 and 25. They are not
-flip-preparation; they are current over-traps on three backends, six counter rows. Fixing them is the cut
-that pays before any flip: an over-trap is a program the spec calls valid that three backends refuse to
-run.
+**None is a live over-trap today.** This section called `lower_bugA_neg_operand` a current over-trap on
+three backends, three counter rows. It is not any more: #943 landed the type-following overflow guard, and
+today's oracle (`0dba07d1`) reads `run/132` on x86_64 and `run/133`,`133`,`134` on the twins — all four
+trap, so the path leaves the disagreement table and the counter has **no row** for it. What #943 settled is
+the guard's signedness; whether the program itself is valid is still #1035, and the fixture now pins the
+trap rather than the value 25.
+
+So of §26's six rows, **four are live over-refusals and two have no row at all.** The four were re-checked
+against today's oracle rather than carried over: `packed_in_plain_struct` (`ref=aarch64:V20`, x86 `C`),
+`deep_field_agg_enum_reject` and `deep_field_agg_var_reject` (`ref=aarch64:V42`, x86 `C`) and
+`reject_local_name_two_aggregate_types` (x86 `compile/1`, twins `run/109`). They sit in the counter's
+`REFUSED` class, 20 rows on 10 paths, all of them x86_64.
+
+*Correction after review:* this section first said `require_unchecked` was the second live over-trap, at
+"six counter rows". That row was carried over from §25 without being recomputed. `e997993` (#1007), already
+in main when §26 merged, made it `run/42` on all three twins, and the counter has no row for it. That is
+the very mistake this section is titled against — and the correction above repeats it in miniature, which is
+why it carries a date: recomputed against `0dba07d1`, the count is zero live over-traps, not one.
 
 **The method lesson, stated once more because it is the fifth time on this branch:** a fixture's prose
 describes the defect the fixture was written *against*, which is not necessarily the defect that exists
