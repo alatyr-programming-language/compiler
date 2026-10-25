@@ -1414,32 +1414,10 @@ wat_try_enum_type := fn(inner : ptr(Expr), params_head : Option(ptr(mut Param)),
   WSpan(s = 0, n = 0)
 }
 
-## The discriminant of the SUCCESS variant for a WAT `?`: `Some` for Option and `Ok` for Result. The
-## shipped stdlib Option is `{None, Some}`, so this must not assume variant zero. An unresolved type
-## folds to zero, matching the native lower's safe default.
-wat_try_success_disc := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> i64 {
-  ebn := base_type_name(src, s, n)
-  di := enum_decl_of(decls, src, ebn.s, ebn.n)
-  if di < 0 { return 0 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
-  mut f := d.fields_head
-  mut idx := 0
-  mut res := 0
-  loop {
-    match f {
-      Some(fq) => {
-        fd := deref(fld_p(fq))
-        nm := str_at((src + fd.ns), fd.nl)
-        if nm == "Some" { res = idx }
-        if nm == "Ok" { res = idx }
-        idx += 1
-        f = fd.next
-      }
-      None => { break }
-    }
-  }
-  res
-}
+## `wat_try_success_disc` deleted (#683, criterion 2): 23 lines byte-identical to `lower.al`'s
+## `try_success_disc`, both reaching every callee — `base_type_name`, `enum_decl_of`, `fld_p`, `str_at`,
+## `decl_at` — through `lower_layout`. The one copy is now `lower_layout::try_success_disc`, and the call
+## site in this module calls it.
 
 ## The callee-name span of an expression IF it is a `Call` (`f(…)`), else {0,0}.
 ## BAND — THE SINGLE-ARM PROBE BAND (`expr_call_name` … `expr_var_name`, and the same shape at
@@ -6291,7 +6269,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       if tsp.n == 0 {
         push_str(sb, "(unreachable) (; unsupported try operand ;)\n")
       } else {
-        sdisc := wat_try_success_disc(decls, src, tsp.s, tsp.n, a)
+        sdisc := lower_layout::try_success_disc(decls, src, tsp.s, tsp.n, a)
         dsc := wat_defer_scratch(pcount, body_head, src, a, decls)
         push_str(sb, "(block (result i64) (local.set ")
         push_int(sb, dsc)

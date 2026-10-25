@@ -68,21 +68,13 @@ ulimit -c 0
 # `dump_rc`/`nsel` are the `alatyr x86-ir <file>` dump's exit and its selected-function count; the
 # observation columns are `-` when the program was not built twice.
 
-# oracle <file> — what the program's OWN header declares as its expected outcome. The regression tests
-# in test/ state it in prose that is already machine-readable (`## build_reject`, `## Expected exit: 42`,
-# `## Expected: TRAP (SIGILL, exit 132)`), and until now ir_diff never read it: it classified a row as
-# build/exit/stdout and stopped, so every disagreement was "unexplained" even when the file named the
-# culprit itself. Prints `reject`, `exit:<N>`, or `none`.
-oracle() {
-  local f="$1" hdr
-  [ -f "$f" ] || { echo none; return; }
-  hdr=$(head -n 30 "$f")
-  if printf '%s\n' "$hdr" | grep -qiE '^##[[:space:]]*build_reject'; then echo reject; return; fi
-  local n
-  n=$(printf '%s\n' "$hdr" | grep -iE '^##[[:space:]]*expected' \
-        | grep -oiE '(exit|status)[[:space:]]*[:=]?[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -1)
-  if [ -n "$n" ]; then echo "exit:$n"; else echo none; fi
-}
+# oracle <file> — what the program's OWN header declares as its expected outcome: `reject`, `exit:<N>`,
+# or `none`. It lives in `scripts/fixture_oracle.sh`, shared with `xbackend_diff.sh`: two readers of the
+# same declaration is the same defect class the IR removes from the emitters — one question, two places,
+# free to drift. The regression tests in test/ state it in prose that is already machine-readable
+# (`## build_reject`, `## Expected exit: 42`, `## Expected: TRAP (SIGILL, exit 132)`), and until this
+# existed ir_diff never read it: every disagreement was "unexplained" even when the file named the culprit.
+. "$(dirname "${BASH_SOURCE[0]}")/fixture_oracle.sh"
 
 # verdict <oracle> <x86_phase> <x86_exit> <ir_phase> <ir_exit> — who is wrong, given what the program
 # declares. A refusal the emitter documents and the IR path does not need is a STOPGAP, not a defect;
