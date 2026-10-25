@@ -316,19 +316,31 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   backend-local function anywhere in its **transitive closure**. The closure is the whole point: a copy
   that calls `a64_local_arrty_span` is two decisions, and lifting it would leave a "shared" copy answering
   from a different place per target — the bug class this exercise removes, reintroduced by the removal.
-  Measured on this tree: **1 family liftable, 18 blocked**, each blocker named — `*_operand_unsigned` and
-  the span chain (`*_local_arrty_span`, `*_slice_elem_span`, *_ann_span`) block `index_elem_unsigned`,
-  `unchecked_init_unsigned` and `hole_index_signed`; `*_inst_add` is blocked by its own instance-table
-  globals; `local_scan` and `emit_narrow` are not even triples (wasm's differ in NAME, `local_slot_scan`,
-  `wat_narrow_pre/post`, so they are different decisions wearing a family's clothes). The one liftable
-  family, `local_ann_unsigned`, is lifted on the slice branch that carries the src change
-  (`slice/signed-band-one-copy`), not here — this branch is src-free, and a note about what is deleted
-  belongs where the deletion is. After the lift the instrument reports the family gone from its own list,
-  so the deletion is confirmed by the measurement that proposed it.
-  A first pass at this question, done by hand, called four families liftable (201 lines) because it
-  checked identity and globals but not callees; three of the four reach a backend-local function. That is
-  recorded here because it is the same failure as §3.8's dirty-tree number: a verdict taken from one
-  property of a thing, when the thing has several.
+  Measured on main `fdc40f6`: **24 families reported — 4 liftable (183 lines of definition), 20 blocked**,
+  each blocker named: `*_operand_unsigned` and the span chain (`*_local_arrty_span`, `*_slice_elem_span`,
+  `*_ann_span`) block `index_elem_unsigned`, `unchecked_init_unsigned` and `hole_index_signed`; `*_inst_add`
+  is blocked by its own instance-table globals (`WAT_INST_TL3`, `WAT_INST_TS3`, `WAT_INST_TL`); `local_scan`
+  and `emit_narrow` are not even triples (wasm's differ in NAME, `local_slot_scan`, `wat_narrow_pre/post`, so
+  they are different decisions wearing a family's clothes).
+- **the blocked set contains a ring, and the ring is why a per-family answer is the wrong question.** Five of
+  the twenty — `operand_narrow`, `operand_signed`, `operand_signed_dep`, `shift_call_signed`,
+  `bin_init_signed` — are blocked by *each other*: `operand_signed` calls `operand_signed_dep`, which calls
+  `bin_init_signed`, which calls `shift_call_signed`, which calls back. Every one of them bottoms out in a
+  backend-local callee that happens to be another member of the same signedness decision, so no single family
+  can ever be lifted alone and the census would report them blocked forever. They move as one unit or not at
+  all — which is what `slice/signed-band-one-copy` does: it puts the whole mutually-recursive set into
+  `lower_layout`, where the closure closes over shared code instead of over three targets. Measured there:
+  **0 liftable, 15 blocked** — nine families gone from the report (the four mechanically liftable plus those
+  five), none added, and `bytecmp.sh` over the whole corpus × five verbs reports `same=9590 byte-diff=0`,
+  so the unit that moved is proven to emit the same bytes. A tool that answers "can THIS family be lifted"
+  is not yet a tool that answers "which copies can go away"; the ring is the difference, and it was invisible
+  until the closure was walked.
+  The gate holds `liftable=0` and has teeth: run against main it exits 1 naming all four (`DELETE IT`), run
+  against the slice branch it exits 0.
+  A first pass at this question, done by hand, picked four families and called three of them liftable when
+  they were not, because it checked identity and globals but not callees — the four it happened to pick were
+  not the four the closure finds. That is recorded here because it is the same failure as §3.8's dirty-tree
+  number: a verdict taken from one property of a thing, when the thing has several.
 - the selectors themselves are clean: `src/{lower,aarch64,riscv64,wat}/isel.al` contain zero `Expr::`
   and `Stmt::` references, so every shape query in this table is legacy-emitter-only — which is what
   makes slice 9's deletion the whole story rather than a partial one.
