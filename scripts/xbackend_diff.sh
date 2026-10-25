@@ -103,6 +103,10 @@
 # Exit 0 = ran (findings or not; this is REPORTING ONLY). 2 = manifest missing/malformed or bad usage.
 # 3 = --self-test failed: this script is broken and its output means nothing.
 set -u
+## The fixture-declaration oracle, shared with `ir_diff.sh` (#683): one reader of `## build_reject`
+## and `## Expected exit: N`, because two readers of the same declaration drift apart — the very
+## defect class the IR removes from the emitters, applied to the tools that judge the emitters.
+. "$(dirname "${BASH_SOURCE[0]}")/fixture_oracle.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 MODE=table
@@ -188,7 +192,7 @@ test/unchecked_div_min_neg1.al'
 ## The join. Reads a manifest, writes one line per disagreeing (path, twin):
 ##   class TAB backend TAB path TAB x86-state TAB twin-state TAB tag
 ## `all=1` also emits REFUSED-LATE. Kept a function so the self-test feeds it synthetic manifests.
-xb_ratchet() { # baseline-file paths rows hw-defined raw-escape — 0 held, 1 GREW, 2 the baseline is unusable
+xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained — 0 held, 1 GREW, 2 unusable
   ## The ratchet (#922): the counters used to be REPORTING ONLY — `--count` ended in `exit 0`
   ## whatever it had just printed, so a PR that ADDED a cross-backend disagreement passed the gate
   ## and the only trace was a number in a log nobody reads. That is how `paths` reached 950.
@@ -196,7 +200,11 @@ xb_ratchet() { # baseline-file paths rows hw-defined raw-escape — 0 held, 1 GR
   ## never demands zero. The 833 TRAP paths are unimplemented lowerings (IR slices 3–8), not
   ## defects this change introduced; demanding zero today would make the gate permanently red and
   ## teach everyone to ignore it, which is the failure mode being repaired.
-  local f="$1" bp br bh bn
+  ## `unexplained` (#683, criterion 3) is the ONE counter that DOES demand zero, and it is held
+  ## separately for that reason: a quiet normal-exit disagreement that nothing declares is a program
+  ## two backends answer differently with no stated cause, which is not a backlog item but a live wrong
+  ## value. Documented hardware-defined rows never reach it (they are filtered before it is counted).
+  local f="$1" bp br bh bn bu
   [ -s "$f" ] || { echo "xbackend ratchet: NO baseline at $f — a ratchet cannot hold a line it does" \
     ; echo "  not have. Write one with: scripts/xbackend_diff.sh --ratchet --write" >&2; return 2; }
   bp="$(awk -F= '/^paths=/{print $2}' "$f" | head -1)"
@@ -205,7 +213,18 @@ xb_ratchet() { # baseline-file paths rows hw-defined raw-escape — 0 held, 1 GR
   ## `raw-escape=` arrived with this class, so an older baseline simply has none of them recorded:
   ## absent reads as 0, which is the strictest reading (any path newly claimed is then reported).
   bn="$(awk -F= '/^raw-escape=/{print $2}' "$f" | head -1)"; bn="${bn:-0}"
-  case "$bp$br$bh$bn" in ''|*[!0-9]*) echo "xbackend ratchet: baseline at $f is malformed" >&2; return 2 ;; esac
+  bu="$(awk -F= '/^unexplained=/{print $2}' "$f" | head -1)"; bu="${bu:-0}"
+  case "$bp$br$bh$bn$bu" in ''|*[!0-9]*) echo "xbackend ratchet: baseline at $f is malformed" >&2; return 2 ;; esac
+  ## The unexplained ceiling first, and it fails on its own: a growing backlog that happens to shrink
+  ## `paths` must not carry a live wrong value past the gate.
+  if [ "${6:-0}" -gt "$bu" ]; then
+    echo "xbackend ratchet: FAIL — UNEXPLAINED quiet disagreements GREW $bu -> ${6:-0}."
+    echo "  A backend exited NORMALLY, quietly, with an answer different from the reference's, and neither"
+    echo "  the fixture's header nor a hardware-defined citation says why. Criterion 3 holds this at zero:"
+    echo "  fix the lowering, refuse it at compile time with a located diagnostic, or declare the expected"
+    echo "  exit in the fixture — do NOT raise this ceiling."
+    return 1
+  fi
   if [ "$2" -gt "$bp" ] || [ "$3" -gt "$br" ]; then
     echo "xbackend ratchet: FAIL — the disagreement count GREW past the baseline."
     echo "    paths $bp -> $2   rows $br -> $3"
@@ -497,6 +516,17 @@ if [ "$MODE" = selftest ]; then
   ok "ratchet: a pre-raw-escape baseline holds at 0" "$(xb_ratchet "$T/old" 10 20 1 0 >/dev/null; echo $?)" 0
   printf 'paths=abc\nrows=20\nhw-defined=1\n' > "$T/bad"
   ok "ratchet: a malformed baseline is not a pass" "$(xb_ratchet "$T/bad" 10 20 1 1 >/dev/null 2>&1; echo $?)" 2
+  ## The UNEXPLAINED ceiling (#683, criterion 3) — the one counter that demands zero, and it fails on
+  ## its own: a change that shrinks the backlog while introducing ONE quiet wrong value must not pass.
+  printf 'paths=10\nrows=20\nhw-defined=1\nraw-escape=1\nunexplained=0\n' > "$T/u"
+  ok "ratchet: unexplained held at zero"        "$(xb_ratchet "$T/u" 10 20 1 1 0 >/dev/null; echo $?)" 0
+  ok "ratchet: unexplained FAIL on one more"    "$(xb_ratchet "$T/u" 10 20 1 1 1 >/dev/null; echo $?)" 1
+  ok "ratchet: one quiet wrong value fails even when paths and rows SHRINK" \
+     "$(xb_ratchet "$T/u" 4 8 1 1 1 >/dev/null; echo $?)" 1
+  ## A baseline predating this counter reads as ZERO — the strictest reading, so a quiet wrong value
+  ## introduced after it cannot pass unseen because the line was never drawn.
+  ok "ratchet: a pre-unexplained baseline holds at 0" "$(xb_ratchet "$T/base" 10 20 1 1 0 >/dev/null; echo $?)" 0
+  ok "ratchet: a pre-unexplained baseline FAILS on one" "$(xb_ratchet "$T/base" 10 20 1 1 1 >/dev/null; echo $?)" 1
   if [ "$fails" = 0 ]; then echo "xbackend_diff self-test: $ran/$ran ok"; exit 0; fi
   echo "xbackend_diff self-test: $fails of $ran check(s) FAILED — this script's output proves nothing"
   exit 3
@@ -591,17 +621,45 @@ if [ -n "$ROWS" ]; then
   nraw="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "RAW-ESCAPE"' | wc -l | tr -d ' ')"
 fi
 nsrc="$(awk -F'\t' '!/^#/ && NF >= 6 && $1 == "x86_64"' "$MANIFEST" | wc -l | tr -d ' ')"
-echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw raw-escape=$nraw"
+## ── attribution: which disagreements does something already explain? (#683, criterion 3) ──────────
+## `paths=`/`rows=` is #683's elimination queue and it counts a TRAP on a twin as a disagreement, which
+## AGENTS.md explicitly permits ("a trap is acceptable, a wrong value is not"). Criterion 3 asks a
+## different question, and conflating the two is how a gate either cries wolf or says nothing: it wants
+## ZERO *unexplained* disagreements, with only documented hardware-defined ones remaining. So the quiet
+## rows are attributed here, row by row:
+##   HW-DEFINED / RAW-ESCAPE  — documented in this script, by spec citation, and excluded from paths=.
+##   DECLARED                 — the fixture's own header states this exit code (`oracle`, shared with
+##                              ir_diff through scripts/fixture_oracle.sh). The file said it would.
+##   UNEXPLAINED              — a backend exited NORMALLY, quietly, with an answer different from the
+##                              reference's, and nothing says why. THIS is the number criterion 3 drives
+##                              to zero and the gate holds; a trap, a refusal and an assembler complaint are
+##                              loud and are not in it.
+nquiet=0; nattrib=0; nunexpl=0
+if [ -n "$ROWS" ]; then
+  while IFS=$'\t' read -r rcls rbe rpath rref rst rtag; do
+    [ "$rtag" = quiet ] || continue
+    case "$rcls" in HW-DEFINED|RAW-ESCAPE) continue ;; esac
+    nquiet=$((nquiet + 1))
+    if oracle_explains "$rpath" "${rst#V}"; then
+      nattrib=$((nattrib + 1))
+    else
+      nunexpl=$((nunexpl + 1))
+      printf '  UNEXPLAINED %s  %s answered %s where the reference answered otherwise, quietly  (oracle: %s)\n' \
+        "$rpath" "$rbe" "$rst" "$(oracle "$rpath")"
+    fi
+  done <<< "$ROWS"
+fi
+echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw raw-escape=$nraw quiet=$nquiet attributed=$nattrib unexplained=$nunexpl"
 if [ "$RATCHET_WRITE" = 1 ]; then
   ## Writing the baseline is a deliberate, reviewable act: it moves the line the gate holds. The
   ## file records the manifest it was measured from, so a baseline cannot be moved without the
   ## manifest that justifies it being in the same diff.
-  printf 'paths=%s\nrows=%s\nhw-defined=%s\nraw-escape=%s\n' "$npaths" "$nrows" "$nhw" "$nraw" > "$RATCHET_FILE" || exit 2
+  printf 'paths=%s\nrows=%s\nhw-defined=%s\nraw-escape=%s\nunexplained=%s\n' "$npaths" "$nrows" "$nhw" "$nraw" "$nunexpl" > "$RATCHET_FILE" || exit 2
   echo "xbackend ratchet: WROTE $RATCHET_FILE (paths=$npaths rows=$nrows hw-defined=$nhw raw-escape=$nraw)"
   exit 0
 fi
 if [ "$RATCHET" = 1 ]; then
-  xb_ratchet "$RATCHET_FILE" "$npaths" "$nrows" "$nhw" "$nraw"
+  xb_ratchet "$RATCHET_FILE" "$npaths" "$nrows" "$nhw" "$nraw" "$nunexpl"
   rc=$?
   [ "$MODE" = count ] && exit $rc
 fi
