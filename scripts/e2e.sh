@@ -8944,6 +8944,10 @@ run checked_div_zero 132
 run checked_udiv_zero 132
 run checked_rem_zero 132
 run checked_div_min_neg1 132
+## PROBE (#1049): unary `−` on i64 at MIN — spec §6.1/§6.4 + Stdlib §4.4 want 132; the parser's
+## `Unchecked(0 - x)` desugaring and lowering's `expr_is_zero(l)` shape test leave no guard, so
+## this is expected to report `got 0`. The number is the measurement, not a landing assertion.
+run probe_neg_min_signed 132
 ## #606 — `MIN / -1` is a member of the checked-overflow set at EVERY signed width, not only i64.
 ## Each backend's guard compared the dividend against the 64-bit INT64_MIN, which a narrow dividend
 ## can never equal, so `(-128 : i8) / (-1 : i8)` answered 128 — a value OUTSIDE `i8` living in an
