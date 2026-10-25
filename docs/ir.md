@@ -286,6 +286,21 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   applied to them and they are now the single `lower_layout::operand_narrow`. Its neighbours do have to
   wait, and for named reasons: `*_operand_unsigned` reads the twelve instance-substitution globals
   (slice 6), and `*_emit_narrow` is per-target ISA spelling, which is not a duplicated decision at all.
+- **the four `x86 REFUSE / everything else RUNS` rows are one class, and the spec already decides
+  them.** `corroboration.sh` shows x86 is the ONLY path that refuses, while x86-ir, aarch64, riscv64 and
+  wasm agree on the value read off the source — so these are stopgaps in the legacy emitter, which §7.2
+  says move into the builder or sema at slice 9; nothing waits on a language decision. `reject_local_name_two_aggregate_types.al`
+  is the sharpest of the four and it is NOT an open question either: `spec/spec/40-declarations.md` says
+  a declaration in an inner scope may shadow an outer name and that same-scope redeclaration is what is
+  rejected, so a nested declaration followed by an enclosing-scope declaration of a different enum type is
+  VALID — the fixture's own header cites exactly this and records that the other three backends answer
+  109. The program is valid, x86 refuses it because its slot map keys a frame slot by NAME for the whole
+  function (§2.4 row 6), and the fixture asserts the refusal: the name `reject_*` is the corpus manifest's
+  authoritative "must refuse" class, so the repository currently encodes the workaround as the requirement.
+  Closing it is two steps in one order, not a decision: make x86's slot map per-binding like
+  `collect_slots`, then reclassify the fixture to accept. Until the first is done the second would turn
+  the gate red, and until both are done this row stays a disagreement with a named cause — which is what
+  §3.8's attribution is for.
 - **row 11 was wrong as written.** `enum_inst_words` has ONE definition (`src/lower_layout.al`), imported
   by all three twins; there is no copy to delete. wasm's real gap is that it calls `enum_max_arity`
   instead, leaving its `enum_inst_words` import dead — a call-site fix, not a deletion.
