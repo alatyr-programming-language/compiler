@@ -1,0 +1,4 @@
+x86_64=4
+aarch64=0
+riscv64=0
+wasm=0

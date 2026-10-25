@@ -1,0 +1,26 @@
+5
+# ir_diff: programs where the x86 emitter and the x86-via-IR path disagree, held so the count cannot
+# grow. Measured on a clean checkout of upstream main 950a1c41, corpus 2331 programs
+# (with-ir=638, ir-fns=1129, agree=633). Each row below is named in the gate output; four of the
+# five are ONE class, and naming it is what makes the fifth worth reading on its own.
+#
+# CLASS ACCEPT-WHEN-EMITTER-REFUSES (4 rows) — x86 refuses the program (build 1) and the shared-IR
+# path accepts it and runs, answering a value. A rejection the emitter enforces and the IR path does
+# not is unsoundness in the IR path: the program reaches a binary. These are not "the IR path is
+# more permissive, fine" — for reject_local_name_two_aggregate_types.al the file's own header says
+# the program is VALID per Declarations §5/§6.1 and that the other three backends answer 109, so the
+# test encodes x86's refusal as expected while the spec says the run should succeed. Either the
+# refusal is the defect and the test is a workaround, or the IR path is wrong to run it; that is a
+# decision to take in the spec, not to guess, and it is why these rows are held rather than waived.
+#   test/deep_field_agg_enum_reject.al        x86 build 1   x86-ir run 42
+#   test/deep_field_agg_var_reject.al         x86 build 1   x86-ir run 42
+#   test/packed_in_plain_struct.al            x86 build 1   x86-ir run 20
+#   test/reject_local_name_two_aggregate_types.al  x86 build 1   x86-ir run 109
+#
+# WRONG EXIT CODE (1 row) — both paths build and run, and answer differently: 25 against 132. This
+# is a value the program gets wrong on one of the two paths, and the file names the mechanism (a
+# negated operand), the same family as the `neg` mnemonic that exists on x86_64 and i386 alone.
+#   test/lower_bugA_neg_operand.al            x86 run 25    x86-ir run 132
+#
+# Lowering the number means fixing a row, not editing this file: a row leaves by being fixed, and
+# the class it belonged to should be gone with it.

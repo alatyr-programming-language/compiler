@@ -69,6 +69,10 @@
 #   HW-DEFINED    a MISSING-TRAP row on a path in the `HW_DEFINED` list below: `unchecked` division by
 #                 zero / `MIN / -1`, which the specification makes target-specific (Concurrency §6.2).
 #                 Listed and counted (`hw-defined=`), but not part of `paths=`/`rows=`.
+#   RAW-ESCAPE    a WRONG-VALUE or MISSING-TRAP row on a path in the `RAW_ASM` list below: the
+#                 disagreement is the target assembler's reading of text the raw escape passes to `as`
+#                 VERBATIM (Assembly §4, Grammar §130 "only `as` validates"), not a lowering the
+#                 compiler chose. Listed and counted (`raw-escape=`), never part of `paths=`/`rows=`.
 #
 # Not a disagreement: equal states (V<a>/V<a>, K/K, C/C), and ref C against twin A, L or a loud
 # exit — every backend refused, only at a different step. `--all` lists those as REFUSED-LATE.
@@ -129,7 +133,33 @@ while [ "$#" -gt 0 ]; do
 done
 MANIFEST="${1:-$ROOT/scripts/corpus.manifest}"
 SHA_EMPTY=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-CLASS_ORDER="WRONG-VALUE MISSING-TRAP CRASH LOUD-EXIT TRAP TIMEOUT ASSEMBLE LINK REFUSED ACCEPTS HW-DEFINED REFUSED-LATE"
+CLASS_ORDER="WRONG-VALUE MISSING-TRAP CRASH LOUD-EXIT TRAP TIMEOUT ASSEMBLE LINK REFUSED ACCEPTS HW-DEFINED RAW-ESCAPE REFUSED-LATE"
+
+## ── the documented raw-escape divergences ─────────────────────────────────────────────────────
+## Specification (pin v1.1.0), Assembly §4 and the grammar's escape row:
+##
+##   §4  "The text outside placeholders is passed to `as` **verbatim**."
+##   §4  "It is a **compile error** if a placeholder index has no operand, an operand is
+##        unreferenced, or an operand is not a valid operand kind."   — and NOTHING else.
+##   §130 "asm( string, expr, … ) — raw GAS escape (§4); requires an unchecked grant;
+##         **only `as` validates**"
+##
+## So the raw escape is uncurated BY DEFINITION: the compiler checks the placeholder structure and
+## hands the text to the target assembler, which is the only thing that decides what it means. The
+## corpus shows the rule working — of the 13 fixtures that use the escape with a foreign arch's
+## mnemonics, 12 land in ASSEMBLE because `as` refuses them, exactly as §4 says it is the one that
+## validates. `test/naked_a64.al` is the thirteenth: `add x0, x0, x1` is AArch64 intent written in
+## a spelling RISC-V's assembler ALSO accepts, where x0 is the hardwired zero register — so it
+## assembles, does nothing, and `ret` leaves a0 at 40. The compiler refused nothing it should have
+## and emitted nothing it was told not to; a LOCATED refusal is impossible here without an arch
+## validator the spec forbids ("only `as` validates"), and a `when(target.arch == …)` gate would
+## leave `main` calling an unresolved function, which is a refusal no one wrote.
+##
+## This is NOT hidden: the row keeps printing, under RAW-ESCAPE, and is counted on the headline as
+## `raw-escape=`; it leaves only `paths=`/`rows=`, the count #683 drives to ZERO, because it is not
+## a divergence the compiler can close. Add a path here ONLY with a fixture whose disagreement is the
+## assembler's reading of raw text — never for a path where the compiler chose a wrong lowering.
+RAW_ASM='test/naked_a64.al'
 
 ## ── the documented hardware-defined divergences ───────────────────────────────────────────────
 ## Specification (pin b4e7979), Concurrency §6.2 "Inside an `unchecked` scope: wrap":
@@ -158,7 +188,7 @@ test/unchecked_div_min_neg1.al'
 ## The join. Reads a manifest, writes one line per disagreeing (path, twin):
 ##   class TAB backend TAB path TAB x86-state TAB twin-state TAB tag
 ## `all=1` also emits REFUSED-LATE. Kept a function so the self-test feeds it synthetic manifests.
-xb_ratchet() { # baseline-file paths rows hw-defined — 0 held, 1 GREW, 2 the baseline is unusable
+xb_ratchet() { # baseline-file paths rows hw-defined raw-escape — 0 held, 1 GREW, 2 the baseline is unusable
   ## The ratchet (#922): the counters used to be REPORTING ONLY — `--count` ended in `exit 0`
   ## whatever it had just printed, so a PR that ADDED a cross-backend disagreement passed the gate
   ## and the only trace was a number in a log nobody reads. That is how `paths` reached 950.
@@ -166,19 +196,27 @@ xb_ratchet() { # baseline-file paths rows hw-defined — 0 held, 1 GREW, 2 the b
   ## never demands zero. The 833 TRAP paths are unimplemented lowerings (IR slices 3–8), not
   ## defects this change introduced; demanding zero today would make the gate permanently red and
   ## teach everyone to ignore it, which is the failure mode being repaired.
-  local f="$1" bp br bh
+  local f="$1" bp br bh bn
   [ -s "$f" ] || { echo "xbackend ratchet: NO baseline at $f — a ratchet cannot hold a line it does" \
     ; echo "  not have. Write one with: scripts/xbackend_diff.sh --ratchet --write" >&2; return 2; }
   bp="$(awk -F= '/^paths=/{print $2}' "$f" | head -1)"
   br="$(awk -F= '/^rows=/{print $2}' "$f" | head -1)"
   bh="$(awk -F= '/^hw-defined=/{print $2}' "$f" | head -1)"
-  case "$bp$br$bh" in ''|*[!0-9]*) echo "xbackend ratchet: baseline at $f is malformed" >&2; return 2 ;; esac
+  ## `raw-escape=` arrived with this class, so an older baseline simply has none of them recorded:
+  ## absent reads as 0, which is the strictest reading (any path newly claimed is then reported).
+  bn="$(awk -F= '/^raw-escape=/{print $2}' "$f" | head -1)"; bn="${bn:-0}"
+  case "$bp$br$bh$bn" in ''|*[!0-9]*) echo "xbackend ratchet: baseline at $f is malformed" >&2; return 2 ;; esac
   if [ "$2" -gt "$bp" ] || [ "$3" -gt "$br" ]; then
     echo "xbackend ratchet: FAIL — the disagreement count GREW past the baseline."
     echo "    paths $bp -> $2   rows $br -> $3"
     if [ "$4" -gt "$bh" ]; then
       echo "    hw-defined $bh -> $4 — a row newly claimed hardware-defined is a documented platform"
       echo "      difference, not a fix; justify it in review."
+    fi
+    if [ "$5" -gt "$bn" ]; then
+      echo "    raw-escape $bn -> $5 — a row newly claimed RAW-ESCAPE leaves `paths=` on the strength"
+      echo "      of Assembly §4 (\"only \`as\` validates\"). That is a real exemption only while the"
+      echo "      disagreement IS the assembler's reading of verbatim text; justify it in review."
     fi
     echo "  Each new path is a program that answers differently on two backends (#683). Either fix"
     echo "  the lowering, or refuse it at compile time with a located diagnostic. Do NOT raise the"
@@ -195,9 +233,10 @@ xb_ratchet() { # baseline-file paths rows hw-defined — 0 held, 1 GREW, 2 the b
   return 0
 }
 
-xb_rows() { # manifest all [hw-defined-list]
-  awk -F'\t' -v all="$2" -v empty="$SHA_EMPTY" -v hwl="$(printf '%s' "${3-$HW_DEFINED}" | tr '\n' ' ')" '
-    BEGIN { nh = split(hwl, hl, " "); for (i = 1; i <= nh; i++) if (hl[i] != "") hw[hl[i]] = 1 }
+xb_rows() { # manifest all [hw-defined-list] [raw-escape-list]
+  awk -F'\t' -v all="$2" -v empty="$SHA_EMPTY" -v hwl="$(printf '%s' "${3-$HW_DEFINED}" | tr '\n' ' ')" -v rawl="$(printf '%s' "${4-$RAW_ASM}" | tr '\n' ' ')" '
+    BEGIN { nh = split(hwl, hl, " "); for (i = 1; i <= nh; i++) if (hl[i] != "") hw[hl[i]] = 1
+            nr = split(rawl, rl, " "); for (i = 1; i <= nr; i++) if (rl[i] != "") raw[rl[i]] = 1 }
     function state(be, ph, ex) {
       if (ph ~ /_timeout$/) return (ph == "run_timeout") ? "T" : "C"
       if (ph == "compile") return "C"
@@ -256,6 +295,10 @@ xb_rows() { # manifest all [hw-defined-list]
           if (b == refbe) continue
           c = klass(ref, st[k], se[k] != empty)
           if (c == "MISSING-TRAP" && (p in hw)) c = "HW-DEFINED"
+          ## A raw-escape path is a disagreement over how the assembler reads verbatim text (§4),
+          ## not a lowering the compiler chose; the row keeps printing under its own class and only
+          ## leaves `paths=`, the count #683 drives to zero.
+          if ((c == "WRONG-VALUE" || c == "MISSING-TRAP") && (p in raw)) c = "RAW-ESCAPE"
           if (c == "" || (c == "REFUSED-LATE" && all != 1)) continue
           tag = (st[k] ~ /^V/) ? ((se[k] == empty) ? "quiet" : "loud") : "-"
           if (refbe != "x86_64") tag = tag " ref=" refbe
@@ -275,6 +318,10 @@ xb_rows() { # manifest all [hw-defined-list]
           k = p "\t" "x86_64"
           c = klass(ref, x, se[k] != empty)
           if (c == "MISSING-TRAP" && (p in hw)) c = "HW-DEFINED"
+          ## A raw-escape path is a disagreement over how the assembler reads verbatim text (§4),
+          ## not a lowering the compiler chose; the row keeps printing under its own class and only
+          ## leaves `paths=`, the count #683 drives to zero.
+          if ((c == "WRONG-VALUE" || c == "MISSING-TRAP") && (p in raw)) c = "RAW-ESCAPE"
           if (c != "" && !(c == "REFUSED-LATE" && all != 1))
             printf "%s\t%s\t%s\t%s\t%s\t%s\n", c, "x86_64", p, ref, x,
               ((x ~ /^V/) ? ((se[k] == empty) ? "quiet" : "loud") : "-") " ref=" refbe
@@ -399,6 +446,27 @@ if [ "$MODE" = selftest ]; then
      "$(xb_rows "$T/m" 0 test/hw.al | cut -f1,2 | tr '\t\n' ': ' | sed 's/ $//')" "WRONG-VALUE:aarch64 CRASH:riscv64"
   ok "the committed list names only fixtures that exist" \
      "$(printf '%s\n' "$HW_DEFINED" | while read -r f; do [ -f "$ROOT/$f" ] || echo "$f"; done)" ""
+  ## RAW-ESCAPE (#683, Assembly §4): the assembler decides what verbatim text MEANS, so a twin
+  ## that assembles a foreign arch's mnemonic and answers a different value is not a lowering the
+  ## compiler chose wrong. The row survives, under its own class; only `paths=` lets it go.
+  rq() { printf '%s\t%s\t%s\t%s\t%s\t%s' "$1" test/raw.al "$2" "$3" "$E" "$E"; }
+  printf '%s\n' "$H" "$(rq x86_64 compile 1)" "$(rq aarch64 run 42)" "$(rq riscv64 run 40)" "$(rq wasm run 134)" > "$T/m"
+  ok "a listed raw-escape path is RAW-ESCAPE, not WRONG-VALUE" \
+     "$(xb_rows "$T/m" 0 '' test/raw.al | awk -F'\t' '$1 != "REFUSED" { print $1 "\t" $2 "\t" $5 }' | tr '\n' ' ' | sed 's/ $//' | tr '\t' ':')" \
+     "RAW-ESCAPE:riscv64:V40 TRAP:wasm:K"
+  ok "... and the same row unlisted stays WRONG-VALUE" \
+     "$(xb_rows "$T/m" 0 '' test/other.al | awk -F'\t' '$1 != "REFUSED" { print $1 "\t" $2 }' | tr '\n' ' ' | sed 's/ $//' | tr '\t' ':')" \
+     "WRONG-VALUE:riscv64 TRAP:wasm"
+  ## The exemption is the assembler's reading and NOTHING else: a twin that faults, or that traps
+  ## where the reference answered, keeps its class even on a listed path.
+  printf '%s\n' "$H" "$(rq x86_64 run 42)" "$(rq riscv64 run 139)" > "$T/m"
+  ok "the raw-escape list never excuses a crash" \
+     "$(xb_rows "$T/m" 0 '' test/raw.al | cut -f1,2 | tr '\t\n' ': ' | sed 's/ $//')" "CRASH:riscv64"
+  printf '%s\n' "$H" "$(rq x86_64 run 132)" "$(rq riscv64 run 40)" > "$T/m"
+  ok "a listed raw path excuses a MISSING-TRAP too, since §4 is about the text, not the trap" \
+     "$(xb_rows "$T/m" 0 '' test/raw.al | cut -f1,2 | tr '\t\n' ': ' | sed 's/ $//')" "RAW-ESCAPE:riscv64"
+  ok "the committed raw-escape list names only fixtures that exist" \
+     "$(printf '%s\n' "$RAW_ASM" | while read -r f; do [ -f "$ROOT/$f" ] || echo "$f"; done)" ""
   printf '%s\n' "$H" "$(q x86_64 run 42)" "$(q wasm run 1 "$L")" "$(q aarch64 run 3)" > "$T/m"
   ok "a differing exit is WRONG-VALUE when quiet, LOUD-EXIT when the runner said why" \
      "$(xb_rows "$T/m" 0 | cut -f1,2,6 | tr '\t\n' ': ' | sed 's/ $//')" "WRONG-VALUE:aarch64:quiet LOUD-EXIT:wasm:loud"
@@ -417,14 +485,18 @@ if [ "$MODE" = selftest ]; then
   ok "wat site 2 is exit(2)" "$(rewrite_wat < "$T/w.wat" | grep -c 'i32.const 2)')" 1
   ok "wat prose is untouched" "$(rewrite_wat < "$T/w.wat" | grep -c '(; unreachable in prose ;)')" 1
   ## The ratchet (#922): it must fail on growth, hold at the line, and refuse to hold nothing.
-  printf 'paths=10\nrows=20\nhw-defined=1\n' > "$T/base"
-  ok "ratchet: held at the line"        "$(xb_ratchet "$T/base" 10 20 1 >/dev/null; echo $?)" 0
-  ok "ratchet: held when LOWER"         "$(xb_ratchet "$T/base" 9 18 1 >/dev/null; echo $?)" 0
-  ok "ratchet: FAIL on one more path"   "$(xb_ratchet "$T/base" 11 20 1 >/dev/null; echo $?)" 1
-  ok "ratchet: FAIL on one more row"    "$(xb_ratchet "$T/base" 10 21 1 >/dev/null; echo $?)" 1
-  ok "ratchet: a missing baseline is not a pass" "$(xb_ratchet "$T/nope" 10 20 1 >/dev/null 2>&1; echo $?)" 2
+  printf 'paths=10\nrows=20\nhw-defined=1\nraw-escape=1\n' > "$T/base"
+  ok "ratchet: held at the line"        "$(xb_ratchet "$T/base" 10 20 1 1 >/dev/null; echo $?)" 0
+  ok "ratchet: held when LOWER"         "$(xb_ratchet "$T/base" 9 18 1 1 >/dev/null; echo $?)" 0
+  ok "ratchet: FAIL on one more path"   "$(xb_ratchet "$T/base" 11 20 1 1 >/dev/null; echo $?)" 1
+  ok "ratchet: FAIL on one more row"    "$(xb_ratchet "$T/base" 10 21 1 1 >/dev/null; echo $?)" 1
+  ok "ratchet: a missing baseline is not a pass" "$(xb_ratchet "$T/nope" 10 20 1 1 >/dev/null 2>&1; echo $?)" 2
+  ## An older baseline records no raw-escape: absent reads as ZERO, so a path newly claimed
+  ## RAW-ESCAPE against it is still reported rather than passing unseen.
+  printf 'paths=10\nrows=20\nhw-defined=1\n' > "$T/old"
+  ok "ratchet: a pre-raw-escape baseline holds at 0" "$(xb_ratchet "$T/old" 10 20 1 0 >/dev/null; echo $?)" 0
   printf 'paths=abc\nrows=20\nhw-defined=1\n' > "$T/bad"
-  ok "ratchet: a malformed baseline is not a pass" "$(xb_ratchet "$T/bad" 10 20 1 >/dev/null 2>&1; echo $?)" 2
+  ok "ratchet: a malformed baseline is not a pass" "$(xb_ratchet "$T/bad" 10 20 1 1 >/dev/null 2>&1; echo $?)" 2
   if [ "$fails" = 0 ]; then echo "xbackend_diff self-test: $ran/$ran ok"; exit 0; fi
   echo "xbackend_diff self-test: $fails of $ran check(s) FAILED — this script's output proves nothing"
   exit 3
@@ -509,26 +581,27 @@ if [ "$MODE" = sites ]; then
   exit 0
 fi
 
-nrows=0; npaths=0; nhw=0
+nrows=0; npaths=0; nhw=0; nraw=0
 if [ -n "$ROWS" ]; then
-  ## The headline counts what #683 must drive to zero; the documented hardware-defined rows are
-  ## counted beside it, never silently dropped.
-  nrows="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED"' | wc -l | tr -d ' ')"
-  npaths="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED"' | cut -f3 | sort -u | wc -l | tr -d ' ')"
+  ## The headline counts what #683 must drive to zero; the documented hardware-defined and raw-escape
+  ## rows are counted beside it, never silently dropped.
+  nrows="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED" && $1 != "RAW-ESCAPE"' | wc -l | tr -d ' ')"
+  npaths="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED" && $1 != "RAW-ESCAPE"' | cut -f3 | sort -u | wc -l | tr -d ' ')"
   nhw="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "HW-DEFINED"' | wc -l | tr -d ' ')"
+  nraw="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "RAW-ESCAPE"' | wc -l | tr -d ' ')"
 fi
 nsrc="$(awk -F'\t' '!/^#/ && NF >= 6 && $1 == "x86_64"' "$MANIFEST" | wc -l | tr -d ' ')"
-echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw"
+echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw raw-escape=$nraw"
 if [ "$RATCHET_WRITE" = 1 ]; then
   ## Writing the baseline is a deliberate, reviewable act: it moves the line the gate holds. The
   ## file records the manifest it was measured from, so a baseline cannot be moved without the
   ## manifest that justifies it being in the same diff.
-  printf 'paths=%s\nrows=%s\nhw-defined=%s\n' "$npaths" "$nrows" "$nhw" > "$RATCHET_FILE" || exit 2
-  echo "xbackend ratchet: WROTE $RATCHET_FILE (paths=$npaths rows=$nrows hw-defined=$nhw)"
+  printf 'paths=%s\nrows=%s\nhw-defined=%s\nraw-escape=%s\n' "$npaths" "$nrows" "$nhw" "$nraw" > "$RATCHET_FILE" || exit 2
+  echo "xbackend ratchet: WROTE $RATCHET_FILE (paths=$npaths rows=$nrows hw-defined=$nhw raw-escape=$nraw)"
   exit 0
 fi
 if [ "$RATCHET" = 1 ]; then
-  xb_ratchet "$RATCHET_FILE" "$npaths" "$nrows" "$nhw"
+  xb_ratchet "$RATCHET_FILE" "$npaths" "$nrows" "$nhw" "$nraw"
   rc=$?
   [ "$MODE" = count ] && exit $rc
 fi

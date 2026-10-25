@@ -429,8 +429,18 @@ bash scripts/ir_census.sh --self-test > "$IRV_LOG" 2>&1
 irv_st_rc=$?
 ALATYR="$ROOT/target/debug/alatyr" bash scripts/ir_census.sh --gate --quiet --jobs "${ALATYR_IR_JOBS:-8}" >> "$IRV_LOG" 2>&1
 irv_rc=$?
-grep -E "^(ir_census self-test:|ir self-test:|  (set|corpus|lib/|src/) |ir census gate:|\*\*\* ir census gate)" "$IRV_LOG"
+grep -E "^(ir_census self-test:|ir self-test:|  (set|corpus|lib/|src/) |ir census gate:|\*\*\* ir census gate|ir coverage per backend:|  backend |  (x86_64|aarch64|riscv64|wasm) +[0-9]|ir targets gate:|\*\*\* ir targets)" "$IRV_LOG"
 irv_cover="$(grep -E "^ir census gate: " "$IRV_LOG" | tail -1 | sed 's/^ir census gate: //')"
+# The per-backend coverage line (`--targets`, implied by --gate): the number that says each of the four
+# emitters really lowers from the shared IR, and the one §7.2 needs before it may delete a backend's
+# private copies. Absent means the measurement did not happen — unknown, so a failure, by the same rule
+# as the verifier's coverage line above.
+ir_cov="$(grep -E "^ir coverage per backend:" "$IRV_LOG" | tail -1)"
+if [ -z "$ir_cov" ]; then
+  echo "  (scripts/ir_census.sh --gate printed no per-backend coverage line — whether the four backends"
+  echo "   lower from the shared IR is unknown, treating as a failure)"
+  fail=1
+fi
 if [ "$irv_st_rc" != 0 ] || [ "$irv_rc" != 0 ]; then
   echo "  FAILURES (from $IRV_LOG): census self-test rc=$irv_st_rc, verifier gate rc=$irv_rc"
   grep -E "^(FAIL|  failed corpus runs|    |  VERIFIER REFUSALS)" "$IRV_LOG" | head -20 | sed 's/^/  /'
@@ -446,13 +456,35 @@ fi
 # itself only reports, but the record keys it reads are what 1e will switch x86's queries onto, so its
 # planted programs run here: a generic instance's operand is unknown with no context and typed in its
 # instance; a `comptime for` member's and a pack element's are typed only in their own iteration.
-echo "### SIGN CENSUS SELF-TEST (record contexts: instance, comptime-for member, pack element) ###"
+echo "### SIGN CENSUS (self-test, then the corpus ratchet: signedness from sema, not from shape) ###"
 SC_LOG="$LOGDIR/full_sign_census_selftest.log"
 ALATYR="$ROOT/target/debug/alatyr" bash scripts/sign_census.sh --self-test > "$SC_LOG" 2>&1
 sc_rc=$?
 grep -E "^(FAIL|sign_census self-test:)" "$SC_LOG"
 if [ "$sc_rc" != 0 ] || ! grep -qE "^sign_census self-test: [0-9]+ checks, 0 failed$" "$SC_LOG"; then
   echo "  FAILURES (from $SC_LOG): sign census self-test rc=$sc_rc"
+  fail=1
+fi
+# The corpus run, gated. Until now only the SELF-TEST ran here: the design's second clause — width and
+# signedness are attributes of the value, derived ONCE from sema (§3.8) — had a proof that the instrument
+# works and no number for the tree. Measured over 2319 programs it is NOT yet true on the twins: x86_64
+# disagrees with sema's recorded signedness at 4 of 17587 decisions (its queries were switched onto the
+# table), aarch64 at 165 of 448, riscv64 at 156 of 424, wasm at 158 of 435. Each one is a `/ % < > <= >=`
+# where the emitter chose signedness from the expression's SHAPE — the #764/#765/#766 family, found by
+# the census rather than by a generator's luck. The ratchet holds the line so the family cannot grow while
+# the slices close it; the counts are printed, because a held number nobody reads is not a gate.
+SCC_LOG="$LOGDIR/full_sign_census.log"
+ALATYR="$ROOT/target/debug/alatyr" bash scripts/sign_census.sh --gate --only corpus --list 8 --jobs "${ALATYR_IR_JOBS:-8}" > "$SCC_LOG" 2>&1
+scc_rc=$?
+grep -E "^(sign census — |  (backend|x86_64|aarch64|riscv64|wasm) |sign census counts |sign census gate:|\*\*\* sign census gate)" "$SCC_LOG"
+if [ "$scc_rc" != 0 ]; then
+  echo "  FAILURES (from $SCC_LOG): sign census gate rc=$scc_rc"
+  grep -E "^(sign ratchet:|\*\*\* sign census gate)" "$SCC_LOG" | head -8 | sed 's/^/  /'
+  fail=1
+fi
+if ! grep -q '^sign census counts corpus:' "$SCC_LOG"; then
+  echo "  (the sign census printed no machine-readable counts line — whether the twins agree with sema is"
+  echo "   unknown, treating as a failure)"
   fail=1
 fi
 
@@ -560,6 +592,39 @@ if [ "$ird_st_rc" != 0 ] || [ "$ird_rc" != 0 ] || [ -z "$ird_withir" ] || [ "$ir
   echo "  'ir diff:' line with a program compared (from $IRD_LOG):"
   grep -E "^(FAIL |ir_diff: )" "$IRD_LOG" | head -5 | sed 's/^/    /'
   fail=1
+fi
+
+# "reporting only" is how five disagreements between the two x86 paths stayed invisible for a cycle:
+# the numbers were printed, the gate was green, and nothing named them. The findings stay non-gating
+# as a differential (a wrong value is xbackend_diff's to gate), but the COUNT of programs where the
+# two paths disagree is now held, so it cannot grow and every row still in it stays named here.
+IRD_BASE="$ROOT/scripts/ir_diff.baseline"
+ird_now="$(sed -nE 's/^ir diff: .*disagree=([0-9]+) .*/\1/p' "$IRD_LOG" | tail -1)"
+if [ -z "$ird_now" ]; then
+  echo "  ir_diff printed no disagree= count to hold: the differential did not complete."
+  fail=1
+elif [ ! -f "$IRD_BASE" ]; then
+  echo "  no scripts/ir_diff.baseline: the disagree count is unheld. Record it with"
+  echo "    bash scripts/ir_diff.sh --quiet --jobs ${ALATYR_IR_JOBS:-8} | sed -nE 's/^ir diff: .*disagree=([0-9]+) .*/\1/p' | tail -1 > scripts/ir_diff.baseline"
+  echo "  after naming each program the count covers, or set it by hand to what is explained."
+  fail=1
+else
+  # only the first line is the number: the file's prose is full of corpus counts, and taking every
+  # digit in it would build a baseline no regression could ever exceed.
+  ird_base="$(head -1 "$IRD_BASE" | tr -dc '0-9')"
+  if [ -z "$ird_base" ]; then
+    echo "  scripts/ir_diff.baseline holds no number."
+    fail=1
+  elif [ "$ird_now" -gt "$ird_base" ]; then
+    echo "  IR DIFF REGRESSION: disagree=$ird_now, baseline $ird_base. The two x86 paths diverge on"
+    echo "  more programs than the recorded, explained set; each new row is a defect in the shared IR"
+    echo "  path or in the emitter, and neither is fixed by raising the baseline."
+    grep -E "^  DISAGREE " "$IRD_LOG" | head -10 | sed 's/^/    /'
+    fail=1
+  else
+    echo "  disagree=$ird_now held at or below baseline $ird_base; the rows it covers:"
+    grep -E "^  DISAGREE " "$IRD_LOG" | sed 's/^/    /'
+  fi
 fi
 
 echo "### SWEEPS (conditional) ###"
