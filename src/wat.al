@@ -183,189 +183,6 @@ wat_extern_symbol := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WSpan 
   WSpan(s = name_s, n = name_l)
 }
 
-## #544 stage 1 — THE WILDCARD CENSUS FOR THIS FILE, AND WHAT IT LICENSES.
-## `src/wat.al` carried 65 `_ =>` arms over an enumerable scrutinee: 40 over `ast::Expr` and 25 over
-## `ast::Stmt`. Each was measured ON ITS OWN with the per-arm deletion census of
-## `.agents/skills/alatyr-lane/wildcard_enumeration.md` §2 — restore the file, delete exactly that one
-## arm, `check package.al`, read the rc OUTSIDE a pipeline — on a compiler BUILT FROM THIS TREE and
-## never on `seed/alatyr`, because the frozen seed predates #656/#655 and still accepts deletions the
-## repaired checker refuses. The split is clean, and it runs along the ENUM rather than along the file:
-##
-##   • 39 of the 40 `Expr` arms are CAUGHT: deleting one is refused with
-##     `check: type mismatch at line <n> in wat`, 39 sites for 39. Those 39 are now ONE OR-pattern
-##     group arm each, listing the absorbed variants in `src/ast.al` declaration order, so ADDING an
-##     `Expr` variant is a compile error at all 39 sites (Control Flow §5.1). Deleting any one of the
-##     39 group arms is likewise refused, 39 for 39, measured on this tree with this tree's compiler.
-##   • all 25 `Stmt` arms are BLIND: deleting one is accepted SILENTLY, rc 0, no diagnostic anywhere.
-##     Every `Stmt` match in this file scrutinises `st := deref(stmt_p(Stmt, <h>))`, `stmt_p` is
-##     generic (`src/ast.al:806`), and the enum identity is lost through that binding before the arm
-##     check asks for it (#660, generalised by #680). Writing a blind arm out buys the APPEARANCE of
-##     enforcement and none of the substance, because nothing would hold the list current — so those
-##     arms are measured, named at their own line, and left exactly as they are.
-##     One of the 25 was different: `wat_loop_scalar_code` already spelled all 21 `Stmt` variants, so
-##     its `_ => { s = 0 }` was UNREACHABLE by the enum's own text, not merely unenforced. It is gone.
-##   • the 40th `Expr` arm, in `wat_break_scalar_var`, is blind for a NEIGHBOURING reason and carries
-##     its own note there. `match deref(d.value)` over `d := deref(decl_get(decls, i))`: annotating the
-##     pointer (`ve : ptr(Expr) = d.value`) restores the check, annotating the struct local does not.
-##
-## The reasons repeat, so they are written as BAND notes rather than 39 per-arm comments; a band note
-## says what a new `Expr` variant means for the whole band. Classify each band as PREDICATE /
-## PROJECTION / NORMALIZER / EMITTER: only an emitter is dangerous, because a predicate's "no", a
-## projection's empty span and a normalizer's identity ARE answers, while an emitter that emits
-## nothing is a missing lowering.
-##
-## Reading the newly explicit lists against their callers produced #696 — a `comptime for` range bound
-## wrapped in `unchecked (…)` is absorbed by `wat_comp_range_bound` and its three duals and silently
-## becomes `0` on all four backends. Per `wildcard_enumeration.md` §6 that is its own issue with its
-## own fixture, never a row inside this refactor, so nothing here changes behaviour.
-##
-## BAND — THE SIGNEDNESS PROOF BAND (`wat_local_ann_signed` … `wat_operand_unsigned`). The narrowness
-## half of this band is gone: `wat_operand_narrow` and its `wat_local_narrow` wrapper were byte-identical
-## to the aarch64 and riscv64 copies and delegated every arm to `lower_layout` already, so they are now
-## the single `lower_layout::operand_narrow` (docs/ir.md §2.4 row 1, §7.2).
-## Every function here is a PREDICATE ("is this operand provably signed / unsigned / narrow?") or a
-## PROJECTION of an annotation span, and every proof is ONE-DIRECTIONAL: it can move an operand OFF
-## the conservative default, never onto it. So for each form the band does not recognise, the
-## initialised `false` / `""` IS the answer and the always-signed `i64` default still covers it. A new
-## `Expr` variant reaching this band is a compile error at each of its group arms; what the author
-## then has to decide is only whether that form can CARRY signedness, and the safe answer is "no".
-wat_local_ann_signed := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := false
-  match d {
-    Some(dq) => {
-      st := deref(stmt_p(Stmt, dq))
-      match st {
-        Stmt::Assign(ans, anl, v, nx) => { if ann_scan_signed(src, ans + anl) { r = true } }
-        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-      }
-    }
-    None => {}
-  }
-  r
-}
-## The `:=` RHS expr of a top-level local (0 if not found) — recovers an un-annotated `b := shr(s, 1)`'s
-## signed type from the shift RHS (OP-6: shl/shr/rotl/rotr return the left operand's type). Without this the
-## annotation-only signedness read chose `i64.div_u` for `b / 2` → a silent WAT miscompile.
-wat_local_rhs := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> ptr(Expr) {
-  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := unchecked bitcast(ptr(Expr), 0)
-  match d {
-    Some(dq) => {
-      st := deref(stmt_p(Stmt, dq))
-      match st {
-        Stmt::Assign(ans, anl, v, nx) => { r = v }
-        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-      }
-    }
-    None => {}
-  }
-  r
-}
-wat_shift_call_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
-  mut r := false
-  match deref(v) {
-    Expr::Call(cs, cl, na, ah) => {
-      cn := str_at((src + cs), cl)
-      if cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr" { if wat_operand_signed_dep(arg_expr_at(ah, 0, a), params_head, body_head, src, a, dep) { r = true } }
-    }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
-## #651 — the `Bin`-INFERRED local, the shape the source scan can never see. `p := m * 3` records no
-## annotation to find at all, so `wat_local_ann_signed` above answers "not proven" and an enclosing
-## `acc + d + p` fell to the UNSIGNED carry guard even when every named operand is `i64` — a trap on a
-## program the language defines (Types §3.2: the operand's interpretation picks the intrinsic exactly
-## as it does for `+` and `<`; Concurrency §6.1: the trap belongs to an operation that OVERFLOWS, and
-## `-1 + -3` does not overflow `i64`). x86_64 answers this by RECORDING a type in
-## `lower::infer_local_scalar_type`'s `Bin` arm; the three source-scanning backends have no slot to
-## record into, so the arithmetic is re-read from the AST at the query.
-##
-## The proof rule is `lower::infer_local_scalar_type`'s, not the emit site's. That site takes
-## `dsigned = dl or dr`, but a MIXED pair (`i64 + u64`) proves nothing about the binding, and x86
-## refuses exactly that pair (`mixed_signedness_pair`) after taking the first typed operand made the
-## recorded type depend on OPERAND ORDER. So: both operands proven signed, or one proven signed and
-## the other a bare integer literal (which has no signedness of its own and takes its partner's).
-## Structurally the mirror image of `wat_operand_unsigned`'s `Bin` arm, down to the operator list;
-## COMPARISONS are excluded there for the same reason — they yield `bool`, not the operand type.
-## One-directional like every predicate in this family: it can only move an operand from the
-## UNSIGNED default to signed, never the reverse.
-wat_bin_init_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
-  mut r := false
-  match deref(v) {
-    Expr::Bin(op, bl, br) => {
-      if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 or op == 34 or op == 35 or op == 36 {
-        sl := wat_operand_signed_dep(bl, params_head, body_head, src, a, dep)
-        sr := wat_operand_signed_dep(br, params_head, body_head, src, a, dep)
-        if sl and sr { r = true }
-        if sl and ex_is_num_lit(br) { r = true }
-        if sr and ex_is_num_lit(bl) { r = true }
-      }
-    }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
-
-## The signedness oracle every `/`, `%`, `shr` and checked `+`/`-`/`*` site reads. Unchanged
-## signature; the recursion `wat_bin_init_signed` introduces is bounded by `_dep` below.
-wat_operand_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
-  wat_operand_signed_dep(e, params_head, body_head, src, a, 0)
-}
-
-## `dep` BOUNDS the binding-chain walk, and the bound is load-bearing rather than defensive: this
-## backend's `:=` locals are function-scoped, `wat_local_rhs` resolves a name to its FIRST flat
-## `Stmt::Assign` — which for a name declared inside a nested block is a later plain `=` — and two
-## such names can each be re-assigned from the other (`if c { mut a := 0 ; mut b := 0 } ; a = b + 1 ;
-## b = a + 1`). Without the cap that pair walks forever. Exhausting it answers "not proven", which is
-## the pre-existing unsigned default and never a wrong type. Same shape and same cap as
-## `wat_is_float_local`.
-wat_operand_signed_dep := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
-  if dep > 24 { return false }
-  mut r := false
-  match deref(e) {
-    Expr::Var(s, n) => {
-      if param_ann_signed(params_head, src, s, n, a) { r = true }
-      if wat_local_ann_signed(body_head, src, s, n, a) { r = true }
-      ## #651 — the scan above is FLAT (`lower_layout::local_decl_assign` walks only the top-level
-      ## statement list), so `mut m : i64 = neg()` written inside an `if`/`while`/`match` arm was
-      ## invisible and `m + 1` took the unsigned guard while `m < hi` beside it stayed signed. One
-      ## NAME is one slot in this backend, so a name annotated `i64`/`isize` anywhere in the function
-      ## is that type everywhere — the same value model #646/#652 settled for the x86 slot map. The
-      ## deep scan declines narrow and unsigned annotations for #652's two recorded reasons.
-      if r == false { if lower_layout::local_ann_native_signed_deep(body_head, src, s, n, 0) { r = true } }
-      ## un-annotated `b := shr(<signed>, n)` — recover the signed result type from the shift RHS.
-      if r == false { rhs := wat_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if wat_shift_call_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
-      ## un-annotated `d := m - 1` — recover the signed result type from the ARITHMETIC RHS (#651).
-      if r == false { rhs := wat_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if wat_bin_init_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
-    }
-    Expr::Call(cs, cl, na, ah) => { if lower_layout::call_value_signed(src, cs, cl) { r = true } }
-    ## An ARITHMETIC `Bin` used DIRECTLY as an operand (`(a - b) + c`) carries its operands' type by
-    ## the same rule as a `Bin`-inferred binding — the two halves of `0 + d + p` (#651).
-    Expr::Bin(bop, obl, obr) => { if wat_bin_init_signed(e, params_head, body_head, src, a, dep + 1) { r = true } }
-    Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
-      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
-
 wat_local_ann_unsigned := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
   mut r := false
@@ -460,8 +277,8 @@ wat_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
       if r == false { if lower_layout::param_ann_unsigned_inst(params_head, src, s, n, a, WAT_SUB_GPS, WAT_SUB_GPL, WAT_SUB_ITS, WAT_SUB_ITL, WAT_SUB_GPS2, WAT_SUB_GPL2, WAT_SUB_ITS2, WAT_SUB_ITL2, WAT_SUB_GPS3, WAT_SUB_GPL3, WAT_SUB_ITS3, WAT_SUB_ITL3) { r = true } }
       if wat_local_ann_unsigned(body_head, src, s, n, a) { r = true }
       ## un-annotated `s := unchecked (<init>)` — recover the unsignedness the wrapper swallowed
-      ## (mirrors the SIGNED side's `wat_shift_call_signed` recovery above).
-      if r == false { rhs := wat_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if wat_unchecked_init_unsigned(rhs, params_head, body_head, src, a) { r = true } } }
+      ## (mirrors the SIGNED side's `lower_layout::shift_call_signed` recovery above).
+      if r == false { rhs := lower_layout::local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if wat_unchecked_init_unsigned(rhs, params_head, body_head, src, a) { r = true } } }
     }
     Expr::Call(cs, cl, na, ah) => { if lower_layout::call_value_unsigned(src, cs, cl) { r = true } }
     ## The two SHAPES that CARRY an operand's unsignedness but have no annotation of their own, so the
@@ -502,7 +319,7 @@ wat_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
 
 ## ─── The `{}` HOLE's PRINT-SITE signedness (#457) ─────────────────────────
 ##
-## LAYERED ON TOP of `wat_operand_signed`, never folded into it. That predicate is the oracle `/`, `%` and
+## LAYERED ON TOP of `lower_layout::operand_signed`, never folded into it. That predicate is the oracle `/`, `%` and
 ## `shr` route on, so widening IT moves ARITHMETIC selection, not just rendering: adding a single
 ## `Expr::Index` arm to it was MEASURED to turn `arr[0] / 2` from `i64.div_u` into `i64.div_s`, `arr[0] % 3` from
 ## `i64.rem_u` into `i64.rem_s` and `shr(arr[0], 1)` from `i64.shr_u` into `i64.shr_s`.
@@ -525,7 +342,7 @@ wat_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
 ## matches: float, `str` and aggregate holes still reach the one integer renderer here, unchanged and
 ## still out of scope.
 wat_hole_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
-  if wat_operand_signed(e, params_head, body_head, src, a) { return true }
+  if lower_layout::operand_signed(e, params_head, body_head, src, a) { return true }
   if wat_operand_unsigned(e, params_head, body_head, src, a) { return false }
   mut r := false
   if lit_arith_i64(e, src) { r = true }
@@ -553,7 +370,7 @@ wat_hole_index_signed := fn(bse : ptr(Expr), body_head : Option(ptr(mut Stmt)), 
 ## there is; literal arithmetic there is §7.1's default `i64`. An ANNOTATED local never reaches here:
 ## the two operand oracles above answer it first, in whichever direction its annotation says.
 wat_hole_local_init_signed := fn(body_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  rhs := wat_local_rhs(body_head, src, ns, nl, a)
+  rhs := lower_layout::local_rhs(body_head, src, ns, nl, a)
   mut r := false
   if unchecked bitcast(usize, rhs) != 0 { if lit_arith_i64(rhs, src) { r = true } }
   r
@@ -857,7 +674,7 @@ wat_is_num_lit := fn(e : ptr(Expr)) -> bool {
 ## BAND — THE CONSTANT / FLOAT CLASSIFIERS (`wat_int_const_expr`, `wat_is_float_expr`). Both are
 ## PREDICATES over a shape, and `false` is the conservative answer: an expression not proved constant
 ## is emitted, and one not proved float takes the integer path, which is the representation the WAT
-## value model already assumes. See the census note above `wat_local_ann_signed` for how the arms
+## value model already assumes. See the census note above `lower_layout::local_ann_signed` for how the arms
 ## below were measured and why the `Stmt` walkers between them keep their `_`.
 wat_int_const_expr := fn(e : ptr(Expr)) -> bool {
   mut r := false
@@ -1022,7 +839,7 @@ count_params := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), a : rt::
 ## #696 exists: its initial `mut r := 0` is a REPRESENTABLE bound, so a caller cannot tell "not
 ## foldable" from "the bound is zero" — the #659 shape, where an accessor whose default is a real
 ## value is read by a caller that has already committed. Spelling its absorbed list out is what made
-## `Expr::Unchecked` visible there. See the census note above `wat_local_ann_signed`.
+## `Expr::Unchecked` visible there. See the census note above `lower_layout::local_ann_signed`.
 wat_cf_mutable_value := fn(e : ptr(Expr), src : ptr(u8)) -> i64 {
   if WAT_CF_VAR_L == 0 { return 0 - 1 }
   match deref(e) {
@@ -1652,7 +1469,7 @@ wat_try_success_disc := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
 ## and every caller qualifies the result (`.n != 0`, `.ok`, a null test) before reading it. That guard
 ## is what keeps this band off the #659 shape. `expr_field_base` is the one NORMALIZER among them — it
 ## returns its own input unchanged for a non-`Field` node, which is the identity a normalizer owes.
-## See the census note above `wat_local_ann_signed`.
+## See the census note above `lower_layout::local_ann_signed`.
 expr_call_name := fn(v : ptr(Expr)) -> WSpan {
   mut rs := 0
   mut rn := 0
@@ -3883,7 +3700,7 @@ wat_loop_value_between := fn(target : usize) -> bool {
 ##     disagreement is #697. The arm keeps its `_` until one of those two lands.
 ##   • `wat_loop_scalar_code` spelled all 21 `Stmt` variants already, so its `_ => { s = 0 }` was
 ##     unreachable by the enum's own text and is removed rather than rewritten.
-## See the census note above `wat_local_ann_signed`.
+## See the census note above `lower_layout::local_ann_signed`.
 wat_expr_start := fn(e : ptr(Expr)) -> usize {
   mut r := 0
   match deref(e) {
@@ -3980,7 +3797,7 @@ wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : Option(ptr(mut 
     }
     return false
   }
-  rhs := wat_local_rhs(fn_head, src, ns, nl, a)
+  rhs := lower_layout::local_rhs(fn_head, src, ns, nl, a)
   if unchecked bitcast(usize, rhs) != 0 { return wat_break_scalar_expr(rhs, params_head, fn_head, src, a, decls, dep + 1) }
   false
 }
@@ -4878,7 +4695,7 @@ emit_print_nl := fn(in out sb : rt::StrBuf) {
 ## The hole's STATIC TYPE picks the helper (Functions §7.1 -> Stdlib appendix §2: base-10 with "a
 ## leading `-` for a negative two's-complement value"). Every hole used to reach the unsigned $__itoa,
 ## so `a : i64 = 0 - 128` printed 2^64-128 here while x86_64 printed -128 — a clean compile, exit 42,
-## wrong TEXT (#443). `wat_hole_signed` asks `wat_operand_signed` — the SAME oracle `/`, `%` and `shr`
+## wrong TEXT (#443). `wat_hole_signed` asks `lower_layout::operand_signed` — the SAME oracle `/`, `%` and `shr`
 ## route on, so the renderer and the arithmetic agree about what the operand is — and then, ONLY for
 ## rendering, the three shapes that oracle cannot prove and must not be taught (#457: an `[i64; N]`
 ## element, a declared `i64` return, literal arithmetic). Anything neither layer proves signed keeps
@@ -5338,7 +5155,7 @@ wat_bound_lambda := fn(body : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, 
 ## `push_str(sb, "(unreachable) (; unsupported expr ;)\n")` duplicated once per alternative — is
 ## writable against the frozen seed, which is what builds `src/`. Verified rather than assumed: the
 ## frozen seed checks AND builds this tree, rc 0 both.
-## See the census note above `wat_local_ann_signed`.
+## See the census note above `lower_layout::local_ann_signed`.
 emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   match deref(e) {
     Expr::FnRef(fnpos, fms, fml) => {
@@ -5525,8 +5342,8 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         emit_wat_expr(r, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "))")
       } else if is_arith_op(op) and (not wat_operand_is_aggregate(l, params_head, body_head, src, a, decls)) and (not wat_operand_is_aggregate(r, params_head, body_head, src, a, decls)) {
-        dl := wat_operand_signed(l, params_head, body_head, src, a)
-        dr := wat_operand_signed(r, params_head, body_head, src, a)
+        dl := lower_layout::operand_signed(l, params_head, body_head, src, a)
+        dr := lower_layout::operand_signed(r, params_head, body_head, src, a)
         ## #964 — as in `aarch64.al`: `/ %` read sema's RECORD of the operator
         ## (`lower_layout::ir_arith_signed`, docs/ir.md §3.8 e3) as x86_64 does; the shape query proved
         ## nothing about a literal-only `Bin` dividend and answered unsigned. `+ - *` keep it until #943.
@@ -5729,7 +5546,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         wspost := wat_narrow_post(wsnw)
         push_str(sb, wspre)
         if wscn == "shl" { push_str(sb, "(i64.shl ") }
-        else if wscn == "shr" { ir::sign_row("wasm", 0, wsv, wsn, src, wat_operand_signed(wsv, params_head, body_head, src, a)); if wat_operand_signed(wsv, params_head, body_head, src, a) { push_str(sb, "(i64.shr_s ") } else { push_str(sb, "(i64.shr_u ") } }
+        else if wscn == "shr" { ir::sign_row("wasm", 0, wsv, wsn, src, lower_layout::operand_signed(wsv, params_head, body_head, src, a)); if lower_layout::operand_signed(wsv, params_head, body_head, src, a) { push_str(sb, "(i64.shr_s ") } else { push_str(sb, "(i64.shr_u ") } }
         else if wscn == "rotl" { push_str(sb, "(i64.rotl ") }
         else { push_str(sb, "(i64.rotr ") }
         emit_wat_expr(wsv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -6613,7 +6430,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
 ## plants. `exprstmt_needs_drop` is the one whose default is `true`, not `false`, and that is the
 ## conservative direction here: everything leaves a value on the WASM stack EXCEPT a call to a void
 ## fn, so an unrecognised form is dropped rather than left to unbalance the stack.
-## See the census note above `wat_local_ann_signed`.
+## See the census note above `lower_layout::local_ann_signed`.
 exprstmt_needs_drop := fn(e : ptr(Expr), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena) -> bool {
   mut r := true
   match deref(e) {
