@@ -239,6 +239,20 @@ Each row is one decision the language makes once and the compiler makes four tim
 | aggregate call convention | `fn_returns_sret`, `emit_struct_to_sret`, `abi_c.al` | `a64_ret_struct_words`, `a64_ret_sret_words` | by address, tuples 1..7 words | CRASH rows |
 | located refusals of invalid programs | 232 sites in `src/lower.al` | – | – | ACCEPTS 179 rows; REFUSED 20 rows on x86_64 (#1018) |
 
+**Two rows of this table are closed on this branch.** Row 1's narrowness half — `a64_operand_narrow`,
+`rv_operand_narrow`, `wat_operand_narrow` and their `*_local_narrow` wrappers (63 lines) — is now the
+single `lower_layout::operand_narrow`; and row 1's signedness half, the whole proof band —
+`*_local_ann_signed`, `*_local_rhs`, `*_shift_call_signed`, `*_bin_init_signed`, `*_operand_signed`,
+`*_operand_signed_dep` (270 lines → 90) — is now `lower_layout`'s. Each copy was located by definition
+and diffed against its twins, not read off this table: byte-identical after prefix normalisation, identical
+signatures, and no backend state read anywhere in either family — no `*_SUB_*` instance span, no `*_CHK`
+scope, no frame. §7.2 defers row 1 to slice 3, and that deferral belongs to `*_operand_unsigned`, which
+DOES read the twelve instance-substitution globals (slice 6); it never applied to what is deleted here,
+none of which waited on the front half being shared. `*_emit_narrow` stays — per-target ISA spelling is
+not a duplicated decision. Both lifts are byte-neutral over the whole corpus across all five verbs
+(`scripts/bytecmp.sh`: same=9590 byte-diff=0 rc-diff=0) and self-reproducing (`scripts/fixpoint.sh`:
+seed == Stage1 == Stage2).
+
 `scripts/idiom_gate.sh` sees part of this — its baseline carries SCAN/TABLE clusters for
 `emit_a64_expr`/`emit_rv_expr`/`emit_wat_expr`, `emit_*_fn`, `*_comp_range_bound`, `*_ann_span`, the
 export-name cluster and the digit cluster — but it cannot see the `*_operand_signed` / `*_narrow_trap`

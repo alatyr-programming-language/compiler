@@ -562,6 +562,25 @@ if [ "$ird_st_rc" != 0 ] || [ "$ird_rc" != 0 ] || [ -z "$ird_withir" ] || [ "$ir
   fail=1
 fi
 
+# The COPY LIFT gate (criterion 2, "the emitters' private copies go away"). `scripts/copy_lift.py`
+# answers which duplicated decisions can be deleted TODAY — identical x3, no backend global, and no
+# backend-local callee anywhere in the transitive closure. It holds that count at zero, so "can be
+# deleted and was not" becomes a gate failure rather than a note in a doc; the blocked families are
+# printed with their blockers, which is the queue for the next slice. Proven to refuse before trusted:
+# a planted identical triple makes it exit 1, a missing baseline exits 2.
+python3 scripts/copy_lift.py --self-test || fail=1
+CL_LOG="$LOGDIR/full_copy_lift.log"
+python3 scripts/copy_lift.py --gate > "$CL_LOG" 2>&1
+cl_rc=$?
+grep -E "^copy lift gate:|^  LIFTABLE " "$CL_LOG"
+if [ "$cl_rc" = 1 ]; then
+  echo "  FAILURES (from $CL_LOG): a family of private copies can be deleted and is still in the tree"
+  fail=1
+elif [ "$cl_rc" != 0 ]; then
+  echo "  FAILURES (from $CL_LOG): the copy-lift gate could not judge (exit $cl_rc) — an unheld count is not a pass"
+  fail=1
+fi
+
 echo "### SWEEPS (conditional) ###"
 bash scripts/sweeps.sh "${SWEEP_ARGS[@]}" 2>&1 | tee "$LOGDIR/full_sweeps.log"
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1

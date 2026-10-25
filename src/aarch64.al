@@ -2182,7 +2182,7 @@ emit_a64_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u
           ## The hole's STATIC TYPE picks the renderer (Functions §7.1 -> Stdlib appendix §2: base-10 with
           ## "a leading `-` for a negative two's-complement value"). Every hole used to reach the unsigned
           ## renderer, so `a : i64 = 0 - 128` printed 2^64-128 here while x86_64 printed -128 — a clean
-          ## compile, exit 42, wrong TEXT (#443). `a64_hole_signed` asks `a64_operand_signed` — the SAME
+          ## compile, exit 42, wrong TEXT (#443). `a64_hole_signed` asks `lower_layout::operand_signed` — the SAME
           ## oracle `/`, `%` and `shr` route on, so the renderer and the arithmetic agree about what the
           ## operand is — and then, ONLY for rendering, the three shapes that oracle cannot prove and must
           ## not be taught (#457: an `[i64; N]` element, a declared `i64` return, literal arithmetic).
@@ -3291,7 +3291,7 @@ a64_arrname_elem_struct_span := fn(src : ptr(u8), ns : usize, nl : usize, a : rt
   mut r := CSpan(s = 0, n = 0)
   if nl == 0 { return r }
   if stmt_any(A64_BODY) {
-    if a64_alit_homog_slit(a64_local_rhs(a64_body(), src, ns, nl, a), src) { r = a64_arr_elem_struct_span(a64_body(), src, ns, nl, a) }
+    if a64_alit_homog_slit(lower_layout::local_rhs(a64_body(), src, ns, nl, a), src) { r = a64_arr_elem_struct_span(a64_body(), src, ns, nl, a) }
     ## `mut xs : [E; N]` — the DECLARED (uninitialized) form has no array literal to read the element
     ## struct off, so take it from the annotation. A type form can never be a tuple, so the
     ## `a64_alit_homog_slit` heterogeneity guard has nothing to do here.
@@ -3470,7 +3470,7 @@ a64_local_arrty_span := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usi
 a64_inferred_local_elem_span := fn(src : ptr(u8), body_head : Option(ptr(mut Stmt)), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
   if a64_is_array_local(body_head, src, ns, nl, a) and a64_local_ann_span(body_head, src, ns, nl, a).n == 0 {
-    v := a64_local_rhs(body_head, src, ns, nl, a)
+    v := lower_layout::local_rhs(body_head, src, ns, nl, a)
     if a64_alit_homog_slit(v, src) {
       es := a64_arr_elem_struct_span(body_head, src, ns, nl, a)
       if es.n != 0 and std_struct_is_word_granular(decls, src, es.s, es.n, a) { r = es }
@@ -3906,172 +3906,6 @@ a64_deep_scalar_ok := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src :
 
 
 
-## Is the typed LOCAL named `[ns,nl)` a signed `iN`? Scans the body for the first Assign binding it,
-## then source-scans its annotation (an inferred `:=` local → false, the unsigned default).
-a64_local_ann_signed := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := false
-  match d {
-    Some(dq) => {
-      st := deref(stmt_p(Stmt, dq))
-      match st {
-        Stmt::Assign(ans, anl, v, nx) => { if ann_scan_signed(src, ans + anl) { r = true } }
-        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-      }
-    }
-    None => {}
-  }
-  r
-}
-
-## Is expression `e` a KNOWN-SIGNED operand (param `: iN`, local `: iN`, or an `iN(x)` conversion)?
-## The default (inferred locals, `uN` types, literals) is UNSIGNED — so `/`/`%` route to `udiv`/`divu`
-## unless proven signed, exactly like the x86_64 `is_signed_expr` rule. Nothing else is signed by default.
-## The `:=` RHS expr of a top-level local named `[ns,nl)` (0 if not found) — mirrors a64_local_ann_signed's
-## walk, returning the value instead of its annotation-signedness. Lets a signedness query recover a local's
-## inferred type from a `shl`/`shr`/`rotl`/`rotr` RHS (which returns the left operand's type — x86 does this
-## in `infer_local_scalar_type`; the non-x86 backends read source annotations, so an UN-annotated
-## `b := shr(s, 1)` looked unsigned → `b / 2` chose `udiv` → a SILENT non-x86 miscompile).
-a64_local_rhs := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> ptr(Expr) {
-  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := unchecked bitcast(ptr(Expr), 0)
-  match d {
-    Some(dq) => {
-      st := deref(stmt_p(Stmt, dq))
-      match st {
-        Stmt::Assign(ans, anl, v, nx) => { r = v }
-        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-      }
-    }
-    None => {}
-  }
-  r
-}
-## `v` is a bit shift/rotate call whose LEFT operand is signed → the shift result is signed (OP-6: shl/shr/
-## rotl/rotr return the left operand's type).
-a64_shift_call_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
-  mut r := false
-  match deref(v) {
-    Expr::Call(cs, cl, na, ah) => {
-      cn := str_at((src + cs), cl)
-      if cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr" { if a64_operand_signed_dep(arg_expr_at(ah, 0, a), params_head, body_head, src, a, dep) { r = true } }
-    }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
-## #651 — the `Bin`-INFERRED local, the shape the source scan can never see. `p := m * 3` records no
-## annotation to find at all, so `a64_local_ann_signed` above answers "not proven" and an enclosing
-## `acc + d + p` fell to the UNSIGNED carry guard even when every named operand is `i64` — a trap on a
-## program the language defines (Types §3.2: the operand's interpretation picks the intrinsic exactly
-## as it does for `+` and `<`; Concurrency §6.1: the trap belongs to an operation that OVERFLOWS, and
-## `-1 + -3` does not overflow `i64`). x86_64 answers this by RECORDING a type in
-## `lower::infer_local_scalar_type`'s `Bin` arm; the three source-scanning backends have no slot to
-## record into, so the arithmetic is re-read from the AST at the query.
-##
-## The proof rule is `lower::infer_local_scalar_type`'s, not the emit site's. That site takes
-## `dsigned = dl or dr`, but a MIXED pair (`i64 + u64`) proves nothing about the binding, and x86
-## refuses exactly that pair (`mixed_signedness_pair`) after taking the first typed operand made the
-## recorded type depend on OPERAND ORDER. So: both operands proven signed, or one proven signed and
-## the other a bare integer literal (which has no signedness of its own and takes its partner's).
-## Structurally the mirror image of `a64_operand_unsigned`'s `Bin` arm, down to the operator list;
-## COMPARISONS are excluded there for the same reason — they yield `bool`, not the operand type.
-## One-directional like every predicate in this family: it can only move an operand from the
-## UNSIGNED default to signed, never the reverse.
-a64_bin_init_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
-  mut r := false
-  match deref(v) {
-    Expr::Bin(op, bl, br) => {
-      if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 or op == 34 or op == 35 or op == 36 {
-        sl := a64_operand_signed_dep(bl, params_head, body_head, src, a, dep)
-        sr := a64_operand_signed_dep(br, params_head, body_head, src, a, dep)
-        if sl and sr { r = true }
-        if sl and ex_is_num_lit(br) { r = true }
-        if sr and ex_is_num_lit(bl) { r = true }
-      }
-    }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
-
-## The signedness oracle every `/`, `%`, `shr` and checked `+`/`-`/`*` site reads. Unchanged
-## signature; the recursion `a64_bin_init_signed` introduces is bounded by `_dep` below.
-a64_operand_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
-  a64_operand_signed_dep(e, params_head, body_head, src, a, 0)
-}
-
-## `dep` BOUNDS the binding-chain walk, and the bound is load-bearing rather than defensive: this
-## backend's `:=` locals are function-scoped, `a64_local_rhs` resolves a name to its FIRST flat
-## `Stmt::Assign` — which for a name declared inside a nested block is a later plain `=` — and two
-## such names can each be re-assigned from the other (`if c { mut a := 0 ; mut b := 0 } ; a = b + 1 ;
-## b = a + 1`). Without the cap that pair walks forever. Exhausting it answers "not proven", which is
-## the pre-existing unsigned default and never a wrong type. Same shape and same cap as
-## `a64_is_float_local`.
-a64_operand_signed_dep := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
-  if dep > 24 { return false }
-  mut r := false
-  match deref(e) {
-    Expr::Var(s, n) => {
-      if param_ann_signed(params_head, src, s, n, a) { r = true }
-      if a64_local_ann_signed(body_head, src, s, n, a) { r = true }
-      ## #651 — the scan above is FLAT (`lower_layout::local_decl_assign` walks only the top-level
-      ## statement list), so `mut m : i64 = neg()` written inside an `if`/`while`/`match` arm was
-      ## invisible and `m + 1` took the unsigned guard while `m < hi` beside it stayed signed. One
-      ## NAME is one slot in this backend, so a name annotated `i64`/`isize` anywhere in the function
-      ## is that type everywhere — the same value model #646/#652 settled for the x86 slot map. The
-      ## deep scan declines narrow and unsigned annotations for #652's two recorded reasons.
-      if r == false { if lower_layout::local_ann_native_signed_deep(body_head, src, s, n, 0) { r = true } }
-      ## un-annotated `b := shr(<signed>, n)` — recover the signed result type from the shift RHS.
-      if r == false { rhs := a64_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if a64_shift_call_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
-      ## un-annotated `d := m - 1` — recover the signed result type from the ARITHMETIC RHS (#651).
-      if r == false { rhs := a64_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if a64_bin_init_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
-    }
-    Expr::Call(cs, cl, na, ah) => { if lower_layout::call_value_signed(src, cs, cl) { r = true } }
-    ## An ARITHMETIC `Bin` used DIRECTLY as an operand (`(a - b) + c`) carries its operands' type by
-    ## the same rule as a `Bin`-inferred binding — the two halves of `0 + d + p` (#651).
-    Expr::Bin(bop, obl, obr) => { if a64_bin_init_signed(e, params_head, body_head, src, a, dep + 1) { r = true } }
-    Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
-      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
-
-a64_local_ann_unsigned := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := false
-  match d {
-    Some(dq) => {
-      st := deref(stmt_p(Stmt, dq))
-      match st {
-        Stmt::Assign(ans, anl, v, nx) => { if ann_scan_unsigned(src, ans + anl) { r = true } }
-        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-      }
-    }
-    None => {}
-  }
-  r
-}
 ## `v` is the `:=` RHS of an UN-annotated local and it is an `unchecked (<inner>)` SCOPE —
 ## which changes only the VERIFICATION mode of the expression it wraps, never its TYPE, so the inner's
 ## unsignedness IS the binding's. The SHAPE GATE that keeps the peel narrow: only an `unchecked`-shaped
@@ -4146,10 +3980,10 @@ a64_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
       ## signedness question is answered from it here. Outside instance mode `A64_SUB_ITL == 0`
       ## and the call is inert, so no non-generic site changes.
       if r == false { if lower_layout::param_ann_unsigned_inst(params_head, src, s, n, a, A64_SUB_GPS, A64_SUB_GPL, A64_SUB_ITS, A64_SUB_ITL, A64_SUB_GPS2, A64_SUB_GPL2, A64_SUB_ITS2, A64_SUB_ITL2, A64_SUB_GPS3, A64_SUB_GPL3, A64_SUB_ITS3, A64_SUB_ITL3) { r = true } }
-      if a64_local_ann_unsigned(body_head, src, s, n, a) { r = true }
+      if lower_layout::local_ann_unsigned(body_head, src, s, n, a) { r = true }
       ## un-annotated `s := unchecked (<init>)` — recover the unsignedness the wrapper swallowed
-      ## (mirrors the SIGNED side's `a64_shift_call_signed` recovery two functions above).
-      if r == false { rhs := a64_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if a64_unchecked_init_unsigned(rhs, params_head, body_head, src, a) { r = true } } }
+      ## (mirrors the SIGNED side's `lower_layout::shift_call_signed` recovery two functions above).
+      if r == false { rhs := lower_layout::local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if a64_unchecked_init_unsigned(rhs, params_head, body_head, src, a) { r = true } } }
     }
     Expr::Call(cs, cl, na, ah) => { if lower_layout::call_value_unsigned(src, cs, cl) { r = true } }
     ## The two SHAPES that CARRY an operand's unsignedness but have no annotation of their own, so the
@@ -4190,7 +4024,7 @@ a64_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
 
 ## ─── The `{}` HOLE's PRINT-SITE signedness (#457) ─────────────────────────
 ##
-## LAYERED ON TOP of `a64_operand_signed`, never folded into it. That predicate is the oracle `/`, `%` and
+## LAYERED ON TOP of `lower_layout::operand_signed`, never folded into it. That predicate is the oracle `/`, `%` and
 ## `shr` route on, so widening IT moves ARITHMETIC selection, not just rendering: adding a single
 ## `Expr::Index` arm to it was MEASURED to turn `arr[0] / 2` from `udiv` into `sdiv`, `arr[0] % 3` into the signed
 ## remainder and `shr(arr[0], 1)` from `lsr` into `asr`.
@@ -4213,7 +4047,7 @@ a64_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
 ## matches: float, `str` and aggregate holes still reach the one integer renderer here, unchanged and
 ## still out of scope.
 a64_hole_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
-  if a64_operand_signed(e, params_head, body_head, src, a) { return true }
+  if lower_layout::operand_signed(e, params_head, body_head, src, a) { return true }
   if a64_operand_unsigned(e, params_head, body_head, src, a) { return false }
   mut r := false
   if lit_arith_i64(e, src) { r = true }
@@ -4241,7 +4075,7 @@ a64_hole_index_signed := fn(bse : ptr(Expr), body_head : Option(ptr(mut Stmt)), 
 ## there is; literal arithmetic there is §7.1's default `i64`. An ANNOTATED local never reaches here:
 ## the two operand oracles above answer it first, in whichever direction its annotation says.
 a64_hole_local_init_signed := fn(body_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  rhs := a64_local_rhs(body_head, src, ns, nl, a)
+  rhs := lower_layout::local_rhs(body_head, src, ns, nl, a)
   mut r := false
   if unchecked bitcast(usize, rhs) != 0 { if lit_arith_i64(rhs, src) { r = true } }
   r
@@ -4278,29 +4112,6 @@ a64_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : Option(ptr(mu
   false
 }
 
-a64_local_narrow := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> str {
-  ## The annotation's sub-word name, or an unannotated `x := xs[i]`'s element — `lower_layout` owns it.
-  lower_layout::local_narrow(head, src, ns, nl)
-}
-## Narrow type name of operand `e` (param `: uN`, local `: uN`, or an `uN(x)` conversion), or "".
-a64_operand_narrow := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> str {
-  mut r := ""
-  match deref(e) {
-    Expr::Var(s, n) => {
-      mut p := params_head
-      loop { match p { Some(pq) => { pm := deref(param_p(pq)) ; if streq(src, pm.ns, pm.nl, s, n) { nn := scalar_name_narrow(src, pm.ts, pm.tl) ; if nn != "" { r = nn } } ; p = pm.next }; None => { break } } }
-      if r == "" { r = a64_local_narrow(body_head, src, s, n, a) }
-    }
-    Expr::Call(cs, cl, na, ah) => { r = scalar_name_narrow(src, cs, cl) }
-    ## `xs[i]` over a local `[uN; K]`: the element's width (#683 — was the native default).
-    Expr::Index(ib, ii) => { r = lower_layout::index_read_narrow(e, body_head, src) }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
 
 emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out sb : rt::StrBuf) {
   ## CHECKED div-by-zero (I11 / CG-7): `sdiv`/`msub`-remainder by 0 on AArch64 returns 0 (NO hardware
@@ -5459,8 +5270,8 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         if op == 19 { push_str(sb, "  fdiv d0, d0, d1\n") }
         push_str(sb, "  fmov x0, d0\n")
       } else {
-        dl := a64_operand_signed(l, params_head, body_head, src, a)
-        dr := a64_operand_signed(r, params_head, body_head, src, a)
+        dl := lower_layout::operand_signed(l, params_head, body_head, src, a)
+        dr := lower_layout::operand_signed(r, params_head, body_head, src, a)
         ## #964 — `/ %` take their signedness from sema's RECORD of the operator, exactly as x86_64
         ## already does at its own division site (`lower.al`, `ir_arith_signed`; docs/ir.md §3.8 e3).
         ## The shape query proves a `Var` signed from its annotation and nothing about a literal-only
@@ -5482,16 +5293,16 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## (native-width only) can be skipped for a narrow op.
         mut nw := ""
         if op == 16 or op == 17 or op == 18 {
-          nw = a64_operand_narrow(l, params_head, body_head, src, a)
-          if nw == "" { nw = a64_operand_narrow(r, params_head, body_head, src, a) }
+          nw = lower_layout::operand_narrow(l, params_head, body_head, src)
+          if nw == "" { nw = lower_layout::operand_narrow(r, params_head, body_head, src) }
         }
         ## The narrow signed DIVIDEND's own minimum for the `MIN / -1` guard (#606); 0 for a native
         ## or unsigned width, which keeps the emitter's previous native-width bytes. Kept out of
         ## `nw` above because `nw` also selects the value-model wrap, which division does not need.
         mut dvmin : i64 = 0
         if op == 19 {
-          mut dvn := a64_operand_narrow(l, params_head, body_head, src, a)
-          if dvn == "" { dvn = a64_operand_narrow(r, params_head, body_head, src, a) }
+          mut dvn := lower_layout::operand_narrow(l, params_head, body_head, src)
+          if dvn == "" { dvn = lower_layout::operand_narrow(r, params_head, body_head, src) }
           dvmin = narrow_signed_min(dvn)
         }
         emit_a64_arith(op, dsigned, (nw != "") or ex_is_zero_lit(l), dvmin, sb)
@@ -5502,8 +5313,8 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## narrow `~`/`^`: mask the xor result to the operand width (the `x^(-1)` desugar carries 64-bit
         ## ones, so a narrow `~` would otherwise keep the high bits). Same-width `^` = identity mask.
         if op == 36 {
-          mut xw := a64_operand_narrow(l, params_head, body_head, src, a)
-          if xw == "" { xw = a64_operand_narrow(r, params_head, body_head, src, a) }
+          mut xw := lower_layout::operand_narrow(l, params_head, body_head, src)
+          if xw == "" { xw = lower_layout::operand_narrow(r, params_head, body_head, src) }
           if xw != "" { a64_emit_narrow(xw, sb) }
         }
       }
@@ -5588,12 +5399,12 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         push_str(sb, "  str x0, [sp, #-16]!\n")
         emit_a64_expr(sn, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "  mov x1, x0\n  ldr x0, [sp], #16\n")
-        ssigned := a64_operand_signed(sv, params_head, body_head, src, a)
+        ssigned := lower_layout::operand_signed(sv, params_head, body_head, src, a)
         if nm == "shr" { ir::sign_row("aarch64", 0, sv, sn, src, ssigned) }
         ## A SUB-WORD operand bounds the count by ITS width (Concurrency §6.1) and its result is
         ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual.
         ## Before #683 both were native here: `shl(u8(1), 8)` ran, and `unchecked shl(u8(1), 9)` kept 512.
-        snw := a64_operand_narrow(sv, params_head, body_head, src, a)
+        snw := lower_layout::operand_narrow(sv, params_head, body_head, src)
         if A64_CHK and (nm == "shl" or nm == "shr") {
           push_str(sb, "  cmp x1, #") ; push_int(sb, lower_layout::shift_width_bits(snw)) ; push_str(sb, "\n  b.lo 1f\n  brk #0 // shift_range\n1:\n")
         }

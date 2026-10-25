@@ -2801,8 +2801,199 @@ pub local_narrow := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, 
   r
 }
 
+## Narrow type name of operand `e` (param `: uN`, local `: uN`, or an `uN(x)` conversion), or "".
+## THE ONE COPY. This was three byte-identical copies — `a64_operand_narrow` (src/aarch64.al),
+## `rv_operand_narrow` (src/riscv64.al), `wat_operand_narrow` (src/wat.al) — whose every arm already
+## delegated here (`local_narrow`, `index_read_narrow`, `scalar_name_narrow`) and which read no backend
+## state at all: not a `*_SUB_*` instance span, not a `*_CHK` scope, not a frame. Same signature in all
+## three, diff empty after prefix normalisation. docs/ir.md §2.4 row 1 lists it as a quadruplicated
+## decision and §7.2 defers deleting it to slice 3, but the census never needed deferring this part:
+## nothing here waits for the front half to be shared, so it goes now. The `a` arena parameter is gone
+## because no arm used it — the twins' copies carried it only to pass it to their `*_local_narrow`
+## wrapper, which forwarded it to `local_narrow`, which does not take it.
+pub operand_narrow := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8)) -> str {
+  mut r := ""
+  match deref(e) {
+    Expr::Var(s, n) => {
+      mut p := params_head
+      loop { match p { Some(pq) => { pm := deref(param_p(pq)) ; if streq(src, pm.ns, pm.nl, s, n) { nn := scalar_name_narrow(src, pm.ts, pm.tl) ; if nn != "" { r = nn } } ; p = pm.next }; None => { break } } }
+      if r == "" { r = local_narrow(body_head, src, s, n) }
+    }
+    Expr::Call(cs, cl, na, ah) => { r = scalar_name_narrow(src, cs, cl) }
+    ## `xs[i]` over a local `[uN; K]`: the element's width (#683 — was the native default).
+    Expr::Index(ib, ii) => { r = index_read_narrow(e, body_head, src) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+
+## THE SIGNEDNESS PROOF BAND — ONE COPY. These six were three byte-identical copies each
+## (`a64_*` in src/aarch64.al, `rv_*` in src/riscv64.al, `wat_*` in src/wat.al): diff empty after
+## prefix normalisation, no backend global read anywhere in the family (no `*_SUB_*` instance span, no
+## `*_CHK` scope, no frame), identical signatures. docs/ir.md §2.4 row 1 lists them as quadruplicated and
+## §7.2 defers the row to slice 3; the deferral belongs to `*_operand_unsigned`, which DOES read the
+## twelve instance-substitution globals, not to this family — every primitive it calls is already shared
+## (`local_decl_assign`, `ann_scan_signed`, `param_ann_signed`, `ex_is_num_lit`,
+## `local_ann_native_signed_deep`, `call_value_signed`, and `arg_expr_at` from `lower_ctx`, reached by
+## the package's unqualified cross-module resolution). 270 lines of definition become 90.
+##
+## EVERY PROOF HERE IS ONE-DIRECTIONAL. The band answers "is this operand PROVABLY signed?": each arm
+## sets `true` only on a proof (a `: i64`/`: isize` annotation, a `shr`/arith RHS whose result type is
+## signed, a call whose declared return is signed), and every shape it does not recognise falls through to
+## `false` — the pre-existing default, which is the unsigned guard. So a miss never invents a signedness
+## and never flips a comparison that was already right; it leaves the latent default in place, which is
+## the direction that keeps the compiler's own `isize` comparisons working (§2.4's drift column,
+## #764/#765/#766). The `dep` cap answers "not proven" for the same reason: the default, never a guess.
+
+pub local_ann_signed := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+  d : Option(ptr(mut Stmt)) = local_decl_assign(head, src, ns, nl)
+  mut r := false
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => { if ann_scan_signed(src, ans + anl) { r = true } }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
+    }
+    None => {}
+  }
+  r
+}
+
+## THE UNSIGNED MIRROR OF `local_ann_signed`, and the same story: three byte-identical copies
+## (`a64_local_ann_unsigned`, `rv_local_ann_unsigned`, `wat_local_ann_unsigned`) that read no backend
+## state and call only shared primitives (`local_decl_assign`, `ann_scan_unsigned`). It is the one family
+## in docs/ir.md §2.4 that lifts today by `scripts/copy_lift.py`'s closure test — its neighbours all reach
+## a backend-local function (`*_local_arrty_span`, *_operand_unsigned`) or read the instance globals, so
+## they stay until those move. Same one-directional rule: it answers true only on a PROVEN unsigned
+## annotation, and an unrecognised statement falls through to false, the pre-existing default.
+pub local_ann_unsigned := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+  d : Option(ptr(mut Stmt)) = local_decl_assign(head, src, ns, nl)
+  mut r := false
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => { if ann_scan_unsigned(src, ans + anl) { r = true } }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
+    }
+    None => {}
+  }
+  r
+}
+
+pub local_rhs := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> ptr(Expr) {
+  d : Option(ptr(mut Stmt)) = local_decl_assign(head, src, ns, nl)
+  mut r := unchecked bitcast(ptr(Expr), 0)
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => { r = v }
+        ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
+    }
+    None => {}
+  }
+  r
+}
+
+pub shift_call_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+  mut r := false
+  match deref(v) {
+    Expr::Call(cs, cl, na, ah) => {
+      cn := str_at((src + cs), cl)
+      if cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr" { if operand_signed_dep(arg_expr_at(ah, 0, a), params_head, body_head, src, a, dep) { r = true } }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+
+pub bin_init_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+  mut r := false
+  match deref(v) {
+    Expr::Bin(op, bl, br) => {
+      if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 or op == 34 or op == 35 or op == 36 {
+        sl := operand_signed_dep(bl, params_head, body_head, src, a, dep)
+        sr := operand_signed_dep(br, params_head, body_head, src, a, dep)
+        if sl and sr { r = true }
+        if sl and ex_is_num_lit(br) { r = true }
+        if sr and ex_is_num_lit(bl) { r = true }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+
+pub operand_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
+  operand_signed_dep(e, params_head, body_head, src, a, 0)
+}
+
+## `dep` BOUNDS the binding-chain walk, and the bound is load-bearing rather than defensive: the twins'
+## `:=` locals are function-scoped, `local_rhs` resolves a name to its FIRST flat `Stmt::Assign` — which
+## for a name declared inside a nested block is a later plain `=` — and two such names can each be
+## re-assigned from the other (`if c { mut a := 0 ; mut b := 0 } ; a = b + 1 ; b = a + 1`). Without the
+## cap that pair walks forever. Exhausting it answers "not proven", which is the pre-existing unsigned
+## default and never a wrong type. Same shape and same cap as the backends' `*_is_float_local`, which
+## stay backend-local because they take `decls` and answer float questions.
+pub operand_signed_dep := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+  if dep > 24 { return false }
+  mut r := false
+  match deref(e) {
+    Expr::Var(s, n) => {
+      if param_ann_signed(params_head, src, s, n, a) { r = true }
+      if local_ann_signed(body_head, src, s, n, a) { r = true }
+      ## #651 — the scan above is FLAT (`local_decl_assign` walks only the top-level statement list), so
+      ## `mut m : i64 = neg()` written inside an `if`/`while`/`match` arm was invisible and `m + 1` took
+      ## the unsigned guard while `m < hi` beside it stayed signed. One NAME is one slot in these
+      ## backends, so a name annotated `i64`/`isize` anywhere in the function is that type everywhere —
+      ## the same value model #646/#652 settled for the x86 slot map. The deep scan declines narrow and
+      ## unsigned annotations for #652's two recorded reasons.
+      if r == false { if local_ann_native_signed_deep(body_head, src, s, n, 0) { r = true } }
+      ## un-annotated `b := shr(<signed>, n)` — recover the signed result type from the shift RHS.
+      if r == false { rhs := local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if shift_call_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
+      ## un-annotated `d := m - 1` — recover the signed result type from the ARITHMETIC RHS (#651).
+      if r == false { rhs := local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if bin_init_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
+    }
+    Expr::Call(cs, cl, na, ah) => { if call_value_signed(src, cs, cl) { r = true } }
+    ## An ARITHMETIC `Bin` used DIRECTLY as an operand (`(a - b) + c`) carries its operands' type by
+    ## the same rule as a `Bin`-inferred binding — the two halves of `0 + d + p` (#651).
+    Expr::Bin(bop, obl, obr) => { if bin_init_signed(e, params_head, body_head, src, a, dep + 1) { r = true } }
+    Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+
 ## The bit width a shift's OPERAND bounds its count by (Concurrency §6.1: "a shift amount ≥ the
-## width" traps): 8/16/32 for the sub-word name `nw` a twin's `*_operand_narrow` answered, else 64.
+## width" traps): 8/16/32 for the sub-word name `nw` `operand_narrow` answered, else 64.
 pub shift_width_bits := fn(nw : str) -> i64 {
   w := bitcast_narrow_bytes(nw)
   if nw == "" or w == 0 { return 64 }
