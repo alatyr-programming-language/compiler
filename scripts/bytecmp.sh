@@ -6,6 +6,10 @@ cd "$(dirname "$0")/.." || exit 1
 REF=${1:?ref compiler}; SRC=${2:?source tree}; FILT=${3:-.}
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 same=0; diff_=0; fail=0
+# the two compilers' own bindirs, resolved physically: trap comments embed them and the two
+# worktrees differ there for a reason that is not behaviour.
+REFDIR=$(cd "$(dirname "$REF")" && pwd -P)
+BASEDIR=$(cd "$(dirname ./target/debug/alatyr)" && pwd -P)
 cd "$SRC" || exit 1
 for f in $(ls test/*.al | grep -E "$FILT" | sort); do
   for b in x86 x86-ir aarch64 riscv64 wat; do
@@ -21,8 +25,8 @@ for f in $(ls test/*.al | grep -E "$FILT" | sort); do
     # Trap comments carry the COMPILER's own absolute path (`ud2 # trap div_zero <bindir>/../../lib/…`),
     # so two builds of the same source in two directories differ there for a reason that is not behaviour.
     # Normalise the compiler's own location out of both sides before comparing.
-    a=${a//$(cd "$(dirname "$REF")" && pwd -P)/@BIN@}
-    c=${c//$(pwd -P)/@BIN@}
+    a=${a//"$REFDIR"/@BIN@}
+    c=${c//"$BASEDIR"/@BIN@}
     if [ "$a" = "$c" ]; then same=$((same+1)); else
       d=$(printf '%s' "$a" | diff - <(printf '%s' "$c") | head -4)
       echo "BYTE-DIFF $b $f:"; printf '%s\n' "$d" | sed 's/^/    /'; diff_=$((diff_+1))
