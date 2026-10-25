@@ -428,6 +428,13 @@ END {
     ## the stage had disclaimed in the same output (issue #537); the walk now re-observes such a row
     ## serially first, so one that reaches here has breached the ceiling twice.
     if (b[1] ~ /_timeout$/)        c = "TIMED-OUT"
+    ## Same exit, earlier phase: NOTHING about the observed behaviour changed — only the word for where
+    ## the program stopped. Calling that NO-LONGER-RUNS asserts a regression the row cannot support, and
+    ## it did: 34 wasm rows moved `run/1 -> link/1` when the walk began recording an uninstantiated module
+    ## as the link failure it always was, and the report called all 34 regressions of programs that had
+    ## never run. A real stop-running has a value to lose, so it shows as an exit change; an identical
+    ## exit is a recording correction, and it is named as one so review looks at the cause, not the count.
+    else if (orun && !nrun && a[2] == b[2]) c = "PHASE-CHANGED"
     else if (orun && !nrun)        c = "NO-LONGER-RUNS"
     else if (!orun && nrun)        c = "NOW-RUNS"
     else if (orun && a[2] != b[2]) c = "EXIT-CHANGED"
@@ -460,7 +467,7 @@ END {
   desc["NO-LONGER-RUNS"] = "was running, now refused by an earlier phase — a REGRESSION"
   desc["EXIT-CHANGED"]   = "ran before and after, different exit — a VALUE change"
   desc["REMOVED"]        = "the pair is gone from the fresh run — coverage lost"
-  desc["PHASE-CHANGED"]  = "refused before and after, at a different phase"
+  desc["PHASE-CHANGED"]  = "stopped at a different phase with the SAME exit — a recording correction, not a behaviour change (it covers a run that never ran now filed as the link failure it was)"
   desc["DETAIL-CHANGED"] = "same phase, different exit or captured streams"
   desc["OUTPUT-CHANGED"] = "ran with the same exit, different stdout/stderr"
   desc["NOW-RUNS"]       = "was refused, now runs — a WIN"
@@ -1725,6 +1732,31 @@ wasm_phase_selftest() {
   echo "corpus manifest: wasm-phase self-test ok (an uninstantiated module is recorded as link; a trap and a real exit-1 run stay run)"
   return 0
 }
+## Planted self-test for the same-exit / earlier-phase distinction (#683). The two facts look identical in
+## the phase column and mean opposite things, so both are planted: a `run/1 -> link/1` pair, which is what
+## an uninstantiated wasm module always was and must NOT be called a regression, and a `run/42 -> link/1`
+## pair, which is a program that had a value to lose and MUST be called one.
+phase_relabel_selftest() {
+  local d out got rc=0 E
+  ## The sha256 of an empty stream, spelled here because `SHA_EMPTY` belongs to xbackend_diff.sh and
+  ## this script does not source it — an undefined name would have planted rows with empty hash columns,
+  ## which is a malformed row rather than a row with no output.
+  E="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  d="$(mktemp -d "${TMPDIR:-/tmp}/corpus-phase-relabel.XXXXXX")" || return 2
+  printf 'wasm\tp/a.al\trun\t1\t%s\t%s\nwasm\tp/b.al\trun\t42\t%s\t%s\n' \
+    "$E" "$E" "$E" "$E" > "$d/old"
+  printf 'wasm\tp/a.al\tlink\t1\t%s\t%s\nwasm\tp/b.al\tlink\t1\t%s\t%s\n' \
+    "$E" "$E" "$E" "$E" > "$d/new"
+  out="$(explain_manifest "$d/old" "$d/new" 2>&1)"
+  got="$(printf '%s\n' "$out" | sed -n 's/^  PHASE-CHANGED *\([0-9][0-9]*\) pair(s).*/\1/p' | head -1)"
+  [ "${got:-0}" = "1" ] || { echo "corpus manifest: phase-relabel self-test FAILED — a same-exit run/1 -> link/1 was not PHASE-CHANGED (got '${got:-absent}', want 1)"; printf '%s\n' "$out" | head -20; rc=1; }
+  got="$(printf '%s\n' "$out" | sed -n 's/^  NO-LONGER-RUNS *\([0-9][0-9]*\) pair(s).*/\1/p' | head -1)"
+  [ "${got:-0}" = "1" ] || { echo "corpus manifest: phase-relabel self-test FAILED — a run/42 -> link/1 (a value lost) was not NO-LONGER-RUNS (got '${got:-absent}', want 1)"; printf '%s\n' "$out" | head -20; rc=1; }
+  rm -rf "$d"
+  [ "$rc" = 0 ] && echo "corpus manifest: phase-relabel self-test ok (same-exit run->link is a correction; losing a value is still a REGRESSION)"
+  return $rc
+}
+phase_relabel_selftest || exit 2
 wasm_phase_selftest || exit 2
 run_delta_selftest || exit 2
 
