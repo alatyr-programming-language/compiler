@@ -131,6 +131,18 @@ tests into explicit ones, so that work is never refused. The rule checks that a 
 the reason names a real blocker is held by review. The 10 `null-ok` markers already in `src/` predate
 this rule and name only the structure. Each gets its blocker named the next time its file is edited.
 
+**Decided, so do not reopen it.** Whether a bare `p == 0` on a `ptr(T)` should be refused was the one
+open question on this form (#1030). The owner chose **grant-only**, recorded as spec decision **MEM-9**
+with the normative paragraph in Memory §4.5: outside an `unchecked` grant a pointer meeting an integer is
+**ill-formed**; inside one it is legal, the integer operand is `usize` (the pointer's own width) and **no
+conversion** is performed. Two consequences for this catalogue. First, the checked half is not merely
+discouraged but **empty by invariant** — §4.1 and MEM-8 make every `ptr(T)` non-null, so a checked
+`p == 0` cannot be true, and a `null-ok` marker on such a site names no real blocker: the author meant
+`Option(ptr(T))` and §4.2 gives it a niche `None` a `match` cannot leave out. Second, #1034 implements
+the refusal and waits on the **pin**, not on review: a spec change binds the compiler only after a
+release is cut and the pin moves in its own explicit commit. Until then the compiler stays at what the
+pinned revision says, and this form stays counted-and-reported rather than refused.
+
 ## 2 · A kind is an enum, not an integer, and flags are not packed into it
 
 **Defect class.** A kind stored as a number and tested against literals whose meaning lives only in a
