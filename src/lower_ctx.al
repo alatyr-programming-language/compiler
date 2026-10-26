@@ -461,18 +461,19 @@ pub CSpan := struct { s : usize, n : usize }
 ## except for which of three globals held the source length, and its helpers `*_slice_scan_has` /
 ## `*_slice_scan_ws` were byte-identical outright, reading no backend state and calling only `str_at`. The
 ## three globals (`A64_SRC_N`, `RV_SRC_N`, `WAT_SRC_N`) were each assigned the SAME value: all three
-## emitters are called from one driver site (`driver.al:6773-6792`) with the same `strbuf::buf_len(bld)`.
+## emitters are called from one driver site (`driver.al:6779-6798`) with the same `strbuf::buf_len(bld)`.
 ## One fact wore three names, and one algorithm wore three bodies.
 ## Threading the length instead of sharing it is NOT the fix: measured with this gate's own brace-balanced
 ## parse, the caller closure of `*_slice_elem_span` is **230 functions** across the three emitters, seven
 ## levels deep, of which three carry `src_n` today. A change that size, unverifiable on a host that cannot
 ## run the seed, is how a silently wrong result gets in.
 ## The bound is therefore read from `ast::src_extent()` — the source length the driver ALREADY publishes
-## once per pipeline (`ast::set_src_extent(strbuf::buf_len(bld))`, driver.al:2974/3066), with the SAME
-## expression the three emitters receive, read by five bounded scans already in `ast.al` (:77/:107/:143/
-## :193/:214). So this adds no state at all: the duplicated decision was the plumbing around a fact the
-## shared module already held. The publish is repeated at the emission dispatch (driver.al, beside
-## `ir::set_source_map`) so the bound is the buffer being emitted, not whatever buffer was published last.
+## with that SAME expression at eight pipeline sites (`ast::set_src_extent`: driver.al:2974, :3066, :5126,
+## :6605, :7002, :7332, plus two over `src.len` at :2863 and :7738) and read by six bounded scans already
+## in `ast.al` (:77/:107/:143/:193/:214/:221). So this adds no state at all: the duplicated decision was
+## the plumbing around a fact the shared module already held. None of those eight sites was the emission
+## dispatch, which is precisely why the publish is repeated there (beside `ir::set_source_map`): the bound
+## must be the buffer being emitted, not the last one published.
 ## Is `want` present at offset `p`, bounded by `end`?
 pub slice_scan_has := fn(src : ptr(u8), end : usize, p : usize, want : str) -> bool {
   if p > end { return false }

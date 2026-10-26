@@ -322,6 +322,25 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   is blocked by its own instance-table globals (`WAT_INST_TL3`, `WAT_INST_TS3`, `WAT_INST_TL`); `local_scan`
   and `emit_narrow` are not even triples (wasm's differ in NAME, `local_slot_scan`, `wat_narrow_pre/post`, so
   they are different decisions wearing a family's clothes).
+- **the span chain is a plumbing duplicate, and threading it is the wrong fix — measured.** The span
+  cluster (`*_slice_elem_span`, `*_slice_param_elem_span`, `*_slice_scan_has`, `*_slice_scan_ws`) was
+  three byte-identical algorithms plus three globals holding **one** value: all three emitters are called
+  from a single driver site (`driver.al:6779-6798`) with the same `strbuf::buf_len(bld)`. The reflex is to
+  thread the bound instead of sharing it. Computed with this gate's own brace-balanced parse and its own
+  `callees()`, the **caller** closure of `*_slice_elem_span` is **230 functions** across the three
+  emitters, seven levels deep, of which **three** carry `src_n` today — so threading is a 230-signature
+  change that cannot be verified on a host that cannot run the seed, which is precisely how a silently wrong
+  result lands. The fix was to share: the bound already exists as `ast::AST_SRC_N`, published by the driver
+  with that same expression at **eight** pipeline sites (`:2974`, `:3066`, `:5126`, `:6605`, `:7002`,
+  `:7332`, and two over `src.len` at `:2863`, `:7738`) and read by six scans already in `ast.al`
+  (:77/:107/:143/:193/:214/:221); the duplicated
+  decision was never the number, it was the plumbing around a number the shared module already held.
+  `#1064` plus its follow-up deleted both families, took the census from 18 to 16 with `LIFTABLE=0`, and
+  netted **−69 lines** while adding **no state**. Two lessons, both general: a family blocked by a global
+  is blocked by plumbing, not by a decision, so look for the shared fact before you thread a parameter; and
+  when a census ratchet says `LIFTABLE`, take it — the second half of this slice was decided by the ratchet
+  rather than by judgement, which is what a ratchet is for.
+
 - **the blocked set contains a ring, and the ring is why a per-family answer is the wrong question.** Five of
   the twenty — `operand_narrow`, `operand_signed`, `operand_signed_dep`, `shift_call_signed`,
   `bin_init_signed` — are blocked by *each other*: `operand_signed` calls `operand_signed_dep`, which calls

@@ -6772,8 +6772,9 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## Re-publish the extent of the buffer about to be emitted, so `lower_ctx::slice_elem_span` — one
   ## algorithm for all three twins now, where `a64_`/`rv_`/`wat_slice_elem_span` each kept a private copy
   ## of both the scan and the length (`A64_SRC_N`, `RV_SRC_N`, `WAT_SRC_N`) — is bounded by THIS buffer.
-  ## `ast::set_src_extent` already exists and the driver already calls it with this same expression
-  ## (:2974, :3066); repeating it here is what keeps the shared bound honest rather than last-published.
+  ## `ast::set_src_extent` already exists and the driver already calls it with this same expression at
+  ## eight pipeline sites (:2974, :3066, :5126, :6605, :7002, :7332 and two over `src.len`); none of them
+  ## was here, so this is the one that makes the shared bound the buffer actually being emitted.
   ast::set_src_extent(strbuf::buf_len(bld))
   mut out := strbuf::strbuf(tar, 67108864)
   if backend == 0 { wat::emit_wat_program(ptr(ed), out, base, strbuf::buf_len(bld), na) }
