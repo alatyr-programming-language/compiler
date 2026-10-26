@@ -456,6 +456,78 @@ pub expr_call_name_nl := fn(v : ptr(Expr)) -> usize {
 ## spelled out for the same reason and carry the same rule for a new `Expr` variant.
 pub CSpan := struct { s : usize, n : usize }
 
+## ── ONE source-span scan for all four backends (docs/ir.md §2.4, criterion 2) ──────────────────────
+## `*_slice_elem_span` existed three times — aarch64.al:796, riscv64.al:502, wat.al:2022 — byte-identical
+## except for which of three globals held the source length, and its helpers `*_slice_scan_has` /
+## `*_slice_scan_ws` were byte-identical outright, reading no backend state and calling only `str_at`. The
+## three globals (`A64_SRC_N`, `RV_SRC_N`, `WAT_SRC_N`) were each assigned the SAME value: all three
+## emitters are called from one driver site (`driver.al:6773-6792`) with the same `strbuf::buf_len(bld)`.
+## One fact wore three names, and one algorithm wore three bodies.
+## Threading the length instead of sharing it is NOT the fix: measured with this gate's own brace-balanced
+## parse, the caller closure of `*_slice_elem_span` is **230 functions** across the three emitters, seven
+## levels deep, of which three carry `src_n` today. A change that size, unverifiable on a host that cannot
+## run the seed, is how a silently wrong result gets in.
+## The bound is therefore read from `ast::src_extent()` — the source length the driver ALREADY publishes
+## once per pipeline (`ast::set_src_extent(strbuf::buf_len(bld))`, driver.al:2974/3066), with the SAME
+## expression the three emitters receive, read by five bounded scans already in `ast.al` (:77/:107/:143/
+## :193/:214). So this adds no state at all: the duplicated decision was the plumbing around a fact the
+## shared module already held. The publish is repeated at the emission dispatch (driver.al, beside
+## `ir::set_source_map`) so the bound is the buffer being emitted, not whatever buffer was published last.
+## Is `want` present at offset `p`, bounded by `end`?
+pub slice_scan_has := fn(src : ptr(u8), end : usize, p : usize, want : str) -> bool {
+  if p > end { return false }
+  if want.len > end - p { return false }
+  str_at((src + p), want.len) == want
+}
+
+## Is the byte at `p` whitespace?
+pub slice_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
+  if p >= end { return false }
+  c := str_at((src + p), 1)
+  c == " " or c == "\n" or c == "\t" or c == "\r"
+}
+
+## The element-type span of a `Slice(T)` annotation, or {0,0}. One algorithm for all four backends; the
+## bound is `ast::src_extent()`, no longer a per-target copy of the same number. Transcribed from the
+## three deleted copies, which were identical apart from the callee prefix and the global name.
+pub slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
+  mut p := s + n
+  end := ast::src_extent()
+  while p < end and slice_scan_ws(src, end, p) { p = p + 1 }
+  if slice_scan_has(src, end, p, ":") == false { return CSpan(s = 0, n = 0) }
+  p = p + 1
+  while p < end and slice_scan_ws(src, end, p) { p = p + 1 }
+  if slice_scan_has(src, end, p, "Slice(") == false { return CSpan(s = 0, n = 0) }
+  es := p + 6
+  mut ee := es
+  while ee < end {
+    if str_at((src + ee), 1) == ")" { break }
+    ee = ee + 1
+  }
+  if ee >= end { return CSpan(s = 0, n = 0) }
+  if ee == es { return CSpan(s = 0, n = 0) }
+  CSpan(s = es, n = ee - es)
+}
+
+## The element-type span of the parameter named `ns/nl`, if it is a `Slice(T)`. One walk for all four
+## backends: the three twins' copies were byte-identical once `slice_elem_span` was shared — same body,
+## same callee — which is what made this family liftable and the `liftable=0` ratchet demand its deletion.
+## `streq` is defined in this module (:41) and `param_p` aliased here (:13), so the walk is self-contained.
+pub slice_param_elem_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+  mut p := params_head
+  mut r := CSpan(s = 0, n = 0)
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, ns, nl) { r = slice_elem_span(src, pm.ns, pm.nl) }
+        p = pm.next
+      }
+      None => { break }
+    }
+  }
+  r
+}
 ## Recover the balanced source argument of a `typeinfo(...)` range bound. The parser's compact
 ## `CompFor` node does not retain that argument, so callers provide the outer member span and the
 ## active generic substitutions explicitly. Keep this source-only scan independent of backend state,

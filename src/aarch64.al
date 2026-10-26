@@ -71,7 +71,6 @@ mut A64_TEST_KEEP : bool = false
 mut A64_TEST_DECL_INDEX : usize = 0
 ## The raw source buffer is shared by all parsed modules. Slice parameter recovery consumes absolute
 ## source offsets, so it must stop at the buffer extent rather than an arbitrary post-name window.
-mut A64_SRC_N : usize = 0
 pub set_cross_test_mode := fn(mode : usize) -> i64 {
   A64_TEST_MODE = mode != 0
   return 0
@@ -779,38 +778,6 @@ a64_param_gen_arr_stride := fn(params_head : Option(ptr(mut Param)), src : ptr(u
   1
 }
 
-## The ELEMENT-type span of a `Slice(E)` PARAM named `[s,n)`, recovered by scanning SOURCE forward from
-## the param name (`: Slice(E)`) — the aarch64 twin of lower.al's `slice_param_elem_span`, so the two
-## backends detect a slice param identically. {0,0} when the param is not `: Slice(...)`. (No `...T`
-## variadic branch: this backend does not lower slice-variadics.)
-a64_slice_scan_has := fn(src : ptr(u8), end : usize, p : usize, want : str) -> bool {
-  if p > end { return false }
-  if want.len > end - p { return false }
-  str_at((src + p), want.len) == want
-}
-a64_slice_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
-  if p >= end { return false }
-  c := str_at((src + p), 1)
-  c == " " or c == "\n" or c == "\t" or c == "\r"
-}
-a64_slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
-  mut p := s + n
-  end := A64_SRC_N
-  while p < end and a64_slice_scan_ws(src, end, p) { p = p + 1 }
-  if a64_slice_scan_has(src, end, p, ":") == false { return CSpan(s = 0, n = 0) }
-  p = p + 1
-  while p < end and a64_slice_scan_ws(src, end, p) { p = p + 1 }
-  if a64_slice_scan_has(src, end, p, "Slice(") == false { return CSpan(s = 0, n = 0) }
-  es := p + 6
-  mut ee := es
-  while ee < end {
-    if str_at((src + ee), 1) == ")" { break }
-    ee = ee + 1
-  }
-  if ee >= end { return CSpan(s = 0, n = 0) }
-  if ee == es { return CSpan(s = 0, n = 0) }
-  CSpan(s = es, n = ee - es)
-}
 ## Is the PARAM `[ns,nl]` a `Slice(E)` param whose element E is a SCALAR (not a struct/enum decl)? A slice
 ## param is passed BY REFERENCE: its frame slot holds a POINTER to the caller's `{ptr,len}` block (word0 =
 ## data ptr, word1 = runtime len), so a read (`s[i]`, `s.len()`, `for x in s`) DOUBLE-derefs. A struct/
@@ -824,7 +791,7 @@ a64_slice_param_scalar := fn(params_head : Option(ptr(mut Param)), src : ptr(u8)
       Some(pq) => {
         pm := deref(param_p(pq))
         if streq(src, pm.ns, pm.nl, ns, nl) {
-          es := a64_slice_elem_span(src, pm.ns, pm.nl)
+          es := lower_ctx::slice_elem_span(src, pm.ns, pm.nl)
           if es.n != 0 {
             if struct_decl_of(decls, src, es.s, es.n) < 0 and enum_decl_of(decls, src, es.s, es.n) < 0 { r = true }
           }
@@ -941,27 +908,10 @@ mut A64_TA_N2 := 0
 mut A64_TA_S3 := 0
 mut A64_TA_N3 := 0
 
-## The element-type span E of the `Slice(E)` PARAM named `[ns,nl]` (scanning the param's `: Slice(E)`
-## annotation), or {0,0} if `[ns,nl]` is not a slice param. The by-name twin used by the aggregate paths.
-a64_slice_param_elem_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
-  mut p := params_head
-  mut r := CSpan(s = 0, n = 0)
-  loop {
-    match p {
-      Some(pq) => {
-        pm := deref(param_p(pq))
-        if streq(src, pm.ns, pm.nl, ns, nl) { r = a64_slice_elem_span(src, pm.ns, pm.nl) }
-        p = pm.next
-      }
-      None => { break }
-    }
-  }
-  r
-}
 ## Element WORD stride of the `Slice(E)` PARAM `[ns,nl]`: struct_words for a struct E, 1+enum_max_arity
 ## for an enum E, else 0 (not an aggregate slice param). The by-reference param's element step in words.
 a64_slice_param_agg_stride := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
-  es := a64_slice_param_elem_span(params_head, src, ns, nl)
+  es := lower_ctx::slice_param_elem_span(params_head, src, ns, nl)
   mut r := 0
   if es.n != 0 {
     if struct_decl_of(decls, src, es.s, es.n) >= 0 { require_no_byte_layout_array_elem(decls, src, es.s, es.n, a) ; r = i64(struct_words(decls, src, es.s, es.n, a)) }
@@ -972,14 +922,14 @@ a64_slice_param_agg_stride := fn(params_head : Option(ptr(mut Param)), src : ptr
 ## The element STRUCT span of the `Slice(P)` PARAM `[ns,nl]` (P a struct), else {0,0} — types a struct
 ## slice-param loop var / `s[i].field` read.
 a64_slice_param_struct_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> CSpan {
-  es := a64_slice_param_elem_span(params_head, src, ns, nl)
+  es := lower_ctx::slice_param_elem_span(params_head, src, ns, nl)
   mut r := CSpan(s = 0, n = 0)
   if es.n != 0 { if struct_decl_of(decls, src, es.s, es.n) >= 0 { r = es } }
   r
 }
 ## The element ENUM span of the `Slice(E)` PARAM `[ns,nl]` (E an enum), else {0,0} — types a `match s[i]`.
 a64_slice_param_enum_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> CSpan {
-  es := a64_slice_param_elem_span(params_head, src, ns, nl)
+  es := lower_ctx::slice_param_elem_span(params_head, src, ns, nl)
   mut r := CSpan(s = 0, n = 0)
   if es.n != 0 { if enum_decl_of(decls, src, es.s, es.n) >= 0 { r = es } }
   r
@@ -3822,9 +3772,9 @@ a64_index_elem_unsigned := fn(bse : ptr(Expr), params_head : Option(ptr(mut Para
   if bn != 0 {
     an := a64_local_arrty_span(body_head, src, bs, bn, a)
     if arrty_elem_unsigned(src, an.s, an.n) { r = true }
-    if r == false { sp := a64_slice_param_elem_span(params_head, src, bs, bn) ; if sp.n != 0 { if scalar_name_is_unsigned(src, sp.s, sp.n) { r = true } } }
+    if r == false { sp := lower_ctx::slice_param_elem_span(params_head, src, bs, bn) ; if sp.n != 0 { if scalar_name_is_unsigned(src, sp.s, sp.n) { r = true } } }
     ## A `Slice(T)` LOCAL. Its element type is written ONLY in the annotation at its declaration,
-    ## so neither the fixed-array span above nor the param lookup can see it. `a64_slice_elem_span`
+    ## so neither the fixed-array span above nor the param lookup can see it. `lower_ctx::slice_elem_span`
     ## is no use either: it scans the source FORWARD from a name to a `: Slice(T)`, and the name it
     ## would get here is the one at the USE site (`xs[0]`), which has no annotation after it.
     ## `a64_local_ann_span` already walks to the DECLARATION and answers its annotation span, so the
@@ -7825,7 +7775,7 @@ emit_a64_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, 
               if sliceparamidx >= 0 and a64_slice_param_scalar(params_head, src, bns, bnl, a, decls) {
                 ## This write form is currently word-tier only. Resolve the active generic T before
                 ## checking width; otherwise Slice(u8) would incorrectly receive an 8-byte store.
-                pes := a64_slice_param_elem_span(params_head, src, bns, bnl)
+                pes := lower_ctx::slice_param_elem_span(params_head, src, bns, bnl)
                 mut pets := pes.s
                 mut petn := pes.n
                 if A64_SUB_GPL != 0 and streq(src, pets, petn, A64_SUB_GPS, A64_SUB_GPL) { pets = A64_SUB_ITS ; petn = A64_SUB_ITL }
@@ -9339,7 +9289,6 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
   ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
   lower_layout::set_call_signedness_decls(decls)       ## #725: call operands take the callee's result signedness
-  A64_SRC_N = src_n
   A64_PRINT_I64 = false
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any callee resolution or emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on another arch is neutered to an

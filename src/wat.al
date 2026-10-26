@@ -81,7 +81,6 @@ tuple_words := lower::tuple_words
 (CSpan, decl_at, decl_get, node_ptr, streq, is_slice_local, arrty_nel, sub_arr_len, typeinfo_arg_span) := lower_ctx
 ## The raw source buffer is shared by all parsed modules. Slice parameter recovery consumes absolute
 ## source offsets, so it must stop at the buffer extent rather than an arbitrary post-name window.
-mut WAT_SRC_N : usize = 0
 
 ## The EXACT linker symbol of a `@export("name")` attribute attached to `[name_s, name_s+name_l)`
 ## (Modules §6.3), or {0,0}. The parser discards attributes, so recover declaration-prefix and
@@ -220,9 +219,9 @@ wat_index_elem_unsigned := fn(bse : ptr(Expr), params_head : Option(ptr(mut Para
   if bn != 0 {
     an := wat_local_arrty_span(body_head, src, bs, bn, a)
     if arrty_elem_unsigned(src, an.s, an.n) { r = true }
-    if r == false { sp := wat_slice_param_elem_span(params_head, src, bs, bn) ; if sp.n != 0 { if scalar_name_is_unsigned(src, sp.s, sp.n) { r = true } } }
+    if r == false { sp := lower_ctx::slice_param_elem_span(params_head, src, bs, bn) ; if sp.n != 0 { if scalar_name_is_unsigned(src, sp.s, sp.n) { r = true } } }
     ## A `Slice(T)` LOCAL. Its element type is written ONLY in the annotation at its declaration,
-    ## so neither the fixed-array span above nor the param lookup can see it. `wat_slice_elem_span`
+    ## so neither the fixed-array span above nor the param lookup can see it. `lower_ctx::slice_elem_span`
     ## is no use either: it scans the source FORWARD from a name to a `: Slice(T)`, and the name it
     ## would get here is the one at the USE site (`xs[0]`), which has no annotation after it.
     ## `wat_local_ann_span` already walks to the DECLARATION and answers its annotation span, so the
@@ -2007,36 +2006,6 @@ wat_call_ret_tuple_words := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
   }
   r
 }
-## The ELEMENT-type span of a `Slice(E)` PARAM named `[s,n)`, by scanning SOURCE forward from the param
-## name (`: Slice(E)`) — the wasm twin of lower.al's `slice_param_elem_span`. {0,0} when not a slice param.
-wat_slice_scan_has := fn(src : ptr(u8), end : usize, p : usize, want : str) -> bool {
-  if p > end { return false }
-  if want.len > end - p { return false }
-  str_at((src + p), want.len) == want
-}
-wat_slice_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
-  if p >= end { return false }
-  c := str_at((src + p), 1)
-  c == " " or c == "\n" or c == "\t" or c == "\r"
-}
-wat_slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
-  mut p := s + n
-  end := WAT_SRC_N
-  while p < end and wat_slice_scan_ws(src, end, p) { p = p + 1 }
-  if wat_slice_scan_has(src, end, p, ":") == false { return CSpan(s = 0, n = 0) }
-  p = p + 1
-  while p < end and wat_slice_scan_ws(src, end, p) { p = p + 1 }
-  if wat_slice_scan_has(src, end, p, "Slice(") == false { return CSpan(s = 0, n = 0) }
-  es := p + 6
-  mut ee := es
-  while ee < end {
-    if str_at((src + ee), 1) == ")" { break }
-    ee = ee + 1
-  }
-  if ee >= end { return CSpan(s = 0, n = 0) }
-  if ee == es { return CSpan(s = 0, n = 0) }
-  CSpan(s = es, n = ee - es)
-}
 ## Is the PARAM `[ns,nl]` a `Slice(E)` param with a SCALAR element E? In WASM a slice PARAM has the SAME
 ## shape as a local slice VIEW: the param (a WASM local) holds the base address of a `{ptr,len}` block in
 ## linear memory (word0 = data ptr, word1 = runtime len). So the read paths reuse the slice-VIEW emit,
@@ -2049,7 +2018,7 @@ wat_slice_param_scalar := fn(params_head : Option(ptr(mut Param)), src : ptr(u8)
       Some(pq) => {
         pm := deref(param_p(pq))
         if streq(src, pm.ns, pm.nl, ns, nl) {
-          es := wat_slice_elem_span(src, pm.ns, pm.nl)
+          es := lower_ctx::slice_elem_span(src, pm.ns, pm.nl)
           if es.n != 0 {
             if struct_decl_of(decls, src, es.s, es.n) < 0 and enum_decl_of(decls, src, es.s, es.n) < 0 { r = true }
           }
@@ -2729,26 +2698,10 @@ wat_inst_add := fn(src : ptr(u8), gi : usize, ts : usize, tl : usize) {
     WAT_INST_N = WAT_INST_N + 1
   }
 }
-## The element-type span E of the `Slice(E)` PARAM `[ns,nl]`, or {0,0}.
-wat_slice_param_elem_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
-  mut p := params_head
-  mut r := CSpan(s = 0, n = 0)
-  loop {
-    match p {
-      Some(pq) => {
-        pm := deref(param_p(pq))
-        if streq(src, pm.ns, pm.nl, ns, nl) { r = wat_slice_elem_span(src, pm.ns, pm.nl) }
-        p = pm.next
-      }
-      None => { break }
-    }
-  }
-  r
-}
 ## Element WORD stride of the `Slice(E)` PARAM `[ns,nl]`: struct_words for struct E, 1+enum_max_arity for
 ## enum E, else 0.
 wat_slice_param_agg_stride := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
-  es := wat_slice_param_elem_span(params_head, src, ns, nl)
+  es := lower_ctx::slice_param_elem_span(params_head, src, ns, nl)
   mut r := 0
   if es.n != 0 {
     if struct_decl_of(decls, src, es.s, es.n) >= 0 { require_no_byte_layout_array_elem(decls, src, es.s, es.n, a) ; r = i64(struct_words(decls, src, es.s, es.n, a)) }
@@ -2758,14 +2711,14 @@ wat_slice_param_agg_stride := fn(params_head : Option(ptr(mut Param)), src : ptr
 }
 ## Element STRUCT span of the `Slice(P)` PARAM `[ns,nl]` (P a struct), else {0,0}.
 wat_slice_param_struct_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> CSpan {
-  es := wat_slice_param_elem_span(params_head, src, ns, nl)
+  es := lower_ctx::slice_param_elem_span(params_head, src, ns, nl)
   mut r := CSpan(s = 0, n = 0)
   if es.n != 0 { if struct_decl_of(decls, src, es.s, es.n) >= 0 { r = es } }
   r
 }
 ## Element ENUM span of the `Slice(E)` PARAM `[ns,nl]` (E an enum), else {0,0}.
 wat_slice_param_enum_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> CSpan {
-  es := wat_slice_param_elem_span(params_head, src, ns, nl)
+  es := lower_ctx::slice_param_elem_span(params_head, src, ns, nl)
   mut r := CSpan(s = 0, n = 0)
   if es.n != 0 { if enum_decl_of(decls, src, es.s, es.n) >= 0 { r = es } }
   r
@@ -8329,7 +8282,6 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
   ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
   lower_layout::set_call_signedness_decls(decls)       ## #725: call operands take the callee's result signedness
-  WAT_SRC_N = src_n
   WAT_PRINT_I64 = false
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any import/global/func emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on an arch that is not this target is
