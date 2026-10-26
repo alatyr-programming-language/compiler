@@ -104,12 +104,13 @@ position's type.
 file used to name, #809 and #792, are **CLOSED** — so neither is a reason for a new marker. They stay
 listed because they say what the workaround looks like, not because it is still needed:
 
-- #809: a direct `match` over an `Option(ptr(T))` field reached through a mutable global, an array
-  element or `deref(p)` (`match deref(p).next {…}`) is refused by the lowering. Copy the field into
-  an annotated local first (`o : Option(ptr(mut N)) = deref(p).next ; match o {…}`). That works, so
-  it is the form to write, not a sentinel.
-- #792: an enum-typed or `Option(u64)` field read through a pointer (`deref(p).f`) is a wrong value
-  or a SIGSEGV. Bind the record first (`rv : Rec = deref(p) ; rv.f`).
+- #809 (CLOSED): a direct `match` over an `Option(ptr(T))` field reached through a mutable global, an
+  array element or `deref(p)` (`match deref(p).next {…}`) WAS refused by the lowering — `e2e.sh` now
+  runs `issue809_option_ptr_field_match` expecting 42. The form to write is still the annotated local
+  (`o : Option(ptr(mut N)) = deref(p).next ; match o {…}`), and it works.
+- #792 (CLOSED): an enum-typed or `Option(u64)` field read through a pointer (`deref(p).f`) WAS a wrong
+  value or a SIGSEGV — `e2e.sh` runs `issue792_enum_field_through_ptr` expecting 42. Bind the record
+  first (`rv : Rec = deref(p) ; rv.f`).
 
 Where neither workaround reaches (every AST list is now `Option(ptr(mut T))`, so this is for a
 shape the typed form still cannot express), spell the null explicitly (§6). The marker's reason
@@ -130,10 +131,24 @@ knows `p` is a pointer. The check refuses a change that increases the sum. Marke
 blocking issue> — <which null-terminated structure>`. The sum is flat while #529 converts implicit
 tests into explicit ones, so that work is never refused. The rule checks that a reason exists. That
 the reason names a real blocker is held by review. The `null-ok` markers already in `src/` predate this rule: measured, there are **25**, and **24** of
-them name only the structure, no issue. Each gets its blocker named — or the marker removed, because on
-the shape §4.1 makes untestable there is no blocker to name — the next time its file is edited. The
-count is stated as measured, not as a remembered number, because a remembered count is how a ratchet
-starts lying.
+them name only the structure, no issue. Each gets its blocker named, or the site converted to
+`Option(ptr(T))` so the marker goes away, the next time its file is edited. Which of the two applies
+depends on which half the site sits in, and getting that backwards deletes a label that is load-bearing:
+  - on a **checked** `p == 0` there is no blocker to name — §4.1's non-nullness makes the test dead, and
+    the site is simply wrong; convert it.
+  - on the `unchecked bitcast(usize, p) != 0` sites (19 of the 25) there IS a blocker, and it is #529,
+    still OPEN: `sema.al` calls the seam "a recorded departure from the pin" and says removing it first
+    breaks the self-host's build. Removing the marker there leaves an unlabelled transitional form,
+    against `AGENTS.md`'s rule that the reason names an OPEN blocker and against this file's own "when
+    the named issue closes, its markers are the sites to convert".
+
+The counts come with the pattern that produced them, because a remembered count is how a ratchet starts
+lying: `grep -rn '^[[:space:]]*##[[:space:]]*null-ok:' src/` gives **25**; the gate's own scanner
+(`strict_forms_scan.awk:55`) accepts a marker anywhere on the line, and `src/lower_layout.al:4042`
+carries one after code, so the enforcement-matching count is **26**. Of those 26 exactly one names an
+issue — `src/ir.al:1700`, `blocked by #789` — and #789 is CLOSED, so **none** names an OPEN blocker:
+every marker in `src/` currently fails the rule this file states, and each is corrected when its file is
+touched.
 
 **Decided, so do not reopen it — but not yet binding here.** Whether a bare `p == 0` on a `ptr(T)`
 should be refused was the one open question on this form (#1030). The owner chose **grant-only**,
@@ -141,7 +156,7 @@ recorded as spec decision **MEM-9 on spec/spec#19**, which at the time of writin
 spec `main`, and so in no release — including the `1.1.0` this compiler pins (`src/spec_revision.al`). The
 normative paragraph lands in Memory §4.5 and binds when a release containing it is cut and the pin moves
 in its own explicit commit. So this catalogue records a DECISION, not a norm the compiler is answerable
-to yet; writing it the other way round would be the very failure the closing sentence warns about.
+to yet; writing it the other way round would be the very failure this file's opening states: "the missing check is a gap to close, not permission".
 
 Two consequences, each scoped to what is already pinned:
   - the checked half is **empty by invariant**, and this half needs no pin — §4.1 AT v1.1.0 already says
