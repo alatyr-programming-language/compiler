@@ -9976,10 +9976,19 @@ build_reject_has issue465_enum_rhs_reject "words are not addressable here"
 run_x86 issue462_enum_call_field 42
 run_a64 issue462_enum_call_field 42
 run_rv64 issue462_enum_call_field 42
-## issue #462 — the wasm status asserted EXACTLY, not merely "nonzero": a struct's enum field on wasm is
-## issue #449's by-reference block and traps (134) on parent 43093e5 and on this tree alike. wasm is
-## outside this issue and this row exists so that stays visible.
-run_wat issue462_enum_call_field 134
+## issue #462 — the wasm status asserted EXACTLY, not merely "nonzero". It was 134 (the #449 refusal)
+## and it is 42 since the sema context fix: `main` here returns 42 ONLY after all seven probes return 0,
+## and every distinct wrong outcome has its own code (52/62/72… the other arm won, 53/63/73… payload
+## word 0 read 0, 57/67/75… no arm matched), so 42 cannot be reached by accident — it means every
+## observable is right on wasm. The trap was not a refusal of this shape on purpose: the function fell
+## back to the legacy emitter, which emitted `(unreachable)` for it; with the context reaching the
+## literals beneath an already-typed composite the function builds from the shared IR (ir census
+## built=1389, was 1388) and emits real code. Measured on the GitHub runner gate for this branch
+## (run 40296304262), where `wasm_sweep` is green in the same run.
+## #449 is NOT thereby closed: its own fixture `issue449_enum_field_eq` compares an enum FIELD with
+## `==`, a by-reference aggregate compare the wasm compare arm still refuses, and it still answers 134
+## in that same run — deliberately, because guessing there would be worse. #449 stays open.
+run_wat issue462_enum_call_field 42
 ## issue #462, the POINTER-RELATIVE twin — the same feed into an ARRAY ELEMENT at a RUNTIME index
 ## (`xs[i] = Boxed(p = mk(), n = 9)`), which goes through `emit_*_store_payload_atptr` instead. aarch64
 ## answered a silent 31 there (the field after the enum, written one word early) while x86_64 dropped the

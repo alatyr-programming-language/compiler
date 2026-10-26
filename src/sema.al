@@ -8724,6 +8724,26 @@ sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)
   if not ir::vty_known(vt) { vt = sema_vty_kind(ty_kind(t)) }
   if not ir::vty_known(vt) { vt = sema_vty_shape(e, decls, src) }
   sema_sty_put(e, vt)
+  ## Types §2.3 and D6, made explicit. The type just recorded IS the context of this node's parts: an
+  ## `if`'s and `match`'s branches, a non-boolean `Bin`'s operands, an `unchecked` body, a `loop`'s
+  ## break values all have the parent's type. Until now that propagation happened only as a SIDE EFFECT
+  ## of `sema_vty_shape` — and shape is computed only when the checker's own `Ty` named no type. So for
+  ## a composite the checker DID type, its untyped descendants were never reached: `(if 1 == 1 { g5(…) }
+  ## else { (if 0 < 0 { (0 - 10) } else { (0 - 1000) }) })` recorded `i64` from the checker's answer,
+  ## never ran the join, and left both nested literals `VcLit`; the builder refused rather than inventing
+  ## a type (correctly, D6), D7's fallback used the legacy emitter, and the shared `$__tmp` delivered a
+  ## silent wrong value (#769, progen seed 314: `wasm=45` where the other three backends answer 39).
+  ## Pushing here is safe for the reason `sema_vty_push` states: it stamps ONLY nodes with no type of
+  ## their own, a `Call`'s arguments are not descended into (they take their parameters' declared types),
+  ## and a boolean `Bin`'s operands are not descended into (its result is `bool`, its operands are not).
+  if ir::vty_known(vt) {
+    match deref(e) {
+      Expr::Bin | Expr::If | Expr::Match | Expr::Unchecked | Expr::Loop => { sema_vty_push(e, vt) }
+      Expr::Num | Expr::BoolLit | Expr::Var | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit
+        | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+        | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast => {}
+    }
+  }
   if sema_vty_site(e, src) { ir::sign_site(e) }
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { sema_vty_call_args(cs, cl, na, ah, decls, src) }
@@ -9179,8 +9199,21 @@ sema_vty_syscall_at := fn(d : Decl, ah : Option(ptr(mut Arg)), decls : ptr(rt::V
 ## parts' (an arithmetic operand, an `unchecked` body, a value `if`'s or `match`'s arms).
 sema_vty_push := fn(e : ptr(Expr), t : ir::VTy) {
   cur : ir::VTy = sema_sty_get(e)
-  if not ir::vty_is_lit(cur) { return }
-  sema_sty_put(e, t)
+  ## Stamp only a node that has NO type of its own (Types §2.3: a literal takes the context's). But
+  ## DESCEND through a node that already has one: an `if`, `match`, `loop` or non-boolean `Bin` takes
+  ## its type from its branches/operands, and a branch that is itself one of those composites can hold
+  ## literals no context reached yet. Stopping at the first known type left exactly one shape untyped —
+  ## a literal-only `if` in the ELSE position whose THEN branch has a known type (a call): the outer
+  ## `if` was known, so the context stopped there and never reached the nested literal branches. The
+  ## builder then refused the function as `sema-gap literal: expr If` (measured: `(if 1 == 1 { g(p) }
+  ## else { (if 0 < 0 { 5 } else { 7 }) })` refuses, while the same nested `if` in the THEN position,
+  ## and the same shape with a literal or a call in place of either branch, build), D7's function-level
+  ## fallback handed it to the legacy emitter, and the shared `$__tmp` delivered a silent wrong value
+  ## (#769, progen seed 314: `wasm=45` where the other three backends answer 39). Descending is safe
+  ## because stamping stays guarded by `vty_is_lit`: a child that already has a type keeps it, and the
+  ## children of these composites have the parent's type by §2.3 anyway. A `Call`'s arguments are NOT
+  ## descended into — they take their parameters' declared types, not the call's context.
+  if ir::vty_is_lit(cur) { sema_sty_put(e, t) }
   match deref(e) {
     Expr::Bin(op, l, r) => {
       if not sema_vty_op_is_bool(op) { sema_vty_push(l, t); sema_vty_push(r, t) }
