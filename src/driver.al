@@ -6769,6 +6769,14 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   }
   ## IR slice 1c: the twins' selectors locate each trap they emit (`<file>:<line>:<col>`, docs/ir.md §3.6).
   ir::set_source_map(ptr(pv), ptr(src_off), ptr(src_len))
+  ## Re-publish the extent of the buffer about to be emitted, so `lower_ctx::slice_elem_span` — one
+  ## algorithm for the three twins now, where `a64_`/`rv_`/`wat_slice_elem_span` each kept a private copy
+  ## of both the scan and the length (`A64_SRC_N`, `RV_SRC_N`, `WAT_SRC_N`) — is bounded by THIS buffer.
+  ## Each emitter also publishes it at its own entry, exactly where its `*_SRC_N` was set, so the bound
+  ## is correct by construction for any caller and not only for this site; this line stays because backend 3
+  ## (`ir::report_program`, below) reaches no emitter. x86_64 is untouched: `lower.al` keeps its own
+  ## `LOWER_SRC_N` and its own copy of the scan (:6273, with a variadic case the shared one lacks).
+  ast::set_src_extent(strbuf::buf_len(bld))
   mut out := strbuf::strbuf(tar, 67108864)
   if backend == 0 { wat::emit_wat_program(ptr(ed), out, base, strbuf::buf_len(bld), na) }
   if backend == 1 {

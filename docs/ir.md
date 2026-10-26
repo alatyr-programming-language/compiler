@@ -322,6 +322,41 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   is blocked by its own instance-table globals (`WAT_INST_TL3`, `WAT_INST_TS3`, `WAT_INST_TL`); `local_scan`
   and `emit_narrow` are not even triples (wasm's differ in NAME, `local_slot_scan`, `wat_narrow_pre/post`, so
   they are different decisions wearing a family's clothes).
+- **the span chain is a plumbing duplicate, and threading it is the wrong fix — measured.** The span
+  cluster (`*_slice_elem_span`, `*_slice_scan_has`, `*_slice_scan_ws`, and then `*_slice_param_elem_span`)
+  was three byte-identical algorithms plus three globals holding **one** value: all three twins are called
+  from one driver site (`driver.al:6780`, `:6789`, `:6799`) with the same `strbuf::buf_len(bld)`. The
+  reflex is to thread the bound instead of sharing it. Computed **on `main`, where the three copies still
+  existed** — the tree the decision was made against, and the only tree the number means: after this branch
+  deletes two of the three seeds the same walk answers 96, which is not a contradiction but a different
+  tree. With this gate's own brace-balanced parse and its own `callees()`, the **caller** closure of the
+  three `*_slice_elem_span` is **230 functions**, **seven caller levels** above the scan (eight functions
+  counting the scan itself — the count is edges from the seed, so state it that way rather than arguing
+  about "deep"), of which **three** carry `src_n`. So threading is a 230-signature change that cannot be
+  verified on a host that cannot run the seed, which is precisely how a silently wrong result lands. The fix was to share: the bound already exists as `ast::AST_SRC_N`,
+  published by the driver with that same expression at six pipeline sites (`ast::set_src_extent`: `:2974`,
+  `:3066`, `:5126`, `:6605`, `:7003`, `:7333`; two more publish `src.len`, at `:2863` and `:7739`) and
+  read by six bounded scans already in `ast.al` (`:77`, `:107`, `:143`, `:193`, `:214`, `:221`). The
+  duplicated decision was never the number — it was the plumbing around a number the shared module already
+  held. Each twin publishes the extent at its own entry, exactly where its `*_SRC_N` was set, so the bound
+  stays correct **by construction for any caller** rather than correct only for the driver's one site.
+  `#1064` plus its follow-up deleted two families, took the census from 18 to **16** with `LIFTABLE=0`,
+  and netted **−69 lines** while adding **no state**. Two lessons, both general: a family blocked by a
+  global is blocked by plumbing, not by a decision, so look for the shared fact before you thread a
+  parameter; and when a census ratchet says `LIFTABLE`, take it — the second half of this slice was decided
+  by `liftable=0`, not by judgement, which is what a ratchet is for.
+- **and the census cannot see the fourth copy, so "closed" is not "gone".** x86_64 was **not** covered by
+  the above. `lower.al:6273` holds its own copy of the same scan under the name `slice_param_elem_span`
+  (same `(src, s, n)` shape as the shared `slice_elem_span`) and it is **not identical**: it carries a
+  variadic branch that recovers the element type of `name : ...T` and returns its span where the shared scan
+  answers {0,0}. Its helpers `ptr_scan_has` (`lower.al:12496`) and `ptr_scan_ws` (`lower.al:12501`) **are**
+  byte-identical to the shared `slice_scan_has` / `slice_scan_ws`. `copy_lift.py` reports these families
+  closed anyway: `BACKENDS` excludes `lower.al`, and `if shared: continue` fires because *some* definition of
+  the bare name exists. A census that calls a family closed because a name resolves somewhere is not a census
+  of copies — read this bullet, not the census line. The figures above are this branch's; the `fdc40f6`
+  snapshot two bullets below (24 reported, 4 liftable, 20 blocked) is that revision's, and "the twenty" there
+  means those twenty.
+
 - **the blocked set contains a ring, and the ring is why a per-family answer is the wrong question.** Five of
   the twenty — `operand_narrow`, `operand_signed`, `operand_signed_dep`, `shift_call_signed`,
   `bin_init_signed` — are blocked by *each other*: `operand_signed` calls `operand_signed_dep`, which calls
