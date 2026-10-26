@@ -716,7 +716,30 @@ ib_lit_step := fn(b : AstBin, x : i64, y : i64) -> Option(i64) {
     BBand => { Option(i64).Some(x & y) }
     BBor => { Option(i64).Some(x | y) }
     BBxor => { Option(i64).Some(x ^ y) }
-    BDiv | BRem | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { Option(i64).None }
+    ## `/` and `%` over two constants fold as well. The compiler's OWN comptime folder folds them
+    ## (`comptime.al::apply`, operator bytes 19 and 29), and Types §2.3 says `bitsN` is the substrate
+    ## of run-time data, "not a constraint on compile-time arithmetic". Refusing them here made the two
+    ## halves of the compiler disagree about the SAME source expression: the fold returned None, the walk
+    ## descended and asked each `Num` its OWN type, no context had reached it (`VcLit`), the function was
+    ## refused as `sema-gap literal`, and D7's function-level fallback handed it to the legacy wasm
+    ## emitter — whose single `$__tmp` is clobbered by a nested literal, a silent wrong value (#769,
+    ## progen seed 2075201016). Controlled measurement: in an `if` branch whose other branch is a call,
+    ## `unchecked (7 + 1)` builds and `7 % 3` does not, with and without `unchecked` — the operator is
+    ## the only difference. Three guards keep the fold faithful, and none of them invents a type (D6):
+    ##  - a ZERO divisor is not folded, so the checked `div_zero` trap §4 owes still fires at run time;
+    ##  - a NEGATIVE operand is not folded: `ib_lit_fold` refuses a negative `Num`, but a folded
+    ##    sub-expression can be negative (`0 - 7`), and `x / y` differs between the signed and unsigned
+    ##    reading there; with both operands non-negative the two agree, so no signedness is chosen;
+    ##  - `MIN / -1` is excluded by the same negative-operand guard, leaving its run-time check in place.
+    BDiv => {
+      if y == 0 or x < 0 or y < 0 { return Option(i64).None }
+      Option(i64).Some(x / y)
+    }
+    BRem => {
+      if y == 0 or x < 0 or y < 0 { return Option(i64).None }
+      Option(i64).Some(x % y)
+    }
+    BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { Option(i64).None }
   }
 }
 ## The folded value `v` of the literal-only expression `e` as a constant of sema's type for `e`. In a
