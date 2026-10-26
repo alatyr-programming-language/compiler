@@ -29,6 +29,11 @@ parse the tree — an instrument that reads nothing reports nothing, and silence
 import io, os, re, sys, difflib
 
 BACKENDS = {'aarch64.al': 'a64', 'riscv64.al': 'rv', 'wat.al': 'wat'}
+## Every emitter, including x86_64. `BACKENDS` deliberately excludes `lower.al` because a family is
+## detected through the twins' `_a64_`/`_rv_`/`_wat_` prefixes and x86 spells its helpers differently — but
+## that is a reason it cannot be *lifted* by the same move, not a reason it cannot hold a private copy. For
+## "is any copy still private" x86_64 counts, so the two sets are deliberately different.
+EMITTERS = ('lower.al', 'aarch64.al', 'riscv64.al', 'wat.al')
 # Families from docs/ir.md §2.4 — the decisions named there, prefix-normalised.
 FAMILIES = [
     'operand_narrow', 'local_narrow',
@@ -219,7 +224,32 @@ def classify(root, families):
                                                           for n in sorted(copies)))]
                 continue
             if shared:
-                continue          # fully hoisted: one shared definition, no private copies left
+                # "fully hoisted" must mean ONE definition, not "no backend-prefixed copies remain".
+                # `BACKENDS` covers the three twins only, so x86_64's emitter (`lower.al`) never enters
+                # `copies` — and when a family is lifted into `lower_ctx` while `lower.al` keeps its own
+                # definition under the SAME bare name, `fam in defs` is satisfied by either one and the
+                # family was reported closed with two live definitions of the decision. Measured on the
+                # #1066 tree: `slice_param_elem_span` is defined at `lower.al:6273` AND `lower_ctx.al:529`
+                # — two definitions, reported as one shared decision. `lower.al:6273` is not even a copy
+                # in the harmless sense: it carries a variadic branch (`name : ...T`) that returns a span
+                # where the shared scan answers {0,0}, so the two definitions ANSWER DIFFERENTLY.
+                # A census that calls a family closed because a name resolves somewhere is not a census of
+                # copies; this is the same failure as the half-hoist above, one level up.
+                shared_defs = defs[fam]
+                in_emitter = [d for d in shared_defs if d['file'] in EMITTERS]
+                if len(shared_defs) > 1:
+                    blocked[label] = ['NOT hoisted: %d definitions of the bare name remain — %s%s'
+                                      % (len(shared_defs),
+                                         ', '.join('%s:%d' % (d['file'], d['start']) for d in shared_defs),
+                                         ' — %d of them in an EMITTER, where a private copy is what criterion 2 '
+                                         'forbids' % len(in_emitter) if in_emitter else '')]
+                    continue
+                if in_emitter:
+                    blocked[label] = ['the one remaining definition sits in an emitter (%s:%d), not in shared '
+                                     'code — criterion 2 is not met'
+                                     % (in_emitter[0]['file'], in_emitter[0]['start'])]
+                    continue
+                continue          # fully hoisted: exactly one shared definition, no private copies left
             blocked[label] = ['only %d of 3 copies present' % len(copies)]
             continue
         # normalise BOTH the lowercase call prefix and the uppercase global prefix: a family whose three
@@ -396,6 +426,29 @@ def self_test():
     chk('a HALF-hoist is reported, not called clean', 'half' not in {f for f, _ in l2}
         and b2.get('half') and 'still keep their own' in b2['half'][0]
         and 'wat.al' in b2['half'][0])
+    # "Fully hoisted" means ONE definition. Two modules defining the same bare name is two copies of the
+    # decision, and the old condition (`fam in defs`) could not tell them apart: BACKENDS excludes lower.al,
+    # so x86_64's emitter never entered `copies`, and a family lifted into shared code while lower.al kept
+    # its own definition was reported CLOSED. `slice_param_elem_span` is exactly that on the #1066 tree —
+    # lower.al:6273 (with a variadic branch the shared scan lacks) and lower_ctx.al:529.
+    w('lower_layout.al', 'hoist2 := fn(x : ptr(u8)) -> bool {\n  false\n}\n')
+    w('lower.al', 'hoist2 := fn(x : ptr(u8)) -> bool {\n  true\n}\n')
+    l3, b3, _ = classify(t, ['hoist2'])
+    chk('two definitions of the bare name are NOT called hoisted', 'hoist2' not in {f for f, _ in l3}
+        and b3.get('hoist2') and '2 definitions' in b3['hoist2'][0]
+        and 'lower.al' in b3['hoist2'][0] and 'lower_layout.al' in b3['hoist2'][0])
+    chk('and the emitter copy is named as the reason', 'EMITTER' in b3['hoist2'][0])
+    # The control: exactly one shared definition, no private copy, is genuinely closed. Without this the
+    # new rule could "pass" by reporting everything blocked, which would look strict and prove nothing.
+    w('lower_layout.al', 'hoist1 := fn(x : ptr(u8)) -> bool {\n  false\n}\n')
+    l4, b4, _ = classify(t, ['hoist1'])
+    chk('ONE shared definition with no private copy is closed', 'hoist1' not in {f for f, _ in l4}
+        and 'hoist1' not in b4)
+    # The other half of the rule: a single definition that lives in an EMITTER is not shared code.
+    w('lower.al', 'emitter_only := fn(x : ptr(u8)) -> bool {\n  false\n}\n')
+    l5, b5, _ = classify(t, ['emitter_only'])
+    chk('a lone definition in an emitter is not shared code', 'emitter_only' not in {f for f, _ in l5}
+        and b5.get('emitter_only') and 'emitter' in b5['emitter_only'][0])
     shutil.rmtree(t)
     print('copy lift self-test: %d checks, %d failed' % (seen_n[0], bad))
     return 0 if bad == 0 else 1
