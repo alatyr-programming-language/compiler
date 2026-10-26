@@ -30085,12 +30085,21 @@ module_decl_ranges := fn(decls : ptr(rt::Vec), src : ptr(u8), base : usize) -> u
 ## is 0 or a buffer → the fixpoint GAS dump (which passes 0) is unaffected. The build path (link_exe, 1c-γ)
 ## consumes the table to split the single `.s` into per-module `.o`; `start` is a byte offset from `sb.data`
 ## (the buffer only ever grows by append, so an offset captured mid-emit is its final file offset).
-## IR slice 1d: whether `emit_program` hands each function to the shared IR's x86 selector first
-## (`x86_isel_try`). Only the `alatyr x86-ir` verb sets it (owner decision D5: a dev surface is a verb,
-## never an environment switch, Codegen §3.1); every other surface, the self-build included, leaves it
-## false and the `and` below never reaches the selector, so the default GAS is byte-identical.
-mut X86_IR_SELECT : bool = false
+## IR slice 9 (`docs/ir.md` §7.4): the x86 flip. `emit_program` hands every function to the shared
+## IR's x86 selector FIRST (`x86_isel_try`) and falls back to the legacy `emit_fn` only when the
+## selector declines it — so the IR path is the default surface, the self-build included. It was OFF
+## behind the `alatyr x86-ir` dev verb through slices 1d–8; the measurement that justified turning it
+## on is recorded on #980: over 2 332 corpus programs the two paths produced `agree=635 disagree=4`,
+## and all four disagreements are `build=4 exit=0 stdout=0` — the selector differs only by REFUSING
+## LESS than the legacy emitter, never by answering differently. `no-ir=996` programs select nothing and
+## take `emit_fn` unchanged, so the flip cannot alter them either.
+## The OFF escape hatch is a VERB (`alatyr x86-legacy`), never an environment switch — owner decision
+## D5 (Codegen §3.1). Byte-identity with the pre-flip GAS was never the goal (§7.4: the selector's
+## register-allocated output already differs from the text path for the same functions), which is why
+## this step owes a seed promotion.
+mut X86_IR_SELECT : bool = true
 pub set_x86_ir_select := fn() { X86_IR_SELECT = true }
+pub clear_x86_ir_select := fn() { X86_IR_SELECT = false }
 pub x86_ir_select_on := fn() -> bool { X86_IR_SELECT }
 ## Whether `d`'s code is reached through its bare mangled label `<module>__<name>` under the legacy
 ## internal convention — the x86 IR selector's question for a function it defines or calls, answered
