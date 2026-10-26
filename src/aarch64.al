@@ -1087,12 +1087,15 @@ a64_ret_enum_sret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   if w > 8 { return w }
   0
 }
-## Is field `[fs,fl]` of struct `[s,n]` SCALAR (one word)? The decision now lives in ONE place,
-## `lower_layout::field_is_scalar`; this is an alias, not a copy (#1027, criterion 2). The two bodies
-## were compared over their full 18 lines and differed by nothing once the `a64_`/`rv_` prefix was
-## normalized, so no emitted byte moves. See that function for why `struct_all_scalar` below cannot
-## join it (a module cycle through `lower.al`'s `field_type_span`).
-a64_field_is_scalar := lower_layout::field_is_scalar
+## The two field queries this emitter asks, both resolved in ONE place, `lower_layout` (#1027, #1056).
+## TWO QUERIES, TWO NAMES (#1056). `lower_layout` now answers the two questions this emitter used to
+## ask with one function. The ordinary field PLACE guards below ask "does this field occupy one word at
+## its layout offset" — that is `field_occupies_one_word`, and it is what this alias has always computed
+## (its body is unchanged, so no emitted byte moves). The comptime projection asks a different question,
+## "is this field's VALUE a scalar", and that is `comp_field_is_scalar` — shared with wasm, which has
+## asked the strict question alone since #99. See `lower_layout.al` for why the two are not one.
+a64_field_is_scalar := lower_layout::field_occupies_one_word
+a64_comp_field_is_scalar := lower_layout::field_is_scalar
 
 ## STANDARD BYTE-LAYOUT PLACE RESOLUTION (CLAYOUT S3a). A standard-byte struct local is still an
 ## inline frame value on this backend; only the FIELD offsets change from words to bytes. Keep this
@@ -5024,7 +5027,10 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       cstys := a64_local_struct_ns(body_head, src, cbns, cbnl, a)
       cstyn := a64_local_struct_nl(body_head, src, cbns, cbnl, a)
       cpoff := a64_local_off(body_head, src, cbns, cbnl, pcount, a, decls)
-      clocalok := cfactive and cbnl != 0 and cstyn != 0 and cpoff >= 0 and a64_field_is_scalar(decls, src, cstys, cstyn, cfs, cfl, a)
+      ## The comptime projection asks whether the field's VALUE is a scalar, not whether it occupies one
+      ## word: `c : C` with `C := struct { x : u64 }` occupies one word and is still an aggregate
+      ## address, and `ldr x0` there reads a pointer as an integer (#1056). Shared with wasm.
+      clocalok := cfactive and cbnl != 0 and cstyn != 0 and cpoff >= 0 and a64_comp_field_is_scalar(decls, src, cstys, cstyn, cfs, cfl, a)
       cpidx := param_find(params_head, src, cbns, cbnl, a)
       cpstys := a64_param_struct_ns(params_head, src, cbns, cbnl, a, decls)
       cpstyn := a64_param_struct_nl(params_head, src, cbns, cbnl, a, decls)
