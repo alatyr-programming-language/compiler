@@ -62,7 +62,7 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # file quietly describing a different compiler.
 #
 current-seed-sha256: ce7dca80b820918d80a0fab5c18460d74dd23d370700392558cb853e30e9dd0c
-current-seed-version: 0.2.17
+current-seed-version: 0.3.0
 #
 # spec-pin: 1.1.0 (tag v1.1.0, spec commit 65a0c9b)
 #

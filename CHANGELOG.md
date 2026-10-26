@@ -124,6 +124,19 @@ Two numbers that are **not** the compiler's version: the specification revision 
 `README.md` carries the badge) and the seed lineage in `seed/VERSION`. The specification's own tags
 (`v1.0.0`, `v1.1.0`, …) live in the sibling repository; a `v1.1.0` here would mean something else entirely.
 
+## 0.3.0 — 2026-10-27 (MINOR: the x86_64 default emission moved to the shared IR selector)
+
+- **The x86_64 default emission is now the shared IR selector (#980 slice 9, #1072).** `X86_IR_SELECT`
+  was OFF outside the `alatyr x86-ir` dev verb, so every real surface — the self-build included — emitted
+  through the legacy text emitter. It is ON by default now: each function goes to `x86_isel_try` first and
+  reaches `emit_fn` only when the selector declines it. The OFF escape hatch is a verb, `alatyr x86-legacy`,
+  never an environment switch (owner decision D5). MINOR because four spec-valid constructs x86 used to
+  refuse now compile and run — `deep_field_agg_var_reject` 42, `deep_field_agg_enum_reject` 42,
+  `packed_in_plain_struct` 20, `reject_local_name_two_aggregate_types` 109 — measured on native x86_64
+  through the default surface, and `ir_diff` moved from `agree=635 disagree=4 unexplained=1` to
+  `agree=639 disagree=0 unexplained=0`. `packed_ret_value` still refuses: its gap is in the shared front
+  half, not the emitter, and it stays on `build_reject_has`.
+
 ## Unreleased
 
 - **The #529 ptrint census is in the gate, and it no longer lets an unmeasured zero read as clean
