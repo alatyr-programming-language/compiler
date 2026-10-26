@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# scripts/hooks/commit-msg — refuse a commit message that claims an attribution this repository cannot
+# support. Install with `bash scripts/install-hooks.sh`; the rule, its reason and its scope boundary
+# live in scripts/attribution.sh, which scripts/land.sh sources at landing — this hook is the SAME
+# decision reached earlier, not a second copy of it.
+#
+# WHY `commit-msg` AND NOT `pre-commit`. Git gives `pre-commit` NO arguments: the message file is
+# passed only to `commit-msg`. A message rule written into `pre-commit` reads as protection, installs
+# cleanly, and never fires — a silent no-op, the same class of defect as a verifier whose hook is not
+# proven to run (`land.sh` refuses to hold a zero while `planted` does not prove the hook fires).
+# This was measured, not assumed: a `pre-commit` version of this rule let a trailer through.
+#
+# It is NOT the guarantee. Git does not clone `.git/hooks/`, so a fresh clone, another worktree or
+# another panel's machine has no hook until `install-hooks.sh` runs there. The guarantee is
+# `scripts/land.sh` PHASE 2, which reads every commit message in BASE..HEAD on the machine that lands,
+# plus `scripts/land.sh --self-test`, which proves the decider fires and does not fire when it should
+# not. The hook only moves the refusal to the moment the message is written, while the choice is open.
+set -u
+
+MSG_FILE="${1:-}"
+# No message file means nothing to read. Fail OPEN here on purpose: this hook guards a claim in a
+# message, and a hook that blocks commits it cannot read would be a worse outage than a trailer that
+# land.sh then refuses. The gate is the backstop, and it does not fail open.
+[ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || exit 0
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SELF/../.." && pwd)"
+[ -f "$ROOT/scripts/attribution.sh" ] || exit 0   # a stripped checkout: never block on our own absence
+# shellcheck source=/dev/null
+. "$ROOT/scripts/attribution.sh"
+
+if attribution_trailer_check "commit message" "$(cat "$MSG_FILE")" >&2; then
+  exit 0
+fi
+printf '\ncommit-msg: remove the trailer and commit again. `git commit --amend` fixes one you already\n' >&2
+printf 'made. Nothing of the work is lost — only the claim about who wrote it, which is not true.\n' >&2
+exit 1

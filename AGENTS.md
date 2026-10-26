@@ -317,6 +317,24 @@ Examples: `fix(lower): preserve nested field places`, `docs: tighten agent workf
 commits that touch no unrelated files. Integration-generated merge commits may use Git's merge format;
 their PR evidence and acceptance record still provide the full description.
 
+**No attribution trailer. Ever.** A commit message carries no `Co-Authored-By:`, `Assisted-by:`,
+`Generated with:` or similar trailer, naming anyone or anything. Every commit here is authored and
+committed under the owner's identity, and GitHub renders such a trailer as a **second author of
+record** — a permanent, unauditable claim about who wrote the code. An agent's contribution is recorded
+where it is true and reviewable: in the PR discussion, the review, and the gate evidence. Nine commits
+naming an AI model reached main before this rule was written down; the prohibition had been given in
+conversation and never written where the next session reads it.
+
+The pattern and the decider live in `scripts/attribution.sh`, read by both `scripts/land.sh` PHASE 2
+(every commit message in `BASE..HEAD`, plus the PR body) and `scripts/hooks/commit-msg`; there is no
+second copy to drift. `scripts/land.sh --self-test` holds the rule in both directions, including the
+eraser control (an ordinary body must pass) and prose that merely mentions the words. Install the local
+hook once per clone or worktree with `bash scripts/install-hooks.sh` — git does not clone
+`.git/hooks/`, so the hook is an earlier trip, not the guarantee; `land.sh` is. The message check goes
+in `commit-msg`, not `pre-commit`: git passes the message file only to `commit-msg`, so the same rule
+placed in `pre-commit` installs cleanly and never fires (measured). In prose and bodies write
+"co-author trailer" without the colon — the colon is what makes it a trailer.
+
 ## Oracle and landing rules
 
 - The three oracle files are exclusive: `scripts/corpus.manifest`, `scripts/idiom.baseline`, and
