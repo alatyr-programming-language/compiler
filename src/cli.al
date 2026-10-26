@@ -4152,7 +4152,8 @@ cli_help := fn(in out a : rt::Arena, fd : usize, status : usize) -> usize {
   kq := rt::push_str(b, "Developer commands:\n")
   kw := rt::push_str(b, "  wat | aarch64 | riscv64 <file.al>  emit that backend's output to stdout\n")
   k9 := rt::push_str(b, "  ir       report the shared IR builder's answer per function\n")
-  ka := rt::push_str(b, "  x86-ir   emit x86_64 with IR-built functions selected from the shared IR\n\n")
+  ka := rt::push_str(b, "  x86-ir   emit x86_64 with IR-built functions selected from the shared IR\n")
+  kb := rt::push_str(b, "  x86-legacy  emit x86_64 with the legacy emitter, bypassing the IR selector (the OFF side of the slice-9 flip)\n\n")
   k8 := rt::push_str(b, "Run program arguments after `--`: alatyr run <program> -- <args>\n")
   kf := diag_flush(b, fd)
   if kf != 0 { return kf }
@@ -5685,10 +5686,22 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   ## selection flag and drops itself from the argument list, so the rest of the invocation is the
   ## default surface's own, front half, peephole and link included.
   mut x86ir := false
+  mut x86legacy := false
   if n >= 2 and arg_at(cmd, 1) == "x86-ir" {
     if n < 3 { return cli_config_diag(a, "x86-ir requires a source file, or -o <exe> and a source file") }
     x86ir = true
     lower::set_x86_ir_select()
+    cmd = cli_drop_arg(a, cmd, 1)
+    n = n - 1
+  }
+  ## IR slice 9 (`docs/ir.md` §7.4): the OFF side of the flip. The IR selector is the DEFAULT now, so
+  ## this verb is what turns it OFF — the surface whose question is "what does the legacy emitter do with
+  ## this program". A verb, never an environment switch (owner decision D5, Codegen §3.1), and the
+  ## argument shape is `x86-ir`'s own so the two verbs stay interchangeable in a script.
+  if n >= 2 and arg_at(cmd, 1) == "x86-legacy" {
+    if n < 3 { return cli_config_diag(a, "x86-legacy requires a source file, or -o <exe> and a source file") }
+    x86legacy = true
+    lower::clear_x86_ir_select()
     cmd = cli_drop_arg(a, cmd, 1)
     n = n - 1
   }
@@ -5739,6 +5752,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     if arg_at(cmd, 1) == "-o" { mode = 1; oi = 2; fi = 3 }
   }
   if x86ir and mode != 0 and mode != 1 { return cli_config_diag(a, "x86-ir accepts a source file, or -o <exe> and a source file") }
+  if x86legacy and mode != 0 and mode != 1 { return cli_config_diag(a, "x86-legacy accepts a source file, or -o <exe> and a source file") }
   ## TOOL-14 — mode 0 is the legacy direct-source/GAS surface, so retain an existing source path (and
   ## the established `-o` spelling) but do not reinterpret a missing non-source first argument as a
   ## file. A typo such as `biuld package.al` is an unrecognized command, not a source-path failure.
