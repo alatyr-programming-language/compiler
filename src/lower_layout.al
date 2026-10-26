@@ -2066,10 +2066,19 @@ pub field_words := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usiz
   if es.n != 0 { return wsize * field_words(decls, src, es.s, es.n, 1, a) }
   wsize
 }
-## Is field `[fs,fl)` of struct `[s,n)` a single-word scalar? The query that lets a scalar field of a
-## struct which ALSO has an aggregate field (`s.n` where `S = { c : Col, n : u64 }`) read at its layout
-## offset, while a non-scalar field stays unhandled. Panic-free even for a comptime-value-param type-fn
-## (`uint(N)`), unlike a fresh layout resolve.
+## TWO QUESTIONS, TWO NAMES (#1056). This answers: does field `[fs,fl)` occupy ONE WORD in the
+## layout? It is the query a PLACE needs — the offset arithmetic that lets a scalar field of a struct
+## which ALSO has an aggregate field (`s.n` where `S = { c : Col, n : u64 }`) read at its layout word
+## offset. Panic-free even for a comptime-value-param type-fn (`uint(N)`), unlike a fresh layout
+## resolve.
+##
+## It is NOT the question "is this field a scalar VALUE", and it must never be used as that answer:
+## a nested struct, an enum with no payload, a `[T; 1]` or a one-word tuple occupies ONE WORD while
+## its value representation is still an aggregate address, so `== 1` admits reading a pointer as an
+## integer. The value question is `field_is_scalar` below, and it is asked once for all four backends.
+## The two were one function until #1056 measured that every call site's own comment asks for a
+## SCALAR ("a one-word `ldr` at its offset would silently read only its word 0", `src/aarch64.al:4891`)
+## while this body could only exclude MULTI-word aggregates — a one-word nested aggregate passed it.
 ##
 ## This was two functions, `a64_field_is_scalar` (`src/aarch64.al`) and `rv_field_is_scalar`
 ## (`src/riscv64.al`), compared over their full bodies: **zero differing lines** once the `a64_`/`rv_`
@@ -2077,7 +2086,7 @@ pub field_words := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usiz
 ## moved and no emitted byte can differ (#1027, criterion 2). `struct_all_scalar` cannot join this file
 ## for the same reason it is still duplicated: its body calls `field_type_span`, which is `pub` in
 ## `lower.al`, and `lower.al` imports this module — hoisting it would make the graph circular.
-pub field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, fs : usize, fl : usize, a : rt::Arena) -> bool {
+pub field_occupies_one_word := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, fs : usize, fl : usize, a : rt::Arena) -> bool {
   di := struct_decl_of(decls, src, s, n)
   if di < 0 { return false }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
@@ -2088,6 +2097,51 @@ pub field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
       Some(fq) => {
         fd := deref(fld_p(fq))
         if streq(src, fd.ns, fd.nl, fs, fl) and field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) == 1 { r = true }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  r
+}
+
+## Is field `[fs,fl)` of struct `[s,n)` a SCALAR VALUE? THE answer, asked ONCE for all four backends
+## (#1056, criterion 2). It resolves the field's TYPE and asks whether that type is an aggregate — it
+## does NOT ask about words, because the two questions have different answers: a nested struct, an enum
+## with no payload, a `[T; 1]` or a one-word tuple occupies ONE WORD while its value representation is
+## still an aggregate address, and loading that word as an integer is a silent wrong value. wasm asked
+## this of its own private `wat_field_is_scalar` since #99 for exactly that reason; the twins asked
+## `field_occupies_one_word` instead, whose own call sites describe the intent as "THIS FIELD must be
+## SCALAR … a one-word `ldr` at its offset would silently read only its word 0" (`src/aarch64.al:4891`)
+## — an intent that body could only half enforce, since it excludes multi-word aggregates and admits
+## one-word ones. Measured on `main` (`#1056`): no backend returns a wrong value today, because an
+## upstream guard (the unsupported nested-`StructLit`) traps first; the weak answer is LATENT, and this
+## commit makes it unrepresentable rather than waiting for a shape that reaches it first.
+##
+## The resolution mirrors `lower.al::field_type_span` step for step — the RAW UNION member types as its
+## payload, and a type-PARAM field of a generic INSTANCE substitutes to the instance's type-arg — using
+## this file's own `is_union_decl` / `union_member_ty` / `subst_field_ty`, so no import of `lower.al`
+## is needed and the module graph stays acyclic. An unresolved field type is `false`: no answer, no
+## scalar.
+pub field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, fs : usize, fl : usize, a : rt::Arena) -> bool {
+  if is_union_decl(decls, src, s, n) {
+    umt := union_member_ty(decls, src, s, n, fs, fl)
+    if umt.n == 0 { return false }
+    return not std_ty_aggregate(umt.s, umt.n, decls, src)
+  }
+  di := struct_decl_of(decls, src, s, n)
+  if di < 0 { return false }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  mut f := d.fields_head
+  mut r := false
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) {
+          eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+          if eff.n != 0 and not std_ty_aggregate(eff.s, eff.n, decls, src) { r = true }
+        }
         f = fd.next
       }
       None => { break }

@@ -4145,16 +4145,12 @@ wat_array_lit_standard_byte_fence := fn(v : ptr(Expr), decls : ptr(rt::Vec), src
   wat_standard_byte_abi_fence(decls, src, sp.s, sp.n, a, false)
 }
 
-## Is the ACTIVE field of struct `[s,n)` a scalar value rather than merely a one-word field? A nested
-## struct/enum (and `[T;1]` / a tuple with one word) can occupy one word in the layout while its value
-## representation is still an aggregate address in the WAT emitter. `field_words == 1` alone therefore
-## admits a pointer-as-integer read; use the resolved field type so the `CompField` arm's scalar guard
-## agrees with the ordinary field-value boundary. Aggregate-aware call arguments do not use this query.
-wat_field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, fs : usize, fl : usize, a : rt::Arena) -> bool {
-  ft := field_type_span(decls, src, s, n, fs, fl, a)
-  if ft.n == 0 { return false }
-  not std_ty_aggregate(ft.s, ft.n, decls, src)
-}
+## The comptime-projection scalar decision lives in ONE place, `lower_layout::field_is_scalar`, and
+## all four backends ask it there (#1056, criterion 2). This was wasm's private copy since #99 — the
+## same question, resolved the same way (resolve the field's type, then ask whether it is an aggregate);
+## the shared version mirrors `field_type_span`'s union and generic-instance steps with `lower_layout`'s
+## own helpers, so the module graph stays acyclic. Aggregate-aware call arguments do not use this query.
+wat_field_is_scalar := lower_layout::field_is_scalar
 
 ## Emit the linear-memory address operand (an i32) for a base + `byte_off`. `base_idx >= 0` is a WASM
 ## LOCAL holding the base address (`local.get`); `base_idx < 0` encodes a COMPILE-TIME-CONSTANT base
