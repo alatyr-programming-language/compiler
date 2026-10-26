@@ -100,8 +100,9 @@ So compiler and library code writes the walk above, and builds lists the same wa
 (`a.next = Option.Some(ptr(mut b))`). Bare `Option.Some(x)` / `Option.None` fold to their
 position's type.
 
-**Transitional form, only for the shapes that are still broken.** Two defects remain, and the
-typed form cannot be written in these shapes yet:
+**Transitional form, only for a shape the typed form still cannot express.** The two blockers this
+file used to name, #809 and #792, are **CLOSED** — so neither is a reason for a new marker. They stay
+listed because they say what the workaround looks like, not because it is still needed:
 
 - #809: a direct `match` over an `Option(ptr(T))` field reached through a mutable global, an array
   element or `deref(p)` (`match deref(p).next {…}`) is refused by the lowering. Copy the field into
@@ -115,7 +116,7 @@ shape the typed form still cannot express), spell the null explicitly (§6). The
 must name the **blocking issue**, not only the structure:
 
 ```alatyr
-## null-ok: #809 — <the field> is read through a mutable global and cannot be matched in place
+## null-ok: #<OPEN blocker> — <the field> is read through a mutable global and cannot be matched in place
 while unchecked bitcast(usize, s) != 0 { ... }
 ```
 
@@ -128,20 +129,35 @@ comparison `p == 0` with `p : ptr(T)`. The compiler reports the implicit one, be
 knows `p` is a pointer. The check refuses a change that increases the sum. Marker: `## null-ok: #<the
 blocking issue> — <which null-terminated structure>`. The sum is flat while #529 converts implicit
 tests into explicit ones, so that work is never refused. The rule checks that a reason exists. That
-the reason names a real blocker is held by review. The 10 `null-ok` markers already in `src/` predate
-this rule and name only the structure. Each gets its blocker named the next time its file is edited.
+the reason names a real blocker is held by review. The `null-ok` markers already in `src/` predate this rule: measured, there are **25**, and **24** of
+them name only the structure, no issue. Each gets its blocker named — or the marker removed, because on
+the shape §4.1 makes untestable there is no blocker to name — the next time its file is edited. The
+count is stated as measured, not as a remembered number, because a remembered count is how a ratchet
+starts lying.
 
-**Decided, so do not reopen it.** Whether a bare `p == 0` on a `ptr(T)` should be refused was the one
-open question on this form (#1030). The owner chose **grant-only**, recorded as spec decision **MEM-9**
-with the normative paragraph in Memory §4.5: outside an `unchecked` grant a pointer meeting an integer is
-**ill-formed**; inside one it is legal, the integer operand is `usize` (the pointer's own width) and **no
-conversion** is performed. Two consequences for this catalogue. First, the checked half is not merely
-discouraged but **empty by invariant** — §4.1 and MEM-8 make every `ptr(T)` non-null, so a checked
-`p == 0` cannot be true, and a `null-ok` marker on such a site names no real blocker: the author meant
-`Option(ptr(T))` and §4.2 gives it a niche `None` a `match` cannot leave out. Second, #1034 implements
-the refusal and waits on the **pin**, not on review: a spec change binds the compiler only after a
-release is cut and the pin moves in its own explicit commit. Until then the compiler stays at what the
-pinned revision says, and this form stays counted-and-reported rather than refused.
+**Decided, so do not reopen it — but not yet binding here.** Whether a bare `p == 0` on a `ptr(T)`
+should be refused was the one open question on this form (#1030). The owner chose **grant-only**,
+recorded as spec decision **MEM-9 on spec/spec#19**, which at the time of writing is **unmerged**: not on
+spec `main`, and so in no release — including the `1.1.0` this compiler pins (`src/spec_revision.al`). The
+normative paragraph lands in Memory §4.5 and binds when a release containing it is cut and the pin moves
+in its own explicit commit. So this catalogue records a DECISION, not a norm the compiler is answerable
+to yet; writing it the other way round would be the very failure the closing sentence warns about.
+
+Two consequences, each scoped to what is already pinned:
+  - the checked half is **empty by invariant**, and this half needs no pin — §4.1 AT v1.1.0 already says
+    a `ptr(T)` is "always a valid (non-null) address", §4.2 that there is no null-pointer value and gives
+    `Option(ptr(T))` the all-zero niche, MEM-8 that a pointer is "always non-null and valid". So a
+    checked `p == 0` cannot be true, and a `null-ok` marker on such a site names no real blocker: the
+    author meant `Option(ptr(T))`.
+  - #1034 carries the refusal and waits on the **pin**, not on review — and on its own rebase, a
+    recomputed expected-delta and a green gate. Its seam is kind-based (`TyInt × TyPtr`, either order),
+    so it enforces the **grant boundary**; that the integer operand be `usize` is NOT enforced there.
+
+**Who refuses, today.** The compiler's own `check` stays permissive until the pin moves — that and only
+that is what "counted-and-reported" means. The strict-forms gate is not permissive: the `null` rule above
+already refuses a new implicit `p == 0` and keeps refusing it (its self-test plants one and measures
+rc=1). Neither reading is a licence: the missing refusal in `check` is not permission, and the gate's
+refusal is not yet the spec's.
 
 ## 2 · A kind is an enum, not an integer, and flags are not packed into it
 

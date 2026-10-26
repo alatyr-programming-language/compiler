@@ -128,9 +128,11 @@ around it.
    `match` over such a field through `deref(p)` or an array element) and #792 (an enum or `Option`
    field read through `deref(p)`), are closed, so a new sentinel needs a newly filed blocker. Held by
    the `null` rule of `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`)
-   forms together. Decided, do not reopen: a pointer meeting an integer is **grant-only** (spec MEM-9,
-   #1030) — ill-formed outside `unchecked`, and inside it the integer operand is `usize` with no
-   conversion; #1034 carries the refusal and waits on the pin, not on review.
+   forms together. Decided, do not reopen: a pointer meeting an integer is **grant-only** (MEM-9 on
+   spec/spec#19 — UNMERGED, so not in the pinned `1.1.0`; it binds when the pin moves). The checked
+   half is already empty by invariant at v1.1.0 (§4.1 non-nullness); #1034 carries the refusal and
+   waits on the pin, not on review. The `null` gate refuses a new implicit `p == 0` today; the
+   compiler's `check` does not, until the pin moves.
 2. **A kind is an enum, and flags are separate fields.** Do not compare a `kind`/`tag` with a literal,
    and do not pack a flag into a tag byte (`+128`) (#583, #626). Held by `kind-literal`.
 3. **Decide with an exhaustive `match` on the value.** Never use `_` over an enum (#544, #464). Do not
