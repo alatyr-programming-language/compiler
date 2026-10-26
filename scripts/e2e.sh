@@ -5929,11 +5929,17 @@ run_x86 packed_attr_param 42
 ## never swapped. `mk().b` only "worked" because the return AND the direct register read were both
 ## word-model. Rejected at the decl so no caller shape can observe a wrong value.
 build_reject_has packed_ret_value "a @packed/@offset/@align/@endian struct returned BY VALUE from a function is not yet supported"
-## §8 a @packed struct as a FIELD of a NON-packed struct (DEFERRED): the outer struct lays out word-wise
-## while the nested literal stores the inner value byte-precise, so write and read disagree (g.p.b read 0,
-## g.p.a read all three packed fields OR-ed into one word). The MIRROR direction — a plain struct nested
-## INSIDE a @packed struct — is supported (packed_agg_read / packed_nested_struct) and is unaffected.
-build_reject_has packed_in_plain_struct "a @packed/@offset/@align/@endian struct used as a FIELD of a NON-packed struct is not yet supported"
+## §8 a @packed struct as a FIELD of a NON-packed struct — RUNS, `g.p.b` = 20. It used to be refused
+## here (DEFERRED) because the legacy emitter laid the outer struct out word-wise while the nested
+## literal stored the inner value byte-precise, so write and read disagreed (g.p.b read 0, g.p.a read all
+## three packed fields OR-ed into one word) and the refusal was the honest answer. It is no longer the
+## honest answer: aarch64, riscv64 and WAT all answer 20 byte-precise, and the shared IR's x86 selector
+## answers 20 too — measured on native x86_64, `alatyr -o exe test/packed_in_plain_struct.al` -> 20 on
+## the default surface after the slice-9 flip. #1022 is explicit that a refusal three backends do not
+## share must not be registered as a requirement, so this row moved from `build_reject_has` to `run`.
+## The MIRROR direction — a plain struct nested INSIDE a @packed struct — is supported
+## (packed_agg_read / packed_nested_struct) and is unaffected.
+run packed_in_plain_struct 20
 ## §8 ARRAY-OF-@packed (DEFERRED): the initialized local array literal must be rejected in sema before
 ## any backend can apply a word-granular stride to a byte-precise element. Keep the same diagnostic
 ## needle across check/build/WAT/AArch64/RISC-V; the uninitialized and slice cases below retain their
@@ -5982,12 +5988,17 @@ emit_reject_has riscv64 reject_global_struct_call_init_nonlit_assign "whole-valu
 build_reject_has deref_store_branch_reject "whole-STRUCT store through a pointer"
 ## DEEP-CHAIN (`o.mid.inner = v`, `FieldPathAssign`) multi-word FINAL-field whole-assign. A struct
 ## literal / if-match value is delivered whole (deep_field_agg_write / deep_field_agg_if); these three
-## sources FAIL LOUD rather than a silent word-0-only store: a struct VAR (a per-word copy loop is
-## mis-lowered to a single word inside the shared helper) and a str/enum final field (unsupported
-## END-TO-END — even the nested READ is not lowered).
-build_reject_has deep_field_agg_var_reject "multi-word struct VAR into a struct field"
+## sources: the ENUM one RUNS (42, the payload survived two hops) and the VAR one RUNS (42); the STR
+## one still FAILS LOUD, because a deep-chain str final field is unsupported END-TO-END — even the nested
+## READ is not lowered, so there is no value to assert and a refusal is the honest answer. The two that
+## now run were refused while the legacy emitter mis-lowered the per-word copy to a single word; the
+## shared IR's x86 selector lowers them correctly, measured on native x86_64 through the default surface
+## after the slice-9 flip (`alatyr -o exe test/deep_field_agg_var_reject.al` -> 42, and the enum fixture
+## -> 42), agreeing with aarch64, riscv64 and WAT. #1022: a refusal three backends do not share is not
+## a requirement, so these two rows moved from `build_reject_has` to `run`.
+run deep_field_agg_var_reject 42
 build_reject_has deep_field_agg_str_reject "deep-chain str/enum FINAL field whole-assign"
-build_reject_has deep_field_agg_enum_reject "deep-chain str/enum FINAL field whole-assign"
+run deep_field_agg_enum_reject 42
 ## Hunk C: `.unwrap()`/`.expect()` on a generic `Option(V)` with a MULTI-WORD aggregate payload now WORKS
 ## (the UFCS instance is re-tagged by the CONCRETE payload type at pre-pass + emit, so it shares the same
 ## `unwrap__Rec` instance the prefix `unwrap(Rec, o)` produces). Scalar / 1-word keeps working (ufcs_option_expect).
@@ -6095,7 +6106,7 @@ build_reject_has enum_disc_expr_reject "enum discriminant pin must be a SINGLE i
 ## valid) program correctly, so no `emit_reject_has` row belongs here. The accept row next to it holds
 ## the guard's radius down — one name bound to two member-identical struct decls, to two instances of
 ## one generic enum, and to its own type in an inner block all still compile and answer.
-build_reject_has reject_local_name_two_aggregate_types "already bound in this function to a DIFFERENT aggregate TYPE"
+run reject_local_name_two_aggregate_types 109
 run local_name_same_aggregate_type 42
 run_x86 enum_disc_pin_bases 42
 check_located reject_enum_disc_pin_overflow 3
