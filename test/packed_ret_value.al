@@ -1,4 +1,9 @@
-## §8 @packed struct RETURNED BY VALUE (DEFERRED, spec Types §8) — the build must FAIL LOUD.
+## build_reject — §8 @packed struct RETURNED BY VALUE (DEFERRED, spec Types §8) — the build must FAIL LOUD.
+## This refusal SURVIVES the slice-9 x86 flip and is NOT an over-refusal: measured on native x86_64,
+## `alatyr -o exe test/packed_ret_value.al` on the flipped default surface still refuses with the same
+## diagnostic, so the gap lives in the shared front half (builder/sema), not in the legacy emitter — which
+## is why this fixture stayed on `build_reject_has` while its four neighbours moved to `run` (#1022,
+## #980). Fixing it is a separate slice, not the flip.
 ## A struct return travels in the WORD-model return registers (field k in one whole register) and the
 ## caller materializes it by spilling those words at 8-byte strides; a @packed value is BYTE-precise.
 ## The two representations disagree and the return path applies NO packed semantics, so every caller

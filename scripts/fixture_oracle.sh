@@ -22,8 +22,10 @@
 # `none` and the row stays UNEXPLAINED, which is the honest verdict — the instrument says it cannot tell,
 # rather than guessing from the name. `reject_*` in a FILENAME is likewise not a declaration: it is the
 # manifest's registration class, and treating a filename as a requirement would let the repository encode a
-# workaround as the spec (see test/reject_local_name_two_aggregate_types.al, where the fixture asserts a
-# refusal the spec does not ask for).
+# workaround as the spec. `test/reject_local_name_two_aggregate_types.al` is the case that proves the
+# rule: its NAME says refuse, the spec (§6.1) says valid, and until the slice-9 flip it carried only
+# prose — so `oracle` answered `none` and the row stayed UNEXPLAINED rather than letting the name
+# invent a requirement. It now declares `## Expected exit: 109`, the value three backends agree on.
 #
 # ## Output
 #
