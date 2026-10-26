@@ -196,6 +196,11 @@ oracle_commit_paths_check() { # changed-paths-of-the-oracle-commit
   return 1
 }
 
+## ATTRIBUTION. The decider and the pattern live in `scripts/attribution.sh`, which the pre-commit
+## hook sources too — one definition, so the hook and the landing gate can never disagree about the
+## same message. The rule, its reason and its scope boundary are documented there.
+source "$ROOT/scripts/attribution.sh"
+
 ## PROVENANCE. `main` is advanced only over commits that came through a pull request: the merge this
 ## script (or a batch) makes, plus the integrator's own TAIL on top of such a merge — a one-oracle
 ## commit (the manifest, optionally with the xbackend ratchet line it moves) or a reseed. A direct push
@@ -305,6 +310,29 @@ land_shape_self_test() { # work-dir
   [ $? = 1 ]; _ck $? oracle-paths-allowed-the-ratchet-line-beside-the-manifest
   oracle_commit_paths_check '' >/dev/null 2>&1
   [ $? = 1 ]; _ck $? oracle-paths-allowed-an-empty-commit
+
+  # ---- 6a · an attribution trailer is refused, and prose that mentions it is not. ----------
+  out="$(attribution_trailer_check 'commit deadbeef' "$(printf '%s\n%s' 'fix(x): y' 'Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>')" 2>&1)"
+  [ $? = 1 ]; _ck $? attribution-allowed-a-commit-carrying-the-trailer
+  case "$out" in *'second author of record'*'noreply@anthropic.com'*) _ck 0 x ;;
+                 *) _ck 1 attribution-did-not-name-the-trailer-line ;; esac
+  # Every spelling the tooling has actually emitted, and every case of it.
+  local spell
+  for spell in 'Co-authored-by: X <x@y>' 'CO-AUTHORED-BY: X <x@y>' 'Assisted-by: Copilot' 'AI-assisted: yes' 'Generated with: some-tool'; do
+    attribution_trailer_check 'commit v' "$(printf '%s\n%s' 'fix(x): y' "$spell")" >/dev/null 2>&1
+    [ $? = 1 ]; _ck $? "attribution-allowed-the-$spell-spelling"
+  done
+  # The eraser control: an ordinary body must pass. A predicate that refused every message would
+  # satisfy every case above and block every landing.
+  attribution_trailer_check 'PR #1 body' "$(printf '%s\n%s' '## Summary' 'Fixes the thing. Verified by the full gate.')" >/dev/null 2>&1
+  _ck $? attribution-refused-an-ordinary-PR-body
+  # Prose that MENTIONS the rule is not a trailer: the commit adding this rule, and AGENTS.md,
+  # both write the word. Only trailer syntax at line start is refused.
+  attribution_trailer_check 'commit rule' "$(printf '%s\n%s' 'docs(agents): forbid the co-author attribution trailer' 'The rule: no agent adds a co-author trailer to a commit message, because')" >/dev/null 2>&1
+  _ck $? attribution-refused-prose-mentioning-a-co-author-trailer
+  # Indentation does not excuse it, and a trailer below the body is still a trailer.
+  attribution_trailer_check 'commit indented' "$(printf '%s\n%s' 'fix(x): y' '   Co-Authored-By: X <x@y>')" >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? attribution-allowed-an-indented-trailer
 
   # ---- 7 · provenance of origin/main's tip. ------------------------------------------------
   main_provenance_step 2 yes '' m1 >/dev/null 2>&1; _ck $? provenance-refused-a-PR-merge
@@ -474,11 +502,13 @@ CHANGED="$(git diff --name-only "$BASE...$HEAD_SHA")"
 # the 39 historical malformed bodies already reachable from main remain grandfathered.
 PR_BODY="$(gh pr view "$PR" -R "$REPO" --json body --jq .body 2>/dev/null)" || die "could not read the selected PR body"
 message_shape_check "PR #$PR body" "$PR_BODY" || shape_fail=1
+attribution_trailer_check "PR #$PR body" "$PR_BODY" || shape_fail=1
 for c in $(git rev-list "$BASE..$HEAD_SHA"); do
   COMMIT_OBJECT="$(git cat-file commit "$c")" || die "could not read commit $c"
   COMMIT_MESSAGE="${COMMIT_OBJECT#*$'\n\n'}"
   COMMIT_BODY="${COMMIT_MESSAGE#*$'\n\n'}"
   message_shape_check "commit $c" "$COMMIT_BODY" || shape_fail=1
+  attribution_trailer_check "commit $c" "$COMMIT_MESSAGE" || shape_fail=1
 done
 # A feature PR and an oracle regeneration are separate review objects. Checking each oracle commit in
 # isolation is not enough: a PR can otherwise hide a feature change beside an oracle-only commit, and
@@ -617,6 +647,7 @@ if [ -f "$CM_LOG" ] && [ "$CM_LOG" -nt "$GATE_STAMP" ] && grep -q '^corpus manif
   git commit --quiet --no-verify -F "$O_MSG" || die "could not create the oracle commit"
   O="$(git rev-parse HEAD)"
   message_shape_check "oracle commit $O" "$(git log -1 --format=%b "$O")" || o_fail=1
+  attribution_trailer_check "oracle commit $O" "$(git log -1 --format=%B "$O")" || o_fail=1
   [ "$(git rev-parse "$O^")" = "$M" ] || { echo "  FAIL: the oracle commit's parent is not the gated merge"; o_fail=1; }
   oracle_commit_paths_check "$(git diff --name-only "$M" "$O")" || o_fail=1
   git show "$O:scripts/corpus.manifest" | cmp -s - "$FRESH" || { echo "  FAIL: the committed oracle is not the fresh manifest"; o_fail=1; }
