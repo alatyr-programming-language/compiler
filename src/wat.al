@@ -79,9 +79,6 @@ compfor_iter_arg := lower_layout::compfor_iter_arg
 fn_returns_tuple := lower::fn_returns_tuple
 tuple_words := lower::tuple_words
 (CSpan, decl_at, decl_get, node_ptr, streq, is_slice_local, arrty_nel, sub_arr_len, typeinfo_arg_span) := lower_ctx
-## The raw source buffer is shared by all parsed modules. Slice parameter recovery consumes absolute
-## source offsets, so it must stop at the buffer extent rather than an arbitrary post-name window.
-
 ## The EXACT linker symbol of a `@export("name")` attribute attached to `[name_s, name_s+name_l)`
 ## (Modules §6.3), or {0,0}. The parser discards attributes, so recover declaration-prefix and
 ## value-position `name := [attributes] fn(…)` forms consistently with the GAS/check-side scans.
@@ -1586,13 +1583,15 @@ is_toplevel_local := fn(fn_head : Option(ptr(mut Stmt)), ns : usize, nl : usize,
 ## A source span is `lower_ctx::CSpan`, imported at the top of this file — NOT a wasm shape.
 ## Until now this file declared a private `WSpan := struct { s : usize, n : usize }`, byte-identical
 ## to `CSpan`, while ALREADY importing `CSpan` (`wat.al:81`) and never using it: the import was dead
-## and the decision lived twice in one file. x86_64 (`lower.al:123`), aarch64 (`aarch64.al:91`) and
+## and the decision lived twice in one file. x86_64 (`lower.al:123`), aarch64 (`aarch64.al:88`) and
 ## riscv64 (`riscv64.al:57`) each import the same `CSpan` and declare no span of their own, so wasm
-## was the only emitter holding a private copy. Deleting it leaves ONE span type across all four
-## backends, and it is what unblocks the four families `scripts/copy_lift.py` reported as blocked on
-## nothing but the spelling — `CSpan(s = 0, n = 0)` against `WSpan(s = 0, n = 0)` in
-## `local_arrty_span`, `local_ann_span`, `slice_elem_span` and `slice_param_elem_span`, whose bodies
-## are otherwise identical once the callee prefix is normalised.
+## was the only emitter holding a private copy. Deleting it leaves ONE span type across the emitters,
+## and it is what unblocked four families `scripts/copy_lift.py` reported as blocked on nothing but the
+## spelling — `CSpan(s = 0, n = 0)` against `WSpan(s = 0, n = 0)`. Of those four, `slice_elem_span` and
+## `slice_param_elem_span` were then CLOSED by lifting the scan into `lower_ctx` (the follow-up PR; the
+## census went 18 → 16 with `LIFTABLE=0`), while `local_arrty_span` and `local_ann_span` stay BLOCKED on
+## their callee chain. Naming only the two that moved is the point: a note still claiming four unblocked
+## would send the next reader to two families that are still open.
 ## The three span records that remain in the FRONT half (`DSpan` driver.al:235, `LSpan`
 ## lower_layout.al:170, `VSpan` sema.al:4230) are the same shape again and are a separate, later
 ## deletion: they sit in shared code, not in an emitter, so they are outside this slice's scope and
@@ -8282,6 +8281,11 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
   ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
   lower_layout::set_call_signedness_decls(decls)       ## #725: call operands take the callee's result signedness
+  ## The span scans' bound, published HERE rather than only by the driver. This is exactly where the
+  ## emitter's own `*_SRC_N` global used to be set, and it keeps the guarantee that had: correct by
+  ## construction for ANY caller of this emitter, not just for the one driver site. Same value
+  ## (`src_n`), no new global, no threading — the shared `ast::AST_SRC_N` already exists.
+  ast::set_src_extent(src_n)
   WAT_PRINT_I64 = false
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any import/global/func emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on an arch that is not this target is

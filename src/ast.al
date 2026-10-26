@@ -28,7 +28,9 @@ pub LocalTypeSpan := struct { s : usize, n : usize }
 ## answers "not found" rather than reading a byte it cannot prove is inside the buffer, which is the
 ## fail-closed default for any direct or internal caller that has not published an extent. The driver
 ## publishes it once per pipeline, beside the `base` pointer it hands to the parser, `sema`, `lower`,
-## `fmt` and the non-x86 back ends. Mirrors `lower::LOWER_SRC_N` and `wat::WAT_SRC_N`.
+## `fmt` and the non-x86 back ends. Mirrors `lower::LOWER_SRC_N`; the twins no longer mirror it — they
+## read THIS extent (`lower_ctx::slice_elem_span` calls `src_extent()`), which is what this field exists
+## for, and each publishes it at its own entry so the guarantee holds for any caller.
 mut AST_SRC_N : usize = 0
 
 pub set_src_extent := fn(n : usize) { AST_SRC_N = n }

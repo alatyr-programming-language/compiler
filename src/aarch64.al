@@ -69,8 +69,6 @@ mut A64_TEST_FILTER_P : usize = 0
 mut A64_TEST_FILTER_N : usize = 0
 mut A64_TEST_KEEP : bool = false
 mut A64_TEST_DECL_INDEX : usize = 0
-## The raw source buffer is shared by all parsed modules. Slice parameter recovery consumes absolute
-## source offsets, so it must stop at the buffer extent rather than an arbitrary post-name window.
 pub set_cross_test_mode := fn(mode : usize) -> i64 {
   A64_TEST_MODE = mode != 0
   return 0
@@ -9289,6 +9287,11 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
   ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
   lower_layout::set_call_signedness_decls(decls)       ## #725: call operands take the callee's result signedness
+  ## The span scans' bound, published HERE rather than only by the driver. This is exactly where the
+  ## emitter's own `*_SRC_N` global used to be set, and it keeps the guarantee that had: correct by
+  ## construction for ANY caller of this emitter, not just for the one driver site. Same value
+  ## (`src_n`), no new global, no threading — the shared `ast::AST_SRC_N` already exists.
+  ast::set_src_extent(src_n)
   A64_PRINT_I64 = false
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any callee resolution or emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on another arch is neutered to an

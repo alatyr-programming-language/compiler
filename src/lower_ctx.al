@@ -456,20 +456,30 @@ pub expr_call_name_nl := fn(v : ptr(Expr)) -> usize {
 ## spelled out for the same reason and carry the same rule for a new `Expr` variant.
 pub CSpan := struct { s : usize, n : usize }
 
-## ── ONE source-span scan for all four backends (docs/ir.md §2.4, criterion 2) ──────────────────────
+## ── ONE source-span scan for THREE emitters: aarch64, riscv64, wasm (docs/ir.md §2.4, criterion 2) ──
+## x86_64 is NOT covered and must not be read as covered. `lower.al:6273` holds its own copy of this
+## scan under the name `slice_param_elem_span` (same `(src, s, n)` shape as `slice_elem_span` below), and
+## it is NOT identical: it carries an extra variadic branch that recovers the element type of
+## `name : ...T` and returns its span where this scan returns {0,0}. Its helpers `ptr_scan_has`
+## (`lower.al:12496`) and `ptr_scan_ws` (`lower.al:12501`) ARE byte-identical to `slice_scan_has` /
+## `slice_scan_ws` below. `scripts/copy_lift.py` cannot see any of this: `BACKENDS` excludes `lower.al`,
+## and its `if shared: continue` fires because SOME definition of the bare name exists — so the census
+## reports these families closed while a fourth, semantically different copy stands in x86_64. A census
+## that reports a family closed because a name resolves somewhere is not a census of copies; the next
+## agent must read this note, not the census line.
 ## `*_slice_elem_span` existed three times — aarch64.al:796, riscv64.al:502, wat.al:2022 — byte-identical
 ## except for which of three globals held the source length, and its helpers `*_slice_scan_has` /
 ## `*_slice_scan_ws` were byte-identical outright, reading no backend state and calling only `str_at`. The
 ## three globals (`A64_SRC_N`, `RV_SRC_N`, `WAT_SRC_N`) were each assigned the SAME value: all three
-## emitters are called from one driver site (`driver.al:6779-6798`) with the same `strbuf::buf_len(bld)`.
+## emitters are called from one driver site (`driver.al:6780, :6789, :6799`) with the same `strbuf::buf_len(bld)`.
 ## One fact wore three names, and one algorithm wore three bodies.
 ## Threading the length instead of sharing it is NOT the fix: measured with this gate's own brace-balanced
 ## parse, the caller closure of `*_slice_elem_span` is **230 functions** across the three emitters, seven
 ## levels deep, of which three carry `src_n` today. A change that size, unverifiable on a host that cannot
 ## run the seed, is how a silently wrong result gets in.
 ## The bound is therefore read from `ast::src_extent()` — the source length the driver ALREADY publishes
-## with that SAME expression at eight pipeline sites (`ast::set_src_extent`: driver.al:2974, :3066, :5126,
-## :6605, :7002, :7332, plus two over `src.len` at :2863 and :7738) and read by six bounded scans already
+## with that SAME expression at the driver's pipeline sites (`ast::set_src_extent`: driver.al:2974, :3066,
+## :5126, :6605, :7003, :7333, plus two over `src.len` at :2863 and :7739) and read by six bounded scans already
 ## in `ast.al` (:77/:107/:143/:193/:214/:221). So this adds no state at all: the duplicated decision was
 ## the plumbing around a fact the shared module already held. None of those eight sites was the emission
 ## dispatch, which is precisely why the publish is repeated there (beside `ir::set_source_map`): the bound
@@ -488,7 +498,8 @@ pub slice_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
   c == " " or c == "\n" or c == "\t" or c == "\r"
 }
 
-## The element-type span of a `Slice(T)` annotation, or {0,0}. One algorithm for all four backends; the
+## The element-type span of a `Slice(T)` annotation, or {0,0}. One algorithm for the three twin
+## emitters (x86_64 keeps its own, with a variadic case — see the band header above); the
 ## bound is `ast::src_extent()`, no longer a per-target copy of the same number. Transcribed from the
 ## three deleted copies, which were identical apart from the callee prefix and the global name.
 pub slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
@@ -510,8 +521,9 @@ pub slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
   CSpan(s = es, n = ee - es)
 }
 
-## The element-type span of the parameter named `ns/nl`, if it is a `Slice(T)`. One walk for all four
-## backends: the three twins' copies were byte-identical once `slice_elem_span` was shared — same body,
+## The element-type span of the parameter named `ns/nl`, if it is a `Slice(T)`. One walk for the three
+## twin emitters (x86_64's `lower.al:6273` scans spans, not a parameter list, and adds a variadic case):
+## the three twins' copies were byte-identical once `slice_elem_span` was shared — same body,
 ## same callee — which is what made this family liftable and the `liftable=0` ratchet demand its deletion.
 ## `streq` is defined in this module (:41) and `param_p` aliased here (:13), so the walk is self-contained.
 pub slice_param_elem_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
@@ -529,6 +541,7 @@ pub slice_param_elem_span := fn(params_head : Option(ptr(mut Param)), src : ptr(
   }
   r
 }
+
 ## Recover the balanced source argument of a `typeinfo(...)` range bound. The parser's compact
 ## `CompFor` node does not retain that argument, so callers provide the outer member span and the
 ## active generic substitutions explicitly. Keep this source-only scan independent of backend state,
