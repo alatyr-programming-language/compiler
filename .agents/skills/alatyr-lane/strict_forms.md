@@ -136,11 +136,27 @@ them name only the structure, no issue. Each gets its blocker named, or the site
 depends on which half the site sits in, and getting that backwards deletes a label that is load-bearing:
   - on a **checked** `p == 0` there is no blocker to name — §4.1's non-nullness makes the test dead, and
     the site is simply wrong; convert it.
-  - on the `unchecked bitcast(usize, p) != 0` sites (19 of the 25) there IS a blocker, and it is #529,
-    still OPEN: `sema.al` calls the seam "a recorded departure from the pin" and says removing it first
-    breaks the self-host's build. Removing the marker there leaves an unlabelled transitional form,
-    against `AGENTS.md`'s rule that the reason names an OPEN blocker and against this file's own "when
-    the named issue closes, its markers are the sites to convert".
+  - where a real blocker exists the marker stays until it closes, because removing it leaves an
+    unlabelled transitional form — against `AGENTS.md`'s rule that the reason names an OPEN blocker and
+    against this file's own "when the named issue closes, its markers are the sites to convert".
+
+**What the 25 actually are — measured, because the split this file first drew was wrong.** An earlier
+revision of this page claimed 19 of the 25 sat on `unchecked bitcast(usize, p) != 0` and that #529 was
+their blocker. Both numbers were false and are retracted. Re-measured, marker by marker:
+  - **17** cite `ast.al`: the legacy AST's null-terminated links and absent-value fields — `Arm.next`
+    and `Arg.next` ("0 = end"), `Decl.value`, `Arm.body`, a null `Expr` link, an absent `For` bound.
+  - **8** are other sentinels: an Arena's pre-init `base`, the resolver's "no such const" null
+    `ptr(Expr)` (×2), a null `a0` for an operand-less call (×2), a null field base, a null
+    `deref_inner_expr`, and `ir.al:1700` (the only one naming an issue, #789 — CLOSED).
+  - **exactly 1** sits on an `unchecked bitcast(usize, …) != 0` — `src/lower_layout.al:4042`.
+  - **0** mention `unchecked` in the reason text at all.
+
+So the checked/unchecked split governs **one** existing site, not nineteen, and #529 is not the blocker
+for the rest: #529 is about identity-class `bitcast` nodes being erased into their operands
+(`ast.al:1021`), a different mechanism from a null list link. The blocker these 24 share is the **legacy
+AST representation itself** — a list that ends in `0` and a field that is absent have no `Option` to hold
+until the AST carries one, and that is an AST-slice change, not a per-site edit. Naming it is what the
+marker's reason should do; "the structure is null-terminated" restates the marker instead of blocking it.
 
 The counts come with the pattern that produced them, because a remembered count is how a ratchet starts
 lying: `grep -rn '^[[:space:]]*##[[:space:]]*null-ok:' src/` gives **25**; the gate's own scanner
