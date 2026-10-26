@@ -111,8 +111,10 @@ listed because they say what the workaround looks like, not because it is still 
   The form to write is still the annotated local
   (`o : Option(ptr(mut N)) = deref(p).next ; match o {…}`), and it works.
 - #792 (CLOSED): an enum-typed or `Option(u64)` field read through a pointer (`deref(p).f`) WAS a wrong
-  value or a SIGSEGV — `e2e.sh` runs `issue792_enum_field_through_ptr` expecting 42 **on x86_64**
-  (`e2e.sh:6933`; the corpus records 133/133/134 on aarch64/riscv64/wasm). Bind the record
+  value or a SIGSEGV — `e2e.sh` runs `issue792_enum_field_through_ptr` expecting 42 (`e2e.sh:6933`,
+  registered as plain `run`, so it runs on all four backends; **42 is x86_64's recorded value** and the
+  corpus records 133/133/134 — traps — on aarch64/riscv64/wasm, so the fix is x86_64-side and the other
+  three still trap). Bind the record
   first (`rv : Rec = deref(p) ; rv.f`).
 
 Where neither workaround reaches (every AST list is now `Option(ptr(mut T))`, so this is for a
@@ -136,30 +138,35 @@ tests into explicit ones, so that work is never refused. The rule checks that a 
 the reason names a real blocker is held by review. The `null-ok` markers already in `src/` predate this rule: measured, there are **25**, and **24** of
 them name only the structure, no issue. Each gets its blocker named, or the site converted to
 `Option(ptr(T))` so the marker goes away, the next time its file is edited. Which of the two applies
-depends on which half the site sits in, and getting that backwards deletes a label that is load-bearing:
-  - on a **checked** `p == 0` there is no blocker to name — §4.1's non-nullness makes the test dead, and
-    the site is simply wrong; convert it.
+depends on what the site actually asserts, and getting that backwards deletes a label that is load-bearing:
+  - where the pointer is genuinely non-null by §4.1 there is no blocker to name — the test is dead, and
+    the site is simply wrong; convert it to `Option(ptr(T))`.
   - where a real blocker exists the marker stays until it closes, because removing it leaves an
     unlabelled transitional form — against `AGENTS.md`'s rule that the reason names an OPEN blocker and
     against this file's own "when the named issue closes, its markers are the sites to convert".
 
 **What the 25 actually are — measured with the gate's own scanner, because both splits this file has
 drawn across them were wrong.** One revision claimed 19 of them sat on `unchecked bitcast(usize, p) != 0`
-with #529 as their blocker; the next retracted that to **one**. The retraction was the error, and it is
-retracted here: it grepped each marker's *own* line for `bitcast`, while the convention — this file at
-`:630` ("a marker on the line **or the line above** acknowledges a form"), `AGENTS.md:115`, and the gate
-at `strict_forms_scan.awk:106`, `a = ((rule, ln) in ack || (rule, ln - 1) in ack)` — reads the line
-*below*. Measured the way the gate measures:
+with #529 as their blocker; the next retracted that to **one**. The retraction was the grosser error — it
+grepped each marker's *own* line for `bitcast`, while the convention, this file under "How the checks
+count" ("a marker on the line **or the line above** acknowledges a form"), `AGENTS.md:115`, and the gate at
+`strict_forms_scan.awk:106`, `a = ((rule, ln) in ack || (rule, ln - 1) in ack)`, reads the line *below*.
+Measured the way the gate measures:
 
     awk -f scripts/strict_forms_scan.awk -- $(git ls-files 'src/*.al'|sort) \
       | awk -F'\t' '$3=="null" && $4==1'
 
 **22 acknowledged `null` rows**, out of 595: **17** on `unchecked bitcast(usize, …) != 0`, **3** on
 `== 0`, **2** on a `bitcast(ptr(…), 0)` fabrication. Per marker, **18 of the 25** sit directly above
-such a comparison, **2** above a fabrication, **5** above no form at all. So the checked/unchecked split
-governs **twenty** sites, not one — and `19`, the number an earlier commit was punished for, was right
-in substance. A count read from the wrong line is how a correct number gets retracted; that is the whole
-lesson of this paragraph.
+such a comparison, **2** above a fabrication, **5** above no form at all. So the split governs **twenty**
+sites, not one — and neither of the two numbers this file has argued about is right: `19` was one marker
+high (measured 18 above a comparison, 17 acked `!= 0` rows), and `1` was eighteen low. Publish the command
+with the count; that is the only defence against a third wrong number here.
+
+One shape note, because it decides whether a marker may be deleted: `src/lower_layout.al:4039` is a
+**three-line** marker whose form sits at `:4042`, outside the scanner's `ln`/`ln-1` window, so it covers
+**nothing** — the row at `:4042` is acknowledged only by the trailing marker on that same line. Do not
+delete the trailing marker as "redundant"; deleting it unlabels a live row.
 
 They are all shaped the same for one reason, and it has a number now: **#1069**. `Decl.value`
 (`src/ast.al:584`) and `Arm.body` (`src/ast.al:455`) are still raw `ptr(Expr)`, so "absent" is spelled
@@ -195,14 +202,26 @@ normative paragraph lands in Memory §4.5 and binds when a release containing it
 in its own explicit commit. So this catalogue records a DECISION, not a norm the compiler is answerable
 to yet; writing it the other way round would be the very failure this file's opening states: "the missing check is a gap to close, not permission".
 
-Two consequences, each scoped to what is already pinned. First, on the axis the gate actually measures —
-**implicit versus explicit**, not checked versus unchecked: the implicit half is empty, `implicit-cmp=0`
-in the gate's typed line and in `scripts/ptrint_census.baseline`, and that half needs no pin at all. The
-explicit half is where every real site lives — **573** unacknowledged `null` rows over `src/`, held at
-baseline, all of the shape `unchecked bitcast(usize, p) != 0` — and those belong to #1069, blocked on
-the AST carrying `Option`, not on MEM-9. (The **361** in the table further down is an older count over a
-different scope; it is deliberately not reconciled here, and the command in the paragraph above is the
-live one. A number carried forward without its instrument is how this page has been wrong twice.)
+Two consequences, each scoped to what is already pinned. First, the axis. It is **explicit versus
+implicit**, and each half has its own instrument — mixing them is what produced the wrong numbers above.
+The lexical scanner's `null` rule counts **explicit** null spellings only; its own header says so
+(`strict_forms_scan.awk:21-24`: the implicit spelling "`p == 0` with `p : ptr(T)`" is "invisible to a
+tokenizer — it needs the operand's type — and is counted by the compiler instead"). So:
+
+  - the **implicit** half is empty, and it is the compiler that says so: `op-cmp=0` in
+    `scripts/ptrint_census.baseline`, held by the ratchet there. This half needs no pin.
+  - the **explicit** half is where every real site lives: **595** `null` rows over `src/`, of which
+    **22** are acknowledged and **573** are not — refused only as *new* occurrences, counted against the
+    merge base, since there is deliberately no committed number (`strict_forms_check.sh:35-37`: "a
+    committed baseline number would be a fourth oracle"). Their shapes are **270** `!= 0`, **157** `== 0`
+    and **146** `bitcast(ptr(…), 0)` fabrications, so no single shape stands for the half. These belong to
+    **#1069** — blocked on the AST carrying `Option`, not on MEM-9.
+
+The **361** in the table further down is the *same* implicit axis, not a different scope, and it is
+**stale**: that table's header names tree `a46b5bc`, an ancestor of HEAD, and its neighbours have moved
+too (`null` explicit `904` against **595** now, `unchecked` `1818` against **1068**). It is left in place
+as history, and the command above is the live one. A count carried forward without its instrument and its
+tree is how this page has been wrong repeatedly.
 
 What §4.1 settles without needing any pin is the *dead-test* case, and it is a statement about those
 sites rather than a count of them: §4.1 at v1.1.0 says a `ptr(T)` is "always a valid (non-null) address",
