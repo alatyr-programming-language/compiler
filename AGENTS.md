@@ -129,8 +129,10 @@ around it.
    field read through `deref(p)`), are closed, so a new sentinel needs a newly filed blocker. Held by
    the `null` rule of `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`)
    forms together. Decided, do not reopen: a pointer meeting an integer is **grant-only** (MEM-9 on
-   spec/spec#19 — UNMERGED, so not in the pinned `1.1.0`; it binds when the pin moves). The checked
-   half is already empty by invariant at v1.1.0 (§4.1 non-nullness); #1034 carries the refusal and
+   spec/spec#19 — UNMERGED, so not in the pinned `1.1.0`; it binds when the pin moves, and #1030 stays
+   OPEN until then). On the axis the gate measures, the **implicit** half is empty (`implicit-cmp=0`);
+   the explicit half — every real site, `unchecked bitcast(usize, p) != 0` — is blocked on #1069, the
+   AST still spelling an absent `Decl.value`/`Arm.body` as null. #1034 carries the refusal and
    waits on the pin, not on review. The `null` gate refuses a new implicit `p == 0` today; the
    compiler's `check` does not, until the pin moves.
 2. **A kind is an enum, and flags are separate fields.** Do not compare a `kind`/`tag` with a literal,

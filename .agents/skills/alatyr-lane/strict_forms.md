@@ -106,10 +106,13 @@ listed because they say what the workaround looks like, not because it is still 
 
 - #809 (CLOSED): a direct `match` over an `Option(ptr(T))` field reached through a mutable global, an
   array element or `deref(p)` (`match deref(p).next {…}`) WAS refused by the lowering — `e2e.sh` now
-  runs `issue809_option_ptr_field_match` expecting 42. The form to write is still the annotated local
+  runs `issue809_option_ptr_field_match` expecting 42 **on x86_64** (`run_x86`, `e2e.sh:10914`; the
+  corpus records 133 on aarch64 and riscv64 and 134 on wasm, so the 42 is not a cross-arch claim).
+  The form to write is still the annotated local
   (`o : Option(ptr(mut N)) = deref(p).next ; match o {…}`), and it works.
 - #792 (CLOSED): an enum-typed or `Option(u64)` field read through a pointer (`deref(p).f`) WAS a wrong
-  value or a SIGSEGV — `e2e.sh` runs `issue792_enum_field_through_ptr` expecting 42. Bind the record
+  value or a SIGSEGV — `e2e.sh` runs `issue792_enum_field_through_ptr` expecting 42 **on x86_64**
+  (`e2e.sh:6933`; the corpus records 133/133/134 on aarch64/riscv64/wasm). Bind the record
   first (`rv : Rec = deref(p) ; rv.f`).
 
 Where neither workaround reaches (every AST list is now `Option(ptr(mut T))`, so this is for a
@@ -140,23 +143,39 @@ depends on which half the site sits in, and getting that backwards deletes a lab
     unlabelled transitional form — against `AGENTS.md`'s rule that the reason names an OPEN blocker and
     against this file's own "when the named issue closes, its markers are the sites to convert".
 
-**What the 25 actually are — measured, because the split this file first drew was wrong.** An earlier
-revision of this page claimed 19 of the 25 sat on `unchecked bitcast(usize, p) != 0` and that #529 was
-their blocker. Both numbers were false and are retracted. Re-measured, marker by marker:
-  - **17** cite `ast.al`: the legacy AST's null-terminated links and absent-value fields — `Arm.next`
-    and `Arg.next` ("0 = end"), `Decl.value`, `Arm.body`, a null `Expr` link, an absent `For` bound.
-  - **8** are other sentinels: an Arena's pre-init `base`, the resolver's "no such const" null
-    `ptr(Expr)` (×2), a null `a0` for an operand-less call (×2), a null field base, a null
-    `deref_inner_expr`, and `ir.al:1700` (the only one naming an issue, #789 — CLOSED).
-  - **exactly 1** sits on an `unchecked bitcast(usize, …) != 0` — `src/lower_layout.al:4042`.
-  - **0** mention `unchecked` in the reason text at all.
+**What the 25 actually are — measured with the gate's own scanner, because both splits this file has
+drawn across them were wrong.** One revision claimed 19 of them sat on `unchecked bitcast(usize, p) != 0`
+with #529 as their blocker; the next retracted that to **one**. The retraction was the error, and it is
+retracted here: it grepped each marker's *own* line for `bitcast`, while the convention — this file at
+`:630` ("a marker on the line **or the line above** acknowledges a form"), `AGENTS.md:115`, and the gate
+at `strict_forms_scan.awk:106`, `a = ((rule, ln) in ack || (rule, ln - 1) in ack)` — reads the line
+*below*. Measured the way the gate measures:
 
-So the checked/unchecked split governs **one** existing site, not nineteen, and #529 is not the blocker
-for the rest: #529 is about identity-class `bitcast` nodes being erased into their operands
-(`ast.al:1021`), a different mechanism from a null list link. The blocker these 24 share is the **legacy
-AST representation itself** — a list that ends in `0` and a field that is absent have no `Option` to hold
-until the AST carries one, and that is an AST-slice change, not a per-site edit. Naming it is what the
-marker's reason should do; "the structure is null-terminated" restates the marker instead of blocking it.
+    awk -f scripts/strict_forms_scan.awk -- $(git ls-files 'src/*.al'|sort) \
+      | awk -F'\t' '$3=="null" && $4==1'
+
+**22 acknowledged `null` rows**, out of 595: **17** on `unchecked bitcast(usize, …) != 0`, **3** on
+`== 0`, **2** on a `bitcast(ptr(…), 0)` fabrication. Per marker, **18 of the 25** sit directly above
+such a comparison, **2** above a fabrication, **5** above no form at all. So the checked/unchecked split
+governs **twenty** sites, not one — and `19`, the number an earlier commit was punished for, was right
+in substance. A count read from the wrong line is how a correct number gets retracted; that is the whole
+lesson of this paragraph.
+
+They are all shaped the same for one reason, and it has a number now: **#1069**. `Decl.value`
+(`src/ast.al:584`) and `Arm.body` (`src/ast.al:455`) are still raw `ptr(Expr)`, so "absent" is spelled
+null and every consumer asks by reinterpreting the pointer as an integer. Closing it is an AST-slice
+change, not a per-site edit — which is why the markers stay until #1069 closes and are not deleted here.
+
+**4 of the 25 are stale: delete them, do not re-label them.** `src/sema.al:4674`, `:4712`, `:12472`
+and `src/lower.al:5112` name `Arm.next` and `Arg.next`, which **already** carry `Option(ptr(mut T))`
+(`src/ast.al:455`, `:703`); the `"0 = end"` their reasons quote is a stale comment at `src/ast.al:442`,
+`:701`, and the scanner confirms those four lines acknowledge **no row at all**. Leaving them in place
+teaches the next agent that a typed field needs a `null-ok` label.
+
+Do not read #529 into this. #529 is *"the checker accepts an implicit `usize` ↔ `ptr(T)` conversion,
+against Types §4.3 and Memory §4.5"* — the implicit seam, a different mechanism from a raw field that
+spells absence as null; per site, say which of the two applies. And per `AGENTS.md:127` a reason names
+an **OPEN blocker**: "the legacy AST representation itself" is not one, so the reason cites #1069.
 
 The counts come with the pattern that produced them, because a remembered count is how a ratchet starts
 lying: `grep -rn '^[[:space:]]*##[[:space:]]*null-ok:' src/` gives **25**; the gate's own scanner
@@ -169,20 +188,30 @@ touched.
 **Decided, so do not reopen it — but not yet binding here.** Whether a bare `p == 0` on a `ptr(T)`
 should be refused was the one open question on this form (#1030). The owner chose **grant-only**,
 recorded as spec decision **MEM-9 on spec/spec#19**, which at the time of writing is **unmerged**: not on
-spec `main`, and so in no release — including the `1.1.0` this compiler pins (`src/spec_revision.al`). The
+spec `main`, and so in no release — including the `1.1.0` this compiler pins (`src/spec_revision.al`).
+**#1030 stays OPEN until the pin moves**, even though its decision is recorded: closing it on the
+decision rather than on the pin would let a norm bind before it is in any release. The
 normative paragraph lands in Memory §4.5 and binds when a release containing it is cut and the pin moves
 in its own explicit commit. So this catalogue records a DECISION, not a norm the compiler is answerable
 to yet; writing it the other way round would be the very failure this file's opening states: "the missing check is a gap to close, not permission".
 
-Two consequences, each scoped to what is already pinned:
-  - the checked half is **empty by invariant**, and this half needs no pin — §4.1 AT v1.1.0 already says
-    a `ptr(T)` is "always a valid (non-null) address", §4.2 that there is no null-pointer value and gives
-    `Option(ptr(T))` the all-zero niche, MEM-8 that a pointer is "always non-null and valid". So a
-    checked `p == 0` cannot be true, and a `null-ok` marker on such a site names no real blocker: the
-    author meant `Option(ptr(T))`.
-  - #1034 carries the refusal and waits on the **pin**, not on review — and on its own rebase, a
-    recomputed expected-delta and a green gate. Its seam is kind-based (`TyInt × TyPtr`, either order),
-    so it enforces the **grant boundary**; that the integer operand be `usize` is NOT enforced there.
+Two consequences, each scoped to what is already pinned. First, on the axis the gate actually measures —
+**implicit versus explicit**, not checked versus unchecked: the implicit half is empty, `implicit-cmp=0`
+in the gate's typed line and in `scripts/ptrint_census.baseline`, and that half needs no pin at all. The
+explicit half is where every real site lives — **573** unacknowledged `null` rows over `src/`, held at
+baseline, all of the shape `unchecked bitcast(usize, p) != 0` — and those belong to #1069, blocked on
+the AST carrying `Option`, not on MEM-9. (The **361** in the table further down is an older count over a
+different scope; it is deliberately not reconciled here, and the command in the paragraph above is the
+live one. A number carried forward without its instrument is how this page has been wrong twice.)
+
+What §4.1 settles without needing any pin is the *dead-test* case, and it is a statement about those
+sites rather than a count of them: §4.1 at v1.1.0 says a `ptr(T)` is "always a valid (non-null) address",
+§4.2 that there is no null-pointer value and gives `Option(ptr(T))` the all-zero niche, MEM-8 that a
+pointer is "always non-null and valid". So a `p == 0` **on a `ptr(T)` that is genuinely non-null** cannot
+be true, and a `null-ok` marker on such a site names no real blocker: the author meant `Option(ptr(T))`.
+Second, #1034 carries the refusal and waits on the **pin**, not on review — and on its own rebase, a
+recomputed expected-delta and a green gate. Its seam is kind-based (`TyInt × TyPtr`, either order),
+so it enforces the **grant boundary**; that the integer operand be `usize` is NOT enforced there.
 
 **Who refuses, today.** The compiler's own `check` stays permissive until the pin moves — that and only
 that is what "counted-and-reported" means. The strict-forms gate is not permissive: the `null` rule above
