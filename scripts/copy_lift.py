@@ -42,7 +42,14 @@ FAMILIES = [
     'operand_unsigned', 'cmp_unsigned', 'local_ann_unsigned', 'index_elem_unsigned',
     'unchecked_init_unsigned', 'hole_index_signed', 'local_arrty_span', 'slice_param_elem_span',
     'ann_arr_words', 'local_ann_span', 'slice_elem_span', 'tyname_words',
-    'emit_narrow', 'emit_narrow_trap', 'local_scan', 'inst_add',
+    # `emit_narrow` / `emit_narrow_trap` are NOT families and are out of the list on purpose: the third
+    # copy does not exist because there is no third decision to copy — wasm spells the same narrowing as
+    # `wat_narrow_pre` / `wat_narrow_post`, and `docs/ir.md` §2.4 says the width is "per-target ISA
+    # spelling, not a duplicated decision at all". Left in the list they would report blocked forever and
+    # the census could never reach zero, which is the wrong question (§2.4, and the note at :323).
+    # `local_scan` STAYS: there the twins really do share one decision and wasm's differs in behaviour
+    # (a shadowed name reuses the slot on aarch64/riscv64, not on wasm) — #1066.
+    'local_scan', 'inst_add',
     'comp_cond_fold', 'comp_range_bound', 'emit_{p}_match_arms', 'try_success_disc',
     # hoisted by #1045 for two backends only — kept in the list so the census sees the third, not so it
     # can be forgotten: see §2.4, a family is closed when the LAST private copy is gone.
