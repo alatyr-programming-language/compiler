@@ -130,13 +130,14 @@ around it.
    the `null` rule of `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`)
    forms together. Decided, do not reopen: a pointer meeting an integer is **grant-only** (MEM-9 on
    spec/spec#19 — UNMERGED, so not in the pinned `1.1.0`; it binds when the pin moves, and #1030 stays
-   OPEN until then). On the axis each instrument measures, the **implicit** half is empty (`op-cmp=0` in
-   `scripts/ptrint_census.baseline`; only the gate's **typed** path sees it, by running the compiler —
-   `strict_forms_check.sh:57`, its self-test plants an implicit `p == 0` at `:432` and expects rc=1,
-   while the lexical scanner alone cannot, it needs the operand's type); the explicit half is where every
-   real site lives (595 `null` rows over `src/`,
-   573 unacknowledged, in three shapes), blocked on #1069 — the AST still spelling an absent
-   `Decl.value`/`Arm.body` as null. #1034 carries the refusal and
+   OPEN until then). On the axis each instrument measures, the **implicit** half is empty: `op-cmp=0` in
+   `scripts/ptrint_census.baseline`. Only the gate's **typed** path can see an implicit row at all — it
+   runs the compiler (`--typed-self-test`, `strict_forms_check.sh:55`, whose proof prints
+   `implicit-cmp base=… +implicit=…` at `:478`); the count-driven decider at `:432` only *simulates*
+   those counts, and the lexical scanner cannot see one at all — it needs the operand's type. The explicit
+   half is where every real site lives: 595 `null` rows over the gate's paths (`src/` + `lib/`; `lib/`
+   contributes none), 573 of them unacknowledged, in three shapes — blocked on #1069, the AST still
+   spelling an absent `Decl.value`/`Arm.body` as null. #1034 carries the refusal and
    waits on the pin, not on review. The `null` gate refuses a new implicit `p == 0` today; the
    compiler's `check` does not, until the pin moves.
 2. **A kind is an enum, and flags are separate fields.** Do not compare a `kind`/`tag` with a literal,

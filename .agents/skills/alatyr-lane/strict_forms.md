@@ -168,7 +168,7 @@ One shape note, because it decides whether a marker may be deleted: `src/lower_l
 **nothing** — the row at `:4042` is acknowledged only by the trailing marker on that same line. Do not
 delete the trailing marker as "redundant"; deleting it unlabels a live row.
 
-They are all shaped the same for one reason, and it has a number now: **#1069**. `Decl.value`
+Most of them are shaped the same for one reason, and it has a number now: **#1069**. `Decl.value`
 (`src/ast.al:584`) and `Arm.body` (`src/ast.al:455`) are still raw `ptr(Expr)`, so "absent" is spelled
 null and every consumer asks by reinterpreting the pointer as an integer. Closing it is an AST-slice
 change, not a per-site edit — which is why the markers stay until #1069 closes and are not deleted here.
@@ -218,10 +218,13 @@ tokenizer — it needs the operand's type — and is counted by the compiler ins
     **#1069** — blocked on the AST carrying `Option`, not on MEM-9.
 
 The **361** in the table further down is the *same* implicit axis, not a different scope, and it is
-**stale**: that table's header names tree `a46b5bc`, an ancestor of HEAD, and its neighbours have moved
-too (`null` explicit `904` against **595** now, `unchecked` `1818` against **1068**). It is left in place
-as history, and the command above is the live one. A count carried forward without its instrument and its
-tree is how this page has been wrong repeatedly.
+**stale**: that table's header names tree `a46b5bc`, an ancestor of HEAD. Its neighbours have moved too,
+compared scope for scope — the table counts the gate's paths, `src/` + `lib/` (`SF_PATHSPECS`,
+`strict_forms_check.sh:63`), so `unchecked` there is `1818` and the same count today is **1539**;
+`null` explicit there is `904` against **595** now, and that one is scope-clean because `lib/` contributes
+no `null` rows. (`:379` repeats the `1818` as "the tree holds"; it is stale in the same way.) The table
+is left in place as history, and the commands beside each number above are the live ones. A count carried
+forward without its instrument and its tree is how this page has been wrong repeatedly.
 
 What §4.1 settles without needing any pin is the *dead-test* case, and it is a statement about those
 sites rather than a count of them: §4.1 at v1.1.0 says a `ptr(T)` is "always a valid (non-null) address",
@@ -233,9 +236,10 @@ recomputed expected-delta and a green gate. Its seam is kind-based (`TyInt × Ty
 so it enforces the **grant boundary**; that the integer operand be `usize` is NOT enforced there.
 
 **Who refuses, today.** The compiler's own `check` stays permissive until the pin moves — that and only
-that is what "counted-and-reported" means. The strict-forms gate is not permissive: the `null` rule above
-already refuses a new implicit `p == 0` and keeps refusing it (its self-test plants one and measures
-rc=1). Neither reading is a licence: the missing refusal in `check` is not permission, and the gate's
+that is what "counted-and-reported" means. The strict-forms gate is not permissive: the gate's **typed
+`null` half** already refuses a new implicit `p == 0` and keeps refusing it — the count-driven decider's
+self-test plants one and measures rc=1 (`strict_forms_check.sh:432`), and `--typed-self-test` proves the
+compiler really emits such a row (`:478`). Neither reading is a licence: the missing refusal in `check` is not permission, and the gate's
 refusal is not yet the spec's.
 
 ## 2 · A kind is an enum, not an integer, and flags are not packed into it
