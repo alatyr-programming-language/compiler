@@ -86,7 +86,7 @@ mut WAT_SRC_N : usize = 0
 ## The EXACT linker symbol of a `@export("name")` attribute attached to `[name_s, name_s+name_l)`
 ## (Modules §6.3), or {0,0}. The parser discards attributes, so recover declaration-prefix and
 ## value-position `name := [attributes] fn(…)` forms consistently with the GAS/check-side scans.
-wat_export_name := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WSpan {
+wat_export_name := fn(src : ptr(u8), name_s : usize, name_l : usize) -> CSpan {
   mut v := name_s + name_l
   while str_at((src + v), 1) == " " or str_at((src + v), 1) == "\n" or str_at((src + v), 1) == "\t" or str_at((src + v), 1) == "\r" { v = v + 1 }
   if str_at((src + v), 2) == ":=" {
@@ -108,7 +108,7 @@ wat_export_name := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WSpan {
                 es := q + 1
                 mut ee := es
                 while str_at((src + ee), 1) != "\"" { ee = ee + 1 }
-                return WSpan(s = es, n = ee - es)
+                return CSpan(s = es, n = ee - es)
               }
             }
           }
@@ -142,33 +142,33 @@ wat_export_name := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WSpan {
     else { scanning = false }
   }
   while p > 0 and (str_at((src + p - 1), 1) == " " or str_at((src + p - 1), 1) == "\n" or str_at((src + p - 1), 1) == "\t" or str_at((src + p - 1), 1) == "\r") { p = p - 1 }
-  if p < 11 { return WSpan(s = 0, n = 0) }
-  if str_at((src + p - 1), 1) != ")" { return WSpan(s = 0, n = 0) }
+  if p < 11 { return CSpan(s = 0, n = 0) }
+  if str_at((src + p - 1), 1) != ")" { return CSpan(s = 0, n = 0) }
   clq := p - 2
-  if str_at((src + clq), 1) != "\"" { return WSpan(s = 0, n = 0) }
+  if str_at((src + clq), 1) != "\"" { return CSpan(s = 0, n = 0) }
   mut oq := clq
   while oq > 0 and str_at((src + oq - 1), 1) != "\"" { oq = oq - 1 }
-  if oq == 0 { return WSpan(s = 0, n = 0) }
+  if oq == 0 { return CSpan(s = 0, n = 0) }
   opq := oq - 1
-  if opq < 8 { return WSpan(s = 0, n = 0) }
-  if str_at((src + opq - 8), 9) != "@export(\"" { return WSpan(s = 0, n = 0) }
-  WSpan(s = oq, n = clq - oq)
+  if opq < 8 { return CSpan(s = 0, n = 0) }
+  if str_at((src + opq - 8), 9) != "@export(\"" { return CSpan(s = 0, n = 0) }
+  CSpan(s = oq, n = clq - oq)
 }
 
 ## The EXTERNAL linker symbol a `@extern` fn (declared at `name_s`, length `name_l`) resolves to
 ## (Modules §7.2): the EXACT `@extern("sym")` name if given, else the DECLARED name, else {0,0} when
 ## the fn is not `@extern`. The WAT twin of `lower::extern_symbol` — scans FORWARD over `:= @extern`
 ## (a value-position attribute). Drives the WASM `(import …)` emit + skipping the (bodyless) func.
-wat_extern_symbol := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WSpan {
+wat_extern_symbol := fn(src : ptr(u8), name_s : usize, name_l : usize) -> CSpan {
   mut p := name_s + name_l
   while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p = p + 1 }
-  if str_at((src + p), 2) != ":=" { return WSpan(s = 0, n = 0) }
+  if str_at((src + p), 2) != ":=" { return CSpan(s = 0, n = 0) }
   p = p + 2
   while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p = p + 1 }
-  if str_at((src + p), 7) != "@extern" { return WSpan(s = 0, n = 0) }
+  if str_at((src + p), 7) != "@extern" { return CSpan(s = 0, n = 0) }
   mut q := p + 7
   bc := str_at((src + q), 1)
-  if not (bc == "(" or bc == " " or bc == "\n" or bc == "\t" or bc == "\r") { return WSpan(s = 0, n = 0) }
+  if not (bc == "(" or bc == " " or bc == "\n" or bc == "\t" or bc == "\r") { return CSpan(s = 0, n = 0) }
   while str_at((src + q), 1) == " " or str_at((src + q), 1) == "\n" or str_at((src + q), 1) == "\t" or str_at((src + q), 1) == "\r" { q = q + 1 }
   if str_at((src + q), 1) == "(" {
     q = q + 1
@@ -177,10 +177,10 @@ wat_extern_symbol := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WSpan 
       oq := q + 1
       mut clq := oq
       while str_at((src + clq), 1) != "\"" { clq = clq + 1 }
-      return WSpan(s = oq, n = clq - oq)
+      return CSpan(s = oq, n = clq - oq)
     }
   }
-  WSpan(s = name_s, n = name_l)
+  CSpan(s = name_s, n = name_l)
 }
 
 ## `v` is the `:=` RHS of an UN-annotated local and it is an `unchecked (<inner>)` SCOPE —
@@ -532,10 +532,10 @@ wat_is_float_global := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : 
 ## (digits / `.` / sign / exponent) — its text feeds a WASM `(f64.const …)`. This SOURCE scan
 ## sidesteps the value-node detection ambiguity (a FloatLit `d.value` reads as non-scalar here but
 ## did not survive a direct node-match): the literal is recovered verbatim from the source instead.
-wat_float_global_init := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WSpan {
+wat_float_global_init := fn(src : ptr(u8), name_s : usize, name_l : usize) -> CSpan {
   mut p := name_s + name_l
   while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p = p + 1 }
-  if str_at((src + p), 2) == ":=" { p = p + 2 } else if str_at((src + p), 1) == "=" { p = p + 1 } else { return WSpan(s = 0, n = 0) }
+  if str_at((src + p), 2) == ":=" { p = p + 2 } else if str_at((src + p), 1) == "=" { p = p + 1 } else { return CSpan(s = 0, n = 0) }
   while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p = p + 1 }
   mut q := p
   mut scanning := true
@@ -543,8 +543,8 @@ wat_float_global_init := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WS
     c := str_at((src + q), 1)
     if dec_digit_val(c) >= 0 or c == "." or c == "-" or c == "+" or c == "e" or c == "E" { q = q + 1 } else { scanning = false }
   }
-  if q == p { return WSpan(s = 0, n = 0) }
-  WSpan(s = p, n = q - p)
+  if q == p { return CSpan(s = 0, n = 0) }
+  CSpan(s = p, n = q - p)
 }
 ## True when the float global NAMED at a USE site (`ns`,`nl`) has a recoverable init — i.e. its
 ## `(mut f64)` cell was emitted, so reads/writes may reinterpret it. The init scan MUST run from the
@@ -922,7 +922,7 @@ agg_globals_end := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64
 }
 
 ## The enum-type name of an enum GLOBAL named `[ns, ns+nl)` (from its EnumLit init), else {0,0}.
-global_enum_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
+global_enum_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
   cnt := rt::vec_len(deref(decls))
   mut rs := 0
   mut rn := 0
@@ -935,11 +935,11 @@ global_enum_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
     }
     i += 1
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## The struct-type name of a struct GLOBAL named `[ns, ns+nl)` (from its StructLit init), else {0,0}.
-global_struct_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
+global_struct_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
   cnt := rt::vec_len(deref(decls))
   mut rs := 0
   mut rn := 0
@@ -952,20 +952,20 @@ global_struct_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
     }
     i += 1
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## --- NESTED struct-GLOBAL field-chain access (`STATE.a.b.c`, any depth). A struct global lives at a
 ## fixed linear-memory base (agg_global_base of its root var); a field chain rooted at it reads/writes
 ## at base + cumulative-word-offset*8 (nested structs FLATTENED). Mirrors aarch64/riscv64's gchain. ---
 ## STRUCT-type name span of the place `e` (a field chain rooted at a struct GLOBAL), else {0,0}.
-wat_gchain_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_gchain_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   match deref(e) {
     Expr::Var(s, n) => { r = global_struct_type(decls, src, s, n, a) }
     Expr::Field(base, fs, fl) => {
       bt := wat_gchain_type(base, decls, src, a)
-      if bt.n != 0 { if struct_decl_of(decls, src, bt.s, bt.n) >= 0 { fts := field_type_span(decls, src, bt.s, bt.n, fs, fl, a) ; r = WSpan(s = fts.s, n = fts.n) } }
+      if bt.n != 0 { if struct_decl_of(decls, src, bt.s, bt.n) >= 0 { fts := field_type_span(decls, src, bt.s, bt.n, fs, fl, a) ; r = CSpan(s = fts.s, n = fts.n) } }
     }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
@@ -997,10 +997,10 @@ wat_gchain_woff := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
 }
 
 ## Root VAR name span of a field chain (`STATE.a.b` → STATE), descending through `Field` bases.
-wat_gchain_root := fn(e : ptr(Expr)) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_gchain_root := fn(e : ptr(Expr)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   match deref(e) {
-    Expr::Var(s, n) => { r = WSpan(s = s, n = n) }
+    Expr::Var(s, n) => { r = CSpan(s = s, n = n) }
     Expr::Field(base, fs, fl) => { r = wat_gchain_root(base) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
@@ -1043,8 +1043,8 @@ wat_array_global_nel := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl :
 ## parses as an ArrayLit too, and its components have DIFFERENT widths — they are not uniformly-strided
 ## elements, so reading one as an aggregate array element would land on the wrong offset. A mixed literal
 ## therefore yields {0,0} and the caller falls back to its scalar path / fails loud.
-wat_arr_lit_elem_struct := fn(v : ptr(Expr), src : ptr(u8)) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_arr_lit_elem_struct := fn(v : ptr(Expr), src : ptr(u8)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   eh := ex_array_lit_ehead(v)
   if not arg_any(eh) { return r }
   a0 := deref(arg_at(eh, "argument list ended early"))
@@ -1088,9 +1088,9 @@ wat_array_global_stride := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, n
 
 ## The element STRUCT span of the array GLOBAL named `[ns,nl]` (its first ArrayLit element's StructLit
 ## name), else {0,0} — the global dual of arr_elem_struct_span. Types `ARR[i]` / `ARR[i].f`.
-wat_array_global_elem_struct := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
+wat_array_global_elem_struct := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
   cnt := rt::vec_len(deref(decls))
-  mut r := WSpan(s = 0, n = 0)
+  mut r := CSpan(s = 0, n = 0)
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -1149,7 +1149,7 @@ callee_is_void := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize
 ## The struct-type name RETURNED by the callee `[cs, cs+cl)` — its `-> R` annotation IF `R` names a
 ## struct decl, else {0,0}. A struct-returning fn yields the value's i64 base address (built in the
 ## `$__sp` bump region, which survives the return), so a local bound to such a call is a struct local.
-callee_ret_struct := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena) -> WSpan {
+callee_ret_struct := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena) -> CSpan {
   cnt := rt::vec_len(deref(decls))
   mut i : usize = 0
   mut rs := 0
@@ -1176,7 +1176,7 @@ callee_ret_struct := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : us
     }
     i += 1
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## Are all of enum `[s, s+n)`'s variant payloads single-word (the subset the WASM match/binding
@@ -1209,7 +1209,7 @@ enum_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize,
 ## enum decl WITH ALL-SCALAR PAYLOADS, else {0,0}. Mirrors `callee_ret_struct`: the value's i64 base
 ## address is built in the `$__sp` bump region (survives the return), so a local bound to such a call
 ## is an enum local. A wide-payload enum stays unresolved → its `match` falls through to fail-loud.
-callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena, allow_union : bool) -> WSpan {
+callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena, allow_union : bool) -> CSpan {
   cnt := rt::vec_len(deref(decls))
   mut i : usize = 0
   mut rs := 0
@@ -1243,7 +1243,7 @@ callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
     }
     i += 1
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## ISSUE #488 / ISSUE #491 — the ENUM TYPE NAME an expression delivers BY ADDRESS, else {0,0}. On WASM
@@ -1276,7 +1276,7 @@ callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
 ##
 ## A FIELD (`h.p`) and an INDEX feed are still not matched: those already FAIL LOUD on every backend
 ## (measured 134 on wasm and x86_64, 133 on aarch64 and riscv64), so there is no silent width to fix.
-wat_addr_enum_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
+wat_addr_enum_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   match deref(v) {
     Expr::Call(cs, cl, _nn, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a, false) }
     Expr::Var(vs, vn) => {
@@ -1288,13 +1288,13 @@ wat_addr_enum_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), bo
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
-  WSpan(s = 0, n = 0)
+  CSpan(s = 0, n = 0)
 }
 
 ## The tryable ENUM type span of a WAT `?` operand. Calls use their declared enum return type; enum
 ## locals use the same PARAM/LOCAL resolver as value-position `match`. The wrappers preserve the
 ## expression's type while the emitter handles the actual early return.
-wat_try_enum_type := fn(inner : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_try_enum_type := fn(inner : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   match deref(inner) {
     Expr::Var(vs, vn) => { return base_enum_type(params_head, fn_head, src, vs, vn, a, decls, false) }
     Expr::Call(cs, cl, nargs, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a, false) }
@@ -1305,7 +1305,7 @@ wat_try_enum_type := fn(inner : ptr(Expr), params_head : Option(ptr(mut Param)),
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
       | Expr::Loop => {}
   }
-  WSpan(s = 0, n = 0)
+  CSpan(s = 0, n = 0)
 }
 
 ## `wat_try_success_disc` deleted (#683, criterion 2): 23 lines byte-identical to `lower.al`'s
@@ -1323,7 +1323,7 @@ wat_try_enum_type := fn(inner : ptr(Expr), params_head : Option(ptr(mut Param)),
 ## is what keeps this band off the #659 shape. `expr_field_base` is the one NORMALIZER among them — it
 ## returns its own input unchanged for a non-`Field` node, which is the identity a normalizer owes.
 ## See the census note above `lower_layout::local_ann_signed`.
-expr_call_name := fn(v : ptr(Expr)) -> WSpan {
+expr_call_name := fn(v : ptr(Expr)) -> CSpan {
   mut rs := 0
   mut rn := 0
   match deref(v) {
@@ -1333,7 +1333,7 @@ expr_call_name := fn(v : ptr(Expr)) -> WSpan {
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## The BASE sub-expression of a `Field` (`o.i` for `o.i.v`), else the expression itself. Single-level
@@ -1352,7 +1352,7 @@ expr_field_base := fn(v : ptr(Expr)) -> ptr(Expr) {
 }
 
 ## The FIELD-name span of a `Field` expression (`v` in `o.i.v`), else {0,0}.
-expr_field_span := fn(v : ptr(Expr)) -> WSpan {
+expr_field_span := fn(v : ptr(Expr)) -> CSpan {
   mut rs := 0
   mut rn := 0
   match deref(v) {
@@ -1362,7 +1362,7 @@ expr_field_span := fn(v : ptr(Expr)) -> WSpan {
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## 0-based index of the PARAM named `[ns, ns+nl)` in the fn's VALUE-param list, or -1 if not a value
@@ -1584,12 +1584,24 @@ is_toplevel_local := fn(fn_head : Option(ptr(mut Stmt)), ns : usize, nl : usize,
   stmt_any(first_assign_handle(fn_head, ns, nl, src, a))
 }
 
-## A source span (a struct type name), or {0,0} for "none".
-WSpan := struct { s : usize, n : usize }
+## A source span is `lower_ctx::CSpan`, imported at the top of this file — NOT a wasm shape.
+## Until now this file declared a private `WSpan := struct { s : usize, n : usize }`, byte-identical
+## to `CSpan`, while ALREADY importing `CSpan` (`wat.al:81`) and never using it: the import was dead
+## and the decision lived twice in one file. x86_64 (`lower.al:123`), aarch64 (`aarch64.al:91`) and
+## riscv64 (`riscv64.al:57`) each import the same `CSpan` and declare no span of their own, so wasm
+## was the only emitter holding a private copy. Deleting it leaves ONE span type across all four
+## backends, and it is what unblocks the four families `scripts/copy_lift.py` reported as blocked on
+## nothing but the spelling — `CSpan(s = 0, n = 0)` against `WSpan(s = 0, n = 0)` in
+## `local_arrty_span`, `local_ann_span`, `slice_elem_span` and `slice_param_elem_span`, whose bodies
+## are otherwise identical once the callee prefix is normalised.
+## The three span records that remain in the FRONT half (`DSpan` driver.al:235, `LSpan`
+## lower_layout.al:170, `VSpan` sema.al:4230) are the same shape again and are a separate, later
+## deletion: they sit in shared code, not in an emitter, so they are outside this slice's scope and
+## are named here rather than left for the next agent to rediscover.
 
 ## The struct-type name of an expression IF it is a `StructLit` (`Pt(x=…, y=…)`), else {0,0}.
 ## Single-level match in its own fn — a nested match inside another arm mis-lowers under the seed.
-expr_struct_name := fn(v : ptr(Expr)) -> WSpan {
+expr_struct_name := fn(v : ptr(Expr)) -> CSpan {
   mut rs := 0
   mut rn := 0
   match deref(v) {
@@ -1599,12 +1611,12 @@ expr_struct_name := fn(v : ptr(Expr)) -> WSpan {
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 
 ## The ENUM TYPE name of an expression IF it is an `EnumLit` (`E.V(…)`), else {0,0}.
-expr_enum_name := fn(v : ptr(Expr)) -> WSpan {
+expr_enum_name := fn(v : ptr(Expr)) -> CSpan {
   mut rs := 0
   mut rn := 0
   match deref(v) {
@@ -1614,11 +1626,11 @@ expr_enum_name := fn(v : ptr(Expr)) -> WSpan {
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## The VARIANT name of an `EnumLit`, else {0,0}.
-expr_enum_variant := fn(v : ptr(Expr)) -> WSpan {
+expr_enum_variant := fn(v : ptr(Expr)) -> CSpan {
   mut rs := 0
   mut rn := 0
   match deref(v) {
@@ -1628,13 +1640,13 @@ expr_enum_variant := fn(v : ptr(Expr)) -> WSpan {
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 
 ## The enum-type name of the LOCAL `[ns, ns+nl)` — from its `:=` EnumLit init (`e := E.V(…)`), else
 ## {0,0}. Lets a `match e { … }` resolve the scrutinee's variant discriminants.
-local_enum_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> WSpan {
+local_enum_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> CSpan {
   mut s : Option(ptr(mut Stmt)) = fn_head
   mut rs := 0
   mut rn := 0
@@ -1685,13 +1697,13 @@ local_enum_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize
       None => { break }
     }
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 
 ## The name span of an expression IF it is a bare `Var`, else {0,0} (the struct-base place must be a
 ## simple local for now — `p.field`, not `expr.field`).
-expr_var_name := fn(v : ptr(Expr)) -> WSpan {
+expr_var_name := fn(v : ptr(Expr)) -> CSpan {
   mut rs := 0
   mut rn := 0
   match deref(v) {
@@ -1701,7 +1713,7 @@ expr_var_name := fn(v : ptr(Expr)) -> WSpan {
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 
@@ -1878,7 +1890,7 @@ wat_operand_is_aggregate := fn(e : ptr(Expr), params_head : Option(ptr(mut Param
 ## — a valid module, a normal exit, a value no variant carries. The field read ITSELF is sound (handing
 ## `h.t` to a `fn(v : Tag)` and dispatching there already answers on wasm); it is this one operand
 ## classification that was wrong, which is why the fix is here and not in the field or literal emit.
-wat_field_enum_type := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_field_enum_type := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut rs := 0
   mut rn := 0
   if ex_is_field(e) {
@@ -1891,7 +1903,7 @@ wat_field_enum_type := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), b
       }
     }
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## Is `e` a FIELD read `<place>.<f>` whose declared field type is a `Slice( … )` view (#916)?
@@ -2007,23 +2019,23 @@ wat_slice_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
   c := str_at((src + p), 1)
   c == " " or c == "\n" or c == "\t" or c == "\r"
 }
-wat_slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> WSpan {
+wat_slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
   mut p := s + n
   end := WAT_SRC_N
   while p < end and wat_slice_scan_ws(src, end, p) { p = p + 1 }
-  if wat_slice_scan_has(src, end, p, ":") == false { return WSpan(s = 0, n = 0) }
+  if wat_slice_scan_has(src, end, p, ":") == false { return CSpan(s = 0, n = 0) }
   p = p + 1
   while p < end and wat_slice_scan_ws(src, end, p) { p = p + 1 }
-  if wat_slice_scan_has(src, end, p, "Slice(") == false { return WSpan(s = 0, n = 0) }
+  if wat_slice_scan_has(src, end, p, "Slice(") == false { return CSpan(s = 0, n = 0) }
   es := p + 6
   mut ee := es
   while ee < end {
     if str_at((src + ee), 1) == ")" { break }
     ee = ee + 1
   }
-  if ee >= end { return WSpan(s = 0, n = 0) }
-  if ee == es { return WSpan(s = 0, n = 0) }
-  WSpan(s = es, n = ee - es)
+  if ee >= end { return CSpan(s = 0, n = 0) }
+  if ee == es { return CSpan(s = 0, n = 0) }
+  CSpan(s = es, n = ee - es)
 }
 ## Is the PARAM `[ns,nl]` a `Slice(E)` param with a SCALAR element E? In WASM a slice PARAM has the SAME
 ## shape as a local slice VIEW: the param (a WASM local) holds the base address of a `{ptr,len}` block in
@@ -2329,10 +2341,10 @@ wat_cf_offset_value := fn(e : ptr(Expr), src : ptr(u8), decls : ptr(rt::Vec), a 
 
 ## The struct-type span of the PARAM `[ns,nl]`, WITH the generic substitution applied (a `v : T` param in
 ## a mono instance resolves to the instance struct type), then generic-application stripped (`Box(T)` →
-## `Box`), else 0/0. Mirrors a64_param_struct_ns/nl. Returns WSpan (safe — wat helpers return WSpan freely).
-wat_param_struct_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+## `Box`), else 0/0. Mirrors a64_param_struct_ns/nl. Returns CSpan (safe — wat helpers return CSpan freely).
+wat_param_struct_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut p := params_head
-  mut r := WSpan(s = 0, n = 0)
+  mut r := CSpan(s = 0, n = 0)
   loop {
     match p {
       Some(pq) => {
@@ -2342,7 +2354,7 @@ wat_param_struct_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8),
           mut etl := pm.tl
           if WAT_SUB_GPL != 0 and streq(src, pm.ts, pm.tl, WAT_SUB_GPS, WAT_SUB_GPL) { ets = WAT_SUB_ITS ; etl = WAT_SUB_ITL }
           bt := base_type_name(src, ets, etl)
-          if struct_decl_of(decls, src, bt.s, bt.n) >= 0 { r = WSpan(s = bt.s, n = bt.n) }
+          if struct_decl_of(decls, src, bt.s, bt.n) >= 0 { r = CSpan(s = bt.s, n = bt.n) }
         }
         p = pm.next
       }
@@ -2353,9 +2365,9 @@ wat_param_struct_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8),
 }
 ## The ENUM-type span of the PARAM `[ns,nl]`, WITH the generic substitution applied (a `v : T` enum param
 ## in a mono instance resolves to the instance enum type), else 0/0. The enum twin of wat_param_struct_span.
-wat_param_enum_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_param_enum_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut p := params_head
-  mut r := WSpan(s = 0, n = 0)
+  mut r := CSpan(s = 0, n = 0)
   loop {
     match p {
       Some(pq) => {
@@ -2365,7 +2377,7 @@ wat_param_enum_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), n
           mut etl := pm.tl
           if WAT_SUB_GPL != 0 and streq(src, pm.ts, pm.tl, WAT_SUB_GPS, WAT_SUB_GPL) { ets = WAT_SUB_ITS ; etl = WAT_SUB_ITL }
           bt := base_type_name(src, ets, etl)
-          if enum_decl_of(decls, src, bt.s, bt.n) >= 0 { r = WSpan(s = bt.s, n = bt.n) }
+          if enum_decl_of(decls, src, bt.s, bt.n) >= 0 { r = CSpan(s = bt.s, n = bt.n) }
         }
         p = pm.next
       }
@@ -2579,10 +2591,10 @@ wat_fn_is_generic := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), a :
   g
 }
 ## The first type-param's NAME span (the `T` of `T : type`), 0/0 if none.
-wat_tparam_name := fn(d : Decl, src : ptr(u8)) -> WSpan {
+wat_tparam_name := fn(d : Decl, src : ptr(u8)) -> CSpan {
   mut p := d.params_head
-  mut r := WSpan(s = 0, n = 0)
-  loop { match p { Some(pq) => { pm := deref(param_p(pq)) ; if r.n == 0 and str_at((src + pm.ts), pm.tl) == "type" { r = WSpan(s = pm.ns, n = pm.nl) } ; p = pm.next }; None => { break } } }
+  mut r := CSpan(s = 0, n = 0)
+  loop { match p { Some(pq) => { pm := deref(param_p(pq)) ; if r.n == 0 and str_at((src + pm.ts), pm.tl) == "type" { r = CSpan(s = pm.ns, n = pm.nl) } ; p = pm.next }; None => { break } } }
   r
 }
 ## Resolve the concrete type-arg span of a generic call `[cs,cl](args)` into WAT_TA_S / WAT_TA_N (0/0
@@ -2718,9 +2730,9 @@ wat_inst_add := fn(src : ptr(u8), gi : usize, ts : usize, tl : usize) {
   }
 }
 ## The element-type span E of the `Slice(E)` PARAM `[ns,nl]`, or {0,0}.
-wat_slice_param_elem_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize) -> WSpan {
+wat_slice_param_elem_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
   mut p := params_head
-  mut r := WSpan(s = 0, n = 0)
+  mut r := CSpan(s = 0, n = 0)
   loop {
     match p {
       Some(pq) => {
@@ -2745,16 +2757,16 @@ wat_slice_param_agg_stride := fn(params_head : Option(ptr(mut Param)), src : ptr
   r
 }
 ## Element STRUCT span of the `Slice(P)` PARAM `[ns,nl]` (P a struct), else {0,0}.
-wat_slice_param_struct_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> WSpan {
+wat_slice_param_struct_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> CSpan {
   es := wat_slice_param_elem_span(params_head, src, ns, nl)
-  mut r := WSpan(s = 0, n = 0)
+  mut r := CSpan(s = 0, n = 0)
   if es.n != 0 { if struct_decl_of(decls, src, es.s, es.n) >= 0 { r = es } }
   r
 }
 ## Element ENUM span of the `Slice(E)` PARAM `[ns,nl]` (E an enum), else {0,0}.
-wat_slice_param_enum_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> WSpan {
+wat_slice_param_enum_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> CSpan {
   es := wat_slice_param_elem_span(params_head, src, ns, nl)
-  mut r := WSpan(s = 0, n = 0)
+  mut r := CSpan(s = 0, n = 0)
   if es.n != 0 { if enum_decl_of(decls, src, es.s, es.n) >= 0 { r = es } }
   r
 }
@@ -2916,9 +2928,9 @@ array_local_stride := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : us
 }
 ## The element STRUCT span of the array LOCAL `[ns,nl]` (or a slice VIEW over one) — its first ArrayLit
 ## element's StructLit name — or {0,0}. Types an aggregate for-loop var so `p.field` reads resolve.
-arr_elem_struct_span := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
+arr_elem_struct_span := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
   mut s : Option(ptr(mut Stmt)) = fn_head
-  mut r := WSpan(s = 0, n = 0)
+  mut r := CSpan(s = 0, n = 0)
   mut done := false
   loop {
     match s {
@@ -2978,8 +2990,8 @@ arr_elem_struct_span := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : 
 ## — an array LOCAL, a range-slice VIEW local, an array GLOBAL, and a `Slice(S)` PARAM — so the Index /
 ## Field / Assign / IndexAssign arms all key off one predicate. ---
 ## The element STRUCT span of the ARRAY-ish place named `[ns,nl]`, else {0,0}.
-wat_arr_elem_struct := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_arr_elem_struct := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   if nl == 0 { return r }
   if is_array_local(fn_head, src, ns, nl, a) { return arr_elem_struct_span(fn_head, src, ns, nl, a) }
   if is_slice_local(fn_head, src, ns, nl, a) { return arr_elem_struct_span(fn_head, src, ns, nl, a) }
@@ -3008,17 +3020,17 @@ wat_arr_elem_stride := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : u
 ## The `: T` annotation span that FOLLOWS the declaration name `[ns,nl)`, or {0,0} for `:=` (inferred),
 ## a missing annotation, or a malformed one. `[`/`(` nesting is tracked so `[Cell; 3]` spans whole; the
 ## span ENDS at a depth-0 `=` (an INITIALIZED `name : T = v` still yields its annotation), newline, `;`
-## or `}`. Mirrors rv_ann_span / ast::local_type_span but returns the wat `WSpan`.
-wat_ann_span := fn(src : ptr(u8), ns : usize, nl : usize) -> WSpan {
+## or `}`. Mirrors rv_ann_span / ast::local_type_span but returns the wat `CSpan`.
+wat_ann_span := fn(src : ptr(u8), ns : usize, nl : usize) -> CSpan {
   mut p := ns + nl
   lim := p + 512
   mut go := true
   while go { c := str_at((src + p), 1) ; if c == " " or c == "\t" or c == "\r" { p = p + 1 } else { go = false } }
-  if str_at((src + p), 1) != ":" { return WSpan(s = 0, n = 0) }
+  if str_at((src + p), 1) != ":" { return CSpan(s = 0, n = 0) }
   p = p + 1
   go = true
   while go { c := str_at((src + p), 1) ; if c == " " or c == "\t" or c == "\r" { p = p + 1 } else { go = false } }
-  if str_at((src + p), 1) == "=" { return WSpan(s = 0, n = 0) }
+  if str_at((src + p), 1) == "=" { return CSpan(s = 0, n = 0) }
   ts := p
   mut depth := 0
   mut term := false
@@ -3029,21 +3041,21 @@ wat_ann_span := fn(src : ptr(u8), ns : usize, nl : usize) -> WSpan {
     stop := depth == 0 and (c == "=" or c == "\n" or c == ";" or c == "}")
     if stop { term = true } else { p = p + 1 }
   }
-  if not term { return WSpan(s = 0, n = 0) }
+  if not term { return CSpan(s = 0, n = 0) }
   mut te := p
   mut trim := true
   while trim and te > ts {
     t := str_at((src + te - 1), 1)
     if t == " " or t == "\t" or t == "\r" { te = te - 1 } else { trim = false }
   }
-  if te <= ts { return WSpan(s = 0, n = 0) }
-  WSpan(s = ts, n = te - ts)
+  if te <= ts { return CSpan(s = 0, n = 0) }
+  CSpan(s = ts, n = te - ts)
 }
 
 
 ## `[E; N]` → the ELEMENT type span E (trimmed), else {0,0}.
-wat_arrty_elem := fn(src : ptr(u8), ts : usize, tl : usize) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_arrty_elem := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   semi := arrty_semi(src, ts, tl)
   if semi == 0 { return r }
   mut es := ts + 1
@@ -3052,7 +3064,7 @@ wat_arrty_elem := fn(src : ptr(u8), ts : usize, tl : usize) -> WSpan {
   mut ee := semi
   mut trim := true
   while trim and ee > es { t := str_at((src + ee - 1), 1) ; if t == " " or t == "\t" { ee = ee - 1 } else { trim = false } }
-  if ee > es { r = WSpan(s = es, n = ee - es) }
+  if ee > es { r = CSpan(s = es, n = ee - es) }
   r
 }
 
@@ -3138,8 +3150,8 @@ wat_ann_arr_nel := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> i
 }
 
 ## The declared ELEMENT type span of the same, else {0,0}.
-wat_ann_arr_elem := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_ann_arr_elem := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   if ex_is_array_lit(v) { return r }
   an := wat_ann_span(src, ns, nl)
   if an.n != 0 { r = wat_arrty_elem(src, an.s, an.n) }
@@ -3160,8 +3172,8 @@ wat_ann_arr_words := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr), a 
 ## The `: T` annotation at the DECLARATION SITE of the LOCAL `[ns,nl]` (an `Expr::Var` carries the span
 ## of its USE, not of the binding), or {0,0}. Same scan shape as `is_array_local` — every Stmt kind is
 ## walked past, so a local declared after any statement is still found.
-wat_local_ann_span := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_local_ann_span := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ns, nl)
   match d {
     Some(dq) => {
@@ -3182,8 +3194,8 @@ wat_local_ann_span := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize
 
 ## The DECLARED fixed-array type span of the local `[ns,nl]` (`mut xs : [Cell; 3]` → `[Cell; 3]`), or
 ## {0,0}. This is the only place a LOCAL's array TYPE (rather than its literal) is recovered.
-wat_local_arrty_span := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_local_arrty_span := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   an := wat_local_ann_span(head, src, ns, nl, a)
   if an.n == 0 { return r }
   if arrty_semi(src, an.s, an.n) != 0 { r = an }
@@ -3215,8 +3227,8 @@ wat_local_arrty_span := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usi
 ## (`std_struct_is_byte_writable`), plus `field_word_offset * 8` for a word-granular child, where the
 ## two models coincide anyway. A child in neither set has NO answer (-1) and its consumer stays
 ## fail-loud, which is what the unconditional `standard_field_byte_offset` this replaced got wrong.
-wat_std_path_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_std_path_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   if ex_is_field(e) {
     bt := wat_std_path_ty(expr_field_base(e), body_head, src, a, decls)
     if bt.n != 0 { r = struct_field_type(decls, src, bt.s, bt.n, expr_field_span(e).s, expr_field_span(e).n, a) }
@@ -3260,8 +3272,8 @@ wat_std_path_root_idx := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), sr
 ## address in their parameter local, so the byte-tier consumer only needs to resolve that local and apply
 ## the shared byte offset. It is separate from the local-only path to leave every existing non-byte route
 ## unchanged and fail-loud.
-wat_std_param_path_ty := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_std_param_path_ty := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   if ex_is_field(e) {
     base := expr_field_base(e)
     bt := wat_std_param_path_ty(base, params_head, src, a, decls)
@@ -3310,8 +3322,8 @@ wat_std_param_path_idx := fn(e : ptr(Expr), params_head : Option(ptr(mut Param))
 ## STANDARD BYTE-LAYOUT ARRAY-ELEMENT path. Its root is an Index into a supported byte-tier struct
 ## array; every following Field hop is resolved with the shared byte-offset oracle. Keeping this
 ## separate from wat_std_path preserves the fixed frame-local path and its historical emission.
-wat_std_idx_path_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_std_idx_path_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   if ex_is_index(e) {
     bt := wat_place_ty(ex_index_base(e), body_head, src, a, decls)
     if bt.n != 0 {
@@ -3341,10 +3353,10 @@ wat_std_idx_path_ok := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src 
 ## The TYPE span of the place `e` — a struct name, a `[E; N]` array-type span, or a scalar type name.
 ## A root Var takes its LOCAL's struct type, else its DECLARED fixed-array type; a Field hop takes the
 ## field's type within its (plain struct) base; an Index hop takes its base array type's element.
-wat_place_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_place_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   ## ONE `mut` accumulator + a bare `return r`, never `return <nested-call>` for a struct result: that
   ## shape is the lean lower's documented mis-lower.
-  mut r := WSpan(s = 0, n = 0)
+  mut r := CSpan(s = 0, n = 0)
   if unchecked bitcast(usize, e) == 0 { return r }
   if ex_is_field(e) {
     bt := wat_place_ty(expr_field_base(e), body_head, src, a, decls)
@@ -3388,8 +3400,8 @@ wat_place_idx_ok := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src 
 }
 
 ## The ELEMENT type span of `base[…]`, else {0,0} — the statement-form twin of wat_place_ty's Index hop.
-wat_place_idx_ty := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
-  mut r := WSpan(s = 0, n = 0)
+wat_place_idx_ty := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
   bt := wat_place_ty(base, body_head, src, a, decls)
   if bt.n != 0 { r = wat_arrty_elem(src, bt.s, bt.n) }
   r
@@ -3829,7 +3841,7 @@ mut WAT_LSD := 0
 
 ## The struct-type name of the LOCAL `[ns, ns+nl)` — found from its `:=` StructLit initializer in the
 ## fn's top-level body (`p := Pt(…)`), else {0,0}. Lets a `p.field` read resolve the field offset.
-local_struct_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+local_struct_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut s : Option(ptr(mut Stmt)) = fn_head
   mut rs := 0
   mut rn := 0
@@ -3918,12 +3930,12 @@ local_struct_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usi
       None => { break }
     }
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## The declared struct-type name of the PARAM `[ns, ns+nl)` (its `: T` annotation span), else {0,0}.
 ## A struct param is passed as its i64 base address, so `p.field` in the callee loads from it.
-param_struct_type := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> WSpan {
+param_struct_type := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
   mut p := params_head
   mut rs := 0
   mut rn := 0
@@ -3937,7 +3949,7 @@ param_struct_type := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns 
       None => { break }
     }
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## Is the TYPE NAME `[ts, ts+tl)` a BUILTIN SCALAR — one word that IS its value, never a base address?
@@ -3956,7 +3968,7 @@ wat_ty_is_scalar_name := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 
 ## The struct-type name of a base place named `[ns, ns+nl)` — a struct PARAM (by annotation) or a
 ## struct LOCAL (by its StructLit init), else {0,0}.
-base_struct_type := fn(params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+base_struct_type := fn(params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   ps := param_struct_type(params_head, src, ns, nl, a)
   if ps.n != 0 { return ps }
   return local_struct_type(fn_head, src, ns, nl, a, decls)
@@ -3970,9 +3982,9 @@ base_struct_type := fn(params_head : Option(ptr(mut Param)), fn_head : Option(pt
 ## inside subst_field_ty (a scalar type-arg returns the param `T` unchanged, byte-identical). The struct
 ## span `[s,n]` MUST carry the type-args (`Box(Pair(u64))`, not the stripped base) for the recovery to fire.
 ## Mirrors a64's struct_all_scalar field-type subst.
-struct_field_type := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, fs : usize, fl : usize, a : rt::Arena) -> WSpan {
+struct_field_type := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, fs : usize, fl : usize, a : rt::Arena) -> CSpan {
   eff := field_type_span(decls, src, s, n, fs, fl, a)
-  WSpan(s = eff.s, n = eff.n)
+  CSpan(s = eff.s, n = eff.n)
 }
 
 ## The STRUCT-type name an expression evaluates to, for a nested struct PLACE: a bare `Var` (via
@@ -3980,7 +3992,7 @@ struct_field_type := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
 ## recursively). {0,0} for anything else. A nested struct field is stored BY REFERENCE (word holds the
 ## inner base address), so `o.i` as a value already yields the inner base — the Field arm then loads
 ## the sub-field from it. Value-returning recursion (no ptr(mut)); `match deref(e)` inline (seed-safe).
-expr_struct_type_of := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+expr_struct_type_of := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut rs := 0
   mut rn := 0
   match deref(e) {
@@ -4007,14 +4019,14 @@ expr_struct_type_of := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), b
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## The STRUCT span of an aggregate PLACE `v` — a struct VAR (local/param) or an `arr[i]` element of an
 ## aggregate-element array/slice — else {0,0}. A place is LIVE STORAGE someone else owns, so binding or
 ## storing from it must COPY its words, not alias its base address (`q := p` then `p.x = …` must not
 ## move `q.x`). StructLit/call RHSs are deliberately EXCLUDED: those already own a fresh block.
-wat_place_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_place_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   if ex_is_index(v) {
     ibn := expr_var_name(ex_index_base(v))
     return wat_arr_elem_struct(fn_head, src, ibn.s, ibn.n, a, decls)
@@ -4023,7 +4035,7 @@ wat_place_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn
     sfp := wat_std_path_ty(v, fn_head, src, a, decls)
     if wat_std_path_ok(v, fn_head, src, a, decls) and sfp.n != 0 {
       sbn := base_type_name(src, sfp.s, sfp.n)
-      if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 { return WSpan(s = sbn.s, n = sbn.n) }
+      if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 { return CSpan(s = sbn.s, n = sbn.n) }
     }
   }
   vn := expr_var_name(v)
@@ -4043,15 +4055,15 @@ wat_place_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn
     ## an alias where a copy was due. Only a name that IS its own one-word value is demoted; every
     ## other span, resolvable or not, keeps the fail-loud copy arm.
     if bs.n != 0 and (not wat_ty_is_scalar_name(src, bs.s, bs.n)) { return bs }
-    return WSpan(s = 0, n = 0)
+    return CSpan(s = 0, n = 0)
   }
-  return WSpan(s = 0, n = 0)
+  return CSpan(s = 0, n = 0)
 }
 
 ## The STRUCT span an aggregate-valued RHS delivers: a place (above), a struct LITERAL, or a
 ## struct-returning CALL. Every one of those evaluates to a linear-memory BASE ADDRESS, so a
 ## whole-element store can copy `struct_words` words from it. {0,0} = not an aggregate RHS → fail-loud.
-wat_rhs_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+wat_rhs_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   sn := expr_struct_name(v)
   if sn.n != 0 { return sn }
   cn := expr_call_name(v)
@@ -4064,7 +4076,7 @@ wat_rhs_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn_h
 
 ## The declared ENUM-type name of the PARAM `[ns, ns+nl)` (its `: T` annotation, only if `T` names an
 ## enum decl), else {0,0}. An enum param is passed as its i64 base address (like a struct).
-param_enum_type := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+param_enum_type := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut p := params_head
   mut rs := 0
   mut rn := 0
@@ -4078,12 +4090,12 @@ param_enum_type := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : 
       None => { break }
     }
   }
-  WSpan(s = rs, n = rn)
+  CSpan(s = rs, n = rn)
 }
 
 ## The enum-type name of a scrutinee place `[ns, ns+nl)` — an enum PARAM (by annotation) or an enum
 ## LOCAL (by its EnumLit init), else {0,0}.
-base_enum_type := fn(params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> WSpan {
+base_enum_type := fn(params_head : Option(ptr(mut Param)), fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> CSpan {
   pe := param_enum_type(params_head, src, ns, nl, a, decls)
   if pe.n != 0 { return pe }
   return local_enum_type(fn_head, src, ns, nl, a, decls, allow_union)
@@ -4855,7 +4867,7 @@ emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb
 ## shared enum resolver for unions is exactly what regressed the union place feed while #491 was fixed.
 ## The consequence is recorded on the issue: a WIDE-member union delivered by a CALL (`q = mkw()`, and a
 ## local bound to one) is not named here and keeps its parent behaviour.
-wat_store_union_span := fn(pe : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
+wat_store_union_span := fn(pe : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   match deref(pe) {
     Expr::Call(cs, cl, _nn, ah) => {
       cr := callee_ret_enum(decls, src, cs, cl, ah, a, true)
@@ -4870,7 +4882,7 @@ wat_store_union_span := fn(pe : ptr(Expr), params_head : Option(ptr(mut Param)),
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
-  WSpan(s = 0, n = 0)
+  CSpan(s = 0, n = 0)
 }
 
 ## ISSUE #497 — write a RAW UNION field's value at byte offset `off` of the block `bidx` and report
@@ -5603,7 +5615,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
     ## (base + field word offset). A struct PARAM typed `T` resolves via the substituting struct-span
     ## helper. A non-scalar field / non-struct base is DEFERRED (fail-loud, never silent). Mirrors a64.
     Expr::CompField(cfbase0, cfidx0) => {
-      ## SCALAR var accessors on the match bindings — a WSpan (2-word) accessor whose arg is the 2nd
+      ## SCALAR var accessors on the match bindings — a CSpan (2-word) accessor whose arg is the 2nd
       ## match-bound child (cfidx0) mis-lowers to 0 under the frozen seed; SCALAR returns do not. Mirrors a64.
       cvns := ex_var_ns(cfidx0)
       cvnl := ex_var_nl(cfidx0)
