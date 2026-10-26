@@ -36,7 +36,12 @@
 ##
 ## Measured on parent 43093e5 with the cross binutils under qemu: x86_64 52 (the OTHER arm won — the
 ## field was never written at all), aarch64 53 and riscv64 53 (the right arm won and payload word 0
-## read 0). wasm 134, the #449 refusal, before and after. This tree: 42 / 42 / 42 / 134.
+## read 0). wasm was 134 there — the #449 refusal, because the function fell back to the legacy
+## emitter, which emitted `(unreachable)` for this shape. It is 42 since the sema context fix made the
+## function build from the shared IR: 42 means all seven probes are right, and it is unreachable by
+## accident (every wrong outcome above has its own code). #449 itself stays OPEN — its own fixture
+## `issue449_enum_field_eq` compares an enum FIELD with `==`, a by-reference compare wasm still
+## refuses, and still answers 134. See the row's comment in scripts/e2e.sh.
 
 Pay := enum { A(u64), B(u64, u64) }
 Tag := enum { Red, Green }
