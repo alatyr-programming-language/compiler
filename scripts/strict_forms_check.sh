@@ -463,12 +463,28 @@ pub main := fn() -> i32 {
 AL
   sed 's/if unchecked bitcast(usize, p) != 0 { r = 1 }/if p != 0 { r = 1 }/' "$t/base.al" > "$t/implicit.al"
   sed 's/  r$/  if unchecked bitcast(usize, p) == 0 { r = 2 }\n  r/' "$t/base.al" > "$t/explicit.al"
-  for f in base implicit explicit; do
+  ## base and explicit are the GRANTED shapes: they must check clean and report a SUMMARY.
+  for f in base explicit; do
     sf_typed_measure "$t" "$cc" "$f.al" "$t/$f.98"; rc=$?
     if [ "$rc" != 0 ] || ! grep -q '^#529 SUMMARY ' "$t/$f.98"; then
       echo "FAIL strict forms typed self-test: \`check $f.al\` rc=$rc or no SUMMARY line" >&2; bad=1
     fi
   done
+  ## implicit.al is the shape MEM-9 (#1034) REFUSES — `p != 0` outside `unchecked`. This loop used to
+  ## require rc=0 for it, which was the proof of the OLD behaviour: it went red the moment the refusal
+  ## landed, exactly like the census's OP-CMP proof did in #1082, for the same reason — a planted
+  ## program that demonstrates "accepted" stops demonstrating anything once "accepted" is a bug.
+  ## Measured on native x86_64 at the merged tree: rc=1, one OP-CMP row still written, NO SUMMARY
+  ## (the instrument records the crossing, then the checker refuses it), and the diagnostic names the
+  ## pointer-vs-integer rule. So the assertion is now the refusal AND the row together: a refusal with
+  ## no row would mean the walk never saw it, and a row with no refusal is the very defect #1030 was
+  ## filed about. Both halves are strictly stronger than the rc=0 this test used to demand.
+  sf_typed_measure "$t" "$cc" implicit.al "$t/implicit.98"; rc=$?
+  if [ "$rc" = 0 ]; then
+    echo "FAIL strict forms typed self-test: \`p != 0\` outside unchecked was ACCEPTED — MEM-9 (#1034) must refuse it" >&2; bad=1
+  elif ! grep -qiE "pointer.*integer|integer.*pointer" "$t/implicit.err" 2>/dev/null; then
+    echo "FAIL strict forms typed self-test: \`p != 0\` was refused, but not by the pointer-vs-integer diagnostic" >&2; bad=1
+  fi
   n0="$(sf_implicit_rows "$t/base.98" | awk '$2 == "OP-CMP"' | wc -l | tr -d ' ')"
   n1="$(sf_implicit_rows "$t/implicit.98" | awk '$2 == "OP-CMP"' | wc -l | tr -d ' ')"
   n2="$(sf_implicit_rows "$t/explicit.98" | awk '$2 == "OP-CMP"' | wc -l | tr -d ' ')"
