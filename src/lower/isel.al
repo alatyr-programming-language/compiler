@@ -519,7 +519,7 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
   cdo : Option(Decl) = sx_sym_decl(x, ip)
   match cdo {
     Some(cd) => {
-      if not sx_plain_label(x, cd) { return false }
+      if not sx_callable(x, cd) { return false }
       mut j : usize = 0
       while j < n {
         av := sx_slot(ir::pool_get(x.f, ir::i_pool(ip) + j))
@@ -549,6 +549,12 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
 ## Whether `d`'s code is reached through its bare mangled label under the legacy internal convention
 ## (`x86_plain_label`, in the parent: its parts live in sibling modules this file cannot name).
 sx_plain_label := fn(x : SxX, d : Decl) -> bool { x86_plain_label(x.decls, x.src, d) }
+## The selector's CALL-SITE question: may this callee be `call`ed at all. An `@inline` callee may not
+## (Codegen §3.3 — substitution is semantic, "no `call` is emitted"), so the function that calls one is
+## declined and the legacy emitter, which holds the only substitution (`emit_inline_call`), emits it.
+## Deliberately not folded into `sx_plain_label`, which is also asked about a function this selector
+## DEFINES, where `@inline` is not a refusal.
+sx_callable := fn(x : SxX, d : Decl) -> bool { x86_isel_callable(x.decls, x.src, d) }
 
 ## ── regions ──
 
