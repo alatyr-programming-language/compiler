@@ -24,6 +24,14 @@
 # evidence that the refusal fires is #1034's `reject_ptr_eq_int_outside_grant.al`, a different assertion
 # in a different instrument; the evidence that the census still SEES a crossing when one is legal is the
 # granted planted row above, which must keep reporting OP-CMP proven.
-places=3
+# places=5, measured on native x86_64 (omen) at main + #1034 + #1082 by
+# `bash scripts/ptrint_census.sh census target/debug/alatyr`: 3 -> 5, and the two new places are named
+# in that run's grant table — `test/accept_ptr_eq_int_unchecked_grant.al` and
+# `test/reject_ptr_eq_int_outside_grant.al`, one OP-CMP each. They are #1034's own fixtures, the pair
+# that proves MEM-9 fires where it must and does not fire where it must not, so the census counting them
+# is the instrument working, not a regression. They are NOT excluded: a census blind to the fixtures that
+# test its own rule would be blind where it matters most (I4). `op-cmp=0` is unchanged and still means
+# what the paragraph above says it means after MEM-9 — zero ungranted crossings among accepted programs.
+places=5
 blind-lib=12
 op-cmp=0
