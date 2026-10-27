@@ -662,7 +662,7 @@ a64_struct_has_word_array_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s : u
         Some(fq) => {
           fd := deref(fld_p(fq))
           ft := field_type_span(decls, src, s, n, fd.ns, fd.nl, a)
-          et := a64_arrty_elem(src, ft.s, ft.n)
+          et := lower_ctx::arrty_elem(src, ft.s, ft.n)
           if et.n != 0 and struct_decl_of(decls, src, et.s, et.n) >= 0 and struct_plain(decls, src, et.s, et.n) {
             if std_struct_is_word_granular(decls, src, et.s, et.n, a) { r = true }
           }
@@ -708,9 +708,9 @@ a64_deref_array_field_elem_span := fn(e : ptr(Expr), params_head : Option(ptr(mu
   root := a64_deref_param_word_struct_span(expr_field_base(e), params_head, src, a, decls)
   if root.n == 0 { return r }
   ft := field_type_span(decls, src, root.s, root.n, expr_field_name_s(e), expr_field_name_l(e), a)
-  et := a64_arrty_elem(src, ft.s, ft.n)
+  et := lower_ctx::arrty_elem(src, ft.s, ft.n)
   if et.n != 0 and struct_decl_of(decls, src, et.s, et.n) >= 0 and struct_plain(decls, src, et.s, et.n) {
-    if std_struct_is_word_granular(decls, src, et.s, et.n, a) and a64_tyname_words(src, et.s, et.n, a, decls) > 0 { r = et }
+    if std_struct_is_word_granular(decls, src, et.s, et.n, a) and lower_ctx::tyname_words(src, et.s, et.n, a, decls) > 0 { r = et }
   }
   r
 }
@@ -1164,7 +1164,7 @@ a64_std_idx_path_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src 
   if ex_is_index(e) {
     bt := a64_place_ty(ex_index_base(e), body_head, src, a, decls)
     if bt.n != 0 {
-      et := a64_arrty_elem(src, bt.s, bt.n)
+      et := lower_ctx::arrty_elem(src, bt.s, bt.n)
       if et.n != 0 and std_array_elem_byte_tier(decls, src, et.s, et.n, a) { r = et }
     }
     return r
@@ -1307,7 +1307,7 @@ a64_std_load_scalar := fn(off : i64, ts : usize, tl : usize, in out sb : rt::Str
 ## its natural word fields at the standard field offset. This is intentionally a constructor-only
 ## consumer in S3(a); whole-value copies use the existing word copy once their byte offset is aligned.
 a64_std_store_value := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
-  es := a64_arrty_elem(src, ts, tl)
+  es := lower_ctx::arrty_elem(src, ts, tl)
   if es.n != 0 {
     mut bytearr := false
     if scalar_byte_size(src, es.s, es.n) == 1 { bytearr = true }
@@ -1388,7 +1388,7 @@ a64_std_store_struct := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a 
 ## byte-tier ARRAY-ELEMENT assignment; the pre-existing word-relative payload writer remains untouched
 ## for every word-tier element and every non-array aggregate path.
 a64_std_store_value_atptr := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
-  es := a64_arrty_elem(src, ts, tl)
+  es := lower_ctx::arrty_elem(src, ts, tl)
   if es.n != 0 {
     if scalar_byte_size(src, es.s, es.n) == 1 and ex_is_array_lit(pe) {
       mut g : Option(ptr(mut Arg)) = ex_array_lit_ehead(pe)
@@ -1770,7 +1770,7 @@ a64_iter_stride := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), e : ptr(Expr)
               ## `mut xs : [E; N]` — the UNINITIALIZED form: the stride is the DECLARED element's word width.
               if not done {
                 ae := a64_ann_arr_elem(src, ans, anl, v)
-                if ae.n != 0 { aw := a64_tyname_words(src, ae.s, ae.n, a, decls) ; if aw > 0 { r = aw ; done = true } }
+                if ae.n != 0 { aw := lower_ctx::tyname_words(src, ae.s, ae.n, a, decls) ; if aw > 0 { r = aw ; done = true } }
               }
             }
             s = nx
@@ -3124,7 +3124,7 @@ a64_arrname_elem_struct_span := fn(src : ptr(u8), ns : usize, nl : usize, a : rt
     ## `a64_alit_homog_slit` heterogeneity guard has nothing to do here.
     if r.n == 0 {
       ats := a64_local_arrty_span(a64_body(), src, ns, nl, a)
-      if ats.n != 0 { r = a64_arrty_elem(src, ats.s, ats.n) }
+      if ats.n != 0 { r = lower_ctx::arrty_elem(src, ats.s, ats.n) }
     }
   }
   if r.n == 0 {
@@ -3172,59 +3172,14 @@ a64_index_elem_struct_span := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, de
 ## paths can TYPE it. Without them a `mut xs : [S; N]` reserved ONE word and every access was fail-loud.
 
 
-## `[E; N]` → the ELEMENT type span E (trimmed), else {0,0}.
-a64_arrty_elem := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
-  mut r := CSpan(s = 0, n = 0)
-  semi := arrty_semi(src, ts, tl)
-  if semi == 0 { return r }
-  mut es := ts + 1
-  mut go := true
-  while go and es < semi { c := str_at((src + es), 1) ; if c == " " or c == "\t" { es = es + 1 } else { go = false } }
-  mut ee := semi
-  mut trim := true
-  while trim and ee > es { t := str_at((src + ee - 1), 1) ; if t == " " or t == "\t" { ee = ee - 1 } else { trim = false } }
-  if ee > es { r = CSpan(s = es, n = ee - es) }
-  r
-}
 
-## The WORD width of the type named `[ts,tl)`: `struct_words` for a PLAIN struct, `1 + enum_max_arity`
-## for an enum, `N * width(E)` for a nested `[E; N]`, 1 for a scalar; 0 = UNSUPPORTED (a generic /
-## comptime-value type-fn whose layout resolve would PANIC without a binding, a `str`, or an unresolvable
-## nested element). Every caller gates on `> 0`, so an unsupported type keeps the fail-loud default.
-a64_tyname_words := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
-  mut r := 0
-  if tl == 0 { return r }
-  if struct_decl_of(decls, src, ts, tl) >= 0 {
-    if not struct_plain(decls, src, ts, tl) { return r }
-    ## CLAYOUT S3(d) — supported standard-byte elements reserve ceil(stride/8) words, while every
-    ## other byte-layout shape keeps the existing located fence and every word-tier struct keeps the
-    ## historical struct_words answer.
-    if std_array_elem_byte_tier(decls, src, ts, tl, a) { r = i64(array_elem_word_reservation(decls, src, ts, tl, a)) ; return r }
-    require_no_byte_layout_array_elem(decls, src, ts, tl, a)
-    r = i64(struct_words(decls, src, ts, tl, a))
-    return r
-  }
-  if enum_decl_of(decls, src, ts, tl) >= 0 {
-    r = 1 + i64(enum_max_arity(decls, src, ts, tl, a))
-    return r
-  }
-  es := a64_arrty_elem(src, ts, tl)
-  if es.n != 0 {
-    ew := a64_tyname_words(src, es.s, es.n, a, decls)
-    nel := arrty_nel(src, ts, tl)
-    if ew > 0 { if nel > 0 { r = nel * ew } }
-    return r
-  }
-  if str_at((src + ts), tl) == "str" { return r }
-  1
-}
 
 ## The runtime ARRAY-ELEMENT STRIDE in BYTES. The byte-tier arm is the only intentional divergence from
-## the old word model; keeping the fallback expressed through a64_tyname_words preserves historical
+## the old word model; keeping the fallback expressed through `lower_ctx::tyname_words` preserves historical
 ## word-element emission exactly.
 a64_arr_elem_stride_bytes := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if std_array_elem_byte_tier(decls, src, ts, tl, a) { return i64(layout_elem_stride_bytes(decls, src, ts, tl, a)) }
-  i64(a64_tyname_words(src, ts, tl, a, decls)) * 8
+  i64(lower_ctx::tyname_words(src, ts, tl, a, decls)) * 8
 }
 
 ## The static element COUNT of a declaration `name : [E; N]` whose value is NOT an array literal (the
@@ -3242,7 +3197,7 @@ a64_ann_arr_elem := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> 
   mut r := CSpan(s = 0, n = 0)
   if ex_is_array_lit(v) { return r }
   an := ann_span(src, ns, nl)
-  if an.n != 0 { r = a64_arrty_elem(src, an.s, an.n) }
+  if an.n != 0 { r = lower_ctx::arrty_elem(src, an.s, an.n) }
   r
 }
 
@@ -3254,7 +3209,7 @@ a64_ann_arr_words := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr), a 
   an := ann_span(src, ns, nl)
   if an.n == 0 { return 0 }
   if arrty_semi(src, an.s, an.n) == 0 { return 0 }
-  a64_tyname_words(src, an.s, an.n, a, decls)
+  lower_ctx::tyname_words(src, an.s, an.n, a, decls)
 }
 
 ## The `: T` annotation at the DECLARATION SITE of the LOCAL `[ns,nl]` (an `Expr::Var` carries the span
@@ -3393,7 +3348,7 @@ a64_place_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u
   }
   if ex_is_index(e) {
     ibase := ex_index_base(e)
-    ## An inferred ARRAY GLOBAL has no source `[E; N]` annotation to hand to a64_arrty_elem. Its
+    ## An inferred ARRAY GLOBAL has no source `[E; N]` annotation to hand to `lower_ctx::arrty_elem`. Its
     ## homogeneous StructLit initializer is the equivalent type oracle for the deep global-root path.
     if a64_ex_is_var(ibase) and a64_is_array_global(decls, src, ex_var_ns(ibase), ex_var_nl(ibase)) {
       if a64_alit_homog_slit(a64_global_value(decls, src, ex_var_ns(ibase), ex_var_nl(ibase)), src) {
@@ -3415,7 +3370,7 @@ a64_place_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u
     }
     if r.n == 0 {
       bt := a64_place_ty(ibase, body_head, src, a, decls)
-      if bt.n != 0 { r = a64_arrty_elem(src, bt.s, bt.n) }
+      if bt.n != 0 { r = lower_ctx::arrty_elem(src, bt.s, bt.n) }
     }
     return r
   }
@@ -3443,20 +3398,20 @@ a64_place_idx_ok := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src 
   if a64_ex_is_var(base) and a64_is_array_global(decls, src, ex_var_ns(base), ex_var_nl(base)) {
     if a64_alit_homog_slit(a64_global_value(decls, src, ex_var_ns(base), ex_var_nl(base)), src) {
       etg := a64_garr_elem_struct_span(decls, src, ex_var_ns(base), ex_var_nl(base))
-      if etg.n != 0 and a64_tyname_words(src, etg.s, etg.n, a, decls) > 0 { r = true }
+      if etg.n != 0 and lower_ctx::tyname_words(src, etg.s, etg.n, a, decls) > 0 { r = true }
     }
   }
   if not r and a64_ex_is_var(base) {
     etl := a64_inferred_local_elem_span(src, body_head, ex_var_ns(base), ex_var_nl(base), a, decls)
-    if etl.n != 0 and a64_tyname_words(src, etl.s, etl.n, a, decls) > 0 { r = true }
+    if etl.n != 0 and lower_ctx::tyname_words(src, etl.s, etl.n, a, decls) > 0 { r = true }
   }
   if not r {
     bt := a64_place_ty(base, body_head, src, a, decls)
     if bt.n == 0 { return r }
     if arrty_semi(src, bt.s, bt.n) == 0 { return r }
-    et := a64_arrty_elem(src, bt.s, bt.n)
+    et := lower_ctx::arrty_elem(src, bt.s, bt.n)
     if et.n == 0 { return r }
-    if a64_tyname_words(src, et.s, et.n, a, decls) > 0 { r = true }
+    if lower_ctx::tyname_words(src, et.s, et.n, a, decls) > 0 { r = true }
   }
   r
 }
@@ -3474,7 +3429,7 @@ a64_place_idx_ty := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src 
     if r.n != 0 { return r }
   }
   bt := a64_place_ty(base, body_head, src, a, decls)
-  if bt.n != 0 { r = a64_arrty_elem(src, bt.s, bt.n) }
+  if bt.n != 0 { r = lower_ctx::arrty_elem(src, bt.s, bt.n) }
   r
 }
 
@@ -3501,7 +3456,7 @@ a64_place_ok := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u
           etp := a64_param_arr_elem_span(params_head, src, ex_var_ns(pbase), ex_var_nl(pbase))
           plenp := a64_param_fixed_array_len(params_head, src, ex_var_ns(pbase), ex_var_nl(pbase))
           if plenp > 0 and etp.n != 0 and struct_decl_of(decls, src, etp.s, etp.n) >= 0 and struct_plain(decls, src, etp.s, etp.n) {
-            if std_struct_is_word_granular(decls, src, etp.s, etp.n, a) and a64_tyname_words(src, etp.s, etp.n, a, decls) > 0 {
+            if std_struct_is_word_granular(decls, src, etp.s, etp.n, a) and lower_ctx::tyname_words(src, etp.s, etp.n, a, decls) > 0 {
               ft := field_type_span(decls, src, etp.s, etp.n, expr_field_name_s(e), expr_field_name_l(e), a)
               if ft.n != 0 and arrty_semi(src, ft.s, ft.n) != 0 { fbaseok = true }
             }
@@ -3537,7 +3492,7 @@ a64_place_ok := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u
     et := a64_param_arr_elem_span(params_head, src, vns, vnl)
     plen := a64_param_fixed_array_len(params_head, src, vns, vnl)
     if plen > 0 and et.n != 0 and struct_decl_of(decls, src, et.s, et.n) >= 0 and struct_plain(decls, src, et.s, et.n) {
-      if std_struct_is_word_granular(decls, src, et.s, et.n, a) and a64_tyname_words(src, et.s, et.n, a, decls) > 0 { r = true }
+      if std_struct_is_word_granular(decls, src, et.s, et.n, a) and lower_ctx::tyname_words(src, et.s, et.n, a, decls) > 0 { r = true }
     }
     return r
   }
@@ -3586,7 +3541,7 @@ emit_a64_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt:
   }
   if et.n == 0 {
     bt := a64_place_ty(base, body_head, src, a, decls)
-    et = a64_arrty_elem(src, bt.s, bt.n)
+    et = lower_ctx::arrty_elem(src, bt.s, bt.n)
     estride = a64_arr_elem_stride_bytes(src, et.s, et.n, a, decls)
     nel = arrty_nel(src, bt.s, bt.n)
   }
@@ -5779,11 +5734,11 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         }
       }
       mut stdidx := false
-      stdel := a64_arrty_elem(src, stdarr.s, stdarr.n)
+      stdel := lower_ctx::arrty_elem(src, stdarr.s, stdarr.n)
       if stdpathok and stdel.n != 0 and scalar_byte_size(src, stdel.s, stdel.n) == 1 { stdidx = true }
       stdidxarr := a64_std_idx_path_ty(ibase, body_head, src, a, decls)
       mut stdidxelem := false
-      stdidxel := a64_arrty_elem(src, stdidxarr.s, stdidxarr.n)
+      stdidxel := lower_ctx::arrty_elem(src, stdidxarr.s, stdidxarr.n)
       if a64_std_idx_path_ok(ibase, body_head, src, a, decls) and stdidxel.n != 0 and scalar_byte_size(src, stdidxel.s, stdidxel.n) == 1 { stdidxelem = true }
       byte_ret_n := fixed_array_byte_return_len(ibase, decls, src, a)
       ## #422 — the DIRECT range-slice base `xs[lo..hi][i]`. The claim rule is shared
@@ -7832,7 +7787,7 @@ emit_a64_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, 
             ## their existing literal/VAR behavior.
             if inferredagg and (not deepagglit) { deepagg = false ; deepaggvar = false }
             stdidxAssignTy := a64_std_idx_path_ty(ibase, body_head, src, a, decls)
-            stdidxAssignEl := a64_arrty_elem(src, stdidxAssignTy.s, stdidxAssignTy.n)
+            stdidxAssignEl := lower_ctx::arrty_elem(src, stdidxAssignTy.s, stdidxAssignTy.n)
             mut stdidxassign := false
             if a64_std_idx_path_ok(ibase, body_head, src, a, decls) and stdidxAssignEl.n != 0 and scalar_byte_size(src, stdidxAssignEl.s, stdidxAssignEl.n) == 1 { stdidxassign = true }
             if stdidxassign {
