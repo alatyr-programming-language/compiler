@@ -578,16 +578,15 @@ walk_arms := fn(head : Option(ptr(mut Arm))) { … }
 walk_one_arm := fn(a : ptr(mut Arm)) { … }
 ```
 
-**Check — read the tree, not this sentence's earlier draft.** Since #760 the checker refuses a
-sibling-pointer mix **where both operand types are known**: `ty_compat` compares the pointee names when
+**Check.** Partly held; the gap is named below. Since #760 the checker refuses a sibling-pointer mix
+**where both operand types are known**: `ty_compat` compares the pointee names when
 both sides are pointers (`src/sema.al:502-511`), and that reaches the sinks routing through it —
 call-result to pointer param (`:11006`), struct-literal field (`:11285`), place writes (`:11546`), tail
 result (`:16808`). It does **not** refuse at a `deref`: under deferred pointee tracking the type there is
 `TyUnknown` (`:11360-11363`). Nor at an argument position, where the pointee name is erased on purpose so
 a written `unchecked bitcast(ptr(X), p)` cannot spuriously fail after the parser reduced it (`:11231-11237`,
 kind only; the pre-match fence judges a named local). This sentence previously said "at a `deref`", which
-is the one place the checker is blind — the same shape of error as the AGENTS.md line it came to correct,
-and both are now written to what the code does. The `usize` plumbing stays review-only; the next step is
+is the one place the checker is blind. The `usize` plumbing stays review-only; the next step is
 proposed below, and it needs a NEW hook — `sema.al:539-553` lists the #529 instrument's thirteen classes
 and `DEREF` is not among them.
 
