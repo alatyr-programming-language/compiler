@@ -271,6 +271,16 @@ unapplied_type_fn_err := fn(s : usize, n : usize) -> CheckErr {
 ## class between the unresolved-`::`-head and CT windows so only the former's upper bound moves and
 ## every other decoded CheckErr range stays byte-identical.
 ENUM_FIELD_ACCESS_DIAG_MARKER : usize = 6902000000000000000
+## #1030 option B (owner decision) — the strict form "no `ptr == 0`, no int<->ptr comparison without
+## an explicit `unchecked`". A pointer meeting an integer AT A COMPARISON is the #529 seam at its most
+## consequential site: `p == 0` is how a fabricated pointer is tested for null without `Option`, and it
+## passed `check` with rc=0 on the tree compiler AND on the committed seed. The seam stays legal INSIDE
+## an `unchecked` grant (Memory §4.5) and ill-formed outside one. Placed in the ladder above
+## ENUM_FIELD_ACCESS_DIAG_MARKER so every older diagnostic range remains byte-identical.
+SEAM_CMP_GRANT_DIAG_MARKER : usize = 6902500000000000000
+seam_cmp_outside_grant_err := fn(s : usize) -> CheckErr {
+  SEAM_CMP_GRANT_DIAG_MARKER + diag_span(s) * 4
+}
 enum_field_access_err := fn(s : usize) -> CheckErr { ENUM_FIELD_ACCESS_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
@@ -645,7 +655,14 @@ mut PTRINT_DECL_NL : usize = 0
 ## grant to review. `PTRINT_GRANT` is the LEXICAL nesting depth of the check walk inside the two grant
 ## forms — a `Stmt::Unchecked` block and an `Expr::Unchecked` operand — raised on entry and RESTORED
 ## (not decremented) on exit, at the three walkers that carry hooks (`check_stmts`, `check_expr_arms`,
-## `expr_has_unbound`). It is instrument-only state: no verdict reads it, and `ptrint_probe_decl`
+## `expr_has_unbound`). #1030 B MADE THIS ENFORCEMENT, NOT INSTRUMENT-ONLY: the comparison arm now
+## reads `PTRINT_GRANT` and refuses the seam when it is 0, so a program that compared a pointer with an
+## integer outside a grant and passed `check` is refused now. Measured blast radius BEFORE landing: the
+## census reports ZERO OP-CMP places across corpus, lib/ and src/, and the three seam places that do
+## exist are BIND and RESULT-TAIL — no tracked program is newly refused. The limit below now has teeth:
+## `unchecked bitcast(usize, p) == 0` reads `out`, because the grant is raised where the VALUE is
+## walked while the comparison is a different site; such a program is refused and must move the whole
+## comparison inside `unchecked { … }`. `ptrint_probe_decl`
 ## zeroes it per declaration, so a refused walk that returned early inside a block cannot leak `in`
 ## into the next declaration. PTRINT_GRANTED counts the rows that were emitted at depth > 0.
 ##
@@ -11100,6 +11117,13 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       ## A comparison (kinds 20/24/25/26/27/28) yields bool; its operands must agree.
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
         ptrint_probe_site("OP-CMP", "bincmp", false, tl.kind, tr.kind, s_of(l, a), src)
+        ## #1030 B: `ty_eq` answers TRUE for the #529 seam (TyInt<->TyPtr) — that is why `p == 0`
+        ## passed. Outside an `unchecked` grant the seam is no longer compatible AT A COMPARISON; the
+        ## caller spells the crossing (`unchecked { … }`) or compares at one type. Scoped here and not
+        ## in `ty_kinds_compat`, so no other int<->ptr site changes verdict in this slice.
+        if ptrint_seam(tl.kind, tr.kind) and PTRINT_GRANT == 0 {
+          er := Result(Ty, CheckErr).Err(seam_cmp_outside_grant_err(s_of(l, a))); return er
+        }
         if ty_eq(tl, tr, src) { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyBool, ns = 0, nl = 0)) }
         else { Result(Ty, CheckErr).Err(mismatch_err(s_of(l, a), 0)) }
       } else if op == 40 or op == 41 {
