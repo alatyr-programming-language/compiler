@@ -24,4 +24,4 @@
 ## release number, never a bare commit hash. The pin itself moves only in its own explicit commit
 ## (AGENTS.md, Authority); this file moves with it.
 
-pub SPEC_REVISION := "1.1.0"
+pub SPEC_REVISION := "1.4.0"
