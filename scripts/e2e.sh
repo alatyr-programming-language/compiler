@@ -9827,6 +9827,15 @@ run issue484_bound_slice_elem 42
 # green — including 28, which proves probe C's two `"dup"` locals really live at different addresses, so
 # a byte compare and a pointer-word compare cannot agree there.
 run issue502_deref_inferred_str_operand 42
+# Cross-target rows, MEASURED on native x86_64 with a compiler built from this branch — the non-x86
+# backends TRAP on a whole-`str` read through a pointer, exactly as the #451/#456/#483/#484 rows do
+# (aarch64=133 SIGTRAP, riscv64=133 SIGTRAP, wasm=134 `unreachable`). They are written as ROWS rather
+# than as a comment because a row fails if one of these ever answers a NUMBER: a trap is acceptable to
+# AGENTS.md ("a trap is acceptable, a wrong value is not"), and only a recorded expectation tells the two
+# apart on the next change.
+run_a64 issue502_deref_inferred_str_operand 133
+run_rv64 issue502_deref_inferred_str_operand 133
+run_wat issue502_deref_inferred_str_operand 134
 # Issue #506 — `deref(ptr(x)).field` where `x` is a BY-REFERENCE `in out` STRUCT PARAM answered a
 # literal ZERO: `Field(Deref(AddrOf(Var)))` matched none of the five deref span resolvers in the
 # scalar `Field` case (each peels a different inner node — Var, Deref, Call, Field, Index), so no arm
