@@ -329,7 +329,14 @@ tail_p2i := fn() -> usize { give_ptr() }
 ## parameters; OP-MATCH fires on an ENUM scrutinee bound to a local, not on an integer scrutinee and
 ## not in tail position. All three were reported NOT PROVEN until this fixture planted them — the hooks
 ## were never dead, nothing reached them.
-cmp_ptr_zero := fn(p : ptr(u8)) -> bool { return p == 0 }
+## MEM-9 (Memory §4.5, spec v1.6.0) makes an UNGRANTED `p == 0` ill-formed, so the planted comparison
+## now carries its own grant: the hook is keyed on the OPERAND KINDS (`src/sema.al:11102`, fired before
+## `ty_eq`), and a grant changes the verdict, not the kinds — so OP-CMP still fires and the program is
+## still accepted. After MEM-9 there is no accepted ungranted pointer-meeting-integer program left to
+## plant, and that is the rule working, not the instrument weakening: what this fixture proves is that
+## the census SEES the crossing, and #1034's `reject_ptr_eq_int_outside_grant.al` is the instrument
+## that proves the refusal fires. The grant therefore adds a second `in` row; see `gin` below.
+cmp_ptr_zero := fn(p : ptr(u8)) -> bool { mut r : bool = false; unchecked { r = p == 0 }; return r }
 if_pair := fn(c : bool) -> usize { if c { give_ptr() } else { give_int() } }
 Flag := enum { A, B }
 match_pair := fn(k : Flag) -> usize {
@@ -435,8 +442,12 @@ AL
     echo "*** ptrint census: the planted program was REFUSED (rc=$rc) — the instrument must only count ***"
     return 1
   fi
-  if [ "$gin" != 1 ]; then
-    echo "*** ptrint census: the grant column reported $gin rows \`in\` where the fixture plants exactly 1 ***"
+  ## TWO granted places, not one: `unchecked bitcast(usize, x)` in `match_pair` below, and the grant
+  ## MEM-9 now requires on the planted OP-CMP comparison (`unchecked { r = p == 0 }` in `cmp_ptr_zero`).
+  ## The count is exact on purpose — it is what proves the grant column distinguishes granted from
+  ## ungranted places at all — and it is read off the fixture, not measured: the gate confirms it.
+  if [ "$gin" != 2 ]; then
+    echo "*** ptrint census: the grant column reported $gin rows \`in\` where the fixture plants exactly 2 ***"
     return 1
   fi
   planted_none "$CC" || return 1

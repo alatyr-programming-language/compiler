@@ -8,12 +8,22 @@
 # Neither number may grow.
 #
 # `op-cmp` IS now claimed clean, and held: the planted fixture plants a pointer meeting an integer
-# literal outside any `unchecked` grant, `planted` reports the hook PROVEN (`proven=13/13` — every class,
-# OP-CMP included), and the census reports `op-cmp=0` over src/, lib/ and every tracked fixture. The
-# ratchet holds that 0 and REFUSES to hold it while the hook is unproven — an unproven zero is silence,
-# not cleanliness, so the ceiling returns rc=2 rather than passing. An earlier revision of this file said
-# OP-CMP could not be claimed because its hook sat undispatched under the bootstrap seed ("scar #2");
-# that was false — both the tree compiler and `seed/alatyr 0.2.16` fire it on `p == 0`.
+# literal — granted, because MEM-9 (Memory §4.5, spec v1.6.0) makes the ungranted form ill-formed and a
+# refused planted program cannot prove anything (`planted` fails on it by design) — `planted` reports the
+# hook PROVEN (`proven=13/13` — every class, OP-CMP included), and the census reports `op-cmp=0` over
+# src/, lib/ and every tracked fixture. The ratchet holds that 0 and REFUSES to hold it while the hook is
+# unproven — an unproven zero is silence, not cleanliness, so the ceiling returns rc=2 rather than
+# passing. An earlier revision of this file said OP-CMP could not be claimed because its hook sat
+# undispatched under the bootstrap seed ("scar #2"); that was false — both the tree compiler and
+# `seed/alatyr 0.2.16` fire it on `p == 0`.
+#
+# WHAT THIS 0 MEANS AFTER MEM-9, stated so the next agent does not over-read it: it counts crossings the
+# census SEES among programs it accepts. Once MEM-9 lands, no accepted program may contain an ungranted
+# pointer-meeting-integer comparison at all, so this zero stops being a survey result and becomes a
+# consequence of the rule — it is no longer evidence that such sites were looked for and not found. The
+# evidence that the refusal fires is #1034's `reject_ptr_eq_int_outside_grant.al`, a different assertion
+# in a different instrument; the evidence that the census still SEES a crossing when one is legal is the
+# granted planted row above, which must keep reporting OP-CMP proven.
 places=3
 blind-lib=12
 op-cmp=0
