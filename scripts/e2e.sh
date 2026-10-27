@@ -9817,6 +9817,25 @@ run issue484_ptr_slice_view_field 42
 # Cross-target rows follow from `run`; the non-x86 backends trap on a view read through a pointer,
 # exactly as the #451/#456/#483 rows above do (measured aarch64=133, riscv64=133, wasm=134).
 run issue484_bound_slice_elem 42
+# Issue #502 — `deref(q)` as a WHOLE-`str` OPERAND on an INFERRED pointer compared the POINTER WORD.
+# `is_str_operand`'s `deref` case asked a span-valued question (`deref_view_span_cx(…).n != 0`) that an
+# inferred `q := ptr(s)` cannot answer — `str` is structural, so no `str` span exists in the source. The
+# operand fell to scalar lowering and `==` answered `false` for byte-equal content, while the annotated
+# `q : ptr(str) = ptr(s)` answered `true`. Both this site and `view_temp_arg`'s identical span-valued
+# `deref` case now ask the fact through `deref_addr_view_ptr_local` (#482/#483). Measured on the frozen
+# seed before the change: this fixture answers **60** (probe A, the defect), with vacuity guards 20-28
+# green — including 28, which proves probe C's two `"dup"` locals really live at different addresses, so
+# a byte compare and a pointer-word compare cannot agree there.
+run issue502_deref_inferred_str_operand 42
+# Cross-target rows, MEASURED on native x86_64 with a compiler built from this branch — the non-x86
+# backends TRAP on a whole-`str` read through a pointer, exactly as the #451/#456/#483/#484 rows do
+# (aarch64=133 SIGTRAP, riscv64=133 SIGTRAP, wasm=134 `unreachable`). They are written as ROWS rather
+# than as a comment because a row fails if one of these ever answers a NUMBER: a trap is acceptable to
+# AGENTS.md ("a trap is acceptable, a wrong value is not"), and only a recorded expectation tells the two
+# apart on the next change.
+run_a64 issue502_deref_inferred_str_operand 133
+run_rv64 issue502_deref_inferred_str_operand 133
+run_wat issue502_deref_inferred_str_operand 134
 # Issue #506 — `deref(ptr(x)).field` where `x` is a BY-REFERENCE `in out` STRUCT PARAM answered a
 # literal ZERO: `Field(Deref(AddrOf(Var)))` matched none of the five deref span resolvers in the
 # scalar `Field` case (each peels a different inner node — Var, Deref, Call, Field, Index), so no arm
