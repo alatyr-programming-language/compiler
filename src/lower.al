@@ -30094,6 +30094,20 @@ x86_plain_label := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
   if overload_set_count(decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) >= 2 { return false }
   not fn_is_naked(src, d.name_start, d.name_len) and not callee_is_abi_c(src, d.name_start, d.name_len)
 }
+## Whether the x86 IR selector may emit a `call` to `d`. Separate from `x86_plain_label` on purpose:
+## that one asks "is its label the plain mangled one", which is also the question about a function the
+## selector DEFINES, and for a definition `@inline` is not a refusal (Codegen §3.3 emits an out-of-line
+## copy when the address is taken or the fn is `@export`ed). This one asks only about a CALL SITE, and
+## there the answer for an `@inline` callee is always no: Codegen §3.3 makes substitution SEMANTIC —
+## "no `call` is emitted", and a deeply-nested inlined body "may spill, but never reverts to a `call`".
+## The substitution lives in ONE place, `emit_inline_call` in the legacy emitter, so a function that
+## calls an `@inline` callee is declined here and emitted there, rather than the substitution being
+## spelled a second time inside the selector (criterion 2: one decision, not four). The gap stays
+## visible — a declined function is counted against the selector's coverage (#1072) — and the durable
+## fix, substituting in the shared front half so no backend can emit the call at all, is #1074.
+pub x86_isel_callable := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
+  x86_plain_label(decls, src, d) and not fn_is_inline(src, d.name_start, d.name_len)
+}
 ## Mono's instance list (docs/ir-slice-1.md §8.1, prerequisite e1 of option A, §7). The x86 GENERICS
 ## pre-pass, moved here unchanged out of `emit_program` so the driver can run it once after parsing and
 ## BEFORE `sema::check_program` (sema needs the list to check each generic body per instance, step e2).

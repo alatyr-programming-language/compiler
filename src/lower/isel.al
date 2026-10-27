@@ -1,7 +1,9 @@
 ## selfhost::lower::isel — the x86_64 instruction selector over the shared IR (`docs/ir.md` §6,
-## `docs/ir-slice-1.md` §4, slice 1d). DEV ONLY: it is reached through the `alatyr x86-ir` verb alone
-## (owner decision D5, Codegen §3.1), never by the default x86 emission, which is unchanged until the
-## flip (`docs/ir.md` §7.4, slice 9).
+## `docs/ir-slice-1.md` §4, slices 1d–9). Since the slice-9 flip (§7.4) this IS the default x86
+## emission: `emit_program` offers every function here first (`X86_IR_SELECT`, `lower.al`) and falls
+## back to `emit_fn` only when this selector declines. Before the flip it was reached through the
+## `alatyr x86-ir` dev verb alone (owner decision D5, Codegen §3.1); `x86-legacy` is now the verb that
+## turns it off, and `x86-ir` the explicit spelling of the default.
 ##
 ## A function the IR builder BUILT and the verifier accepted is emitted from its IR here instead of by
 ## `emit_fn`; every other function keeps its legacy emission (owner decision D7). The selector is
@@ -519,7 +521,7 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
   cdo : Option(Decl) = sx_sym_decl(x, ip)
   match cdo {
     Some(cd) => {
-      if not sx_plain_label(x, cd) { return false }
+      if not sx_callable(x, cd) { return false }
       mut j : usize = 0
       while j < n {
         av := sx_slot(ir::pool_get(x.f, ir::i_pool(ip) + j))
@@ -549,6 +551,12 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
 ## Whether `d`'s code is reached through its bare mangled label under the legacy internal convention
 ## (`x86_plain_label`, in the parent: its parts live in sibling modules this file cannot name).
 sx_plain_label := fn(x : SxX, d : Decl) -> bool { x86_plain_label(x.decls, x.src, d) }
+## The selector's CALL-SITE question: may this callee be `call`ed at all. An `@inline` callee may not
+## (Codegen §3.3 — substitution is semantic, "no `call` is emitted"), so such a function is declined and
+## the legacy emitter, which holds the only substitution (`emit_inline_call`), emits it. Kept apart from
+## `sx_plain_label`, which is also asked about a function this selector DEFINES, where `@inline` is not
+## a refusal (#1072, #1074).
+sx_callable := fn(x : SxX, d : Decl) -> bool { x86_isel_callable(x.decls, x.src, d) }
 
 ## ── regions ──
 
