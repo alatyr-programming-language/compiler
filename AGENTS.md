@@ -165,7 +165,16 @@ around it.
    comment at its workaround site. A new workaround adds a row. Held by `scripts/seed_forms_check.sh`,
    which fails when a promotion fixes a form so its row and workarounds retire.
 9. **An AST handle has its node's own type**, never `usize` or a sibling node's pointer (#760 fixed 12
-   walkers). Held by the checker at a `deref`; the typed-handle proposal is in the skill file.
+   walkers). **Review-only, and there is no check for it — do not say there is.** Nothing in `scripts/`
+   holds this form: `SF_LEX_RULES` is `unchecked kind-literal try-inline` (`strict_forms_check.sh:65`),
+   and the typed path holds `null` and `ptrint` only, so no rule inspects a handle's type at a `deref`.
+   An earlier revision of this bullet claimed it was "held by the checker at a `deref`", which was not
+   true of any instrument in the tree; a form is either pinned or it is not, and this one is not, so it
+   is decided by review until a rule exists. What would make it a gate rule: the typed path already walks
+   operand types for `ptrint`, so the same walk can assert that a value dereferenced as a node is not a
+   bare `usize` and not a sibling node's pointer — the proposal, with its blast radius, is in
+   `.agents/skills/alatyr-lane/strict_forms.md`. Until then a reviewer answers the question, and the
+   answer is recorded in the PR, not assumed.
 10. **A quantity with an identity is a `brand`**, not a bare number: a byte offset, a word count and a
     slot index get distinct brands, converted by named functions (#167, #760, #299). The checker
     refuses a sibling or raw mix since #299. Choosing a brand for a new quantity is **review-only**.
