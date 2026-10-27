@@ -17,6 +17,11 @@
 #   ## build_reject ...            the program MUST be refused at compile time (the corpus manifest's
 #                                  `reject_*` class spells its requirement in prose; this is the marker)
 #   ## Expected ... exit: N        the program must RUN and exit N (also accepts `status: N`, `=N`, bare)
+#   ## @target(<arch>)             the asm() body is written for <arch>; a walk on another backend is
+#                                  not a divergence (#1041). Read here and nowhere else, for the same reason
+#                                  as the two shapes above; `oracle_target` answers the arch or `none`, and
+#                                  `oracle_targets` scans a whole test/ glob in ONE awk process (the per-
+#                                  fixture loop cost ~3 800 subprocesses and 147 s of self-test time).
 #
 # A prose header that cites a spec section but states no number is NOT a declaration: `oracle` answers
 # `none` and the row stays UNEXPLAINED, which is the honest verdict — the instrument says it cannot tell,
@@ -46,6 +51,37 @@ oracle() {
 # oracle_explains <path> <exit-code> — true when the fixture declares exactly this exit code. Used by
 # xbackend_diff to tell "a backend answered differently, and the file said it would" from "…and nothing
 # says why". A `reject` declaration explains a REFUSAL, never an exit number.
+# oracle_target <path> — the architecture a fixture declares its asm() body written for, or `none`.
+# Header only (first 30 lines), same scope rule as `oracle`. A SECOND, different declaration in the same
+# header is an error, not a tie-break: two claims in one file mean the file does not answer the question,
+# and silently taking the first (`grep -m1`) would let a fixture both claim and disclaim a backend.
+oracle_target() { # path
+  local f="$1" a
+  [ -f "$f" ] || { echo none; return; }
+  a=$(head -n 30 "$f" | grep -oE '^##[[:space:]]*@target\((x86_64|aarch64|riscv64|wasm)\)'         | sed -E 's/.*\((.*)\)/\1/' | sort -u)
+  case "$a" in
+    "") echo none ;;
+    *$'
+'*) echo "CONFLICT" >&2; echo none ;;
+    *) echo "$a" ;;
+  esac
+}
+
+# oracle_targets <glob> — path TAB arch, for every declaring fixture, in ONE awk process. Header-scoped
+# (FNR<=30), first declaration per file wins, and a conflicting second one is reported to stderr rather
+# than resolved silently. FILENAME is printed EXACTLY as the caller spelled it, so a caller that wants
+# manifest-relative rows globs relative paths (`test/*.al` from the repository root).
+oracle_targets() { # glob...
+  awk 'FNR <= 30 && match($0, /^##[[:space:]]*@target\((x86_64|aarch64|riscv64|wasm)\)/) {
+         a = substr($0, RSTART, RLENGTH); sub(/.*\(/, "", a); sub(/\)/, "", a)
+         if (FILENAME in arch) { if (arch[FILENAME] != a) printf "CONFLICT %s: %s vs %s\n", FILENAME, arch[FILENAME], a > "/dev/stderr"
+                                 next }
+         arch[FILENAME] = a
+       }
+       END { for (fn in arch) printf "%s\t%s\n", fn, arch[fn] }' "$@"
+  return 0
+}
+
 oracle_explains() { # path exit
   local o; o="$(oracle "$1")"
   case "$o" in
