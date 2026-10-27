@@ -482,7 +482,11 @@ AL
   sf_typed_measure "$t" "$cc" implicit.al "$t/implicit.98"; rc=$?
   if [ "$rc" = 0 ]; then
     echo "FAIL strict forms typed self-test: \`p != 0\` outside unchecked was ACCEPTED — MEM-9 (#1034) must refuse it" >&2; bad=1
-  elif ! grep -qiE "pointer.*integer|integer.*pointer" "$t/implicit.err" 2>/dev/null; then
+  elif ! grep -qiE "pointer.*integer|integer.*pointer" "$t/implicit.98.err" 2>/dev/null; then
+    ## The file is `<out>.err`, which `sf_typed_measure` names off the ROWS file it was handed —
+    ## `$t/implicit.98.err`, not `$t/implicit.err`. Reading the wrong name greps an empty file and
+    ## reports "refused, but not by the pointer-vs-integer diagnostic" over a diagnostic that is sitting
+    ## right there on stderr (measured: `alatyr check` writes it to fd 2, and fd 1 gets nothing).
     echo "FAIL strict forms typed self-test: \`p != 0\` was refused, but not by the pointer-vs-integer diagnostic" >&2; bad=1
   fi
   n0="$(sf_implicit_rows "$t/base.98" | awk '$2 == "OP-CMP"' | wc -l | tr -d ' ')"
