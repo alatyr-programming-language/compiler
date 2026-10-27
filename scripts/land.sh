@@ -253,6 +253,22 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
 LAND_SELFTEST_EXPECTED=43
+## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
+## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
+## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
+## Defined ABOVE `land_shape_self_test`, which calls it: bash defines a function when execution reaches
+## its definition, and the self-test runs before the PHASE 0 block that uses it for real.
+land_push_capability_ok() { # remote-url credential-helper token -> 0 can, 1 cannot
+  case "$1" in
+    git@*|ssh://*) return 0 ;;
+    https://*|http://*|"" ) : ;;
+    * ) return 0 ;;
+  esac
+  [ -n "$2" ] && return 0
+  [ -n "$3" ] && return 0
+  return 1
+}
+
 land_shape_self_test() { # work-dir
   local st="$1" bad="" k=0 out
   rm -rf "$st"; mkdir -p "$st" || return 1
@@ -316,6 +332,15 @@ land_shape_self_test() { # work-dir
   _ck $? spec-pin-exemption-hid-an-unrelated-deletion
   [ "$(printf '%s\n' '-# a plain comment line' | pr_seed_version_protected_deletions)" = 1 ]
   _ck $? spec-pin-exemption-widened-to-any-comment
+
+  # ---- push capability: the PHASE 7 stall, caught in PHASE 0 (#1085). ------------------
+  # Both directions, so the probe cannot pass by always answering either way.
+  land_push_capability_ok "git@github.com:o/r.git" "" ""; _ck $? push-capability-ssh-needs-no-helper
+  land_push_capability_ok "ssh://git@github.com/o/r" "" ""; _ck $? push-capability-ssh-url-needs-no-helper
+  land_push_capability_ok "https://github.com/o/r" "store" ""; _ck $? push-capability-https-with-helper
+  land_push_capability_ok "https://github.com/o/r" "" "ghp_token"; _ck $? push-capability-https-with-token
+  land_push_capability_ok "https://github.com/o/r" "" ""; [ $? = 1 ]
+  _ck $? push-capability-https-without-helper-or-token-was-accepted
 
   # ---- 4 · an oracle commit touches that oracle alone. -------------------------------------
   out="$(pr_oracle_commit_isolation_check scripts/corpus.manifest deadbeef 2 2>&1)"
@@ -405,7 +430,8 @@ land_shape_self_test() { # work-dir
   fi
   echo "ok   land PR-shape self-test: $k checks — the oracle-mixing, seed-binary, seed/VERSION"
   echo "     append-only, one-file-oracle-commit, predicted-delta base, oracle-commit path-set and"
-  echo "     main-provenance refusals, each in both directions, and the predicted-delta decider"
+  echo "     main-provenance refusals and the push-capability probe, each in both directions, and the"
+  echo "     predicted-delta decider"
   return 0
 }
 
@@ -455,6 +481,23 @@ command -v git >/dev/null 2>&1 || die "git is required"
      and two trees stashing at once swap each other's work). Resolve it before landing."
 git rev-parse --verify -q refs/heads/main >/dev/null || die "no local main"
 echo "  clean tree, no stash, gh present"
+
+## PUSH CAPABILITY (#1085). `--push` reaches PHASE 7 and runs the one irreversible command in this
+## procedure. On `omen` it sat there for ~30 minutes with ZERO bytes of I/O — no credential helper
+## configured (`git config --get credential.helper` empty), `gh` not on PATH even inside `nix develop`,
+## although `~/.config/gh/hosts.yml` held a valid token. A stall at the publish step is worse than a
+## refusal: the gate has already cost ~90 minutes by then, and nothing tells you why nothing is happening.
+## An SSH remote needs no helper; an HTTPS one needs a helper OR a token in the environment.
+if [ "$DO_PUSH" = 1 ]; then
+  REMOTE_URL="$(git remote get-url origin 2>/dev/null || true)"
+  CRED_HELPER="$(git config --get credential.helper 2>/dev/null || true)"
+  if ! land_push_capability_ok "$REMOTE_URL" "$CRED_HELPER" "${GH_TOKEN:-}${GITHUB_TOKEN:-}"; then
+    die "this checkout cannot push over HTTPS: remote is '$REMOTE_URL', no credential.helper is configured
+     and neither \$GH_TOKEN nor \$GITHUB_TOKEN is set. Gate the tree here if you want, but publish from a
+     checkout that can (the same object, the same --force-with-lease). Run \`gh auth setup-git\` there."
+  fi
+  echo "  push capability: present"
+fi
 
 ISSUE_META="$(gh pr view "$PR" -R "$REPO" --json body,title \
           --jq '[.body, .title] | join(" ")
