@@ -2845,7 +2845,7 @@ array_local_stride := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : us
               ## `mut xs : [E; N]` — the UNINITIALIZED form: the stride is the DECLARED element's word width.
               if not done {
                 ae := wat_ann_arr_elem(src, ans, anl, v)
-                if ae.n != 0 { aw := wat_tyname_words(src, ae.s, ae.n, a, decls) ; if aw > 0 { r = aw ; done = true } }
+                if ae.n != 0 { aw := lower_ctx::tyname_words(src, ae.s, ae.n, a, decls) ; if aw > 0 { r = aw ; done = true } }
               }
             }
             s = nx
@@ -3005,55 +3005,13 @@ wat_ann_span := fn(src : ptr(u8), ns : usize, nl : usize) -> CSpan {
 }
 
 
-## `[E; N]` → the ELEMENT type span E (trimmed), else {0,0}.
-wat_arrty_elem := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
-  mut r := CSpan(s = 0, n = 0)
-  semi := arrty_semi(src, ts, tl)
-  if semi == 0 { return r }
-  mut es := ts + 1
-  mut go := true
-  while go and es < semi { c := str_at((src + es), 1) ; if c == " " or c == "\t" { es = es + 1 } else { go = false } }
-  mut ee := semi
-  mut trim := true
-  while trim and ee > es { t := str_at((src + ee - 1), 1) ; if t == " " or t == "\t" { ee = ee - 1 } else { trim = false } }
-  if ee > es { r = CSpan(s = es, n = ee - es) }
-  r
-}
 
-## The WORD width of the type named `[ts,tl)`: `struct_words` for a PLAIN struct, `1 + enum_max_arity`
-## for an enum, `N * width(E)` for a nested `[E; N]`, 1 for a scalar; 0 = UNSUPPORTED (a generic /
-## comptime-value type-fn whose layout resolve would PANIC without a binding, a `str`, or an unresolvable
-## nested element). Every caller gates on `> 0`, so an unsupported type keeps the fail-loud default.
-wat_tyname_words := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
-  mut r := 0
-  if tl == 0 { return r }
-  if struct_decl_of(decls, src, ts, tl) >= 0 {
-    if not struct_plain(decls, src, ts, tl) { return r }
-    if std_array_elem_byte_tier(decls, src, ts, tl, a) { r = i64(array_elem_word_reservation(decls, src, ts, tl, a)) ; return r }
-    require_no_byte_layout_array_elem(decls, src, ts, tl, a)
-    r = i64(struct_words(decls, src, ts, tl, a))
-    return r
-  }
-  if enum_decl_of(decls, src, ts, tl) >= 0 {
-    r = 1 + i64(enum_max_arity(decls, src, ts, tl, a))
-    return r
-  }
-  es := wat_arrty_elem(src, ts, tl)
-  if es.n != 0 {
-    ew := wat_tyname_words(src, es.s, es.n, a, decls)
-    nel := arrty_nel(src, ts, tl)
-    if ew > 0 { if nel > 0 { r = nel * ew } }
-    return r
-  }
-  if str_at((src + ts), tl) == "str" { return r }
-  1
-}
 
 ## Runtime ARRAY-ELEMENT stride in BYTES. Reservation remains word-denominated; only the proven
 ## standard byte-tier struct element diverges from the historical word model here.
 wat_arr_elem_stride_bytes := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if std_array_elem_byte_tier(decls, src, ts, tl, a) { return i64(layout_elem_stride_bytes(decls, src, ts, tl, a)) }
-  i64(wat_tyname_words(src, ts, tl, a, decls)) * 8
+  i64(lower_ctx::tyname_words(src, ts, tl, a, decls)) * 8
 }
 
 ## Is the type `[ts,tl)` a genuine ONE-WORD SCALAR? `ty_is_scalar` alone says yes to a `[u64; 3]`
@@ -3063,7 +3021,7 @@ wat_ty_word_scalar := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, d
   mut r := false
   if tl == 0 { return r }
   if not ty_is_scalar(ts, tl, decls, src) { return r }
-  if wat_tyname_words(src, ts, tl, a, decls) == 1 { r = true }
+  if lower_ctx::tyname_words(src, ts, tl, a, decls) == 1 { r = true }
   r
 }
 
@@ -3106,7 +3064,7 @@ wat_ann_arr_elem := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> 
   mut r := CSpan(s = 0, n = 0)
   if ex_is_array_lit(v) { return r }
   an := wat_ann_span(src, ns, nl)
-  if an.n != 0 { r = wat_arrty_elem(src, an.s, an.n) }
+  if an.n != 0 { r = lower_ctx::arrty_elem(src, an.s, an.n) }
   r
 }
 
@@ -3118,7 +3076,7 @@ wat_ann_arr_words := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr), a 
   an := wat_ann_span(src, ns, nl)
   if an.n == 0 { return 0 }
   if arrty_semi(src, an.s, an.n) == 0 { return 0 }
-  wat_tyname_words(src, an.s, an.n, a, decls)
+  lower_ctx::tyname_words(src, an.s, an.n, a, decls)
 }
 
 ## The `: T` annotation at the DECLARATION SITE of the LOCAL `[ns,nl]` (an `Expr::Var` carries the span
@@ -3279,7 +3237,7 @@ wat_std_idx_path_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src 
   if ex_is_index(e) {
     bt := wat_place_ty(ex_index_base(e), body_head, src, a, decls)
     if bt.n != 0 {
-      et := wat_arrty_elem(src, bt.s, bt.n)
+      et := lower_ctx::arrty_elem(src, bt.s, bt.n)
       if et.n != 0 and std_array_elem_byte_tier(decls, src, et.s, et.n, a) { r = et }
     }
     return r
@@ -3324,7 +3282,7 @@ wat_place_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u
   }
   if ex_is_index(e) {
     bt := wat_place_ty(ex_index_base(e), body_head, src, a, decls)
-    if bt.n != 0 { r = wat_arrty_elem(src, bt.s, bt.n) }
+    if bt.n != 0 { r = lower_ctx::arrty_elem(src, bt.s, bt.n) }
     return r
   }
   vn := expr_var_name(e)
@@ -3345,7 +3303,7 @@ wat_place_idx_ok := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src 
   bt := wat_place_ty(base, body_head, src, a, decls)
   if bt.n == 0 { return r }
   if arrty_semi(src, bt.s, bt.n) == 0 { return r }
-  et := wat_arrty_elem(src, bt.s, bt.n)
+  et := lower_ctx::arrty_elem(src, bt.s, bt.n)
   if et.n == 0 { return r }
   if wat_arr_elem_stride_bytes(src, et.s, et.n, a, decls) > 0 { r = true }
   r
@@ -3355,7 +3313,7 @@ wat_place_idx_ok := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src 
 wat_place_idx_ty := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
   bt := wat_place_ty(base, body_head, src, a, decls)
-  if bt.n != 0 { r = wat_arrty_elem(src, bt.s, bt.n) }
+  if bt.n != 0 { r = lower_ctx::arrty_elem(src, bt.s, bt.n) }
   r
 }
 
@@ -4200,7 +4158,7 @@ wat_std_store_expr := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl :
 }
 
 wat_std_store_value := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
-  es := wat_arrty_elem(src, ts, tl)
+  es := lower_ctx::arrty_elem(src, ts, tl)
   if es.n != 0 {
     mut bytearr := false
     if scalar_byte_size(src, es.s, es.n) == 1 { bytearr = true }
@@ -4621,7 +4579,7 @@ emit_wat_agg_elem_addr := fn(ibase : ptr(Expr), iidx : ptr(Expr), in out sb : rt
 ## inner hop's guard overwrites the shared scratch local.
 emit_wat_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   bt := wat_place_ty(base, body_head, src, a, decls)
-  et := wat_arrty_elem(src, bt.s, bt.n)
+  et := lower_ctx::arrty_elem(src, bt.s, bt.n)
   mut estride := wat_arr_elem_stride_bytes(src, et.s, et.n, a, decls)
   ## An inline scalar array field inside a byte-tier element is packed by the scalar's byte width,
   ## not by the ordinary one-word scalar stride.
@@ -5894,7 +5852,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           stdparamidx = true
         }
       }
-      stdel := wat_arrty_elem(src, stdarr.s, stdarr.n)
+      stdel := lower_ctx::arrty_elem(src, stdarr.s, stdarr.n)
       mut stdidx := false
       if stdpathok and stdel.n != 0 {
         if scalar_byte_size(src, stdel.s, stdel.n) == 1 { stdidx = true }

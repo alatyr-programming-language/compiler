@@ -1075,7 +1075,7 @@ rv_std_idx_path_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src :
   if ex_is_index(e) {
     bt := rv_place_ty(ex_index_base(e), body_head, src, a, decls)
     if bt.n != 0 {
-      et := rv_arrty_elem(src, bt.s, bt.n)
+      et := lower_ctx::arrty_elem(src, bt.s, bt.n)
       if et.n != 0 and std_array_elem_byte_tier(decls, src, et.s, et.n, a) { r = et }
     }
     return r
@@ -1213,7 +1213,7 @@ rv_std_copy := fn(ts : usize, tl : usize, soff : i64, doff : i64, in out sb : rt
 ## at a time; nested word-granular structs retain their own natural word fields at the containing byte
 ## offset. Whole-value copies stay on the existing word-copy path once their byte offset is aligned.
 rv_std_store_value := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
-  es := rv_arrty_elem(src, ts, tl)
+  es := lower_ctx::arrty_elem(src, ts, tl)
   if es.n != 0 {
     mut bytearr := false
     if scalar_byte_size(src, es.s, es.n) == 1 { bytearr = true }
@@ -1293,7 +1293,7 @@ rv_std_store_struct := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a :
 ## while each literal expression is emitted. This is intentionally used only for a byte-tier array
 ## element whole-assignment; the established frame-relative writer above remains unchanged.
 rv_std_store_value_atptr := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
-  es := rv_arrty_elem(src, ts, tl)
+  es := lower_ctx::arrty_elem(src, ts, tl)
   if es.n != 0 {
     if scalar_byte_size(src, es.s, es.n) == 1 and ex_is_array_lit(pe) {
       mut g : Option(ptr(mut Arg)) = ex_array_lit_ehead(pe)
@@ -1696,7 +1696,7 @@ rv_iter_stride := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), e : ptr(Expr),
               ## `mut xs : [E; N]` — the UNINITIALIZED form: the stride is the DECLARED element's word width.
               if not done {
                 ae := rv_ann_arr_elem(src, ans, anl, v)
-                if ae.n != 0 { aw := rv_tyname_words(src, ae.s, ae.n, a, decls) ; if aw > 0 { r = aw ; done = true } }
+                if ae.n != 0 { aw := lower_ctx::tyname_words(src, ae.s, ae.n, a, decls) ; if aw > 0 { r = aw ; done = true } }
               }
             }
             s = nx
@@ -2605,7 +2605,7 @@ rv_arrname_elem_struct_span := fn(src : ptr(u8), ns : usize, nl : usize, a : rt:
     ## `rv_alit_homog_slit` heterogeneity guard has nothing to do here.
     if r.n == 0 {
       ats := rv_local_arrty_span(rv_body(), src, ns, nl, a)
-      if ats.n != 0 { r = rv_arrty_elem(src, ats.s, ats.n) }
+      if ats.n != 0 { r = lower_ctx::arrty_elem(src, ats.s, ats.n) }
     }
   }
   if r.n == 0 {
@@ -2642,55 +2642,13 @@ rv_index_elem_struct_span := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, dec
 ## paths can TYPE it. Without them a `mut xs : [S; N]` reserved ONE word and every access was fail-loud.
 
 
-## `[E; N]` → the ELEMENT type span E (trimmed), else {0,0}.
-rv_arrty_elem := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
-  mut r := CSpan(s = 0, n = 0)
-  semi := arrty_semi(src, ts, tl)
-  if semi == 0 { return r }
-  mut es := ts + 1
-  mut go := true
-  while go and es < semi { c := str_at((src + es), 1) ; if c == " " or c == "\t" { es = es + 1 } else { go = false } }
-  mut ee := semi
-  mut trim := true
-  while trim and ee > es { t := str_at((src + ee - 1), 1) ; if t == " " or t == "\t" { ee = ee - 1 } else { trim = false } }
-  if ee > es { r = CSpan(s = es, n = ee - es) }
-  r
-}
 
-## The WORD width of the type named `[ts,tl)`: `struct_words` for a PLAIN struct, `1 + enum_max_arity`
-## for an enum, `N * width(E)` for a nested `[E; N]`, 1 for a scalar; 0 = UNSUPPORTED (a generic /
-## comptime-value type-fn whose layout resolve would PANIC without a binding, a `str`, or an unresolvable
-## nested element). Every caller gates on `> 0`, so an unsupported type keeps the fail-loud default.
-rv_tyname_words := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
-  mut r := 0
-  if tl == 0 { return r }
-  if struct_decl_of(decls, src, ts, tl) >= 0 {
-    if not struct_plain(decls, src, ts, tl) { return r }
-    if std_array_elem_byte_tier(decls, src, ts, tl, a) { r = i64(array_elem_word_reservation(decls, src, ts, tl, a)) ; return r }
-    require_no_byte_layout_array_elem(decls, src, ts, tl, a)
-    r = i64(struct_words(decls, src, ts, tl, a))
-    return r
-  }
-  if enum_decl_of(decls, src, ts, tl) >= 0 {
-    r = 1 + i64(enum_max_arity(decls, src, ts, tl, a))
-    return r
-  }
-  es := rv_arrty_elem(src, ts, tl)
-  if es.n != 0 {
-    ew := rv_tyname_words(src, es.s, es.n, a, decls)
-    nel := arrty_nel(src, ts, tl)
-    if ew > 0 { if nel > 0 { r = nel * ew } }
-    return r
-  }
-  if str_at((src + ts), tl) == "str" { return r }
-  1
-}
 
 ## Runtime ARRAY-ELEMENT STRIDE in BYTES. Reservation remains word-denominated; only byte-tier
 ## elements use their exact Types §6.4 stride here.
 rv_arr_elem_stride_bytes := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if std_array_elem_byte_tier(decls, src, ts, tl, a) { return i64(layout_elem_stride_bytes(decls, src, ts, tl, a)) }
-  i64(rv_tyname_words(src, ts, tl, a, decls)) * 8
+  i64(lower_ctx::tyname_words(src, ts, tl, a, decls)) * 8
 }
 
 ## The static element COUNT of a declaration `name : [E; N]` whose value is NOT an array literal (the
@@ -2708,7 +2666,7 @@ rv_ann_arr_elem := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> C
   mut r := CSpan(s = 0, n = 0)
   if ex_is_array_lit(v) { return r }
   an := ann_span(src, ns, nl)
-  if an.n != 0 { r = rv_arrty_elem(src, an.s, an.n) }
+  if an.n != 0 { r = lower_ctx::arrty_elem(src, an.s, an.n) }
   r
 }
 
@@ -2720,7 +2678,7 @@ rv_ann_arr_words := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr), a :
   an := ann_span(src, ns, nl)
   if an.n == 0 { return 0 }
   if arrty_semi(src, an.s, an.n) == 0 { return 0 }
-  rv_tyname_words(src, an.s, an.n, a, decls)
+  lower_ctx::tyname_words(src, an.s, an.n, a, decls)
 }
 
 ## The `: T` annotation at the DECLARATION SITE of the LOCAL `[ns,nl]` (an `Expr::Var` carries the span
@@ -2792,7 +2750,7 @@ rv_place_ty := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8
   }
   if ex_is_index(e) {
     bt := rv_place_ty(ex_index_base(e), body_head, src, a, decls)
-    if bt.n != 0 { r = rv_arrty_elem(src, bt.s, bt.n) }
+    if bt.n != 0 { r = lower_ctx::arrty_elem(src, bt.s, bt.n) }
     return r
   }
   vns := ex_var_ns(e)
@@ -2814,7 +2772,7 @@ rv_place_idx_ok := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src :
   bt := rv_place_ty(base, body_head, src, a, decls)
   if bt.n == 0 { return r }
   if arrty_semi(src, bt.s, bt.n) == 0 { return r }
-  et := rv_arrty_elem(src, bt.s, bt.n)
+  et := lower_ctx::arrty_elem(src, bt.s, bt.n)
   if et.n == 0 { return r }
   if rv_arr_elem_stride_bytes(src, et.s, et.n, a, decls) > 0 { r = true }
   r
@@ -2824,7 +2782,7 @@ rv_place_idx_ok := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src :
 rv_place_idx_ty := fn(base : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
   bt := rv_place_ty(base, body_head, src, a, decls)
-  if bt.n != 0 { r = rv_arrty_elem(src, bt.s, bt.n) }
+  if bt.n != 0 { r = lower_ctx::arrty_elem(src, bt.s, bt.n) }
   r
 }
 
@@ -2865,7 +2823,7 @@ rv_place_ok := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : ptr(u8
 ## `bltu` also traps a negative i64 index (a huge unsigned).
 emit_rv_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   bt := rv_place_ty(base, body_head, src, a, decls)
-  et := rv_arrty_elem(src, bt.s, bt.n)
+  et := lower_ctx::arrty_elem(src, bt.s, bt.n)
   estride := rv_arr_elem_stride_bytes(src, et.s, et.n, a, decls)
   nel := arrty_nel(src, bt.s, bt.n)
   emit_rv_place_addr(base, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -5029,13 +4987,13 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           stdparamidx = true
         }
       }
-      stdel := rv_arrty_elem(src, stdarr.s, stdarr.n)
+      stdel := lower_ctx::arrty_elem(src, stdarr.s, stdarr.n)
       mut stdidx := false
       if stdpathok and stdel.n != 0 {
         if scalar_byte_size(src, stdel.s, stdel.n) == 1 { stdidx = true }
       }
       stdidxarr := rv_std_idx_path_ty(ibase, body_head, src, a, decls)
-      stdidxel := rv_arrty_elem(src, stdidxarr.s, stdidxarr.n)
+      stdidxel := lower_ctx::arrty_elem(src, stdidxarr.s, stdidxarr.n)
       mut stdidxelem := false
       if rv_std_idx_path_ok(ibase, body_head, src, a, decls) and stdidxel.n != 0 and scalar_byte_size(src, stdidxel.s, stdidxel.n) == 1 { stdidxelem = true }
       ## #422 — the DIRECT range-slice base `xs[lo..hi][i]`. The claim rule is shared
@@ -6895,7 +6853,7 @@ emit_rv_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, a
               }
             }
             stdidxAssignTy := rv_std_idx_path_ty(ibase, body_head, src, a, decls)
-            stdidxAssignEl := rv_arrty_elem(src, stdidxAssignTy.s, stdidxAssignTy.n)
+            stdidxAssignEl := lower_ctx::arrty_elem(src, stdidxAssignTy.s, stdidxAssignTy.n)
             mut stdidxassign := false
             if rv_std_idx_path_ok(ibase, body_head, src, a, decls) and stdidxAssignEl.n != 0 and scalar_byte_size(src, stdidxAssignEl.s, stdidxAssignEl.n) == 1 { stdidxassign = true }
             if stdidxassign {

@@ -167,6 +167,59 @@ pub arrty_nel := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
   if not any { return 0 }
   n
 }
+## `[E; N]` → the ELEMENT type span E (trimmed), else {0,0}. Shared by all three target backends: the
+## scan reads only the source-relative type span and `lower_layout::arrty_semi`, so there is no
+## backend-specific state in the query — the same reason `arrty_nel` above is shared. It used to be three
+## byte-identical copies (`a64_arrty_elem` / `rv_arrty_elem` / `wat_arrty_elem`, 13 lines each), which is
+## the `tyname_words` row of the copy census; deleting them closes that family (#529, criterion 2).
+pub arrty_elem := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
+  semi := lower_layout::arrty_semi(src, ts, tl)
+  if semi == 0 { return r }
+  mut es := ts + 1
+  mut go := true
+  while go and es < semi { c := str_at((src + es), 1) ; if c == " " or c == "\t" { es = es + 1 } else { go = false } }
+  mut ee := semi
+  mut trim := true
+  while trim and ee > es { t := str_at((src + ee - 1), 1) ; if t == " " or t == "\t" { ee = ee - 1 } else { trim = false } }
+  if ee > es { r = CSpan(s = es, n = ee - es) }
+  r
+}
+## `[T; N]` / a struct / an enum NAME span → the WORD COUNT the type occupies in a frame, 0 for `str`
+## and for anything unresolvable. Shared by all three target backends: every callee is a `lower_layout`
+## query on the source type span, and the only recursion is into this same function, so there is no
+## backend-specific state in the decision — the criterion `docs/ir.md` §2.4 uses for "one decision, not
+## four". It was three copies (`a64_` / `rv_` / `wat_tyname_words`, identical modulo the prefix and the
+## comments, which never reach the emitted bytes); their element-span callee `*_arrty_elem` was hoisted
+## to `arrty_elem` above in the same pass, which is what made this family liftable at all (#529,
+## criterion 2, closes the `tyname_words` row of the copy census).
+pub tyname_words := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+  mut r := 0
+  if tl == 0 { return r }
+  if lower_layout::struct_decl_of(decls, src, ts, tl) >= 0 {
+    if not lower_layout::struct_plain(decls, src, ts, tl) { return r }
+    ## CLAYOUT S3(d) — supported standard-byte elements reserve ceil(stride/8) words, while every
+    ## other byte-layout shape keeps the existing located fence and every word-tier struct keeps the
+    ## historical struct_words answer.
+    if lower_layout::std_array_elem_byte_tier(decls, src, ts, tl, a) { r = i64(lower_layout::array_elem_word_reservation(decls, src, ts, tl, a)) ; return r }
+    lower_layout::require_no_byte_layout_array_elem(decls, src, ts, tl, a)
+    r = i64(lower_layout::struct_words(decls, src, ts, tl, a))
+    return r
+  }
+  if lower_layout::enum_decl_of(decls, src, ts, tl) >= 0 {
+    r = 1 + i64(lower_layout::enum_max_arity(decls, src, ts, tl, a))
+    return r
+  }
+  es := arrty_elem(src, ts, tl)
+  if es.n != 0 {
+    ew := tyname_words(src, es.s, es.n, a, decls)
+    nel := arrty_nel(src, ts, tl)
+    if ew > 0 { if nel > 0 { r = nel * ew } }
+    return r
+  }
+  if str_at((src + ts), tl) == "str" { return r }
+  1
+}
 
 ## Generic fixed-array parameter length scan for a backend's active substitution span. This is deliberately
 ## distinct from `arrty_nel`: preserve the existing permissive `;`-scan and digit parsing used by the
