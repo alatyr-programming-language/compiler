@@ -3876,6 +3876,14 @@ view_temp_arg := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> bool {
   ## its address, like every other homeless view. Before this the argument fell to the scalar default
   ## and `io::print(deref(p))` printed NOTHING — a silent wrong value (I11).
   if deref_view_span_cx(e, cx).n != 0 { return true }
+  ## …and the SAME route when the pointer local is INFERRED (`q := ptr(s)`), which has NO pointee span
+  ## to answer the question above with — `str` is structural, so no `str` span exists in the source.
+  ## Ask the fact directly instead of through a name: `deref_addr_view_ptr_local` (#482/#483) scans the
+  ## local's own declaration `q := ptr(<ident>)` and asks `view_dest_is_local` whether the ADDRESSED
+  ## identifier's slot carries its own pair. Before this the operand fell to scalar lowering and `==`
+  ## compared the POINTER WORD against the literal's address — a clean compile answering `false` for
+  ## byte-equal content, a silent wrong value (I11). #502.
+  if deref_addr_view_ptr_local(e, cx.slots, cx.src) { return true }
   if is_slice_expr(e) { return true }
   if str_field_arr_elem(e, cx, a).found { return true }
   match deref(e) {
@@ -10043,6 +10051,16 @@ is_str_operand := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   ## (`alloc::vec::get` at `T = str`, `Option(T).Some(deref(elem))`) otherwise delivered ONLY the
   ## pointer word and the caller read a garbage length — a wrong value.
   if deref_view_span_cx(e, cx).n != 0 { return true }
+  ## …and the SAME route when the pointer local is INFERRED (`q := ptr(s)`), which has NO pointee span
+  ## for the question above — `str` is structural, so no `str` span exists in the source at all. Ask the
+  ## fact instead of a name: `deref_addr_view_ptr_local` (#482/#483) scans the local's own declaration
+  ## `q := ptr(<ident>)` and asks `view_dest_is_local` whether the ADDRESSED identifier's slot carries
+  ## its own pair. Before this the operand fell through to scalar lowering and `==` compared the POINTER
+  ## WORD against the literal's address: a clean compile answering `false` for byte-equal content, while
+  ## the annotated `q : ptr(str) = ptr(s)` answered `true`. A silent wrong value (I11). #502.
+  ## The emitter needed nothing new: `emit_str_pair`'s `Expr::Deref` arm is span-free — it lowers the
+  ## pointer to an address and reads word 0 and word 8 at the ascending pointee offsets.
+  if deref_addr_view_ptr_local(e, cx.slots, cx.src) { return true }
   false
 }
 
