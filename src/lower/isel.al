@@ -108,6 +108,53 @@ sx_lda := fn(in out sb : rt::StrBuf, r : SxR, ip : ptr(mut ir::IrInst)) -> bool 
 sx_ldb := fn(in out sb : rt::StrBuf, r : SxR, ip : ptr(mut ir::IrInst)) -> bool { sx_ld(sb, r, ir::i_bk(ip), ir::i_bv(ip)) }
 ## Both operands: `a` into %rax, `b` into %rcx.
 sx_ld2 := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool { sx_lda(sb, SxR.XrAx, ip) and sx_ldb(sb, SxR.XrCx, ip) }
+## The imm32 value operand `b` DENOTES, if it denotes one: an `OkImm` directly, or the single `const`
+## instruction that defines the vreg. The builder lowers a literal to `const` + vreg + spill, so by the
+## time an `add` reaches here its literal right operand is usually a vreg — but the value it holds is
+## still written in the IR (`%1 = const.u i64 2147483647`), and reading it is consuming an IR fact, not
+## re-deriving one (§3.8: every width and signedness decision is read from the value's attributes).
+## Refused unless the vreg has EXACTLY one definition, so a re-bound slot can never fold a stale value.
+## The scan is linear and the selector only reaches scalar-leaf functions, so it costs nothing worth
+## naming; a table would need indexed writes `ir.al`'s WBuf does not offer.
+sx_bimm := fn(x : SxX, ip : ptr(mut ir::IrInst)) -> Option(i64) {
+  bk : ir::OpndK = ir::i_bk(ip)
+  if bk == ir::OpndK.OkImm {
+    if sx_imm32(ir::i_bv(ip)) { return Option(i64).Some(ir::i_bv(ip)) }
+    return Option(i64).None
+  }
+  if bk != ir::OpndK.OkVReg { return Option(i64).None }
+  mut v : usize = usize(ir::i_bv(ip))
+  mut defs : usize = 0
+  mut got : Option(i64) = Option(i64).None
+  ni := ir::fn_ninst(x.f)
+  mut i : usize = 0
+  while i < ni {
+    q := ir::fn_inst(x.f, i)
+    if ir::i_dk(q) == ir::OpndK.OkVReg and usize(ir::i_dv(q)) == v {
+      defs = defs + 1
+      if ir::i_op(q) == ir::Op.OpConst and ir::i_ak(q) == ir::OpndK.OkImm and sx_imm32(ir::i_av(q)) {
+        got = Option(i64).Some(ir::i_av(q))
+      }
+    }
+    i = i + 1
+  }
+  if defs == 1 { return got }
+  Option(i64).None
+}
+## `mn %b, %rax` — the shape shared by `addq`/`subq`/`andq`/`orq`/`xorq`/`cmpq`/signed `imulq`: the
+## literal rides the instruction when it fits imm32, and %rcx is loaded only when it does not. Loading
+## %rax first is what makes the fold free: nothing else touches %rcx on the folded path.
+sx_alu := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), mn : str) -> bool {
+  if not sx_lda(sb, SxR.XrAx, ip) { return false }
+  match sx_bimm(x, ip) {
+    Some(v) => { sx_put(sb, "  "); sx_put(sb, mn); sx_put(sb, " $"); sx_int(sb, v); sx_put(sb, ", %rax\n") }
+    None => {
+      if not sx_ldb(sb, SxR.XrCx, ip) { return false }
+      sx_put(sb, "  "); sx_put(sb, mn); sx_put(sb, " %rcx, %rax\n")
+    }
+  }
+  true
+}
 ## The destination vreg of `ip`, if it defines one.
 sx_dst := fn(ip : ptr(mut ir::IrInst)) -> Option(SxSlot) {
   match ir::i_dk(ip) {
@@ -214,12 +261,11 @@ sx_move := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
 ## %rdx, which sets CF and OF) is not zero.
 sx_arith := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), o : SxArith) -> bool {
   if not ir::kty_eq(ir::i_ty(ip), ir::Kty.KI64) { return false }
-  if not sx_ld2(sb, ip) { return false }
   if not ir::mode_is_chk(ir::i_md(ip)) {
     match o {
-      XaAdd => { sx_put(sb, "  addq %rcx, %rax\n") }
-      XaSub => { sx_put(sb, "  subq %rcx, %rax\n") }
-      XaMul => { sx_put(sb, "  imulq %rcx, %rax\n") }
+      XaAdd => { if not sx_alu(sb, x, ip, "addq") { return false } }
+      XaSub => { if not sx_alu(sb, x, ip, "subq") { return false } }
+      XaMul => { if not sx_alu(sb, x, ip, "imulq") { return false } }
     }
     return sx_strax(sb, ip)
   }
@@ -227,17 +273,20 @@ sx_arith := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), o : Sx
   match sg {
     SgS => {
       match o {
-        XaAdd => { sx_put(sb, "  addq %rcx, %rax\n") }
-        XaSub => { sx_put(sb, "  subq %rcx, %rax\n") }
-        XaMul => { sx_put(sb, "  imulq %rcx, %rax\n") }
+        XaAdd => { if not sx_alu(sb, x, ip, "addq") { return false } }
+        XaSub => { if not sx_alu(sb, x, ip, "subq") { return false } }
+        XaMul => { if not sx_alu(sb, x, ip, "imulq") { return false } }
       }
       sx_trap_unless(sb, x, "jno", ir::TrapKind.TkOverflow, ip)
     }
     SgU => {
       match o {
-        XaAdd => { sx_put(sb, "  addq %rcx, %rax\n") }
-        XaSub => { sx_put(sb, "  subq %rcx, %rax\n") }
-        XaMul => { sx_put(sb, "  mulq %rcx\n") }
+        XaAdd => { if not sx_alu(sb, x, ip, "addq") { return false } }
+        XaSub => { if not sx_alu(sb, x, ip, "subq") { return false } }
+        ## NO fold here, and this is the one place the rule is not a style choice: `mulq` has no
+        ## immediate form at all — it reads %rdx:%rax and sets CF/OF from the HIGH WORD, which is
+        ## exactly what the trap below reads. Folding would change what the instruction computes.
+        XaMul => { if not sx_ld2(sb, ip) { return false } sx_put(sb, "  mulq %rcx\n") }
       }
       sx_trap_unless(sb, x, "jnc", ir::TrapKind.TkOverflow, ip)
     }
@@ -271,10 +320,8 @@ sx_div := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), o : SxDi
   sx_strax(sb, ip)
 }
 ## `& | ^` on canonical operands, at any integer width or `bool` (canonical-preserving, V3).
-sx_bits := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst), mn : str) -> bool {
-  if not sx_ld2(sb, ip) { return false }
-  sx_put(sb, mn)
-  sx_put(sb, " %rcx, %rax\n")
+sx_bits := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), mn : str) -> bool {
+  if not sx_alu(sb, x, ip, mn) { return false }
   sx_strax(sb, ip)
 }
 ## `shl`/`shr` at 64 bits. `chk` traps `shift_range` on a count ≥ 64; otherwise (`hw`, or a `wrap` the
@@ -356,12 +403,12 @@ sx_fit := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool 
   }
 }
 ## `cmp` → `bool`: the predicate's condition at the op's spelled signedness.
-sx_cmp := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
+sx_cmp := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
   co : Option(str) = sx_cc_code(ir::i_cc(ip), ir::i_sg(ip))
   match co {
     Some(c) => {
-      if not sx_ld2(sb, ip) { return false }
-      sx_put(sb, "  cmpq %rcx, %rax\n  set")
+      if not sx_alu(sb, x, ip, "cmpq") { return false }
+      sx_put(sb, "  set")
       sx_put(sb, c)
       sx_put(sb, " %al\n  movzbl %al, %eax\n")
       sx_strax(sb, ip)
@@ -647,16 +694,16 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
     OpMul => { sx_arith(sb, x, ip, SxArith.XaMul) }
     OpDiv => { sx_div(sb, x, ip, SxDivK.XdQuot) }
     OpRem => { sx_div(sb, x, ip, SxDivK.XdRem) }
-    OpAnd => { sx_bits(sb, ip, "  andq") }
-    OpOr => { sx_bits(sb, ip, "  orq") }
-    OpXor => { sx_bits(sb, ip, "  xorq") }
+    OpAnd => { sx_bits(sb, x, ip, "andq") }
+    OpOr => { sx_bits(sb, x, ip, "orq") }
+    OpXor => { sx_bits(sb, x, ip, "xorq") }
     OpShl => { sx_shift(sb, x, ip, SxShift.XsShl) }
     OpShr => { sx_shift(sb, x, ip, SxShift.XsShr) }
     OpRotl => { sx_rot(sb, ip, SxRot.XrRotl) }
     OpRotr => { sx_rot(sb, ip, SxRot.XrRotr) }
     OpExt => { sx_ext(sb, x, ip) }
     OpFit => { sx_fit(sb, x, ip) }
-    OpCmp => { sx_cmp(sb, ip) }
+    OpCmp => { sx_cmp(sb, x, ip) }
     OpAddrSym => { sx_addr(sb, x, ip) }
     OpLoad => { sx_load(sb, x, ip) }
     OpStore => { sx_store(sb, x, ip) }
