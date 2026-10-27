@@ -159,8 +159,27 @@ pr_seed_binary_check() { # changed-paths
 pr_seed_version_append_only_check() { # changed-paths deleted-line-count
   printf '%s\n' "$1" | grep -qx 'seed/VERSION' || return 0
   case "${2:-0}" in ''|0) return 0 ;; esac
-  echo "  REFUSE: seed/VERSION is append-only and this PR deletes ${2} line(s) from it."
+  echo "  REFUSE: seed/VERSION is append-only and this PR deletes ${2} protected line(s) from it."
+  echo "          Protected means the dated promotion journal entries and the `current-seed-*` lines:"
+  echo "          rewriting them is how an old hash is made to resolve. The ONE mutable line is"
+  echo "          `# spec-pin:` — see pr_seed_version_protected_deletions."
   return 1
+}
+
+## The deletions in seed/VERSION that the rule above PROTECTS: every deleted line except the single
+## `# spec-pin:` line. That exclusion is not a loosening invented here — the file states it itself:
+##
+##   "The dated promotion entries below keep the pin as it stood when each was written — APPEND-ONLY
+##    history; this line, not those, is the current claim."
+##
+## So `# spec-pin:` is the CURRENT claim on a different axis from `current-seed-version`, and moving
+## the pin REQUIRES rewriting exactly that line. Counting it as a deletion made the append-only rule
+## refuse the only change its own target file documents as mandatory, and a spec release with a pin
+## move became unlandable (#1080 hit this: one modified `spec-pin:` line, `git diff` reports it as
+## 1 deletion + 1 addition, LAND REFUSED). Everything else stays protected exactly as before: the
+## journal entries, `current-seed-sha256`, `current-seed-version`.
+pr_seed_version_protected_deletions() { # deleted diff lines on stdin -> count of protected ones
+  grep -vE '^-# spec-pin: ' | wc -l | tr -d ' '
 }
 
 ## A regenerated oracle owns a commit that touches nothing else.
@@ -273,11 +292,30 @@ land_shape_self_test() { # work-dir
   # ---- 3 · seed/VERSION is append-only, and only when it is in the PR at all. --------------
   out="$(pr_seed_version_append_only_check seed/VERSION 4 2>&1)"
   [ $? = 1 ]; _ck $? append-only-allowed-a-deletion-from-seed/VERSION
-  case "$out" in *'deletes 4 line(s)'*) _ck 0 x ;; *) _ck 1 append-only-did-not-name-the-deletion-count ;; esac
+  case "$out" in *'deletes 4 protected line(s)'*) _ck 0 x ;; *) _ck 1 append-only-did-not-name-the-deletion-count ;; esac
   pr_seed_version_append_only_check seed/VERSION 0 >/dev/null 2>&1
   _ck $? append-only-refused-a-pure-append
   pr_seed_version_append_only_check src/lower.al 4 >/dev/null 2>&1
   _ck $? append-only-fired-on-a-PR-that-does-not-touch-seed/VERSION
+
+  # ---- 3b · the ONE mutable line: `# spec-pin:` moves, the journal does not. ----------------
+  # A pin move rewrites exactly one line and `git diff` spells that as a deletion. The counter
+  # must not count it, or the rule refuses the change its own target file mandates (#1080).
+  [ "$(printf '%s\n' '-# spec-pin: 1.1.0 (tag v1.1.0, spec commit 65a0c9b)' |
+      pr_seed_version_protected_deletions)" = 0 ]
+  _ck $? spec-pin-modification-counted-as-a-protected-deletion
+  [ "$(printf '%s\n' '-current-seed-version: 0.2.17' |
+      pr_seed_version_protected_deletions)" = 1 ]
+  _ck $? spec-pin-exemption-ate-a-seed-version-deletion
+  [ "$(printf '%s\n' '-Promoted:      2026-10-15 (see the last entry in this file)' |
+      pr_seed_version_protected_deletions)" = 1 ]
+  _ck $? spec-pin-exemption-ate-a-journal-deletion
+  [ "$(printf '%s\n%s\n' '-# spec-pin: 1.1.0 (tag v1.1.0, spec commit 65a0c9b)' \
+      '-current-seed-sha256: ce7dca80b820918d80a0fab5c18460d74dd23d370700392558cb853e30e9dd0c' |
+      pr_seed_version_protected_deletions)" = 1 ]
+  _ck $? spec-pin-exemption-hid-an-unrelated-deletion
+  [ "$(printf '%s\n' '-# a plain comment line' | pr_seed_version_protected_deletions)" = 1 ]
+  _ck $? spec-pin-exemption-widened-to-any-comment
 
   # ---- 4 · an oracle commit touches that oracle alone. -------------------------------------
   out="$(pr_oracle_commit_isolation_check scripts/corpus.manifest deadbeef 2 2>&1)"
@@ -526,7 +564,8 @@ printf '%s\n' "$CHANGED" | grep -qx "$DELTA_REL" && [ "$DELTA_DECLARED_BASE" != 
   echo "  predicted delta: $DELTA_REL declares $(git show "$HEAD_SHA:$DELTA_REL" | sed -n 's/^pairs=//p') pair(s) against main's manifest"
 dels=0
 printf '%s\n' "$CHANGED" | grep -qx 'seed/VERSION' &&
-  dels="$(git diff --numstat "$BASE...$HEAD_SHA" -- seed/VERSION | awk '{print $2}')"
+  dels="$(git diff "$BASE...$HEAD_SHA" -- seed/VERSION | grep -E '^-' | grep -v '^--- ' |
+          pr_seed_version_protected_deletions)"
 pr_seed_version_append_only_check "$CHANGED" "${dels:-0}" || shape_fail=1
 for oracle in scripts/corpus.manifest scripts/idiom.baseline scripts/needle.baseline; do
   printf '%s\n' "$CHANGED" | grep -qx "$oracle" || continue
