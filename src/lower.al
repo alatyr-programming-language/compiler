@@ -30094,6 +30094,15 @@ x86_plain_label := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
   if overload_set_count(decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) >= 2 { return false }
   not fn_is_naked(src, d.name_start, d.name_len) and not callee_is_abi_c(src, d.name_start, d.name_len)
 }
+## Whether the CALLEE of a shared-IR call is `@inline` (#1074). Codegen §3.5 substitutes an `@inline`
+## callee at its call site and forbids the `call` ("no `call` is emitted … never reverts to a `call`"), so
+## the selector must DECLINE the enclosing function and let the text emitter expand it (`emit_inline_call`:
+## args to scratch slots, params aliased by name, `return` redirected to an inline-end label). Deliberately
+## NOT folded into `x86_plain_label` above: `sx_fn` asks that predicate about the function being compiled
+## itself, and §3.5 permits an `@inline` definition to be emitted out-of-line (address taken, `@export`ed) —
+## it is only the CALL that is forbidden. Keeping the two apart is what makes this refusal cost nothing to
+## the definition's own lowering.
+x86_callee_is_inline := fn(src : ptr(u8), d : Decl) -> bool { fn_is_inline(src, d.name_start, d.name_len) }
 ## Mono's instance list (docs/ir-slice-1.md §8.1, prerequisite e1 of option A, §7). The x86 GENERICS
 ## pre-pass, moved here unchanged out of `emit_program` so the driver can run it once after parsing and
 ## BEFORE `sema::check_program` (sema needs the list to check each generic body per instance, step e2).
