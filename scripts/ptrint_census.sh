@@ -329,7 +329,14 @@ tail_p2i := fn() -> usize { give_ptr() }
 ## parameters; OP-MATCH fires on an ENUM scrutinee bound to a local, not on an integer scrutinee and
 ## not in tail position. All three were reported NOT PROVEN until this fixture planted them — the hooks
 ## were never dead, nothing reached them.
-cmp_ptr_zero := fn(p : ptr(u8)) -> bool { return p == 0 }
+## MEM-9 (Memory §4.5, spec v1.6.0) makes an UNGRANTED `p == 0` ill-formed, so the planted comparison
+## now carries its own grant: the hook is keyed on the OPERAND KINDS (`src/sema.al:11102`, fired before
+## `ty_eq`), and a grant changes the verdict, not the kinds — so OP-CMP still fires and the program is
+## still accepted. After MEM-9 there is no accepted ungranted pointer-meeting-integer program left to
+## plant, and that is the rule working, not the instrument weakening: what this fixture proves is that
+## the census SEES the crossing, and #1034's `reject_ptr_eq_int_outside_grant.al` is the instrument
+## that proves the refusal fires. The grant therefore adds a second `in` row; see `gin` below.
+cmp_ptr_zero := fn(p : ptr(u8)) -> bool { mut r : bool = false; unchecked { r = p == 0 }; return r }
 if_pair := fn(c : bool) -> usize { if c { give_ptr() } else { give_int() } }
 Flag := enum { A, B }
 match_pair := fn(k : Flag) -> usize {
@@ -435,8 +442,12 @@ AL
     echo "*** ptrint census: the planted program was REFUSED (rc=$rc) — the instrument must only count ***"
     return 1
   fi
-  if [ "$gin" != 1 ]; then
-    echo "*** ptrint census: the grant column reported $gin rows \`in\` where the fixture plants exactly 1 ***"
+  ## TWO granted places, not one: `unchecked bitcast(usize, x)` in `match_pair` below, and the grant
+  ## MEM-9 now requires on the planted OP-CMP comparison (`unchecked { r = p == 0 }` in `cmp_ptr_zero`).
+  ## The count is exact on purpose — it is what proves the grant column distinguishes granted from
+  ## ungranted places at all — and it is read off the fixture, not measured: the gate confirms it.
+  if [ "$gin" != 2 ]; then
+    echo "*** ptrint census: the grant column reported $gin rows \`in\` where the fixture plants exactly 2 ***"
     return 1
   fi
   planted_none "$CC" || return 1
@@ -525,9 +536,23 @@ gate() {
   [ "$crc" = 0 ] || { echo "ptrint census gate: the census exited $crc — no number to judge" >&2; return 1; }
   [ "$prc" = 0 ] || { echo "ptrint census gate: planted non-vacuity FAILED (rc=$prc) — every zero below is unproven" >&2; return 1; }
 
-  local places opcmp proven unproven blind tracked
+  ## `op-cmp` counts what the baseline says it counts: **ungranted crossings in programs the checker
+  ## ACCEPTED** — so it is derived from `rows.txt`, where every row carries the `rc=` of the compile
+  ## that produced it and the census's own GRANT column, NOT from the compiler's summary line. The
+  ## summary counts every row it wrote, and two of those categories are not violations:
+  ##   rc!=0  — the program was REFUSED. `test/reject_ptr_eq_int_outside_grant.al` is #1034's proof
+  ##            that MEM-9 fires; a refused program delivered no crossing to any backend, so counting it
+  ##            would make the ratchet punish the instrument for demonstrating the rule.
+  ##   GRANT=in — the crossing is INSIDE `unchecked { … }`, which MEM-9 makes legal.
+  ##            `test/accept_ptr_eq_int_unchecked_grant.al` is the granted half of that same proof, and
+  ##            it is also what keeps the zero from being silence: the census must still SEE it.
+  ## Both are reported, never hidden — as `op-cmp-granted` and `op-cmp-refused` — because a census that
+  ## is blind to the fixtures testing its own rule is blind where it matters most (I4).
+  local places opcmp opcmp_granted opcmp_refused proven unproven blind tracked
   places=$( [ -f "$OUT/places.tsv" ] && wc -l < "$OUT/places.tsv" | tr -d ' ' || echo 0 )
-  opcmp=$(awk '/^  OP-CMP/{print $5}' "$CLOG" | head -1)
+  opcmp=$(awk '/#529 OP-CMP/ && / rc=0 / { g=$0; sub(/\|.*/,"",g); n=split(g,b," "); if (b[n]=="out") c++ } END{print c+0}' "$OUT/rows.txt")
+  opcmp_granted=$(awk '/#529 OP-CMP/ && / rc=0 / { g=$0; sub(/\|.*/,"",g); n=split(g,b," "); if (b[n]=="in") c++ } END{print c+0}' "$OUT/rows.txt")
+  opcmp_refused=$(awk '/#529 OP-CMP/ && !/ rc=0 / { c++ } END{print c+0}' "$OUT/rows.txt")
   [ -n "$opcmp" ] || opcmp=0
   proven=$(grep -c 'PROVEN  ' "$PLOG")
   unproven=$(grep -oE '^    [A-Z-]+ +NOT PROVEN' "$PLOG" | awk '{print $1}' | sort -u | tr '\n' ',' | sed 's/,$//')
@@ -538,7 +563,7 @@ gate() {
     grep -q "^lib $f " "$OUT/summaries.txt" || { blind=$((blind+1)); blindlist="$blindlist $f"; }
   done < <(git ls-files 'lib/**/*.al' 'lib/*.al')
 
-  echo "ptrint census gate: places=$places op-cmp=$opcmp proven=$proven/$(set -- $CLASSES; echo $#) blind-lib=$blind/$tracked"
+  echo "ptrint census gate: places=$places op-cmp=$opcmp (granted=$opcmp_granted refused=$opcmp_refused, neither a violation — see the baseline) proven=$proven/$(set -- $CLASSES; echo $#) blind-lib=$blind/$tracked"
   if [ -n "$unproven" ]; then
     echo "  op-cmp=UNMEASURED — these hooks were never proven to fire, so their zero is silence, not"
     echo "    cleanliness: $unproven"
