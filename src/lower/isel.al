@@ -567,6 +567,12 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
   match cdo {
     Some(cd) => {
       if not sx_plain_label(x, cd) { return false }
+      ## #1074: an `@inline` callee is substituted, not called (§3.5 / CG-10). Declining here sends the
+      ## whole enclosing function to `emit_fn`, which expands it; the selector has no substitution machinery
+      ## (no param→value binding scope, and `IrInst`'s return is a frame/slot write, not an inline-end
+      ## label), so emitting `call` here would silently break the contract while still computing the right
+      ## value — the shape no fixture catches by result.
+      if sx_callee_is_inline(x, cd) { return false }
       mut j : usize = 0
       while j < n {
         av := sx_slot(ir::pool_get(x.f, ir::i_pool(ip) + j))
@@ -596,6 +602,8 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
 ## Whether `d`'s code is reached through its bare mangled label under the legacy internal convention
 ## (`x86_plain_label`, in the parent: its parts live in sibling modules this file cannot name).
 sx_plain_label := fn(x : SxX, d : Decl) -> bool { x86_plain_label(x.decls, x.src, d) }
+## The `@inline`-callee refusal (#1074), wrapped in the parent for the same reason as `sx_plain_label`.
+sx_callee_is_inline := fn(x : SxX, d : Decl) -> bool { x86_callee_is_inline(x.src, d) }
 
 ## ── regions ──
 
