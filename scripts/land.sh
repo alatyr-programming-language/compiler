@@ -159,8 +159,27 @@ pr_seed_binary_check() { # changed-paths
 pr_seed_version_append_only_check() { # changed-paths deleted-line-count
   printf '%s\n' "$1" | grep -qx 'seed/VERSION' || return 0
   case "${2:-0}" in ''|0) return 0 ;; esac
-  echo "  REFUSE: seed/VERSION is append-only and this PR deletes ${2} line(s) from it."
+  echo "  REFUSE: seed/VERSION is append-only and this PR deletes ${2} protected line(s) from it."
+  echo "          Protected means the dated promotion journal entries and the `current-seed-*` lines:"
+  echo "          rewriting them is how an old hash is made to resolve. The ONE mutable line is"
+  echo "          `# spec-pin:` — see pr_seed_version_protected_deletions."
   return 1
+}
+
+## The deletions in seed/VERSION that the rule above PROTECTS: every deleted line except the single
+## `# spec-pin:` line. That exclusion is not a loosening invented here — the file states it itself:
+##
+##   "The dated promotion entries below keep the pin as it stood when each was written — APPEND-ONLY
+##    history; this line, not those, is the current claim."
+##
+## So `# spec-pin:` is the CURRENT claim on a different axis from `current-seed-version`, and moving
+## the pin REQUIRES rewriting exactly that line. Counting it as a deletion made the append-only rule
+## refuse the only change its own target file documents as mandatory, and a spec release with a pin
+## move became unlandable (#1080 hit this: one modified `spec-pin:` line, `git diff` reports it as
+## 1 deletion + 1 addition, LAND REFUSED). Everything else stays protected exactly as before: the
+## journal entries, `current-seed-sha256`, `current-seed-version`.
+pr_seed_version_protected_deletions() { # deleted diff lines on stdin -> count of protected ones
+  grep -vE '^-# spec-pin: ' | wc -l | tr -d ' '
 }
 
 ## A regenerated oracle owns a commit that touches nothing else.
@@ -234,6 +253,22 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
 LAND_SELFTEST_EXPECTED=43
+## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
+## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
+## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
+## Defined ABOVE `land_shape_self_test`, which calls it: bash defines a function when execution reaches
+## its definition, and the self-test runs before the PHASE 0 block that uses it for real.
+land_push_capability_ok() { # remote-url credential-helper token -> 0 can, 1 cannot
+  case "$1" in
+    git@*|ssh://*) return 0 ;;
+    https://*|http://*|"" ) : ;;
+    * ) return 0 ;;
+  esac
+  [ -n "$2" ] && return 0
+  [ -n "$3" ] && return 0
+  return 1
+}
+
 land_shape_self_test() { # work-dir
   local st="$1" bad="" k=0 out
   rm -rf "$st"; mkdir -p "$st" || return 1
@@ -273,11 +308,39 @@ land_shape_self_test() { # work-dir
   # ---- 3 · seed/VERSION is append-only, and only when it is in the PR at all. --------------
   out="$(pr_seed_version_append_only_check seed/VERSION 4 2>&1)"
   [ $? = 1 ]; _ck $? append-only-allowed-a-deletion-from-seed/VERSION
-  case "$out" in *'deletes 4 line(s)'*) _ck 0 x ;; *) _ck 1 append-only-did-not-name-the-deletion-count ;; esac
+  case "$out" in *'deletes 4 protected line(s)'*) _ck 0 x ;; *) _ck 1 append-only-did-not-name-the-deletion-count ;; esac
   pr_seed_version_append_only_check seed/VERSION 0 >/dev/null 2>&1
   _ck $? append-only-refused-a-pure-append
   pr_seed_version_append_only_check src/lower.al 4 >/dev/null 2>&1
   _ck $? append-only-fired-on-a-PR-that-does-not-touch-seed/VERSION
+
+  # ---- 3b · the ONE mutable line: `# spec-pin:` moves, the journal does not. ----------------
+  # A pin move rewrites exactly one line and `git diff` spells that as a deletion. The counter
+  # must not count it, or the rule refuses the change its own target file mandates (#1080).
+  [ "$(printf '%s\n' '-# spec-pin: 1.1.0 (tag v1.1.0, spec commit 65a0c9b)' |
+      pr_seed_version_protected_deletions)" = 0 ]
+  _ck $? spec-pin-modification-counted-as-a-protected-deletion
+  [ "$(printf '%s\n' '-current-seed-version: 0.2.17' |
+      pr_seed_version_protected_deletions)" = 1 ]
+  _ck $? spec-pin-exemption-ate-a-seed-version-deletion
+  [ "$(printf '%s\n' '-Promoted:      2026-10-15 (see the last entry in this file)' |
+      pr_seed_version_protected_deletions)" = 1 ]
+  _ck $? spec-pin-exemption-ate-a-journal-deletion
+  [ "$(printf '%s\n%s\n' '-# spec-pin: 1.1.0 (tag v1.1.0, spec commit 65a0c9b)' \
+      '-current-seed-sha256: ce7dca80b820918d80a0fab5c18460d74dd23d370700392558cb853e30e9dd0c' |
+      pr_seed_version_protected_deletions)" = 1 ]
+  _ck $? spec-pin-exemption-hid-an-unrelated-deletion
+  [ "$(printf '%s\n' '-# a plain comment line' | pr_seed_version_protected_deletions)" = 1 ]
+  _ck $? spec-pin-exemption-widened-to-any-comment
+
+  # ---- push capability: the PHASE 7 stall, caught in PHASE 0 (#1085). ------------------
+  # Both directions, so the probe cannot pass by always answering either way.
+  land_push_capability_ok "git@github.com:o/r.git" "" ""; _ck $? push-capability-ssh-needs-no-helper
+  land_push_capability_ok "ssh://git@github.com/o/r" "" ""; _ck $? push-capability-ssh-url-needs-no-helper
+  land_push_capability_ok "https://github.com/o/r" "store" ""; _ck $? push-capability-https-with-helper
+  land_push_capability_ok "https://github.com/o/r" "" "ghp_token"; _ck $? push-capability-https-with-token
+  land_push_capability_ok "https://github.com/o/r" "" ""; [ $? = 1 ]
+  _ck $? push-capability-https-without-helper-or-token-was-accepted
 
   # ---- 4 · an oracle commit touches that oracle alone. -------------------------------------
   out="$(pr_oracle_commit_isolation_check scripts/corpus.manifest deadbeef 2 2>&1)"
@@ -367,7 +430,8 @@ land_shape_self_test() { # work-dir
   fi
   echo "ok   land PR-shape self-test: $k checks — the oracle-mixing, seed-binary, seed/VERSION"
   echo "     append-only, one-file-oracle-commit, predicted-delta base, oracle-commit path-set and"
-  echo "     main-provenance refusals, each in both directions, and the predicted-delta decider"
+  echo "     main-provenance refusals and the push-capability probe, each in both directions, and the"
+  echo "     predicted-delta decider"
   return 0
 }
 
@@ -417,6 +481,23 @@ command -v git >/dev/null 2>&1 || die "git is required"
      and two trees stashing at once swap each other's work). Resolve it before landing."
 git rev-parse --verify -q refs/heads/main >/dev/null || die "no local main"
 echo "  clean tree, no stash, gh present"
+
+## PUSH CAPABILITY (#1085). `--push` reaches PHASE 7 and runs the one irreversible command in this
+## procedure. On `omen` it sat there for ~30 minutes with ZERO bytes of I/O — no credential helper
+## configured (`git config --get credential.helper` empty), `gh` not on PATH even inside `nix develop`,
+## although `~/.config/gh/hosts.yml` held a valid token. A stall at the publish step is worse than a
+## refusal: the gate has already cost ~90 minutes by then, and nothing tells you why nothing is happening.
+## An SSH remote needs no helper; an HTTPS one needs a helper OR a token in the environment.
+if [ "$DO_PUSH" = 1 ]; then
+  REMOTE_URL="$(git remote get-url origin 2>/dev/null || true)"
+  CRED_HELPER="$(git config --get credential.helper 2>/dev/null || true)"
+  if ! land_push_capability_ok "$REMOTE_URL" "$CRED_HELPER" "${GH_TOKEN:-}${GITHUB_TOKEN:-}"; then
+    die "this checkout cannot push over HTTPS: remote is '$REMOTE_URL', no credential.helper is configured
+     and neither \$GH_TOKEN nor \$GITHUB_TOKEN is set. Gate the tree here if you want, but publish from a
+     checkout that can (the same object, the same --force-with-lease). Run \`gh auth setup-git\` there."
+  fi
+  echo "  push capability: present"
+fi
 
 ISSUE_META="$(gh pr view "$PR" -R "$REPO" --json body,title \
           --jq '[.body, .title] | join(" ")
@@ -526,7 +607,8 @@ printf '%s\n' "$CHANGED" | grep -qx "$DELTA_REL" && [ "$DELTA_DECLARED_BASE" != 
   echo "  predicted delta: $DELTA_REL declares $(git show "$HEAD_SHA:$DELTA_REL" | sed -n 's/^pairs=//p') pair(s) against main's manifest"
 dels=0
 printf '%s\n' "$CHANGED" | grep -qx 'seed/VERSION' &&
-  dels="$(git diff --numstat "$BASE...$HEAD_SHA" -- seed/VERSION | awk '{print $2}')"
+  dels="$(git diff "$BASE...$HEAD_SHA" -- seed/VERSION | grep -E '^-' | grep -v '^--- ' |
+          pr_seed_version_protected_deletions)"
 pr_seed_version_append_only_check "$CHANGED" "${dels:-0}" || shape_fail=1
 for oracle in scripts/corpus.manifest scripts/idiom.baseline scripts/needle.baseline; do
   printf '%s\n' "$CHANGED" | grep -qx "$oracle" || continue
