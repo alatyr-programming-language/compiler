@@ -591,6 +591,31 @@ and both are now written to what the code does. The `usize` plumbing stays revie
 proposed below, and it needs a NEW hook — `sema.al:539-553` lists the #529 instrument's thirteen classes
 and `DEREF` is not among them.
 
+**Why the checker is blind at a `deref`, and why that is a defect rather than a design.** The root cause
+is one line, and it is an artifact of an earlier stage of the grammar, not a language decision:
+
+```alatyr
+Expr::AddrOf(p) => { … Ok(Ty(kind = TyKind.TyPtr, ns = 0, nl = 0)) }   ## sema.al:11352-11356
+Expr::Deref(p)  => { … Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) } ## sema.al:11360-11363
+```
+
+An `AddrOf` result is a pointer **with no pointee span**, and the comment on it says why: "the toy
+grammar's pointers point to ints". That grammar is gone — the language carries `ptr(Vec(T))`,
+`ptr(mut Stmt)`, `ptr(u8)` in its declarations, and the pointee span survives at *declaration* level
+(`param.ts`/`param.tl`, `cd.ret_ts`), which is exactly what `ir_check_call` and `ty_compat` read. It is
+only the **expression-level** `Ty` that drops it, so `deref(p)` answers `TyUnknown` and no comparison of
+pointees is possible there. The spec models the opposite: Types §4 (the receiver/access-coercion list,
+`spec/20-types.md:279-292`) says an operand `ptr([mut] R)` in a position wanting `R` **reaches the pointee** — so the pointee type is known at that
+node by definition, and `TyUnknown` there contradicts the spec's own model rather than implementing it.
+
+So the gate rule for this form is an **implementation gap with a spec answer**, not an owner question, and
+its first step is narrow and testable: carry the pointee span through `AddrOf` (and through the
+`bitcast(ptr(X), …)` the parser reduces) into the expression-level `Ty`, then add the `DEREF` instrument
+class that compares pointee names at a deref. The risk is named in the same comment — "poison-tolerant, so
+a `deref(p)` used as a u64 result never spuriously mismatches" — so the span must be carried WITHOUT
+turning today's tolerated shapes into refusals, which is why it goes as its own slice with the corpus
+diff measured on the gate machine, not hand-edited.
+
 ### Proposal (not implemented): nominal AST handles
 
 What the tree has today, measured at `a46b5bc`:
