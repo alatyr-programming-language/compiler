@@ -33,7 +33,7 @@ issue in the marker's reason. Do not quietly route around it.
 | 6 | `unchecked` is explicit and justified; no implicit `usize` ↔ `ptr` | #529, #610 | `strict_forms_check.sh` `unchecked`, `ptrint`; the count by `ptrint_census.sh gate` (`op-cmp=0`, held only while `planted` proves the hook fires) |
 | 7 | bind a `?` before using its value | #752 | `strict_forms_check.sh` `try-inline` |
 | 8 | do not write the forms the frozen seed miscompiles | no live rows; seven retired by 0.2.5, two (#790, #791) by 0.2.7 | `seed_forms_check.sh` (the registry, `scripts/seed_forms.tsv`); a comment at every workaround |
-| 9 | an AST handle has its node's own type | #760 (12 walkers), the `usize` pass-plumbing | the checker (since #760), review; §9 has the proposal |
+| 9 | an AST handle has its node's own type | #760 (12 walkers), the `usize` pass-plumbing | partly: `ty_compat` compares pointee names where BOTH operand types are known (`sema.al:502-511`) — NOT at a `deref` (`:11360-11363`, `TyUnknown`) nor at an argument (`:11231-11237`, kind only); the rest is review, §9 has the proposal |
 | 10 | a quantity with an identity is a `brand`, not a bare number | #167 (word offset used as a byte offset), #760, #299 | the checker refuses a sibling or raw mix (since #299); *choosing* a brand is held by review |
 
 ## 1 · Absence is `Option(ptr(T))` walked with `match`, not a sentinel
@@ -578,8 +578,18 @@ walk_arms := fn(head : Option(ptr(mut Arm))) { … }
 walk_one_arm := fn(a : ptr(mut Arm)) { … }
 ```
 
-**Check.** Since #760, the checker refuses a sibling-pointer mix at a `deref`. The `usize` plumbing is
-held by review. The next step is proposed below.
+**Check — read the tree, not this sentence's earlier draft.** Since #760 the checker refuses a
+sibling-pointer mix **where both operand types are known**: `ty_compat` compares the pointee names when
+both sides are pointers (`src/sema.al:502-511`), and that reaches the sinks routing through it —
+call-result to pointer param (`:11006`), struct-literal field (`:11285`), place writes (`:11546`), tail
+result (`:16808`). It does **not** refuse at a `deref`: under deferred pointee tracking the type there is
+`TyUnknown` (`:11360-11363`). Nor at an argument position, where the pointee name is erased on purpose so
+a written `unchecked bitcast(ptr(X), p)` cannot spuriously fail after the parser reduced it (`:11231-11237`,
+kind only; the pre-match fence judges a named local). This sentence previously said "at a `deref`", which
+is the one place the checker is blind — the same shape of error as the AGENTS.md line it came to correct,
+and both are now written to what the code does. The `usize` plumbing stays review-only; the next step is
+proposed below, and it needs a NEW hook — `sema.al:539-553` lists the #529 instrument's thirteen classes
+and `DEREF` is not among them.
 
 ### Proposal (not implemented): nominal AST handles
 
