@@ -221,7 +221,7 @@ test/unchecked_div_min_neg1.al'
 ## The join. Reads a manifest, writes one line per disagreeing (path, twin):
 ##   class TAB backend TAB path TAB x86-state TAB twin-state TAB tag
 ## `all=1` also emits REFUSED-LATE. Kept a function so the self-test feeds it synthetic manifests.
-xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained — 0 held, 1 GREW, 2 unusable
+xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained target-na — 0 held, 1 GREW, 2 unusable
   ## The ratchet (#922): the counters used to be REPORTING ONLY — `--count` ended in `exit 0`
   ## whatever it had just printed, so a PR that ADDED a cross-backend disagreement passed the gate
   ## and the only trace was a number in a log nobody reads. That is how `paths` reached 950.
@@ -243,7 +243,24 @@ xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained — 
   ## absent reads as 0, which is the strictest reading (any path newly claimed is then reported).
   bn="$(awk -F= '/^raw-escape=/{print $2}' "$f" | head -1)"; bn="${bn:-0}"
   bu="$(awk -F= '/^unexplained=/{print $2}' "$f" | head -1)"; bu="${bu:-0}"
-  case "$bp$br$bh$bn$bu" in ''|*[!0-9]*) echo "xbackend ratchet: baseline at $f is malformed" >&2; return 2 ;; esac
+  bt="$(awk -F= '/^target-na=/{print $2}' "$f" | head -1)"; bt="${bt:-0}"
+  case "$bp$br$bh$bn$bu$bt" in ''|*[!0-9]*) echo "xbackend ratchet: baseline at $f is malformed" >&2; return 2 ;; esac
+  ## `target-na=` is held OUTSIDE the paths/rows condition, and that placement is the whole point
+  ## (#1041). A fixture newly declaring `## @target(aarch64)` makes its foreign-backend rows leave
+  ## `paths=` and `rows=` — the numbers go DOWN, so a check that fires only on growth never sees it,
+  ## and the counter would reach zero by the walk asking fewer questions. That is I4's blind-counter
+  ## failure in a new costume: the exemption is a claim written into a fixture by the same person
+  ## whose disagreement it excuses, so a new one is a review event, not a quiet win. The declared
+  ## target itself stays judged either way (Assembly §4 / CG-3).
+  mut_note=0
+  case "${7:-}" in ''|*[!0-9]*) ;; *) mut_note="${7}" ;; esac
+  if [ "$mut_note" -gt "$bt" ]; then
+    echo "xbackend ratchet: FAIL — target-na GREW past the baseline ($bt -> $mut_note)."
+    echo "  A fixture that newly declares a target stops being judged on the other three backends."
+    echo "  Legitimate ONLY where its asm() body really is written for the declared arch: name the"
+    echo "  fixture and the arch in review, or fix the disagreement on the declared target."
+    return 1
+  fi
   ## The unexplained ceiling first, and it fails on its own: a growing backlog that happens to shrink
   ## `paths` must not carry a live wrong value past the gate.
   if [ "${6:-0}" -gt "$bu" ]; then
@@ -599,6 +616,15 @@ if [ "$MODE" = selftest ]; then
   ## introduced after it cannot pass unseen because the line was never drawn.
   ok "ratchet: a pre-unexplained baseline holds at 0" "$(xb_ratchet "$T/base" 10 20 1 1 0 >/dev/null; echo $?)" 0
   ok "ratchet: a pre-unexplained baseline FAILS on one" "$(xb_ratchet "$T/base" 10 20 1 1 1 >/dev/null; echo $?)" 1
+  ## target-na is held even while paths/rows SHRINK — the exemption itself is what is watched (#1041)
+  printf 'paths=10\nrows=20\nhw-defined=1\nraw-escape=1\nunexplained=0\ntarget-na=2\n' > "$T/tn"
+  ok "ratchet: target-na held at the line"      "$(xb_ratchet "$T/tn" 10 20 1 1 0 2 >/dev/null; echo $?)" 0
+  ok "ratchet: target-na FAILS on one more"     "$(xb_ratchet "$T/tn" 10 20 1 1 0 3 >/dev/null 2>&1; echo $?)" 1
+  ok "ratchet: a newly declared target FAILS even as paths and rows SHRINK" \
+     "$(xb_ratchet "$T/tn" 4 8 1 1 0 3 >/dev/null 2>&1; echo $?)" 1
+  ok "ratchet: a pre-declaration baseline holds at 0" "$(xb_ratchet "$T/base" 10 20 1 1 0 0 >/dev/null; echo $?)" 0
+  ok "ratchet: a pre-declaration baseline FAILS on one declared fixture" \
+     "$(xb_ratchet "$T/base" 10 20 1 1 0 1 >/dev/null 2>&1; echo $?)" 1
   if [ "$fails" = 0 ]; then echo "xbackend_diff self-test: $ran/$ran ok"; exit 0; fi
   echo "xbackend_diff self-test: $fails of $ran check(s) FAILED — this script's output proves nothing"
   exit 3
@@ -733,7 +759,7 @@ if [ "$RATCHET_WRITE" = 1 ]; then
   exit 0
 fi
 if [ "$RATCHET" = 1 ]; then
-  xb_ratchet "$RATCHET_FILE" "$npaths" "$nrows" "$nhw" "$nraw" "$nunexpl"
+  xb_ratchet "$RATCHET_FILE" "$npaths" "$nrows" "$nhw" "$nraw" "$nunexpl" "$ntna"
   rc=$?
   [ "$MODE" = count ] && exit $rc
 fi
