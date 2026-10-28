@@ -39,7 +39,7 @@ step() { printf '=== %s ===\n' "$1"; }
 # Returns 0 when `seed/VERSION`'s CURRENT SEED block describes the committed seed and agrees with
 # `package.al`; 6 otherwise, having said which of the five ways it broke.
 seed_identity_check() { # version-file package-file seed-binary
-  local VF="$1" M="$2" SEED="$3" f n want_sha want_ver have_sha have_ver
+  local VF="$1" M="$2" SEED="$3" f n want_sha want_ver have_sha have_ver MID_PROMOTION=0
   [ -f "$VF" ] || { echo "FAIL: no seed/VERSION at $VF"; return 6; }
   field() { # <name> -> the single value, or empty when the line is absent
     grep -oE "^${1}:[[:space:]]*[^[:space:]]+" "$VF" 2>/dev/null | head -1 | sed -E "s/^${1}:[[:space:]]*//"
@@ -157,10 +157,21 @@ seed_identity_check() { # version-file package-file seed-binary
       return 6
     fi
   fi
-  if [ -n "$asked" ]; then
-    echo "seed identity ok: sha256 ${have_sha:0:16}… version $have_ver (seed/VERSION agrees; the seed was asked and answered $asked)"
+  # The version named in the verdict is the one that was VERIFIED — the block's, which the artifact
+  # was just asked to confirm. It is NOT package.al's: mid-promotion those differ, and printing
+  # $have_ver there produced `version 0.2.18 (seed/VERSION agrees; the seed … answered 0.2.17)` on
+  # the #1072 reseed run — a verdict line asserting agreement on a number neither the block nor the
+  # artifact carries, which is the exact defect this file's own header (lines 32-35) warns about.
+  if [ "${MID_PROMOTION:-0}" = "1" ]; then
+    if [ -n "$asked" ]; then
+      echo "seed identity ok: sha256 ${have_sha:0:16}… version $want_ver (mid-promotion: seed/VERSION and the seed agree at $want_ver; package.al is AHEAD at $have_ver, the version of the tree about to be built; the seed was asked and answered $asked)"
+    else
+      echo "seed identity ok: sha256 ${have_sha:0:16}… version $want_ver (mid-promotion: seed/VERSION at $want_ver; package.al is AHEAD at $have_ver; the seed was NOT asked on this host)"
+    fi
+  elif [ -n "$asked" ]; then
+    echo "seed identity ok: sha256 ${have_sha:0:16}… version $want_ver (seed/VERSION agrees; the seed was asked and answered $asked)"
   else
-    echo "seed identity ok: sha256 ${have_sha:0:16}… version $have_ver (seed/VERSION agrees; the seed was NOT asked on this host)"
+    echo "seed identity ok: sha256 ${have_sha:0:16}… version $want_ver (seed/VERSION agrees; the seed was NOT asked on this host)"
   fi
   return 0
 }
@@ -169,7 +180,7 @@ seed_identity_check() { # version-file package-file seed-binary
 ## invocation, BEFORE the decision it is about — and in a SUBSHELL, because a `set -u` unbound
 ## variable or an arithmetic error inside a driven function unwinds to top level and ENDS THE
 ## SCRIPT, printing nothing at all; the completion marker below is what notices instead.
-FIXPOINT_SELFTEST_EXPECTED=36  # +6 for the #1104 mid-promotion opt-in and its limit
+FIXPOINT_SELFTEST_EXPECTED=38  # +6 for the #1104 opt-in and its limit, +2 for the verdict line
 fixpoint_seed_identity_selftest() { # work-dir
   local st="$1" bad="" k=0 out rc
   # The self-test drives the REAL decision, so it owns the variable some of its checks are about:
@@ -305,6 +316,15 @@ fixpoint_seed_identity_selftest() { # work-dir
   [ "$rc" = 0 ]; _ck $? "identity-refused-a-mid-promotion-tree(rc=$rc: $out)"
   case "$out" in *'mid-promotion'*) _ck 0 x ;;
                  *) _ck 1 "opt-in-did-not-say-it-was-mid-promotion($out)" ;; esac
+  # The VERDICT LINE names the version that was verified, not the one merely declared. On the
+  # #1072 run it printed `version 0.2.18 (seed/VERSION agrees …)` while the block and the seed
+  # both said 0.4.2-equivalent — an agreement claim on a number nothing carries.
+  _ans 0.4.2
+  out="$(ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"
+  case "$out" in *'version 0.4.2 (mid-promotion'*) _ck 0 x ;;
+                 *) _ck 1 "verdict-line-named-the-declared-not-the-verified-version($out)" ;; esac
+  case "$out" in *'package.al is AHEAD at 0.4.3'*) _ck 0 x ;;
+                 *) _ck 1 "verdict-line-did-not-mark-package-ahead($out)" ;; esac
   # …and the LIMIT: same opt-in, same bump ahead, but the artifact answers a THIRD version. That is
   # #586 and it must still be refused, flag set or not.
   _ans 0.4.1
