@@ -160,9 +160,10 @@ pr_seed_version_append_only_check() { # changed-paths deleted-line-count
   printf '%s\n' "$1" | grep -qx 'seed/VERSION' || return 0
   case "${2:-0}" in ''|0) return 0 ;; esac
   echo "  REFUSE: seed/VERSION is append-only and this PR deletes ${2} protected line(s) from it."
-  echo "          Protected means the dated promotion journal entries and the `current-seed-*` lines:"
-  echo "          rewriting them is how an old hash is made to resolve. The ONE mutable line is"
-  echo "          `# spec-pin:` — see pr_seed_version_protected_deletions."
+  echo '          Protected means the dated promotion journal entries and the `current-seed-sha256`'
+  echo '          and `current-seed-version` lines: rewriting them is how an old hash is made to'
+  echo '          resolve. The ONE mutable line is `# spec-pin:` — see the checker below, which'
+  echo '          excludes exactly that prefix and counts every other deletion as protected.' 
   return 1
 }
 
@@ -265,7 +266,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=43
+LAND_SELFTEST_EXPECTED=45  # +2 for #1106: the refusal must name the fields it protects
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -322,6 +323,14 @@ land_shape_self_test() { # work-dir
   out="$(pr_seed_version_append_only_check seed/VERSION 4 2>&1)"
   [ $? = 1 ]; _ck $? append-only-allowed-a-deletion-from-seed/VERSION
   case "$out" in *'deletes 4 protected line(s)'*) _ck 0 x ;; *) _ck 1 append-only-did-not-name-the-deletion-count ;; esac
+  # #1106 · the refusal exists to tell the integrator WHICH lines are protected, so it has to
+  # NAME them. They were written in backticks inside a double-quoted echo, which bash runs as
+  # command substitution: `current-seed-*` became "command not found" and `# spec-pin:` — a
+  # comment, exit 0, empty output — vanished, leaving "The ONE mutable line is" with nothing
+  # after it. A refusal that names no field cannot be acted on, and the existing checks above
+  # passed the whole time because they only ever looked for the count.
+  case "$out" in *'current-seed-sha256'*) _ck 0 x ;; *) _ck 1 append-only-refusal-did-not-name-current-seed-sha256 ;; esac
+  case "$out" in *'ONE mutable line is `# spec-pin:`'*) _ck 0 x ;; *) _ck 1 append-only-refusal-ate-the-mutable-line-name ;; esac
   pr_seed_version_append_only_check seed/VERSION 0 >/dev/null 2>&1
   _ck $? append-only-refused-a-pure-append
   pr_seed_version_append_only_check src/lower.al 4 >/dev/null 2>&1
