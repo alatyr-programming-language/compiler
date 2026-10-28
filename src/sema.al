@@ -11372,11 +11372,27 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyEnum, ns = es, nl = el))
     }
     ## `ptr(<place>)` — take the address of a place. The inner place is checked (its name
-    ## must be bound); the result is a POINTER type (tag 5). Pointee-type tracking is deferred
-    ## (the toy grammar's pointers point to ints), so the pointer carries no pointee span.
+    ## must be bound); the result is a POINTER type (tag 5) that CARRIES THE POINTEE SPAN.
+    ## It used to answer `ns = 0, nl = 0`, on the comment "the toy grammar's pointers point to
+    ## ints". That grammar is gone: the language declares `ptr(Vec(T))`, `ptr(mut Stmt)`,
+    ## `ptr(u8)`, the pointee span survives at declaration level (`param.ts`/`cd.ret_ts`, what
+    ## `ir_check_call` and `ty_compat` read), and FIVE other sites already build a `TyPtr` with
+    ## its pointee span (2585, 3560, 4314, 7164, 7171) — this was the only one that
+    ## dropped it, so an expression-level `Ty` for `ptr(x)` could not say what it pointed at
+    ## and a later generic call had no `T` to instantiate (Comptime §3.3 refused
+    ## `hash(ptr(x))`; the author had to annotate). Types §4 models the opposite: an operand
+    ## `ptr([mut] R)` in a position wanting `R` REACHES THE POINTEE, so the pointee is known at
+    ## that node by definition.
+    ## Strictly additive, which is the risk the old comment named ("poison-tolerant, so a
+    ## `deref(p)` used as a u64 result never spuriously mismatches"): `tp.ns/nl` is zero for an
+    ## inner place with no recorded type name, and then this answers exactly what it answered
+    ## before — so no shape tolerated today becomes a refusal here. `Deref` is deliberately NOT
+    ## touched: carrying the span here is step one, the `DEREF` instrument that compares pointee
+    ## names at a deref is the next slice, and doing both at once is how a tolerated shape gets
+    ## refused without a measured corpus diff to say so (strict_forms.md form 9).
     Expr::AddrOf(p) => {
       tp := check_expr(p, decls, upto, src, a, locals, nloc)?
-      Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = 0, nl = 0))
+      Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = tp.ns, nl = tp.nl))
     }
     ## `deref(<ptr>)` — a load through a pointer. The inner pointer is checked; the result
     ## type is the pointee, which is unknown (tag 0) under the deferred pointee-type tracking
