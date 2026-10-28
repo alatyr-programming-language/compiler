@@ -9,12 +9,15 @@ step-by-step procedures live in `.agents/skills/`.
   the compiler conforms to it, never the reverse.
 - Decide language questions in the specification before changing `src/`. If the specification is silent,
   stop and get the decision recorded; do not infer semantics from current behavior.
-- **The pin.** This repository is answerable to specification revision **1.1.0** (tag `v1.1.0`,
-  `65a0c9b`). The pin names a TAGGED RELEASE and never a moving branch head: the post-tag range that
-  used to live in this sentence — the commits up to spec `main` `b4e7979`, which added TOOL-21
-  (`help`/`version` introspection), TOOL-22 (output verbosity may not affect a build) and the TOOL-14
-  clarification (an unrecognised argument is an invocation-level Config diagnostic, never a source path) —
-  is inside `v1.1.0` now, so one number says what a range and two hashes used to.
+- **The pin.** This repository is answerable to specification revision **1.6.0** (tag `v1.6.0`,
+  `01c75ab`). The pin names a TAGGED RELEASE and never a moving branch head: one number says what a range
+  and two hashes used to, and the tag is what makes a citation resolve to exact text. It moved several
+  revisions in one step, because the first candidates were tagged carrying defects an independent review
+  found after each tag was pushed — a contradiction in Functions §1.4 over whether a heterogeneous
+  `ptr`↔`usize` binding is admissible, and a derived `Pointer` walk whose mechanism was named as
+  something outside the lattice. Both are resolved in the revision pinned here, which is the first of
+  them that describes a mechanism the reference implementation can actually have. A tag is never
+  rewritten, so earlier revisions stay citable; this tree answers to the one above.
 - The pin records what the compiler is **answerable to**, not what it has already implemented: the tree
   may lag it, and each gap is an open issue. The number the compiler *reports* lives in
   `src/spec_revision.al` and is printed by `alatyr version` beside its own version, per TOOL-21
@@ -128,9 +131,9 @@ around it.
    `match` over such a field through `deref(p)` or an array element) and #792 (an enum or `Option`
    field read through `deref(p)`), are closed, so a new sentinel needs a newly filed blocker. Held by
    the `null` rule of `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`)
-   forms together. Decided, do not reopen: a pointer meeting an integer is **grant-only** (MEM-9 on
-   spec/spec#19 — UNMERGED, so not in the pinned `1.1.0`; it binds when the pin moves, and #1030 stays
-   OPEN until then). On the axis each instrument measures, the **implicit** half is empty: `op-cmp=0` in
+   forms together. Decided, do not reopen: a pointer meeting an integer is **grant-only** (MEM-9, with
+   MEM-10 refining it; spec/spec#19 merged, and both are inside the pinned revision, so the rule binds
+   this tree now — which is what unblocks #1034, the compiler half that enforces it). On the axis each instrument measures, the **implicit** half is empty: `op-cmp=0` in
    `scripts/ptrint_census.baseline`. Only the gate's **typed** path can see an implicit row at all — it
    runs the compiler (`--typed-self-test`, `strict_forms_check.sh:55`, whose proof prints
    `implicit-cmp base=… +implicit=…` at `:478`); the count-driven decider at `:432` only *simulates*

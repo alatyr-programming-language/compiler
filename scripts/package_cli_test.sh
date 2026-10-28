@@ -72,7 +72,7 @@ run_help_version() {
   # here are hardcoded on purpose, exactly as the version has always been: `scripts/spec_pin_check.sh`
   # is what keeps this line and that constant in step, so a pin move that forgets this file fails the
   # cheap pre-build stage instead of going red here with a diagnostic that never names a version.
-  printf 'alatyr 0.2.17, spec 1.1.0\n' >"$want"
+  printf 'alatyr 0.2.17, spec 1.6.0\n' >"$want"
   version_ok=1
   for arg in --version -V version; do
     (cd "$tmp" && "$CC" "$arg") >"$out" 2>"$err"
