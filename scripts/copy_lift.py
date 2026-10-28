@@ -41,6 +41,13 @@ FAMILIES = [
     'local_ann_signed', 'local_rhs',
     'operand_unsigned', 'cmp_unsigned', 'local_ann_unsigned', 'index_elem_unsigned',
     'unchecked_init_unsigned', 'hole_index_signed', 'local_arrty_span', 'slice_param_elem_span',
+    # `slice_ann_elem_span` is x86_64's superset copy of the shared span scan, renamed off
+    # `slice_param_elem_span` by #1077 so the bare name stopped meaning two things. It has ONE
+    # definition, so it is not a copy family and the census reports nothing about it — which is
+    # precisely why it is listed by name here: the family count fell 14 -> 13 when the collision was
+    # fixed, and a falling count that nobody can explain is how a copy gets forgotten. docs/ir.md
+    # §2.4 and the note at `lower_ctx.al:512` carry what this instrument cannot see.
+    'slice_ann_elem_span',
     'ann_arr_words', 'local_ann_span', 'slice_elem_span', 'tyname_words',
     # `emit_narrow` / `emit_narrow_trap` are NOT families and are out of the list on purpose: the third
     # copy does not exist because there is no third decision to copy — wasm spells the same narrowing as
