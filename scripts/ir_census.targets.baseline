@@ -2,3 +2,4 @@ x86_64=1130
 aarch64=1836
 riscv64=1836
 wasm=1302
+## x86_64-coverage-ok: #1084 — CORRECTION, not a regression: the 1130 counted five x86_64 functions the selector was selecting while emitting a `call` to an `@inline` callee, and neither `docs/ir.md` nor the spec models `@inline` substitution (checked: the token appears in neither), so the count stood for output the IR does not model; 1125 is what x86_64 takes from the shared IR today. Restored when #1084 is answered and the selector represents the substitution. Measured twice: runner full gate `6a127120` and an independent native x86_64 `scripts/ir_census.sh --targets` both report 1125.

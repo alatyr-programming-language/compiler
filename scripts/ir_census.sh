@@ -202,13 +202,15 @@ targets_report() {
 # wrong one:
 #   REGRESSION   a function the backend used to select from the IR now falls back to the private
 #                emitter. Nothing excuses this; it fails, exactly as it always has.
-#   CORRECTION   the baseline was inflated: some of those functions were being MIS-lowered, and the
-#                selector now refuses them because the spec says so. The number was never honest, and
-#                refusing to record the correction would keep the compiler in violation of the spec
-#                just to hold a figure up (#1084 is exactly this: five x86_64 functions were counted
-#                while the selector emitted a `call` for an `@inline` callee, which §3.5 forbids).
+#   CORRECTION   the baseline was inflated: what the selector emitted for those functions was not
+#                right — either the spec forbids it, or the IR has no model for it and the count was
+#                standing for output the IR does not actually model. The number was never honest, and
+#                refusing to record the correction would keep the compiler wrong just to hold a figure
+#                up (#1084 is the second kind: five x86_64 functions were counted while the selector
+#                emitted a `call` for an `@inline` callee, and neither `docs/ir.md` nor the spec models
+#                `@inline` substitution — a gap, so it is filed as #1084 rather than asserted here).
 # The second is recorded, never hidden: the ack names the backend, cites the issue that establishes
-# the violation, and says what restores the coverage. It prints on every run that uses it, so it
+# the correction, and says what restores the coverage. It prints on every run that uses it, so it
 # cannot go quiet, and an ack with no citation is refused — a bare "trust me" is not a reason. Same
 # discipline as the strict forms' `## <rule>-ok: <reason>` markers, moved from the source to the
 # baseline.
@@ -452,7 +454,7 @@ if [ "$SELFTEST" = 1 ]; then
   chk "$c" "ir targets ratchet self-test: the refusal says HOW to record an honest correction (rc=$rc)"
 
   ## ── an acknowledged decrease: recorded, cited, and never silent. ──
-  printf 'x86_64=20\n## x86_64-coverage-ok: #1084 — five functions were counted while the selector emitted a call for an @inline callee, which §3.5 forbids; the IR gains the representation in slice 9.\naarch64=18\nriscv64=18\nwasm=0\n' > "$T/base_ack"
+  printf 'x86_64=20\n## x86_64-coverage-ok: #1084 — five functions were counted while the selector emitted a call for an @inline callee, which neither docs/ir.md nor the spec models; the IR gains the representation when #1084 is answered.\naarch64=18\nriscv64=18\nwasm=0\n' > "$T/base_ack"
   printf 'x86_64\t10\t5\t15\t0\naarch64\t10\t5\t18\t0\nriscv64\t10\t5\t18\t0\nwasm\t10\t1\t1\t3\n' > "$T/targets.txt"
   out="$(targets_ratchet "$T/base_ack" 2>&1)"; rc=$?
   c=0; [ "$rc" = 0 ] || c=1
