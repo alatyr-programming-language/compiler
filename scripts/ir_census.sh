@@ -196,14 +196,38 @@ targets_report() {
 # backend the ratchet does not hold, and it could fall to one selected function unseen — which is the
 # hole this whole mode exists to close. Lines are validated, never filtered out: a line that does not
 # parse is the baseline being broken, not a line to skip.
+#
+# ## An acknowledged decrease: `## <backend>-coverage-ok: #<issue> — <reason>`
+# A count can fall for two opposite reasons, and the ratchet must tell them apart or it enforces the
+# wrong one:
+#   REGRESSION   a function the backend used to select from the IR now falls back to the private
+#                emitter. Nothing excuses this; it fails, exactly as it always has.
+#   CORRECTION   the baseline was inflated: some of those functions were being MIS-lowered, and the
+#                selector now refuses them because the spec says so. The number was never honest, and
+#                refusing to record the correction would keep the compiler in violation of the spec
+#                just to hold a figure up (#1084 is exactly this: five x86_64 functions were counted
+#                while the selector emitted a `call` for an `@inline` callee, which §3.5 forbids).
+# The second is recorded, never hidden: the ack names the backend, cites the issue that establishes
+# the violation, and says what restores the coverage. It prints on every run that uses it, so it
+# cannot go quiet, and an ack with no citation is refused — a bare "trust me" is not a reason. Same
+# discipline as the strict forms' `## <rule>-ok: <reason>` markers, moved from the source to the
+# baseline.
 targets_ratchet() {
   local f="$1"
   [ -s "$f" ] || { echo "ir targets ratchet: NO baseline at $f — write it with:" \
     ; echo "  scripts/ir_census.sh --targets --ratchet-write" >&2; return 2; }
-  local be want have rc=0 seen=""
+  local be want have rc=0 seen="" ack="" short
   while read -r line; do
     [ -n "$line" ] || continue
     case "$line" in
+      \#\#[[:space:]]*[a-z0-9_]*-coverage-ok:*)
+        ## Validated here, printed where it is used (below): an ack that excuses nothing must not
+        ## print as though it did, and a malformed one must fail at parse time, not silently pass.
+        be="${line#\#\# }"; be="${be%%-coverage-ok:*}"
+        case "$be" in x86_64|aarch64|riscv64|wasm) ;; *) echo "ir targets ratchet: ack names no known backend: '$line'" >&2; return 2 ;; esac
+        ack="${line#*-coverage-ok:}"; ack="$(printf '%s' "$ack" | sed 's/^ *//')"
+        case "$ack" in *'#'[0-9]*) ;; *) echo "ir targets ratchet: the $be ack cites no issue — a reason must name one (#1084)" >&2; return 2 ;; esac
+        continue ;;
       *=*) ;; *) echo "ir targets ratchet: malformed baseline line '$line'" >&2; return 2 ;;
     esac
     be="${line%%=*}"; want="${line#*=}"
@@ -213,8 +237,21 @@ targets_ratchet() {
     have=$(awk -F'\t' -v b="$be" '$1 == b {print $4}' "$W/targets.txt")
     [ -n "$have" ] || { echo "ir targets ratchet: no measurement for $be" >&2; return 2; }
     if [ "$have" -lt "$want" ]; then
+      ack="$(awk -v b="$be" '$0 ~ "^## "b"-coverage-ok:" {sub("^## [^-]*-coverage-ok:[[:space:]]*",""); print; exit}' "$f")"
+      if [ -n "$ack" ]; then
+        short=$((want - have))
+        echo "ir targets ratchet: $be is $short BELOW the baseline $want -> $have, ACKNOWLEDGED."
+        echo "  ack: $ack"
+        echo "  The ack is in the baseline and repeated here so it cannot go quiet. The shortfall is a"
+        echo "  debt, not a new floor: docs/ir.md §7.2 closes when this returns to $want, or the"
+        echo "  baseline is lowered by $short in its own reviewed commit."
+        continue
+      fi
       echo "ir targets ratchet: FAIL — $be selected FEWER functions from the IR than the baseline: $want -> $have"
       echo "  A backend losing IR coverage is a regression to explain, not a pass (docs/ir.md §7.2)."
+      echo "  If the baseline was inflated — those functions were mis-lowered and the selector now refuses"
+      echo "  them per the spec — RECORD that, do not hide it. Add to this baseline:"
+      echo "    ## $be-coverage-ok: #<issue> — <what was wrong, and what restores the coverage>"
       rc=1
     elif [ "$have" -gt "$want" ]; then
       echo "ir targets ratchet: $be GREW its IR coverage $want -> $have; lower the baseline."
@@ -222,6 +259,16 @@ targets_ratchet() {
   done < "$f"
   for be in x86_64 aarch64 riscv64 wasm; do
     case " $seen " in *" $be "*) ;; *) echo "ir targets ratchet: baseline names no $be — that backend is unheld" >&2; return 2 ;; esac
+    ## A stale ack is a lie by omission: it says this backend is below its baseline when it is not,
+    ## which means the coverage came back and nobody removed the excuse. Warn, do not fail — the
+    ## number is right, the comment is out of date, and a gate that fails on a stale comment teaches
+    ## people to delete comments rather than check them.
+    ack=no; grep -q "^## $be-coverage-ok:" "$f" && ack=yes
+    [ "$ack" = yes ] || continue
+    have=$(awk -F'\t' -v b="$be" '$1 == b {print $4}' "$W/targets.txt")
+    want="$(awk -F= -v b="$be" '$1 == b {print $2; exit}' "$f")"
+    [ -n "$have" ] && [ -n "$want" ] && [ "$have" -ge "$want" ] &&
+      echo "  NOTE: $be carries a coverage ack but is AT or ABOVE the baseline ($want -> $have); remove the stale line."
   done
   return $rc
 }
@@ -401,6 +448,36 @@ if [ "$SELFTEST" = 1 ]; then
   c=0; [ "$rc" = 1 ] || c=1
   printf '%s\n' "$out" | grep -q 'x86_64 selected FEWER' || c=1
   chk "$c" "ir targets ratchet self-test: FAIL when a backend loses coverage, and names it (rc=$rc)"
+  printf '%s\n' "$out" | grep -q 'coverage-ok: #<issue>' || c=1
+  chk "$c" "ir targets ratchet self-test: the refusal says HOW to record an honest correction (rc=$rc)"
+
+  ## ── an acknowledged decrease: recorded, cited, and never silent. ──
+  printf 'x86_64=20\n## x86_64-coverage-ok: #1084 — five functions were counted while the selector emitted a call for an @inline callee, which §3.5 forbids; the IR gains the representation in slice 9.\naarch64=18\nriscv64=18\nwasm=0\n' > "$T/base_ack"
+  printf 'x86_64\t10\t5\t15\t0\naarch64\t10\t5\t18\t0\nriscv64\t10\t5\t18\t0\nwasm\t10\t1\t1\t3\n' > "$T/targets.txt"
+  out="$(targets_ratchet "$T/base_ack" 2>&1)"; rc=$?
+  c=0; [ "$rc" = 0 ] || c=1
+  printf '%s\n' "$out" | grep -q 'x86_64 is 5 BELOW the baseline 20 -> 15, ACKNOWLEDGED' || c=1
+  printf '%s\n' "$out" | grep -q '#1084' || c=1
+  chk "$c" "ir targets ratchet self-test: a cited ack holds the line and prints the reason (rc=$rc)"
+  ## An ack with no citation is not a reason.
+  printf 'x86_64=20\n## x86_64-coverage-ok: it is fine.\naarch64=18\nriscv64=18\nwasm=0\n' > "$T/base_ack_nocite"
+  targets_ratchet "$T/base_ack_nocite" >/dev/null 2>&1; rc=$?
+  chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir targets ratchet self-test: an ack citing no issue is refused (rc=$rc)"
+  ## An ack naming a backend that does not exist is refused, not ignored.
+  printf 'x86_64=20\n## mips64-coverage-ok: #1 — nope.\naarch64=18\nriscv64=18\nwasm=0\n' > "$T/base_ack_be"
+  targets_ratchet "$T/base_ack_be" >/dev/null 2>&1; rc=$?
+  chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir targets ratchet self-test: an ack naming an unknown backend is refused (rc=$rc)"
+  ## Non-vacuity: the same file WITHOUT the ack must fail. If it did not, the ack test above proves
+  ## nothing and the ack is decoration.
+  printf 'x86_64=20\naarch64=18\nriscv64=18\nwasm=0\n' > "$T/base_noack"
+  targets_ratchet "$T/base_noack" >/dev/null 2>&1; rc=$?
+  chk "$([ "$rc" = 1 ] && echo 0 || echo 1)" "ir targets ratchet self-test: WITHOUT the ack the same shortfall FAILS (non-vacuity, rc=$rc)"
+  ## A stale ack — coverage came back and nobody removed the excuse — is noticed.
+  printf 'x86_64\t10\t5\t20\t0\naarch64\t10\t5\t18\t0\nriscv64\t10\t5\t18\t0\nwasm\t10\t1\t1\t3\n' > "$T/targets.txt"
+  out="$(targets_ratchet "$T/base_ack" 2>&1)"; rc=$?
+  c=0; [ "$rc" = 0 ] || c=1
+  printf '%s\n' "$out" | grep -q 'stale line' || c=1
+  chk "$c" "ir targets ratchet self-test: an ack no longer excusing anything is flagged stale (rc=$rc)"
   printf 'x86_64\t10\t5\t20\t0\naarch64\t10\t5\t18\t0\nriscv64\t10\t5\t18\t0\n' > "$T/targets.txt"
   targets_ratchet "$T/base_ok" >/dev/null 2>&1; rc=$?
   chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir targets ratchet self-test: a backend missing from the measurement is not a pass (rc=$rc)"
