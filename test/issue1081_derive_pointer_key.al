@@ -75,9 +75,13 @@ main := fn() -> u64 {
   mut y : u64 = 22
   mut z : u64 = 33
 
-  k1 := ptr(x)
-  k2 := ptr(y)
-  k3 := ptr(z)
+  ## ANNOTATED, not inferred: `ptr(local)` yields a pointer whose pointee the sema does not record
+  ## (`AddrOf` returns `TyPtr` with no span, src/sema.al:11352-11356), so an inferred `k1 := ptr(x)`
+  ## reaches `hash(k1)` with no `T` to instantiate and is refused (Comptime §3.3). The annotation is
+  ## the strict form the catalogue prescribes, and it is what makes the checked call below legal.
+  k1 : ptr(u64) = ptr(x)
+  k2 : ptr(u64) = ptr(y)
+  k3 : ptr(u64) = ptr(z)
 
   ## A — non-vacuity, with no bitcast: distinct addresses hold distinct values after both writes.
   if deref(k1) != 11 { return 100 }
@@ -85,7 +89,7 @@ main := fn() -> u64 {
   if deref(k1) == deref(k2) { return 102 }
 
   ## B — a second handle on k1's own address.
-  k1b := ptr(x)
+  k1b : ptr(u64) = ptr(x)
 
   ## C — Hash consistent with Eq (§2.6): the same address hashes alike, and the hash is not a
   ## constant (a constant hash would make every key collide, which D and F below would not catch).
