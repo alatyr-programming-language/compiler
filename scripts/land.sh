@@ -182,6 +182,19 @@ pr_seed_version_protected_deletions() { # deleted diff lines on stdin -> count o
   grep -vE '^-# spec-pin: ' | wc -l | tr -d ' '
 }
 
+## The xbackend baseline is the line the ratchet holds, and a PR that moves it blesses its own
+## disagreement (#1019: `xb_ratchet` prints "do NOT raise the baseline" in prose, to a log, and
+## nothing checks it). The landing moves it instead, in PHASE 6c, and only by the paths and rows the
+## gate reported as newly covered — coverage added, never a disagreement on a path that had a test.
+## Defined up here so the self-test, which ends in `exit`, can reach it.
+pr_xbackend_baseline_edit_check() { # changed-paths -> 0 clean, 1 REFUSE
+  printf '%s\n' "$1" | grep -qx "scripts/xbackend_diff.baseline" || return 0
+  echo "  REFUSE: this PR edits scripts/xbackend_diff.baseline. The baseline moves at landing"
+  echo "          (scripts/land.sh PHASE 6c) by exactly the newly covered paths and rows the gate"
+  echo "          printed; a PR that moves it by hand is blessing its own disagreement (#1019)."
+  return 1
+}
+
 ## A regenerated oracle owns a commit that touches nothing else.
 pr_oracle_commit_isolation_check() { # oracle-path commit other-file-count
   case "${3:-0}" in ''|0) return 0 ;; esac
@@ -313,6 +326,18 @@ land_shape_self_test() { # work-dir
   _ck $? append-only-refused-a-pure-append
   pr_seed_version_append_only_check src/lower.al 4 >/dev/null 2>&1
   _ck $? append-only-fired-on-a-PR-that-does-not-touch-seed/VERSION
+  ## The xbackend baseline: a PR never moves the line the ratchet holds (#1019).
+  out="$(pr_xbackend_baseline_edit_check "src/lower.al
+test/issue502_deref_inferred_str_operand.al" 2>&1)"; rc=$?
+  [ "$rc" = 0 ]; _ck $? "baseline-edit-allowed-a-PR-that-touches-no-baseline"
+  out="$(pr_xbackend_baseline_edit_check "scripts/xbackend_diff.baseline
+src/lower.al" 2>&1)"; rc=$?
+  [ "$rc" = 1 ]; _ck $? "baseline-edit-refused-a-PR-that-moved-the-ratchet-line"
+  case "$out" in *'#1019'*) _ck 0 x ;; *) _ck 1 baseline-edit-did-not-name-1019 ;; esac
+  ## A path that merely contains the name is not the file (`grep -qx`, not a substring match).
+  pr_xbackend_baseline_edit_check "scripts/xbackend_diff.baseline.bak
+docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
+  _ck $? "baseline-edit-allowed-a-lookalike-path"
 
   # ---- 3b · the ONE mutable line: `# spec-pin:` moves, the journal does not. ----------------
   # A pin move rewrites exactly one line and `git diff` spells that as a deletion. The counter
@@ -609,6 +634,7 @@ dels=0
 printf '%s\n' "$CHANGED" | grep -qx 'seed/VERSION' &&
   dels="$(git diff "$BASE...$HEAD_SHA" -- seed/VERSION | grep -E '^-' | grep -v '^--- ' |
           pr_seed_version_protected_deletions)"
+pr_xbackend_baseline_edit_check "$CHANGED" || shape_fail=1
 pr_seed_version_append_only_check "$CHANGED" "${dels:-0}" || shape_fail=1
 for oracle in scripts/corpus.manifest scripts/idiom.baseline scripts/needle.baseline; do
   printf '%s\n' "$CHANGED" | grep -qx "$oracle" || continue
@@ -751,6 +777,47 @@ if [ -f "$CM_LOG" ] && [ "$CM_LOG" -nt "$GATE_STAMP" ] && grep -q '^corpus manif
   git diff --exit-code --quiet && git diff --cached --exit-code --quiet && [ "$(git rev-parse HEAD)" = "$O" ] ||
     { verdict "NOT LANDABLE — the tree moved after the oracle commit"; exit 1; }
   PUBLISH="$O"
+
+  # --- PHASE 6c — the xbackend baseline follows the oracle, never the PR ----------------------
+  ## The gate held the line on existing paths and reported what it newly covered. Once this lands
+  ## those paths ARE existing, so a baseline that did not move would refuse the NEXT landing on rows
+  ## this one legitimately added — a permanently red gate, which is the failure xb_ratchet itself says
+  ## it exists to avoid. The landing owns the move; the PR cannot (PHASE 2 refuses it, #1019).
+  NEWP="$(printf '%s\n' "$O_RATCHET" | sed -n 's/^xbackend diff: .*new-paths=\([0-9]*\).*$/\1/p' | head -1)"
+  NEWR="$(printf '%s\n' "$O_RATCHET" | sed -n 's/^xbackend diff: .*new-rows=\([0-9]*\).*$/\1/p' | head -1)"
+  NEWP="${NEWP:-0}"; NEWR="${NEWR:-0}"
+  SEENP="$(printf '%s\n' "$O_RATCHET" | sed -n 's/^xbackend diff: paths=\([0-9]*\).*$/\1/p' | head -1)"
+  SEENR="$(printf '%s\n' "$O_RATCHET" | sed -n 's/^xbackend diff: paths=[0-9]* rows=\([0-9]*\).*$/\1/p' | head -1)"
+  SEENP="${SEENP:-?}"; SEENR="${SEENR:-?}"
+  if [ "$NEWP" -gt 0 ] || [ "$NEWR" -gt 0 ]; then
+    say "PHASE 6c — the xbackend baseline moves by the coverage this gate added"
+    B_MSG="$ROOT/target/land-baseline-commit.msg"
+    bash scripts/xbackend_diff.sh --ratchet --write "$FRESH" > "$ROOT/target/land-baseline-write.log" 2>&1
+    bw_rc=$?
+    grep -E '^xbackend ratchet:' "$ROOT/target/land-baseline-write.log" | sed 's/^/  /'
+    [ "$bw_rc" = 0 ] || { verdict "NOT LANDABLE — writing the xbackend baseline failed (rc $bw_rc)"; exit 1; }
+    {
+      printf 'chore(gates): xbackend baseline follows the oracle #%s\n\n' "$PR"
+      printf 'The gate held the ratchet on the %s paths and %s rows that already had a test, and\n' "$SEENP" "$SEENR"
+      printf 'reported %s path(s) and %s row(s) as NEWLY COVERED — fixtures this change adds, whose\n' "$NEWP" "$NEWR"
+      printf 'cross-backend difference was already in the compiler with no test on it. After this lands\n'
+      printf 'those paths are existing, so the line moves by exactly that coverage and by nothing else.\n\n'
+      printf 'scripts/xbackend_diff.sh --ratchet --write on the gated manifest, verbatim:\n\n'
+      grep -E '^xbackend (diff|ratchet):' "$ROOT/target/land-baseline-write.log" | sed 's/^/  /'
+      printf '\nThe PR itself was refused if it touched this file (scripts/land.sh PHASE 2, #1019).\n'
+      [ -n "$ISSUE" ] && printf '\nRefs #%s\n' "$ISSUE"
+    } > "$B_MSG"
+    git add scripts/xbackend_diff.baseline
+    git commit --quiet --no-verify -F "$B_MSG" || die "could not create the baseline commit"
+    B="$(git rev-parse HEAD)"
+    attribution_trailer_check "baseline commit $B" "$(git log -1 --format=%B "$B")" || o_fail=1
+    B_PATHS="$(git diff --name-only "$O" "$B")"
+    [ "$B_PATHS" = "scripts/xbackend_diff.baseline" ] ||
+      { echo "  FAIL: the baseline commit changes more than the baseline: $B_PATHS"; o_fail=1; }
+    [ "$o_fail" = 0 ] || { verdict "NOT LANDABLE — the baseline commit failed its shape checks"; exit 1; }
+    echo "  baseline commit $B: scripts/xbackend_diff.baseline alone, moved by paths+$NEWP rows+$NEWR"
+    PUBLISH="$B"
+  fi
 fi
 
 verdict "GATE GREEN on the merged tree — $PUBLISH is landable"
