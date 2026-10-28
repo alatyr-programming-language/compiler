@@ -123,11 +123,25 @@ SITES_CC=""
 RATCHET=0
 RATCHET_WRITE=0
 RATCHET_FILE="$ROOT/scripts/xbackend_diff.baseline"
+## `--base <rev>` names the revision this change is measured against (the integrator passes
+## origin/main's tip). It answers one question the baseline cannot: is a disagreeing path NEW here,
+## or was it already covered? A row on a path that already existed is a disagreement this change
+## introduced and the ratchet must refuse it. A row on a path this change ADDS is coverage of a
+## difference that was already in the compiler and simply had no test yet — refusing those makes the
+## queue shrink only by deleting tests, which is backwards. They are counted beside the line, never
+## silently: `new-paths=`/`new-rows=`. `unexplained` is NOT split — a new fixture that answers
+## quietly and differently still fails, so the teeth stay on the only counter criterion 3 names.
+BASE_REV="${ALATYR_XB_BASE:-}"
+NEWPATHS_FILE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --count)     MODE=count; shift ;;
     --ratchet)   MODE=count; RATCHET=1; shift ;;
     --write)     RATCHET_WRITE=1; shift ;;
+    --base)      [ "$#" -ge 2 ] || { echo "xbackend_diff: --base needs a revision" >&2; exit 2; }
+                 BASE_REV="$2"; shift 2 ;;
+    --new-paths) [ "$#" -ge 2 ] || { echo "xbackend_diff: --new-paths needs a file" >&2; exit 2; }
+                 NEWPATHS_FILE="$2"; shift 2 ;;
     --baseline)  [ "$#" -ge 2 ] || { echo "xbackend_diff: --baseline needs a file" >&2; exit 2; }
                  RATCHET_FILE="$2"; shift 2 ;;
     --rows)      MODE=rows; shift ;;
@@ -460,6 +474,20 @@ wat_site_info() { # k < in.wat — prints "comment TAB function" for the k-th si
       print "$c\t$f\n"; last }' "$1"
 }
 
+## The split, as a function so the self-test can drive it without a corpus walk.
+## Echoes four numbers: existing-paths existing-rows new-paths new-rows.
+## `N/A-TARGET`, `HW-DEFINED` and `RAW-ESCAPE` leave the queue entirely (they are documented
+## differences, counted beside it); a path added by this change leaves the LINE but is reported.
+## Defined above the self-test because the self-test branch ends in `exit` and a function defined
+## after it would never exist when the checks call it.
+xb_split_counts() { # rows newpaths -> "epaths erows npaths nrows"
+  printf '%s\n' "$1" | awk -F'\t' -v new="$2" '
+    BEGIN{if(new!=""){n=split(new,a,"\n");for(i=1;i<=n;i++) if(a[i]!="")N[a[i]]=1}}
+    $1=="HW-DEFINED"||$1=="RAW-ESCAPE"||$1=="N/A-TARGET"{next}
+    { if ($3 in N) { nr++; NP[$3]=1 } else { er++; EP[$3]=1 } }
+    END{ printf "%d %d %d %d\n", length(EP)+0, er+0, length(NP)+0, nr+0 }'
+}
+
 if [ "$MODE" = selftest ]; then
   T="$(mktemp -d)" || exit 3
   trap 'rm -rf "$T"' EXIT
@@ -665,6 +693,37 @@ if [ "$MODE" = selftest ]; then
   ok "ratchet: a pre-declaration baseline holds at 0" "$(xb_ratchet "$T/base" 10 20 1 1 0 0 >/dev/null; echo $?)" 0
   ok "ratchet: a pre-declaration baseline FAILS on one declared fixture" \
      "$(xb_ratchet "$T/base" 10 20 1 1 0 1 >/dev/null 2>&1; echo $?)" 1
+
+  ## ── the new-path split: coverage is not a regression, but a moved path still is. ──
+  ## Rows are `class backend path x86 twin tag`. Two paths existed at base; `test/new.al` is added
+  ## by this change and disagrees on three backends, exactly the #502 shape (x86_64 runs, the twins
+  ## trap). The split must keep the two existing paths on the line and move only the new one out.
+  SPLIT_ROWS="$(printf '%s\n' \
+    "TRAP	aarch64	test/old_a.al	run/trap	-	quiet" \
+    "TRAP	wasm	test/old_a.al	run/trap	-	quiet" \
+    "TRAP	aarch64	test/old_b.al	run/trap	-	quiet" \
+    "TRAP	aarch64	test/new.al	run/trap	-	quiet" \
+    "TRAP	riscv64	test/new.al	run/trap	-	quiet" \
+    "TRAP	wasm	test/new.al	run/trap	-	quiet" \
+    "HW-DEFINED	x86_64	test/new.al	run/trap	-	hw")"
+  printf 'test/new.al\n' > "$T/newp"
+  ok "split: existing paths stay on the line, the added path leaves it" \
+     "$(xb_split_counts "$SPLIT_ROWS" "$(cat "$T/newp")")" "2 3 1 3"
+  ok "split: no base means nothing is new, every row counts (the strict reading)" \
+     "$(xb_split_counts "$SPLIT_ROWS" "")" "3 6 0 0"
+  ## A baseline of the split's own size, so these two checks measure the split and not the 10/20
+  ## baseline the ratchet checks above share: 2 paths / 3 rows is exactly what remains on the line
+  ## once the added path is held out.
+  printf 'paths=2\nrows=3\nhw-defined=0\nraw-escape=0\nunexplained=0\ntarget-na=0\n' > "$T/sbase"
+  ok "split: a row on an EXISTING path still reaches the ratchet and GREWS it" \
+     "$(xb_ratchet "$T/sbase" 3 6 0 0 0 0 >/dev/null 2>&1; echo $?)" 1
+  ok "split: the same totals with the added path held out HOLD the line" \
+     "$(xb_ratchet "$T/sbase" 2 3 0 0 0 0 >/dev/null 2>&1; echo $?)" 0
+  ## Non-vacuity: if the split were a no-op, the two ratchet checks above would agree. They do not.
+  ok "split: HW-DEFINED on the added path is excluded from both sides" \
+     "$(xb_split_counts "HW-DEFINED	x86_64	test/new.al	run/trap	-	hw" "test/new.al")" "0 0 0 0"
+  ok "split: an unknown path in the new set invents no rows" \
+     "$(xb_split_counts "TRAP	aarch64	test/old_a.al	run/trap	-	quiet" "test/absent.al")" "1 1 0 0"
   if [ "$fails" = 0 ]; then echo "xbackend_diff self-test: $ran/$ran ok"; exit 0; fi
   echo "xbackend_diff self-test: $fails of $ran check(s) FAILED — this script's output proves nothing"
   exit 3
@@ -749,12 +808,38 @@ if [ "$MODE" = sites ]; then
   exit 0
 fi
 
-nrows=0; npaths=0; nhw=0; nraw=0; ntna=0
+nrows=0; npaths=0; nhw=0; nraw=0; ntna=0; nnewrows=0; nnewpaths=0
+## Which disagreeing paths does THIS change add? A path absent at `--base` had no test, so its
+## disagreement was already in the compiler, unobserved; refusing that row means refusing the test,
+## and the queue would shrink only by deleting coverage. A path that existed at `--base` and disagrees
+## now is behaviour this change moved, and it stays on the line. `unexplained` is NOT split: a new
+## fixture that answers quietly and differently still fails, so criterion 3 keeps its teeth.
+NEWPATHS=""
+if [ -n "$NEWPATHS_FILE" ]; then
+  ## The seam: the integrator (and the self-test) can hand the new-path set in directly, so the
+  ## split is testable without a git history and land.sh can pin the exact set it reviewed.
+  [ -f "$NEWPATHS_FILE" ] || { echo "xbackend diff: --new-paths '$NEWPATHS_FILE' is not a file" >&2; exit 2; }
+  NEWPATHS="$(cat "$NEWPATHS_FILE")"
+elif [ -n "$BASE_REV" ]; then
+  NEWPATHS="$(git -C "$ROOT" diff --diff-filter=A --name-only "$BASE_REV"...HEAD -- 'test/*.al' 2>/dev/null)"
+  if ! git -C "$ROOT" rev-parse -q --verify "$BASE_REV^{commit}" >/dev/null 2>&1; then
+    echo "xbackend diff: NOTE --base $BASE_REV is not a commit here; nothing counts as newly added and" \
+         "every row counts against the baseline (the strict reading)." >&2
+    NEWPATHS=""
+  fi
+else
+  ## Self-resolved, the same order `wildcard_arm_check.sh` and `strict_forms_check.sh` use, so the
+  ## split works from a bare `--ratchet` with nothing passed. On main itself the merge base IS the
+  ## head, the diff is empty, and nothing counts as new — which is right: main has no pending
+  ## additions, so every row there is on the line.
+  BASE_REV="$(git -C "$ROOT" merge-base origin/main HEAD 2>/dev/null \
+           || git -C "$ROOT" merge-base main HEAD 2>/dev/null || true)"
+  [ -n "$BASE_REV" ] && NEWPATHS="$(git -C "$ROOT" diff --diff-filter=A --name-only "$BASE_REV"...HEAD -- 'test/*.al' 2>/dev/null)"
+fi
 if [ -n "$ROWS" ]; then
   ## The headline counts what #683 must drive to zero; the documented hardware-defined and raw-escape
   ## rows are counted beside it, never silently dropped.
-  nrows="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED" && $1 != "RAW-ESCAPE" && $1 != "N/A-TARGET"' | wc -l | tr -d ' ')"
-  npaths="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED" && $1 != "RAW-ESCAPE" && $1 != "N/A-TARGET"' | cut -f3 | sort -u | wc -l | tr -d ' ')"
+  read -r npaths nrows nnewpaths nnewrows <<< "$(xb_split_counts "$ROWS" "$NEWPATHS")"
   nhw="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "HW-DEFINED"' | wc -l | tr -d ' ')"
   nraw="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "RAW-ESCAPE"' | wc -l | tr -d ' ')"
   ntna="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "N/A-TARGET"' | wc -l | tr -d ' ')"
@@ -789,13 +874,28 @@ if [ -n "$ROWS" ]; then
     fi
   done <<< "$ROWS"
 fi
-echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw raw-escape=$nraw target-na=$ntna quiet=$nquiet attributed=$nattrib unexplained=$nunexpl"
+echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw raw-escape=$nraw target-na=$ntna quiet=$nquiet attributed=$nattrib unexplained=$nunexpl new-paths=$nnewpaths new-rows=$nnewrows"
+## The new-path line is printed only when there is something to say, and it says who owns the number:
+## a row on a path this change adds is coverage of a difference already in the compiler, so it is
+## reported here and excluded from the ratchet above. The baseline must move by exactly these figures
+## at landing, and by nothing else — a PR that moves it by more is not adding coverage, it is blessing
+## a disagreement on a path that already had a test.
+if [ "$nnewpaths" -gt 0 ] || [ "$nnewrows" -gt 0 ]; then
+  echo "  NEWLY COVERED $nnewpaths path(s), $nnewrows row(s) — added by this change, held outside the"
+  echo "    ratchet line; the baseline moves by exactly paths+$nnewpaths rows+$nnewrows at landing."
+  printf '%s\n' "$NEWPATHS" | while IFS= read -r np; do [ -n "$np" ] && printf '      %s\n' "$np"; done
+fi
 if [ "$RATCHET_WRITE" = 1 ]; then
   ## Writing the baseline is a deliberate, reviewable act: it moves the line the gate holds. The
   ## file records the manifest it was measured from, so a baseline cannot be moved without the
   ## manifest that justifies it being in the same diff.
-  printf 'paths=%s\nrows=%s\nhw-defined=%s\nraw-escape=%s\ntarget-na=%s\nunexplained=%s\n' "$npaths" "$nrows" "$nhw" "$nraw" "$ntna" "$nunexpl" > "$RATCHET_FILE" || exit 2
-  echo "xbackend ratchet: WROTE $RATCHET_FILE (paths=$npaths rows=$nrows hw-defined=$nhw raw-escape=$nraw)"
+  ## The written number is the FULL total, existing plus newly covered: the baseline describes the
+  ## tree as it stands AFTER this lands, and a path added by this change is an existing path to the
+  ## next PR. The CHECK compares existing-only, which is what makes the two consistent — a PR never
+  ## moves the line by its own number; only the landing does, and only by coverage.
+  printf 'paths=%s\nrows=%s\nhw-defined=%s\nraw-escape=%s\ntarget-na=%s\nunexplained=%s\n' "$((npaths + nnewpaths))" "$((nrows + nnewrows))" "$nhw" "$nraw" "$ntna" "$nunexpl" > "$RATCHET_FILE" || exit 2
+  echo "xbackend ratchet: WROTE $RATCHET_FILE (paths=$((npaths + nnewpaths)) rows=$((nrows + nnewrows)) hw-defined=$nhw raw-escape=$nraw)"
+  echo "  newly covered by this change paths+$nnewpaths rows+$nnewrows; already on the line $npaths/$nrows"
   exit 0
 fi
 if [ "$RATCHET" = 1 ]; then
