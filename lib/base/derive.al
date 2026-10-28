@@ -189,9 +189,12 @@ pub hash := fn(T : type, v : T) -> u64 {
             ## is preserved exactly.
             ## unchecked-ok: `v` is a `Pointer(_)` leaf reached by the comptime guard above;
             ## §4.5 grants reading its address bits for the hash, and this is the only crossing
-            ## here — the mixing below is xor and shift, which cannot overflow a `usize`.
+            ## here — the mixing below is xor and shift, which cannot overflow a `usize`. The shift
+            ## is spelled `.shr(n)`: Alatyr has no `>>` glyph and OP-6 refuses it, which cost this
+            ## branch a full gate cycle before it was caught (`ir --self-test` answers nothing at all
+            ## when stdlib fails to compile, so the six golden FAILs were downstream of one glyph).
             bits : usize = unchecked bitcast(usize, v);
-            return bits ^ (bits >> 23);
+            return bits ^ bits.shr(23);
           } else {
             return u64(v)
           }
