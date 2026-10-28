@@ -172,6 +172,12 @@ seed_identity_check() { # version-file package-file seed-binary
 FIXPOINT_SELFTEST_EXPECTED=36  # +6 for the #1104 mid-promotion opt-in and its limit
 fixpoint_seed_identity_selftest() { # work-dir
   local st="$1" bad="" k=0 out rc
+  # The self-test drives the REAL decision, so it owns the variable some of its checks are about:
+  # a run launched WITH ALATYR_RESEED=1 must not leak the flag into the negative controls, or
+  # 'a bump made without a promotion' answers rc=0 and the self-test that is supposed to catch
+  # exactly that goes silent — measured, it failed rc=1 with two such labels when the whole
+  # fixpoint run carried the flag. Checks that exercise the opt-in set it explicitly per call.
+  local ALATYR_RESEED=0
   rm -rf "$st"; mkdir -p "$st" || return 1
   _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
   printf 'a frozen seed\n' > "$st/seed"
