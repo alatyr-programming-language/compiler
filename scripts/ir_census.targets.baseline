@@ -2,3 +2,4 @@ x86_64=1130
 aarch64=1836
 riscv64=1836
 wasm=1302
+## x86_64-coverage-ok: #1084 — CORRECTION, not a regression: the 1130 counted five x86_64 functions whose call sites the selector emitted as a `call` to an `@inline` callee, which spec 90-codegen §3.5 item 3 forbids ("substituted at every direct call site … no `call` is emitted"; decision CG-10), so the count stood for output the spec does not allow; 1125 is what x86_64 takes from the shared IR today. The debt is to IMPLEMENT that substitution in the selector and builder — NOT to restore 1130 by re-allowing the `call`; when it lands this line is deleted. Measured twice: runner full gate `6a127120` and an independent native x86_64 `scripts/ir_census.sh --targets` both report 1125.
