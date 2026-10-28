@@ -35,6 +35,7 @@ issue in the marker's reason. Do not quietly route around it.
 | 8 | do not write the forms the frozen seed miscompiles | no live rows; seven retired by 0.2.5, two (#790, #791) by 0.2.7 | `seed_forms_check.sh` (the registry, `scripts/seed_forms.tsv`); a comment at every workaround |
 | 9 | an AST handle has its node's own type | #760 (12 walkers), the `usize` pass-plumbing | partly: `ty_compat` compares pointee names where BOTH operand types are known (`sema.al:502-511`) — NOT at a `deref` (`:11360-11363`, `TyUnknown`) nor at an argument (`:11231-11237`, kind only); the rest is review, §9 has the proposal |
 | 10 | a quantity with an identity is a `brand`, not a bare number | #167 (word offset used as a byte offset), #760, #299 | the checker refuses a sibling or raw mix (since #299); *choosing* a brand is held by review |
+| 11 | a field a backend reads is not a place to put metadata | #1097 (six rows trapped on three backends), #1099 | **review-only**: what a field means is fixed by its readers, and they are spread over three emitters — no lexical rule can see it; §11 has the audit that would |
 
 ## 1 · Absence is `Option(ptr(T))` walked with `match`, not a sentinel
 
@@ -706,6 +707,46 @@ to an overloaded, generic or qualified callee is not reached (`src/sema.al`, the
 crossings. **Choosing a brand for a new quantity is held by review.** No check can know that a
 `usize` means a byte offset, and there is no gate rule for it. `src/` declares no brand yet. A new
 quantity is the place to start, and the non-pointer handles of §9 step 3 are the planned campaign.
+
+## 11 · A field a backend reads is not a place to put metadata
+
+`Ty := struct { kind : TyKind, ns : usize, nl : usize }` (`src/sema.al:312`). At `Expr::AddrOf` the
+pointer answered `ns = 0, nl = 0`, and the comment said the pointee was untracked. When a generic call
+needed the pointee, the obvious one-liner was to carry it: `ns = tp.ns, nl = tp.nl`, where `tp` is the
+inner place's type. It compiles. It passes sema. It is **wrong**, and the full gate proved it: six rows
+that answer 42 on `main` trapped on three backends — `ir_ptr_place(a64)`, `ir_ptr_agree(a64)` and
+`ir_ptr_place(rv64)` with SIGTRAP, `ir_ptr_place(wat)`, `p0_parser_if_deref_store(wat)` and
+`p0_void_tail_call_side_effect(wat)` with SIGABRT (`a3c10e93`, PR #1097).
+
+```alatyr
+## not this — "the span is only metadata, filling it in can only add information" (#1097)
+Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = tp.ns, nl = tp.nl))
+
+## this — until there is a field no emitter reads (#1099)
+Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = 0, nl = 0))
+```
+
+**Why.** A field's meaning is the set of things that read it, not what the writer meant by it. `ns/nl`
+on a `TyPtr` is read to **size a memory access**: `src/aarch64.al:5007` takes a load width from
+`deref_bitcast_pointee_bytes`, `:8489` a store width from the same, `:1263` refuses a sub-word pointee
+it cannot size, and `src/wat.al:3512-3513` takes the pointee name from `ptr_target_pointee_s/_n`. So
+attaching the span of `S` to `ptr(mut s)` does not annotate a word — it asks the backend to derive a
+width from a name, and for a struct pointee there is no width to derive, and the program traps.
+
+The shape of the mistake is worth keeping, because it is repeatable and it reads as safe: **zero staying
+zero is the only case that cannot change behaviour, and non-zero was the entire point of the change.**
+"Strictly additive" is therefore not a safety argument for filling in a field that has always answered
+zero — the zeros are what some reader is relying on. A comment that calls the zero a limitation may be
+describing a load-bearing tolerance; check the readers before calling it stale.
+
+**Check.** **Review-only, and deliberately so.** No lexical rule can hold this: whether a field is
+metadata or machine state is decided by readers in three different emitters, and a checker that greps
+`sema.al` cannot see `aarch64.al:5007`. What would hold it is an audit — for each field of each type
+that crosses from sema into lowering, the list of files that read it — and that is a real deliverable
+(#1099 asks the owner for the field, not for the audit; the audit is what makes the answer checkable).
+Until then: before you write a non-zero into a field that has answered zero, `rg` the field name across
+`src/` including the emitter directories, and read every hit. If any hit sizes, offsets or selects on
+it, it is not metadata, and the answer is a new field or nothing.
 
 ## How the checks count, and what they measured
 

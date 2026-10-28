@@ -188,6 +188,14 @@ around it.
 10. **A quantity with an identity is a `brand`**, not a bare number: a byte offset, a word count and a
     slot index get distinct brands, converted by named functions (#167, #760, #299). The checker
     refuses a sibling or raw mix since #299. Choosing a brand for a new quantity is **review-only**.
+11. **A field a backend reads is not a place to put metadata.** Before writing a non-zero into a field
+    that has always answered zero, `rg` the field across `src/` *including the emitter directories* and
+    read every hit: if any of them sizes, offsets or selects on it, it is machine state, not an
+    annotation (#1097 — carrying the pointee span into `Ty.ns/nl` at `Expr::AddrOf` trapped six rows
+    on three backends, because `aarch64.al:5007`/`:8489` take a load and store width from it). "Zero
+    staying zero" is the only case that cannot change behaviour, and non-zero was the point; so
+    "strictly additive" is not a safety argument for filling a field in. Needs a new field, or nothing
+    (#1099). **Review-only**: no lexical rule can see a reader in another emitter.
 
 ## Work reaching `main`
 
