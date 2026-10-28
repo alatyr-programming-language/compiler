@@ -346,7 +346,9 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   parameter; and when a census ratchet says `LIFTABLE`, take it — the second half of this slice was decided
   by `liftable=0`, not by judgement, which is what a ratchet is for.
 - **and the census cannot see the fourth copy, so "closed" is not "gone".** x86_64 was **not** covered by
-  the above. `lower.al:6273` holds its own copy of the same scan under the name `slice_param_elem_span`
+  the above. `lower.al:6273` holds its own copy of the same scan, named `slice_ann_elem_span` since
+  #1077 renamed it — before that it shared the bare name `slice_param_elem_span` with the
+  parameter-list walker at `lower_ctx.al:582`, two different functions answering to one name
   (same `(src, s, n)` shape as the shared `slice_elem_span`) and it is **not identical**: it carries a
   variadic branch that recovers the element type of `name : ...T` and returns its span where the shared scan
   answers {0,0}. Its helpers `ptr_scan_has` (`lower.al:12496`) and `ptr_scan_ws` (`lower.al:12501`) **are**

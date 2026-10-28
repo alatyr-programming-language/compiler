@@ -511,7 +511,7 @@ pub CSpan := struct { s : usize, n : usize }
 
 ## ── ONE source-span scan for THREE emitters: aarch64, riscv64, wasm (docs/ir.md §2.4, criterion 2) ──
 ## x86_64 is NOT covered and must not be read as covered. `lower.al:6273` holds its own copy of this
-## scan under the name `slice_param_elem_span` (same `(src, s, n)` shape as `slice_elem_span` below), and
+## scan under the name `slice_ann_elem_span` (same `(src, s, n)` shape as `slice_elem_span` below), and
 ## it is NOT identical: it carries an extra variadic branch that recovers the element type of
 ## `name : ...T` and returns its span where this scan returns {0,0}. Its helpers `ptr_scan_has`
 ## (`lower.al:12496`) and `ptr_scan_ws` (`lower.al:12501`) ARE byte-identical to `slice_scan_has` /
@@ -520,6 +520,13 @@ pub CSpan := struct { s : usize, n : usize }
 ## reports these families closed while a fourth, semantically different copy stands in x86_64. A census
 ## that reports a family closed because a name resolves somewhere is not a census of copies; the next
 ## agent must read this note, not the census line.
+## #1077 renamed this x86_64 copy from `slice_param_elem_span` to `slice_ann_elem_span`, because two
+## different functions — this source-text scanner and the parameter-list walker at `lower_ctx.al:582` —
+## answered to one bare name. The rename fixes the collision and NOTHING ELSE: the census keyed on the
+## bare name, so its family count fell 14 -> 13 and this copy is now invisible to it under a name the
+## census does not track. That dropped line is NOT coverage gained and must not be reported as such.
+## The open work is still exactly the sentence above: x86_64 has a superset copy, and merging it means
+## giving this scan the variadic branch without changing what the three twins answer today.
 ## `*_slice_elem_span` existed three times — aarch64.al:796, riscv64.al:502, wat.al:2022 — byte-identical
 ## except for which of three globals held the source length, and its helpers `*_slice_scan_has` /
 ## `*_slice_scan_ws` were byte-identical outright, reading no backend state and calling only `str_at`. The

@@ -1672,7 +1672,7 @@ slice_view_cmp_kind := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize
   ## multi-word aggregates whose padding/unused payload words are indeterminate, so word-wise
   ## equality is not the answer — fail loud.
   if ent.eek == 2 or ent.eek == 3 or ent.eek == 4 or ent.eek == 7 {
-    if slice_param_elem_span(cx.src, ent.ns, ent.nl).n != 0 { return 2 }
+    if slice_ann_elem_span(cx.src, ent.ns, ent.nl).n != 0 { return 2 }
     if slot_name_is_annotated(cx.src, ent.ns, ent.nl) == false { return 2 }
   }
   0
@@ -6268,7 +6268,7 @@ slice_arr_espan := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan 
 ## PARAM (whose slot holds a POINTER to the caller's block), which the slot entry alone cannot
 ## distinguish for an aggregate element (both carry the element TYPE span in `sns`/`snl`, so the
 ## scalar-element `snl == 1 && sns == 0` marker is unavailable). Same source-scan technique as
-## `slice_param_elem_span` / `local_is_mut`.
+## `slice_ann_elem_span` / `local_is_mut`.
 slot_name_is_annotated := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   mut p := s + n
   end := LOWER_SRC_N
@@ -6278,7 +6278,7 @@ slot_name_is_annotated := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   ptr_scan_has(src, end, p, "=") == false
 }
 
-slice_param_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
+slice_ann_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
   mut p := s + n
   end := LOWER_SRC_N
   while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
@@ -6337,7 +6337,7 @@ view_var_kind := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> u8 {
   if ent.ek == 5 and ent.is_ref {
     if ent.eek == 2 or ent.eek == 3 or ent.eek == 7 {
       if slot_name_is_annotated(src, ent.ns, ent.nl) == false { return 5 }
-      if slice_param_elem_span(src, ent.ns, ent.nl).n != 0 { return 5 }
+      if slice_ann_elem_span(src, ent.ns, ent.nl).n != 0 { return 5 }
     } else if ent.snl == 1 { return 5 }
   }
   0
@@ -7783,7 +7783,7 @@ idx_field_index := fn(arr : ptr(Expr), idx : ptr(Expr), fs : usize, fl : usize, 
   mut r := field_word_offset(cx.decls, cx.src, ent.sns, ent.snl, fs, fl, deref(cx.mar))
   if tc.estride != 0 and tc.snl != 0 { r = field_word_offset(cx.decls, cx.src, tc.sns, tc.snl, fs, fl, deref(cx.mar)) }
   if r < 0 and ent.ek == 5 and ent.is_ref {
-    eta := slice_param_elem_span(cx.src, ent.ns, ent.nl)
+    eta := slice_ann_elem_span(cx.src, ent.ns, ent.nl)
     if eta.n != 0 { r = field_word_offset(cx.decls, cx.src, eta.s, eta.n, fs, fl, deref(cx.mar)) }
   }
   ## SOUNDNESS (§8): a NEGATIVE offset means the field is not resolvable in the resolved element type —
@@ -13114,13 +13114,13 @@ deref_index_ptrstruct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)
 }
 
 ## Fail-loud guard for the GENERIC form `deref(s[i]).field` where `s` is a `Slice(ptr(mut T))` PARAM:
-## the pointee `T` is erased in the param's source text (`slice_param_elem_span` recovers only
+## the pointee `T` is erased in the param's source text (`slice_ann_elem_span` recovers only
 ## "ptr(mut T)") AND the param binds as a plain scalar-named slice (base name "Slice", ek 0) with no
 ## per-instance mono pointee binding — so the pointee struct span cannot be resolved WITHOUT unbounded
 ## new mono machinery. Returns true when the base is `Deref(Index(<Var>))` and the Var's DECLARED param
 ## type is `Slice(ptr(…))`. The caller PANICS on true rather than emit a wrong `pushq $0` (the cardinal
 ## rule: never a silent miscompile). Only consulted when `dix.n == 0`, so the concrete
-## `[ptr(mut b0), …]` case (eek 7, a LOCAL with no annotation → `slice_param_elem_span` = 0/0) is handled
+## `[ptr(mut b0), …]` case (eek 7, a LOCAL with no annotation → `slice_ann_elem_span` = 0/0) is handled
 ## upstream and never reaches here.
 deref_index_ptr_param_unresolved := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> bool {
   inner := deref_inner_expr(e)
@@ -13129,7 +13129,7 @@ deref_index_ptr_param_unresolved := fn(e : ptr(Expr), slots : ptr(SVec), src : p
   if ib.n == 0 { return false }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, ib.s, ib.n)))
   if streq(src, ent.ns, ent.nl, ib.s, ib.n) == false { return false }
-  eta := slice_param_elem_span(src, ent.ns, ent.nl)   ## element text of the declared `s : Slice(<…>)`
+  eta := slice_ann_elem_span(src, ent.ns, ent.nl)   ## element text of the declared `s : Slice(<…>)`
   if eta.n < 4 { return false }
   str_at((src + eta.s), 4) == "ptr("
 }
@@ -16254,7 +16254,7 @@ slice_param_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       if bv.n == 0 { return CSpan(s = 0, n = 0) }
       ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
       if ent.ek != 5 or ent.is_ref == false or ent.sns != 1 or ent.snl != 1 { return CSpan(s = 0, n = 0) }
-      es := slice_param_elem_span(cx.src, ent.ns, ent.nl)
+      es := slice_ann_elem_span(cx.src, ent.ns, ent.nl)
       if es.n != 0 and is_builtin_int_name(str_at((cx.src + es.s), es.n)) { return es }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -26319,7 +26319,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               bslot = bent.off
               b_snl = bent.snl
               b_estride = bent.estride
-              bent_slice_param_elem := slice_param_elem_span(cx.src, bent.ns, bent.nl)
+              bent_slice_param_elem := slice_ann_elem_span(cx.src, bent.ns, bent.nl)
               ## A concrete Slice(u8) PARAM/LOCAL is still a two-word view, but its iterable element is one
               ## byte. Keep this text-path control correct beside the RA byte-load seam; arrays do not return a
               ## Slice element span here and remain on their existing word/aggregate branches.
@@ -26868,7 +26868,7 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
     ## A STRUCT/ENUM element `...Pt` / `...E` binds like a struct/enum-element `Slice(T)` param: a
     ## by-ref slice (ek 5, is_ref) carrying the element TYPE span in `sns`/`snl` (so `x.field` / the
     ## loop var resolve the element type) and the element word stride. The by-ref for-loop + Index read
-    ## paths already handle eek 2/3, and `slice_param_elem_span` now recovers `T` from the `...T` source.
+    ## paths already handle eek 2/3, and `slice_ann_elem_span` now recovers `T` from the `...T` source.
     vebn := base_type_name(src, pm.ts, pm.tl)
     ve_sdi := struct_decl_of(decls, src, vebn.s, vebn.n)
     ve_edi := enum_decl_of(decls, src, vebn.s, vebn.n)
@@ -26892,7 +26892,7 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
     svec_push(slots, SlotEntry(ns = pm.ns, nl = pm.nl, off = voff, sns = 1, snl = 1, ek = 5, estride = 1, eek = veek, is_ref = true))
     return
   }
-  raw_slice := slice_param_elem_span(src, pm.ns, pm.nl)
+  raw_slice := slice_ann_elem_span(src, pm.ns, pm.nl)
   ## SUBSTITUTE a type-PARAM element (`Slice(T)` → `Slice(u64)` for this instance) via the same Subst
   ## as the whole-param path above. Without it a GENERIC `Slice(T)` param's element stayed `T` — matching
   ## no scalar/struct/enum — so the param fell through and mis-bound as a LOCAL array (`is_ref = false`):
