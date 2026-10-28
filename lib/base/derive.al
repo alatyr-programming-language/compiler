@@ -51,6 +51,20 @@ pub eq := fn(T : type, a : T, b : T) -> bool {
       }
       return true
     }
+    Pointer(_) => {
+      ## A `Pointer` leaf is not a `ScalarKind` member (§4.1 `Pointer{pointee, mutable}`), so the `_`
+      ## arm's `a == b` has no class for it: two pointers compared with each other "compare by their
+      ## address bits, which is what the structural derive gives a `Pointer` leaf … and they stay legal
+      ## in checked code" (Memory §4.5, closing the boundary of the pointer/integer grant). The read
+      ## that gets those bits IS a `bitcast` and it IS granted, but the grant sits in the GENERATED
+      ## body, not at the caller's site (§2.6): so `p == q` in checked code needs no grant of the
+      ## author's own, while every confined crossing it reaches is named where it is spelled. The
+      ## spelling cannot be `u64(a) == u64(b)`: `T(value)` preserves a value or re-brands it, and
+      ## reading address bits out of a pointer is reinterpret, "whose only form is `bitcast`"
+      ## (Type System §4.4). Same shape as `Option::get`, the one precedent in this stdlib
+      ## (`lib/base/option.al:41-48`). Consistent with the `hash` arm below, as §2.6 requires.
+      return unchecked bitcast(usize, a) == unchecked bitcast(usize, b)
+    }
     _ => { return a == b }
   }
 }
@@ -99,6 +113,17 @@ pub lt := fn(T : type, a : T, b : T) -> bool {
       }
       return false
     }
+    Pointer(_) => {
+      ## Ordering a `Pointer` leaf is the same address-bits read as `eq` above: Memory §4.5 names both
+      ## relations together ("Two pointers compared with each other (`p == q`, `p < q`) … compare by
+      ## their address bits"), so `lt` owes the leaf the same arm and the same grant-in-the-generated-
+      ## body. The ORDER of two distinct live pointers is hardware-defined (§4.5) and the spec does not
+      ## promise a stable one across runs — which is why the fixture below asserts only the properties
+      ## that hold: irreflexivity, asymmetry, and agreement with `eq` on the same pair. A container that
+      ## needs a reproducible order over pointer keys must brand one itself (§2.6); the derive supplies
+      ## the comparison, not a guarantee about which pointer sorts first.
+      return unchecked bitcast(usize, a) < unchecked bitcast(usize, b)
+    }
     _ => { return a < b }
   }
 }
@@ -146,7 +171,21 @@ pub hash := fn(T : type, v : T) -> u64 {
           ## grown map hash differently from the one it grew out of.
           return str_hash(v)
         } else {
-          return u64(v)
+          comptime if (match typeinfo(T) { Pointer(_) => true; _ => false }) {
+            ## The `hash` half of the `Pointer` leaf above, and it must agree with `eq` (§2.6): equal
+            ## pointers hash alike, different pointers need not. The address bits are reached by the same
+            ## granted `bitcast` in the generated body (§4.5, §2.6), never by `u64(v)` — which is the
+            ## spelling this whole issue exists to remove, and which the `Str` arm above already shows
+            ## bottoming out on a rejected conversion operand rather than answering wrongly.
+            ## The address is multiplied by the FNV prime rather than returned raw: allocations are
+            ## 8- and 16-byte aligned, so the low 3-4 bits of a raw address are always zero and a map
+            ## that buckets on them would cluster every pointer key into one bucket. Mixing spreads the
+            ## entropy upward; it is still a pure function of the address bits, so consistency with `eq`
+            ## is preserved exactly.
+            return unchecked (unchecked bitcast(usize, v) * 1099511628211)
+          } else {
+            return u64(v)
+          }
         }
       }
     }
