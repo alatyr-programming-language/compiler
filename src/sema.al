@@ -309,7 +309,19 @@ comptime_cond_err := fn(s : usize) -> CheckErr { COMPTIME_COND_DIAG_MARKER + dia
 ##
 ## Issue #583 slice 7b — the kind is an enum field, not a byte, so a literal comparison of a type kind
 ## no longer compiles: every decision reads `.kind` through a predicate below or an exhaustive `match`.
-pub Ty := struct { kind : TyKind, ns : usize, nl : usize }
+## Issue #1099 (owner's decision: the pointee lives in `Ty`) — `ps/pl` is the POINTEE name span,
+## defaulted to `{0,0}` so the 146 construction sites that name no pointee stay as they are (Types
+## §11: a field with a declared default is applied when omitted at construction). It exists because
+## `ns/nl` on a `TyPtr` ALREADY carries the pointee at DECLARATION level (`resolve_ty:2585`, which is
+## what lets `ty_compat` tell `ptr(Arg)` from `ptr(Expr)`), while an expression-level `&x` had nowhere
+## to put it: writing the pointee into `ns/nl` there is what trapped six rows on three backends
+## (#1097), because `sema_vty_record:8740` reads `ns/nl` and turns a resolved NAME into the node's
+## VALUE type — so a pointer whose pointee is named `u64` became `VcInt`, 8 bytes, signed, and
+## `ir/build.al:230` built an integer where a pointer belongs. `ps/pl` is the field that no reader
+## converts into a size or a class: `sema_vty_record` MUST NOT read it, and strict_forms.md form 11 is
+## the rule that keeps it that way. Nothing consumes it yet — recording it once, at the node, is this
+## slice; who may read it and what a generic instantiates from is the next.
+pub Ty := struct { kind : TyKind, ns : usize, nl : usize, ps : usize = 0, pl : usize = 0 }
 
 ## Issue #583 — the KIND of a type, as an enum, so a decision over kinds is a `match` the exhaustiveness
 ## check can hold to account: a new kind is refused at every such `match` instead of falling through an
@@ -11372,41 +11384,22 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyEnum, ns = es, nl = el))
     }
     ## `ptr(<place>)` — take the address of a place. The inner place is checked (its name
-    ## must be bound); the result is a POINTER type (tag 5). Pointee-type tracking is deferred
-    ## (the toy grammar's pointers point to ints), so the pointer carries no pointee span.
-    ## The second half of that sentence is now false as DESCRIPTION — the grammar declares
-    ## `ptr(Vec(T))`, `ptr(mut Stmt)`, `ptr(u8)` and the span survives at declaration level
-    ## (`param.ts`/`cd.ret_ts`, what `ir_check_call` and `ty_compat` read) — but the first half
-    ## still holds at THIS node, and keeping it is a measured result, not inertia. The obvious
-    ## reading — "the pointee span is metadata, so filling it in can only add information" — is
-    ## FALSE here, and the full gate proved it on three backends (the run for PR #1097 at
-    ## `a3c10e93`, which tried exactly this):
-    ## `ir_ptr_place(a64)` and `ir_ptr_agree(a64)` trapped with SIGTRAP, `ir_ptr_place(rv64)` with
-    ## SIGTRAP, `ir_ptr_place(wat)`, `p0_parser_if_deref_store(wat)` and
-    ## `p0_void_tail_call_side_effect(wat)` with SIGABRT, where all six answer 42 on `main`.
-    ## The cause is that `Ty.ns/nl` on a `TyPtr` is NOT inert. It is not the emitters that read it
-    ## here — `deref_bitcast_pointee_bytes` and `ptr_target_pointee_s/_n` parse the span off the
-    ## `Expr::Bitcast` AST node (`lower_layout.al:2688-2701`, where `Expr::AddrOf` sits in the empty
-    ## arm) and never consult a `Ty`. The reader is `sema_vty_record` (`:8738-8743`), and it is the
-    ## ORDER of its fallbacks: `if t.nl != 0 { vt = sema_vty_name(...) }` (`:8740`) goes BEFORE
-    ## `sema_vty_kind(ty_kind(t))` (`:8741`). With `nl = 0` the name branch cannot fire and this node
-    ## is recorded by its kind, which for `TyPtr` is `ir::vty_ptr()` (`:8904`) — class `VcPtr`.
-    ## Carry the span and a pointee whose name resolves, `ptr(mut n)` where `n : i64`, answers a
-    ## SCALAR (`:8911`), so the node is recorded `VTy(cls = VcInt, bytes = 8, sg = Signed)`
-    ## (`ir.al:2527`) and `ir/build.al:230` builds an integer of the pointee's width and signedness
-    ## where a pointer belongs. The address stops being a pointer in the table the builder reads.
-    ## Zero staying zero was the only case this change was safe in; non-zero was the whole point of
-    ## it, and it is the case that broke. The old comment's "poison-tolerant" was not a stale excuse,
-    ## it was load-bearing. `strict_forms.md` form 11 is the general rule this is one instance of.
-    ## So the pointee of an expression-level `&x` stays unrecorded until there is a field for it that
-    ## no reader converts into a value type: `Ty` is `{ kind, ns, nl }` and is built in 146 places, so
-    ## a fourth field is its own slice with its own spec answer (where the pointee lives, who may read
-    ## it, and what a generic instantiates from) — filed as #1099, not guessed here.
-    ## Types §4's `ptr([mut] R)` reaching the pointee is about a place wanting `R` at DECLARATION
-    ## level, where `param.ts`/`cd.ret_ts` already carry the span; it does not ask for this one.
+    ## must be bound); the result is a POINTER type (tag 5) that RECORDS ITS POINTEE in `ps/pl`
+    ## (#1099, owner's decision: the pointee lives in `Ty`; Memory §4.3/§4.4 — `ptr` yields
+    ## `ptr(T)`/`ptr(mut T)`, so the pointee is part of this node's type by the spec's own words,
+    ## and Comptime §3.3 then has a `T` to infer without the author spelling one).
+    ## It goes in `ps/pl` and NOT in `ns/nl`: `sema_vty_record:8740` reads `ns/nl` and turns a
+    ## resolved name into this node's VALUE type, so naming the pointee there makes the address
+    ## `VcInt` and `ir/build.al:230` builds an integer where a pointer belongs — measured, six rows
+    ## trapped on three backends at `a3c10e93` (#1097). `ns/nl` stays `{0,0}` so that reader keeps
+    ## answering `vty_ptr()` (`:8904`) exactly as it does today; strict_forms.md form 11 holds the
+    ## boundary. Nothing reads `ps/pl` yet — recording the fact once, at the node where it is born,
+    ## is this slice; the consumer (generic instantiation, and retiring the re-derivation in
+    ## `sema_addr_local_struct_ptr_ty:4305`, which answers this same question a second time from the
+    ## AST and the locals because the carrier used to lose it) is the next slice.
     Expr::AddrOf(p) => {
       tp := check_expr(p, decls, upto, src, a, locals, nloc)?
-      Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = 0, nl = 0))
+      Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = 0, nl = 0, ps = tp.ns, pl = tp.nl))
     }
     ## `deref(<ptr>)` — a load through a pointer. The inner pointer is checked; the result
     ## type is the pointee, which is unknown (tag 0) under the deferred pointee-type tracking
