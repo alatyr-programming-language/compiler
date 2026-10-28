@@ -11384,19 +11384,24 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     ## `ir_ptr_place(a64)` and `ir_ptr_agree(a64)` trapped with SIGTRAP, `ir_ptr_place(rv64)` with
     ## SIGTRAP, `ir_ptr_place(wat)`, `p0_parser_if_deref_store(wat)` and
     ## `p0_void_tail_call_side_effect(wat)` with SIGABRT, where all six answer 42 on `main`.
-    ## The cause is that `Ty.ns/nl` on a `TyPtr` is NOT inert: the emitters READ it to SIZE a
-    ## memory access — `aarch64.al:5007` takes the load width from `deref_bitcast_pointee_bytes`,
-    ## `aarch64.al:8489` the store width from `deref_bitcast_pointee_bytes`, `wat.al:3512-3513`
-    ## the pointee name from `ptr_target_pointee_s/_n`, and `aarch64.al:1263` refuses a sub-word
-    ## pointee it cannot size. So `ptr(mut s)` with the span of `S` attached stops being a word and
-    ## becomes, to the emitter, a pointer to something whose width it must derive from the name —
-    ## and for a struct, or a name it cannot size, it traps. Zero staying zero was the only case
-    ## this change was safe in; non-zero was the whole point of the change, and it is the case
-    ## that broke. The old comment's "poison-tolerant" was not a stale excuse, it was load-bearing.
-    ## So the pointee of an expression-level `&x` stays unrecorded until there is a field for it
-    ## that no emitter reads: `Ty` is `{ kind, ns, nl }` and is built in 146 places, so a fourth
-    ## field is its own slice with its own spec answer (where the pointee lives, who may read it,
-    ## and what a generic instantiates from) — filed as the successor of #1097, not guessed here.
+    ## The cause is that `Ty.ns/nl` on a `TyPtr` is NOT inert. It is not the emitters that read it
+    ## here — `deref_bitcast_pointee_bytes` and `ptr_target_pointee_s/_n` parse the span off the
+    ## `Expr::Bitcast` AST node (`lower_layout.al:2688-2701`, where `Expr::AddrOf` sits in the empty
+    ## arm) and never consult a `Ty`. The reader is `sema_vty_record` (`:8738-8743`), and it is the
+    ## ORDER of its fallbacks: `if t.nl != 0 { vt = sema_vty_name(...) }` (`:8740`) goes BEFORE
+    ## `sema_vty_kind(ty_kind(t))` (`:8741`). With `nl = 0` the name branch cannot fire and this node
+    ## is recorded by its kind, which for `TyPtr` is `ir::vty_ptr()` (`:8904`) — class `VcPtr`.
+    ## Carry the span and a pointee whose name resolves, `ptr(mut n)` where `n : i64`, answers a
+    ## SCALAR (`:8911`), so the node is recorded `VTy(cls = VcInt, bytes = 8, sg = Signed)`
+    ## (`ir.al:2527`) and `ir/build.al:230` builds an integer of the pointee's width and signedness
+    ## where a pointer belongs. The address stops being a pointer in the table the builder reads.
+    ## Zero staying zero was the only case this change was safe in; non-zero was the whole point of
+    ## it, and it is the case that broke. The old comment's "poison-tolerant" was not a stale excuse,
+    ## it was load-bearing. `strict_forms.md` form 11 is the general rule this is one instance of.
+    ## So the pointee of an expression-level `&x` stays unrecorded until there is a field for it that
+    ## no reader converts into a value type: `Ty` is `{ kind, ns, nl }` and is built in 146 places, so
+    ## a fourth field is its own slice with its own spec answer (where the pointee lives, who may read
+    ## it, and what a generic instantiates from) — filed as #1099, not guessed here.
     ## Types §4's `ptr([mut] R)` reaching the pointee is about a place wanting `R` at DECLARATION
     ## level, where `param.ts`/`cd.ret_ts` already carry the span; it does not ask for this one.
     Expr::AddrOf(p) => {
