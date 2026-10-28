@@ -165,7 +165,23 @@ around it.
    comment at its workaround site. A new workaround adds a row. Held by `scripts/seed_forms_check.sh`,
    which fails when a promotion fixes a form so its row and workarounds retire.
 9. **An AST handle has its node's own type**, never `usize` or a sibling node's pointer (#760 fixed 12
-   walkers). Held by the checker at a `deref`; the typed-handle proposal is in the skill file.
+   walkers). **Partly held by the checker, review-only for the rest — and the two halves must not be
+   conflated.** Where both operand types are known, the checker does discriminate pointee names:
+   `ty_compat` compares `a.ns`/`b.ns` when both sides are pointers (`src/sema.al:502-511`), so a
+   sibling-node pointer mix is refused at the sinks that route through it — call-result to pointer param
+   (`:11006`), struct-literal field (`:11285`), place writes (`:11546`), tail result (`:16808`). It does
+   **not** hold at a `deref`, where the type is deliberately `TyUnknown` under deferred pointee tracking
+   (`:11360-11363`), nor at an argument position, where the pointee name is erased on purpose so a
+   written `unchecked bitcast` cannot spuriously fail (`:11231-11237`, kind only). So the earlier wording
+   here — "held by the checker at a `deref`" — named the one place the checker is blind, and a later
+   correction that said there was no check at all was wrong in the other direction; both were coverage
+   claims nobody had read the tree for. What stays **review-only** is exactly the gap: a bare `usize`
+   handle, and a sibling-pointer mix at a deref or an argument. A gate rule would need a new hook, not
+   reuse — the #529 instrument's classes are `ARG/BIND/REASSIGN/FIELD-LIT/FIELD-STORE/ELEM-STORE/
+   PLACE-NESTED/PLACE-ARRNESTED/RESULT-RET/RESULT-TAIL/OP-CMP/OP-IF/OP-MATCH` (`src/sema.al:539-553`)
+   and there is no `DEREF` among them. The proposal, with its measured blast radius, is in
+   `.agents/skills/alatyr-lane/strict_forms.md` §9; until a rule lands, a reviewer answers the question
+   and the answer is recorded in the PR, not assumed.
 10. **A quantity with an identity is a `brand`**, not a bare number: a byte offset, a word count and a
     slot index get distinct brands, converted by named functions (#167, #760, #299). The checker
     refuses a sibling or raw mix since #299. Choosing a brand for a new quantity is **review-only**.
