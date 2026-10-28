@@ -84,15 +84,36 @@ seed_identity_check() { # version-file package-file seed-binary
     echo "FAIL: package.al has no version field to compare against seed/VERSION"; return 6
   fi
   if [ "$have_ver" != "$want_ver" ]; then
-    echo "FAIL: package.al's version and the promoted seed's version disagree."
-    echo "      package.al version:                $have_ver"
-    echo "      seed/VERSION current-seed-version: $want_ver"
-    echo "      CHANGELOG.md's versioning order moves the version ON a seed promotion and only on one, so"
-    echo "      these two must always agree. This fires on both ways of breaking it: a promotion that"
-    echo "      forgot the bump, and a bump made without a promotion. Note the version IS part of the"
-    echo "      emission — it is a compile-time constant (src/cli.al, TOOL-21) — but changing it moves"
-    echo "      the seed's and Stage1's output identically, so the fixpoint below would NOT catch this."
-    return 6
+    # ALATYR_RESEED=1 — the mid-promotion state, and the ONLY state where these two may differ.
+    # seed/VERSION's promote order is "bump FIRST, then build", because a compiler bakes the version
+    # of the tree it was compiled from (#586). So between the bump and the promotion the input tree
+    # legitimately names a version the committed seed does not carry yet — and without this opt-in
+    # fixpoint.sh refuses that tree here, before it builds anything, which is the state the prose
+    # REQUIRES. There is no other stage builder (see #1104). The opt-in relaxes THIS comparison
+    # only — a claim checked against a claim. The artifact check below is untouched and still runs:
+    # the seed must answer `current-seed-version`. That is what keeps this from becoming an escape
+    # hatch for #586 — a bump without a promotion still fails, flag set or not, because the binary
+    # answers the old number while the block claims the new one.
+    if [ "${ALATYR_RESEED:-0}" = "1" ]; then
+      echo "NOTE: mid-promotion, bump ahead of the seed (ALATYR_RESEED=1)."
+      echo "      package.al version:                $have_ver  <- the tree about to be built"
+      echo "      seed/VERSION current-seed-version: $want_ver  <- what the committed seed answers"
+      echo "      Falling THROUGH to the artifact check, not returning past it: the seed still has to"
+      echo "      answer $want_ver here, and the promoted Stage2 must answer $have_ver."
+      MID_PROMOTION=1
+    else
+      echo "FAIL: package.al's version and the promoted seed's version disagree."
+      echo "      package.al version:                $have_ver"
+      echo "      seed/VERSION current-seed-version: $want_ver"
+      echo "      CHANGELOG.md's versioning order moves the version ON a seed promotion and only on one, so"
+      echo "      these two must always agree. This fires on both ways of breaking it: a promotion that"
+      echo "      forgot the bump, and a bump made without a promotion. Note the version IS part of the"
+      echo "      emission — it is a compile-time constant (src/cli.al, TOOL-21) — but changing it moves"
+      echo "      the seed's and Stage1's output identically, so the fixpoint below would NOT catch this."
+      echo "      The one legitimate state where they differ is mid-promotion, bump ahead of the seed:"
+      echo "      run with ALATYR_RESEED=1 (#1104), and the artifact check below still has to pass."
+      return 6
+    fi
   fi
   # THE THIRD AXIS — ASK THE ARTIFACT (#586). The two comparisons above are claims checked against
   # claims: the block's version against package.al's. Both can agree while the binary they describe
@@ -148,7 +169,7 @@ seed_identity_check() { # version-file package-file seed-binary
 ## invocation, BEFORE the decision it is about — and in a SUBSHELL, because a `set -u` unbound
 ## variable or an arithmetic error inside a driven function unwinds to top level and ENDS THE
 ## SCRIPT, printing nothing at all; the completion marker below is what notices instead.
-FIXPOINT_SELFTEST_EXPECTED=30
+FIXPOINT_SELFTEST_EXPECTED=36  # +6 for the #1104 mid-promotion opt-in and its limit
 fixpoint_seed_identity_selftest() { # work-dir
   local st="$1" bad="" k=0 out rc
   rm -rf "$st"; mkdir -p "$st" || return 1
@@ -264,6 +285,27 @@ fixpoint_seed_identity_selftest() { # work-dir
   [ "$rc" = 0 ]; _ck $? "identity-failed-on-a-host-that-cannot-execute-the-seed(rc=$rc)"
   case "$out" in *'NOT asked'*) _ck 0 x ;;
                  *) _ck 1 "identity-claimed-an-asking-it-could-not-do($out)" ;; esac
+
+  # 1104 · the mid-promotion opt-in, in all three states. A bump ahead of the seed is the state
+  #        seed/VERSION's "bump FIRST, then build" order REQUIRES, and fixpoint.sh used to refuse
+  #        it before any stage built. These drive the opt-in and, more importantly, its LIMIT: the
+  #        artifact check still governs, so an opt-in cannot mask #586.
+  _vf "$sha" 0.4.2; _pkg 0.4.3; _ans 0.4.2
+  out="$(seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 6 ]; _ck $? "identity-accepted-a-bump-ahead-without-the-flag(rc=$rc)"
+  case "$out" in *'ALATYR_RESEED=1'*) _ck 0 x ;;
+                 *) _ck 1 "identity-refusal-did-not-name-the-opt-in($out)" ;; esac
+  out="$(ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 0 ]; _ck $? "identity-refused-a-mid-promotion-tree(rc=$rc: $out)"
+  case "$out" in *'mid-promotion'*) _ck 0 x ;;
+                 *) _ck 1 "opt-in-did-not-say-it-was-mid-promotion($out)" ;; esac
+  # …and the LIMIT: same opt-in, same bump ahead, but the artifact answers a THIRD version. That is
+  # #586 and it must still be refused, flag set or not.
+  _ans 0.4.1
+  out="$(ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 6 ]; _ck $? "opt-in-masked-a-seed-answering-a-third-version(rc=$rc)"
+  case "$out" in *'different version than seed/VERSION records'*) _ck 0 x ;;
+                 *) _ck 1 "opt-in-did-not-still-ask-the-artifact($out)" ;; esac
 
   printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
   if [ -n "$bad" ]; then echo "*** fixpoint seed-identity selftest: FAILED —$bad ***"; return 1; fi
