@@ -73,6 +73,13 @@
 #                 disagreement is the target assembler's reading of text the raw escape passes to `as`
 #                 VERBATIM (Assembly §4, Grammar §130 "only `as` validates"), not a lowering the
 #                 compiler chose. Listed and counted (`raw-escape=`), never part of `paths=`/`rows=`.
+#   N/A-TARGET    a row on a fixture that DECLARES the architecture its `asm()` body is written for
+#                 (a `## @target(<arch>)` header line, read from the fixture itself by
+#                 `xb_declared_targets`, #1041) where the judged backend is not that architecture.
+#                 The fixture never claimed to answer there, so the divergence is the walk's question,
+#                 not the compiler's. Counted (`target-na=`), never part of `paths=`/`rows=`, and
+#                 NEVER applied on the declared target itself. Decided BEFORE RAW-ESCAPE: a fact in the
+#                 file outranks a list maintained here, and the latter can drift from the former.
 #
 # Not a disagreement: equal states (V<a>/V<a>, K/K, C/C), and ref C against twin A, L or a loud
 # exit — every backend refused, only at a different step. `--all` lists those as REFUSED-LATE.
@@ -137,7 +144,7 @@ while [ "$#" -gt 0 ]; do
 done
 MANIFEST="${1:-$ROOT/scripts/corpus.manifest}"
 SHA_EMPTY=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-CLASS_ORDER="WRONG-VALUE MISSING-TRAP CRASH LOUD-EXIT TRAP TIMEOUT ASSEMBLE LINK REFUSED ACCEPTS HW-DEFINED RAW-ESCAPE REFUSED-LATE"
+CLASS_ORDER="WRONG-VALUE MISSING-TRAP CRASH LOUD-EXIT TRAP TIMEOUT ASSEMBLE LINK REFUSED ACCEPTS HW-DEFINED RAW-ESCAPE N/A-TARGET REFUSED-LATE"
 
 ## ── the documented raw-escape divergences ─────────────────────────────────────────────────────
 ## Specification (pin v1.1.0), Assembly §4 and the grammar's escape row:
@@ -164,6 +171,28 @@ CLASS_ORDER="WRONG-VALUE MISSING-TRAP CRASH LOUD-EXIT TRAP TIMEOUT ASSEMBLE LINK
 ## a divergence the compiler can close. Add a path here ONLY with a fixture whose disagreement is the
 ## assembler's reading of raw text — never for a path where the compiler chose a wrong lowering.
 RAW_ASM='test/naked_a64.al'
+
+## Fixtures that DECLARE the architecture their `asm()` body is written for. The declaration is read
+## from the FIXTURE's own header — a machine-readable `## @target(<arch>)` line — and never from a list
+## here, so the claim cannot drift from the file it describes (#1041, owner's decision: respect the
+## fixture's declared target). Why this is not an exemption of convenience: `spec/80-assembly.md` §4
+## and CG-3 say the raw escape "needs an `unchecked` grant and is validated only by `as`, with none of
+## the compiler's checks or guards". So when riscv64 assembles AArch64 text — `add x0,x0,x1` is legal
+## RV64, x0/x1 being aliases for zero/ra — and answers 40 where AArch64 answers 42, the compiler
+## conformed and the fixture, which declares "on AArch64", was asked a question it never claimed to
+## answer. The divergence is the walk's, not the compiler's, and it is reported as `N/A-TARGET`:
+## visible in the table, counted on the headline as `target-na=`, excluded from `paths=`/`rows=`.
+## A fixture with no marker is judged on every backend exactly as before; this widens nothing.
+xb_declared_targets() { # — path TAB arch, for each declaring fixture; paths are relative
+  ## ONE grep over the glob, not two processes per fixture: the loop form cost ~3 800 subprocesses
+  ## and took the self-test from 1 s to 148 s, because `xb_rows` calls this on every invocation.
+  ## Output is byte-identical (path TAB arch, manifest-relative), measured ~95x faster.
+  ## ONE awk process over the glob, header-scoped, through the single fixture-declaration reader
+  ## (`oracle_targets` in fixture_oracle.sh) — not a second copy of the pattern here, and not two
+  ## subprocesses per fixture (that cost ~3 800 processes and 147 s of self-test time).
+  ( cd "$ROOT" && oracle_targets test/*.al )
+  return 0
+}
 
 ## ── the documented hardware-defined divergences ───────────────────────────────────────────────
 ## Specification (pin b4e7979), Concurrency §6.2 "Inside an `unchecked` scope: wrap":
@@ -192,7 +221,7 @@ test/unchecked_div_min_neg1.al'
 ## The join. Reads a manifest, writes one line per disagreeing (path, twin):
 ##   class TAB backend TAB path TAB x86-state TAB twin-state TAB tag
 ## `all=1` also emits REFUSED-LATE. Kept a function so the self-test feeds it synthetic manifests.
-xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained — 0 held, 1 GREW, 2 unusable
+xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained target-na — 0 held, 1 GREW, 2 unusable
   ## The ratchet (#922): the counters used to be REPORTING ONLY — `--count` ended in `exit 0`
   ## whatever it had just printed, so a PR that ADDED a cross-backend disagreement passed the gate
   ## and the only trace was a number in a log nobody reads. That is how `paths` reached 950.
@@ -204,7 +233,7 @@ xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained — 
   ## separately for that reason: a quiet normal-exit disagreement that nothing declares is a program
   ## two backends answer differently with no stated cause, which is not a backlog item but a live wrong
   ## value. Documented hardware-defined rows never reach it (they are filtered before it is counted).
-  local f="$1" bp br bh bn bu
+  local f="$1" bp br bh bn bu bt mut_note
   [ -s "$f" ] || { echo "xbackend ratchet: NO baseline at $f — a ratchet cannot hold a line it does" \
     ; echo "  not have. Write one with: scripts/xbackend_diff.sh --ratchet --write" >&2; return 2; }
   bp="$(awk -F= '/^paths=/{print $2}' "$f" | head -1)"
@@ -214,7 +243,24 @@ xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained — 
   ## absent reads as 0, which is the strictest reading (any path newly claimed is then reported).
   bn="$(awk -F= '/^raw-escape=/{print $2}' "$f" | head -1)"; bn="${bn:-0}"
   bu="$(awk -F= '/^unexplained=/{print $2}' "$f" | head -1)"; bu="${bu:-0}"
-  case "$bp$br$bh$bn$bu" in ''|*[!0-9]*) echo "xbackend ratchet: baseline at $f is malformed" >&2; return 2 ;; esac
+  bt="$(awk -F= '/^target-na=/{print $2}' "$f" | head -1)"; bt="${bt:-0}"
+  case "$bp$br$bh$bn$bu$bt" in ''|*[!0-9]*) echo "xbackend ratchet: baseline at $f is malformed" >&2; return 2 ;; esac
+  ## `target-na=` is held OUTSIDE the paths/rows condition, and that placement is the whole point
+  ## (#1041). A fixture newly declaring `## @target(aarch64)` makes its foreign-backend rows leave
+  ## `paths=` and `rows=` — the numbers go DOWN, so a check that fires only on growth never sees it,
+  ## and the counter would reach zero by the walk asking fewer questions. That is I4's blind-counter
+  ## failure in a new costume: the exemption is a claim written into a fixture by the same person
+  ## whose disagreement it excuses, so a new one is a review event, not a quiet win. The declared
+  ## target itself stays judged either way (Assembly §4 / CG-3).
+  mut_note=0
+  case "${7:-}" in ''|*[!0-9]*) ;; *) mut_note="${7}" ;; esac
+  if [ "$mut_note" -gt "$bt" ]; then
+    echo "xbackend ratchet: FAIL — target-na GREW past the baseline ($bt -> $mut_note)."
+    echo "  A fixture that newly declares a target stops being judged on the other three backends."
+    echo "  Legitimate ONLY where its asm() body really is written for the declared arch: name the"
+    echo "  fixture and the arch in review, or fix the disagreement on the declared target."
+    return 1
+  fi
   ## The unexplained ceiling first, and it fails on its own: a growing backlog that happens to shrink
   ## `paths` must not carry a live wrong value past the gate.
   if [ "${6:-0}" -gt "$bu" ]; then
@@ -252,10 +298,16 @@ xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained — 
   return 0
 }
 
-xb_rows() { # manifest all [hw-defined-list] [raw-escape-list]
-  awk -F'\t' -v all="$2" -v empty="$SHA_EMPTY" -v hwl="$(printf '%s' "${3-$HW_DEFINED}" | tr '\n' ' ')" -v rawl="$(printf '%s' "${4-$RAW_ASM}" | tr '\n' ' ')" '
+xb_rows() { # manifest all [hw-defined-list] [raw-escape-list] [declared-target-list]
+  ## The declared-target list is the FIFTH argument, not the fourth: #1050 first took the fourth slot
+  ## for it while main had already taken that slot for the raw-escape list (#683). Two meanings in one
+  ## positional slot is how a judging tool silently judges the wrong thing.
+  awk -F'\t' -v all="$2" -v empty="$SHA_EMPTY" -v hwl="$(printf '%s' "${3-$HW_DEFINED}" | tr '\n' ' ')" -v rawl="$(printf '%s' "${4-$RAW_ASM}" | tr '\n' ' ')" \
+      -v tdl="$(printf '%s' "${5-$(xb_declared_targets)}" | tr '\n' '|')" '
     BEGIN { nh = split(hwl, hl, " "); for (i = 1; i <= nh; i++) if (hl[i] != "") hw[hl[i]] = 1
-            nr = split(rawl, rl, " "); for (i = 1; i <= nr; i++) if (rl[i] != "") raw[rl[i]] = 1 }
+            nr = split(rawl, rl, " "); for (i = 1; i <= nr; i++) if (rl[i] != "") raw[rl[i]] = 1
+            nt = split(tdl, tl, "|"); for (i = 1; i <= nt; i++) { if (tl[i] == "") continue
+              split(tl[i], kv, "\t"); if (kv[1] != "" && kv[2] != "") td[kv[1]] = kv[2] } }
     function state(be, ph, ex) {
       if (ph ~ /_timeout$/) return (ph == "run_timeout") ? "T" : "C"
       if (ph == "compile") return "C"
@@ -314,6 +366,20 @@ xb_rows() { # manifest all [hw-defined-list] [raw-escape-list]
           if (b == refbe) continue
           c = klass(ref, st[k], se[k] != empty)
           if (c == "MISSING-TRAP" && (p in hw)) c = "HW-DEFINED"
+          ## A fixture that declares its target is not judged on a foreign one (#1041); decided before
+          ## RAW-ESCAPE so the source-declared class names the row. On the declared target it IS judged.
+          ## Scoped to the shapes the declaration actually excuses — the precedent in this file:
+          ## HW-DEFINED applies ONLY to MISSING-TRAP, RAW-ESCAPE only to WRONG-VALUE|MISSING-TRAP.
+          ## `@target(aarch64)` says the asm() body is AArch64 GAS; what that excuses is the FOREIGN
+          ## FOREIGN ASSEMBLER reading of that verbatim text — a wrong value, a missing trap, or `as`
+          ## refusing it. It does NOT excuse decisions the compiler made itself on a foreign backend:
+          ## (wasm running where CG-4 wants a compile error), REFUSED (the #1014 over-refusal queue),
+          ## CRASH and TIMEOUT stay judged. `c != ""` keeps AGREEING backends out of the table —
+          ## without it, FIXING a foreign lowering prints a row and grows `target-na=`, failing the
+          ## ratchet for having fixed a bug.
+          if ((p in td) && b != td[p] && c != "" && (c == "WRONG-VALUE" || c == "MISSING-TRAP" || c == "ASSEMBLE")) {
+            printf "%s\t%s\t%s\t%s\t%s\tdeclared=%s\n", "N/A-TARGET", b, p, ref, st[k], td[p]; continue
+          }
           ## A raw-escape path is a disagreement over how the assembler reads verbatim text (§4),
           ## not a lowering the compiler chose; the row keeps printing under its own class and only
           ## leaves `paths=`, the count #683 drives to zero.
@@ -337,6 +403,15 @@ xb_rows() { # manifest all [hw-defined-list] [raw-escape-list]
           k = p "\t" "x86_64"
           c = klass(ref, x, se[k] != empty)
           if (c == "MISSING-TRAP" && (p in hw)) c = "HW-DEFINED"
+          ## `continue`, NOT `next`: this block sits inside the `for (i)` loop in awk END, and
+          ## `next` from END is illegal — awk aborts the whole program (rc=2) at the FIRST declaring
+          ## fixture, silently dropping every later path while `unexplained=0` still prints. The
+          ## self-test missed it because every planted declaring manifest holds ONE path, so the
+          ## abort lands after the asserted row; the two-path case below is what catches it.
+          if ((p in td) && td[p] != "x86_64" && c != "" && (c == "WRONG-VALUE" || c == "MISSING-TRAP" || c == "ASSEMBLE")) {
+            printf "%s\t%s\t%s\t%s\t%s\tdeclared=%s\n", "N/A-TARGET", "x86_64", p, ref, x, td[p]
+            continue
+          }
           ## A raw-escape path is a disagreement over how the assembler reads verbatim text (§4),
           ## not a lowering the compiler chose; the row keeps printing under its own class and only
           ## leaves `paths=`, the count #683 drives to zero.
@@ -486,6 +561,60 @@ if [ "$MODE" = selftest ]; then
      "$(xb_rows "$T/m" 0 '' test/raw.al | cut -f1,2 | tr '\t\n' ': ' | sed 's/ $//')" "RAW-ESCAPE:riscv64"
   ok "the committed raw-escape list names only fixtures that exist" \
      "$(printf '%s\n' "$RAW_ASM" | while read -r f; do [ -f "$ROOT/$f" ] || echo "$f"; done)" ""
+  ## A fixture that DECLARES its target is not judged on a foreign one (#1041) — and IS judged on the
+  ## target it declared. Both directions are driven, or the exemption would be a rubber stamp: a marker
+  ## that excused every backend would empty the counter by making the counter blind, which is exactly
+  ## what the reference rule at #1014 refuses.
+  tq() { printf '%s\t%s\t%s\t%s\t%s\t%s' "$1" test/decl.al "$2" "$3" "$E" "$E"; }
+  printf '%s\n' "$H" "$(tq x86_64 compile 1)" "$(tq aarch64 run 42)" "$(tq riscv64 run 40)" "$(tq wasm run 134)" > "$T/m"
+  ok "a foreign-target pair is N/A-TARGET while the DECLARED target is still judged" \
+     "$(xb_rows "$T/m" 0 "" "" "test/decl.al	riscv64" | cut -f1,2 | tr '\t\n' ': ' | sed 's/ $//')" \
+     "WRONG-VALUE:riscv64 TRAP:wasm REFUSED:x86_64"
+  ok "... and on a fixture declaring aarch64, every other backend is N/A-TARGET" \
+     "$(xb_rows "$T/m" 0 "" "" "test/decl.al	aarch64" | cut -f1,2 | sort | tr '\t\n' ': ' | sed 's/ $//')" \
+     "N/A-TARGET:riscv64 REFUSED:x86_64 TRAP:wasm"
+  printf '%s\n' "$H" "$(tq x86_64 run 42)" "$(tq aarch64 run 41)" > "$T/m"
+  ok "the marker never excuses a wrong value ON the target it declares" \
+     "$(xb_rows "$T/m" 0 "" "" "test/decl.al	aarch64" | cut -f1,2 | tr '\t\n' ': ' | sed 's/ $//')" \
+     "WRONG-VALUE:aarch64"
+  printf '%s\n' "$H" "$(tq x86_64 compile 1)" "$(tq aarch64 run 42)" "$(tq riscv64 run 40)" "$(tq wasm run 134)" > "$T/m"
+  ok "... and an UNMARKED fixture is judged on every backend, unchanged" \
+     "$(xb_rows "$T/m" 0 | cut -f1,2 | sort | tr '\t\n' ': ' | sed 's/ $//')" \
+     "REFUSED:x86_64 TRAP:wasm WRONG-VALUE:riscv64"
+  ## TWO-PATH case — the blind spot that hid an illegal `next` in awk END (#1041). Every other
+  ## planted declaring manifest here holds ONE path, so an abort inside the END loop lands AFTER the
+  ## asserted row: the check passes, the join is truncated, and `unexplained=0` still prints over half
+  ## the corpus never examined. Here a second disagreeing path FOLLOWS the declaring fixture, so a
+  ## truncation loses rows this check asserts on.
+  q2() { printf '%s\t%s\t%s\t%s\t%s\t%s' "$1" test/p.al "$2" "$3" "$E" "$E"; }
+  ## x86_64 is the reference here, so the exemption fires in the TWIN loop — the reachable site.
+  ## (Two earlier versions of this case were vacuous and are recorded as such: one made x86_64 the
+  ## reference with a plain value, so the exempt branch never ran; the other made x86_64 refuse, and
+  ## REFUSED is deliberately NOT excused — it is the #1014 over-refusal queue.)
+  printf '%s\n' "$H" "$(tq x86_64 run 42)" "$(tq aarch64 run 99)" "$(tq riscv64 run 40)" \
+    "$(q2 x86_64 run 42)" "$(q2 aarch64 run 7)" > "$T/m2"
+  ok "a disagreeing path AFTER a declaring fixture is still judged (END must not abort)" \
+     "$(xb_rows "$T/m2" 0 "" "" "test/decl.al\triscv64" | grep -c 'test/p.al')" "1"
+  ok "... and xb_rows exits 0 — a truncated join must not pass silently" \
+     "$(xb_rows "$T/m2" 0 "" "" "test/decl.al\triscv64" >/dev/null 2>&1; echo $?)" "0"
+  ok "... and the declaring fixture really reached the exempt path (the case is not vacuous)" \
+     "$(xb_rows "$T/m2" 0 "" "" "test/decl.al\triscv64" | awk -F'\t' '$3=="test/decl.al" && $2=="aarch64" {print $1}')" \
+     "N/A-TARGET"
+  ## ASSEMBLE IS excused: `as` refusing foreign text is the walk asking a question the fixture never
+  ## claimed to answer (Assembly §4 — only `as` validates). TRAP is NOT (CG-4: on a structured
+  ## backend asm is a compile error, not a runtime trap) — asserted above via wasm.
+  printf '%s\n' "$H" "$(tq x86_64 run 42)" "$(tq riscv64 assemble 1)" > "$T/m3"
+  ok "a declared target excuses ASSEMBLE on the foreign backend" \
+     "$(xb_rows "$T/m3" 0 "" "" "test/decl.al\taarch64" | awk -F'\t' '$2=="riscv64" {print $1}')" \
+     "N/A-TARGET"
+  ok "the declarations read from the fixtures name only existing fixtures and a known arch" \
+     "$(xb_declared_targets | while IFS=$'\t' read -r p a; do
+          { [ -f "$ROOT/$p" ] && case "$a" in x86_64|aarch64|riscv64|wasm) ;; *) echo "bad-arch $p";; esac; } || echo "missing $p"
+        done)" ""
+  ok "every declaring fixture carries its marker in the header, not in a list here" \
+     "$(xb_declared_targets | while IFS=$'\t' read -r p a; do
+          grep -qE "^##[[:space:]]*@target\($a\)" "$ROOT/$p" || echo "drift $p ($a)"
+        done)" ""
   printf '%s\n' "$H" "$(q x86_64 run 42)" "$(q wasm run 1 "$L")" "$(q aarch64 run 3)" > "$T/m"
   ok "a differing exit is WRONG-VALUE when quiet, LOUD-EXIT when the runner said why" \
      "$(xb_rows "$T/m" 0 | cut -f1,2,6 | tr '\t\n' ': ' | sed 's/ $//')" "WRONG-VALUE:aarch64:quiet LOUD-EXIT:wasm:loud"
@@ -527,6 +656,15 @@ if [ "$MODE" = selftest ]; then
   ## introduced after it cannot pass unseen because the line was never drawn.
   ok "ratchet: a pre-unexplained baseline holds at 0" "$(xb_ratchet "$T/base" 10 20 1 1 0 >/dev/null; echo $?)" 0
   ok "ratchet: a pre-unexplained baseline FAILS on one" "$(xb_ratchet "$T/base" 10 20 1 1 1 >/dev/null; echo $?)" 1
+  ## target-na is held even while paths/rows SHRINK — the exemption itself is what is watched (#1041)
+  printf 'paths=10\nrows=20\nhw-defined=1\nraw-escape=1\nunexplained=0\ntarget-na=2\n' > "$T/tn"
+  ok "ratchet: target-na held at the line"      "$(xb_ratchet "$T/tn" 10 20 1 1 0 2 >/dev/null; echo $?)" 0
+  ok "ratchet: target-na FAILS on one more"     "$(xb_ratchet "$T/tn" 10 20 1 1 0 3 >/dev/null 2>&1; echo $?)" 1
+  ok "ratchet: a newly declared target FAILS even as paths and rows SHRINK" \
+     "$(xb_ratchet "$T/tn" 4 8 1 1 0 3 >/dev/null 2>&1; echo $?)" 1
+  ok "ratchet: a pre-declaration baseline holds at 0" "$(xb_ratchet "$T/base" 10 20 1 1 0 0 >/dev/null; echo $?)" 0
+  ok "ratchet: a pre-declaration baseline FAILS on one declared fixture" \
+     "$(xb_ratchet "$T/base" 10 20 1 1 0 1 >/dev/null 2>&1; echo $?)" 1
   if [ "$fails" = 0 ]; then echo "xbackend_diff self-test: $ran/$ran ok"; exit 0; fi
   echo "xbackend_diff self-test: $fails of $ran check(s) FAILED — this script's output proves nothing"
   exit 3
@@ -535,7 +673,7 @@ fi
 [ -s "$MANIFEST" ] && grep -q '^columns=' "$MANIFEST" || {
   echo "xbackend_diff: no usable manifest at $MANIFEST (expected a 'columns=' header)" >&2; exit 2; }
 
-ROWS="$(xb_rows "$MANIFEST" "$ALL")"
+ROWS="$(xb_rows "$MANIFEST" "$ALL")" || { echo "xbackend diff: FAIL — the join aborted (rc=$?); every count below is TRUNCATED, not clean" >&2; exit 3; }
 [ -n "$CLASS" ] && ROWS="$(printf '%s\n' "$ROWS" | awk -F'\t' -v c="$CLASS" '$1 == c')"
 [ -n "$ROWS" ] || ROWS=""
 
@@ -611,14 +749,15 @@ if [ "$MODE" = sites ]; then
   exit 0
 fi
 
-nrows=0; npaths=0; nhw=0; nraw=0
+nrows=0; npaths=0; nhw=0; nraw=0; ntna=0
 if [ -n "$ROWS" ]; then
   ## The headline counts what #683 must drive to zero; the documented hardware-defined and raw-escape
   ## rows are counted beside it, never silently dropped.
-  nrows="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED" && $1 != "RAW-ESCAPE"' | wc -l | tr -d ' ')"
-  npaths="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED" && $1 != "RAW-ESCAPE"' | cut -f3 | sort -u | wc -l | tr -d ' ')"
+  nrows="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED" && $1 != "RAW-ESCAPE" && $1 != "N/A-TARGET"' | wc -l | tr -d ' ')"
+  npaths="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED" && $1 != "RAW-ESCAPE" && $1 != "N/A-TARGET"' | cut -f3 | sort -u | wc -l | tr -d ' ')"
   nhw="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "HW-DEFINED"' | wc -l | tr -d ' ')"
   nraw="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "RAW-ESCAPE"' | wc -l | tr -d ' ')"
+  ntna="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "N/A-TARGET"' | wc -l | tr -d ' ')"
 fi
 nsrc="$(awk -F'\t' '!/^#/ && NF >= 6 && $1 == "x86_64"' "$MANIFEST" | wc -l | tr -d ' ')"
 ## ── attribution: which disagreements does something already explain? (#683, criterion 3) ──────────
@@ -638,7 +777,8 @@ nquiet=0; nattrib=0; nunexpl=0
 if [ -n "$ROWS" ]; then
   while IFS=$'\t' read -r rcls rbe rpath rref rst rtag; do
     [ "$rtag" = quiet ] || continue
-    case "$rcls" in HW-DEFINED|RAW-ESCAPE) continue ;; esac
+    ## N/A-TARGET is explained by the fixture's own header; the other two by spec citations here.
+    case "$rcls" in HW-DEFINED|RAW-ESCAPE|N/A-TARGET) continue ;; esac
     nquiet=$((nquiet + 1))
     if oracle_explains "$rpath" "${rst#V}"; then
       nattrib=$((nattrib + 1))
@@ -649,17 +789,17 @@ if [ -n "$ROWS" ]; then
     fi
   done <<< "$ROWS"
 fi
-echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw raw-escape=$nraw quiet=$nquiet attributed=$nattrib unexplained=$nunexpl"
+echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw raw-escape=$nraw target-na=$ntna quiet=$nquiet attributed=$nattrib unexplained=$nunexpl"
 if [ "$RATCHET_WRITE" = 1 ]; then
   ## Writing the baseline is a deliberate, reviewable act: it moves the line the gate holds. The
   ## file records the manifest it was measured from, so a baseline cannot be moved without the
   ## manifest that justifies it being in the same diff.
-  printf 'paths=%s\nrows=%s\nhw-defined=%s\nraw-escape=%s\nunexplained=%s\n' "$npaths" "$nrows" "$nhw" "$nraw" "$nunexpl" > "$RATCHET_FILE" || exit 2
+  printf 'paths=%s\nrows=%s\nhw-defined=%s\nraw-escape=%s\ntarget-na=%s\nunexplained=%s\n' "$npaths" "$nrows" "$nhw" "$nraw" "$ntna" "$nunexpl" > "$RATCHET_FILE" || exit 2
   echo "xbackend ratchet: WROTE $RATCHET_FILE (paths=$npaths rows=$nrows hw-defined=$nhw raw-escape=$nraw)"
   exit 0
 fi
 if [ "$RATCHET" = 1 ]; then
-  xb_ratchet "$RATCHET_FILE" "$npaths" "$nrows" "$nhw" "$nraw" "$nunexpl"
+  xb_ratchet "$RATCHET_FILE" "$npaths" "$nrows" "$nhw" "$nraw" "$nunexpl" "$ntna"
   rc=$?
   [ "$MODE" = count ] && exit $rc
 fi
