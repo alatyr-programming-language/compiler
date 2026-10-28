@@ -35,6 +35,7 @@ issue in the marker's reason. Do not quietly route around it.
 | 8 | do not write the forms the frozen seed miscompiles | no live rows; seven retired by 0.2.5, two (#790, #791) by 0.2.7 | `seed_forms_check.sh` (the registry, `scripts/seed_forms.tsv`); a comment at every workaround |
 | 9 | an AST handle has its node's own type | #760 (12 walkers), the `usize` pass-plumbing | partly: `ty_compat` compares pointee names where BOTH operand types are known (`sema.al:502-511`) — NOT at a `deref` (`:11360-11363`, `TyUnknown`) nor at an argument (`:11231-11237`, kind only); the rest is review, §9 has the proposal |
 | 10 | a quantity with an identity is a `brand`, not a bare number | #167 (word offset used as a byte offset), #760, #299 | the checker refuses a sibling or raw mix (since #299); *choosing* a brand is held by review |
+| 11 | a field a reader turns into a value type is not a place to put metadata | #1097 (six rows trapped on three backends), #1099 | review until a registry exists: `sema_vty_record` (`sema.al:8740`) reads the span **before** the `TyPtr` kind, so a carried pointee name records the address as `VcInt`; no lexical rule can *derive* which fields are codegen-bearing, though once audited it is registry-holdable the way form 8 is — §11 |
 
 ## 1 · Absence is `Option(ptr(T))` walked with `match`, not a sentinel
 
@@ -706,6 +707,64 @@ to an overloaded, generic or qualified callee is not reached (`src/sema.al`, the
 crossings. **Choosing a brand for a new quantity is held by review.** No check can know that a
 `usize` means a byte offset, and there is no gate rule for it. `src/` declares no brand yet. A new
 quantity is the place to start, and the non-pointer handles of §9 step 3 are the planned campaign.
+
+## 11 · A field a reader turns into a value type is not a place to put metadata
+
+`Ty := struct { kind : TyKind, ns : usize, nl : usize }` (`src/sema.al:312`). At `Expr::AddrOf` the
+pointer answered `ns = 0, nl = 0`, and the comment said the pointee was untracked. When a generic call
+needed the pointee, the obvious one-liner was to carry it: `ns = tp.ns, nl = tp.nl`, where `tp` is the
+inner place's type. It compiles. It passes sema. It is **wrong**, and the full gate proved it: six rows
+that answer 42 on `main` trapped on three backends — `ir_ptr_place(a64)`, `ir_ptr_agree(a64)` and
+`ir_ptr_place(rv64)` with SIGTRAP, `ir_ptr_place(wat)`, `p0_parser_if_deref_store(wat)` and
+`p0_void_tail_call_side_effect(wat)` with SIGABRT (`a3c10e93`, PR #1097).
+
+```alatyr
+## not this — "the span is only metadata, filling it in can only add information" (#1097)
+Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = tp.ns, nl = tp.nl))
+
+## this — until there is a field no reader turns into a value type (#1099)
+Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = 0, nl = 0))
+```
+
+**Why.** A field's meaning is the set of things that read it, not what the writer meant by it. The
+reader here is `sema_vty_record` (`src/sema.al:8738-8743`), and the order of its three fallbacks is
+what makes the carry fatal:
+
+```alatyr
+if t.nl != 0 { vt = sema_vty_name(src, t.ns, t.nl, decls) }   ## :8740 — the NAME branch goes first
+if not ir::vty_known(vt) { vt = sema_vty_kind(ty_kind(t)) }    ## :8741 — TyPtr => vty_ptr(), correct
+```
+
+With `nl = 0` the name branch cannot fire and every `&x` node is recorded by its `kind`, which for
+`TyPtr` is `ir::vty_ptr()` (`src/sema.al:8904`) — class `VcPtr`. Fill the span in and, for a pointee
+whose name resolves — `ptr(mut n)` where `n : i64` — `sema_vty_name` answers a **scalar** (`:8911`,
+`sema_vty_scalar`), so the node is recorded `VTy(cls = VcInt, bytes = 8, sg = Signed)` (`src/ir.al:2527`)
+instead of `VcPtr`: the address stops being a pointer in the table the IR builder reads, and
+`src/ir/build.al:230` (`VcInt => { ib_int_ks(t.bytes, t.sg) }`) builds an integer of the pointee's
+width and signedness where a pointer belongs. That is what traps.
+
+Note what this is *not*: the emitter-side pointee readers (`deref_bitcast_pointee_bytes`,
+`ptr_target_pointee_s/_n`) are **not** the channel — they parse the span off the `Expr::Bitcast` AST
+node (`src/lower_layout.al:2688-2701`, where `Expr::AddrOf` sits in the empty arm) and never consult a
+`Ty`. The first version of this section said otherwise and was wrong; the channel is inside `sema.al`,
+one function, three lines. It is easier to miss for being local.
+
+The transferable part is repeatable and it reads as safe: **zero staying zero is the only case that
+cannot change behaviour, and non-zero was the entire point of the change.** "Strictly additive" is
+therefore never a safety argument for filling in a field that has always answered zero — the zeros are
+what some reader is relying on. A comment that calls such a zero a limitation may be describing a
+load-bearing tolerance; find the readers before calling it stale.
+
+**Check.** No lexical rule can **derive** which fields are codegen-bearing — that needs the audit
+(#1099 asks the owner for the field; the audit is what makes the answer checkable). Once audited,
+holding it is routine and this repo already ships the pattern: form 8 is exactly a review-derived audit
+frozen into `scripts/seed_forms.tsv` and enforced by `scripts/seed_forms_check.sh`. A
+`codegen_bearing_fields.tsv` of `(type, field)` pairs with a rule in `SF_LEX_RULES`
+(`scripts/strict_forms_check.sh:65`), refusing `Ty(` … `ns =`/`nl =` whose right-hand side is not `0`
+absent a `## metadata-ok: <reason>` marker, is implementable in the existing scanner. **Until that
+registry exists this form is held by review.** The review step is mechanical: before you write a
+non-zero into a field that has always answered zero, `rg` the field across `src/` and read every hit —
+and read the *sema-side* hits first, because that is where this one was.
 
 ## How the checks count, and what they measured
 
