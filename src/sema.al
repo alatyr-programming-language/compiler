@@ -11372,27 +11372,36 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyEnum, ns = es, nl = el))
     }
     ## `ptr(<place>)` — take the address of a place. The inner place is checked (its name
-    ## must be bound); the result is a POINTER type (tag 5) that CARRIES THE POINTEE SPAN.
-    ## It used to answer `ns = 0, nl = 0`, on the comment "the toy grammar's pointers point to
-    ## ints". That grammar is gone: the language declares `ptr(Vec(T))`, `ptr(mut Stmt)`,
-    ## `ptr(u8)`, the pointee span survives at declaration level (`param.ts`/`cd.ret_ts`, what
-    ## `ir_check_call` and `ty_compat` read), and FIVE other sites already build a `TyPtr` with
-    ## its pointee span (2585, 3560, 4314, 7164, 7171) — this was the only one that
-    ## dropped it, so an expression-level `Ty` for `ptr(x)` could not say what it pointed at
-    ## and a later generic call had no `T` to instantiate (Comptime §3.3 refused
-    ## `hash(ptr(x))`; the author had to annotate). Types §4 models the opposite: an operand
-    ## `ptr([mut] R)` in a position wanting `R` REACHES THE POINTEE, so the pointee is known at
-    ## that node by definition.
-    ## Strictly additive, which is the risk the old comment named ("poison-tolerant, so a
-    ## `deref(p)` used as a u64 result never spuriously mismatches"): `tp.ns/nl` is zero for an
-    ## inner place with no recorded type name, and then this answers exactly what it answered
-    ## before — so no shape tolerated today becomes a refusal here. `Deref` is deliberately NOT
-    ## touched: carrying the span here is step one, the `DEREF` instrument that compares pointee
-    ## names at a deref is the next slice, and doing both at once is how a tolerated shape gets
-    ## refused without a measured corpus diff to say so (strict_forms.md form 9).
+    ## must be bound); the result is a POINTER type (tag 5). Pointee-type tracking is deferred
+    ## (the toy grammar's pointers point to ints), so the pointer carries no pointee span.
+    ## The second half of that sentence is now false as DESCRIPTION — the grammar declares
+    ## `ptr(Vec(T))`, `ptr(mut Stmt)`, `ptr(u8)` and the span survives at declaration level
+    ## (`param.ts`/`cd.ret_ts`, what `ir_check_call` and `ty_compat` read) — but the first half
+    ## still holds at THIS node, and keeping it is a measured result, not inertia. The obvious
+    ## reading — "the pointee span is metadata, so filling it in can only add information" — is
+    ## FALSE here, and the full gate proved it on three backends (the run for PR #1097 at
+    ## `a3c10e93`, which tried exactly this):
+    ## `ir_ptr_place(a64)` and `ir_ptr_agree(a64)` trapped with SIGTRAP, `ir_ptr_place(rv64)` with
+    ## SIGTRAP, `ir_ptr_place(wat)`, `p0_parser_if_deref_store(wat)` and
+    ## `p0_void_tail_call_side_effect(wat)` with SIGABRT, where all six answer 42 on `main`.
+    ## The cause is that `Ty.ns/nl` on a `TyPtr` is NOT inert: the emitters READ it to SIZE a
+    ## memory access — `aarch64.al:5007` takes the load width from `deref_bitcast_pointee_bytes`,
+    ## `aarch64.al:8489` the store width from `deref_bitcast_pointee_bytes`, `wat.al:3512-3513`
+    ## the pointee name from `ptr_target_pointee_s/_n`, and `aarch64.al:1263` refuses a sub-word
+    ## pointee it cannot size. So `ptr(mut s)` with the span of `S` attached stops being a word and
+    ## becomes, to the emitter, a pointer to something whose width it must derive from the name —
+    ## and for a struct, or a name it cannot size, it traps. Zero staying zero was the only case
+    ## this change was safe in; non-zero was the whole point of the change, and it is the case
+    ## that broke. The old comment's "poison-tolerant" was not a stale excuse, it was load-bearing.
+    ## So the pointee of an expression-level `&x` stays unrecorded until there is a field for it
+    ## that no emitter reads: `Ty` is `{ kind, ns, nl }` and is built in 146 places, so a fourth
+    ## field is its own slice with its own spec answer (where the pointee lives, who may read it,
+    ## and what a generic instantiates from) — filed as the successor of #1097, not guessed here.
+    ## Types §4's `ptr([mut] R)` reaching the pointee is about a place wanting `R` at DECLARATION
+    ## level, where `param.ts`/`cd.ret_ts` already carry the span; it does not ask for this one.
     Expr::AddrOf(p) => {
       tp := check_expr(p, decls, upto, src, a, locals, nloc)?
-      Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = tp.ns, nl = tp.nl))
+      Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = 0, nl = 0))
     }
     ## `deref(<ptr>)` — a load through a pointer. The inner pointer is checked; the result
     ## type is the pointee, which is unknown (tag 0) under the deferred pointee-type tracking
