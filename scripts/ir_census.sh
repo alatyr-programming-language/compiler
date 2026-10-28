@@ -202,13 +202,15 @@ targets_report() {
 # wrong one:
 #   REGRESSION   a function the backend used to select from the IR now falls back to the private
 #                emitter. Nothing excuses this; it fails, exactly as it always has.
-#   CORRECTION   the baseline was inflated: what the selector emitted for those functions was not
-#                right — either the spec forbids it, or the IR has no model for it and the count was
-#                standing for output the IR does not actually model. The number was never honest, and
-#                refusing to record the correction would keep the compiler wrong just to hold a figure
-#                up (#1084 is the second kind: five x86_64 functions were counted while the selector
-#                emitted a `call` for an `@inline` callee, and neither `docs/ir.md` nor the spec models
-#                `@inline` substitution — a gap, so it is filed as #1084 rather than asserted here).
+#   CORRECTION   the baseline was inflated: what the selector counted was not what the spec allows it
+#                to emit. The number was never honest, and refusing to record the correction would keep
+#                the compiler non-conforming just to hold a figure up (#1084 is this: five x86_64
+#                functions were counted while the selector emitted a `call` for an `@inline` callee —
+#                spec 90-codegen §3.5 item 3, "the guaranteed minimum", says such a call site is
+#                SUBSTITUTED at every direct call and "no `call` is emitted", and CG-10 is the decision
+#                behind it. So the count stood for output the spec forbids; 1125 is what x86_64 really
+#                takes from the IR. The debt is to IMPLEMENT the substitution, not to restore 1130 by
+#                re-allowing the `call`.)
 # The second is recorded, never hidden: the ack names the backend, cites the issue that establishes
 # the correction, and says what restores the coverage. It prints on every run that uses it, so it
 # cannot go quiet, and an ack with no citation is refused — a bare "trust me" is not a reason. Same
@@ -454,7 +456,7 @@ if [ "$SELFTEST" = 1 ]; then
   chk "$c" "ir targets ratchet self-test: the refusal says HOW to record an honest correction (rc=$rc)"
 
   ## ── an acknowledged decrease: recorded, cited, and never silent. ──
-  printf 'x86_64=20\n## x86_64-coverage-ok: #1084 — five functions were counted while the selector emitted a call for an @inline callee, which neither docs/ir.md nor the spec models; the IR gains the representation when #1084 is answered.\naarch64=18\nriscv64=18\nwasm=0\n' > "$T/base_ack"
+  printf 'x86_64=20\n## x86_64-coverage-ok: #1084 — five functions were counted while the selector emitted a call for an @inline callee, which spec 90-codegen §3.5 item 3 forbids (no `call` at an @inline call site); the IR gains the substitution.\naarch64=18\nriscv64=18\nwasm=0\n' > "$T/base_ack"
   printf 'x86_64\t10\t5\t15\t0\naarch64\t10\t5\t18\t0\nriscv64\t10\t5\t18\t0\nwasm\t10\t1\t1\t3\n' > "$T/targets.txt"
   out="$(targets_ratchet "$T/base_ack" 2>&1)"; rc=$?
   c=0; [ "$rc" = 0 ] || c=1
