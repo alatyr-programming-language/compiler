@@ -655,6 +655,72 @@ if [ -z "$sw_status" ]; then
   fail=1; sw_status=UNKNOWN
 fi
 
+# The SEEDED PROGRAM GENERATOR (#582), now IN THE GATE. Criterion 4 is "no wrong value, no crash, on
+# any backend", and until now that sentence was held by nobody: `progen.py` existed and was run by
+# hand, so "progen green" meant somebody remembered to run it. Every fixture under test/ is one point
+# someone thought to write; progen generates programs valid BY CONSTRUCTION and runs each on all four
+# backends, so a disagreement needs no expected value to be found — which is exactly the class of bug
+# the fixtures structurally miss, and why it belongs beside the sweeps rather than in a nightly nobody
+# reads.
+#
+# The seed range is FIXED so the gate is reproducible: the same tree answers the same way twice, and a
+# seed that once failed keeps failing until it is fixed. `ALATYR_PROGEN_SEEDS` widens the count for a
+# nightly without changing what the pinned range means. The self-test runs first, by the house rule
+# that a check must prove it can fail before it is believed.
+#
+# `progen.py run` exits non-zero on WRONG, REFUSED or CRASH — and REFUSED is included because a
+# program valid by construction that the compiler refuses IS a defect, so this stage is stricter than
+# the criterion it holds. It does NOT exit non-zero on HANG, so the summary is read here too: a
+# backend that hangs is not a green night either. No summary line means nothing ran — unknown, so a
+# failure, by the same rule as every other coverage line in this script.
+echo "### PROGEN (seeded generator: one program, four backends, no expected value needed) ###"
+PG_LOG="$LOGDIR/full_progen.log"
+python3 scripts/progen.py self-test > "$PG_LOG" 2>&1
+pg_st_rc=$?
+grep -E "^progen self-test:" "$PG_LOG" | tail -1 | sed 's/^/  /'
+if [ "$pg_st_rc" != 0 ]; then
+  echo "  FAIL progen self-test: rc=$pg_st_rc — the generator's own differential is not proven, so"
+  echo "   a green run below would mean nothing"
+  fail=1
+fi
+# No silent fallback to a compiler that is not there: if the binary is missing, every generated
+# program "refuses" for the same reason and the counts would still read clean.
+if [ ! -x "$ROOT/target/debug/alatyr" ]; then
+  echo "  FAIL progen: no executable at $ROOT/target/debug/alatyr — the stage would report a green"
+  echo "   built on nothing, so it refuses to run at all"
+  fail=1; pg_cover="NOT RUN — no compiler"
+fi
+pg_seeds="${ALATYR_PROGEN_SEEDS:-300}"
+pg_start="${ALATYR_PROGEN_START:-1}"
+if [ "$pg_seeds" -lt 1 ] 2>/dev/null; then
+  echo "  FAIL progen: ALATYR_PROGEN_SEEDS=$pg_seeds generates no program at all — a run that"
+  echo "   compares nothing is not a green night, whatever it prints"
+  fail=1
+fi
+python3 scripts/progen.py run --seed "$pg_start" --count "$pg_seeds" \
+  --jobs "${ALATYR_PROGEN_JOBS:-4}" --cc "$ROOT/target/debug/alatyr" >> "$PG_LOG" 2>&1
+pg_rc=$?
+pg_line="$(grep -E '^progen: seeds=' "$PG_LOG" | tail -1)"
+pg_hang="$(printf '%s' "$pg_line" | grep -oE 'hang=[0-9]+' | cut -d= -f2)"
+if [ -z "$pg_line" ]; then
+  echo "  (progen printed no summary line — whether any program ran is unknown, treating as a failure)"
+  fail=1; pg_cover="UNKNOWN — no progen summary"
+else
+  echo "  $pg_line"
+  grep -E '^progen coverage:' "$PG_LOG" | tail -1 | sed 's/^/  /'
+  # `progen.py` fails on compared==0 only when attempted>0; a count of 0 slips past its own rule,
+  # so the compared count is checked here too — zero cross-backend comparisons prove nothing.
+  pg_cmp="$(grep -E '^progen coverage:' "$PG_LOG" | tail -1 | grep -oE 'compared=[0-9]+' | cut -d= -f2)"
+  [ "${pg_cmp:-0}" != 0 ] || { echo "  FAIL progen: compared=0 — no program was compared across two backends"; fail=1; }
+  [ "${pg_hang:-0}" != 0 ] && { echo "  FAIL progen: hang=$pg_hang — a backend that never answered is not green"; fail=1; }
+  pg_cover="$(printf '%s' "$pg_line" | sed 's/^progen: //;s/ out=.*//')"
+fi
+if [ "$pg_rc" != 0 ]; then
+  echo "  FAIL progen: rc=$pg_rc (WRONG, REFUSED or CRASH; artifacts and a reproduce: command are named in $PG_LOG)"
+  grep -E '^(WRONG|CRASH|REFUSED|TIMEOUT|progen: NO program)' "$PG_LOG" | head -12 | sed 's/^/    /'
+  fail=1
+fi
+
 if [ "$fail" != 0 ]; then
   echo "*** FULL GATE: FAILURES ***"
 elif [ "$sw_status" = "RAN" ]; then
@@ -670,6 +736,7 @@ elif [ "$sw_status" = "RAN" ]; then
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
+  echo "    progen:          ${pg_cover:-NO SUMMARY LINE}"
 else
   echo "*** FULL GATE: GREEN — but the SWEEPS DID NOT RUN (sweeps STATUS=$sw_status): the aarch64/"
   echo "    riscv64/wasm backends were NOT exercised by the sweeps. Re-run with --force-sweeps before"
@@ -685,5 +752,6 @@ else
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
+  echo "    progen:          ${pg_cover:-NO SUMMARY LINE}"
 fi
 exit "$fail"
