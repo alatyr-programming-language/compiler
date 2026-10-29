@@ -79,7 +79,7 @@ comptime_cmp := fn(op : i64, l : i64, r : i64, unsigned : bool) -> i64 {
     if op == 27 { if not lt { return 1 }; return 0 }
     if op == 28 { if l != r { return 1 }; return 0 }
   }
-  guard_cmp(op, l, r)
+  sema::sema_guard_cmp(op, l, r)
 }
 
 comptime_scalar_value := fn(e : ptr(Expr), cx : ptr(LCtx)) -> ComptimeScalar {
@@ -414,8 +414,8 @@ comptime_query_arg_ok := fn(e : ptr(Expr), pm : ptr(mut Param), cx : ptr(LCtx), 
   mut et := comptime_query_comp_field_type(e, cx, a)
   if et.n == 0 { et = expr_type_span(e, cx) }
   if et.n != 0 and pb.n != 0 { return norm_type_eq(cx.src, et.s, et.n, pb.s, pb.n) }
-  if arg_is_num_literal(e) { return is_int_scalar_type(cx.src, pb.s, pb.n) }
-  if arg_is_float_literal(e) { return is_float_scalar_type(cx.src, pb.s, pb.n) }
+  if arg_is_num_literal(e) { return sema::sema_int_overload_param(cx.src, pb.s, pb.n) }
+  if arg_is_float_literal(e) { return sema::sema_float_overload_param(cx.src, pb.s, pb.n) }
   if comptime_query_is_str_lit(e) { return str_at((cx.src + pb.s), pb.n) == "str" }
   true
 }
@@ -1056,10 +1056,10 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
       ## `N <op> M` (Comptime §4: a closed comptime fact). All three used to fall to -1.
       if parser::expr_is_num(r) {
         lsz := guard_size_operand(l, tp, cx.decls, src, a)
-        if lsz >= 0 { return guard_cmp(i64(op), lsz, guard_expr_num(r)) }
+        if lsz >= 0 { return sema::sema_guard_cmp(i64(op), lsz, guard_expr_num(r)) }
         lcnt := guard_field_count(l, tp, cx.decls, src, a)
-        if lcnt >= 0 { return guard_cmp(i64(op), lcnt, guard_expr_num(r)) }
-        if parser::expr_is_num(l) { return guard_cmp(i64(op), guard_expr_num(l), guard_expr_num(r)) }
+        if lcnt >= 0 { return sema::sema_guard_cmp(i64(op), lcnt, guard_expr_num(r)) }
+        if parser::expr_is_num(l) { return sema::sema_guard_cmp(i64(op), guard_expr_num(l), guard_expr_num(r)) }
       }
       ## TYPE-NAME equality where BOTH sides are concrete type names (`u64 == u64`, `S != T` outside a
       ## generic) — Comptime §4.1's type equality as a closed comptime fact. Disjoint from the
@@ -1100,7 +1100,7 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
       if k < 0 { return -1 }
       am := deref(arm_p(ast::arm_at(arms_head, "ctfold: comptime match has no arms")))
       if am.vl != 0 {
-        want := comptime_kind_of_name(src, am.vs, am.vl)
+        want := sema::sema_comptime_kind_of_name(src, am.vs, am.vl)
         if want >= 0 {
           if k == want { return 1 }
           return 0
@@ -1266,7 +1266,7 @@ comptime_range_typeinfo_arg := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Aren
   ## `.fields.len` / `.variants.len` leaves one Field wrapper around the call in `base`; `.n` passes
   ## the call directly. Peel exactly that one wrapper, matching `guard_field_count`'s AST shape.
   mut scrut := base
-  inner := guard_field_base(base)
+  inner := sema::expr_field_base(base)
   if unchecked bitcast(usize, inner) != 0 { scrut = inner }
   guard_typeinfo_arg_type(scrut, ptr(tp), cx.src, a)
 }
