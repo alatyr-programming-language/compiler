@@ -204,6 +204,87 @@ def diff_detail(norm):
     return out
 
 
+def _norm_sig(body):
+    """-> (params, ret) normalized, or (None, None) if the head does not parse."""
+    m = re.match(r'\s*(?:pub\s+)?[a-z_][a-z0-9_]*\s*:=\s*fn\s*\((.*?)\)\s*(?:->\s*([^{]+))?\{',
+                body, re.S)
+    if not m:
+        return None, None
+    return (re.sub(r'\s+', ' ', m.group(1)).strip(),
+            re.sub(r'\s+', ' ', m.group(2) or '').strip())
+
+
+def _norm_body(name, body):
+    """Body as a shape: comments gone, the function's OWN name replaced, backend callee prefixes
+    stripped, whitespace collapsed. Two spellings of one decision collide here on purpose."""
+    b = strip_comments(body)
+    b = re.sub(r'\b%s\b' % re.escape(name), 'FN', b)
+    b = re.sub(r'\b(?:a64|rv|wat|x86)_([a-z])', r'\1', b)
+    return re.sub(r'\s+', ' ', b).strip()
+
+
+def private_exact(root):
+    """EXACT private copies: a function in an EMITTER whose normalized signature AND body equal a
+    function in SHARED code, found by shape and NOT by the FAMILIES list.
+
+    Why this exists and why it is exact-only. `FAMILIES` is a list of names, so a private copy written
+    under a fresh name is invisible to it — measured on main `99476a5`: pasting the shared span scan
+    into `lower.al` under a new name left `--gate` at rc=0 with zero mentions of it. Criterion 2 says
+    the private copies are GONE; a census that only knows the copies someone already named does not
+    hold that. Near-matches were measured too and are NOT refused: at a Jaccard floor of 0.6 over
+    same-signature pairs the tree yields **1068** hits, which is noise, not a finding — refusing them
+    would teach the next agent to lower the floor or delete the check. Exact equality is the line that
+    can actually be held, and it is empty today (0), so the ceiling costs nothing to keep at zero.
+
+    An acknowledged copy carries `## copy-ok: #<issue> — <why this one cannot be shared yet>` on the
+    line above its definition; the reason is printed on every run that uses it, and a marker citing no
+    issue is refused — a bare 'trust me' is not a reason.
+    """
+    defs, _ = load(root)
+    shared = {}
+    for sname, fns in defs.items():
+        for d in fns:
+            if d['file'] in EMITTERS:
+                continue
+            p, r = _norm_sig(d['body'])
+            if p is None:
+                continue
+            shared.setdefault((p, r), []).append((d, _norm_body(sname, d['body'])))
+    out = []
+    for name, fns in sorted(defs.items()):
+        for d in fns:
+            if d['file'] not in EMITTERS:
+                continue
+            p, r = _norm_sig(d['body'])
+            if p is None:
+                continue
+            nb = _norm_body(name, d['body'])
+            for sd, sb in shared.get((p, r), []):
+                if nb != sb:
+                    continue
+                path = os.path.join(root, 'src', d['file'])
+                if not os.path.isfile(path):
+                    for cand in ('src/lower', 'src'):
+                        alt = os.path.join(root, cand, d['file'])
+                        if os.path.isfile(alt):
+                            path = alt
+                            break
+                mark = ''
+                try:
+                    lines = io.open(path, encoding='utf-8', errors='replace').read().split('\n')
+                    for k in (d['start'] - 1, d['start'] - 2):
+                        if 0 <= k < len(lines) and 'copy-ok:' in lines[k]:
+                            mark = lines[k].split('copy-ok:', 1)[1].strip()
+                            break
+                except OSError:
+                    pass
+                out.append({'name': name, 'file': d['file'], 'line': d['start'],
+                            'shared_file': sd['file'], 'shared_line': sd['start'],
+                            'mark': mark})
+                break
+    return out
+
+
 def classify(root, families):
     """-> (liftable[(fam,lines)], blocked{fam:[blockers]}, ok) — the verdicts, unprefixed by printing."""
     defs, _ = load(root)
@@ -323,6 +404,22 @@ def analyse(root, families, verbose):
     if verbose:
         print('  (closure depth 12; backend-local means defined in aarch64.al/riscv64.al/wat.al)')
     return 0
+
+
+def capture(fn, *a, **kw):
+    """Run `fn`, catching SystemExit, and return (rc, everything it printed). A self-test that only
+    reads the return code cannot tell a refusal from a refusal-with-the-right-words, and the words are
+    what the next agent acts on."""
+    import io as _io, contextlib
+    buf = _io.StringIO()
+    rc = 0
+    try:
+        with contextlib.redirect_stdout(buf):
+            r = fn(*a, **kw)
+        rc = 0 if r is None else int(r)
+    except SystemExit as e:
+        rc = 0 if e.code is None else int(e.code)
+    return rc, buf.getvalue()
 
 
 def self_test():
@@ -463,6 +560,42 @@ def self_test():
     l5, b5, _ = classify(t, ['emitter_only'])
     chk('a lone definition in an emitter is not shared code', 'emitter_only' not in {f for f, _ in l5}
         and b5.get('emitter_only') and 'emitter' in b5['emitter_only'][0])
+    # ── EXACT private copies, found by SHAPE, not by the FAMILIES list. The class this exists for:
+    # a shared decision pasted into an emitter under a fresh name, which `FAMILIES` cannot see. Every
+    # verdict below is asserted, including the ones that must NOT fire — an instrument that refuses
+    # everything looks strict and proves nothing.
+    w('lower_layout.al', 'shared_one := fn(x : ptr(u8), n : usize) -> bool {\n  mut r := false\n  if x != 0 { r = true }\n  r\n}\n')
+    w('lower.al', 'x86_copy_one := fn(x : ptr(u8), n : usize) -> bool {\n  mut r := false\n  if x != 0 { r = true }\n  r\n}\n')
+    pc = private_exact(t)
+    chk('an EXACT copy under a NEW name is found by shape',
+        any(e['name'] == 'x86_copy_one' and e['shared_file'] == 'lower_layout.al' for e in pc))
+    bp = os.path.join(t, 'base_priv')
+    io.open(bp, 'w', encoding='utf-8').write('private=0\n')
+    rc_p, out_p = capture(private_ratchet, t, bp)
+    chk('a NEW exact copy FAILS the ratchet and is named with its original',
+        rc_p == 1 and 'x86_copy_one' in out_p and 'lower_layout.al' in out_p)
+    chk('the refusal says HOW to acknowledge it', 'copy-ok:' in out_p)
+    # A marker with a cited issue acknowledges it — and the reason prints, so it cannot go quiet.
+    w('lower.al', '## copy-ok: #1234 — the shared one reads a global this emitter cannot see yet.\n'
+                  'x86_copy_two := fn(x : ptr(u8), n : usize) -> bool {\n  mut r := false\n  if x != 0 { r = true }\n  r\n}\n')
+    rc_p, out_p = capture(private_ratchet, t, bp)
+    chk('a cited copy-ok marker is ACKed and prints its reason, while the unmarked copy still fails',
+        rc_p == 1 and 'x86_copy_two' in out_p and '#1234' in out_p and 'ACK' in out_p
+        and 'x86_copy_one' in out_p)
+    # A marker that cites no issue is not a reason.
+    w('lower.al', '## copy-ok: it is fine.\nx86_copy_three := fn(x : ptr(u8), n : usize) -> bool {\n  mut r := false\n  if x != 0 { r = true }\n  r\n}\n')
+    rc_p, out_p = capture(private_ratchet, t, bp)
+    chk('a copy-ok citing no issue is refused', rc_p == 1 and 'cites no issue' in out_p)
+    # The control: with every copy in the baseline, the same tree passes. Without this the rule above
+    # could "pass" only by never having been tried.
+    names = {e['name'] for e in private_exact(t)}
+    io.open(bp, 'w', encoding='utf-8').write(
+        'private=%d\n' % len(names) + ''.join('%s\tlower.al:0\tx/y.al:0\n' % n for n in sorted(names)))
+    rc_p, out_p = capture(private_ratchet, t, bp)
+    chk('the same tree PASSES once every copy is in the baseline (non-vacuity)', rc_p == 0)
+    # No baseline is not a pass: the class would be silently unheld.
+    rc_p, out_p = capture(private_ratchet, t, os.path.join(t, 'no_such_base'))
+    chk('a missing baseline is rc=2, never a silent zero', rc_p == 2 and 'unheld' in out_p)
     shutil.rmtree(t)
     print('copy lift self-test: %d checks, %d failed' % (seen_n[0], bad))
     return 0 if bad == 0 else 1
@@ -501,7 +634,62 @@ def gate(root, baseline_path):
     print('  blocked (each names what the next slice must move first):')
     for fam in sorted(blocked):
         print('    %-26s %s' % (fam, '; '.join(blocked[fam][:3])))
-    return 0
+    rc = private_ratchet(root, os.path.join(os.path.dirname(baseline_path),
+                                             'copy_lift.private.baseline'))
+    return rc
+
+
+def private_ratchet(root, base_path):
+    """Hold the EXACT private copies of shared decisions to the reviewed baseline, by name.
+
+    rc: 0 held or improved, 1 a NEW copy appeared (or a marker cited no issue), 2 the baseline is
+    missing or unreadable — an unmeasured tree is never a pass."""
+    found = private_exact(root)
+    if not os.path.isfile(base_path):
+        print('copy lift private gate: NO baseline at %s — the class is unheld. Write it with:'
+              % base_path)
+        print('  python3 scripts/copy_lift.py --private-copies --write-baseline > %s' % base_path)
+        return 2
+    allowed, notes = set(), []
+    for ln in io.open(base_path, encoding='utf-8'):
+        ln = ln.strip()
+        if not ln or ln.startswith('#'):
+            continue
+        if ln.startswith('private='):
+            notes.append(ln)
+            continue
+        allowed.add(ln.split('\t')[0])
+    names = {e['name'] for e in found}
+    new = sorted(names - allowed)
+    gone = sorted(allowed - names)
+    print('copy lift private gate: exact private copies=%d baseline %d (new=%d, retired=%d)'
+          % (len(names), len(allowed), len(new), len(gone)))
+    for e in found:
+        if e['mark']:
+            print('  ACK %-26s %s:%s copies %s:%s — %s'
+                  % (e['name'], e['file'], e['line'], e['shared_file'], e['shared_line'], e['mark']))
+    rc = 0
+    if new:
+        print('copy lift private gate: FAIL — %d NEW exact private cop%s of a shared decision:'
+              % (len(new), 'y' if len(new) == 1 else 'ies'))
+        for e in sorted(found, key=lambda x: (x['file'], x['line'])):
+            if e['name'] in new:
+                print('    %s:%s  %s  duplicates %s:%s'
+                      % (e['file'], e['line'], e['name'], e['shared_file'], e['shared_line']))
+        print('  One decision, one place (strict_forms.md §4). Call the shared one; if this copy')
+        print('  genuinely cannot be shared yet, acknowledge it on the line above:')
+        print('    ## copy-ok: #<issue> — <what forces a second copy here>')
+        rc = 1
+    unmarked_new = [e for e in found if e['name'] in new and e['mark'] and not re.search(r'#\d', e['mark'])]
+    for e in unmarked_new:
+        print('copy lift private gate: FAIL — the copy-ok marker on %s cites no issue; a reason must '
+              'name one' % e['name'])
+        rc = 1
+    if gone:
+        print('  retired since the baseline (coverage gained, delete those lines here in the same PR):')
+        for n in gone:
+            print('    %s' % n)
+    return rc
 
 
 if __name__ == '__main__':
@@ -515,6 +703,24 @@ if __name__ == '__main__':
         args.remove('--verbose')
     if '--self-test' in args:
         sys.exit(self_test())
+    if '--private-copies' in args:
+        args.remove('--private-copies')
+        write = '--write-baseline' in args
+        if write:
+            args.remove('--write-baseline')
+        found = private_exact(root)
+        if write:
+            print('private=%d' % len(found))
+            for e in sorted(found, key=lambda x: (x['file'], x['line'])):
+                print('%s\t%s:%s\t%s:%s' % (e['name'], e['file'], e['line'],
+                                             e['shared_file'], e['shared_line']))
+            sys.exit(0)
+        print('copy lift: %d EXACT private copies of a shared decision in an emitter' % len(found))
+        for e in sorted(found, key=lambda x: (x['file'], x['line'])):
+            print('  %-26s %s:%-6s duplicates %s:%s%s'
+                  % (e['name'], e['file'], e['line'], e['shared_file'], e['shared_line'],
+                     '  [copy-ok: %s]' % e['mark'] if e['mark'] else ''))
+        sys.exit(0)
     if '--gate' in args:
         args.remove('--gate')
         sys.exit(gate(root, os.path.join(root, 'scripts', 'copy_lift.baseline')))

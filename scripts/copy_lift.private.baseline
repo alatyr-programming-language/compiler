@@ -1,0 +1,56 @@
+# scripts/copy_lift.private.baseline — the ceiling for EXACT private copies of shared decisions.
+# scripts/copy_lift.py --gate holds it. MEASURED at 99476a5, not chosen:
+#
+#   python3 scripts/copy_lift.py --private-copies
+#
+# An EXACT private copy is a function in an EMITTER (`lower.al`, `aarch64.al`, `riscv64.al`,
+# `wat.al`) whose normalized signature AND body equal a function in shared code, matched by SHAPE
+# and not by the `FAMILIES` name list. Name-matching is what `FAMILIES` already does, and it is
+# why criterion 2 was unenforced: pasting the shared span scan into `lower.al` under a fresh name
+# left `--gate` at rc=0 with zero mentions of it (measured on this tree before this file existed).
+# A census that only knows the copies someone already named does not hold "the private copies are
+# gone".
+#
+# WHY AN ADDITION RULE WITH A BASELINE RATHER THAN A REFUSAL OF ALL NINETEEN
+# ------------------------------------------------------------------------------
+# All 19 exist on main today, so refusing exact copies outright would turn the gate red before any
+# new defect was added — which is not evidence, that is a broken instrument. The repo's own rule
+# (AGENTS.md "Strict forms") is the same one every other check here follows: refuse only a NEW
+# occurrence against the merge base, and let an existing one be acknowledged where it cannot move
+# yet. This file is that merge-base snapshot, by NAME so a removal is auditable: a bare count would
+# let one copy leave and another arrive unseen.
+#
+# WHY NONE OF THE 19 IS FORCED BY LAYERING — checked, not assumed
+# ----------------------------------------------------------------
+# The obvious defence of a copy in `lower.al` is that the shared original sits ABOVE it and the
+# emitter may not call upward. It already does, so the defence fails: `lower.al` references
+# `driver::` (2 sites), `cli::` (1), `sema::` (5), `parser::` (3), `lower_layout::` (81),
+# `lower_ctx::` (1), `ast::` (25), `ir::` (6). Every module holding one of these 19 originals is
+# already imported by the file holding the copy, so each copy is one call away from being deleted.
+# The graph is already bidirectional (`driver::` calls `lower::` 62 times, `sema::` 43,
+# `lower_layout::` 22), so lifting adds no edge that does not already exist.
+#
+# Each line is `name<TAB>emitter:line<TAB>original`. The line numbers are where the COPY stands
+# today and move with any edit; the NAME is what the ratchet holds. Removing a copy means deleting
+# its line here in the same PR, and the count falling is coverage gained — say so in the PR body
+# and let `--private-copies` print the proof.
+private=19
+streq	lower.al:290	driver.al:62
+colon_pos	lower.al:437	driver.al:1245
+is_builtin_int_name	lower.al:787	cli.al:3490
+_lnhash	lower.al:1948	lower_layout.al:410
+gref_ident_byte	lower.al:2109	sema.al:19617
+vis_show_span	lower.al:2229	lower_layout.al:353
+vis_show_str	lower.al:2232	lower_layout.al:356
+is_dyn_type	lower.al:9494	driver.al:2009
+decl_at	lower.al:13328	driver.al:52
+decl_get	lower.al:13330	lower_layout.al:127
+tuple_first_start	lower.al:15577	lower_layout.al:1841
+expr_is_int_lit	lower.al:16313	sema.al:13528
+is_int_scalar_type	lower.al:17015	sema.al:5716
+is_float_scalar_type	lower.al:17023	sema.al:5721
+comptime_kind_of_name	lower.al:24822	sema.al:17489
+guard_expr_is_num	lower.al:25014	parser.al:2789
+guard_cmp	lower.al:25023	sema.al:17280
+guard_stmt_ret_expr	lower.al:25039	sema.al:17641
+guard_field_base	lower.al:25105	sema.al:4274

@@ -301,6 +301,44 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   `collect_slots`, then reclassify the fixture to accept. Until the first is done the second would turn
   the gate red, and until both are done this row stays a disagreement with a named cause — which is what
   §3.8's attribution is for.
+- **CORRECTION to the bullet below it, same day: the twins do not refuse at the span scan, so lifting
+  it is NEUTRAL for them — measured off the emitted text, not inferred.** Emitting the §7.2 fixtures with
+  the main build (`alatyr aarch64|riscv64|wat test/slice_variadic_enum_elem.al`, stdout captured) shows the
+  refusal site is the for-in lowering, a different decision: `ebreak # for-in over an unsupported iterable`
+  in both aarch64 and riscv64, `(unreachable) (; unsupported for-in-iterable ;)` in wasm. So the bullet
+  below is wrong in its mechanism and in the ordering it prescribes: giving the shared scan the variadic
+  branch does NOT turn these refusals into answers, and the fixture reclassification therefore does NOT
+  belong in the same PR as the lift — it waits, as §7.2 already says, for the `for`-in iterable support
+  (slice 6, "for-in 33 rows"). What the lift changes on the twins is only what they answer WHERE THEY
+  ALREADY ANSWER, which is the constraint the band note at `lower_ctx.al:528` meant and could not state.
+  The bound is safe and this was checked rather than assumed: x86 sets `LOWER_SRC_N = src_n` at
+  `lower.al:30318`, and every x86 emit site is preceded by a publish of the SAME buffer length into
+  `ast::set_src_extent` (`driver.al:2863`→`:2917`, `:2974`→`:3012`, `:3066`→`:3099`, `:5138`→`:5605`),
+  so `LOWER_SRC_N == ast::src_extent()` wherever the lifted scan would run.
+- **criterion 2 was unENFORCED, and now it is: `copy_lift.py` found only the copies someone had already
+  named.** Measured on this tree before the fix: pasting `driver::streq` verbatim into `lower.al` under
+  the fresh name `x86_private_streq` left `--gate` at **rc=0 with zero mentions of it** — `FAMILIES` is a
+  name list, so an unlisted copy walks through the check that exists to stop it. A census that knows only
+  the duplicates already listed does not hold "the private copies are gone"; this is the recurring class the
+  whole exercise is about, enforced by a list of names instead of by shape. Fixed by `private_exact()`,
+  which matches an emitter function against shared code by normalized SIGNATURE and BODY, name-agnostic,
+  plus `scripts/copy_lift.private.baseline` as the merge-base snapshot and a `## copy-ok: #<issue> — <why>`
+  marker for a copy that genuinely cannot move yet. Evidence, in order: the planted copy above now returns
+  **rc=1 naming `lower.al:30956 x86_private_streq duplicates driver.al:62`**; the self-test runs 28 checks
+  and 0 fail, including a non-vacuity control (the same tree passes once every copy is in the baseline) and
+  a refusal of a marker that cites no issue; and the clean tree holds at `liftable=0 baseline 0` unchanged.
+  **The measurement it made possible: `lower.al` carries 19 EXACT copies of decisions shared code already
+  makes** (`streq`≡`driver.al:62`, `_lnhash`≡`lower_layout.al:410`, `is_int_scalar_type`≡`sema.al:5716`,
+  `guard_expr_is_num`≡`parser.al:2789`, and 15 more, all listed in the baseline by name so a removal is
+  auditable and a swap is not). None is forced by layering, which was the obvious defence and does not
+  survive the grep: `lower.al` already references `driver::` (2 sites), `cli::` (1), `sema::` (5),
+  `parser::` (3), `lower_layout::` (81), `lower_ctx::` (1), `ast::` (25) — every module holding one of the
+  19 originals is already imported by the file holding its copy, so each is one call from deletion. Near-
+  matches were measured too and deliberately NOT refused: at a Jaccard floor of 0.6 over same-signature
+  pairs the tree yields **1068** hits, which is noise; refusing them would teach the next agent to lower
+  the floor or delete the check. Exact equality is the line that can be held, and it costs nothing to hold
+  at 19. `idiom_gate.sh` stays the reporting-only duplicate-decision detector AGENTS.md makes it — this
+  refuses one narrow shape it cannot see, and does not duplicate its remit.
 - **the x86 variadic branch is not incidental, and merging it is a behaviour change on three backends —
   measured, so the next slice can be ordered.** The band note at `lower_ctx.al:528` says the open work is
   "giving this scan the variadic branch without changing what the three twins answer today". Read as a
@@ -310,9 +348,12 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   non-scalar element — `test/slice_variadic_enum_elem.al` x86_64 `run 42` (the fixture's own expected
   value, `esum(Sh.Sq(20), Sh.Tri(11)) = 20 + 22 = 42`) against aarch64 and riscv64 `run 133`
   (= 128 + SIGTRAP, the `ebreak`/`brk #0` refusal) and wasm `run 134`; `test/signedness_slice_variadic.al`
-  likewise (x86 `run 42`, twins TRAP, wasm `assemble 1`). So on these paths the twins answer NOTHING today:
-  the merge does not perturb a value, it turns a refusal into an answer, and it therefore LOWERS the TRAP
-  mass (2 210 of the 2 462 rows) rather than risking a wrong value. Scope, counted: **29 corpus sites carry
+  likewise (x86 `run 42`, twins TRAP, wasm `assemble 1`). The reading of these numbers given here first —
+  "the twins answer nothing, so the merge turns a refusal into an answer and lowers the TRAP mass" — was
+  WRONG about where they refuse, and is corrected by the bullet above: they trap at the for-in lowering,
+  which the span scan does not touch. What the numbers still establish is the SCOPE: x86_64 is today the
+  only backend that carries §7.2 slice-variadic with a non-scalar element, and the span scan is one of the
+  decisions standing in the way of the twins getting it. Scope, counted: **29 corpus sites carry
   the `name : ...T` annotation form** (27 in `test/*.al`, 2 in `lib/`), of which six are dedicated
   §7.2 fixtures (`slice_variadic{,_fixed,_float,_enum8,_enum_elem}.al`, `signedness_slice_variadic.al`).
   What the merge must preserve is the {0,0} answer for a BARE `...` (the §7.1 comptime variadic, no element
