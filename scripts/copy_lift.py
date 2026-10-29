@@ -86,7 +86,13 @@ def parse(path):
         depth = 0
         for j in range(i, len(raw)):
             depth += strip_noise(raw[j]).count('{') - strip_noise(raw[j]).count('}')
-            if depth == 0 and j > i:
+            ## `j >= i`, not `j > i`: a ONE-LINE definition (`f := fn(...) -> T { expr }`) returns
+            ## depth to 0 on its own line, and requiring a later line made the scan run past it and
+            ## swallow every following definition until some accidental depth-0 — measured on main
+            ## 99476a5, `lower_ctx.al:33 decl_at` came back with `pub decl_get := fn(...)` inside
+            ## its body. Bodies that are not the body are how a duplicate detector invents duplicates
+            ## and misses real ones; the span is the whole of what is compared.
+            if depth == 0 and j >= i:
                 out[m.group(1)] = {'file': os.path.basename(path), 'start': i + 1,
                                    'end': j + 1, 'body': '\n'.join(raw[i:j + 1])}
                 break
@@ -223,23 +229,29 @@ def _norm_body(name, body):
     return re.sub(r'\s+', ' ', b).strip()
 
 
-def private_exact(root):
-    """EXACT private copies: a function in an EMITTER whose normalized signature AND body equal a
-    function in SHARED code, found by shape and NOT by the FAMILIES list.
+def _code(name, body):
+    """The executable text only: `pub` and statement separators normalized too.
 
-    Why this exists and why it is exact-only. `FAMILIES` is a list of names, so a private copy written
-    under a fresh name is invisible to it — measured on main `99476a5`: pasting the shared span scan
-    into `lower.al` under a new name left `--gate` at rc=0 with zero mentions of it. Criterion 2 says
-    the private copies are GONE; a census that only knows the copies someone already named does not
-    hold that. Near-matches were measured too and are NOT refused: at a Jaccard floor of 0.6 over
-    same-signature pairs the tree yields **1068** hits, which is noise, not a finding — refusing them
-    would teach the next agent to lower the floor or delete the check. Exact equality is the line that
-    can actually be held, and it is empty today (0), so the ceiling costs nothing to keep at zero.
+    Why this is NOT the same as `_norm_body`. `_norm_body` keeps `pub` and keeps `;`, and that
+    difference is the difference between a copy and NOT a copy: `decl_at` in lower.al differs from
+    `pub decl_at` in lower_ctx.al by the keyword alone, and `decl_get` by a `;` alone — both are
+    genuinely the same decision written twice. Meanwhile `streq` in lower.al was reported an exact
+    copy of `driver.al:62` while the `pub` version in lower_ctx.al carries NO fast-reject that
+    lower.al's has: `if a_n != b_n { return false }`. A detector that calls that 'exact' invites
+    someone to delete the fast path and repoint 257 call sites at a different implementation — which
+    is a behaviour change dressed as a refactor. So the shape match and the code match are reported
+    apart, and only a CODE match may be deleted."""
+    b = _norm_body(name, body)
+    b = re.sub(r'^\s*pub\s+', '', b)
+    b = b.replace(';', ' ')
+    return re.sub(r'\s+', ' ', b).strip()
 
-    An acknowledged copy carries `## copy-ok: #<issue> — <why this one cannot be shared yet>` on the
-    line above its definition; the reason is printed on every run that uses it, and a marker citing no
-    issue is refused — a bare 'trust me' is not a reason.
-    """
+
+def classify_copies(root):
+    """-> (exact, superset). EXACT: same signature, same executable code — deletable by repointing
+    the call sites at the shared one. SUPERSET: same signature, the emitter's body does strictly more
+    (or something different) — NOT deletable without a decision, and reported so the next agent does
+    not 'lift' it and silently change behaviour."""
     defs, _ = load(root)
     shared = {}
     for sname, fns in defs.items():
@@ -249,8 +261,9 @@ def private_exact(root):
             p, r = _norm_sig(d['body'])
             if p is None:
                 continue
-            shared.setdefault((p, r), []).append((d, _norm_body(sname, d['body'])))
-    out = []
+            shared.setdefault((p, r), []).append((d, _norm_body(sname, d['body']),
+                                                  _code(sname, d['body'])))
+    exact, sup = [], []
     for name, fns in sorted(defs.items()):
         for d in fns:
             if d['file'] not in EMITTERS:
@@ -258,31 +271,71 @@ def private_exact(root):
             p, r = _norm_sig(d['body'])
             if p is None:
                 continue
-            nb = _norm_body(name, d['body'])
-            for sd, sb in shared.get((p, r), []):
-                if nb != sb:
-                    continue
-                path = os.path.join(root, 'src', d['file'])
-                if not os.path.isfile(path):
-                    for cand in ('src/lower', 'src'):
-                        alt = os.path.join(root, cand, d['file'])
-                        if os.path.isfile(alt):
-                            path = alt
-                            break
-                mark = ''
-                try:
-                    lines = io.open(path, encoding='utf-8', errors='replace').read().split('\n')
-                    for k in (d['start'] - 1, d['start'] - 2):
-                        if 0 <= k < len(lines) and 'copy-ok:' in lines[k]:
-                            mark = lines[k].split('copy-ok:', 1)[1].strip()
-                            break
-                except OSError:
-                    pass
-                out.append({'name': name, 'file': d['file'], 'line': d['start'],
-                            'shared_file': sd['file'], 'shared_line': sd['start'],
-                            'mark': mark})
-                break
-    return out
+            nb, nc = _norm_body(name, d['body']), _code(name, d['body'])
+            hit_shape = [s for s in shared.get((p, r), []) if nb == s[1]]
+            if not hit_shape:
+                continue
+            sd, _, sc = shared[(p, r)][0]
+            code_hits = [s for s in hit_shape if nc == s[2]]
+            pub = [s for s in code_hits if 'pub ' in s[0]['body'].split('{')[0]]
+            # Prefer the PUBLIC shared definition as the home to repoint at: a private one in another
+            # module cannot be called cross-module, so naming it would send the next agent to a target
+            # that does not compile.
+            home = (pub or code_hits or [shared[(p, r)][0]])[0][0]
+            rec = {'name': name, 'file': d['file'], 'line': d['start'],
+                   'shared_file': home['file'], 'shared_line': home['start'],
+                   'pub': bool(pub), 'mark': ''}
+            if code_hits:
+                exact.append(rec)
+            else:
+                rec['differs'] = ('emitter body does more or different code than %s:%s — NOT deletable '
+                                  'by repointing' % (home['file'], home['start']))
+                sup.append(rec)
+    return exact, sup
+
+
+def private_exact(root):
+    """The deletable set: emitter functions whose EXECUTABLE code equals a shared function's, found
+    by shape and not by the FAMILIES name list. Delegates to classify_copies() and keeps only EXACT
+    code matches, so the gate never asks for a lift that would drop behaviour — see _code().
+
+    Why shape and not names: `FAMILIES` is a list of names, so a private copy written under a fresh
+    name is invisible to it — measured on main `99476a5`: pasting the shared span scan into `lower.al`
+    under a new name left `--gate` at rc=0 with zero mentions. Criterion 2 says the private copies are
+    GONE; a census that knows only the duplicates already listed does not hold that. Near-matches were
+    measured too and are NOT refused: at a Jaccard floor of 0.6 over same-signature pairs the tree
+    yields **1068** hits, which is noise — refusing them teaches the next agent to lower the floor or
+    delete the check. Code equality is the line that can be held.
+
+    An acknowledged copy carries `## copy-ok: #<issue> — <why this one cannot be shared yet>` on the
+    line above its definition; the reason prints on every run, and a marker citing no issue is refused.
+    """
+    exact, _sup = classify_copies(root)
+    for e in exact:
+        path = os.path.join(root, 'src', e['file'])
+        if not os.path.isfile(path):
+            for cand in ('src/lower',):
+                alt = os.path.join(root, cand, e['file'])
+                if os.path.isfile(alt):
+                    path = alt
+                    break
+        try:
+            lines = io.open(path, encoding='utf-8', errors='replace').read().split('\n')
+            for k in (e['line'] - 1, e['line'] - 2):
+                if 0 <= k < len(lines) and 'copy-ok:' in lines[k]:
+                    e['mark'] = lines[k].split('copy-ok:', 1)[1].strip()
+                    break
+        except OSError:
+            pass
+    return exact
+
+
+def private_superset(root):
+    """Same signature, different code: reported, never refused. These are the ones a naive 'lift it'
+    would silently rewrite — `streq` in lower.al carries a length-first fast reject the shared one
+    does not, so repointing its 257 call sites is a behaviour change, not a refactor."""
+    _ex, sup = classify_copies(root)
+    return sup
 
 
 def classify(root, families):
@@ -590,12 +643,26 @@ def self_test():
     # could "pass" only by never having been tried.
     names = {e['name'] for e in private_exact(t)}
     io.open(bp, 'w', encoding='utf-8').write(
-        'private=%d\n' % len(names) + ''.join('%s\tlower.al:0\tx/y.al:0\n' % n for n in sorted(names)))
+        'private=%d\n' % len(names) + ''.join('B\t%s\tlower.al:0\tprivate x/y.al:0\t0\n' % n
+                                                for n in sorted(names)))
     rc_p, out_p = capture(private_ratchet, t, bp)
     chk('the same tree PASSES once every copy is in the baseline (non-vacuity)', rc_p == 0)
     # No baseline is not a pass: the class would be silently unheld.
     rc_p, out_p = capture(private_ratchet, t, os.path.join(t, 'no_such_base'))
     chk('a missing baseline is rc=2, never a silent zero', rc_p == 2 and 'unheld' in out_p)
+    # ── the parse span. A ONE-LINE definition must end on its own line. `j > i` made the scan run
+    # past it and swallow every following definition until some accidental depth-0, so the body that
+    # was compared was not the body — measured on main 99476a5, `lower_ctx.al:33 decl_at` came back
+    # containing `pub decl_get := fn(...)`. An instrument that compares the wrong text both invents
+    # duplicates and hides real ones, and every verdict downstream is then unfounded.
+    w('lower_layout.al', 'one_liner := fn(x : usize) -> usize { x + 1 }\n'
+                         'after_it := fn(x : usize) -> usize { x - 1 }\n')
+    got = parse(os.path.join(t, 'src', 'lower_layout.al'))
+    chk('a ONE-LINE definition ends on its own line',
+        got['one_liner']['start'] == got['one_liner']['end']
+        and 'after_it' not in got['one_liner']['body'])
+    chk('and the definition after it is still found, not swallowed',
+        'after_it' in got and got['after_it']['start'] > got['one_liner']['end'])
     shutil.rmtree(t)
     print('copy lift self-test: %d checks, %d failed' % (seen_n[0], bad))
     return 0 if bad == 0 else 1
@@ -655,10 +722,17 @@ def private_ratchet(root, base_path):
         ln = ln.strip()
         if not ln or ln.startswith('#'):
             continue
-        if ln.startswith('private='):
+        if ln.startswith('private=') or ln.startswith('A='):
             notes.append(ln)
             continue
-        allowed.add(ln.split('\t')[0])
+        # `class<TAB>name<TAB>emitter<TAB>home<TAB>calls` — the NAME is field 2. Reading field 1
+        # would take the class letter for a name and report every copy as new, which is exactly the
+        # kind of green-turned-red-by-format accident that makes a gate untrustworthy.
+        f = ln.split('\t')
+        if len(f) < 2 or not f[1]:
+            print('copy lift private gate: malformed baseline line %r' % ln)
+            return 2
+        allowed.add(f[1])
     names = {e['name'] for e in found}
     new = sorted(names - allowed)
     gone = sorted(allowed - names)
@@ -710,10 +784,34 @@ if __name__ == '__main__':
             args.remove('--write-baseline')
         found = private_exact(root)
         if write:
+            # The SAME classified format the committed baseline uses, so `--write-baseline` regenerates
+            # it. A baseline the documented command cannot produce is a trap: the next agent regenerates
+            # it, the format changes under the ratchet's parser, and every copy reads as new.
+            defs, _ = load(root)
             print('private=%d' % len(found))
-            for e in sorted(found, key=lambda x: (x['file'], x['line'])):
-                print('%s\t%s:%s\t%s:%s' % (e['name'], e['file'], e['line'],
-                                             e['shared_file'], e['shared_line']))
+            rows = []
+            for e in sorted(found, key=lambda x: x['line']):
+                ds = defs[e['name']]
+                low = [x for x in ds if x['file'] == e['file']][0]
+                nc = _code(e['name'], low['body'])
+                pubs = [d for d in ds if 'pub ' in d['body'].split('{')[0]
+                        and _code(e['name'], d['body']) == nc]
+                pubany = [d for d in ds if 'pub ' in d['body'].split('{')[0]]
+                c = sum(len(re.findall(r'(?<![:\w.])%s\s*\(' % re.escape(e['name']), strip_noise(ln)))
+                        for ln in open(os.path.join(root, 'src', e['file']),
+                                       encoding='utf-8', errors='replace'))
+                if pubs:
+                    cls, home = 'A', 'pub %s:%s' % (pubs[0]['file'], pubs[0]['start'])
+                elif pubany:
+                    cls, home = 'C', 'pub %s:%s DIFFERS' % (pubany[0]['file'], pubany[0]['start'])
+                else:
+                    cls, home = 'B', 'private %s:%s' % (e['shared_file'], e['shared_line'])
+                rows.append((cls, e['name'], '%s:%s' % (e['file'], e['line']), home, c))
+            # Grouped by class, then line — the committed baseline's order, so a regeneration is
+            # byte-identical and a diff of the baseline means the TREE changed, not the sort.
+            for cls in 'ABC':
+                for r in [x for x in rows if x[0] == cls]:
+                    print('%s\t%s\t%s\t%s\t%d' % r)
             sys.exit(0)
         print('copy lift: %d EXACT private copies of a shared decision in an emitter' % len(found))
         for e in sorted(found, key=lambda x: (x['file'], x['line'])):

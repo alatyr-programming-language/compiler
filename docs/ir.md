@@ -301,6 +301,43 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   `collect_slots`, then reclassify the fixture to accept. Until the first is done the second would turn
   the gate red, and until both are done this row stays a disagreement with a named cause — which is what
   §3.8's attribution is for.
+- **the 19 are not one class, and the class matters more than the count — measured per name.** Each is
+  now classified A/B/C in `scripts/copy_lift.private.baseline`, because "delete the copy" is safe for two
+  of them and a behaviour change for one:
+  * **A — 2 names, 187 call sites, deletable today.** `decl_at` (`lower.al:13328`) and `decl_get`
+    (`lower.al:13330`) have a `pub` definition in `lower_ctx.al:33/:34` whose executable code is identical
+    — differing by the `pub` keyword and a `;` alone. The shared decision already exists and the emitter
+    keeps its own copy anyway: this is criterion 2 in its purest form, and repointing is mechanical.
+  * **B — 16 names, 53 call sites.** Duplicated only across PRIVATE module copies (`lower.al` ↔
+    `driver.al`/`sema.al`/`parser.al`/`cli.al`/`lower_layout.al`), no `pub` home exists. Two steps: lift
+    one to `lower_ctx`, then delete the rest; the lift is the reviewed part. Naming a private twin as the
+    target would send the next agent to a call that does not compile, so the detector prefers a `pub` home.
+  * **C — 1 name, 257 call sites, NOT deletable by repointing.** `streq`: the `pub` version in
+    `lower_ctx.al:41` has NO length-first fast reject that `lower.al:290` and `driver.al:62` both carry.
+    Two implementations of one signature. **Checked, not assumed benign:** emitting the shape and reading
+    the GAS shows `cmpq %rcx, %rsi; jne` before any byte compare — `==` on `str` compares length first,
+    so the fast reject is redundant at the machine level and the two are equivalent. It is a source-level
+    optimization, not a semantic difference; repointing is therefore safe on VALUE, which is exactly the
+    thing that had to be established before touching 257 call sites.
+  A stale comment is recorded here so it stops misleading: `lower.al:293-294` says the pointer arithmetic
+  "route[s] through `rt::addr`, not a checked integer `+` (I11 / CG-8)", while the two lines below it use
+  plain `src + a_s` — and `lower_ctx.al:39-40` says plain `+` is intentional for the same reason. Both
+  use `+`; the comment contradicts its own code.
+- **why the deletion is NOT attempted on this machine.** `alatyr check package.al` does not terminate in
+  120 s under Rosetta, and `alatyr check src/lower.al` cannot check a module standalone (`invalid at line
+  206`, it needs the package context). So a 187-call-site edit to `lower.al` cannot be compiled here at
+  all, and an unverifiable refactor of the emitter is precisely the silently-wrong result this goal
+  forbids. Class A is staged as the first deletion PR for a native x86_64 machine, with the repoint
+  targets named in the baseline.
+- **an instrument bug found while doing this, and what it invalidated.** `parse()` ended a definition at
+  `depth == 0 and j > i`, so a ONE-LINE definition never terminated on its own line: the scan ran past it
+  and swallowed every following definition until some accidental depth-0 — `lower_ctx.al:33 decl_at` came
+  back with `pub decl_get := fn(...)` inside its body. Text that is not the body both invents duplicates
+  and hides real ones, so every verdict downstream was unfounded. Fixed to `j >= i`, with two planted
+  self-test checks; the count held at 19 across the fix, which is the reassuring answer, not the expected
+  one. `copy_lift.py --self-test` now runs **30 checks, 0 failed**, and `--private-copies --write-baseline`
+  regenerates the committed baseline BYTE-IDENTICALLY (grouped by class, so a baseline diff means the tree
+  changed, not the sort).
 - **CORRECTION to the bullet below it, same day: the twins do not refuse at the span scan, so lifting
   it is NEUTRAL for them — measured off the emitted text, not inferred.** Emitting the §7.2 fixtures with
   the main build (`alatyr aarch64|riscv64|wat test/slice_variadic_enum_elem.al`, stdout captured) shows the
