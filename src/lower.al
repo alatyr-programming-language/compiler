@@ -6245,25 +6245,25 @@ slice_arr_espan := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan 
 slot_name_is_annotated := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   mut p := s + n
   end := LOWER_SRC_N
-  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
-  if ptr_scan_has(src, end, p, ":") == false { return false }
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
+  if lower_ctx::slice_scan_has(src, end, p, ":") == false { return false }
   p = p + 1
-  ptr_scan_has(src, end, p, "=") == false
+  lower_ctx::slice_scan_has(src, end, p, "=") == false
 }
 
 slice_ann_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
   mut p := s + n
   end := LOWER_SRC_N
-  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
-  if ptr_scan_has(src, end, p, ":") == false { return CSpan(s = 0, n = 0) }
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
+  if lower_ctx::slice_scan_has(src, end, p, ":") == false { return CSpan(s = 0, n = 0) }
   p = p + 1
-  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
-  if ptr_scan_has(src, end, p, "Slice(") == false {
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
+  if lower_ctx::slice_scan_has(src, end, p, "Slice(") == false {
     ## §7.2 slice-VARIADIC `name : ...T` — the element type follows `...`. Recover `T`'s span so a
     ## `...Pt` / `...E` param reads its struct/enum element exactly like a `Slice(Pt)` param (field
     ## resolution + the by-ref for-loop). A bare `...` (the §7.1 comptime variadic — no element type,
     ## `)` right after) yields 0/0, unchanged from before → fixpoint-neutral for the lib `args : ...`.
-    if ptr_scan_has(src, end, p, "...") {
+    if lower_ctx::slice_scan_has(src, end, p, "...") {
       vs := p + 3
       mut ve := vs
       while ve < end {
@@ -12475,20 +12475,6 @@ deref_store_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
   return 1
 }
 
-## Length-aware primitives for the narrow inferred-pointer source recovery below. Every prefix/byte
-## read is proven to stay in `[0, end)`, because `src` is a raw pointer rather than a length-carrying
-## `str` value. Keeping these helpers local to this mechanism avoids widening the unrelated typed-local
-## recovery path.
-ptr_scan_has := fn(src : ptr(u8), end : usize, p : usize, want : str) -> bool {
-  if p > end { return false }
-  if want.len > end - p { return false }
-  str_at((src + p), want.len) == want
-}
-ptr_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
-  if p >= end { return false }
-  c := str_at((src + p), 1)
-  c == " " or c == "\n" or c == "\t" or c == "\r"
-}
 
 ## Recover the pointee name of a pointer local. An annotated local is covered by `local_type_span`;
 ## an inferred local needs the source spelling of the preserved `bitcast(ptr(T), …)` target because
@@ -12520,15 +12506,15 @@ slot_ptr_pointee_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usi
   }
   mut p := ent.ns + ent.nl
   end := LOWER_SRC_N
-  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
-  if ptr_scan_has(src, end, p, ":=") == false { return CSpan(s = 0, n = 0) }
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
+  if lower_ctx::slice_scan_has(src, end, p, ":=") == false { return CSpan(s = 0, n = 0) }
   p = p + 2
-  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
-  if ptr_scan_has(src, end, p, "unchecked") {
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
+  if lower_ctx::slice_scan_has(src, end, p, "unchecked") {
     p = p + 9
-    while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
+    while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
   }
-  if ptr_scan_has(src, end, p, "bitcast(") == false { return CSpan(s = 0, n = 0) }
+  if lower_ctx::slice_scan_has(src, end, p, "bitcast(") == false { return CSpan(s = 0, n = 0) }
   p = p + 8
   ts := p
   mut depth := 0
@@ -12548,7 +12534,7 @@ slot_ptr_pointee_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usi
     if c == " " or c == "\n" or c == "\t" or c == "\r" { te = te - 1 }
     else { break }
   }
-  if te <= ts or ptr_scan_has(src, end, ts, "ptr(") == false { return CSpan(s = 0, n = 0) }
+  if te <= ts or lower_ctx::slice_scan_has(src, end, ts, "ptr(") == false { return CSpan(s = 0, n = 0) }
   mut ps2 := ts + 4
   mut pl2 := te - ts - 5
   if pl2 > 4 and str_at((src + ps2), 4) == "mut " { ps2 = ps2 + 4 ; pl2 = pl2 - 4 }
@@ -12656,10 +12642,10 @@ byte_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
   if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return false }
   end := LOWER_SRC_N
   mut p := ent.ns + ent.nl
-  while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
-  if ptr_scan_has(cx.src, end, p, ":=") == false { return false }
+  while p < end and lower_ctx::slice_scan_ws(cx.src, end, p) { p = p + 1 }
+  if lower_ctx::slice_scan_has(cx.src, end, p, ":=") == false { return false }
   p = p + 2
-  while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
+  while p < end and lower_ctx::slice_scan_ws(cx.src, end, p) { p = p + 1 }
   vs := p
   mut stop := false
   while p < end and stop == false {
@@ -12669,7 +12655,7 @@ byte_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
     else { p = p + 1 }
   }
   if p == vs or stop == false { return false }
-  if ptr_scan_has(cx.src, end, p, ".ptr") == false { return false }
+  if lower_ctx::slice_scan_has(cx.src, end, p, ".ptr") == false { return false }
   ## the RHS must be EXACTLY `<ident>.ptr` — a longer chain (`a.ptr.b`, `a.ptr + k`) is not this shape.
   if p + 4 >= end { return false }
   t := str_at((cx.src + p + 4), 1)
@@ -12745,16 +12731,16 @@ slot_addr_view_ptr_local_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize,
   if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return CSpan(s = 0, n = 0) }
   end := LOWER_SRC_N
   mut p := ent.ns + ent.nl
-  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
-  if ptr_scan_has(src, end, p, ":=") == false { return CSpan(s = 0, n = 0) }
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
+  if lower_ctx::slice_scan_has(src, end, p, ":=") == false { return CSpan(s = 0, n = 0) }
   p = p + 2
-  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
-  if ptr_scan_has(src, end, p, "ptr(") == false { return CSpan(s = 0, n = 0) }
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
+  if lower_ctx::slice_scan_has(src, end, p, "ptr(") == false { return CSpan(s = 0, n = 0) }
   p = p + 4
-  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
-  if ptr_scan_has(src, end, p, "mut ") {
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
+  if lower_ctx::slice_scan_has(src, end, p, "mut ") {
     p = p + 4
-    while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
+    while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
   }
   vs := p
   mut stop := false
@@ -15915,26 +15901,6 @@ is_float_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   }
 }
 
-## Is expression `e` of a SIGNED integer type (`i8`/`i16`/`i32`/`i64`/`isize`)? Used to pick signed
-## (`idivq`) vs unsigned (`divq`) division/modulo. An UNKNOWN type (a bare local whose `: T` annotation
-## the lean parser discards, an untyped literal) is treated as UNSIGNED — Alatyr's scalar default —
-## so `h % cap` over `u64`/`usize` operands (e.g. a hash reduction with the high bit set) uses the
-## UNSIGNED `divq`, not the signed `idivq` that read the huge value as negative and returned a negative
-## remainder (an out-of-range index → OOB slot read). Signed division stays `idivq` for real `iN` operands.
-## Is `e` the literal `0`? A `Num(0)` LEFT operand makes `0 - x` / `0 + x` / `0 * x` a NEGATION or
-## identity — never an overflow — so the checked guard (I11 / CG-8) is skipped for it. This is what
-## makes the pervasive `0 - N` negative/sentinel idiom (`mut off := 0 - 1`) not trap under the `-` guard.
-expr_is_zero := fn(e : ptr(Expr)) -> bool {
-  mut r := false
-  match deref(e) {
-    Expr::Num(v, s, n) => { if v == 0 { r = true } }
-    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
 ## Is `e` a POSITIVE integer literal? A division BY such a literal can neither divide by zero nor be
 ## the signed `MIN / -1` overflow, so both checked division guards (CG-13, below) are PROVABLY
 ## unnecessary and are elided — the optimization CG-13 explicitly sanctions ("a semantics-preserving
@@ -17305,7 +17271,7 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
   if typ == "u16" or typ == "i16" { bits = 16 }
   if typ == "u32" or typ == "i32" { bits = 32 }
   if op == 16 {
-    if narrow and (not expr_is_zero(l)) {
+    if narrow and (not lower_layout::ex_is_zero_lit(l)) {
       push_str(sb, "  movq %rax, %rcx\n  addq %rbx, %rcx\n")
       if dsigned {
         if bits == 8 { push_str(sb, "  movsbq %cl, %rdx\n") }
@@ -17317,14 +17283,14 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
         push_int(sb, bits)
         push_str(sb, ", %rdx\n  jz 1f\n  ud2\n1:\n")
       }
-    } else if not expr_is_zero(l) {
+    } else if not lower_layout::ex_is_zero_lit(l) {
       push_str(sb, "  movq %rax, %rcx\n  addq %rbx, %rcx\n")
       if dsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") }
       else { push_str(sb, "  jnc 1f\n  ud2\n1:\n") }
     }
   }
   if op == 17 {
-    if narrow and (not expr_is_zero(l)) {
+    if narrow and (not lower_layout::ex_is_zero_lit(l)) {
       push_str(sb, "  movq %rax, %rcx\n  subq %rbx, %rcx\n")
       if dsigned {
         if bits == 8 { push_str(sb, "  movsbq %cl, %rdx\n") }
@@ -17336,14 +17302,14 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
         push_int(sb, bits)
         push_str(sb, ", %rdx\n  jz 1f\n  ud2\n1:\n")
       }
-    } else if not expr_is_zero(l) {
+    } else if not lower_layout::ex_is_zero_lit(l) {
       push_str(sb, "  movq %rax, %rcx\n  subq %rbx, %rcx\n")
       if dsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") }
       else { push_str(sb, "  jnc 1f\n  ud2\n1:\n") }
     }
   }
   if op == 18 {
-    if narrow and (not expr_is_zero(l)) {
+    if narrow and (not lower_layout::ex_is_zero_lit(l)) {
       push_str(sb, "  movq %rax, %rcx\n  imulq %rbx, %rcx\n")
       if dsigned {
         if bits == 8 { push_str(sb, "  movsbq %cl, %rdx\n") }
@@ -17355,7 +17321,7 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
         push_int(sb, bits)
         push_str(sb, ", %rdx\n  jz 1f\n  ud2\n1:\n")
       }
-    } else if not expr_is_zero(l) {
+    } else if not lower_layout::ex_is_zero_lit(l) {
       if dsigned {
         push_str(sb, "  movq %rax, %rcx\n  imulq %rbx, %rcx\n  jno 1f\n  ud2\n1:\n")
       } else {
@@ -18351,7 +18317,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       }
       ## a literal-`0` LEFT operand → negation/identity, never overflows → skip the guard (covers the
       ## `0 - N` negative/sentinel idiom pervasive in src/). Also the parser wraps unary `-x` in Unchecked.
-      if expr_is_zero(l) { ovf_narrow = true }
+      if lower_layout::ex_is_zero_lit(l) { ovf_narrow = true }
       ## POINTER arithmetic (`ptr + int` / `ptr - ptr`) is ADDRESS arithmetic — unchecked BY TYPE (CG-8 /
       ## Memory §4.5), never an I11 integer overflow. When an operand is a pointer, skip the overflow guard,
       ## so a folded `src + off` (usize→ptr Phase 3: dropping the `rt::addr` helper) traps no more than the
@@ -18420,7 +18386,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             ## low N bits differs from the full value. Dropped under `unchecked`; skipped for a `0 - x`
             ## negation (`expr_is_zero`). The truncation below is then the `unchecked` value-model wrap.
             ## Both operands have the result's type, so the 64-bit value's signedness is the target's.
-            if cx.vchk and (not expr_is_zero(l)) { emit_int_fit_guard(sb, wnm, false) }
+            if cx.vchk and (not lower_layout::ex_is_zero_lit(l)) { emit_int_fit_guard(sb, wnm, false) }
             emit_int_narrow_reg(sb, wnm)
           }
         }
@@ -19093,7 +19059,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           if tent.ek == 5 and tent.eek == 12 and tent.is_ref == false {
             ttslot := tuple_local_type(cx.src, tent.ns, tent.nl)
             push_str(sb, "  movq $")
-            push_int(sb, i64(tuple_standard_byte_bytes(cx.decls, cx.src, ttslot.s, ttslot.n, deref(cx.mar))))
+            push_int(sb, i64(lower_layout::tuple_type_size_bytes(cx.decls, cx.src, ttslot.s, ttslot.n, deref(cx.mar))))
             push_str(sb, ", %rax\n  pushq %rax\n")
             return
           }
@@ -19104,7 +19070,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ttsz := tuple_typearg_span(a0, cx.src, a)
         if ttsz.n != 0 and tuple_span_has_narrow_component(cx.src, ttsz.s, ttsz.n) {
           push_str(sb, "  movq $")
-          push_int(sb, i64(tuple_standard_byte_bytes(cx.decls, cx.src, ttsz.s, ttsz.n, deref(cx.mar))))
+          push_int(sb, i64(lower_layout::tuple_type_size_bytes(cx.decls, cx.src, ttsz.s, ttsz.n, deref(cx.mar))))
           push_str(sb, ", %rax\n  pushq %rax\n")
           return
         }
@@ -21492,27 +21458,9 @@ tuple_span_has_narrow_component := fn(src : ptr(u8), ts : usize, tl : usize) -> 
 tuple_standard_byte_words := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   tt := tuple_local_type(src, ns, nl)
   if tt.n == 0 { return 0 }
-  (tuple_standard_byte_bytes(decls, src, tt.s, tt.n, a) + 7) / 8
+  (lower_layout::tuple_type_size_bytes(decls, src, tt.s, tt.n, a) + 7) / 8
 }
 
-tuple_standard_byte_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, a : rt::Arena) -> usize {
-  if tl == 0 or str_at((src + ts), 1) != "(" { return 0 }
-  mut off : usize = 0
-  mut al : usize = 1
-  mut i := 0
-  mut scanning := true
-  while scanning {
-    cs := typearg_at(src, ts, 0, usize(i))
-    if cs.n == 0 { scanning = false } else {
-      ca := standard_type_byte_align(decls, src, cs.s, cs.n, 1, a)
-      if ca > al { al = ca }
-      off = round_up_to(off, ca)
-      off += standard_type_byte_size(decls, src, cs.s, cs.n, 1, a)
-      i += 1
-    }
-  }
-  round_up_to(off, al)
-}
 
 tuple_standard_byte_align_value := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, a : rt::Arena) -> usize {
   if tl == 0 or str_at((src + ts), 1) != "(" { return 0 }
@@ -21705,21 +21653,6 @@ tuple_layout_collect := fn(head : Option(ptr(mut Stmt)), slots : ptr(SVec), in o
   }
 }
 
-## Position of the `(` opening a TUPLE parameter type `name : (…)`, or -1 if the param type is not a
-## tuple. The parser keeps only a tuple param's FIRST component span, so the full tuple is recovered by
-## source-scanning after the param name (the same source-scan discipline as `local_is_mut`). `in`/`out`
-## modes sit BEFORE the name, so the scan starts right at the `:`.
-param_tuple_open := fn(src : ptr(u8), ns : usize, nl : usize) -> i64 {
-  mut i := ns + nl
-  mut go := true
-  while go { if str_at((src + i), 1) == " " { i = i + 1 } else { go = false } }
-  if str_at((src + i), 1) != ":" { return 0 - 1 }
-  i = i + 1
-  go = true
-  while go { if str_at((src + i), 1) == " " { i = i + 1 } else { go = false } }
-  if str_at((src + i), 1) == "(" { return i64(i) }
-  0 - 1
-}
 ## A tuple COMPONENT type's word width (struct → struct_words, enum → 1 + payload, else scalar 1) and
 ## KIND (2 struct / 3 enum / 0 scalar) — the type-driven duals of `elem_expr_width` / `comp_eek`, used
 ## for the tuple-PARAM layout (whose components come from the type text, not initializer expressions).
@@ -21753,7 +21686,7 @@ param_tuple_layout_collect := fn(params_head : Option(ptr(mut Param)), slots : p
     match p {
       Some(pq) => {
         pm := deref(param_p(pq))
-        open := param_tuple_open(src, pm.ns, pm.nl)
+        open := lower_layout::param_tuple_open_at(src, pm.ns, pm.nl)
         if open >= 0 {
           slot := slot_of(slots, src, pm.ns, pm.nl)
           if slot >= 0 {
@@ -21814,7 +21747,7 @@ validate_standard_byte_tuple_boundaries := fn(decls : ptr(rt::Vec), src : ptr(u8
         match p {
           Some(pq) => {
             pm := deref(param_p(pq))
-            po := param_tuple_open(src, pm.ns, pm.nl)
+            po := lower_layout::param_tuple_open_at(src, pm.ns, pm.nl)
             if po >= 0 and tuple_span_has_byte_component(src, usize(po), 1) {
               panic("selfhost: a standard-layout byte tuple parameter is not supported yet (parameter ABI is word-based)")
             }
@@ -24810,17 +24743,6 @@ comptime_scalar_num_kind := fn(it_s : usize, it_l : usize, src : ptr(u8)) -> i64
   return 0
 }
 
-## Map a `comptime match <scalar-kind>` arm's variant name to a NUMERIC sub-kind (the dual of
-## `comptime_scalar_num_kind`): `Bool`/`Char`/`Int`/`Float`. -1 for a non-numeric name (the outer
-## `typeinfo(T)` arms `Struct`/`Enum`/`Scalar`/… return -1 here, so this dispatch is inert for them).
-comptime_num_kind_of_name := fn(src : ptr(u8), vs : usize, vl : usize) -> i64 {
-  nm := str_at((src + vs), vl)
-  if nm == "Bool"  { return 1 }
-  if nm == "Char"  { return 2 }
-  if nm == "Int"   { return 3 }
-  if nm == "Float" { return 4 }
-  return 0 - 1
-}
 
 arch_rhs_name := fn(e : ptr(Expr), src : ptr(u8)) -> CSpan {
   match deref(e) {
@@ -26681,7 +26603,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                   cam := deref(arm_p(carmq))
                   if cam.wild != 0 { cwild = Option.Some(carmq) }
                   else if comptime_kind_of_name(cx.src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
-                  else if comptime_num_kind_of_name(cx.src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
+                  else if lower_layout::ct_num_kind_of_name(cx.src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
                   carm = cam.next
                 }
                 None => { break }

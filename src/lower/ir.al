@@ -360,14 +360,14 @@ ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : p
     regalloc::ra_ir_emit(iop, 3, i64(t), ro.k, ro.v)           ## t (+|-)= R  (sets OF/CF)
     ## CHECKED overflow (I11 / CG-8): trap on native-width `+`/`-` overflow — unless `unchecked` or a
     ## `0 - x` negation. Signed → `jno`; unsigned → `jnc` (carry/borrow).
-    if (not unch) and (not expr_is_zero(l)) { ir_emit_ovf_guard(dsigned) }
+    if (not unch) and (not lower_layout::ex_is_zero_lit(l)) { ir_emit_ovf_guard(dsigned) }
     return IROperand(k = 3, v = i64(t))
   }
   if op == 18 {
     ## CHECKED `*`: SIGNED via 2-operand `imul` (op 3, sets OF on a >64-bit signed product → `jno`);
     ## UNSIGNED via 1-operand `mul` (op 5, rdx:rax, sets CF iff the high half is nonzero → `jnc`) — the
     ## same split the text path uses. `unchecked` (or a `0 * x`) keeps the plain `imul`, no guard.
-    if unch or expr_is_zero(l) or dsigned {
+    if unch or lower_layout::ex_is_zero_lit(l) or dsigned {
       ## Keep an immediate left operand visible to the scalar-IR fold; the fresh destination vreg makes the
       ## `mov t, $lhs` form legal for the following two-operand imul.
       lo := ir_lower_expr(l, cx, unch)
@@ -375,7 +375,7 @@ ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : p
       t := ir_fresh_vreg()
       regalloc::ra_ir_emit(0, 3, i64(t), lo.k, lo.v)            ## mov t, L
       regalloc::ra_ir_emit(3, 3, i64(t), ro.k, ro.v)           ## imul t, R  (sets OF signed)
-      if (not unch) and (not expr_is_zero(l)) { ir_emit_ovf_guard(true) }   ## dsigned here → jno
+      if (not unch) and (not lower_layout::ex_is_zero_lit(l)) { ir_emit_ovf_guard(true) }   ## dsigned here → jno
       return IROperand(k = 3, v = i64(t))
     }
     ## checked UNSIGNED multiply: mov rax, L; mul R; jnc CONT; ud2; CONT:; mov t, rax.
