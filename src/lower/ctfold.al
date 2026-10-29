@@ -342,7 +342,7 @@ closed_cmp_fold := fn(op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> i
   bfn := build_lhs_flag_name(l, src)
   if bfn.n == 0 { return -1 }
   mut eqv : i64 = 0 - 1
-  if guard_expr_is_num(r) {
+  if parser::expr_is_num(r) {
     eqv = build_flag_int_eq(str_at((src + bfn.s), bfn.n), guard_expr_num(r))
   } else {
     rhead := build_cmp_rhs_head(r, src)
@@ -396,7 +396,7 @@ comptime_query_comp_field_type := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Aren
     Expr::CompField(base, idx) => {
       if cx.cf_var_l == 0 { return CSpan(s = 0, n = 0) }
       vn := var_name_span(idx)
-      if vn.n == 0 or not streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { return CSpan(s = 0, n = 0) }
+      if vn.n == 0 or not lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { return CSpan(s = 0, n = 0) }
       bt := expr_type_span(base, cx)
       if bt.n == 0 { return CSpan(s = 0, n = 0) }
       ft := field_type_span(cx.decls, cx.src, bt.s, bt.n, cx.cf_fld_s, cx.cf_fld_l, deref(cx.mar))
@@ -421,7 +421,7 @@ comptime_query_arg_ok := fn(e : ptr(Expr), pm : ptr(mut Param), cx : ptr(LCtx), 
 }
 comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena, types : bool) -> bool {
   cnt := rt::vec_len(deref(cx.decls))
-  cp := colon_pos(cx.src, cs, cl)
+  cp := driver::d_colon_pos(cx.src, cs, cl)
   mut qns := cs
   mut qnl := cl
   mut qms := cx.mod_s
@@ -436,15 +436,15 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr
     ## this binding for `m::floor`; keep the query mirror on the same path.
     ## Only a single-segment head is an alias (multi-segment heads are already
     ## literal module paths), and the alias must belong to the caller module.
-    if colon_pos(cx.src, qms, qml) < 0 {
+    if driver::d_colon_pos(cx.src, qms, qml) < 0 {
       mut i : usize = 0
       mut as_ := 0
       mut al := 0
       while i < cnt {
-        d := deref(decl_get(cx.decls, i))
+        d := deref(lower_ctx::decl_get(cx.decls, i))
         if d.kind == 0 and d.arity == 0 and d.ret_tl != 0 and d.name_len == qml
-          and streq(cx.src, d.name_start, d.name_len, qms, qml)
-          and streq(cx.src, d.mod_start, d.mod_len, cx.mod_s, cx.mod_l) {
+          and lower_ctx::streq(cx.src, d.name_start, d.name_len, qms, qml)
+          and lower_ctx::streq(cx.src, d.mod_start, d.mod_len, cx.mod_s, cx.mod_l) {
           as_ = d.ret_ts
           al = d.ret_tl
         }
@@ -456,8 +456,8 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr
   mut found := false
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(cx.decls, i))
-    mut name_ok := streq(cx.src, d.name_start, d.name_len, qns, qnl)
+    d := deref(lower_ctx::decl_get(cx.decls, i))
+    mut name_ok := lower_ctx::streq(cx.src, d.name_start, d.name_len, qns, qnl)
     mut module_ok := true
     if cp >= 0 { module_ok = mod_head_matches(cx.src, d.mod_start, d.mod_len, qms, qml) }
     if (d.kind == 1 or d.kind == 4) and d.arity == na and name_ok and module_ok {
@@ -520,7 +520,7 @@ pub comptime_query_expr_ok := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena, t
     Expr::Var(s, n) => {
       ei := entry_of(cx.slots, cx.src, s, n)
       ent := deref(svec_at(SlotEntry, cx.slots, ei))
-      if streq(cx.src, ent.ns, ent.nl, s, n) { return true }
+      if lower_ctx::streq(cx.src, ent.ns, ent.nl, s, n) { return true }
       if unchecked bitcast(usize, module_const_value(cx.decls, cx.src, s, n)) != 0 { return true }
       is_module_mut_global(cx.decls, cx.src, s, n)
     }
@@ -1031,7 +1031,7 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
         if lvn.n != 0 and (not is_type_name(l, cx.decls, src, a)) and is_type_name(r, cx.decls, src, a) {
           rvn := var_name_span(r)
           itbn := base_type_name(src, cx.it_s, cx.it_l)
-          eq := streq(src, itbn.s, itbn.n, rvn.s, rvn.n)
+          eq := lower_ctx::streq(src, itbn.s, itbn.n, rvn.s, rvn.n)
           if i64(op) == 20 { if eq { return 1 } return 0 }
           if eq { return 0 }
           return 1
@@ -1054,12 +1054,12 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
       ## and `typeinfo(X).fields.len` / `.variants.len` / `.n` `<op> N` (appendix §4.1), each with `X`
       ## resolved through the 1st/2nd/3rd type-param bindings — or a plain LITERAL comparison
       ## `N <op> M` (Comptime §4: a closed comptime fact). All three used to fall to -1.
-      if guard_expr_is_num(r) {
+      if parser::expr_is_num(r) {
         lsz := guard_size_operand(l, tp, cx.decls, src, a)
         if lsz >= 0 { return guard_cmp(i64(op), lsz, guard_expr_num(r)) }
         lcnt := guard_field_count(l, tp, cx.decls, src, a)
         if lcnt >= 0 { return guard_cmp(i64(op), lcnt, guard_expr_num(r)) }
-        if guard_expr_is_num(l) { return guard_cmp(i64(op), guard_expr_num(l), guard_expr_num(r)) }
+        if parser::expr_is_num(l) { return guard_cmp(i64(op), guard_expr_num(l), guard_expr_num(r)) }
       }
       ## TYPE-NAME equality where BOTH sides are concrete type names (`u64 == u64`, `S != T` outside a
       ## generic) — Comptime §4.1's type equality as a closed comptime fact. Disjoint from the
@@ -1068,7 +1068,7 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
         tl2 := var_name_span(l)
         tr2 := var_name_span(r)
         if tl2.n != 0 and tr2.n != 0 and is_type_name(l, cx.decls, src, a) and is_type_name(r, cx.decls, src, a) {
-          teq := streq(src, tl2.s, tl2.n, tr2.s, tr2.n)
+          teq := lower_ctx::streq(src, tl2.s, tl2.n, tr2.s, tr2.n)
           if i64(op) == 20 { if teq { return 1 } return 0 }
           if teq { return 0 }
           return 1

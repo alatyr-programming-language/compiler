@@ -92,7 +92,7 @@ pub block_decl_type := fn(head : Option(ptr(mut Stmt)), ns2 : usize, nl2 : usize
         match st {
           Stmt::Assign(ans, anl, v, nx) => {
             isas = true
-            if streq(src, ans, anl, ns2, nl2) {
+            if lower_ctx::streq(src, ans, anl, ns2, nl2) {
               lt := local_type_span(src, ans, anl)
               if lt.n != 0 { rs = lt.s; rn = lt.n }
               else {
@@ -282,7 +282,7 @@ collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
   sdi := struct_decl_of(decls, src, bn.s, bn.n)
   if sdi >= 0 {
     if struct_words(decls, src, bn.s, bn.n, a) > 1 {
-      sd := deref(decl_get(decls, usize(sdi)))
+      sd := deref(lower_ctx::decl_get(decls, usize(sdi)))
       if sd.is_generic { return CSpan(s = ts, n = tl) }
       return CSpan(s = sd.name_start, n = sd.name_len)
     }
@@ -291,7 +291,7 @@ collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
   edi := enum_decl_of(decls, src, bn.s, bn.n)
   if edi >= 0 {
     if 1 + enum_inst_words(decls, src, bn.s, bn.n, a) > 1 {
-      ed := deref(decl_get(decls, usize(edi)))
+      ed := deref(lower_ctx::decl_get(decls, usize(edi)))
       if ed.is_generic { return CSpan(s = ts, n = tl) }
       return CSpan(s = ed.name_start, n = ed.name_len)
     }

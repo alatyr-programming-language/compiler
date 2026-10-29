@@ -985,7 +985,7 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
 ## slot (a struct local, a by-reference struct parameter, a pointer-to-struct local); 0/0 for any other
 ## base. `emit_store_value` asks it so a folded `Option(ptr(T))` field stores its one folded word.
 field_assign_dest_ty := fn(bent : SlotEntry, bns : usize, bnl : usize, fns : usize, fnl : usize, cx : ptr(LCtx)) -> CSpan {
-  if not streq(cx.src, bent.ns, bent.nl, bns, bnl) { return CSpan(s = 0, n = 0) }
+  if not lower_ctx::streq(cx.src, bent.ns, bent.nl, bns, bnl) { return CSpan(s = 0, n = 0) }
   if bent.ek == 2 or bent.ek == 7 or bent.is_ref { return field_type_span(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar)) }
   CSpan(s = 0, n = 0)
 }
@@ -2116,7 +2116,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         s3dvn := var_name_span(iv)
         s3dvent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s3dvn.s, s3dvn.n)))
         ## a NON-ref local of the SAME element type: its own frame block already holds the §6.1 image
-        if not s3dvent.is_ref and streq(cx.src, s3dvent.sns, s3dvent.snl, s3dent.sns, s3dent.snl) { s3dsrc = i64(s3dvent.off) }
+        if not s3dvent.is_ref and lower_ctx::streq(cx.src, s3dvent.sns, s3dvent.snl, s3dent.sns, s3dent.snl) { s3dsrc = i64(s3dvent.off) }
       }
       if s3dsrc < 0 {
         panic("selfhost: `xs[i] = <value>` into an array whose ELEMENT is a standard byte-layout struct is supported for a struct LITERAL and for a non-reference LOCAL of the same element type — a call result, a by-reference var, a global element read or an if/match expression has no byte-precise element image yet; bind it to a local of the element type first (`t := <rhs>; xs[i] = t`)")
@@ -2512,7 +2512,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     sslot := i64(sent.off)
     ncap := usize(sent.eek)
     lidx := lam_idx_by_fnpos(cx.decls, sent.sns)
-    larity := deref(decl_get(cx.decls, usize(lidx))).arity
+    larity := deref(lower_ctx::decl_get(cx.decls, usize(lidx))).arity
     for j in 0..ncap {
       capsp := lam_param_span_at(cx.decls, usize(lidx), larity - ncap + j)
       capslot := slot_of(cx.slots, cx.src, capsp.s, capsp.n)
@@ -2537,7 +2537,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     fms := sent.snl
     fml := sent.estride
     lidx := lam_idx_by_fnpos(cx.decls, fnpos)
-    larity := deref(decl_get(cx.decls, usize(lidx))).arity
+    larity := deref(lower_ctx::decl_get(cx.decls, usize(lidx))).arity
     lts := local_type_span(cx.src, ns, nl2)
     nuser := dyn_type_nuser(cx.src, lts.s, lts.n)
     if larity < nuser or (larity - nuser) < 1 { panic("selfhost: FN-11 — a `dyn` closure needs at least one capture (a zero-capture closure is a plain fn value)") }

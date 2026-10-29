@@ -39,6 +39,9 @@ pub decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) {
 ## Equality of two source-relative spans. The source pointer arithmetic is intentional (I11/CG-8):
 ## callers pass parser/lower offsets, including rebased comptime-synthesized spans.
 pub streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  ## length-first fast reject (most scan comparisons differ in length); equivalent because
+  ## spans of different lengths cannot denote the same name. Mirrors driver/lower.
+  if a_n != b_n { return false }
   str_at((src + a_s), a_n) == str_at((src + b_s), b_n)
 }
 

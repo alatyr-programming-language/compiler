@@ -121,7 +121,7 @@ scan_init_from := fn(mode : InitScan, head : Option(ptr(mut Stmt)), bs : usize, 
 ## Is `v` the name `[bs, bs+bl)` itself?
 expr_is_var := fn(v : ptr(Expr), bs : usize, bl : usize, src : ptr(u8)) -> bool {
   vn := var_name_span(v)
-  vn.n != 0 and streq(src, vn.s, vn.n, bs, bl)
+  vn.n != 0 and lower_ctx::streq(src, vn.s, vn.n, bs, bl)
 }
 
 ## Is `v` `deref` of the name `[bs, bs+bl)`?
@@ -141,7 +141,7 @@ retype_ptr_copy := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize, 
   k := slot_of(slots, src, ns, nl)
   if k < 0 { return }
   ue := deref(svec_at(SlotEntry, slots, usize(k)))
-  if not streq(src, ue.ns, ue.nl, ns, nl) or ue.ek != 0 or ue.snl != 0 or ue.is_ref { return }
+  if not lower_ctx::streq(src, ue.ns, ue.nl, ns, nl) or ue.ek != 0 or ue.snl != 0 or ue.is_ref { return }
   deref(svec_at(SlotEntry, slots, usize(k))) = SlotEntry(ns = ue.ns, nl = ue.nl, off = ue.off, sns = ps, snl = pn, ek = ek, estride = ue.estride, eek = ue.eek, is_ref = false, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l)
 }
 
@@ -202,7 +202,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               ## the stack, so reject. A DECLARATION (`NAME := v` / `NAME : T = v`) is excluded above: it
               ## introduces a new local and legitimately shadows the global's spelling.
               reject_gref_unresolved(decls, src, ns, nl)
-            } else if local_type_span(src, ns, nl).n != 0 and is_dyn_type(src, local_type_span(src, ns, nl).s, local_type_span(src, ns, nl).n) {
+            } else if local_type_span(src, ns, nl).n != 0 and driver::d_is_dyn_annotation(src, local_type_span(src, ns, nl).s, local_type_span(src, ns, nl).n) {
               ## FN-11: `d : dyn fn(…)->R = dyn_over(…)` — a two-word {code, env} fat pair (dormant: src/lib
               ## declare no `dyn` type, so this never fires there → fixpoint-neutral).
               bind_dyn_slot(slots, src, ns, nl)
@@ -217,7 +217,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               lidx := lam_idx_by_fnpos(decls, fr.fnpos)
               mut ncap := 1
               if lidx >= 0 and nu >= 0 {
-                larity := deref(decl_get(decls, usize(lidx))).arity
+                larity := deref(lower_ctx::decl_get(decls, usize(lidx))).arity
                 if i64(larity) > nu { ncap = usize(i64(larity) - nu) }
               }
               bind_dyn_store_slot(slots, src, ns, nl, fr.fnpos, fr.ms, fr.ml, ncap)
@@ -860,7 +860,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
             mut mel := 0
             if msc.n != 0 {
               ment := deref(svec_at(SlotEntry, slots, entry_of(slots, src, msc.s, msc.n)))
-              if streq(src, ment.ns, ment.nl, msc.s, msc.n) and ment.ek == 3 { mes = ment.sns; mel = ment.snl }
+              if lower_ctx::streq(src, ment.ns, ment.nl, msc.s, msc.n) and ment.ek == 3 { mes = ment.sns; mel = ment.snl }
             }
             mut arm : Option(ptr(mut Arm)) = ah
             loop {

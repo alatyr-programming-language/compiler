@@ -2786,7 +2786,7 @@ field_tail_name := fn(e : ptr(Expr)) -> NSpan {
 
 ## Is `e` an integer literal? Used to tell a mis-lexed FLOAT (`1.5` → `1 . 5`, base is `Num`) apart
 ## from tuple indexing `t.N` (base is a place) in the `.<int>` postfix.
-expr_is_num := fn(e : ptr(Expr)) -> bool {
+pub expr_is_num := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Num(v, s, n) => { true }
     Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit

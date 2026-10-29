@@ -3487,7 +3487,7 @@ profile_flag_override := fn(in out a : rt::Arena, fblk : str, flag_name : str) -
   return ""
 }
 
-mf_is_int_type := fn(t : str) -> bool {
+pub mf_is_int_type := fn(t : str) -> bool {
   return t == "u8" or t == "u16" or t == "u32" or t == "u64" or t == "usize" or t == "i8" or t == "i16" or t == "i32" or t == "i64" or t == "isize"
 }
 
