@@ -1203,3 +1203,52 @@ for the same functions.
 - **#777 and #778:** probes built from `a46b5bc` on the gate machine and run on all four backends; the
   programs and their exits are in those issues.
 - **Sizes:** `wc -l`.
+
+### 9.1 What a macOS dev box CANNOT measure, and how the gate survives it (measured 2026-10-29)
+
+Every claim above was taken on native x86_64. On the local macOS/arm64 machine four things fail, and
+each failure mode was reproduced rather than assumed, because three of them produced a PLAUSIBLE WRONG
+ANSWER before they were understood. Recorded so the next agent does not spend an hour rediscovering them
+or, worse, report a green from one of them.
+
+1. **The compiler cannot run at all.** `seed/alatyr` and every Stage binary are static x86_64 Linux
+   ELF: `cannot execute binary file: Exec format error`. They run only inside Docker (Rosetta), so any
+   check that invokes `$ALATYR` directly dies at once — `ptrint_census.sh planted` answered rc=126
+   that way, and its "NOT PROVEN — 13 of 13 classes" was the census reporting that IT could not run,
+   not that the tree was dirty.
+2. **The #529 census is unrunnable, not merely slow.** It opens its channel with a shell redirect
+   (`check "$2" 98>"$3"`, `ptrint_census.sh:52`) and the seed image has **no `/bin/sh`** (`stat
+   /bin/sh: no such file or directory`), so fd 98 cannot be forwarded into the container. `op-cmp=0`
+   therefore stays a baseline reading here and is verified only on the gate machine.
+3. **`scripts/ir_census.sh` does not run on macOS.** It calls `timeout 60 "$AL" ...` at `:174` and
+   macOS has no coreutils `timeout` (`command -v timeout` empty). The failure is misleading: the error
+   names the *redirect target*, not the missing command. A `timeout` shim plus a Docker wrapper got the
+   census to completion, and its answer was **`x86_64/aarch64/riscv64/wasm: programs 2335, with-IR 0,
+   refused 2335`** — every invocation failing, so `refused` there counts broken calls, not selector
+   refusals. A number that looks like a measurement and is not one.
+4. **`check package.al` crashes under emulation.** rc=135 (signal 7) after ~160 s, no output. So a
+   change to `lower.al` cannot be compile-checked locally at all, which is why the class-A deletions in
+   §2.4 are staged rather than applied: an unverifiable edit to the emitter is the silently-wrong
+   result this document forbids.
+
+**Why none of this can turn the real gate green by accident.** `full.sh:438-442` fails when
+`ir_census.sh --gate` prints no `ir coverage per backend:` line, and `:449-453` fails when it prints no
+`ir census gate:` line — "absent means the measurement did not happen — unknown, so a failure". A census
+that cannot run therefore cannot pass. The same proof-of-work pattern guards `wildcard_arm_check.sh`,
+`strict_forms_check.sh`, `corpus_manifest.sh`, `fmt_corpus.sh` and `sweeps.sh`. The gate is safe; what
+is unsafe is reading a number printed by a hand-rolled wrapper, which is exactly what happened twice in
+this session:
+
+- **the `created`-state false pass, hit twice.** `docker inspect -f '{{.State.Running}}'` is **false
+  while a container is still `created`**, and `{{.State.ExitCode}}` is **0 until the process has exited**.
+  A wait loop keyed on `Running != true` breaks before the process starts and reports rc=0. This voided
+  the entire #1108 splice corpus (`.worktrees/e2e-crash/target/1108-correction.md`), then reappeared
+  minutes later in a fresh wrapper written after that lesson was written down — which is the argument for
+  keying on `State.Status` and accepting an exit code only at `exited`, every single time, rather than
+  trusting the next loop.
+- **`mktemp` CREATES its file.** Using `[ -e "$flag" ]` as "the timer fired" is true from the moment of
+  creation, so a `timeout` shim built that way returned 124 for every command including `sleep 1` under
+  a 5 s cap. Remove the file after creating it; existence then means exactly what it is being read as.
+
+Both are the same shape: **a sentinel that is true before the event it stands for.** The gate's
+proof-of-work lines exist to catch this class; a scratch harness has to re-derive it, and did, twice.
