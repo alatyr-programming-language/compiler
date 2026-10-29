@@ -16213,32 +16213,6 @@ unsigned_thru_unchecked := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   }
 }
 
-## Is `e` a bare INTEGER LITERAL (`Expr::Num`)? An integer literal carries NO type span
-## (`expr_type_span` returns 0/0), so `is_unsigned_expr` can never prove it unsigned — which is why
-## `n >= 10` over a `u64` fell back to the SIGNED `setge` and read every value at or above 2^63 as
-## negative (at `n = 2^63`: `n >= 10` FALSE, `n > 1` FALSE, `n < 100` TRUE). A literal has no
-## signedness of its own; it takes the type of its partner, and its WORD is the same either way — so
-## pairing it with a PROVABLY unsigned operand cannot change what the literal means, only how the
-## OTHER operand is read. That covers the whole literal range in one test, including a literal at or
-## above 2^63 (`m < 18446744073709551615`, a `Num` whose `i64` view is `-1`), which under the signed
-## setcc compared as `5 < -1` → FALSE.
-## There is NO negative-literal case to exclude: the grammar has no negative literal — the parser
-## desugars unary `-x` to `Unchecked(Bin(17, Num(0), x))`, which is a `Bin`, not a `Num`, so `x < -1`
-## never reaches this test and keeps the signed default. (A comptime fold CAN leave a `Num` negative,
-## but only where its partner is provably unsigned does this fire, and there the value's `uN` reading
-## — the wrapped word — is the one the comparison must use anyway. Emission over `src/` + `lib/` is
-## byte-identical whether or not negative `Num`s are admitted: no such pair exists in the tree.)
-expr_is_int_lit := fn(e : ptr(Expr)) -> bool {
-  mut r := false
-  match deref(e) {
-    Expr::Num(v, s, n) => { r = true }
-    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  r
-}
 
 ## e3: is the ORDERING comparison over (`l`, `r`) unsigned? The pair's signedness is its first integer
 ## operand's record (`ir::pair_sg_cur`; sema refuses a pair whose integer operands disagree, docs/ir.md
