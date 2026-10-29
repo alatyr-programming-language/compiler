@@ -7658,16 +7658,6 @@ rv_fn_is_generic := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), a : 
   g
 }
 
-## Is the fn named `[ns, ns+nl)` an `@abi(naked)` fn (spec ch.80)? Source-scan `name := @abi(naked) fn …`
-## (mirrors the x86_64/aarch64 versions; the marker is arch-agnostic).
-rv_fn_is_naked := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
-  mut p := ns + nl
-  while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p = p + 1 }
-  if str_at((src + p), 2) != ":=" { return false }
-  p += 2
-  while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p = p + 1 }
-  str_at((src + p), 11) == "@abi(naked)"
-}
 
 ## Check the EFFECTIVE value parameters of the current function. Generic instances substitute the
 ## active type-parameter spans before asking the shared ABI-fence predicate; comptime `type` params
@@ -7856,7 +7846,7 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   RV_MDEPTH = 0
   RV_BIND_DEPTH = 0
   ## `@abi(naked)` (spec ch.80): label + raw body (asm() lines) + trailing value only; no prologue/epilogue.
-  if rv_fn_is_naked(src, d.name_start, d.name_len) {
+  if lower_asm::fn_is_naked(src, d.name_start, d.name_len) {
     emit_rv_export(sb, src, d.name_start, d.name_len)
     if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(RV_TEST_DECL_INDEX)) } else if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { ir::put_symbol_name(sb, src, d.name_start, d.name_len) } ; push_str(sb, ":\n")
     emit_rv_stmts(d.body_stmts, sb, a, src, ephead, pcount, d.body_stmts, decls, frame, Option.None, 0)
