@@ -392,6 +392,60 @@ export-name cluster and the digit cluster — but it cannot see the `*_operand_s
 triplets: they share too few literals to score. The duplication the IR removes is larger than the gate
 can measure.
 
+### 2.4.1 `decl_at` lifted out of `lower.al` — measured, native (slice 9 work)
+
+The first private copy was actually deleted and **built natively on x86_64**, not argued about.
+
+- The local `decl_at` in `lower.al` (was `lower.al:13328`) is deleted; its **96** call sites
+  now call `lower_ctx::decl_at`. Stage1 builds clean: `seed/alatyr build package.al` →
+  `EXIT=0`, artifact `target/debug/alatyr` (6 110 128 B), profile=debug, x86_64-linux-gnu-elf.
+- **Emission delta, complete accounting** (`diff <(sort gas_base) <(sort gas_edit)`): added
+  **113** lines, *all* of them call-target renames (95 → `lower_ctx__decl_at__Decl`,
+  18 → `sema__decl_at__Decl`); removed **136** = those same 113 renames **+ 23 lines that are
+  exactly one function body** (`.globl`, the `lower__decl_at__Decl:` label, prologue,
+  callee-saved spills, `ret`). Nothing else changed in 1.6 M lines of GAS. That is the proof
+  the refactor is behaviour-preserving at machine level, not an assertion about it.
+- Why retargeting to *either* home is safe: **all seven `decl_at` definitions in the tree are
+  textually identical** — `return unchecked bitcast(ptr(T), h)` (`fmt.al:48`, `iface.al:144`,
+  `driver.al:52`, `lower_layout.al:125`, `lower_ctx.al:33`, `lower.al:13328`, `sema.al:829`).
+  So the 18 sites that resolved to `sema__…` rather than `lower_ctx__…` are equivalent by source.
+- **Correction to an earlier claim in this section:** `decl_at` carries **no bounds check** — it
+  is an unchecked handle cast in every module. What was said above about a bounds-checked shared
+  accessor being "strictly safer" applies to `decl_get`, not to `decl_at`.
+- **`decl_get` IS deletable — the earlier "not deletable" verdict here was wrong, and the
+  reason is worth keeping.** Repointing `lower.al`'s local `decl_get` to `lower_ctx::decl_get`
+  and deleting it failed with `alatyr: check: invalid at line 2515 in lower__assign`. The cause
+  was **not** anything invisible: `lower.al`'s copy had **17 remaining callers in its own child
+  modules** (`src/lower/*.al`: ir.al 5, fnval.al 4, assign.al 2, ctfold.al 2, mono.al 2,
+  collect_slots.al 1, decl_index.al 1), which resolve the **bare** name `decl_get` to the parent
+  module's definition. A census of `lower.al` alone — which is what was done first — cannot see
+  them; the count of unqualified mentions in `lower.al` was 0 and that number meant nothing.
+  Repointing those 17 sites to `lower_ctx::decl_get` and deleting the copy builds clean
+  (`EXIT=0`, Stage1 6 110 088 B).
+- **How the consumers were found, since the diagnostic was useless:** the GAS of a build with
+  the copy still present showed `call lower__decl_get` **17** times while `lower.al` source had
+  no bare calls left; the enclosing labels were `lower__ir__…`, `lower__fnval__…`,
+  `lower__mono__…` — child modules of `lower`. GAS, not the error message, located the dependency.
+- **Defect filed for the diagnostic (see the issue linked below).** `check` reported neither the
+  missing symbol nor the file that referenced it, and its line number is **not source-relative**:
+  prepending 11 blank lines to `lower.al` left the report at `line 2515` unchanged, and renaming
+  the definition (same position, same line count) reproduced the identical message. A refusal that
+  names nothing makes this bug class expressible — de-duplicating a shared accessor looks like an
+  unexplained regression, so nobody attempts it.
+- **GAS accounting caveat, stated rather than glossed:** once a function definition is deleted,
+  label allocation shifts across the whole emission — `b8 → b10` differs in **73 122 added /
+  73 155 removed** lines, almost all `jmp .L…` renumbering. So the "complete accounting" claim
+  made above for `decl_at` holds only for a change that does not remove a definition; here the
+  checkable invariants are `call lower__decl_get` = **0**, `call lower__decl_at__Decl` = **0**,
+  no definition of either symbol emitted, and the retarget counts balanced (**107 removed /
+  107 added** to `lower_ctx__decl_get`). The real proof is the fixpoint and the gate, not a
+  hand-read GAS diff.
+
+- **Process lesson:** a copy being textually identical is *necessary, not sufficient*. Only a
+  build decides deletability. Two of the three class-A names were misclassified by the detector,
+  and both errors would have survived any review that read the source and a GAS diff summary
+  without compiling.
+
 ### 2.5 What `src/lower/ir.al` models, and what it bypasses
 
 `src/lower/ir.al` (1 789 lines) with `src/regalloc.al` is an **x86-only machine IR**, not a semantic
@@ -1095,57 +1149,3 @@ for the same functions.
 - **#777 and #778:** probes built from `a46b5bc` on the gate machine and run on all four backends; the
   programs and their exits are in those issues.
 - **Sizes:** `wc -l`.
-
-### 2.4.1 `decl_at` lifted out of `lower.al` — measured, native (slice 9 work)
-
-The first private copy was actually deleted and **built natively on x86_64**, not argued about.
-
-- The local `decl_at` in `lower.al` (was `lower.al:13328`) is deleted; its **96** call sites
-  now call `lower_ctx::decl_at`. Stage1 builds clean: `seed/alatyr build package.al` →
-  `EXIT=0`, artifact `target/debug/alatyr` (6 110 128 B), profile=debug, x86_64-linux-gnu-elf.
-- **Emission delta, complete accounting** (`diff <(sort gas_base) <(sort gas_edit)`): added
-  **113** lines, *all* of them call-target renames (95 → `lower_ctx__decl_at__Decl`,
-  18 → `sema__decl_at__Decl`); removed **136** = those same 113 renames **+ 23 lines that are
-  exactly one function body** (`.globl`, the `lower__decl_at__Decl:` label, prologue,
-  callee-saved spills, `ret`). Nothing else changed in 1.6 M lines of GAS. That is the proof
-  the refactor is behaviour-preserving at machine level, not an assertion about it.
-- Why retargeting to *either* home is safe: **all seven `decl_at` definitions in the tree are
-  textually identical** — `return unchecked bitcast(ptr(T), h)` (`fmt.al:48`, `iface.al:144`,
-  `driver.al:52`, `lower_layout.al:125`, `lower_ctx.al:33`, `lower.al:13328`, `sema.al:829`).
-  So the 18 sites that resolved to `sema__…` rather than `lower_ctx__…` are equivalent by source.
-- **Correction to an earlier claim in this section:** `decl_at` carries **no bounds check** — it
-  is an unchecked handle cast in every module. What was said above about a bounds-checked shared
-  accessor being "strictly safer" applies to `decl_get`, not to `decl_at`.
-- **`decl_get` IS deletable — the earlier "not deletable" verdict here was wrong, and the
-  reason is worth keeping.** Repointing `lower.al`'s local `decl_get` to `lower_ctx::decl_get`
-  and deleting it failed with `alatyr: check: invalid at line 2515 in lower__assign`. The cause
-  was **not** anything invisible: `lower.al`'s copy had **17 remaining callers in its own child
-  modules** (`src/lower/*.al`: ir.al 5, fnval.al 4, assign.al 2, ctfold.al 2, mono.al 2,
-  collect_slots.al 1, decl_index.al 1), which resolve the **bare** name `decl_get` to the parent
-  module's definition. A census of `lower.al` alone — which is what was done first — cannot see
-  them; the count of unqualified mentions in `lower.al` was 0 and that number meant nothing.
-  Repointing those 17 sites to `lower_ctx::decl_get` and deleting the copy builds clean
-  (`EXIT=0`, Stage1 6 110 088 B).
-- **How the consumers were found, since the diagnostic was useless:** the GAS of a build with
-  the copy still present showed `call lower__decl_get` **17** times while `lower.al` source had
-  no bare calls left; the enclosing labels were `lower__ir__…`, `lower__fnval__…`,
-  `lower__mono__…` — child modules of `lower`. GAS, not the error message, located the dependency.
-- **Defect filed for the diagnostic (see the issue linked below).** `check` reported neither the
-  missing symbol nor the file that referenced it, and its line number is **not source-relative**:
-  prepending 11 blank lines to `lower.al` left the report at `line 2515` unchanged, and renaming
-  the definition (same position, same line count) reproduced the identical message. A refusal that
-  names nothing makes this bug class expressible — de-duplicating a shared accessor looks like an
-  unexplained regression, so nobody attempts it.
-- **GAS accounting caveat, stated rather than glossed:** once a function definition is deleted,
-  label allocation shifts across the whole emission — `b8 → b10` differs in **73 122 added /
-  73 155 removed** lines, almost all `jmp .L…` renumbering. So the "complete accounting" claim
-  made above for `decl_at` holds only for a change that does not remove a definition; here the
-  checkable invariants are `call lower__decl_get` = **0**, `call lower__decl_at__Decl` = **0**,
-  no definition of either symbol emitted, and the retarget counts balanced (**107 removed /
-  107 added** to `lower_ctx__decl_get`). The real proof is the fixpoint and the gate, not a
-  hand-read GAS diff.
-
-- **Process lesson:** a copy being textually identical is *necessary, not sufficient*. Only a
-  build decides deletability. Two of the three class-A names were misclassified by the detector,
-  and both errors would have survived any review that read the source and a GAS diff summary
-  without compiling.
