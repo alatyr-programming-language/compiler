@@ -38,6 +38,7 @@ stmt_label_span := ast::stmt_label_span
 local_type_span := ast::local_type_span
 binding_is_comptime := ast::binding_is_comptime
 fn_is_naked := lower_asm::fn_is_naked
+fn_is_inline := lower_attrs::fn_is_inline   ## #1074: the predicate must see an `@inline` callee
 (Arg, Decl, Expr, Stmt) := ast
 (push_str, push_int) := strbuf
 (CSpan, LCtx, SVec, var_name_span) := lower_ctx
@@ -1522,6 +1523,28 @@ ir_check_call := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl : usize,
   } else {
     cd := deref(lower_ctx::decl_get(decls, usize(idx)))
     if cd.kind != 1 { IRP_OK = false }              ## plain fn only (not a syscall-fn / struct / enum)
+    ## An `@inline` callee is NEVER a `call` (#1074; Codegen §3.5 / CG-10, Declarations §2.3: "substituted
+    ## at every direct call site — no `call` is emitted", and §3.5 closes "never reverts to a `call`"). The
+    ## generic call lowering below emits op 6 (`call <mangled>`) + reads %rax, which would silently break
+    ## that contract: the value would still be right (the out-of-line symbol exists), so no fixture would
+    ## catch it by result — only the `check_inline_value` symbol probe does, and it caught exactly this.
+    ## The text emitter substitutes (`emit_inline_call` → args into scratch slots, params aliased by name,
+    ## `return` REDIRECTED to an inline-end label), so DECLINING here keeps the emitted program conformant
+    ## and is the same defence this predicate already uses for every unmodelled shape ("the caller selects
+    ## the text emitter instead of silently erasing the target").
+    ## WHAT THIS COSTS, measured rather than argued: zero corpus coverage today. The arithmetic and
+    ## comparison operators (`num.al`, `cmp.al`, `u128.al` — all `@inline`) never reach THIS arm at all:
+    ## they are `Expr::Bin` nodes and lower through `ir_lower_bin`, and the only operator this language
+    ## spells as a named call is the shift pair (`shl`/`shr`, OP-6), admitted above before resolution. Of
+    ## the remaining named `@inline` callees in `lib/`, `vec.al::vec_base` and `vec.al::at` are refused by
+    ## `ir_native_scalar` on their `ptr(Vec(T))` parameter (and by `cd.is_generic`, their `T : type`). So
+    ## the shape that reaches this arm is a NAMED, non-generic, single-overload, all-native-scalar `@inline`
+    ## fn, and the corpus holds exactly one — `add` in `test/value_position_attrs.al`, the fixture that
+    ## reported #1074. That is why the flip's gate carried exactly one FAIL here, and no wrong value.
+    ## Substituting inside the IR (rather than declining) is the follow-up slice, not this one: it needs a
+    ## param-name→IROperand binding scope over `ir_var_vreg` AND a `return` redirect, since the IR's
+    ## `Stmt::Return` emits op 7 (`ret` → the caller's epilogue) and has no inline-end label to jump to.
+    if fn_is_inline(src, cd.name_start, cd.name_len) { IRP_OK = false }
     if cd.is_generic { IRP_OK = false }
     if extern_symbol(src, cd.name_start, cd.name_len).n != 0 { IRP_OK = false }   ## keep to internal fns
     if overload_set_count(decls, src, cd.name_start, cd.name_len, cd.mod_start, cd.mod_len) >= 2 { IRP_OK = false }
