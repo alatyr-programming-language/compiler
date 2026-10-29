@@ -301,6 +301,36 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   `collect_slots`, then reclassify the fixture to accept. Until the first is done the second would turn
   the gate red, and until both are done this row stays a disagreement with a named cause — which is what
   §3.8's attribution is for.
+- **the x86 variadic branch is not incidental, and merging it is a behaviour change on three backends —
+  measured, so the next slice can be ordered.** The band note at `lower_ctx.al:528` says the open work is
+  "giving this scan the variadic branch without changing what the three twins answer today". Read as a
+  promise that nothing changes, that is unmeasurable and wrong; read as "do not change what the twins
+  answer WHEN THEY ANSWER", it is the right constraint. The measurement settles which it means:
+  `scripts/corpus.manifest` shows x86_64 the ONLY backend that implements §7.2 slice-variadic with a
+  non-scalar element — `test/slice_variadic_enum_elem.al` x86_64 `run 42` (the fixture's own expected
+  value, `esum(Sh.Sq(20), Sh.Tri(11)) = 20 + 22 = 42`) against aarch64 and riscv64 `run 133`
+  (= 128 + SIGTRAP, the `ebreak`/`brk #0` refusal) and wasm `run 134`; `test/signedness_slice_variadic.al`
+  likewise (x86 `run 42`, twins TRAP, wasm `assemble 1`). So on these paths the twins answer NOTHING today:
+  the merge does not perturb a value, it turns a refusal into an answer, and it therefore LOWERS the TRAP
+  mass (2 210 of the 2 462 rows) rather than risking a wrong value. Scope, counted: **29 corpus sites carry
+  the `name : ...T` annotation form** (27 in `test/*.al`, 2 in `lib/`), of which six are dedicated
+  §7.2 fixtures (`slice_variadic{,_fixed,_float,_enum8,_enum_elem}.al`, `signedness_slice_variadic.al`).
+  What the merge must preserve is the {0,0} answer for a BARE `...` (the §7.1 comptime variadic, no element
+  type) — x86's copy already returns {0,0} there (`lower.al:6301`, `if ve == vs`), so the branch is
+  additive on exactly the shapes the twins refuse. Plumbing is already in place and adds no state:
+  `lower_ctx.al` publishes `pub slice_scan_has` (:548) and `pub slice_scan_ws` (:555), byte-identical to
+  x86's `ptr_scan_has`/`ptr_scan_ws` (`lower.al:12514`, `:12519`), and the bound comes from
+  `ast::src_extent()` rather than a per-target global. So the lift is: add the variadic branch to
+  `lower_ctx::slice_elem_span`, delete x86's copy and its two helpers, repoint the four shared callers that
+  already reach into the emitter (`lower/place.al:237`, `:1230`, `lower/ir.al:1231`, `:1790`) — and land
+  the six fixtures' reclassification in the same PR, since a fixture that asserts a trap while the backend
+  now answers 42 is the gate going red for the right reason.
+- **#1108 does not block any of this.** Re-measured on the main build from a clean directory (the earlier
+  "hang" was two harness defects, recorded in `.worktrees/e2e-crash/target/1108-correction.md`: a
+  `docker inspect` false-pass race, and a self-host path entered because the diagnostic binary sat in
+  `target/debug/`): `alatyr` at `99476a5` returns rc=0 for BOTH `ir` and `check` on all eleven repro
+  programs. The repo's own gate scripts never inspect container state — the race was the scratch harness's
+  alone. Nothing here is a compiler defect, so slice 9 waits on the gate and the seed promotion, not on it.
 - **row 11 was wrong as written.** `enum_inst_words` has ONE definition (`src/lower_layout.al`), imported
   by all three twins; there is no copy to delete. wasm's real gap is that it calls `enum_max_arity`
   instead, leaving its `enum_inst_words` import dead — a call-site fix, not a deletion.
