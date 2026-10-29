@@ -396,7 +396,7 @@ comptime_query_comp_field_type := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Aren
     Expr::CompField(base, idx) => {
       if cx.cf_var_l == 0 { return CSpan(s = 0, n = 0) }
       vn := var_name_span(idx)
-      if vn.n == 0 or not streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { return CSpan(s = 0, n = 0) }
+      if vn.n == 0 or not lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { return CSpan(s = 0, n = 0) }
       bt := expr_type_span(base, cx)
       if bt.n == 0 { return CSpan(s = 0, n = 0) }
       ft := field_type_span(cx.decls, cx.src, bt.s, bt.n, cx.cf_fld_s, cx.cf_fld_l, deref(cx.mar))
@@ -443,8 +443,8 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr
       while i < cnt {
         d := deref(lower_ctx::decl_get(cx.decls, i))
         if d.kind == 0 and d.arity == 0 and d.ret_tl != 0 and d.name_len == qml
-          and streq(cx.src, d.name_start, d.name_len, qms, qml)
-          and streq(cx.src, d.mod_start, d.mod_len, cx.mod_s, cx.mod_l) {
+          and lower_ctx::streq(cx.src, d.name_start, d.name_len, qms, qml)
+          and lower_ctx::streq(cx.src, d.mod_start, d.mod_len, cx.mod_s, cx.mod_l) {
           as_ = d.ret_ts
           al = d.ret_tl
         }
@@ -457,7 +457,7 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr
   mut i : usize = 0
   while i < cnt {
     d := deref(lower_ctx::decl_get(cx.decls, i))
-    mut name_ok := streq(cx.src, d.name_start, d.name_len, qns, qnl)
+    mut name_ok := lower_ctx::streq(cx.src, d.name_start, d.name_len, qns, qnl)
     mut module_ok := true
     if cp >= 0 { module_ok = mod_head_matches(cx.src, d.mod_start, d.mod_len, qms, qml) }
     if (d.kind == 1 or d.kind == 4) and d.arity == na and name_ok and module_ok {
@@ -520,7 +520,7 @@ pub comptime_query_expr_ok := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena, t
     Expr::Var(s, n) => {
       ei := entry_of(cx.slots, cx.src, s, n)
       ent := deref(svec_at(SlotEntry, cx.slots, ei))
-      if streq(cx.src, ent.ns, ent.nl, s, n) { return true }
+      if lower_ctx::streq(cx.src, ent.ns, ent.nl, s, n) { return true }
       if unchecked bitcast(usize, module_const_value(cx.decls, cx.src, s, n)) != 0 { return true }
       is_module_mut_global(cx.decls, cx.src, s, n)
     }
@@ -1031,7 +1031,7 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
         if lvn.n != 0 and (not is_type_name(l, cx.decls, src, a)) and is_type_name(r, cx.decls, src, a) {
           rvn := var_name_span(r)
           itbn := base_type_name(src, cx.it_s, cx.it_l)
-          eq := streq(src, itbn.s, itbn.n, rvn.s, rvn.n)
+          eq := lower_ctx::streq(src, itbn.s, itbn.n, rvn.s, rvn.n)
           if i64(op) == 20 { if eq { return 1 } return 0 }
           if eq { return 0 }
           return 1
@@ -1068,7 +1068,7 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
         tl2 := var_name_span(l)
         tr2 := var_name_span(r)
         if tl2.n != 0 and tr2.n != 0 and is_type_name(l, cx.decls, src, a) and is_type_name(r, cx.decls, src, a) {
-          teq := streq(src, tl2.s, tl2.n, tr2.s, tr2.n)
+          teq := lower_ctx::streq(src, tl2.s, tl2.n, tr2.s, tr2.n)
           if i64(op) == 20 { if teq { return 1 } return 0 }
           if teq { return 0 }
           return 1

@@ -49,7 +49,7 @@ IROperand := struct { k : usize, v : i64 }
 pub ir_var_vreg := fn(cx : ptr(LCtx), s : usize, n : usize) -> usize {
   mut i := 0
   while i < IRV_N {
-    if streq(cx.src, IRV_S[i], IRV_L[i], s, n) { return IRV_V[i] }
+    if lower_ctx::streq(cx.src, IRV_S[i], IRV_L[i], s, n) { return IRV_V[i] }
     i += 1
   }
   vr := IRV_NEXT
@@ -580,19 +580,19 @@ ir_find_accum := fn(cx : ptr(LCtx), fns : usize, fnl : usize, fb : Option(ptr(mu
         st := deref(stmt_p(Stmt, sq))
         match st {
           Stmt::Assign(ns, nl, v, nx) => {
-            if (not streq(cx.src, ns, nl, fns, fnl)) and ir_var_vreg_lookup(cx, ns, nl) >= 0 {
+            if (not lower_ctx::streq(cx.src, ns, nl, fns, fnl)) and ir_var_vreg_lookup(cx, ns, nl) >= 0 {
               IRRD_N = 0
               IRRD_OK = true
               ir_rd_expr(cx.src, v)                                  ## collect the RHS read set
               mut reads := false
               mut k := 0
-              while k < IRRD_N { if streq(cx.src, IRRD_S[k], IRRD_L[k], ns, nl) { reads = true } ; k += 1 }
+              while k < IRRD_N { if lower_ctx::streq(cx.src, IRRD_S[k], IRRD_L[k], ns, nl) { reads = true } ; k += 1 }
               if reads {
                 off := slot_of(cx.slots, cx.src, ns, nl)
                 if off >= 0 {
                   ek := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, ns, nl))).ek
                   if ek == 0 {
-                    if not (acc_l != 0 and streq(cx.src, acc_s, acc_l, ns, nl)) { count += 1; acc_s = ns; acc_l = nl }
+                    if not (acc_l != 0 and lower_ctx::streq(cx.src, acc_s, acc_l, ns, nl)) { count += 1; acc_s = ns; acc_l = nl }
                   }
                 }
               }
@@ -610,7 +610,7 @@ ir_find_accum := fn(cx : ptr(LCtx), fns : usize, fnl : usize, fb : Option(ptr(mu
   }
   if count == 1 {
     mut i := 0
-    while i < IRV_N { if streq(cx.src, IRV_S[i], IRV_L[i], acc_s, acc_l) { return i64(i) } ; i += 1 }
+    while i < IRV_N { if lower_ctx::streq(cx.src, IRV_S[i], IRV_L[i], acc_s, acc_l) { return i64(i) } ; i += 1 }
     0 - 1
   } else { 0 - 1 }
 }
@@ -704,7 +704,7 @@ ir_is_vecbuild_call := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr)) ->
       mut i : usize = 0
       while i < cnt {
         d := deref(lower_ctx::decl_get(decls, i))
-        if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, t.s, t.n) {
+        if (d.kind == 1 or d.kind == 4) and lower_ctx::streq(src, d.name_start, d.name_len, t.s, t.n) {
           if d.kind == 4 { return true }                          ## a @abi(syscall) fn (mmap)
           bn := base_type_name(src, d.ret_ts, d.ret_tl)
           rn := str_at((src + bn.s), bn.n)
@@ -732,7 +732,7 @@ ir_call_returns_vec := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr)) ->
       mut i : usize = 0
       while i < cnt {
         d := deref(lower_ctx::decl_get(decls, i))
-        if d.is_fn and streq(src, d.name_start, d.name_len, t.s, t.n) {
+        if d.is_fn and lower_ctx::streq(src, d.name_start, d.name_len, t.s, t.n) {
           bn := base_type_name(src, d.ret_ts, d.ret_tl)
           if str_at((src + bn.s), bn.n) == "Vec" { return true }
         }
@@ -759,7 +759,7 @@ ir_emit_gbarrier := fn(sp : ptr(mut Stmt)) {
 ## add a DISTINCT read var span (dedup keeps the sync count tight); overflow → give up (reject the fn).
 ir_rd_add := fn(src : ptr(u8), s : usize, n : usize) {
   mut i := 0
-  while i < IRRD_N { if streq(src, IRRD_S[i], IRRD_L[i], s, n) { return } ; i += 1 }
+  while i < IRRD_N { if lower_ctx::streq(src, IRRD_S[i], IRRD_L[i], s, n) { return } ; i += 1 }
   if IRRD_N < 32 { IRRD_S[IRRD_N] = s; IRRD_L[IRRD_N] = n; IRRD_N = IRRD_N + 1 } else { IRRD_OK = false }
 }
 ## Collect every Var READ in a value expression into IRRD; a form the walker cannot decompose → give up.
@@ -830,7 +830,7 @@ ir_collect_barrier_reads := fn(src : ptr(u8), sp : ptr(mut Stmt)) {
 ## modeled path has genuinely register-allocated.
 ir_var_vreg_lookup := fn(cx : ptr(LCtx), s : usize, n : usize) -> i64 {
   mut i := 0
-  while i < IRV_N { if streq(cx.src, IRV_S[i], IRV_L[i], s, n) { return i64(IRV_V[i]) } ; i += 1 }
+  while i < IRV_N { if lower_ctx::streq(cx.src, IRV_S[i], IRV_L[i], s, n) { return i64(IRV_V[i]) } ; i += 1 }
   0 - 1
 }
 ## Before a general barrier: store every MODELED scalar the barrier reads into its TEXT frame slot. Only a
@@ -1220,7 +1220,7 @@ pub ir_render := fn(in out sb : strbuf::StrBuf, raprefix : usize, lepi : usize, 
 ir_slice_param_idx := fn(src : ptr(u8), s : usize, n : usize) -> i64 {
   mut i := 0
   while i < IRSL_N {
-    if streq(src, IRSL_S[i], IRSL_L[i], s, n) { return i64(IRSL_PIDX[i]) }
+    if lower_ctx::streq(src, IRSL_S[i], IRSL_L[i], s, n) { return i64(IRSL_PIDX[i]) }
     i += 1
   }
   0 - 1
@@ -1235,7 +1235,7 @@ ir_slice_param_byte := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ir_array_local_idx := fn(src : ptr(u8), s : usize, n : usize) -> i64 {
   mut i := 0
   while i < IRARR_N {
-    if streq(src, IRARR_S[i], IRARR_L[i], s, n) { return i64(i) }
+    if lower_ctx::streq(src, IRARR_S[i], IRARR_L[i], s, n) { return i64(i) }
     i += 1
   }
   0 - 1
@@ -1243,7 +1243,7 @@ ir_array_local_idx := fn(src : ptr(u8), s : usize, n : usize) -> i64 {
 ir_vec_local_idx := fn(src : ptr(u8), s : usize, n : usize) -> i64 {
   mut i := 0
   while i < IRVEC_N {
-    if streq(src, IRVEC_S[i], IRVEC_L[i], s, n) { return i64(i) }
+    if lower_ctx::streq(src, IRVEC_S[i], IRVEC_L[i], s, n) { return i64(i) }
     i += 1
   }
   0 - 1
@@ -1251,7 +1251,7 @@ ir_vec_local_idx := fn(src : ptr(u8), s : usize, n : usize) -> i64 {
 ir_fr_idx := fn(src : ptr(u8), s : usize, n : usize) -> i64 {
   mut i := 0
   while i < IRFR_N {
-    if streq(src, IRFR_S[i], IRFR_L[i], s, n) { return i64(i) }
+    if lower_ctx::streq(src, IRFR_S[i], IRFR_L[i], s, n) { return i64(i) }
     i += 1
   }
   0 - 1
@@ -1336,7 +1336,7 @@ pub index_plain_scalar_struct := fn(src : ptr(u8), decls : ptr(rt::Vec), ts : us
 ir_sp_idx := fn(src : ptr(u8), bs : usize, bn : usize) -> i64 {
   mut i := 0
   while i < IRSP_N {
-    if streq(src, IRSP_S[i], IRSP_L[i], bs, bn) { return i64(i) }
+    if lower_ctx::streq(src, IRSP_S[i], IRSP_L[i], bs, bn) { return i64(i) }
     i += 1
   }
   0 - 1
@@ -1368,7 +1368,7 @@ pub ir_native_scalar := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 ir_bound_has := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   mut i : usize = 0
   while i < IRB_N {
-    if streq(src, IRB_S[i], IRB_L[i], s, n) { return true }
+    if lower_ctx::streq(src, IRB_S[i], IRB_L[i], s, n) { return true }
     i += 1
   }
   false

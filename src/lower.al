@@ -287,15 +287,7 @@ arena_of := fn(cx : ptr(LCtx)) -> rt::Arena { return deref(cx.mar) }
 arena_base := fn(a : ptr(mut rt::Arena)) -> usize { return unchecked bitcast(usize, deref(a).base) }
 
 ## Do two source spans denote the same name (content equality), mirroring nameres/sema.
-streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
-  ## PERF: length-first fast reject (most scan comparisons differ in length — skip the str views).
-  if a_n != b_n { return false }
-  ## `src + a_s`/`src + b_s` are POINTER arithmetic (a span start may be a REBASED handle for a
-  ## comptime-synthesized name) → route through `rt::addr`, not a checked integer `+` (I11 / CG-8).
-  wa := str_at((src + a_s), a_n)
-  wb := str_at((src + b_s), b_n)
-  wa == wb
-}
+
 
 ## MODULE tier — NAME MANGLING. A function's emitted GAS label is `<module>__<fn>` so two
 ## modules may each define a same-named `helper` without their symbols colliding (the real
@@ -509,7 +501,7 @@ mod_head_matches := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : 
     k += 1
   }
   if ls == 0 { return false }
-  streq(src, as_ + ls, al - ls, ms, ml)
+  lower_ctx::streq(src, as_ + ls, al - ls, ms, ml)
 }
 
 ## The decl index of an `@inline` fn named `[cs, cl)` resolvable from module `[ms, ml)` (else -1) — a
@@ -714,7 +706,7 @@ generic_op_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), name : str, ts : 
       }
       if nct >= 1 and nval == 2 {
         fv := first_value_param_type_span(d, src, a)
-        if fv.n != 0 and struct_decl_of(decls, src, fv.s, fv.n) >= 0 and streq(src, fv.s, fv.n, ob.s, ob.n) {
+        if fv.n != 0 and struct_decl_of(decls, src, fv.s, fv.n) >= 0 and lower_ctx::streq(src, fv.s, fv.n, ob.s, ob.n) {
           found = i64(i)
           nfound += 1
         }
@@ -922,7 +914,7 @@ callee_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
     i := dni_at(cnt, j)
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
       d := deref(lower_ctx::decl_get(decls, i))
-      if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, cs, cl) {
+      if (d.kind == 1 or d.kind == 4) and lower_ctx::streq(src, d.name_start, d.name_len, cs, cl) {
         if bare and mod_head_matches(src, d.mod_start, d.mod_len, ms, ml) { return i64(i) }
         hits += 1
         if found < 0 { found = i64(i) }
@@ -975,7 +967,7 @@ binding_head_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : us
         pr := projection_head_for(src, d.ret_ts, d.ret_tl, ns, nl)
         if pr.n != 0 { hs = pr.s; hl = pr.n; ts = ns; tl = nl }
       } else {
-        if streq(src, d.name_start, d.name_len, ns, nl) {
+        if lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) {
           g := gref_split(src, d.ret_ts, d.ret_tl)
           if g.qual { hs = g.ms; hl = g.ml; ts = g.ns; tl = g.nl }
         }
@@ -1000,7 +992,7 @@ binding_rhs_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
     d := deref(lower_ctx::decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0 and d.name_len != 0
        and mod_seg_eq(src, d.mod_start, d.mod_len, cs, cl)
-       and streq(src, d.name_start, d.name_len, ns, nl) {
+       and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) {
       g := gref_split(src, d.ret_ts, d.ret_tl)
       if g.qual { return CSpan(s = d.ret_ts, n = d.ret_tl) }
     }
@@ -1075,7 +1067,7 @@ qual_head_pick := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize
     j += 1
     if dnh_skip(cnt, k, th) == false {
       d := deref(lower_ctx::decl_get(decls, k))
-      if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, ts, tl) {
+      if (d.kind == 1 or d.kind == 4) and lower_ctx::streq(src, d.name_start, d.name_len, ts, tl) {
         r := mod_head_rank(src, d.mod_start, d.mod_len, hs, hl, cs, cl)
         if r > best {
           best = r
@@ -1126,7 +1118,7 @@ projection_head_for := fn(src : ptr(u8), rs : usize, rl : usize, ns : usize, nl 
     while r < e and gref_ident_byte(src, r) { r = r + 1 }
     if r == q { q = q + 1 }
     else {
-      if streq(src, q, r - q, ns, nl) { hit = true }
+      if lower_ctx::streq(src, q, r - q, ns, nl) { hit = true }
       q = r
     }
   }
@@ -1148,7 +1140,7 @@ callee_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usi
     i := dni_at(cnt, j)
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
       d := deref(lower_ctx::decl_get(decls, i))
-      if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, cs, cl) {
+      if (d.kind == 1 or d.kind == 4) and lower_ctx::streq(src, d.name_start, d.name_len, cs, cl) {
         if mod_head_matches(src, d.mod_start, d.mod_len, ms, ml) { return false }
         if mod_anc_rank_from(src, d.mod_start, d.mod_len, ms, ml) >= 0 { return false }
         hits += 1
@@ -1177,7 +1169,7 @@ callee_arity_collision := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl
     j += 1
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
-      if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, cs, cl)
+      if (d.kind == 1 or d.kind == 4) and lower_ctx::streq(src, d.name_start, d.name_len, cs, cl)
          and mod_head_matches(src, d.mod_start, d.mod_len, ms, ml) == false
          and mod_anc_rank_from(src, d.mod_start, d.mod_len, ms, ml) < 0 {
         mut k := dni_lo(cnt, th)
@@ -1187,7 +1179,7 @@ callee_arity_collision := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl
           k += 1
           if q != i and dnh_skip(cnt, q, th) == false {
             e := deref(lower_ctx::decl_get(decls, q))
-            if (e.kind == 1 or e.kind == 4) and streq(src, e.name_start, e.name_len, cs, cl)
+            if (e.kind == 1 or e.kind == 4) and lower_ctx::streq(src, e.name_start, e.name_len, cs, cl)
                and mod_head_matches(src, e.mod_start, e.mod_len, ms, ml) == false
                and mod_anc_rank_from(src, e.mod_start, e.mod_len, ms, ml) < 0
                and e.arity == d.arity and e.is_generic == d.is_generic
@@ -1226,7 +1218,7 @@ callee_variadic_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : 
     i := dni_at(cnt, j)
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
       d := deref(lower_ctx::decl_get(decls, i))
-      if d.is_fn and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+      if d.is_fn and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         mut p := d.params_head
         mut isv := false
         loop {
@@ -1339,7 +1331,7 @@ agg_value_var_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize
   vn := var_name_span(e)
   if vn.n == 0 { return 0 }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-  if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return 0 }
+  if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return 0 }
   if ent.ek == 2 { return struct_words(cx.decls, cx.src, ent.sns, ent.snl, a) }
   if ent.ek == 3 { return 1 + enum_inst_words(cx.decls, cx.src, ent.sns, ent.snl, a) }
   0
@@ -1362,7 +1354,7 @@ param_type_start := fn(ns : usize, nl : usize, penv : Option(ptr(mut Param)), sr
     match pc {
       Some(pcq) => {
         pm := deref(param_p(pcq))
-        if streq(src, pm.ns, pm.nl, ns, nl) { return pm.ts }
+        if lower_ctx::streq(src, pm.ns, pm.nl, ns, nl) { return pm.ts }
         pc = pm.next
       }
       None => { break }
@@ -1408,7 +1400,7 @@ tuple_value_var_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
   vn := var_name_span(e)
   if vn.n == 0 { return 0 }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-  if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return 0 }
+  if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return 0 }
   if ent.ek != 5 { return 0 }
   if ent.eek != 0 { return 0 }
   if ent.estride != 1 { return 0 }
@@ -1477,7 +1469,7 @@ index_agg_elem_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
   bv := index_base_var_span(e)
   if bv.n != 0 {
     ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
-    if streq(cx.src, ent.ns, ent.nl, bv.s, bv.n) == false { return 0 }
+    if lower_ctx::streq(cx.src, ent.ns, ent.nl, bv.s, bv.n) == false { return 0 }
     if ent.ek != 5 { return 0 }
     if ent.eek != 2 and ent.eek != 3 and ent.eek != 5 { return 0 }
     return ent.estride
@@ -1501,7 +1493,7 @@ index_plain_struct_elem_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena
   bv := index_base_var_span(e)
   if bv.n == 0 { return 0 }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
-  if streq(cx.src, ent.ns, ent.nl, bv.s, bv.n) == false { return 0 }
+  if lower_ctx::streq(cx.src, ent.ns, ent.nl, bv.s, bv.n) == false { return 0 }
   if ent.ek != 5 or ent.eek != 2 or ent.estride <= 1 { return 0 }
   if not index_plain_scalar_struct(cx.src, cx.decls, ent.sns, ent.snl, a) { return 0 }
   if ent.is_ref {
@@ -1526,7 +1518,7 @@ tuple_value_var_block := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   vn := var_name_span(e)
   if vn.n == 0 { return false }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-  if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return false }
+  if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return false }
   if ent.ek != 5 { return false }
   if ent.is_ref { return false }
   agg_arr_fill_count(cx.slots, ent.off) > 1
@@ -1652,7 +1644,7 @@ slice_view_cmp_kind := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize
   vn := var_name_span(e)
   if vn.n == 0 { return 0 }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-  if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return 0 }
+  if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return 0 }
   if ent.ek != 5 { return 0 }
   if ent.is_ref == false { return 0 }
   ## `snl == 1` is the RUNTIME-LEN marker of a scalar/float-element slice — a LOCAL view (`sns == 0`,
@@ -1737,7 +1729,7 @@ agg_value_var_is_enum := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   vn := var_name_span(e)
   if vn.n == 0 { return false }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-  if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return false }
+  if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return false }
   ent.ek == 3
 }
 ## The decl index of the generic structural derive `eq` (want_lt=false) / `lt` (want_lt=true) in
@@ -1846,7 +1838,7 @@ emit_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : Option(
         svn := var_name_span(argx)
         if svn.n != 0 {
           sent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, svn.s, svn.n)))
-          if streq(cx.src, sent.ns, sent.nl, svn.s, svn.n) {
+          if lower_ctx::streq(cx.src, sent.ns, sent.nl, svn.s, svn.n) {
             if sent.ek == 4 { is_str_hole = true }
             if sent.ek == 9 { is_float_hole = true }
             if sent.ek == 0 { is_scalar_hole = true }   ## a plain scalar LOCAL/param slot
@@ -1985,7 +1977,7 @@ set_global_ref_module := fn(s : usize, l : usize, dp : usize) {
   lower_layout::set_type_ref_module(s, l, ROOT_MOD_S, ROOT_MOD_L)
 }
 global_ref_module_eq := fn(src : ptr(u8), d : Decl) -> bool {
-  streq(src, d.mod_start, d.mod_len, GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
+  lower_ctx::streq(src, d.mod_start, d.mod_len, GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
 }
 ## How closely does the module span `[ms, ml)` relate to the module being lowered? Modules §3 —
 ## privacy flows DOWN the tree, so exactly this module and its ANCESTORS may be named without a path.
@@ -2048,7 +2040,7 @@ gref_best_rank := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0
-         and streq(src, d.name_start, d.name_len, ns, nl) {
+         and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) {
         r := mod_anc_rank(src, d.mod_start, d.mod_len)
         if r > best { best = r }
       }
@@ -2094,7 +2086,7 @@ global_ref_candidate := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl, s : us
   while i < cnt {
     q := deref(lower_ctx::decl_get(decls, i))
     if q.is_fn == false and q.kind == 0 and q.ret_tl == 0 and q.arity == 0
-       and streq(src, q.name_start, q.name_len, s, n) { hits += 1 }
+       and lower_ctx::streq(src, q.name_start, q.name_len, s, n) { hits += 1 }
     i += 1
   }
   hits == 1
@@ -2162,7 +2154,7 @@ gref_names_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0
-         and streq(src, d.name_start, d.name_len, g.ns, g.nl)
+         and lower_ctx::streq(src, d.name_start, d.name_len, g.ns, g.nl)
          and unchecked bitcast(usize, d.value) != 0
          and var_name_span(d.value).n == 0 { res = true }
     }
@@ -2257,7 +2249,7 @@ vis_check_pair := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
       if (d.kind == k1 or d.kind == k2) and d.name_len != 0
-         and streq(src, d.name_start, d.name_len, ns, nl)
+         and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl)
          and mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl)
          and decl_visible_from(src, d, cs, cl) == false {
         reject_decl_not_visible(src, d, ns, what)
@@ -2305,7 +2297,7 @@ vis_check_reexport := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : u
     j += 1
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
-      if d.name_len != 0 and streq(src, d.name_start, d.name_len, ns, nl)
+      if d.name_len != 0 and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl)
          and mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl)
          and decl_is_pub(src, d.name_start) == false {
         lower_show_src_line(src, ns)
@@ -2423,8 +2415,8 @@ module_const_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   h := lower_layout::_name_hash(src, s, n)
   if _mcv_n[h] == n and _mcv_src[h] == src and _mcv_ctx[h] == GLOBAL_REF_MOD_SET
      and _mcv_ml[h] == GLOBAL_REF_MOD_L
-     and streq(src, _mcv_ms[h], _mcv_ml[h], GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
-     and streq(src, _mcv_s[h], _mcv_n[h], s, n) { return unchecked bitcast(ptr(Expr), _mcv_r[h]) }
+     and lower_ctx::streq(src, _mcv_ms[h], _mcv_ml[h], GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
+     and lower_ctx::streq(src, _mcv_s[h], _mcv_n[h], s, n) { return unchecked bitcast(ptr(Expr), _mcv_r[h]) }
   cnt := rt::vec_len(deref(decls))
   mut res := 0
   gr := gref_split(src, s, n)
@@ -2438,7 +2430,7 @@ module_const_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
       ## exclude a MUTABLE global (`mut NAME := …`) — that is runtime .data storage, not a
       ## compile-time constant; `is_module_mut_global` claims it and the read/write paths address it.
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and n != 0
-         and global_ref_candidate(decls, src, d, s, n) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
+         and global_ref_candidate(decls, src, d, s, n) and lower_ctx::streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
          and local_is_mut(src, d.name_start) == false {
         res = unchecked bitcast(usize, d.value)
       }
@@ -2459,8 +2451,8 @@ mut_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   h := lower_layout::_name_hash(src, s, n)
   if _mgv_n[h] == n and _mgv_src[h] == src and _mgv_ctx[h] == GLOBAL_REF_MOD_SET
      and _mgv_ml[h] == GLOBAL_REF_MOD_L
-     and streq(src, _mgv_ms[h], _mgv_ml[h], GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
-     and streq(src, _mgv_s[h], _mgv_n[h], s, n) { return unchecked bitcast(ptr(Expr), _mgv_r[h]) }
+     and lower_ctx::streq(src, _mgv_ms[h], _mgv_ml[h], GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
+     and lower_ctx::streq(src, _mgv_s[h], _mgv_n[h], s, n) { return unchecked bitcast(ptr(Expr), _mgv_r[h]) }
   cnt := rt::vec_len(deref(decls))
   mut res := 0
   gr := gref_split(src, s, n)
@@ -2472,7 +2464,7 @@ mut_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and n != 0
-         and global_ref_candidate(decls, src, d, s, n) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
+         and global_ref_candidate(decls, src, d, s, n) and lower_ctx::streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
          and local_is_mut(src, d.name_start) {
         res = unchecked bitcast(usize, d.value)
       }
@@ -2501,7 +2493,7 @@ const_array_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and n != 0
-         and global_ref_candidate(decls, src, d, s, n) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
+         and global_ref_candidate(decls, src, d, s, n) and lower_ctx::streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
          and local_is_mut(src, d.name_start) == false {
         if array_lit_info(d.value).is_a or fixed_array_byte_eek(src, d.name_start, d.name_len) != 0 { res = unchecked bitcast(usize, d.value) }
       }
@@ -2744,7 +2736,7 @@ global_array_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl 
     i := dni_at(cnt, j)
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
-      if global_ref_candidate(decls, src, d, ns, nl) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl) {
+      if global_ref_candidate(decls, src, d, ns, nl) and lower_ctx::streq(src, d.name_start, d.name_len, gr.ns, gr.nl) {
         return i64(i)
       }
     }
@@ -2817,7 +2809,7 @@ is_module_mut_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0
-         and global_ref_candidate(decls, src, d, s, n) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
+         and global_ref_candidate(decls, src, d, s, n) and lower_ctx::streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
          and local_is_mut(src, d.name_start) {
         res = true
       }
@@ -2841,7 +2833,7 @@ emit_global_label := fn(in out sb : strbuf::StrBuf, decls : ptr(rt::Vec), src : 
       d := deref(lower_ctx::decl_get(decls, i))
       ## `global_needs_storage` covers a `mut` global AND a const ARRAY (both get a `.data` label);
       ## a scalar/struct const is inlined (no label), so it is correctly excluded.
-      if global_ref_candidate(decls, src, d, s, n) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
+      if global_ref_candidate(decls, src, d, s, n) and lower_ctx::streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
          and global_needs_storage(src, d) {
         emit_mangled_def(sb, src, d.mod_start, d.mod_len, d.name_start, d.name_len)
         return
@@ -2883,7 +2875,7 @@ const_struct_field := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(r
     match f {
       Some(fq) => {
         fdn := deref(fld_p(fq))
-        if streq(src, fdn.ns, fdn.nl, fs, fl) { found = i64(idx) }
+        if lower_ctx::streq(src, fdn.ns, fdn.nl, fs, fl) { found = i64(idx) }
         idx += 1
         f = fdn.next
       }
@@ -2928,7 +2920,7 @@ struct_field_index := fn(decls : ptr(rt::Vec), src : ptr(u8), ss : usize, sl : u
     match f {
       Some(fq) => {
         fdn := deref(fld_p(fq))
-        if streq(src, fdn.ns, fdn.nl, fs, fl) { found = i64(idx) }
+        if lower_ctx::streq(src, fdn.ns, fdn.nl, fs, fl) { found = i64(idx) }
         idx += 1
         f = fdn.next
       }
@@ -3166,7 +3158,7 @@ slot_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> i64 {
     ## LENGTH pre-check INLINE: `streq` rejects on length too, but only after the call + two `str_at`
     ## span builds. Most slots differ in name length, so this skips the call outright. Same verdict.
     if deref(e).nl == n {
-      if streq(src, deref(e).ns, n, s, n) { res = i64(deref(e).off) }
+      if lower_ctx::streq(src, deref(e).ns, n, s, n) { res = i64(deref(e).off) }
     }
     i += 1
   }
@@ -3194,7 +3186,7 @@ slot_declared_before := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usiz
     ## The same inline length pre-check `slot_of` uses, and `streq` is the same arbiter; only the
     ## position test and the bool result differ.
     if deref(e).nl == n and deref(e).ns < use_s {
-      if streq(src, deref(e).ns, n, s, n) { res = true }
+      if lower_ctx::streq(src, deref(e).ns, n, s, n) { res = true }
     }
     i += 1
   }
@@ -3216,7 +3208,7 @@ comptime_slot_is := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize,
   mut found_s : usize = 0
   while i < cnt {
     e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
-    if deref(e).off <= use_s and deref(e).nl == n and streq(src, deref(e).ns, deref(e).nl, s, n) {
+    if deref(e).off <= use_s and deref(e).nl == n and lower_ctx::streq(src, deref(e).ns, deref(e).nl, s, n) {
       if found == 0 or deref(e).off >= found_s { found = deref(e).ek ; found_s = deref(e).off }
     }
     i += 1
@@ -3235,7 +3227,7 @@ comptime_slot_expr := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usiz
   mut found := false
   while i < cnt {
     e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
-    if deref(e).off <= use_s and deref(e).ek == 255 and deref(e).nl == n and streq(src, deref(e).ns, deref(e).nl, s, n) {
+    if deref(e).off <= use_s and deref(e).ek == 255 and deref(e).nl == n and lower_ctx::streq(src, deref(e).ns, deref(e).nl, s, n) {
       if not found or deref(e).off >= result_s { result = deref(e).sns ; result_s = deref(e).off ; found = true }
     }
     i += 1
@@ -3269,7 +3261,7 @@ local_entry := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> Opt
   while i < cnt {
     e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
     if deref(e).nl == n {
-      if streq(src, deref(e).ns, n, s, n) { res = Option(u64).Some(u64(i)) }
+      if lower_ctx::streq(src, deref(e).ns, n, s, n) { res = Option(u64).Some(u64(i)) }
     }
     i += 1
   }
@@ -3409,7 +3401,7 @@ agg_members_agree := fn(decls : ptr(rt::Vec), src : ptr(u8), da : i64, db : i64)
           Some(fbq) => {
             ta := deref(fld_p(faq))
             tb := deref(fld_p(fbq))
-            if streq(src, ta.ns, ta.nl, tb.ns, tb.nl) == false { agree = false }
+            if lower_ctx::streq(src, ta.ns, ta.nl, tb.ns, tb.nl) == false { agree = false }
             fa = ta.next
             fb = tb.next
           }
@@ -3514,7 +3506,7 @@ slot_adopt_native_int_type := fn(in out slots : SVec, src : ptr(u8), s : usize, 
   if tn != "i64" and tn != "isize" { return }
   ei := entry_of(ptr(slots), src, s, n)
   e := svec_at(SlotEntry, ptr(slots), ei)
-  if streq(src, deref(e).ns, deref(e).nl, s, n) == false { return }
+  if lower_ctx::streq(src, deref(e).ns, deref(e).nl, s, n) == false { return }
   if deref(e).ek != 0 { return }
   if deref(e).sns != 0 or deref(e).snl != 0 { return }
   deref(e).sns = ts
@@ -3619,7 +3611,7 @@ pub field_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), sns : usize, snl 
         ## (`Box(Pair(u64))`'s `v : T` → `Pair`), so a nested read `c.v.a` types `c.v` as the concrete
         ## aggregate. Gated (aggregate type-args only) inside `subst_field_ty` — a scalar-arg instance
         ## returns the param `T` unchanged (typed/sized as a scalar, byte-identical to before).
-        if streq(src, fd.ns, fd.nl, fs, fl) {
+        if lower_ctx::streq(src, fd.ns, fd.nl, fs, fl) {
           eff := subst_field_ty(decls, src, sns, snl, fd.ts, fd.tl, a)
           res = CSpan(s = eff.s, n = eff.n)
         }
@@ -3725,7 +3717,7 @@ agg_field_arg_parts := fn(e : ptr(Expr), cx : ptr(LCtx)) -> AggFld {
     Expr::Field(base, fs, fl) => { res = agg_field_of(base, fs, fl, cx) }
     Expr::CompField(base, idx) => {
       vn := var_name_span(idx)
-      if cx.cf_var_l != 0 and vn.n != 0 and streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) {
+      if cx.cf_var_l != 0 and vn.n != 0 and lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) {
         res = agg_field_of(base, cx.cf_fld_s, cx.cf_fld_l, cx)
       }
     }
@@ -3802,7 +3794,7 @@ comp_agg_elem_parts := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> CompA
   match deref(e) {
     Expr::CompField(base, idx) => {
       vn := var_name_span(idx)
-      if vn.n != 0 and streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) {
+      if vn.n != 0 and lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) {
         ## the CURRENT member type (cf_ty) must be a struct/enum to pass by reference.
         bn := base_type_name(cx.src, cx.cf_ty_s, cx.cf_ty_l)
         mut is_agg := struct_decl_of(cx.decls, cx.src, bn.s, bn.n) >= 0 or enum_decl_of(cx.decls, cx.src, bn.s, bn.n) >= 0
@@ -4137,7 +4129,7 @@ emit_require_predicate := fn(pred : CSpan, under : CSpan, arg_off : i64, in out 
     ubn := base_type_name(cx.src, under.s, under.n)
     pk := require_agg_kind(cx.decls, cx.src, pm.ts, pm.tl)
     uk := require_agg_kind(cx.decls, cx.src, under.s, under.n)
-    if pm.pmode != 0 or pbn.n == 0 or ubn.n == 0 or pk != uk or not streq(cx.src, pbn.s, pbn.n, ubn.s, ubn.n) {
+    if pm.pmode != 0 or pbn.n == 0 or ubn.n == 0 or pk != uk or not lower_ctx::streq(cx.src, pbn.s, pbn.n, ubn.s, ubn.n) {
       panic("selfhost: aggregate require predicate must take an ordinary parameter of the complete underlying aggregate type")
     }
     if pd.ret_tl == 0 or str_at((cx.src + pd.ret_ts), pd.ret_tl) != "bool" {
@@ -5578,7 +5570,7 @@ agg_cmp_operand_tag := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   vn := var_name_span(e)
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-  if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return CSpan(s = 0, n = 0) }
+  if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return CSpan(s = 0, n = 0) }
   if ent.snl == 0 { return CSpan(s = 0, n = 0) }
   bn := base_type_name(cx.src, ent.sns, ent.snl)
   type_lit_tag(cx.decls, cx.src, bn.s, bn.n)
@@ -6323,7 +6315,7 @@ view_var_kind := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> u8 {
   vn := var_name_span(v)
   if vn.n == 0 { return 0 }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, vn.s, vn.n)))
-  if streq(src, ent.ns, ent.nl, vn.s, vn.n) == false { return 0 }
+  if lower_ctx::streq(src, ent.ns, ent.nl, vn.s, vn.n) == false { return 0 }
   if ent.ek == 4 { return 4 }
   if ent.ek == 5 and ent.is_ref {
     if ent.eek == 2 or ent.eek == 3 or ent.eek == 7 {
@@ -6343,7 +6335,7 @@ view_var_kind := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> u8 {
 ## else keeps its existing (unchanged) lowering.
 view_dest_is_local := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize) -> bool {
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, ns, nl)))
-  if streq(src, ent.ns, ent.nl, ns, nl) == false { return false }
+  if lower_ctx::streq(src, ent.ns, ent.nl, ns, nl) == false { return false }
   if ent.ek == 4 { return ent.is_ref == false }
   if ent.ek == 5 and ent.is_ref {
     if ent.snl == 1 and ent.sns == 0 { return true }
@@ -6422,7 +6414,7 @@ is_cf_name_ref := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
     Expr::Field(base, fs, fl) => {
       if str_at((cx.src + fs), fl) == "name" {
         vn := var_name_span(base)
-        if vn.n != 0 and streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { res = true }
+        if vn.n != 0 and lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { res = true }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -6447,8 +6439,8 @@ cf_name_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       if str_at((cx.src + fs), fl) == "name" {
         vn := var_name_span(base)
         if vn.n != 0 {
-          if cx.cf_var_l != 0 and streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { rs = cx.cf_fld_s; rn = cx.cf_fld_l }
-          else if cx.cf_vloop_l != 0 and cx.cf_curvar_l != 0 and streq(cx.src, vn.s, vn.n, cx.cf_vloop_s, cx.cf_vloop_l) { rs = cx.cf_curvar_s; rn = cx.cf_curvar_l }
+          if cx.cf_var_l != 0 and lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { rs = cx.cf_fld_s; rn = cx.cf_fld_l }
+          else if cx.cf_vloop_l != 0 and cx.cf_curvar_l != 0 and lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_vloop_s, cx.cf_vloop_l) { rs = cx.cf_curvar_s; rn = cx.cf_curvar_l }
         }
       }
     }
@@ -6469,7 +6461,7 @@ cf_mutable_value := fn(e : ptr(Expr), cx : ptr(LCtx)) -> i64 {
     Expr::Field(base, fs, fl) => {
       if str_at((cx.src + fs), fl) != "mutable" { return 0 - 1 }
       vn := var_name_span(base)
-      if vn.n == 0 or not streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { return 0 - 1 }
+      if vn.n == 0 or not lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { return 0 - 1 }
       if local_is_mut(cx.src, cx.cf_fld_s) { return 1 }
       return 0
     }
@@ -6488,7 +6480,7 @@ cf_unknown_member := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   match deref(e) {
     Expr::Field(base, fs, fl) => {
       vn := var_name_span(base)
-      if vn.n == 0 or not streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { return false }
+      if vn.n == 0 or not lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { return false }
       nm := str_at((cx.src + fs), fl)
       not (nm == "name" or nm == "type" or nm == "offset" or nm == "mutable")
     }
@@ -6510,7 +6502,7 @@ cf_offset_value := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> i64 {
     Expr::Field(base, fs, fl) => {
       if str_at((cx.src + fs), fl) != "offset" { return 0 - 1 }
       vn := var_name_span(base)
-      if vn.n == 0 or not streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { return 0 - 1 }
+      if vn.n == 0 or not lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) { return 0 - 1 }
       ct := compfor_target_type(cx, cx.cf_var_s, cx.cf_var_l)
       if ct.n == 0 { return 0 - 1 }
       ## THE ORACLE (`lower_layout::layout_kind`) picks the tier — one decision shared with the
@@ -6543,7 +6535,7 @@ is_cf_payload_ref := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
     Expr::Field(base, fs, fl) => {
       if str_at((cx.src + fs), fl) == "payload" {
         vn := var_name_span(base)
-        if vn.n != 0 and streq(cx.src, vn.s, vn.n, cx.cf_vloop_s, cx.cf_vloop_l) { res = true }
+        if vn.n != 0 and lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_vloop_s, cx.cf_vloop_l) { res = true }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -6565,7 +6557,7 @@ is_cf_payload_typeinfo := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> bo
     Expr::Call(cs, cl, na, ah) => {
       if str_at((cx.src + cs), cl) == "typeinfo" {
         vn := var_name_span(arg_expr_at(ah, 0, a))
-        if vn.n != 0 and streq(cx.src, vn.s, vn.n, cx.cf_pay_s, cx.cf_pay_l) { res = true }
+        if vn.n != 0 and lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_pay_s, cx.cf_pay_l) { res = true }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -7326,7 +7318,7 @@ str_field_place := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> StrFld
   if bv.n == 0 { return res }
   ei := entry_of(cx.slots, cx.src, bv.s, bv.n)
   se := deref(svec_at(SlotEntry, cx.slots, ei))
-  if not streq(cx.src, se.ns, se.nl, bv.s, bv.n) { return res }   ## entry_of returns 0 on miss — verify
+  if not lower_ctx::streq(cx.src, se.ns, se.nl, bv.s, bv.n) { return res }   ## entry_of returns 0 on miss — verify
   if se.ek != 2 { return res }                           ## g must be a struct (inline local or by-ref param)
   bt := base_struct_span(fp.base, cx)
   fts := field_type_span(cx.decls, cx.src, bt.s, bt.n, fp.fs, fp.fl, a)
@@ -8479,7 +8471,7 @@ bin_operator_ret_struct := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
         ## the operand span itself re-hits the unbound-`N` read).
         oa := alias_rhs(decls, src, ots.s, ots.n)
         obt := base_type_name(src, oa.s, oa.n)
-        if streq(src, rbn.s, rbn.n, obt.s, obt.n) { return CSpan(s = obt.s, n = obt.n) }
+        if lower_ctx::streq(src, rbn.s, rbn.n, obt.s, obt.n) { return CSpan(s = obt.s, n = obt.n) }
       }
       if rbn.n != 0 and struct_decl_of(decls, src, rbn.s, rbn.n) >= 0 { return rbn }
       return CSpan(s = 0, n = 0)
@@ -8734,7 +8726,7 @@ call_ret_struct_span_sub := fn(inner : ptr(Expr), decls : ptr(rt::Vec), src : pt
         jc = jc + 1
         if dnh_skip(cnt, i, th) == false {
           d := deref(lower_ctx::decl_get(decls, i))
-          if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, nm.s, nm.n) { ci = i64(i) }
+          if (d.kind == 1 or d.kind == 4) and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) { ci = i64(i) }
         }
       }
       if ci >= 0 {
@@ -8751,7 +8743,7 @@ call_ret_struct_span_sub := fn(inner : ptr(Expr), decls : ptr(rt::Vec), src : pt
             match pc {
               Some(pcq) => {
                 pm := deref(param_p(pcq))
-                if streq(src, pm.ns, pm.nl, pn.s, pn.n) { ppos = i64(pj) }
+                if lower_ctx::streq(src, pm.ns, pm.nl, pn.s, pn.n) { ppos = i64(pj) }
                 pj += 1
                 pc = pm.next
               }
@@ -8764,8 +8756,8 @@ call_ret_struct_span_sub := fn(inner : ptr(Expr), decls : ptr(rt::Vec), src : pt
             vn := var_name_span(cta)
             if vn.n != 0 { rn = vn }
           }
-          if gpl != 0 and streq(src, rn.s, rn.n, gps, gpl) { rn = CSpan(s = its, n = itl) }
-          else if gpl2 != 0 and streq(src, rn.s, rn.n, gps2, gpl2) { rn = CSpan(s = its2, n = itl2) }
+          if gpl != 0 and lower_ctx::streq(src, rn.s, rn.n, gps, gpl) { rn = CSpan(s = its, n = itl) }
+          else if gpl2 != 0 and lower_ctx::streq(src, rn.s, rn.n, gps2, gpl2) { rn = CSpan(s = its2, n = itl2) }
           if struct_decl_of(decls, src, rn.s, rn.n) >= 0 { res = rn }
         }
       }
@@ -8798,7 +8790,7 @@ callee_param_pos := fn(decls : ptr(rt::Vec), ci : usize, src : ptr(u8), ts : usi
     match pc {
       Some(pcq) => {
         pm := deref(param_p(pcq))
-        if streq(src, pm.ns, pm.nl, ts, tl) { res = i64(pj) }
+        if lower_ctx::streq(src, pm.ns, pm.nl, ts, tl) { res = i64(pj) }
         pj += 1
         pc = pm.next
       }
@@ -8822,7 +8814,7 @@ fn_decl_idx_by_name := fn(decls : ptr(rt::Vec), src : ptr(u8), nm : CSpan) -> i6
     jc = jc + 1
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
-      if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, nm.s, nm.n) { ci = i64(i) }
+      if (d.kind == 1 or d.kind == 4) and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) { ci = i64(i) }
     }
   }
   ci
@@ -8869,9 +8861,9 @@ call_ret_pointee_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
             }
           }
           if ok {
-            if gpl != 0 and streq(src, rn.s, rn.n, gps, gpl) { rn = CSpan(s = its, n = itl) }
-            else if gpl2 != 0 and streq(src, rn.s, rn.n, gps2, gpl2) { rn = CSpan(s = its2, n = itl2) }
-            else if gpl3 != 0 and streq(src, rn.s, rn.n, gps3, gpl3) { rn = CSpan(s = its3, n = itl3) }
+            if gpl != 0 and lower_ctx::streq(src, rn.s, rn.n, gps, gpl) { rn = CSpan(s = its, n = itl) }
+            else if gpl2 != 0 and lower_ctx::streq(src, rn.s, rn.n, gps2, gpl2) { rn = CSpan(s = its2, n = itl2) }
+            else if gpl3 != 0 and lower_ctx::streq(src, rn.s, rn.n, gps3, gpl3) { rn = CSpan(s = its3, n = itl3) }
             res = rn
           }
         }
@@ -8960,7 +8952,7 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
         jc = jc + 1
         if dnh_skip(cnt, i, th) == false {
         d := deref(lower_ctx::decl_get(decls, i))
-        if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           ci = i64(i)
           if d.arity == nargs {
             ci_arity = i64(i)
@@ -9041,7 +9033,7 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
                       Some(ppxq) => {
                         pmx := deref(param_p(ppxq))
                         if str_at((src + pmx.ts), pmx.tl) == "type" {
-                          if streq(src, pmx.ns, pmx.nl, ta.s, ta.n) { tpix = i64(tpc) }
+                          if lower_ctx::streq(src, pmx.ns, pmx.nl, ta.s, ta.n) { tpix = i64(tpc) }
                           tpc += 1
                         }
                         ppx = pmx.next
@@ -9059,8 +9051,8 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
                     }
                   }
                 }
-                if gpl != 0 and streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
-                else if gpl2 != 0 and streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
+                if gpl != 0 and lower_ctx::streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
+                else if gpl2 != 0 and lower_ctx::streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
                 astr := str_at((src + rs), rn)
                 push_str(msb, astr)
                 k2 += 1
@@ -9115,8 +9107,8 @@ subst_slice_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
               vn := var_name_span(cta)
               if vn.n != 0 { rs = vn.s; rn = vn.n }
             }
-            if gpl != 0 and streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
-            else if gpl2 != 0 and streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
+            if gpl != 0 and lower_ctx::streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
+            else if gpl2 != 0 and lower_ctx::streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
             if struct_decl_of(decls, src, rs, rn) >= 0 and struct_words(decls, src, rs, rn, a) > 1 {
               mut msb := rt::strbuf(deref(synth), 128)
               push_str(msb, "Slice(")
@@ -9192,9 +9184,9 @@ ty_is_agg_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) 
 ## (`gps→its` / `gps2→its2` / `gps3→its3`) — the shared core of the inline `cx.gp_*` maps. Returns
 ## the input unchanged when it names no type-parameter.
 subst3_ty := fn(src : ptr(u8), s : usize, n : usize, gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize) -> CSpan {
-  if gpl != 0 and itl != 0 and streq(src, s, n, gps, gpl) { return CSpan(s = its, n = itl) }
-  if gpl2 != 0 and itl2 != 0 and streq(src, s, n, gps2, gpl2) { return CSpan(s = its2, n = itl2) }
-  if gpl3 != 0 and itl3 != 0 and streq(src, s, n, gps3, gpl3) { return CSpan(s = its3, n = itl3) }
+  if gpl != 0 and itl != 0 and lower_ctx::streq(src, s, n, gps, gpl) { return CSpan(s = its, n = itl) }
+  if gpl2 != 0 and itl2 != 0 and lower_ctx::streq(src, s, n, gps2, gpl2) { return CSpan(s = its2, n = itl2) }
+  if gpl3 != 0 and itl3 != 0 and lower_ctx::streq(src, s, n, gps3, gpl3) { return CSpan(s = its3, n = itl3) }
   CSpan(s = s, n = n)
 }
 
@@ -9371,9 +9363,9 @@ subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src 
     else {
       mut rs := ta.s
       mut rn := ta.n
-      if gpl != 0 and streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
-      else if gpl2 != 0 and streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
-      else if gpl3 != 0 and streq(src, rs, rn, gps3, gpl3) { rs = its3; rn = itl3 }
+      if gpl != 0 and lower_ctx::streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
+      else if gpl2 != 0 and lower_ctx::streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
+      else if gpl3 != 0 and lower_ctx::streq(src, rs, rn, gps3, gpl3) { rs = its3; rn = itl3 }
       ## STRIP `(…)` type-args for the struct-decl LOOKUP — the same rule `agg_words`/`struct_words`
       ## already state. A resolved type-arg that is itself a GENERIC-STRUCT INSTANCE (`Pair(u64, u64)`,
       ## `Entry(K, V)`) streqs the WHOLE text and missed its `Pair`/`Entry` decl, so this width test
@@ -9404,9 +9396,9 @@ subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src 
       if k2 > 0 { push_str(msb, ", ") }
       mut rs := ta.s
       mut rn := ta.n
-      if gpl != 0 and streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
-      else if gpl2 != 0 and streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
-      else if gpl3 != 0 and streq(src, rs, rn, gps3, gpl3) { rs = its3; rn = itl3 }
+      if gpl != 0 and lower_ctx::streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
+      else if gpl2 != 0 and lower_ctx::streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
+      else if gpl3 != 0 and lower_ctx::streq(src, rs, rn, gps3, gpl3) { rs = its3; rn = itl3 }
       push_str(msb, str_at((src + rs), rn))
       k2 += 1
     }
@@ -9616,7 +9608,7 @@ dyn_store_nuser := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), s : usize, n 
           Stmt::Assign(ans, anl, av, anx) => {
             if is_dyn_over_call(av, src) {
               sv := dyn_over_store_span(av, a)
-              if sv.n != 0 and streq(src, sv.s, sv.n, s, n) {
+              if sv.n != 0 and lower_ctx::streq(src, sv.s, sv.n, s, n) {
                 lt := local_type_span(src, ans, anl)
                 if lt.n != 0 and is_dyn_type(src, lt.s, lt.n) { res = i64(dyn_type_nuser(src, lt.s, lt.n)) }
               }
@@ -9665,7 +9657,7 @@ stmts_have_dyn_over := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), s : usize
           Stmt::Assign(ans, anl, av, anx) => {
             if is_dyn_over_call(av, src) {
               sv := dyn_over_store_span(av, a)
-              if sv.n != 0 and streq(src, sv.s, sv.n, s, n) { res = true }
+              if sv.n != 0 and lower_ctx::streq(src, sv.s, sv.n, s, n) { res = true }
             }
             st = anx
           }
@@ -9754,7 +9746,7 @@ append_lit_type := fn(in out msb : strbuf::StrBuf, v : ptr(Expr), decls : ptr(rt
     match vf {
       Some(vfq) => {
         fd := deref(fld_p(vfq))
-        if streq(src, fd.ns, fd.nl, ef.vs, ef.vl) and fd.arity >= 1 { vfts = fd.ts; vftl = fd.tl }
+        if lower_ctx::streq(src, fd.ns, fd.nl, ef.vs, ef.vl) and fd.arity >= 1 { vfts = fd.ts; vftl = fd.tl }
         vf = fd.next
       }
       None => { break }
@@ -10022,7 +10014,7 @@ is_str_operand := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
     ## `entry_of` returns slot 0 for a module-global or otherwise unbound name. Check the
     ## recovered entry's name before using its kind; otherwise any scalar global can inherit the
     ## string kind of an unrelated first local and route a numeric expression into `emit_str_pair`.
-    if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 4 { return true }
+    if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 4 { return true }
     ## An immutable module-level str is also a two-word value, although it has no SlotEntry. Keep
     ## direct equality on the same pair path as `len`, `bytes`, and str returns; a scalar fallback
     ## would compare the literal's address instead of its bytes.
@@ -10243,8 +10235,8 @@ payload_call_struct_words := fn(es : usize, el : usize, vs : usize, vl : usize, 
   if pty.n == 0 { return 0 }
   mut rs := pty.s
   mut rn := pty.n
-  if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, rs, rn, cx.gp_s, cx.gp_l) { rs = cx.it_s; rn = cx.it_l }
-  else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, rs, rn, cx.gp2_s, cx.gp2_l) { rs = cx.it2_s; rn = cx.it2_l }
+  if cx.gp_l != 0 and cx.it_l != 0 and lower_ctx::streq(cx.src, rs, rn, cx.gp_s, cx.gp_l) { rs = cx.it_s; rn = cx.it_l }
+  else if cx.gp2_l != 0 and cx.it2_l != 0 and lower_ctx::streq(cx.src, rs, rn, cx.gp2_s, cx.gp2_l) { rs = cx.it2_s; rn = cx.it2_l }
   if struct_decl_of(cx.decls, cx.src, rs, rn) >= 0 { return struct_words(cx.decls, cx.src, rs, rn, a) }
   0
 }
@@ -10765,7 +10757,7 @@ generic_str_return_instance := fn(d : Decl, args_head : Option(ptr(mut Arg)), sr
       Some(pq) => {
         pm := deref(param_p(pq))
         if str_at((src + pm.ts), pm.tl) == "type" {
-          if streq(src, d.ret_ts, d.ret_tl, pm.ns, pm.nl) {
+          if lower_ctx::streq(src, d.ret_ts, d.ret_tl, pm.ns, pm.nl) {
             ta := arg_expr_at(args_head, pi, a)
             if unchecked bitcast(usize, ta) == 0 { return false }
             tv := deref_var_info(ta)
@@ -10877,7 +10869,7 @@ gen_ret_targ_float := fn(d : Decl, head : Option(ptr(mut Arg)), src : ptr(u8)) -
     match pp {
       Some(ppq) => {
         pm := deref(param_p(ppq))
-        if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, d.ret_ts, d.ret_tl) { ti = k }
+        if str_at((src + pm.ts), pm.tl) == "type" and lower_ctx::streq(src, pm.ns, pm.nl, d.ret_ts, d.ret_tl) { ti = k }
         pp = pm.next
         k = k + 1
       }
@@ -10926,7 +10918,7 @@ float_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool
         jc = jc + 1
         if dnh_skip(cnt, i, th) == false {
         d := deref(lower_ctx::decl_get(decls, i))
-        if d.kind == 1 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        if d.kind == 1 and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           if fn_returns_float(d, src) { res = true }
           ## a GENERIC `-> T` callee instantiated at `f64`/`f32` (see `gen_ret_targ_float`). `src/`
           ## instantiates no generic with a float type argument → never fires → fixpoint-neutral.
@@ -11111,15 +11103,15 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
     if ta.n == 0 and cx.cf_var_l != 0 {
       ct_a0 := arg_expr_at(args_head, tpi, a)
       ct_fp := field_var_parts(ct_a0)
-      if ct_fp.ok and streq(cx.src, ct_fp.os, ct_fp.on, cx.cf_var_s, cx.cf_var_l) and str_at((cx.src + ct_fp.fs), ct_fp.fl) == "type" {
+      if ct_fp.ok and lower_ctx::streq(cx.src, ct_fp.os, ct_fp.on, cx.cf_var_s, cx.cf_var_l) and str_at((cx.src + ct_fp.fs), ct_fp.fl) == "type" {
         ta = CSpan(s = cx.cf_ty_s, n = cx.cf_ty_l)
       }
     }
-    if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, ta.s, ta.n, cx.gp_s, cx.gp_l) {
+    if cx.gp_l != 0 and cx.it_l != 0 and lower_ctx::streq(cx.src, ta.s, ta.n, cx.gp_s, cx.gp_l) {
       ta = CSpan(s = cx.it_s, n = cx.it_l)
-    } else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, ta.s, ta.n, cx.gp2_s, cx.gp2_l) {
+    } else if cx.gp2_l != 0 and cx.it2_l != 0 and lower_ctx::streq(cx.src, ta.s, ta.n, cx.gp2_s, cx.gp2_l) {
       ta = CSpan(s = cx.it2_s, n = cx.it2_l)
-    } else if cx.gp3_l != 0 and cx.it3_l != 0 and streq(cx.src, ta.s, ta.n, cx.gp3_s, cx.gp3_l) {
+    } else if cx.gp3_l != 0 and cx.it3_l != 0 and lower_ctx::streq(cx.src, ta.s, ta.n, cx.gp3_s, cx.gp3_l) {
       ta = CSpan(s = cx.it3_s, n = cx.it3_l)
     }
     ntpc := tparam_count(cx.decls, gi, cx.src, a)
@@ -11138,9 +11130,9 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
       tpi2 = i64(tparam_idx2(cx.decls, gi, cx.src, a))
       ta2 = type_arg_full_at(args_head, usize(tpi2), cx.decls, cx.src, a)
       if is_fn_name(cx.decls, cx.src, ta2.s, ta2.n) { ta2 = CSpan(s = 0, n = 0) }
-      if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, ta2.s, ta2.n, cx.gp_s, cx.gp_l) { ta2 = CSpan(s = cx.it_s, n = cx.it_l) }
-      else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, ta2.s, ta2.n, cx.gp2_s, cx.gp2_l) { ta2 = CSpan(s = cx.it2_s, n = cx.it2_l) }
-      else if cx.gp3_l != 0 and cx.it3_l != 0 and streq(cx.src, ta2.s, ta2.n, cx.gp3_s, cx.gp3_l) { ta2 = CSpan(s = cx.it3_s, n = cx.it3_l) }
+      if cx.gp_l != 0 and cx.it_l != 0 and lower_ctx::streq(cx.src, ta2.s, ta2.n, cx.gp_s, cx.gp_l) { ta2 = CSpan(s = cx.it_s, n = cx.it_l) }
+      else if cx.gp2_l != 0 and cx.it2_l != 0 and lower_ctx::streq(cx.src, ta2.s, ta2.n, cx.gp2_s, cx.gp2_l) { ta2 = CSpan(s = cx.it2_s, n = cx.it2_l) }
+      else if cx.gp3_l != 0 and cx.it3_l != 0 and lower_ctx::streq(cx.src, ta2.s, ta2.n, cx.gp3_s, cx.gp3_l) { ta2 = CSpan(s = cx.it3_s, n = cx.it3_l) }
     }
     mut ta3 := CSpan(s = 0, n = 0)
     mut tpi3 := -1
@@ -11148,9 +11140,9 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
       tpi3 = i64(tparam_idx3(cx.decls, gi, cx.src, a))
       ta3 = type_arg_full_at(args_head, usize(tpi3), cx.decls, cx.src, a)
       if is_fn_name(cx.decls, cx.src, ta3.s, ta3.n) { ta3 = CSpan(s = 0, n = 0) }
-      if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp_s, cx.gp_l) { ta3 = CSpan(s = cx.it_s, n = cx.it_l) }
-      else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp2_s, cx.gp2_l) { ta3 = CSpan(s = cx.it2_s, n = cx.it2_l) }
-      else if cx.gp3_l != 0 and cx.it3_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp3_s, cx.gp3_l) { ta3 = CSpan(s = cx.it3_s, n = cx.it3_l) }
+      if cx.gp_l != 0 and cx.it_l != 0 and lower_ctx::streq(cx.src, ta3.s, ta3.n, cx.gp_s, cx.gp_l) { ta3 = CSpan(s = cx.it_s, n = cx.it_l) }
+      else if cx.gp2_l != 0 and cx.it2_l != 0 and lower_ctx::streq(cx.src, ta3.s, ta3.n, cx.gp2_s, cx.gp2_l) { ta3 = CSpan(s = cx.it2_s, n = cx.it2_l) }
+      else if cx.gp3_l != 0 and cx.it3_l != 0 and lower_ctx::streq(cx.src, ta3.s, ta3.n, cx.gp3_s, cx.gp3_l) { ta3 = CSpan(s = cx.it3_s, n = cx.it3_l) }
     }
     ## IMPLICIT type-arg (`hash(key)`, T omitted): infer T from the value arg's type; erase nothing.
     gdd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
@@ -11163,7 +11155,7 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
     if cx.cf_pay_l != 0 and ntpc == 1 {
       ip_a0 := arg_expr_at(args_head, 0, a)
       ip_vn := var_name_span(ip_a0)
-      if ip_vn.n != 0 and streq(cx.src, ip_vn.s, ip_vn.n, cx.cf_pay_s, cx.cf_pay_l) {
+      if ip_vn.n != 0 and lower_ctx::streq(cx.src, ip_vn.s, ip_vn.n, cx.cf_pay_s, cx.cf_pay_l) {
         ta = CSpan(s = cx.cf_pay_ty_s, n = cx.cf_pay_ty_l); did_impl = true
       }
     }
@@ -11292,7 +11284,7 @@ lit_has_byref_agg_value := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> b
     vn := var_name_span(fk)
     if vn.n != 0 {
       ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-      if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.is_ref and (ent.ek == 2 or ent.ek == 3) { res = true }
+      if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.is_ref and (ent.ek == 2 or ent.ek == 3) { res = true }
     }
   }
   res
@@ -12179,7 +12171,7 @@ var_agg_info := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> VarAgg {
   vn := var_name_span(v)
   if vn.n == 0 { return VarAgg(ek = 0, s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, vn.s, vn.n)))
-  if streq(src, ent.ns, ent.nl, vn.s, vn.n) {
+  if lower_ctx::streq(src, ent.ns, ent.nl, vn.s, vn.n) {
     if ent.ek == 2 { return VarAgg(ek = 2, s = ent.sns, n = ent.snl) }
     if ent.ek == 3 { return VarAgg(ek = 3, s = ent.sns, n = ent.snl) }
   }
@@ -12361,9 +12353,9 @@ subst_ptr_pointee_struct_span := fn(src : ptr(u8), ts : usize, tl : usize, decls
   if pn.n == 0 { return CSpan(s = 0, n = 0) }
   mut rs := pn.s
   mut rl := pn.n
-  if gpl != 0 and streq(src, pn.s, pn.n, gps, gpl) { rs = its; rl = itl }
-  else if gpl2 != 0 and streq(src, pn.s, pn.n, gps2, gpl2) { rs = its2; rl = itl2 }
-  else if gpl3 != 0 and streq(src, pn.s, pn.n, gps3, gpl3) { rs = its3; rl = itl3 }
+  if gpl != 0 and lower_ctx::streq(src, pn.s, pn.n, gps, gpl) { rs = its; rl = itl }
+  else if gpl2 != 0 and lower_ctx::streq(src, pn.s, pn.n, gps2, gpl2) { rs = its2; rl = itl2 }
+  else if gpl3 != 0 and lower_ctx::streq(src, pn.s, pn.n, gps3, gpl3) { rs = its3; rl = itl3 }
   if struct_decl_of(decls, src, rs, rl) >= 0 { return CSpan(s = rs, n = rl) }
   CSpan(s = 0, n = 0)
 }
@@ -12528,7 +12520,7 @@ local_ptr_pointee_span := fn(cx : ptr(LCtx), s : usize, n : usize) -> CSpan {
 }
 slot_ptr_pointee_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> CSpan {
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, s, n)))
-  if streq(src, ent.ns, ent.nl, s, n) == false { return CSpan(s = 0, n = 0) }
+  if lower_ctx::streq(src, ent.ns, ent.nl, s, n) == false { return CSpan(s = 0, n = 0) }
   if ent.ek == 0 and (ent.eek == 6 or ent.eek == 13) and ent.snl != 0 { return CSpan(s = ent.sns, n = ent.snl) }
   if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return CSpan(s = 0, n = 0) }
   lts := local_type_span(src, ent.ns, ent.nl)
@@ -12600,9 +12592,9 @@ deref_dest_pointee_span := fn(p : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   }
   pt := local_ptr_pointee_span(cx, vn.s, vn.n)
   if pt.n == 0 { return CSpan(s = 0, n = 0) }
-  if cx.gp_l != 0 and streq(cx.src, pt.s, pt.n, cx.gp_s, cx.gp_l) { return CSpan(s = cx.it_s, n = cx.it_l) }
-  if cx.gp2_l != 0 and streq(cx.src, pt.s, pt.n, cx.gp2_s, cx.gp2_l) { return CSpan(s = cx.it2_s, n = cx.it2_l) }
-  if cx.gp3_l != 0 and streq(cx.src, pt.s, pt.n, cx.gp3_s, cx.gp3_l) { return CSpan(s = cx.it3_s, n = cx.it3_l) }
+  if cx.gp_l != 0 and lower_ctx::streq(cx.src, pt.s, pt.n, cx.gp_s, cx.gp_l) { return CSpan(s = cx.it_s, n = cx.it_l) }
+  if cx.gp2_l != 0 and lower_ctx::streq(cx.src, pt.s, pt.n, cx.gp2_s, cx.gp2_l) { return CSpan(s = cx.it2_s, n = cx.it2_l) }
+  if cx.gp3_l != 0 and lower_ctx::streq(cx.src, pt.s, pt.n, cx.gp3_s, cx.gp3_l) { return CSpan(s = cx.it3_s, n = cx.it3_l) }
   return pt
 }
 
@@ -12674,7 +12666,7 @@ deref_pointee_bytes := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
 ## identifier walk reads only under `p < end`.
 byte_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
-  if streq(cx.src, ent.ns, ent.nl, s, n) == false { return false }
+  if lower_ctx::streq(cx.src, ent.ns, ent.nl, s, n) == false { return false }
   if ent.ek != 0 { return false }
   if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return false }
   end := LOWER_SRC_N
@@ -12698,7 +12690,7 @@ byte_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
   t := str_at((cx.src + p + 4), 1)
   if t != "\n" and t != ";" and t != " " and t != "}" { return false }
   vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vs, p - vs)))
-  if streq(cx.src, vent.ns, vent.nl, vs, p - vs) == false { return false }
+  if lower_ctx::streq(cx.src, vent.ns, vent.nl, vs, p - vs) == false { return false }
   if vent.ek == 4 { return true }
   bn := base_type_name(cx.src, vent.sns, vent.snl)
   if vent.ek == 2 and str_at((cx.src + bn.s), bn.n) == "Slice" {
@@ -12763,7 +12755,7 @@ slot_addr_view_ptr_local := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : 
 }
 slot_addr_view_ptr_local_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> CSpan {
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, s, n)))
-  if streq(src, ent.ns, ent.nl, s, n) == false { return CSpan(s = 0, n = 0) }
+  if lower_ctx::streq(src, ent.ns, ent.nl, s, n) == false { return CSpan(s = 0, n = 0) }
   if ent.ek != 0 { return CSpan(s = 0, n = 0) }
   if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return CSpan(s = 0, n = 0) }
   end := LOWER_SRC_N
@@ -12980,7 +12972,7 @@ deref_addrof_byref_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr
   av := deref_addrof_var_span(e)
   if av.n == 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, av.s, av.n)))
-  if streq(src, ent.ns, ent.nl, av.s, av.n) == false { return CSpan(s = 0, n = 0) }
+  if lower_ctx::streq(src, ent.ns, ent.nl, av.s, av.n) == false { return CSpan(s = 0, n = 0) }
   if ent.ek != 2 { return CSpan(s = 0, n = 0) }
   if ent.is_ref == false { return CSpan(s = 0, n = 0) }
   CSpan(s = ent.sns, n = ent.snl)
@@ -13100,7 +13092,7 @@ deref_index_ptrstruct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)
   ib := index_var_span(inner)
   if ib.n == 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, ib.s, ib.n)))
-  if streq(src, ent.ns, ent.nl, ib.s, ib.n) and ent.ek == 5 and ent.eek == 7 { return CSpan(s = ent.sns, n = ent.snl) }
+  if lower_ctx::streq(src, ent.ns, ent.nl, ib.s, ib.n) and ent.ek == 5 and ent.eek == 7 { return CSpan(s = ent.sns, n = ent.snl) }
   CSpan(s = 0, n = 0)
 }
 
@@ -13119,7 +13111,7 @@ deref_index_ptr_param_unresolved := fn(e : ptr(Expr), slots : ptr(SVec), src : p
   ib := index_var_span(inner)
   if ib.n == 0 { return false }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, ib.s, ib.n)))
-  if streq(src, ent.ns, ent.nl, ib.s, ib.n) == false { return false }
+  if lower_ctx::streq(src, ent.ns, ent.nl, ib.s, ib.n) == false { return false }
   eta := slice_ann_elem_span(src, ent.ns, ent.nl)   ## element text of the declared `s : Slice(<…>)`
   if eta.n < 4 { return false }
   str_at((src + eta.s), 4) == "ptr("
@@ -13132,7 +13124,7 @@ index_elem_ptrstruct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8))
   ib := index_var_span(e)
   if ib.n == 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, ib.s, ib.n)))
-  if streq(src, ent.ns, ent.nl, ib.s, ib.n) and ent.ek == 5 and ent.eek == 7 { return CSpan(s = ent.sns, n = ent.snl) }
+  if lower_ctx::streq(src, ent.ns, ent.nl, ib.s, ib.n) and ent.ek == 5 and ent.eek == 7 { return CSpan(s = ent.sns, n = ent.snl) }
   CSpan(s = 0, n = 0)
 }
 
@@ -13145,7 +13137,7 @@ addr_ptrptr_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -
   av := addr_var_span(e)
   if av.n == 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, av.s, av.n)))
-  if streq(src, ent.ns, ent.nl, av.s, av.n) and ent.ek == 7 { return CSpan(s = ent.sns, n = ent.snl) }
+  if lower_ctx::streq(src, ent.ns, ent.nl, av.s, av.n) and ent.ek == 7 { return CSpan(s = ent.sns, n = ent.snl) }
   CSpan(s = 0, n = 0)
 }
 
@@ -13189,9 +13181,9 @@ ptr_expr_pointee_span := fn(pe : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::V
   }
   pt := slot_ptr_pointee_span(slots, src, vn.s, vn.n)
   if pt.n == 0 { return CSpan(s = 0, n = 0) }
-  if sub.gpl != 0 and streq(src, pt.s, pt.n, sub.gps, sub.gpl) { return CSpan(s = sub.its, n = sub.itl) }
-  if sub.gpl2 != 0 and streq(src, pt.s, pt.n, sub.gps2, sub.gpl2) { return CSpan(s = sub.its2, n = sub.itl2) }
-  if sub.gpl3 != 0 and streq(src, pt.s, pt.n, sub.gps3, sub.gpl3) { return CSpan(s = sub.its3, n = sub.itl3) }
+  if sub.gpl != 0 and lower_ctx::streq(src, pt.s, pt.n, sub.gps, sub.gpl) { return CSpan(s = sub.its, n = sub.itl) }
+  if sub.gpl2 != 0 and lower_ctx::streq(src, pt.s, pt.n, sub.gps2, sub.gpl2) { return CSpan(s = sub.its2, n = sub.itl2) }
+  if sub.gpl3 != 0 and lower_ctx::streq(src, pt.s, pt.n, sub.gps3, sub.gpl3) { return CSpan(s = sub.its3, n = sub.itl3) }
   return pt
 }
 
@@ -13272,7 +13264,7 @@ deref_deref_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -
   iv := deref_var_span(inner)                  ## inner == Deref(Var pp) → pp span
   if iv.n == 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, iv.s, iv.n)))
-  if streq(src, ent.ns, ent.nl, iv.s, iv.n) and ent.ek == 0 and ent.eek == 1 and ent.snl != 0 { return CSpan(s = ent.sns, n = ent.snl) }
+  if lower_ctx::streq(src, ent.ns, ent.nl, iv.s, iv.n) and ent.ek == 0 and ent.eek == 1 and ent.snl != 0 { return CSpan(s = ent.sns, n = ent.snl) }
   CSpan(s = 0, n = 0)
 }
 
@@ -13283,7 +13275,7 @@ deref_ptrptr_pointee_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8))
   iv := deref_var_span(e)                      ## e == Deref(Var pp) → pp span
   if iv.n == 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, iv.s, iv.n)))
-  if streq(src, ent.ns, ent.nl, iv.s, iv.n) and ent.ek == 0 and ent.eek == 1 and ent.snl != 0 { return CSpan(s = ent.sns, n = ent.snl) }
+  if lower_ctx::streq(src, ent.ns, ent.nl, iv.s, iv.n) and ent.ek == 0 and ent.eek == 1 and ent.snl != 0 { return CSpan(s = ent.sns, n = ent.snl) }
   CSpan(s = 0, n = 0)
 }
 
@@ -13303,7 +13295,7 @@ var_ptrstruct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSp
   match deref(e) {
     Expr::Var(s, n) => {
       ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, s, n)))
-      if streq(src, ent.ns, ent.nl, s, n) and ent.ek == 7 { return CSpan(s = ent.sns, n = ent.snl) }
+      if lower_ctx::streq(src, ent.ns, ent.nl, s, n) and ent.ek == 7 { return CSpan(s = ent.sns, n = ent.snl) }
       CSpan(s = 0, n = 0)
     }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
@@ -13435,7 +13427,7 @@ deref_enum_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan 
   if dv.n == 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, dv.s, dv.n)))
   if ent.ek != 6 or ent.snl == 0 { return CSpan(s = 0, n = 0) }
-  if streq(src, ent.ns, ent.nl, dv.s, dv.n) == false { return CSpan(s = 0, n = 0) }
+  if lower_ctx::streq(src, ent.ns, ent.nl, dv.s, dv.n) == false { return CSpan(s = 0, n = 0) }
   if is_niche_folded(src, ent.sns, ent.snl) { return CSpan(s = 0, n = 0) }
   CSpan(s = ent.sns, n = ent.snl)
 }
@@ -13630,7 +13622,7 @@ convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
     if dic_live(cnt) { isc = dic_is_convert(cnt, i) } else { if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { isc = true } }
     if isc {
       rb := base_type_name(src, d.ret_ts, d.ret_tl)
-      if rb.n != 0 and streq(src, rb.s, rb.n, cs, cl) {
+      if rb.n != 0 and lower_ctx::streq(src, rb.s, rb.n, cs, cl) {
         r := convert_scope_rank(src, d.mod_start, d.mod_len)
         if found < 0 or r > bestr { bestr = r; found = i64(i) }
         else if r == bestr { panic("selfhost: ambiguous @convert to target type (TYP-6)") }
@@ -13668,7 +13660,7 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
     if dic_live(cnt) { isc = dic_is_convert(cnt, i) } else { if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { isc = true } }
     if isc {
       rb := base_type_name(src, d.ret_ts, d.ret_tl)
-      if rb.n != 0 and streq(src, rb.s, rb.n, cs, cl) {
+      if rb.n != 0 and lower_ctx::streq(src, rb.s, rb.n, cs, cl) {
         r := convert_scope_rank(src, d.mod_start, d.mod_len)
         if found < 0 or r > bestr { bestr = r; found = i64(i) }
         else if r == bestr { panic("selfhost: ambiguous @convert to target type (TYP-6)") }
@@ -13701,7 +13693,7 @@ pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
     mut i : usize = 0
     while i < cnt {
       d := deref(lower_ctx::decl_get(decls, i))
-      if d.is_fn and streq(src, d.name_start, d.name_len, cs, cl) { return 0 - 1 }
+      if d.is_fn and lower_ctx::streq(src, d.name_start, d.name_len, cs, cl) { return 0 - 1 }
       i += 1
     }
     return convert_callee_idx(decls, src, cs, cl)
@@ -13732,7 +13724,7 @@ twin_operand_aggregate := fn(e : ptr(Expr), params_head : Option(ptr(mut Param))
     match p {
       Some(pq) => {
         pm := deref(param_p(pq))
-        if streq(src, pm.ns, pm.nl, vn.s, vn.n) {
+        if lower_ctx::streq(src, pm.ns, pm.nl, vn.s, vn.n) {
           if lower_layout::param_tuple_open_at(src, pm.ns, pm.nl) >= 0 { return true }
           return twin_type_is_aggregate(decls, src, pm.ts, pm.tl)
         }
@@ -13793,7 +13785,7 @@ ret_call_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
     i := dni_at(cnt, j)
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
     d := deref(lower_ctx::decl_get(decls, i))
-    if d.kind == 1 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+    if d.kind == 1 and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
       res = i64(i)
       if d.arity == nargs {
         res_arity = i64(i)
@@ -14094,8 +14086,8 @@ slice_ret_elem := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
                 if vn.n != 0 { rs = vn.s; rn = vn.n }
               }
               ## then through the enclosing instance substitution (Slice(T) → Slice(<concrete>)).
-              if gpl != 0 and streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
-              else if gpl2 != 0 and streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
+              if gpl != 0 and lower_ctx::streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
+              else if gpl2 != 0 and lower_ctx::streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
               res = slice_elem_layout(decls, src, rs, rn, a)
             }
           }
@@ -14131,7 +14123,7 @@ gen_ret_targ_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
         i = dni_at(cnt, jc)
         jc = jc + 1
         d := deref(lower_ctx::decl_get(decls, i))
-        if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           mut tps := 0
           mut tpl := 0
           mut pp := d.params_head
@@ -14145,7 +14137,7 @@ gen_ret_targ_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
               None => { break }
             }
           }
-          if tpl != 0 and d.ret_tl != 0 and streq(src, d.ret_ts, d.ret_tl, tps, tpl) {
+          if tpl != 0 and d.ret_tl != 0 and lower_ctx::streq(src, d.ret_ts, d.ret_tl, tps, tpl) {
             mut ta := type_arg_span(ah, a)
             ## A GENERIC-INSTANCE type argument (`id(Box(u64), b)`) parses as a `Call`, which
             ## `type_arg_span` (bare `Var` only) misses → the binding fell to a bare scalar and the
@@ -14226,7 +14218,7 @@ ufcs_ret_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec
         i = dni_at(cnt, jc)
         jc = jc + 1
         d := deref(lower_ctx::decl_get(decls, i))
-        if res.n == 0 and d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        if res.n == 0 and d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           mut tps := 0
           mut tpl := 0
           mut ntpc := 0
@@ -14243,7 +14235,7 @@ ufcs_ret_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec
           }
           ## the callee returns its FIRST type-param, AND every type-arg is omitted (the implicit-UFCS
           ## shape) → the value-param index equals the arg index, so `jm`/`arg_expr_at` line up.
-          if tpl != 0 and d.ret_tl != 0 and streq(src, d.ret_ts, d.ret_tl, tps, tpl) and d.arity != 0 and nargs == d.arity - usize(ntpc) {
+          if tpl != 0 and d.ret_tl != 0 and lower_ctx::streq(src, d.ret_ts, d.ret_tl, tps, tpl) and d.arity != 0 and nargs == d.arity - usize(ntpc) {
             mut jm := 0
             mut pc := d.params_head
             loop {
@@ -14264,7 +14256,7 @@ ufcs_ret_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec
                           while gk {
                             pta := typearg_at(src, pbn.s, pbn.n, usize(kk))
                             if pta.n == 0 { gk = false }
-                            else { if streq(src, pta.s, pta.n, tps, tpl) { tpos = i64(kk); gk = false } ; kk += 1 }
+                            else { if lower_ctx::streq(src, pta.s, pta.n, tps, tpl) { tpos = i64(kk); gk = false } ; kk += 1 }
                           }
                           if tpos >= 0 {
                             rbn := base_type_name(src, rent.sns, rent.snl)
@@ -14317,7 +14309,7 @@ gen_ret_enum_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : 
         i = dni_at(cnt, jc)
         jc = jc + 1
         d := deref(lower_ctx::decl_get(decls, i))
-        if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           mut tps := 0
           mut tpl := 0
           mut pp := d.params_head
@@ -14331,7 +14323,7 @@ gen_ret_enum_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : 
               None => { break }
             }
           }
-          if tpl != 0 and d.ret_tl != 0 and streq(src, d.ret_ts, d.ret_tl, tps, tpl) {
+          if tpl != 0 and d.ret_tl != 0 and lower_ctx::streq(src, d.ret_ts, d.ret_tl, tps, tpl) {
             mut ta := type_arg_span(ah, a)
             ## A GENERIC-INSTANCE type argument (`unbox(Option(u64), b)`) parses as a `Call`, which
             ## `type_arg_span` (bare `Var` only) misses — the binding then fell to a bare SCALAR and a
@@ -14521,7 +14513,7 @@ generic_inferred_str_ret := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> 
       }
       if ntp != 1 { return false }
       if tpn_l == 0 { return false }
-      if streq(cx.src, gd.ret_ts, gd.ret_tl, tpn_s, tpn_l) == false { return false }
+      if lower_ctx::streq(cx.src, gd.ret_ts, gd.ret_tl, tpn_s, tpn_l) == false { return false }
       if gd.arity == 0 { return false }
       if nargs != gd.arity - 1 { return false }        ## the type argument must be OMITTED
       iti := infer_implicit_targ(gi, args_head, cx, a)
@@ -14741,7 +14733,7 @@ recv_payload_targ := fn(src : ptr(u8), pts : usize, ptl : usize, tpn_s : usize, 
   while gk {
     pta := typearg_at(src, pbn.s, pbn.n, usize(kk))
     if pta.n == 0 { gk = false }
-    else { if streq(src, pta.s, pta.n, tpn_s, tpn_l) { tpos = i64(kk); gk = false } ; kk += 1 }
+    else { if lower_ctx::streq(src, pta.s, pta.n, tpn_s, tpn_l) { tpos = i64(kk); gk = false } ; kk += 1 }
   }
   if tpos < 0 { return CSpan(s = 0, n = 0) }
   rbn := base_type_name(src, rts, rtl)
@@ -14793,7 +14785,7 @@ call_ret_ptrstruct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
         jc = jc + 1
         if dnh_skip(cnt, i, th) == false {
           d := deref(lower_ctx::decl_get(decls, i))
-          if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+          if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
             if str_at((src + d.ret_ts), d.ret_tl) == "ptr" { isptr = true }
           }
         }
@@ -14829,7 +14821,7 @@ call_ret_ptrstruct_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr
       nm := callee_name_span(src, cs, cl)
       for i in 0..cnt {
         d := deref(lower_ctx::decl_get(decls, i))
-        if d.kind == 1 and not d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        if d.kind == 1 and not d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           ## The declared return type records only the BASE name (`ptr`); recover the FULL
           ## `ptr(<opt mut> P)` from the source, then take the pointee name. Accept it only when the
           ## pointee is a known STRUCT decl (so a scalar-pointee return stays a plain scalar bind).
@@ -14868,7 +14860,7 @@ gen_ret_ptrstruct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
         i = dni_at(cnt, jc)
         jc = jc + 1
         d := deref(lower_ctx::decl_get(decls, i))
-        if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           mut tps := 0
           mut tpl := 0
           mut pp := d.params_head
@@ -14887,7 +14879,7 @@ gen_ret_ptrstruct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
           if tpl != 0 and d.ret_tl != 0 {
             rfull := extend_type_span(src, d.ret_ts, d.ret_tl)
             pn := ptr_pointee_name(src, d.ret_ts, rfull)
-            if pn.n != 0 and streq(src, pn.s, pn.n, tps, tpl) {
+            if pn.n != 0 and lower_ctx::streq(src, pn.s, pn.n, tps, tpl) {
               ta := type_arg_span(ah, a)
               if ta.n != 0 and struct_decl_of(decls, src, ta.s, ta.n) >= 0 { res = ta }
             }
@@ -14895,7 +14887,7 @@ gen_ret_ptrstruct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
             ## instantiated at `T = ptr(S)` is a pointer to `S` as well. Without this the local bound from
             ## it had no pointee, and `deref(n).f` read 0 on a clean build; it surfaced once #770 let
             ## `Option::unwrap(ptr(mut S), o)` assemble at all.
-            if res.n == 0 and streq(src, d.ret_ts, d.ret_tl, tps, tpl) {
+            if res.n == 0 and lower_ctx::streq(src, d.ret_ts, d.ret_tl, tps, tpl) {
               tu := type_arg_full_at(ah, 0, decls, src, a)
               if tu.n != 0 {
                 tpn := ptr_pointee_name(src, tu.s, tu.n)
@@ -14950,7 +14942,7 @@ call_ret_ptrenum_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
         jc = jc + 1
         if dnh_skip(cnt, i, th) == false {
           d := deref(lower_ctx::decl_get(decls, i))
-          if d.kind == 1 and not d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+          if d.kind == 1 and not d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
             rfull := extend_type_span(src, d.ret_ts, d.ret_tl)
             pn := ptr_pointee_name(src, d.ret_ts, rfull)
             if pn.n != 0 and enum_decl_of(decls, src, pn.s, pn.n) >= 0 { res = pn }
@@ -15068,9 +15060,9 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
       j0 += 1
       if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
       d := deref(lower_ctx::decl_get(decls, i))
-      if (d.kind == 1 or d.kind == 4) and d.is_generic == false and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+      if (d.kind == 1 or d.kind == 4) and d.is_generic == false and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         mut mm := false
-        if segcmp { mm = mod_head_matches(src, d.mod_start, d.mod_len, pms, pml) } else { mm = streq(src, d.mod_start, d.mod_len, pms, pml) }
+        if segcmp { mm = mod_head_matches(src, d.mod_start, d.mod_len, pms, pml) } else { mm = lower_ctx::streq(src, d.mod_start, d.mod_len, pms, pml) }
         ## A QUALIFIED call (`alloc::map::get`) short-circuits to the named non-generic authoritatively.
         ## A BARE same-module call only short-circuits when the non-generic decl's ARITY matches — so
         ## `derive`'s recursive struct `hash(f.type, v.(f))` (2 args) is NOT captured by the concrete
@@ -15106,7 +15098,7 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
       jr += 1
       if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
         d := deref(lower_ctx::decl_get(decls, i))
-        if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           r := callee_mod_rank(src, d.mod_start, d.mod_len, ms, ml)
           if r > bestr { bestr = r }
         }
@@ -15134,7 +15126,7 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
     j += 1
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
     d := deref(lower_ctx::decl_get(decls, i))
-    if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n)
+    if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n)
        and (bestr < 0 or callee_mod_rank(src, d.mod_start, d.mod_len, ms, ml) == bestr)
        and (bml == 0 or mod_head_matches(src, d.mod_start, d.mod_len, bms, bml)) {
       res = i64(i)
@@ -15215,7 +15207,7 @@ implicit_targ_from_recv := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, rec
             while go {
               pta := typearg_at(src, sbn.s, sbn.n, usize(k))
               if pta.n == 0 { go = false }
-              else { if streq(src, pta.s, pta.n, tpn_s, tpn_l) { pos = i64(k); go = false } ; k += 1 }
+              else { if lower_ctx::streq(src, pta.s, pta.n, tpn_s, tpn_l) { pos = i64(k); go = false } ; k += 1 }
             }
             if pos >= 0 {
               rbn := base_type_name(src, recv_ts, recv_tl)
@@ -15250,11 +15242,11 @@ infer_map_targ3 := fn(decls : ptr(rt::Vec), src : ptr(u8), args_head : Option(pt
   mut rn := 0
   for i in 0..cnt {
     d := deref(lower_ctx::decl_get(decls, i))
-    if d.is_fn and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) { rs = d.ret_ts; rn = d.ret_tl }
+    if d.is_fn and d.ret_tl != 0 and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) { rs = d.ret_ts; rn = d.ret_tl }
   }
   if rn == 0 { return CSpan(s = 0, n = 0) }
   rb := base_type_name(src, rs, rn)
-  if streq(src, rb.s, rb.n, rcv_bs, rcv_bn) {
+  if lower_ctx::streq(src, rb.s, rb.n, rcv_bs, rcv_bn) {
     ta := typearg_at(src, rs, rn, 0)
     return CSpan(s = ta.s, n = ta.n)
   }
@@ -15272,15 +15264,15 @@ recv_redirect_generic := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs
   if gi < 0 { return gi }
   if rbl == 0 { return gi }
   csb := self_param_base(decls, src, gi, a)
-  if streq(src, csb.s, csb.n, rbs, rbl) { return gi }
+  if lower_ctx::streq(src, csb.s, csb.n, rbs, rbl) { return gi }
   gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   cnt := rt::vec_len(deref(decls))
   mut best := gi
   for i in 0..cnt {
     d := deref(lower_ctx::decl_get(decls, i))
-    if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, gd.name_start, gd.name_len) {
+    if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, gd.name_start, gd.name_len) {
       sb := self_param_base(decls, src, i64(i), a)
-      if sb.n != 0 and streq(src, sb.s, sb.n, rbs, rbl) {
+      if sb.n != 0 and lower_ctx::streq(src, sb.s, sb.n, rbs, rbl) {
         ntpc := tparam_count(decls, i64(i), src, a)
         if d.arity == nargs or (d.arity >= ntpc and d.arity - ntpc == nargs) { best = i64(i) }
       }
@@ -15350,16 +15342,16 @@ generic_sig_redirect := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs 
   gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   if generic_overload_set_count(decls, src, gd.name_start, gd.name_len, gd.mod_start, gd.mod_len) < 2 { return gi }
   csb := self_param_base(decls, src, gi, a)
-  if streq(src, csb.s, csb.n, vbs, vbl) { return gi }
+  if lower_ctx::streq(src, csb.s, csb.n, vbs, vbl) { return gi }
   cnt := rt::vec_len(deref(decls))
   mut best := gi
   for i in 0..cnt {
     d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 and d.is_generic
-       and streq(src, d.name_start, d.name_len, gd.name_start, gd.name_len)
-       and streq(src, d.mod_start, d.mod_len, gd.mod_start, gd.mod_len) {
+       and lower_ctx::streq(src, d.name_start, d.name_len, gd.name_start, gd.name_len)
+       and lower_ctx::streq(src, d.mod_start, d.mod_len, gd.mod_start, gd.mod_len) {
       psb := self_param_base(decls, src, i64(i), a)
-      if psb.n != 0 and streq(src, psb.s, psb.n, vbs, vbl) {
+      if psb.n != 0 and lower_ctx::streq(src, psb.s, psb.n, vbs, vbl) {
         ntpc := tparam_count(decls, i64(i), src, a)
         if d.arity == nargs or (ltac == 0 and d.arity >= ntpc and d.arity - ntpc == nargs) { best = i64(i) }
       }
@@ -15648,7 +15640,7 @@ is_fn_name := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> b
   mut res := false
   for i in 0..cnt {
     d := deref(lower_ctx::decl_get(decls, i))
-    if d.is_fn and streq(src, d.name_start, d.name_len, nm.s, nm.n) { res = true }
+    if d.is_fn and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) { res = true }
   }
   res
 }
@@ -16070,7 +16062,7 @@ comptime_local_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       mut decl_n := 0
       while i < cnt {
         ent := svec_at(SlotEntry, cts, i)
-        if deref(ent).off <= s and deref(ent).nl == n and streq(cx.src, deref(ent).ns, deref(ent).nl, s, n) {
+        if deref(ent).off <= s and deref(ent).nl == n and lower_ctx::streq(cx.src, deref(ent).ns, deref(ent).nl, s, n) {
           if not found or deref(ent).off >= found_off {
             found = true
             found_off = deref(ent).off
@@ -16171,7 +16163,7 @@ global_array_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan 
         mut found := CSpan(s = 0, n = 0)
         while i < cnt {
           d := deref(lower_ctx::decl_get(cx.decls, i))
-          if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and streq(cx.src, d.name_start, d.name_len, bv.s, bv.n) {
+          if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and lower_ctx::streq(cx.src, d.name_start, d.name_len, bv.s, bv.n) {
             lt := local_type_span(cx.src, d.name_start, d.name_len)
             if lt.n != 0 {
               es := array_elem_span(cx.src, lt.s, lt.n)
@@ -16373,7 +16365,7 @@ overload_set_count := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
     i := dni_at(cnt, j)
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
       d := deref(lower_ctx::decl_get(decls, i))
-      if (d.kind == 1 or d.kind == 4) and d.is_generic == false and streq(src, d.name_start, d.name_len, ns, nl) and streq(src, d.mod_start, d.mod_len, ms, ml) {
+      if (d.kind == 1 or d.kind == 4) and d.is_generic == false and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) and lower_ctx::streq(src, d.mod_start, d.mod_len, ms, ml) {
         c += 1
       }
     }
@@ -16420,7 +16412,7 @@ expr_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
       ## An array slot (`ek == 5`, scalar/float element) reuses `snl` for its element COUNT, not a
       ## type span — skip it here so overload resolution never reads the count as a type name.
-      if streq(cx.src, ent.ns, ent.nl, s, n) and ent.snl != 0 and ent.ek != 5 { return CSpan(s = ent.sns, n = ent.snl) }
+      if lower_ctx::streq(cx.src, ent.ns, ent.nl, s, n) and ent.snl != 0 and ent.ek != 5 { return CSpan(s = ent.sns, n = ent.snl) }
       return CSpan(s = 0, n = 0)
     }
     Expr::Field(base, fs, fl) => {
@@ -16454,7 +16446,7 @@ expr_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       bvn := var_name_span(base)
       if bvn.n == 0 { return CSpan(s = 0, n = 0) }
       ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bvn.s, bvn.n)))
-      if streq(cx.src, ent.ns, ent.nl, bvn.s, bvn.n) and ent.ek == 5 and (ent.eek == 0 or is_byte_array_eek(ent.eek)) {
+      if lower_ctx::streq(cx.src, ent.ns, ent.nl, bvn.s, bvn.n) and ent.ek == 5 and (ent.eek == 0 or is_byte_array_eek(ent.eek)) {
         lt := local_type_span(cx.src, ent.ns, ent.nl)
         if lt.n != 0 {
           es := array_elem_span(cx.src, lt.s, lt.n)
@@ -16518,7 +16510,7 @@ nongen_type_match := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : us
       jc = jc + 1
       if dnh_skip(cnt, j, th) == false {
         d := deref(lower_ctx::decl_get(decls, j))
-        if (d.kind == 1 or d.kind == 4) and d.is_generic == false and d.arity == 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) { return true }
+        if (d.kind == 1 or d.kind == 4) and d.is_generic == false and d.arity == 0 and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) { return true }
       }
     }
     return false
@@ -16530,9 +16522,9 @@ nongen_type_match := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : us
     kc = kc + 1
     if dnh_skip(cnt, i, th) == false {
       d := deref(lower_ctx::decl_get(decls, i))
-      if (d.kind == 1 or d.kind == 4) and d.is_generic == false and d.arity == nargs and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+      if (d.kind == 1 or d.kind == 4) and d.is_generic == false and d.arity == nargs and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         fp := first_param_type_span(d, a, src)
-        if fp.n != 0 and streq(src, fp.s, fp.n, ats, atl) { return true }
+        if fp.n != 0 and lower_ctx::streq(src, fp.s, fp.n, ats, atl) { return true }
       }
     }
   }
@@ -16588,7 +16580,7 @@ view_str_ty_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
   if view_var_kind(e, slots, src) == 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, vn.s, vn.n)))
-  if streq(src, ent.ns, ent.nl, vn.s, vn.n) == false { return CSpan(s = 0, n = 0) }
+  if lower_ctx::streq(src, ent.ns, ent.nl, vn.s, vn.n) == false { return CSpan(s = 0, n = 0) }
   lt := local_type_span(src, ent.ns, ent.nl)
   if lt.n == 0 { return CSpan(s = 0, n = 0) }
   if str_at((src + lt.s), lt.n) == "str" { return CSpan(s = lt.s, n = lt.n) }
@@ -16618,7 +16610,7 @@ gen_ret_str_infer := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
         i = dni_at(cnt, jc)
         jc = jc + 1
         d := deref(lower_ctx::decl_get(decls, i))
-        if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           mut tps := 0
           mut tpl := 0
           mut ntp := 0
@@ -16636,7 +16628,7 @@ gen_ret_str_infer := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
               None => { break }
             }
           }
-          if ntp == 1 and tpl != 0 and d.ret_tl != 0 and streq(src, d.ret_ts, d.ret_tl, tps, tpl) and d.arity != 0 and nargs == d.arity - 1 {
+          if ntp == 1 and tpl != 0 and d.ret_tl != 0 and lower_ctx::streq(src, d.ret_ts, d.ret_tl, tps, tpl) and d.arity != 0 and nargs == d.arity - 1 {
             ## the type argument is OMITTED — find the value argument declared `T` and ask whether it
             ## is a `str` VIEW binding (the same rule the emit side's inference applies).
             mut vj := 0
@@ -16648,7 +16640,7 @@ gen_ret_str_infer := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
                   if str_at((src + pmv.ts), pmv.tl) == "type" {
                     pv = pmv.next
                   } else {
-                    if streq(src, pmv.ts, pmv.tl, tps, tpl) and view_str_ty_span(arg_expr_at(ah, vj, a), slots, src).n != 0 { res = true }
+                    if lower_ctx::streq(src, pmv.ts, pmv.tl, tps, tpl) and view_str_ty_span(arg_expr_at(ah, vj, a), slots, src).n != 0 { res = true }
                     vj += 1
                     pv = pmv.next
                   }
@@ -16695,7 +16687,7 @@ infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(L
           pc = pm.next
         } else {
           bn := base_type_name(cx.src, pm.ts, pm.tl)
-          if streq(cx.src, bn.s, bn.n, tpn_s, tpn_l) {
+          if lower_ctx::streq(cx.src, bn.s, bn.n, tpn_s, tpn_l) {
             ## Try EVERY value param whose type is T, returning the first arg whose type IS inferable —
             ## so `eq(existing, key)` (existing a local → 0/0; key a param → K→concrete) resolves via
             ## `key`, not the un-inferable `existing`. Un-inferable first arg falls through to the next.
@@ -16761,7 +16753,7 @@ infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(L
                 while gk {
                   pta := typearg_at(cx.src, pbn.s, pbn.n, usize(kk))
                   if pta.n == 0 { gk = false }
-                  else { if streq(cx.src, pta.s, pta.n, tpn_s, tpn_l) { tpos = i64(kk); gk = false } ; kk += 1 }
+                  else { if lower_ctx::streq(cx.src, pta.s, pta.n, tpn_s, tpn_l) { tpos = i64(kk); gk = false } ; kk += 1 }
                 }
                 if tpos >= 0 {
                   rbn := base_type_name(cx.src, rty.s, rty.n)
@@ -16790,7 +16782,7 @@ infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(L
             if rc.n != 0 {
               pbase := base_type_name(cx.src, pm.ts, pm.tl)
               rbase := base_type_name(cx.src, rc.s, rc.n)
-              if streq(cx.src, pbase.s, pbase.n, rbase.s, rbase.n) {
+              if lower_ctx::streq(cx.src, pbase.s, pbase.n, rbase.s, rbase.n) {
                 cpayl := recv_payload_targ(cx.src, pm.ts, pm.tl, tpn_s, tpn_l, rc.s, rc.n)
                 if cpayl.n != 0 and is_concrete_scalar_tag(cx.decls, cx.src, cpayl.s, cpayl.n, deref(cx.mar)) { return cpayl }
               }
@@ -16823,7 +16815,7 @@ param_type_has_tparam := fn(src : ptr(u8), ts : usize, tl : usize, tpn_s : usize
     ta := typearg_at(src, bn.s, bn.n, usize(k))
     if ta.n == 0 { go = false }
     else {
-      if streq(src, ta.s, ta.n, tpn_s, tpn_l) { res = true; go = false }
+      if lower_ctx::streq(src, ta.s, ta.n, tpn_s, tpn_l) { res = true; go = false }
       k += 1
     }
   }
@@ -17015,7 +17007,7 @@ overload_resolve_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl :
   mut i : usize = 0
   while i < cnt {
     d := deref(lower_ctx::decl_get(decls, i))
-    if (d.kind == 1 or d.kind == 4) and d.is_generic == false and d.arity == nargs and streq(src, d.name_start, d.name_len, ns, nl) and streq(src, d.mod_start, d.mod_len, ms, ml) {
+    if (d.kind == 1 or d.kind == 4) and d.is_generic == false and d.arity == nargs and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) and lower_ctx::streq(src, d.mod_start, d.mod_len, ms, ml) {
       if overload_args_match(d, args_head, cx, a) { found = i64(i); nfound = nfound + 1 }
     }
     i += 1
@@ -18316,7 +18308,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           if agg_cmp_has_lit_operand(l, r, cx, a) {
             ltag := agg_cmp_operand_tag(l, cx)
             rtag := agg_cmp_operand_tag(r, cx)
-            if ltag.n == 0 or rtag.n == 0 or streq(cx.src, ltag.s, ltag.n, rtag.s, rtag.n) == false {
+            if ltag.n == 0 or rtag.n == 0 or lower_ctx::streq(cx.src, ltag.s, ltag.n, rtag.s, rtag.n) == false {
               panic("selfhost: a bare comparison with an aggregate CONSTRUCTOR operand requires both operands to name the SAME struct/enum type (the structural derive is monomorphized on one T); bind the operands to locals of that type first")
             }
           }
@@ -18964,7 +18956,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         vns := var_name_span(a0)
         if vns.n != 0 {
           vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vns.s, vns.n)))
-          if streq(cx.src, vent.ns, vent.nl, vns.s, vns.n) and (vent.ek == 2 or vent.ek == 3 or vent.ek == 4 or vent.ek == 5) { agg_op = true }
+          if lower_ctx::streq(cx.src, vent.ns, vent.nl, vns.s, vns.n) and (vent.ek == 2 or vent.ek == 3 or vent.ek == 4 or vent.ek == 5) { agg_op = true }
         }
         if agg_op {
           acvi := convert_callee_idx_incl_builtin(cx.decls, cx.src, cs, cl)
@@ -19153,9 +19145,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           ts = gis.s
           tl = gis.n
         }
-        if cx.gp_l != 0 and streq(cx.src, ts, tl, cx.gp_s, cx.gp_l) { ts = cx.it_s; tl = cx.it_l }
-        else if cx.gp2_l != 0 and streq(cx.src, ts, tl, cx.gp2_s, cx.gp2_l) { ts = cx.it2_s; tl = cx.it2_l }
-        else if cx.gp3_l != 0 and streq(cx.src, ts, tl, cx.gp3_s, cx.gp3_l) { ts = cx.it3_s; tl = cx.it3_l }
+        if cx.gp_l != 0 and lower_ctx::streq(cx.src, ts, tl, cx.gp_s, cx.gp_l) { ts = cx.it_s; tl = cx.it_l }
+        else if cx.gp2_l != 0 and lower_ctx::streq(cx.src, ts, tl, cx.gp2_s, cx.gp2_l) { ts = cx.it2_s; tl = cx.it2_l }
+        else if cx.gp3_l != 0 and lower_ctx::streq(cx.src, ts, tl, cx.gp3_s, cx.gp3_l) { ts = cx.it3_s; tl = cx.it3_l }
         ## FAIL LOUD on an operand whose type could not be resolved to a name. This used to fall through
         ## `{0,0}` → `scalar_byte_size(0, 0)` → 8, i.e. `size(<anything unrecognized>)` silently answered
         ## "one machine word" — the single most dangerous line in the layout surface (I11: a trap is
@@ -19270,9 +19262,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           ats = agis.s
           atl = agis.n
         }
-        if cx.gp_l != 0 and streq(cx.src, ats, atl, cx.gp_s, cx.gp_l) { ats = cx.it_s; atl = cx.it_l }
-        else if cx.gp2_l != 0 and streq(cx.src, ats, atl, cx.gp2_s, cx.gp2_l) { ats = cx.it2_s; atl = cx.it2_l }
-        else if cx.gp3_l != 0 and streq(cx.src, ats, atl, cx.gp3_s, cx.gp3_l) { ats = cx.it3_s; atl = cx.it3_l }
+        if cx.gp_l != 0 and lower_ctx::streq(cx.src, ats, atl, cx.gp_s, cx.gp_l) { ats = cx.it_s; atl = cx.it_l }
+        else if cx.gp2_l != 0 and lower_ctx::streq(cx.src, ats, atl, cx.gp2_s, cx.gp2_l) { ats = cx.it2_s; atl = cx.it2_l }
+        else if cx.gp3_l != 0 and lower_ctx::streq(cx.src, ats, atl, cx.gp3_s, cx.gp3_l) { ats = cx.it3_s; atl = cx.it3_l }
         ## default word-model alignment is 8 (every value laid out at 8-byte offsets). §8 levers RAISE it:
         ## a struct-level `@align(N)` pins it to N; a `@packed` struct's alignment is the max of its fields'
         ## `@align(N)` (1 for a plain packed struct). Gated → a non-attributed type still emits 8.
@@ -19570,7 +19562,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if ta.n == 0 and cx.cf_var_l != 0 {
           ct_a0 := arg_expr_at(args_head, tpi, a)
           ct_fp := field_var_parts(ct_a0)
-          if ct_fp.ok and streq(cx.src, ct_fp.os, ct_fp.on, cx.cf_var_s, cx.cf_var_l) and str_at((cx.src + ct_fp.fs), ct_fp.fl) == "type" {
+          if ct_fp.ok and lower_ctx::streq(cx.src, ct_fp.os, ct_fp.on, cx.cf_var_s, cx.cf_var_l) and str_at((cx.src + ct_fp.fs), ct_fp.fl) == "type" {
             ta = CSpan(s = cx.cf_ty_s, n = cx.cf_ty_l)
           }
         }
@@ -19583,11 +19575,11 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## The mono pre-pass performs the matching transitive collection so the `__<concrete>`
         ## instance is defined. (Fires only inside an instance with a type-param arg — src/ has no
         ## such nested call, so it never fires there → fixpoint-neutral.)
-        if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, ta.s, ta.n, cx.gp_s, cx.gp_l) {
+        if cx.gp_l != 0 and cx.it_l != 0 and lower_ctx::streq(cx.src, ta.s, ta.n, cx.gp_s, cx.gp_l) {
           ta = CSpan(s = cx.it_s, n = cx.it_l)
-        } else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, ta.s, ta.n, cx.gp2_s, cx.gp2_l) {
+        } else if cx.gp2_l != 0 and cx.it2_l != 0 and lower_ctx::streq(cx.src, ta.s, ta.n, cx.gp2_s, cx.gp2_l) {
           ta = CSpan(s = cx.it2_s, n = cx.it2_l)
-        } else if cx.gp3_l != 0 and cx.it3_l != 0 and streq(cx.src, ta.s, ta.n, cx.gp3_s, cx.gp3_l) {
+        } else if cx.gp3_l != 0 and cx.it3_l != 0 and lower_ctx::streq(cx.src, ta.s, ta.n, cx.gp3_s, cx.gp3_l) {
           ta = CSpan(s = cx.it3_s, n = cx.it3_l)
         }
         ## SECOND type-param (`map(T, U, …)`): read its type-arg + skip position; erase BOTH args.
@@ -19608,9 +19600,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           tpi2 = i64(tparam_idx2(cx.decls, gi, cx.src, a))
           ta2 = type_arg_full_at(args_head, usize(tpi2), cx.decls, cx.src, a)
           if is_fn_name(cx.decls, cx.src, ta2.s, ta2.n) { ta2 = CSpan(s = 0, n = 0) }
-          if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, ta2.s, ta2.n, cx.gp_s, cx.gp_l) { ta2 = CSpan(s = cx.it_s, n = cx.it_l) }
-          else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, ta2.s, ta2.n, cx.gp2_s, cx.gp2_l) { ta2 = CSpan(s = cx.it2_s, n = cx.it2_l) }
-          else if cx.gp3_l != 0 and cx.it3_l != 0 and streq(cx.src, ta2.s, ta2.n, cx.gp3_s, cx.gp3_l) { ta2 = CSpan(s = cx.it3_s, n = cx.it3_l) }
+          if cx.gp_l != 0 and cx.it_l != 0 and lower_ctx::streq(cx.src, ta2.s, ta2.n, cx.gp_s, cx.gp_l) { ta2 = CSpan(s = cx.it_s, n = cx.it_l) }
+          else if cx.gp2_l != 0 and cx.it2_l != 0 and lower_ctx::streq(cx.src, ta2.s, ta2.n, cx.gp2_s, cx.gp2_l) { ta2 = CSpan(s = cx.it2_s, n = cx.it2_l) }
+          else if cx.gp3_l != 0 and cx.it3_l != 0 and lower_ctx::streq(cx.src, ta2.s, ta2.n, cx.gp3_s, cx.gp3_l) { ta2 = CSpan(s = cx.it3_s, n = cx.it3_l) }
         }
         ## THIRD type-param (`Result::map(T, E, U, …)`): its type-arg + skip; erase all three leading args.
         mut ta3 := CSpan(s = 0, n = 0)
@@ -19619,9 +19611,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           tpi3 = i64(tparam_idx3(cx.decls, gi, cx.src, a))
           ta3 = type_arg_full_at(args_head, usize(tpi3), cx.decls, cx.src, a)
           if is_fn_name(cx.decls, cx.src, ta3.s, ta3.n) { ta3 = CSpan(s = 0, n = 0) }
-          if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp_s, cx.gp_l) { ta3 = CSpan(s = cx.it_s, n = cx.it_l) }
-          else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp2_s, cx.gp2_l) { ta3 = CSpan(s = cx.it2_s, n = cx.it2_l) }
-          else if cx.gp3_l != 0 and cx.it3_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp3_s, cx.gp3_l) { ta3 = CSpan(s = cx.it3_s, n = cx.it3_l) }
+          if cx.gp_l != 0 and cx.it_l != 0 and lower_ctx::streq(cx.src, ta3.s, ta3.n, cx.gp_s, cx.gp_l) { ta3 = CSpan(s = cx.it_s, n = cx.it_l) }
+          else if cx.gp2_l != 0 and cx.it2_l != 0 and lower_ctx::streq(cx.src, ta3.s, ta3.n, cx.gp2_s, cx.gp2_l) { ta3 = CSpan(s = cx.it2_s, n = cx.it2_l) }
+          else if cx.gp3_l != 0 and cx.it3_l != 0 and lower_ctx::streq(cx.src, ta3.s, ta3.n, cx.gp3_s, cx.gp3_l) { ta3 = CSpan(s = cx.it3_s, n = cx.it3_l) }
         }
         ## IMPLICIT payload type-arg (derive's enum `hash(p)`): a single-type-param generic called with
         ## the current arm's payload binding as its ONLY arg — the type-arg is IMPLICIT (the payload's
@@ -19631,7 +19623,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if cx.cf_pay_l != 0 and ntpc == 1 {
           ip_a0 := arg_expr_at(args_head, 0, a)
           ip_vn := var_name_span(ip_a0)
-          if ip_vn.n != 0 and streq(cx.src, ip_vn.s, ip_vn.n, cx.cf_pay_s, cx.cf_pay_l) {
+          if ip_vn.n != 0 and lower_ctx::streq(cx.src, ip_vn.s, ip_vn.n, cx.cf_pay_s, cx.cf_pay_l) {
             impl_pay = true
             ta = CSpan(s = cx.cf_pay_ty_s, n = cx.cf_pay_ty_l)
           }
@@ -19866,7 +19858,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         dviewent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, dviewv.s, dviewv.n)))
         ## MARKED — the eek-6/eek-13 slot marker (a call-derived view pointer, a `ptr(str)` param, a
         ## folded `Some(p)` niche binding). Unchanged.
-        dmarked := streq(cx.src, dviewent.ns, dviewent.nl, dviewv.s, dviewv.n) and dviewent.ek == 0 and (dviewent.eek == 6 or dviewent.eek == 13) and dviewent.snl != 0
+        dmarked := lower_ctx::streq(cx.src, dviewent.ns, dviewent.nl, dviewv.s, dviewv.n) and dviewent.ek == 0 and (dviewent.eek == 6 or dviewent.eek == 13) and dviewent.snl != 0
         ## TYPED — the pointee VIEW span the emit-side resolver recovers from the pointer local's own
         ## spelling: an ANNOTATION (`q : ptr(str) = …`) or the preserved `bitcast(ptr(str), …)` target.
         ## `deref_view_span_cx` is the same resolver the `ss := deref(q)` binding and `io::print(deref(q))`
@@ -19917,7 +19909,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       pkv := var_name_span(base)
       if pkv.n != 0 {
         pke := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, pkv.s, pkv.n)))
-        if streq(cx.src, pke.ns, pke.nl, pkv.s, pkv.n) and pke.ek == 2 and not pke.is_ref and is_packed(cx.decls, cx.src, pke.sns, pke.snl) {
+        if lower_ctx::streq(cx.src, pke.ns, pke.nl, pkv.s, pkv.n) and pke.ek == 2 and not pke.is_ref and is_packed(cx.decls, cx.src, pke.sns, pke.snl) {
           bo := packed_field_byte_offset(cx.decls, cx.src, pke.sns, pke.snl, fs, fl, deref(cx.mar))
           fty := field_type_span(cx.decls, cx.src, pke.sns, pke.snl, fs, fl, deref(cx.mar))
           if bo >= 0 {
@@ -19935,7 +19927,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       stdv := var_name_span(base)
       if stdv.n != 0 {
         stde := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, stdv.s, stdv.n)))
-        if streq(cx.src, stde.ns, stde.nl, stdv.s, stdv.n) and stde.ek == 2 and not stde.is_ref and std_struct_has_direct_byte_layout(cx.decls, cx.src, stde.sns, stde.snl, deref(cx.mar)) {
+        if lower_ctx::streq(cx.src, stde.ns, stde.nl, stdv.s, stdv.n) and stde.ek == 2 and not stde.is_ref and std_struct_has_direct_byte_layout(cx.decls, cx.src, stde.sns, stde.snl, deref(cx.mar)) {
           sbo := standard_field_byte_offset(cx.decls, cx.src, stde.sns, stde.snl, fs, fl, deref(cx.mar))
           sfty := field_type_span(cx.decls, cx.src, stde.sns, stde.snl, fs, fl, deref(cx.mar))
           saes := array_elem_span(cx.src, sfty.s, sfty.n)
@@ -19994,7 +19986,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         pbv := field_base_var(pfp.base)
         if pbv.ok {
           pae := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, pbv.s, pbv.n)))
-          if streq(cx.src, pae.ns, pae.nl, pbv.s, pbv.n) and pae.ek == 2 and not pae.is_ref and is_packed(cx.decls, cx.src, pae.sns, pae.snl) {
+          if lower_ctx::streq(cx.src, pae.ns, pae.nl, pbv.s, pbv.n) and pae.ek == 2 and not pae.is_ref and is_packed(cx.decls, cx.src, pae.sns, pae.snl) {
             abo := packed_field_byte_offset(cx.decls, cx.src, pae.sns, pae.snl, pfp.fs, pfp.fl, deref(cx.mar))
             afty := field_type_span(cx.decls, cx.src, pae.sns, pae.snl, pfp.fs, pfp.fl, deref(cx.mar))
             if abo >= 0 and (abo / 8) * 8 == abo {
@@ -20064,7 +20056,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         pnb := field_base_var(pfp.base)
         if pnb.ok {
           pne := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, pnb.s, pnb.n)))
-          if streq(cx.src, pne.ns, pne.nl, pnb.s, pnb.n) and pne.ek == 2 and not is_packed(cx.decls, cx.src, pne.sns, pne.snl) {
+          if lower_ctx::streq(cx.src, pne.ns, pne.nl, pnb.s, pnb.n) and pne.ek == 2 and not is_packed(cx.decls, cx.src, pne.sns, pne.snl) {
             pnft := field_type_span(cx.decls, cx.src, pne.sns, pne.snl, pfp.fs, pfp.fl, deref(cx.mar))
             if pnft.n != 0 and is_packed(cx.decls, cx.src, pnft.s, pnft.n) { panic("selfhost: a @packed/@offset/@align/@endian struct used as a FIELD of a NON-packed struct is not yet supported (spec Types §8) — the outer struct lays its fields out word-wise while the packed field is stored byte-precise; declare the outer struct @packed too, or hold a ptr to the packed struct") }
           }
@@ -21328,7 +21320,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
     ## var (`cf_var`), currently bound to a member `cf_fld`, so emit `base.<cf_fld>` (a plain Field).
     Expr::CompField(base, idx) => {
       vn := var_name_span(idx)
-      if cx.cf_var_l != 0 and vn.n != 0 and streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) {
+      if cx.cf_var_l != 0 and vn.n != 0 and lower_ctx::streq(cx.src, vn.s, vn.n, cx.cf_var_s, cx.cf_var_l) {
         if not comp_field_scalar_value(cx) { panic("selfhost: comptime field projection of an aggregate is unsupported in value position; pass the field to an aggregate-aware callee") }
         if str_at((cx.src + cx.it_s), 1) == "(" or str_at((cx.src + cx.it_s), 1) == "[" {
           ## TUPLE component / ARRAY element projection `v.(c)` — index in `cf_fld_s` (`cf_fld_l
@@ -22042,7 +22034,7 @@ emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
             Some(gq) => {
               ga := deref(arg_p(gq))
               si := struct_lit_info(ga.e)
-              if si.is_s == false or not streq(cx.src, si.ss, si.sl, ent.sns, ent.snl) {
+              if si.is_s == false or not lower_ctx::streq(cx.src, si.ss, si.sl, ent.sns, ent.snl) {
                 panic("selfhost: a direct scalar standard-byte array literal must contain elements of its declared struct type")
               }
               emit_standard_value(ga.e, base, i64(k) * i64(strideb), sb, cx, a, nl)
@@ -22203,7 +22195,7 @@ packed_byte_base_entry := fn(base : ptr(Expr), cx : ptr(LCtx)) -> i64 {
   if vn.n == 0 { return -1 }
   si := entry_of(cx.slots, cx.src, vn.s, vn.n)
   ent := deref(svec_at(SlotEntry, cx.slots, si))
-  if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 5 and is_byte_array_eek(ent.eek) { return i64(si) }
+  if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 5 and is_byte_array_eek(ent.eek) { return i64(si) }
   -1
 }
 
@@ -22606,7 +22598,7 @@ slice_var_ref := fn(base : ptr(Expr), cx : ptr(LCtx)) -> SlRef {
   if vn.n != 0 {
     ei := entry_of(cx.slots, cx.src, vn.s, vn.n)
     ent := deref(svec_at(SlotEntry, cx.slots, ei))
-    if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 2 {
+    if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 2 {
       bn := base_type_name(cx.src, ent.sns, ent.snl)
       if str_at((cx.src + bn.s), bn.n) == "Slice" {
         ## the element type is the slice's first type-arg (`Slice(u8)` → `u8`); a BYTE element
@@ -22634,7 +22626,7 @@ slice_var_ref := fn(base : ptr(Expr), cx : ptr(LCtx)) -> SlRef {
     ## read the {ptr,len} slots themselves as "bytes" → garbage text. `src/` indexes only the DIRECT
     ## `bytes(x)[i]` form (handled by the `Index` arm's `bytes_view_arg` case), never a str LOCAL, so
     ## this is fixpoint-neutral.
-    else if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 4 {
+    else if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 4 {
       res = SlRef(ok = true, off = ent.off, is_ref = ent.is_ref, is_byte = true)
     }
   }
@@ -22650,7 +22642,7 @@ slice_var_is_str_elem := fn(base : ptr(Expr), cx : ptr(LCtx)) -> bool {
   if vn.n == 0 { return false }
   ei := entry_of(cx.slots, cx.src, vn.s, vn.n)
   ent := deref(svec_at(SlotEntry, cx.slots, ei))
-  if ent.ek != 2 or streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return false }
+  if ent.ek != 2 or lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return false }
   slice_val_str_espan(cx.src, ent.sns, ent.snl).n != 0
 }
 
@@ -22831,7 +22823,7 @@ pair_value_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   vn := var_name_span(e)
   if vn.n == 0 { return false }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-  if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return false }
+  if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return false }
   if ent.ek == 4 { return true }
   if ent.ek == 5 and ent.is_ref { return true }
   false
@@ -22880,7 +22872,7 @@ emit_folded_option_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::S
 folded_slot_span := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
   if slot_of(slots, src, ns, nl) < 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, ns, nl)))
-  if ent.ek == 3 and streq(src, ent.ns, ent.nl, ns, nl) and is_niche_folded(src, ent.sns, ent.snl) { return CSpan(s = ent.sns, n = ent.snl) }
+  if ent.ek == 3 and lower_ctx::streq(src, ent.ns, ent.nl, ns, nl) and is_niche_folded(src, ent.sns, ent.snl) { return CSpan(s = ent.sns, n = ent.snl) }
   CSpan(s = 0, n = 0)
 }
 
@@ -22906,7 +22898,7 @@ folded_value_span := fn(v : ptr(Expr), expect : CSpan, slots : ptr(SVec), decls 
     ## #789 — a BARE `Option.Some(p)` / `Option.None` names no type argument; it takes the fold of the
     ## type its position expects (the destination local, the parameter). A head WITH arguments keeps
     ## its own answer above.
-    if is_niche_folded(src, expect.s, expect.n) and base_type_name(src, ei.es, ei.el).n == ei.el and streq(src, ei.es, ei.el, base_type_name(src, expect.s, expect.n).s, base_type_name(src, expect.s, expect.n).n) { return expect }
+    if is_niche_folded(src, expect.s, expect.n) and base_type_name(src, ei.es, ei.el).n == ei.el and lower_ctx::streq(src, ei.es, ei.el, base_type_name(src, expect.s, expect.n).s, base_type_name(src, expect.s, expect.n).n) { return expect }
     return z
   }
   vn := var_name_span(v)
@@ -22951,7 +22943,7 @@ folded_array_elem_of := fn(ab : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Ve
     ## #824 — an array GLOBAL (no frame slot) declared `[Option(ptr(T)); N]`.
     if slot_of(slots, src, avn.s, avn.n) < 0 { return global_folded_elem_span(decls, src, avn.s, avn.n) }
     aent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, avn.s, avn.n)))
-    if streq(src, aent.ns, aent.nl, avn.s, avn.n) and aent.ek == 5 and aent.eek == 3 and is_niche_folded(src, aent.sns, aent.snl) { return CSpan(s = aent.sns, n = aent.snl) }
+    if lower_ctx::streq(src, aent.ns, aent.nl, avn.s, avn.n) and aent.ek == 5 and aent.eek == 3 and is_niche_folded(src, aent.sns, aent.snl) { return CSpan(s = aent.sns, n = aent.snl) }
     return CSpan(s = 0, n = 0)
   }
   folded_field_array_elem(ab, slots, decls, src, a)
@@ -22982,7 +22974,7 @@ field_place_type_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Ve
   if bvn.n != 0 {
     if slot_of(slots, src, bvn.s, bvn.n) >= 0 {
       bent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, bvn.s, bvn.n)))
-      if streq(src, bent.ns, bent.nl, bvn.s, bvn.n) and (bent.ek == 2 or bent.ek == 7) { bs = bent.sns; bl = bent.snl }
+      if lower_ctx::streq(src, bent.ns, bent.nl, bvn.s, bvn.n) and (bent.ek == 2 or bent.ek == 7) { bs = bent.sns; bl = bent.snl }
     } else if is_module_mut_global(decls, src, bvn.s, bvn.n) {
       ## #809 — a field of a mutable struct GLOBAL (`G.head`): the global's initializer names its type.
       gsi := struct_lit_info(mut_global_value(decls, src, bvn.s, bvn.n))
@@ -23005,7 +22997,7 @@ field_place_type_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Ve
           dav := addr_inner_var_span(dai)
           if dav.n != 0 and slot_of(slots, src, dav.s, dav.n) >= 0 {
             daent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, dav.s, dav.n)))
-            if streq(src, daent.ns, daent.nl, dav.s, dav.n) and daent.ek == 2 { bs = daent.sns; bl = daent.snl }
+            if lower_ctx::streq(src, daent.ns, daent.nl, dav.s, dav.n) and daent.ek == 2 { bs = daent.sns; bl = daent.snl }
           }
         }
       }
@@ -24938,9 +24930,9 @@ GuardTP := struct {
 ## 2nd/3rd type-params (or a concrete type) the argument spells.
 guard_resolve_tp := fn(tp : ptr(GuardTP), src : ptr(u8), ts : usize, tl : usize) -> CSpan {
   t := deref(tp)
-  if t.gp_l != 0 and streq(src, ts, tl, t.gp_s, t.gp_l) { return CSpan(s = t.its, n = t.itl) }
-  if t.gp2_l != 0 and streq(src, ts, tl, t.gp2_s, t.gp2_l) { return CSpan(s = t.its2, n = t.itl2) }
-  if t.gp3_l != 0 and streq(src, ts, tl, t.gp3_s, t.gp3_l) { return CSpan(s = t.its3, n = t.itl3) }
+  if t.gp_l != 0 and lower_ctx::streq(src, ts, tl, t.gp_s, t.gp_l) { return CSpan(s = t.its, n = t.itl) }
+  if t.gp2_l != 0 and lower_ctx::streq(src, ts, tl, t.gp2_s, t.gp2_l) { return CSpan(s = t.its2, n = t.itl2) }
+  if t.gp3_l != 0 and lower_ctx::streq(src, ts, tl, t.gp3_s, t.gp3_l) { return CSpan(s = t.its3, n = t.itl3) }
   CSpan(s = ts, n = tl)
 }
 
@@ -25522,7 +25514,7 @@ emit_st_comp_for_range := fn(cst : ptr(mut Stmt), rvs : usize, rvl : usize, rlo 
           if vsp.n != 0 {
             aei := entry_of(cx.slots, cx.src, vsp.s, vsp.n)
             aent := deref(svec_at(SlotEntry, cx.slots, aei))
-            if streq(cx.src, aent.ns, aent.nl, vsp.s, vsp.n) {
+            if lower_ctx::streq(cx.src, aent.ns, aent.nl, vsp.s, vsp.n) {
               asv := svec_len(cx.slots)
               svec_push(deref(cx.slots), SlotEntry(ns = rvs, nl = rvl, off = aent.off, sns = aent.sns, snl = aent.snl, ek = aent.ek, estride = aent.estride, eek = aent.eek, is_ref = aent.is_ref, tmod_s = aent.tmod_s, tmod_l = aent.tmod_l))
               ## the body (not the argument, a node of the caller's) is the iteration's
@@ -26814,9 +26806,9 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
   ## (`gps2`/`gpl2` → `its2`/`itl2`, for `map(T, U, …)`) substitutes the same way.
   mut pts := pm.ts
   mut ptl := pm.tl
-  if gpl != 0 and itl != 0 and streq(src, pm.ts, pm.tl, gps, gpl) { pts = its; ptl = itl }
-  else if gpl2 != 0 and itl2 != 0 and streq(src, pm.ts, pm.tl, gps2, gpl2) { pts = its2; ptl = itl2 }
-  else if gpl3 != 0 and itl3 != 0 and streq(src, pm.ts, pm.tl, gps3, gpl3) { pts = its3; ptl = itl3 }
+  if gpl != 0 and itl != 0 and lower_ctx::streq(src, pm.ts, pm.tl, gps, gpl) { pts = its; ptl = itl }
+  else if gpl2 != 0 and itl2 != 0 and lower_ctx::streq(src, pm.ts, pm.tl, gps2, gpl2) { pts = its2; ptl = itl2 }
+  else if gpl3 != 0 and itl3 != 0 and lower_ctx::streq(src, pm.ts, pm.tl, gps3, gpl3) { pts = its3; ptl = itl3 }
   ## GENERIC POINTER-to-type-param param `p : ptr(V)` / `ptr(mut V)`: substitute the pointee `V`
   ## (`pm.pps`/`pm.ppl`) through the instance Subst so the ek 6/ek 7 (pointer-to-enum / -struct)
   ## checks below see the CONCRETE pointee, binding `p` as a pointer-to-struct/enum instead of a bare
@@ -26824,9 +26816,9 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
   ## Non-generic / concrete pointee → no subst fires → `ppn` == `pm.pps`/`pm.ppl` (byte-identical).
   mut ppn_s := pm.pps
   mut ppn_l := pm.ppl
-  if gpl != 0 and streq(src, pm.pps, pm.ppl, gps, gpl) { ppn_s = its; ppn_l = itl }
-  else if gpl2 != 0 and streq(src, pm.pps, pm.ppl, gps2, gpl2) { ppn_s = its2; ppn_l = itl2 }
-  else if gpl3 != 0 and streq(src, pm.pps, pm.ppl, gps3, gpl3) { ppn_s = its3; ppn_l = itl3 }
+  if gpl != 0 and lower_ctx::streq(src, pm.pps, pm.ppl, gps, gpl) { ppn_s = its; ppn_l = itl }
+  else if gpl2 != 0 and lower_ctx::streq(src, pm.pps, pm.ppl, gps2, gpl2) { ppn_s = its2; ppn_l = itl2 }
+  else if gpl3 != 0 and lower_ctx::streq(src, pm.pps, pm.ppl, gps3, gpl3) { ppn_s = its3; ppn_l = itl3 }
   ## A pointer-to-generic-enum parameter (`ptr(mut Option(T))`) carries the pointee span separately
   ## from `pm.ts`. Resolve that enum instance too, so `match deref(self)` sees the one-word niche
   ## representation for `Option(ptr(P))` instead of materializing the raw two-word `Option(T)`.
@@ -26882,9 +26874,9 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
   mut ess0 := raw_slice.s
   mut esn0 := raw_slice.n
   if esn0 != 0 {
-    if gpl != 0 and itl != 0 and streq(src, ess0, esn0, gps, gpl) { ess0 = its; esn0 = itl }
-    else if gpl2 != 0 and itl2 != 0 and streq(src, ess0, esn0, gps2, gpl2) { ess0 = its2; esn0 = itl2 }
-    else if gpl3 != 0 and itl3 != 0 and streq(src, ess0, esn0, gps3, gpl3) { ess0 = its3; esn0 = itl3 }
+    if gpl != 0 and itl != 0 and lower_ctx::streq(src, ess0, esn0, gps, gpl) { ess0 = its; esn0 = itl }
+    else if gpl2 != 0 and itl2 != 0 and lower_ctx::streq(src, ess0, esn0, gps2, gpl2) { ess0 = its2; esn0 = itl2 }
+    else if gpl3 != 0 and itl3 != 0 and lower_ctx::streq(src, ess0, esn0, gps3, gpl3) { ess0 = its3; esn0 = itl3 }
   }
   early_slice := CSpan(s = ess0, n = esn0)
   if early_slice.n != 0 {
@@ -28076,7 +28068,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## collapses into `fn_returns_sret` (byte-identical → fixpoint-neutral).
   mut srs := d.ret_ts
   mut srl := d.ret_tl
-  if gpl != 0 and srl != 0 and streq(p.src, d.ret_ts, d.ret_tl, gps, gpl) { srs = its; srl = itl }
+  if gpl != 0 and srl != 0 and lower_ctx::streq(p.src, d.ret_ts, d.ret_tl, gps, gpl) { srs = its; srl = itl }
   gen_wide_ret := srl != 0 and struct_decl_of(p.decls, p.src, srs, srl) >= 0 and struct_words(p.decls, p.src, srs, srl, deref(p.mar)) >= 8
   ## A >= 8-COMPONENT TUPLE return joins the same sret path (the register convention tops out at %r11 =
   ## 7 words, so components 7.. were never delivered — a silent garbage tail). `fn_returns_tuple_sret`
@@ -28410,7 +28402,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## Non-generic / non-`T` returns keep their own span → byte-identical.
   mut ers := d.ret_ts
   mut erl := d.ret_tl
-  if gpl != 0 and erl != 0 and streq(p.src, d.ret_ts, d.ret_tl, gps, gpl) { ers = its; erl = itl }
+  if gpl != 0 and erl != 0 and lower_ctx::streq(p.src, d.ret_ts, d.ret_tl, gps, gpl) { ers = its; erl = itl }
   ## GENERIC enum return with a type-argument payload (`get -> Option(ptr(T))`, `and_then ->
   ## Option(U)`) needs the same effective instance span as a generic enum parameter. In particular,
   ## the raw `Option(T)` return would select the ordinary two-word ABI even when this instance is
@@ -28620,7 +28612,7 @@ ivec_push := fn(in out v : IVec, x : Inst) {
 ## instantiations, not collapsed. For a bare type-arg (no trailing `(…)` → no type-args) this reduces
 ## to the head `streq` — byte-identical dedup to before (fixpoint-neutral for `src/`).
 inst_targ_eq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
-  if streq(src, a_s, a_n, b_s, b_n) == false { return false }
+  if lower_ctx::streq(src, a_s, a_n, b_s, b_n) == false { return false }
   mut j := 0
   mut eq := true
   mut going := true
@@ -28629,7 +28621,7 @@ inst_targ_eq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : u
     tb := typearg_at(src, b_s, b_n, j)
     if ta.n == 0 and tb.n == 0 { going = false }
     else if ta.n == 0 or tb.n == 0 { eq = false ; going = false }
-    else if streq(src, ta.s, ta.n, tb.s, tb.n) == false { eq = false ; going = false }
+    else if lower_ctx::streq(src, ta.s, ta.n, tb.s, tb.n) == false { eq = false ; going = false }
     else { j = j + 1 }
   }
   eq
@@ -28657,7 +28649,7 @@ param_type_of := fn(ns : usize, nl : usize, penv : Option(ptr(mut Param)), src :
     match pc {
       Some(pcq) => {
         pm := deref(param_p(pcq))
-        if streq(src, pm.ns, pm.nl, ns, nl) { return base_type_name(src, pm.ts, pm.tl) }
+        if lower_ctx::streq(src, pm.ns, pm.nl, ns, nl) { return base_type_name(src, pm.ts, pm.tl) }
         pc = pm.next
       }
       None => { break }
@@ -28675,7 +28667,7 @@ fixed_array_param_len := fn(ns : usize, nl : usize, params : Option(ptr(mut Para
     match p {
       Some(pq) => {
         pm := deref(param_p(pq))
-        if streq(src, pm.ns, pm.nl, ns, nl) and pm.pmode == 1 { return pm.pps }
+        if lower_ctx::streq(src, pm.ns, pm.nl, ns, nl) and pm.pmode == 1 { return pm.pps }
         p = pm.next
       }
       None => { break }
@@ -28716,7 +28708,7 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
           pc = pm.next
         } else {
           bn := base_type_name(src, pm.ts, pm.tl)
-          if streq(src, bn.s, bn.n, tpn_s, tpn_l) {
+          if lower_ctx::streq(src, bn.s, bn.n, tpn_s, tpn_l) {
             ## Try EVERY value param whose type is T (mirrors `infer_implicit_targ`): a value arg that is
             ## a LOCAL (not in `penv`) is uninferable in the pre-pass → fall through to the next T-typed
             ## arg (e.g. `eq(existing, key)` resolves via the param `key`, not the local `existing`).
@@ -28788,7 +28780,7 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
             pc2 = pm2.next
           } else {
             bn2 := base_type_name(src, pm2.ts, pm2.tl)
-            if streq(src, bn2.s, bn2.n, tpn_s, tpn_l) {
+            if lower_ctx::streq(src, bn2.s, bn2.n, tpn_s, tpn_l) {
               vn2 := var_name_span(arg_expr_at(args_head, j2, a))
               if vn2.n != 0 {
                 lt := block_decl_type(COLLECT_BODY, vn2.s, vn2.n, src, decls, a)
@@ -28832,7 +28824,7 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
               while gk {
                 pta := typearg_at(src, pbn.s, pbn.n, usize(kk))
                 if pta.n == 0 { gk = false }
-                else { if streq(src, pta.s, pta.n, tpn_s, tpn_l) { tpos = i64(kk); gk = false } ; kk += 1 }
+                else { if lower_ctx::streq(src, pta.s, pta.n, tpn_s, tpn_l) { tpos = i64(kk); gk = false } ; kk += 1 }
               }
               if tpos >= 0 {
                 rbn := base_type_name(src, rty.s, rty.n)
@@ -28850,7 +28842,7 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
             if rc.n != 0 {
               pbb := base_type_name(src, pmm.ts, pmm.tl)
               rbb := base_type_name(src, rc.s, rc.n)
-              if streq(src, pbb.s, pbb.n, rbb.s, rbb.n) {
+              if lower_ctx::streq(src, pbb.s, pbb.n, rbb.s, rbb.n) {
                 cpayl := recv_payload_targ(src, pmm.ts, pmm.tl, tpn_s, tpn_l, rc.s, rc.n)
                 if cpayl.n != 0 and is_concrete_scalar_tag(decls, src, cpayl.s, cpayl.n, a) { return cpayl }
               }
@@ -29208,7 +29200,7 @@ mut _mark_ms : usize = 0
 mut _mark_ml : usize = 0
 mark_name := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) {
   h := lower_layout::_name_hash(src, ns, nl)
-  if _mn_n[h] == nl and _mn_src[h] == src and _mn_ms[h] == _mark_ms and _mn_ml[h] == _mark_ml and streq(src, _mn_s[h], _mn_n[h], ns, nl) { return }
+  if _mn_n[h] == nl and _mn_src[h] == src and _mn_ms[h] == _mark_ms and _mn_ml[h] == _mark_ml and lower_ctx::streq(src, _mn_s[h], _mn_n[h], ns, nl) { return }
   cnt := rt::vec_len(deref(decls))
   th := name_hash(src, ns, nl)
   ## When the caller module contains a same-named declaration, that is the resolved bare call. Check
@@ -29230,7 +29222,7 @@ mark_name := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl 
       q += 1
       if dnh_skip(cnt, j, th) == false {
         d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), j)))
-        if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, ns, nl) {
+        if (d.kind == 1 or d.kind == 4) and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) {
           r := callee_mod_rank(src, d.mod_start, d.mod_len, _mark_ms, _mark_ml)
           if r > bestr { bestr = r }
         }
@@ -29243,7 +29235,7 @@ mark_name := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl 
     j := dni_at(cnt, k)
     if dnh_skip(cnt, j, th) == false {
       d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), j)))
-      if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, ns, nl) and (bestr < 0 or callee_mod_rank(src, d.mod_start, d.mod_len, _mark_ms, _mark_ml) == bestr) {
+      if (d.kind == 1 or d.kind == 4) and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) and (bestr < 0 or callee_mod_rank(src, d.mod_start, d.mod_len, _mark_ms, _mark_ml) == bestr) {
         rb_set(rb, j, 1)
       }
     }
@@ -30205,19 +30197,19 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
         ## 1-/2-param generic is byte-identical (the original two-way substitution).
         mut nts := te.ts
         mut ntl := te.tl
-        if streq(src, te.ts, te.tl, tp.ns, tp.nl) { nts = ie.ts; ntl = ie.tl }
-        else if tp2nl != 0 and streq(src, te.ts, te.tl, tp2ns, tp2nl) { nts = ie.ts2; ntl = ie.tl2 }
-        else if tp3nl != 0 and streq(src, te.ts, te.tl, tp3ns, tp3nl) { nts = ie.ts3; ntl = ie.tl3 }
+        if lower_ctx::streq(src, te.ts, te.tl, tp.ns, tp.nl) { nts = ie.ts; ntl = ie.tl }
+        else if tp2nl != 0 and lower_ctx::streq(src, te.ts, te.tl, tp2ns, tp2nl) { nts = ie.ts2; ntl = ie.tl2 }
+        else if tp3nl != 0 and lower_ctx::streq(src, te.ts, te.tl, tp3ns, tp3nl) { nts = ie.ts3; ntl = ie.tl3 }
         mut nts2 := te.ts2
         mut ntl2 := te.tl2
-        if tp2nl != 0 and streq(src, te.ts2, te.tl2, tp2ns, tp2nl) { nts2 = ie.ts2; ntl2 = ie.tl2 }
-        else if streq(src, te.ts2, te.tl2, tp.ns, tp.nl) { nts2 = ie.ts; ntl2 = ie.tl }
-        else if tp3nl != 0 and streq(src, te.ts2, te.tl2, tp3ns, tp3nl) { nts2 = ie.ts3; ntl2 = ie.tl3 }
+        if tp2nl != 0 and lower_ctx::streq(src, te.ts2, te.tl2, tp2ns, tp2nl) { nts2 = ie.ts2; ntl2 = ie.tl2 }
+        else if lower_ctx::streq(src, te.ts2, te.tl2, tp.ns, tp.nl) { nts2 = ie.ts; ntl2 = ie.tl }
+        else if tp3nl != 0 and lower_ctx::streq(src, te.ts2, te.tl2, tp3ns, tp3nl) { nts2 = ie.ts3; ntl2 = ie.tl3 }
         mut nts3 := te.ts3
         mut ntl3 := te.tl3
-        if tp3nl != 0 and streq(src, te.ts3, te.tl3, tp3ns, tp3nl) { nts3 = ie.ts3; ntl3 = ie.tl3 }
-        else if tp2nl != 0 and streq(src, te.ts3, te.tl3, tp2ns, tp2nl) { nts3 = ie.ts2; ntl3 = ie.tl2 }
-        else if streq(src, te.ts3, te.tl3, tp.ns, tp.nl) { nts3 = ie.ts; ntl3 = ie.tl }
+        if tp3nl != 0 and lower_ctx::streq(src, te.ts3, te.tl3, tp3ns, tp3nl) { nts3 = ie.ts3; ntl3 = ie.tl3 }
+        else if tp2nl != 0 and lower_ctx::streq(src, te.ts3, te.tl3, tp2ns, tp2nl) { nts3 = ie.ts2; ntl3 = ie.tl2 }
+        else if lower_ctx::streq(src, te.ts3, te.tl3, tp.ns, tp.nl) { nts3 = ie.ts; ntl3 = ie.tl }
         add_inst(insts, src, te.gi, nts, ntl, nts2, ntl2, nts3, ntl3)
       }
       ## COMPTIME-FOR (self-recursive derive): a generic fn whose body has `comptime for f in

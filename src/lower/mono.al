@@ -92,7 +92,7 @@ pub block_decl_type := fn(head : Option(ptr(mut Stmt)), ns2 : usize, nl2 : usize
         match st {
           Stmt::Assign(ans, anl, v, nx) => {
             isas = true
-            if streq(src, ans, anl, ns2, nl2) {
+            if lower_ctx::streq(src, ans, anl, ns2, nl2) {
               lt := local_type_span(src, ans, anl)
               if lt.n != 0 { rs = lt.s; rn = lt.n }
               else {

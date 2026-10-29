@@ -649,7 +649,7 @@ pub emit_enum_match := fn(head_in : Option(ptr(mut Arm)), si : ScrutInfo, in out
   }
   if owner_type_ctx == false { owner_type_s = 0; owner_type_l = 0 }
   head := expand_variant_arms(head_in, si.es, si.el, cx, a)
-  body_type_swap := owner_type_ctx and not streq(cx.src, owner_type_s, owner_type_l, cx.mod_s, cx.mod_l)
+  body_type_swap := owner_type_ctx and not lower_ctx::streq(cx.src, owner_type_s, owner_type_l, cx.mod_s, cx.mod_l)
   lend := nl
   nl += 1
   ## load the discriminant (slot `base`) into %r12 — at the `@repr(T)` tag WIDTH if the enum pins one

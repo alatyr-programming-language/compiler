@@ -195,7 +195,7 @@ std_idx_field_elem := fn(arr : ptr(Expr), idx : ptr(Expr), slots : ptr(SVec), de
       fav := var_name_span(fbase)
       if fav.n != 0 {
         faent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, fav.s, fav.n)))
-        if streq(src, faent.ns, faent.nl, fav.s, fav.n) and faent.ek == 2 and not faent.is_ref and faent.snl != 0 {
+        if lower_ctx::streq(src, faent.ns, faent.nl, fav.s, fav.n) and faent.ek == 2 and not faent.is_ref and faent.snl != 0 {
           faft := field_type_span(decls, src, faent.sns, faent.snl, afs, afl, a)
           faes := array_elem_span(src, faft.s, faft.n)
           fabn := base_type_name(src, faes.s, faes.n)
@@ -292,7 +292,7 @@ pub std_idx_one := fn(arr : ptr(Expr), fs : usize, fl : usize, cx : ptr(LCtx)) -
     afv := var_name_span(afp.base)
     if afv.n != 0 {
       afent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, afv.s, afv.n)))
-      if streq(cx.src, afent.ns, afent.nl, afv.s, afv.n) and afent.ek == 2 and not afent.is_ref and afent.snl != 0 {
+      if lower_ctx::streq(cx.src, afent.ns, afent.nl, afv.s, afv.n) and afent.ek == 2 and not afent.is_ref and afent.snl != 0 {
         afft := field_type_span(cx.decls, cx.src, afent.sns, afent.snl, afp.fs, afp.fl, a)
         afes := array_elem_span(cx.src, afft.s, afft.n)
         afbn := base_type_name(cx.src, afes.s, afes.n)
@@ -587,7 +587,7 @@ pub word_field_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec)
   match deref(e) {
     Expr::Var(s, n) => {
       ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, s, n)))
-      if ent.ek == 2 and not ent.is_ref and streq(src, ent.ns, ent.nl, s, n) and ent.snl != 0 and word_tier_agg(decls, src, ent.sns, ent.snl, a) {
+      if ent.ek == 2 and not ent.is_ref and lower_ctx::streq(src, ent.ns, ent.nl, s, n) and ent.snl != 0 and word_tier_agg(decls, src, ent.sns, ent.snl, a) {
         FieldAgg(kind = 2, s = ent.sns, n = ent.snl, boff = ent.off, fwo = 0, isr = false)
       } else { z }
     }
@@ -653,7 +653,7 @@ pub field_read_agg := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
       bvn := var_name_span(base)
       if bvn.n != 0 {
         bent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, bvn.s, bvn.n)))
-        if bent.ek == 2 and streq(src, bent.ns, bent.nl, bvn.s, bvn.n) and bent.snl != 0 {
+        if bent.ek == 2 and lower_ctx::streq(src, bent.ns, bent.nl, bvn.s, bvn.n) and bent.snl != 0 {
           ft := field_type_span(decls, src, bent.sns, bent.snl, fs, fl, a)
           if ft.n != 0 {
             ## Types §9.4 — a `str` FIELD is a 2-word `{ptr, len}` sub-aggregate (Memory §3.5), so
@@ -1210,7 +1210,7 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
     panic("selfhost: this index BASE is not a named array/slice place — the element-address tail composes `base + i * stride` out of a bound local's or parameter's frame slot, and this base has none, so it used to resolve to frame slot 0 and read the caller's own frame. Bind the base to a local first (`v := <base>; v[i]`), the spelling every backend already lowers. Known unresolved shapes: a range slice used directly as a base (`xs[lo..hi][i]` / `s[lo..hi][i]`, issue #422), an array literal, a `deref`/`ptr` compound, an `if`/`match` value, a `Slice(T)` constructor, and a module-global `[str; N]`'s nested index")
   }
   ent := deref(svec_at(SlotEntry, cx.slots, bslot))
-  if not streq(cx.src, ent.ns, ent.nl, ibtv.s, ibtv.n) {
+  if not lower_ctx::streq(cx.src, ent.ns, ent.nl, ibtv.s, ibtv.n) {
     lower_show_src_line(cx.src, ibtv.s)
     panic("selfhost: this index BASE names no bound local or parameter — `entry_of` did not find it in the frame's slot map, so the element-address tail used to fall back to frame slot 0 and read an unrelated local. Declare or bind the name before indexing it")
   }
@@ -1290,7 +1290,7 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
   ## with the DECLARED `[T; N]` span in `sns`/`snl` — and its uniform stride-1 element math below is
   ## correct, so an `[…]`-shaped slot span is exempt (`array_elem_span`).
   isbv := var_name_span(base)
-  if isbv.n != 0 and ent.ek == 0 and streq(cx.src, ent.ns, ent.nl, isbv.s, isbv.n) {
+  if isbv.n != 0 and ent.ek == 0 and lower_ctx::streq(cx.src, ent.ns, ent.nl, isbv.s, isbv.n) {
     if array_elem_span(cx.src, ent.sns, ent.snl).n == 0 {
       panic("selfhost: indexing a SCALAR local/param (`x[i]` where `x` is one word — an integer, a float, or a raw `ptr(T)`) is not a place: Types §6.4 gives a raw pointer no indexing of its own, so `p[i]` means `deref(p)[i]` and needs an INDEXABLE pointee. Read a single element with `deref(p)`, or make a view — `Slice(T)(ptr = p, len = n)` / `bytes(s)` for a str — and index that")
     }

@@ -124,7 +124,7 @@ body_binding := fn(head : Option(ptr(mut Stmt)), ns2 : usize, nl2 : usize, src :
         match st {
           Stmt::Assign(ans, anl, v, nx) => {
             isas = true
-            if streq(src, ans, anl, ns2, nl2) { r = BindInfo(rhs = v, ns = ans, nl = anl) }
+            if lower_ctx::streq(src, ans, anl, ns2, nl2) { r = BindInfo(rhs = v, ns = ans, nl = anl) }
             s = nx
           }
           Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
@@ -149,7 +149,7 @@ fn_decl_by_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usiz
   mut i : usize = 0
   while i < cnt {
     d := deref(lower_ctx::decl_get(decls, i))
-    if d.kind == 1 and streq(src, d.name_start, d.name_len, ns, nl) { res = i64(i) }
+    if d.kind == 1 and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) { res = i64(i) }
     i = i + 1
   }
   res
@@ -165,7 +165,7 @@ pub fnval_ty_pos := fn(cs : usize, cl : usize, src : ptr(u8), a : rt::Arena) -> 
     match pc {
       Some(pcq) => {
         pm := deref(param_p(pcq))
-        if streq(src, pm.ns, pm.nl, cs, cl) and str_at((src + pm.ts), pm.tl) == "fn" { pr = pm.ts }
+        if lower_ctx::streq(src, pm.ns, pm.nl, cs, cl) and str_at((src + pm.ts), pm.tl) == "fn" { pr = pm.ts }
         pc = pm.next
       }
       None => { break }
@@ -316,9 +316,9 @@ ty_is_float_sub := fn(ts : usize, tl : usize, cx : ptr(LCtx)) -> bool {
   if tl == 0 { return false }
   mut s := ts
   mut n := tl
-  if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, s, n, cx.gp_s, cx.gp_l) { s = cx.it_s; n = cx.it_l }
-  if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, s, n, cx.gp2_s, cx.gp2_l) { s = cx.it2_s; n = cx.it2_l }
-  if cx.gp3_l != 0 and cx.it3_l != 0 and streq(cx.src, s, n, cx.gp3_s, cx.gp3_l) { s = cx.it3_s; n = cx.it3_l }
+  if cx.gp_l != 0 and cx.it_l != 0 and lower_ctx::streq(cx.src, s, n, cx.gp_s, cx.gp_l) { s = cx.it_s; n = cx.it_l }
+  if cx.gp2_l != 0 and cx.it2_l != 0 and lower_ctx::streq(cx.src, s, n, cx.gp2_s, cx.gp2_l) { s = cx.it2_s; n = cx.it2_l }
+  if cx.gp3_l != 0 and cx.it3_l != 0 and lower_ctx::streq(cx.src, s, n, cx.gp3_s, cx.gp3_l) { s = cx.it3_s; n = cx.it3_l }
   tn := str_at((cx.src + s), n)
   tn == "f64" or tn == "f32"
 }
@@ -494,7 +494,7 @@ ecallee_localty := fn(ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> C
     match pcur {
       Some(pcurq) => {
         pm := deref(param_p(pcurq))
-        if streq(src, pm.ns, pm.nl, ns, nl) { ps = pm.ns ; pn = pm.nl }
+        if lower_ctx::streq(src, pm.ns, pm.nl, ns, nl) { ps = pm.ns ; pn = pm.nl }
         pcur = pm.next
       }
       None => { break }

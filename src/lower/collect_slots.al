@@ -121,7 +121,7 @@ scan_init_from := fn(mode : InitScan, head : Option(ptr(mut Stmt)), bs : usize, 
 ## Is `v` the name `[bs, bs+bl)` itself?
 expr_is_var := fn(v : ptr(Expr), bs : usize, bl : usize, src : ptr(u8)) -> bool {
   vn := var_name_span(v)
-  vn.n != 0 and streq(src, vn.s, vn.n, bs, bl)
+  vn.n != 0 and lower_ctx::streq(src, vn.s, vn.n, bs, bl)
 }
 
 ## Is `v` `deref` of the name `[bs, bs+bl)`?
@@ -141,7 +141,7 @@ retype_ptr_copy := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize, 
   k := slot_of(slots, src, ns, nl)
   if k < 0 { return }
   ue := deref(svec_at(SlotEntry, slots, usize(k)))
-  if not streq(src, ue.ns, ue.nl, ns, nl) or ue.ek != 0 or ue.snl != 0 or ue.is_ref { return }
+  if not lower_ctx::streq(src, ue.ns, ue.nl, ns, nl) or ue.ek != 0 or ue.snl != 0 or ue.is_ref { return }
   deref(svec_at(SlotEntry, slots, usize(k))) = SlotEntry(ns = ue.ns, nl = ue.nl, off = ue.off, sns = ps, snl = pn, ek = ek, estride = ue.estride, eek = ue.eek, is_ref = false, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l)
 }
 
@@ -860,7 +860,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
             mut mel := 0
             if msc.n != 0 {
               ment := deref(svec_at(SlotEntry, slots, entry_of(slots, src, msc.s, msc.n)))
-              if streq(src, ment.ns, ment.nl, msc.s, msc.n) and ment.ek == 3 { mes = ment.sns; mel = ment.snl }
+              if lower_ctx::streq(src, ment.ns, ment.nl, msc.s, msc.n) and ment.ek == 3 { mes = ment.sns; mel = ment.snl }
             }
             mut arm : Option(ptr(mut Arm)) = ah
             loop {
