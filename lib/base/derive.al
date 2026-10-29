@@ -63,9 +63,9 @@ pub eq := fn(T : type, a : T, b : T) -> bool {
       ## reading address bits out of a pointer is reinterpret, "whose only form is `bitcast`"
       ## (Type System §4.4). Same shape as `Option::get`, the one precedent in this stdlib
       ## (`lib/base/option.al:41-48`). Consistent with the `hash` arm below, as §2.6 requires.
-      ## unchecked-ok: the two operands are already `Pointer(_)` leaves of the same typeinfo
       ## branch; Memory §4.5 grants reading their address bits for `==`, and that read is a
       ## bitcast (§2.6), spelled here in the generated body rather than at the caller's site.
+      ## unchecked-ok: the two operands are already `Pointer(_)` leaves of the same typeinfo
       return unchecked bitcast(usize, a) == unchecked bitcast(usize, b)
     }
     _ => { return a == b }
@@ -125,8 +125,8 @@ pub lt := fn(T : type, a : T, b : T) -> bool {
       ## that hold: irreflexivity, asymmetry, and agreement with `eq` on the same pair. A container that
       ## needs a reproducible order over pointer keys must brand one itself (§2.6); the derive supplies
       ## the comparison, not a guarantee about which pointer sorts first.
-      ## unchecked-ok: the same `Pointer(_)` leaves as `eq` above; §4.5 names `p < q` together
       ## with `p == q` and grants the same address-bits read, in the generated body.
+      ## unchecked-ok: the same `Pointer(_)` leaves as `eq` above; §4.5 names `p < q` together
       return unchecked bitcast(usize, a) < unchecked bitcast(usize, b)
     }
     _ => { return a < b }
@@ -187,12 +187,12 @@ pub hash := fn(T : type, v : T) -> u64 {
             ## that buckets on them would cluster every pointer key into one bucket. Mixing spreads the
             ## entropy upward; it is still a pure function of the address bits, so consistency with `eq`
             ## is preserved exactly.
-            ## unchecked-ok: `v` is a `Pointer(_)` leaf reached by the comptime guard above;
             ## §4.5 grants reading its address bits for the hash, and this is the only crossing
             ## here — the mixing below is xor and shift, which cannot overflow a `usize`. The shift
             ## is spelled `.shr(n)`: Alatyr has no `>>` glyph and OP-6 refuses it, which cost this
             ## branch a full gate cycle before it was caught (`ir --self-test` answers nothing at all
             ## when stdlib fails to compile, so the six golden FAILs were downstream of one glyph).
+            ## unchecked-ok: `v` is a `Pointer(_)` leaf reached by the comptime guard above;
             bits : usize = unchecked bitcast(usize, v);
             return bits ^ bits.shr(23);
           } else {
