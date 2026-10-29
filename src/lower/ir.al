@@ -1228,7 +1228,7 @@ ir_slice_param_idx := fn(src : ptr(u8), s : usize, n : usize) -> i64 {
 ## Keep byte elements separate from ir_native_scalar: widening scalar parameters to u8 would make qword
 ## arithmetic depend on unspecified high bits. Only the aggregate view iterable uses this zero-ext load.
 ir_slice_param_byte := fn(src : ptr(u8), s : usize, n : usize) -> bool {
-  es := slice_ann_elem_span(src, s, n)
+  es := lower_ctx::slice_elem_span(src, s, n)
   es.n != 0 and str_at((src + es.s), es.n) == "u8"
 }
 ## The index of an admitted array-local name `[s, n)` (-1 = not an admitted array local).
@@ -1787,7 +1787,7 @@ pub is_scalar_leaf_shape := fn(d : Decl, p : ptr(PCtx)) -> bool {
           ## a by-ref STRUCT param (all-scalar fields → barriered field reads) OR a `Slice(native-scalar-word)` /
           ## bounded `Slice(u8)` PARAM (iterated by `for x in s`). A byte slice is not a native scalar ABI param;
           ## it is admitted only as an aggregate view iterable with the dedicated zero-ext load.
-          slelem := slice_ann_elem_span(p.src, pm.ns, pm.nl)
+          slelem := lower_ctx::slice_elem_span(p.src, pm.ns, pm.nl)
           slbase := base_type_name(p.src, pm.ts, pm.tl)
           is_slice := slelem.n != 0 and str_at((p.src + slbase.s), slbase.n) == "Slice" and (ir_native_scalar(p.src, slelem.s, slelem.n) or str_at((p.src + slelem.s), slelem.n) == "u8")
           if is_slice {

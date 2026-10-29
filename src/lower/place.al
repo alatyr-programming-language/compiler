@@ -234,7 +234,7 @@ pub std_idx_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), s
       ## absence of an annotation; annotated `s : Slice(P)` parameters are recovered from their type.
       mut is_slice_view := not ent.is_ref
       if ent.is_ref {
-        is_slice_view = slot_name_is_annotated(src, ent.ns, ent.nl) == false or slice_ann_elem_span(src, ent.ns, ent.nl).n != 0
+        is_slice_view = slot_name_is_annotated(src, ent.ns, ent.nl) == false or lower_ctx::slice_elem_span(src, ent.ns, ent.nl).n != 0
       }
       if ent.ek == 5 and ent.eek == 2 and is_slice_view and ent.snl != 0 and std_array_elem_byte_tier(decls, src, ent.sns, ent.snl, a) {
         StdIdxPath(ok = true, arr = arr, idx = idx, bo = 0, ts = ent.sns, tl = ent.snl)
@@ -1227,7 +1227,7 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
     push_str(sb, "(%rbp), %rax\n")
     return
   }
-  ent_slice_param_elem := slice_ann_elem_span(cx.src, ent.ns, ent.nl)
+  ent_slice_param_elem := lower_ctx::slice_elem_span(cx.src, ent.ns, ent.nl)
   ## BYTE-PACKED ARRAY / TYPED BYTE-SLICE. Fixed local arrays start at the first filler word
   ## (`-(off*8)(%rbp)`); a range slice stores that same data pointer directly in its `off` slot.
   ## In both cases the element offset is a BYTE count, not `idx * 8`. A byte store/read is selected

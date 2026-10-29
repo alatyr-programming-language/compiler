@@ -1654,7 +1654,7 @@ slice_view_cmp_kind := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize
   ## multi-word aggregates whose padding/unused payload words are indeterminate, so word-wise
   ## equality is not the answer — fail loud.
   if ent.eek == 2 or ent.eek == 3 or ent.eek == 4 or ent.eek == 7 {
-    if slice_ann_elem_span(cx.src, ent.ns, ent.nl).n != 0 { return 2 }
+    if lower_ctx::slice_elem_span(cx.src, ent.ns, ent.nl).n != 0 { return 2 }
     if slot_name_is_annotated(cx.src, ent.ns, ent.nl) == false { return 2 }
   }
   0
@@ -6246,41 +6246,6 @@ slot_name_is_annotated := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   lower_ctx::slice_scan_has(src, end, p, "=") == false
 }
 
-slice_ann_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
-  mut p := s + n
-  end := LOWER_SRC_N
-  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
-  if lower_ctx::slice_scan_has(src, end, p, ":") == false { return CSpan(s = 0, n = 0) }
-  p = p + 1
-  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
-  if lower_ctx::slice_scan_has(src, end, p, "Slice(") == false {
-    ## §7.2 slice-VARIADIC `name : ...T` — the element type follows `...`. Recover `T`'s span so a
-    ## `...Pt` / `...E` param reads its struct/enum element exactly like a `Slice(Pt)` param (field
-    ## resolution + the by-ref for-loop). A bare `...` (the §7.1 comptime variadic — no element type,
-    ## `)` right after) yields 0/0, unchanged from before → fixpoint-neutral for the lib `args : ...`.
-    if lower_ctx::slice_scan_has(src, end, p, "...") {
-      vs := p + 3
-      mut ve := vs
-      while ve < end {
-        c := str_at((src + ve), 1)
-        if c == ")" or c == "," or c == " " or c == "\n" or c == "\t" or c == "\r" { break }
-        ve = ve + 1
-      }
-      if ve == vs { return CSpan(s = 0, n = 0) }
-      return CSpan(s = vs, n = ve - vs)
-    }
-    return CSpan(s = 0, n = 0)
-  }
-  es := p + 6
-  mut ee := es
-  while ee < end {
-    if str_at((src + ee), 1) == ")" { break }
-    ee = ee + 1
-  }
-  if ee >= end { return CSpan(s = 0, n = 0) }
-  if ee == es { return CSpan(s = 0, n = 0) }
-  CSpan(s = es, n = ee - es)
-}
 
 ## Types §9.4 / §7.2 — the VIEW kind of a plain `Var` used as a VALUE: `4` = a `str`, `5` = a
 ## `Slice(T)`, `0` = anything else. A view is the 2-word `{ptr, len}` value `emit_str_pair`
@@ -6305,7 +6270,7 @@ view_var_kind := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> u8 {
   if ent.ek == 5 and ent.is_ref {
     if ent.eek == 2 or ent.eek == 3 or ent.eek == 7 {
       if slot_name_is_annotated(src, ent.ns, ent.nl) == false { return 5 }
-      if slice_ann_elem_span(src, ent.ns, ent.nl).n != 0 { return 5 }
+      if lower_ctx::slice_elem_span(src, ent.ns, ent.nl).n != 0 { return 5 }
     } else if ent.snl == 1 { return 5 }
   }
   0
@@ -7751,7 +7716,7 @@ idx_field_index := fn(arr : ptr(Expr), idx : ptr(Expr), fs : usize, fl : usize, 
   mut r := field_word_offset(cx.decls, cx.src, ent.sns, ent.snl, fs, fl, deref(cx.mar))
   if tc.estride != 0 and tc.snl != 0 { r = field_word_offset(cx.decls, cx.src, tc.sns, tc.snl, fs, fl, deref(cx.mar)) }
   if r < 0 and ent.ek == 5 and ent.is_ref {
-    eta := slice_ann_elem_span(cx.src, ent.ns, ent.nl)
+    eta := lower_ctx::slice_elem_span(cx.src, ent.ns, ent.nl)
     if eta.n != 0 { r = field_word_offset(cx.decls, cx.src, eta.s, eta.n, fs, fl, deref(cx.mar)) }
   }
   ## SOUNDNESS (§8): a NEGATIVE offset means the field is not resolvable in the resolved element type —
@@ -13078,7 +13043,7 @@ deref_index_ptr_param_unresolved := fn(e : ptr(Expr), slots : ptr(SVec), src : p
   if ib.n == 0 { return false }
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, ib.s, ib.n)))
   if lower_ctx::streq(src, ent.ns, ent.nl, ib.s, ib.n) == false { return false }
-  eta := slice_ann_elem_span(src, ent.ns, ent.nl)   ## element text of the declared `s : Slice(<…>)`
+  eta := lower_ctx::slice_elem_span(src, ent.ns, ent.nl)   ## element text of the declared `s : Slice(<…>)`
   if eta.n < 4 { return false }
   str_at((src + eta.s), 4) == "ptr("
 }
@@ -16172,7 +16137,7 @@ slice_param_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       if bv.n == 0 { return CSpan(s = 0, n = 0) }
       ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
       if ent.ek != 5 or ent.is_ref == false or ent.sns != 1 or ent.snl != 1 { return CSpan(s = 0, n = 0) }
-      es := slice_ann_elem_span(cx.src, ent.ns, ent.nl)
+      es := lower_ctx::slice_elem_span(cx.src, ent.ns, ent.nl)
       if es.n != 0 and cli::mf_is_int_type(str_at((cx.src + es.s), es.n)) { return es }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -26097,7 +26062,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               bslot = bent.off
               b_snl = bent.snl
               b_estride = bent.estride
-              bent_slice_param_elem := slice_ann_elem_span(cx.src, bent.ns, bent.nl)
+              bent_slice_param_elem := lower_ctx::slice_elem_span(cx.src, bent.ns, bent.nl)
               ## A concrete Slice(u8) PARAM/LOCAL is still a two-word view, but its iterable element is one
               ## byte. Keep this text-path control correct beside the RA byte-load seam; arrays do not return a
               ## Slice element span here and remain on their existing word/aggregate branches.
@@ -26670,7 +26635,7 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
     svec_push(slots, SlotEntry(ns = pm.ns, nl = pm.nl, off = voff, sns = 1, snl = 1, ek = 5, estride = 1, eek = veek, is_ref = true))
     return
   }
-  raw_slice := slice_ann_elem_span(src, pm.ns, pm.nl)
+  raw_slice := lower_ctx::slice_elem_span(src, pm.ns, pm.nl)
   ## SUBSTITUTE a type-PARAM element (`Slice(T)` → `Slice(u64)` for this instance) via the same Subst
   ## as the whole-param path above. Without it a GENERIC `Slice(T)` param's element stayed `T` — matching
   ## no scalar/struct/enum — so the param fell through and mis-bound as a LOCAL array (`is_ref = false`):

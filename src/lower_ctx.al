@@ -572,7 +572,26 @@ pub slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
   if slice_scan_has(src, end, p, ":") == false { return CSpan(s = 0, n = 0) }
   p = p + 1
   while p < end and slice_scan_ws(src, end, p) { p = p + 1 }
-  if slice_scan_has(src, end, p, "Slice(") == false { return CSpan(s = 0, n = 0) }
+  if slice_scan_has(src, end, p, "Slice(") == false {
+    ## §7.2 slice-VARIADIC `name : ...T` -- the element type follows `...`. Recover T's span so a
+    ## `...Pt` / `...E` param reads its struct/enum element exactly like a `Slice(Pt)` param. A
+    ## bare `...` (spec §7.1 comptime variadic -- no element type, `)` right after) yields 0/0.
+    ## §7.3 confines the bare form to @abi(c) FFI inside an unchecked grant, so 0/0 there is the
+    ## specified answer, not a gap. This arm was x86_64's alone (#1067); the twins answering 0/0
+    ## for `...T` was the defect, not the safe default.
+    if slice_scan_has(src, end, p, "...") {
+      vs := p + 3
+      mut ve := vs
+      while ve < end {
+        c := str_at((src + ve), 1)
+        if c == ")" or c == "," or c == " " or c == "\n" or c == "\t" or c == "\r" { break }
+        ve = ve + 1
+      }
+      if ve == vs { return CSpan(s = 0, n = 0) }
+      return CSpan(s = vs, n = ve - vs)
+    }
+    return CSpan(s = 0, n = 0)
+  }
   es := p + 6
   mut ee := es
   while ee < end {
