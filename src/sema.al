@@ -4271,7 +4271,7 @@ field_path_root_var := fn(e : ptr(Expr)) -> VSpan {
 
 ## The spans of a bounded two-level field path `root.first.second`; {0,0,0,0,0,0} for any other place.
 NestedPath := struct { rs : usize, rn : usize, fs : usize, fl : usize, ss : usize, sl : usize }
-expr_field_base := fn(e : ptr(Expr)) -> ptr(Expr) {
+pub expr_field_base := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Field(base, fs, fl) => { base }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -5713,12 +5713,12 @@ callee_fn_name_count := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s 
 ## every parameter in its scalar category, so two matching signatures are unambiguously an ambiguity.
 ## Non-literals, qualified calls, generics, guarded declarations, and cross-module names are left to
 ## the existing fail-loud frontier rather than guessed, preventing a false reject from sema's coarser Ty.
-sema_int_overload_param := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+pub sema_int_overload_param := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   t := str_at((src + s), n)
   t == "u64" or t == "i64" or t == "usize" or t == "isize" or t == "u32" or t == "i32"
     or t == "u16" or t == "i16" or t == "u8" or t == "i8" or t == "bool" or t == "char"
 }
-sema_float_overload_param := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+pub sema_float_overload_param := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   t := str_at((src + s), n)
   t == "f64" or t == "f32"
 }
@@ -17277,7 +17277,7 @@ sema_guard_resolve_tp := fn(tp : ptr(SGuardTP), src : ptr(u8), ts : usize, tl : 
 }
 ## A comparison operator on two ints (24 `<` / 25 `>` / 26 `<=` / 27 `>=` / 20 `==` / 28 `!=`); 1 = true,
 ## 0 = false, -1 = not a comparison op. Byte-mirror of `lower::guard_cmp`.
-sema_guard_cmp := fn(op : i64, l : i64, r : i64) -> i64 {
+pub sema_guard_cmp := fn(op : i64, l : i64, r : i64) -> i64 {
   if op == 24 { if l < r { return 1 } return 0 }
   if op == 25 { if l > r { return 1 } return 0 }
   if op == 26 { if l <= r { return 1 } return 0 }
@@ -17486,7 +17486,7 @@ sema_default_int_array_arg_bad := fn(pat : Ty, arg : ptr(Expr), src : ptr(u8), l
   sema_is_scalar_name(en) and en != "i64" and en != "isize"
 }
 ## Map a `match typeinfo(T)` arm's variant name to a KIND value — byte-mirror of `lower::comptime_kind_of_name`.
-sema_comptime_kind_of_name := fn(src : ptr(u8), vs : usize, vl : usize) -> i64 {
+pub sema_comptime_kind_of_name := fn(src : ptr(u8), vs : usize, vl : usize) -> i64 {
   nm := str_at((src + vs), vl)
   if nm == "Struct" { return 2 }
   if nm == "Enum" { return 3 }
@@ -17638,7 +17638,7 @@ sema_guard_field_count := fn(e : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt::
 }
 ## The SINGLE trailing bool expr of a candidate NAMED predicate body (a trailing-expr body OR a lone
 ## `return <expr>`); null otherwise. Byte-mirror of `lower::guard_stmt_ret_expr`/`guard_pred_body_expr`.
-sema_guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
+pub sema_guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
   match deref(bs) {
     Stmt::Return(e, next) => {
       if not stmt_any(next) { return e }

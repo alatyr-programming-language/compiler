@@ -16845,13 +16845,13 @@ overload_args_match := fn(d : Decl, args_head : Option(ptr(mut Arg)), cx : ptr(L
               ## `h(u64, u64)` overload over `h(u64, A)` / `h(u64, B)` (both structs), rather than being an
               ## ambiguous wildcard. A NON-literal uninferable arg stays a wildcard (match anything).
               pb := base_type_name(cx.src, pm.ts, pm.tl)
-              if not is_int_scalar_type(cx.src, pb.s, pb.n) { return false }
+              if not sema::sema_int_overload_param(cx.src, pb.s, pb.n) { return false }
             } else if arg_is_float_literal(an.e) {
               ## a bare float literal (`2.0`) mirrors the integer case — it can only match a FLOAT scalar
               ## parameter, so `g(2.0)` selects `g(f64)` over `g(u64)` rather than matching both (which left
               ## the call ambiguous → no suffix → an undefined bare callee label at link).
               pb := base_type_name(cx.src, pm.ts, pm.tl)
-              if not is_float_scalar_type(cx.src, pb.s, pb.n) { return false }
+              if not sema::sema_float_overload_param(cx.src, pb.s, pb.n) { return false }
             } else if str_lit_info(an.e).is_s {
               ## a bare STRING literal (`"ok"`) mirrors the integer/float cases: it carries no type span
               ## (`expr_type_span` is 0/0 for a `StrLit`), so without this it matched EVERY parameter as a
@@ -16901,21 +16901,7 @@ arg_is_float_literal := fn(e : ptr(Expr)) -> bool {
   }
 }
 
-## Is the type name `[s, s+n)` a built-in INTEGER / bool scalar (the types a bare integer literal
-## may bind to)? Excludes struct / enum / str / ptr / float — matching how a default-int literal
-## lowers as a word-sized integer.
-is_int_scalar_type := fn(src : ptr(u8), s : usize, n : usize) -> bool {
-  t := str_at((src + s), n)
-  t == "u64" or t == "i64" or t == "usize" or t == "isize" or t == "u32" or t == "i32"
-    or t == "u16" or t == "i16" or t == "u8" or t == "i8" or t == "bool" or t == "char"
-}
 
-## Is the type name `[s, s+n)` a built-in FLOAT scalar (`f32`/`f64`) — the types a bare float literal
-## may bind to? The float mirror of `is_int_scalar_type`.
-is_float_scalar_type := fn(src : ptr(u8), s : usize, n : usize) -> bool {
-  t := str_at((src + s), n)
-  t == "f64" or t == "f32"
-}
 
 ## Resolve an overloaded CALL to the UNIQUE decl index in the overload set (same name + module,
 ## non-generic, arity == nargs) whose parameter types match every inferable argument (§1 item 3).
@@ -24676,25 +24662,6 @@ comptime_type_kind := fn(it_s : usize, it_l : usize, decls : ptr(rt::Vec), src :
   return 0
 }
 
-## Map a `comptime match typeinfo(T)` arm's variant name to a KIND value (see `comptime_type_kind`);
-## -1 for an unrecognized name.
-comptime_kind_of_name := fn(src : ptr(u8), vs : usize, vl : usize) -> i64 {
-  nm := str_at((src + vs), vl)
-  if nm == "Struct" { return 2 }
-  if nm == "Enum" { return 3 }
-  if nm == "Array" { return 5 }
-  if nm == "Scalar" { return 0 }
-  if nm == "Brand" { return 6 }
-  if nm == "Tuple" { return 7 }
-  ## Pointer/Str/Function/Union (appendix §4.1) — same KIND integers `comptime_type_kind` returns.
-  ## `Union` (raw union, Types §6.3) now parses and `comptime_type_kind` yields 11 for it, so a
-  ## `match typeinfo(U) { Union(_) => … }` arm is live (was inert while union types were unparsed).
-  if nm == "Pointer" { return 8 }
-  if nm == "Str" { return 9 }
-  if nm == "Function" { return 10 }
-  if nm == "Union" { return 11 }
-  return 0 - 1
-}
 
 ## The NUMERIC sub-kind of a SCALAR type `T` (appendix §4.1): `Bool`=1, `Char`=2, signed `Int`=3,
 ## `Float`=4, everything else (unsigned `uN`/`usize`/`bitsN`) = 0. `comptime_type_kind` collapses
@@ -24864,39 +24831,10 @@ guard_expr_num := fn(e : ptr(Expr)) -> i64 {
   match deref(e) { Expr::Num(v, s, n) => { i64(v) } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 } }
 }
 
-## Apply a comparison operator (24 `<`, 25 `>`, 26 `<=`, 27 `>=`, 20 `==`, 28 `!=`) to two integers;
-## 1 = true, 0 = false, -1 = not a comparison op.
-guard_cmp := fn(op : i64, l : i64, r : i64) -> i64 {
-  if op == 24 { if l < r { return 1 } return 0 }
-  if op == 25 { if l > r { return 1 } return 0 }
-  if op == 26 { if l <= r { return 1 } return 0 }
-  if op == 27 { if l >= r { return 1 } return 0 }
-  if op == 20 { if l == r { return 1 } return 0 }
-  if op == 28 { if l != r { return 1 } return 0 }
-  return 0 - 1
-}
 
-## The SINGLE trailing bool expression of a candidate NAMED predicate `fn(T:type,…) -> bool { <expr> }`
-## (CT-4 "a constraint is an ordinary comptime fn(type) bool"). A foldable predicate body is exactly ONE
-## comptime-boolean expression — either the trailing return expr (`body_stmts == 0`, `value` = the expr)
-## or a bare `return <expr>` as the SOLE statement. Anything with locals / control flow (a non-empty
-## `body_stmts` that is not a lone `return`) is NOT a single foldable expr → `0` (the caller FAIL-SAFES to
-## "cannot fold" = the guard is kept ACTIVE; a full comptime fn-body interpreter is a separate build).
-guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
-  match deref(bs) {
-    Stmt::Return(e, next) => {
-      if not stmt_any(next) { return e }
-      unchecked bitcast(ptr(Expr), 0)
-    }
-    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
-      | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-      | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-      | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { unchecked bitcast(ptr(Expr), 0) }
-  }
-}
 guard_pred_body_expr := fn(bs : Option(ptr(mut Stmt)), val : ptr(Expr)) -> ptr(Expr) {
   if not stmt_any(bs) { return val }   ## trailing-expr body (no statements)
-  guard_stmt_ret_expr(stmt_at(bs, "guard predicate body: empty list"))   ## else must be a lone `return <expr>`
+  sema::sema_guard_stmt_ret_expr(stmt_at(bs, "guard predicate body: empty list"))   ## else must be a lone `return <expr>`
 }
 
 ## The RESOLVED concrete type a `typeinfo(X)` comptime call names, threaded through the instance bindings
@@ -24945,12 +24883,6 @@ guard_type_member_count := fn(rs : usize, rn : usize, decls : ptr(rt::Vec), src 
   return -1
 }
 
-## The base expression / tail field-name of an `Expr::Field(base, fs, fl)` (else null / `CSpan(0,0)`) — the
-## single-`match` accessors that let `guard_field_count` walk `typeinfo(T).fields.len` (a nested Field over
-## a Field over the `typeinfo` call) without a nested match.
-guard_field_base := fn(e : ptr(Expr)) -> ptr(Expr) {
-  match deref(e) { Expr::Field(base, fs, fl) => { base } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) } }
-}
 guard_field_tail := fn(e : ptr(Expr)) -> CSpan {
   match deref(e) { Expr::Field(base, fs, fl) => { CSpan(s = fs, n = fl) } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CSpan(s = 0, n = 0) } }
 }
@@ -24966,9 +24898,9 @@ guard_field_count := fn(e : ptr(Expr), tp : ptr(GuardTP), decls : ptr(rt::Vec), 
   tail := guard_field_tail(e)
   if tail.n == 0 { return -1 }
   tnm := str_at((src + tail.s), tail.n)
-  base := guard_field_base(e)
+  base := sema::expr_field_base(e)
   if tnm == "len" {                                   ## `typeinfo(T).fields.len` / `.variants.len`
-    inner := guard_field_base(base)                   ## descend past `.fields`/`.variants` to `typeinfo(T)`
+    inner := sema::expr_field_base(base)                   ## descend past `.fields`/`.variants` to `typeinfo(T)`
     if unchecked bitcast(usize, inner) == 0 { return -1 }
     rt := guard_typeinfo_arg_type(inner, tp, src, a)
     return guard_type_member_count(rt.s, rt.n, decls, src)
@@ -25070,13 +25002,13 @@ guard_fold_inst := fn(cond : ptr(Expr), tp : ptr(GuardTP), decls : ptr(rt::Vec),
       ## `size(U) <op> N` — a comparison whose LHS is a `size(…)` comptime call and RHS an integer literal.
       lsz := guard_size_operand(l, tp, decls, src, a)
       if lsz >= 0 and parser::expr_is_num(r) {
-        return guard_cmp(i64(op), lsz, guard_expr_num(r))
+        return sema::sema_guard_cmp(i64(op), lsz, guard_expr_num(r))
       }
       ## `typeinfo(U).fields.len <op> N` — a structural FIELD/VARIANT-COUNT bound (appendix §4.1's
       ## `TypeInfo.Struct{fields:[Field]}` / `.Enum{variants:[Variant]}`), the count folded per-instance.
       lcnt := guard_field_count(l, tp, decls, src, a)
       if lcnt >= 0 and parser::expr_is_num(r) {
-        return guard_cmp(i64(op), lcnt, guard_expr_num(r))
+        return sema::sema_guard_cmp(i64(op), lcnt, guard_expr_num(r))
       }
       return -1
     }
@@ -25110,7 +25042,7 @@ guard_fold_inst := fn(cond : ptr(Expr), tp : ptr(GuardTP), decls : ptr(rt::Vec),
       if k < 0 { return -1 }
       am := deref(arm_p(ast::arm_at(arms_head, "lower: comptime match has no arms")))
       if am.vl != 0 {
-        want := comptime_kind_of_name(src, am.vs, am.vl)
+        want := sema::sema_comptime_kind_of_name(src, am.vs, am.vl)
         if want >= 0 {
           if k == want { return 1 }
           return 0
@@ -26571,7 +26503,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 Some(carmq) => {
                   cam := deref(arm_p(carmq))
                   if cam.wild != 0 { cwild = Option.Some(carmq) }
-                  else if comptime_kind_of_name(cx.src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
+                  else if sema::sema_comptime_kind_of_name(cx.src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
                   else if lower_layout::ct_num_kind_of_name(cx.src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
                   carm = cam.next
                 }
