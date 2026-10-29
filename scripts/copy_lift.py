@@ -272,8 +272,33 @@ def classify_copies(root):
             if p is None:
                 continue
             nb, nc = _norm_body(name, d['body']), _code(name, d['body'])
-            hit_shape = [s for s in shared.get((p, r), []) if nb == s[1]]
+            # Candidates are matched on `_code`, NOT on `_norm_body`. `_norm_body` keeps `pub`, and a
+            # shared home is usually `pub` while the emitter's copy is private — so matching on it made
+            # the most natural new copy INVISIBLE to this check, in neither EXACT nor SUPERSET. Proven
+            # on a planted private duplicate of `pub lower_ctx::streq`: the detector reported 19 with
+            # new=0, and the first differing byte was the `pub ` at offset 0. `_code` strips `pub` and
+            # `;`, which are exactly the two spellings that hide a real copy (see `_code`).
+            cands = [s for s in shared.get((p, r), []) if nc == s[2]]
+            hit_shape = cands
             if not hit_shape:
+                # SUPERSET, defined strictly: same signature, and the emitter's code contains every token
+                # of the home's code plus more — "does strictly more", not "is vaguely similar". A
+                # Jaccard floor was measured and rejected (1068 noise hits at 0.6); token containment is
+                # decidable and reports nothing unless one body really is the other with additions.
+                sup_hits = []
+                for s in shared.get((p, r), []):
+                    ht, et = s[2].split(), nc.split()
+                    if len(et) > len(ht) and ht == [t for t in et if t in ht] and ht == et[:len(ht)] \
+                       and all(t in et for t in ht):
+                        sup_hits.append(s)
+                if not sup_hits:
+                    continue
+                sd = sup_hits[0][0]
+                sup.append({'name': name, 'file': d['file'], 'line': d['start'],
+                           'shared_file': sd['file'], 'shared_line': sd['start'],
+                           'pub': False, 'mark': '',
+                           'differs': ('emitter body does strictly more than %s:%s — NOT deletable '
+                                       'by repointing' % (sd['file'], sd['start']))})
                 continue
             sd, _, sc = shared[(p, r)][0]
             code_hits = [s for s in hit_shape if nc == s[2]]
@@ -663,6 +688,25 @@ def self_test():
         and 'after_it' not in got['one_liner']['body'])
     chk('and the definition after it is still found, not swallowed',
         'after_it' in got and got['after_it']['start'] > got['one_liner']['end'])
+    # ── the `pub` hole. Matching candidates on `_norm_body` (which KEEPS `pub`) hid the single most
+    # natural shape of a new private copy: the shared home is `pub` (that is why it is callable) and the
+    # emitter's copy is private. Proven on main 99476a5 with a planted private duplicate of
+    # `pub lower_ctx::streq` — the detector reported the baseline count unchanged, new=0, and the first
+    # differing byte was `pub ` at offset 0. The count of exact private copies on main was 19 by that
+    # census and **27** once candidates are matched on `_code`; 8 copies had been invisible, including
+    # `a64_fn_is_naked`/`pub fn_is_naked`, `ptr_scan_has`/`pub slice_scan_has` and
+    # `expr_is_zero`/`pub ex_is_zero_lit`. A check that misses the commonest shape is not a check.
+    shutil.rmtree(t)
+    t = tempfile.mkdtemp()
+    os.makedirs(os.path.join(t, 'src'))
+    w('lower_ctx.al', 'pub shared_pub_thing := fn(a : usize) -> usize { a + 2 }\n')
+    w('lower.al', 'private_copy_thing := fn(a : usize) -> usize { a + 2 }\n')
+    found = {e['name'] for e in private_exact(t)}
+    chk('a PRIVATE copy of a PUB shared function is FOUND (the pub hole)',
+        'private_copy_thing' in found)
+    chk('and it names the pub home, so the repoint target compiles',
+        any(e['name'] == 'private_copy_thing' and e['shared_file'] == 'lower_ctx.al'
+            for e in private_exact(t)))
     shutil.rmtree(t)
     print('copy lift self-test: %d checks, %d failed' % (seen_n[0], bad))
     return 0 if bad == 0 else 1

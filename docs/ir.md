@@ -376,6 +376,25 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   the floor or delete the check. Exact equality is the line that can be held, and it costs nothing to hold
   at 19. `idiom_gate.sh` stays the reporting-only duplicate-decision detector AGENTS.md makes it — this
   refuses one narrow shape it cannot see, and does not duplicate its remit.
+
+- **CORRECTION, measured: the number above is 19 and the true number on `main` is 27.** The census that
+  produced 19 matched candidate pairs on `_norm_body`, which **keeps `pub`**. A shared home is normally
+  `pub` — that is why it is callable — while the emitter's copy is private, so the commonest shape of a
+  new private copy was invisible to the check, in neither EXACT nor SUPERSET. Found by doing the thing
+  the catalog now documents: planting a private duplicate of `pub lower_ctx::streq` with the documented
+  `## copy-ok:` marker. The detector answered `new=0`, and the first differing byte between the two
+  normalized bodies was the `pub ` at **offset 0**. Matching candidates on `_code` (which strips `pub`
+  and `;`, the two spellings `_code` exists to strip) finds **27**, so **8 copies had been invisible**:
+  `a64_fn_is_naked`≡`pub fn_is_naked` (`lower_asm.al:56`), `rv_fn_is_naked`≡the same, `ptr_scan_has`≡
+  `pub slice_scan_has` (`lower_ctx.al:548`), `ptr_scan_ws`, `expr_is_zero`≡`pub ex_is_zero_lit`
+  (`lower_layout.al:3835`), `tuple_standard_byte_bytes`, `param_tuple_open`, `comptime_num_kind_of_name`.
+  Three were read side by side against their homes and are genuine, not noise. Consequence for the open
+  slices: #1110–#1116 delete **12** names, so the honest residual after all of them is **15**, not 7 —
+  and 8 of those 15 are new work nobody had listed. The baseline is regenerated to all 27 so the gate
+  holds the true count and refuses a 28th; two self-test checks now pin the hole (32 checks, 0 failed
+  with the fix, and **both new checks FAIL when it is reverted** — the control was run, not assumed).
+  This is the same lesson as §2.4.1 one step earlier: an instrument that cannot see the commonest case
+  does not under-report a number, it licenses the copies it cannot see.
 - **the x86 variadic branch is not incidental, and merging it is a behaviour change on three backends —
   measured, so the next slice can be ordered.** The band note at `lower_ctx.al:528` says the open work is
   "giving this scan the variadic branch without changing what the three twins answer today". Read as a

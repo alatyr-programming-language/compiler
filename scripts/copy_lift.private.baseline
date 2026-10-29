@@ -1,42 +1,26 @@
-# scripts/copy_lift.private.baseline — the ceiling for EXACT private copies of shared decisions.
-# Held by `scripts/copy_lift.py --gate`. MEASURED at 99476a5, not chosen:
-#   python3 scripts/copy_lift.py --private-copies --write-baseline
-#
-# An EXACT private copy is a function in an EMITTER whose normalized signature AND executable code
-# equal a function in shared code, matched by SHAPE and not by the `FAMILIES` name list. Name
-# matching is what `FAMILIES` already does, and that is why criterion 2 was unenforced: pasting
-# `driver::streq` verbatim into `lower.al` under a fresh name left `--gate` at rc=0 with zero
-# mentions of it (measured on this tree before the detector existed).
-#
-# WHY AN ADDITION RULE WITH A BASELINE: all 19 exist on main today, so refusing exact copies
-# outright would turn the gate red before any new defect existed — a broken instrument, not evidence.
-# AGENTS.md "Strict forms" is the same shape: refuse only a NEW occurrence, acknowledge what cannot
-# move yet with `## copy-ok: #<issue> — <why>`. Held by NAME, so a removal is auditable and one
-# copy swapped for another is not.
-#
-# CLASS, measured per name — the column that tells the next agent what is safe:
-#   A  a PUB shared definition with IDENTICAL code exists -> delete the copy, repoint at it. Safe.
-#   B  duplicated only across PRIVATE module copies, no pub home -> lift one to lower_ctx, then
-#      delete the rest. Two steps, and the lift is the reviewed part.
-#   C  a PUB version exists but its CODE DIFFERS -> NOT deletable by repointing; reconciling the
-#      two implementations is a decision, and a naive "lift it" silently changes behaviour.
-# Columns: class<TAB>name<TAB>emitter<TAB>home<TAB>call-sites-in-the-emitter
-private=19
-# A=2 (187 call sites)  B=16 (53 call sites)  C=1 (257 call sites)
+private=27
 A	decl_at	lower.al:13328	pub lower_ctx.al:33	96
 A	decl_get	lower.al:13330	pub lower_ctx.al:34	91
 B	colon_pos	lower.al:437	private driver.al:1245	11
 B	is_builtin_int_name	lower.al:787	private cli.al:3490	5
 B	_lnhash	lower.al:1948	private lower_layout.al:410	3
-B	gref_ident_byte	lower.al:2109	private sema.al:19617	3
+B	gref_ident_byte	lower.al:2109	private lower_layout.al:657	3
 B	vis_show_span	lower.al:2229	private lower_layout.al:353	6
 B	vis_show_str	lower.al:2232	private lower_layout.al:356	12
+B	rv_fn_is_naked	riscv64.al:7663	private lower_asm.al:56	1
+B	a64_fn_is_naked	aarch64.al:8650	private lower_asm.al:56	1
 B	is_dyn_type	lower.al:9494	private driver.al:2009	1
+B	ptr_scan_has	lower.al:12514	private lower_ctx.al:548	14
+B	ptr_scan_ws	lower.al:12519	private lower_ctx.al:555	12
 B	tuple_first_start	lower.al:15577	private lower_layout.al:1841	1
-B	expr_is_int_lit	lower.al:16313	private sema.al:13528	0
+B	expr_is_zero	lower.al:15970	private lower_layout.al:3835	8
+B	expr_is_int_lit	lower.al:16313	private lower_layout.al:3830	0
 B	is_int_scalar_type	lower.al:17015	private sema.al:5716	1
 B	is_float_scalar_type	lower.al:17023	private sema.al:5721	1
+B	tuple_standard_byte_bytes	lower.al:21541	private lower_layout.al:1900	3
+B	param_tuple_open	lower.al:21755	private lower_layout.al:3733	2
 B	comptime_kind_of_name	lower.al:24822	private sema.al:17489	2
+B	comptime_num_kind_of_name	lower.al:24859	private lower_layout.al:3534	1
 B	guard_expr_is_num	lower.al:25014	private parser.al:2789	2
 B	guard_cmp	lower.al:25023	private sema.al:17280	2
 B	guard_stmt_ret_expr	lower.al:25039	private sema.al:17641	1
