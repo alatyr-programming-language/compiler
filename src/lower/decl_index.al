@@ -91,7 +91,7 @@ pub build_decl_name_hash := fn(decls : ptr(rt::Vec), src : ptr(u8), in out mar :
   mut nconv := 0
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     rt::rec_set(unchecked bitcast(ptr(mut u8), base), i, name_hash(src, d.name_start, d.name_len))
     mut cv := 0
     if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { cv = 1 }

@@ -612,7 +612,7 @@ named_op_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), name : str, ts : us
     i := dni_at(cnt, j)
     j += 1
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn and d.is_generic == false and d.arity == 2 and str_at((src + d.name_start), d.name_len) == name and fn_is_inline(src, d.name_start, d.name_len) {
         fp := first_param_type_span(d, a, src)
         if fp.n != 0 and norm_type_name(str_at((src + fp.s), fp.n)) == ont { return i64(i) }
@@ -639,7 +639,7 @@ named_op_decl_idx_noinline := fn(decls : ptr(rt::Vec), src : ptr(u8), name : str
     i := dni_at(cnt, j)
     j += 1
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn and d.is_generic == false and d.arity == 2 and str_at((src + d.name_start), d.name_len) == name and not fn_is_inline(src, d.name_start, d.name_len) {
         fp := first_param_type_span(d, a, src)
         if fp.n != 0 and norm_type_name(str_at((src + fp.s), fp.n)) == ont { return i64(i) }
@@ -696,7 +696,7 @@ generic_op_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), name : str, ts : 
     i := dni_at(cnt, jc)
     jc += 1
     if dnh_skip(cnt, i, th) == false {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.is_fn and d.is_generic and str_at((src + d.name_start), d.name_len) == name and fn_is_inline(src, d.name_start, d.name_len) == want_inline {
       mut nct := 0
       mut nval := 0
@@ -921,7 +921,7 @@ callee_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
   while j < je {
     i := dni_at(cnt, j)
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, cs, cl) {
         if bare and mod_head_matches(src, d.mod_start, d.mod_len, ms, ml) { return i64(i) }
         hits += 1
@@ -968,7 +968,7 @@ binding_head_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : us
   mut tl := 0
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0
        and mod_seg_eq(src, d.mod_start, d.mod_len, cs, cl) {
       if d.name_len == 0 {
@@ -997,7 +997,7 @@ binding_rhs_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
   cnt := rt::vec_len(deref(decls))
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0 and d.name_len != 0
        and mod_seg_eq(src, d.mod_start, d.mod_len, cs, cl)
        and streq(src, d.name_start, d.name_len, ns, nl) {
@@ -1074,7 +1074,7 @@ qual_head_pick := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize
     k := dni_at(cnt, j)
     j += 1
     if dnh_skip(cnt, k, th) == false {
-      d := deref(decl_get(decls, k))
+      d := deref(lower_ctx::decl_get(decls, k))
       if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, ts, tl) {
         r := mod_head_rank(src, d.mod_start, d.mod_len, hs, hl, cs, cl)
         if r > best {
@@ -1082,7 +1082,7 @@ qual_head_pick := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize
           res = i64(k)
           lenient_other = false
         } else if r == best and r == 0 and res >= 0 {
-          rd := deref(decl_get(decls, usize(res)))
+          rd := deref(lower_ctx::decl_get(decls, usize(res)))
           if mod_seg_eq(src, rd.mod_start, rd.mod_len, d.mod_start, d.mod_len) == false { lenient_other = true }
     }
   }
@@ -1147,7 +1147,7 @@ callee_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usi
   while j < je {
     i := dni_at(cnt, j)
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, cs, cl) {
         if mod_head_matches(src, d.mod_start, d.mod_len, ms, ml) { return false }
         if mod_anc_rank_from(src, d.mod_start, d.mod_len, ms, ml) >= 0 { return false }
@@ -1176,7 +1176,7 @@ callee_arity_collision := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl
     i := dni_at(cnt, j)
     j += 1
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, cs, cl)
          and mod_head_matches(src, d.mod_start, d.mod_len, ms, ml) == false
          and mod_anc_rank_from(src, d.mod_start, d.mod_len, ms, ml) < 0 {
@@ -1186,7 +1186,7 @@ callee_arity_collision := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl
           q := dni_at(cnt, k)
           k += 1
           if q != i and dnh_skip(cnt, q, th) == false {
-            e := deref(decl_get(decls, q))
+            e := deref(lower_ctx::decl_get(decls, q))
             if (e.kind == 1 or e.kind == 4) and streq(src, e.name_start, e.name_len, cs, cl)
                and mod_head_matches(src, e.mod_start, e.mod_len, ms, ml) == false
                and mod_anc_rank_from(src, e.mod_start, e.mod_len, ms, ml) < 0
@@ -1225,7 +1225,7 @@ callee_variadic_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : 
   while j < je {
     i := dni_at(cnt, j)
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         mut p := d.params_head
         mut isv := false
@@ -1249,7 +1249,7 @@ callee_variadic_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : 
 ## The number of declared parameters of the fn `Decl` at index `i` (a generic's leading comptime
 ## type param counts, matching how a call site spells it).
 fn_param_count := fn(decls : ptr(rt::Vec), i : usize) -> usize {
-  d := deref(decl_get(decls, i))
+  d := deref(lower_ctx::decl_get(decls, i))
   mut p := d.params_head
   mut n : usize = 0
   loop {
@@ -1293,7 +1293,7 @@ variadic_print_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl 
   }
   si := callee_decl_idx(decls, src, cs, cl, ms, ml)
   if si >= 0 and si != vi and na <= fn_param_count(decls, usize(si)) {
-    sd := deref(decl_get(decls, usize(si)))
+    sd := deref(lower_ctx::decl_get(decls, usize(si)))
     if mod_head_matches(src, sd.mod_start, sd.mod_len, ms, ml) { return -1 }
   }
   vi
@@ -1306,7 +1306,7 @@ decl_by_lit_name := fn(decls : ptr(rt::Vec), src : ptr(u8), nm : str) -> i64 {
   mut res := -1
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.is_fn and str_at((src + d.name_start), d.name_len) == nm { res = i64(i) }
     i += 1
   }
@@ -1749,7 +1749,7 @@ derive_cmp_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), want_lt : bool) -> i6
   cnt := rt::vec_len(deref(decls))
   mut res := 0 - 1
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 and d.is_generic and d.arity == 3 {
       nm := str_at((src + d.name_start), d.name_len)
       if want_lt {
@@ -2051,7 +2051,7 @@ gref_best_rank := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize
   while j < je {
     i := dni_at(cnt, j)
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0
          and streq(src, d.name_start, d.name_len, ns, nl) {
         r := mod_anc_rank(src, d.mod_start, d.mod_len)
@@ -2097,7 +2097,7 @@ global_ref_candidate := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl, s : us
   mut hits := 0
   mut i : usize = 0
   while i < cnt {
-    q := deref(decl_get(decls, i))
+    q := deref(lower_ctx::decl_get(decls, i))
     if q.is_fn == false and q.kind == 0 and q.ret_tl == 0 and q.arity == 0
        and streq(src, q.name_start, q.name_len, s, n) { hits += 1 }
     i += 1
@@ -2165,7 +2165,7 @@ gref_names_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
   while j < je {
     i := dni_at(cnt, j)
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0
          and streq(src, d.name_start, d.name_len, g.ns, g.nl)
          and unchecked bitcast(usize, d.value) != 0
@@ -2264,7 +2264,7 @@ vis_check_pair := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize
     i := dni_at(cnt, j)
     j += 1
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if (d.kind == k1 or d.kind == k2) and d.name_len != 0
          and streq(src, d.name_start, d.name_len, ns, nl)
          and mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl)
@@ -2313,7 +2313,7 @@ vis_check_reexport := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : u
     i := dni_at(cnt, j)
     j += 1
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if d.name_len != 0 and streq(src, d.name_start, d.name_len, ns, nl)
          and mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl)
          and decl_is_pub(src, d.name_start) == false {
@@ -2381,7 +2381,7 @@ vis_check_program := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
   cnt := rt::vec_len(deref(decls))
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     ## a fn SIGNATURE: each parameter type, then the return type
     mut pp := d.params_head
     loop {
@@ -2443,7 +2443,7 @@ module_const_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   while j < je {
     i := dni_at(cnt, j)
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       ## exclude a MUTABLE global (`mut NAME := …`) — that is runtime .data storage, not a
       ## compile-time constant; `is_module_mut_global` claims it and the read/write paths address it.
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and n != 0
@@ -2479,7 +2479,7 @@ mut_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   while j < je {
     i := dni_at(cnt, j)
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and n != 0
          and global_ref_candidate(decls, src, d, s, n) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
          and local_is_mut(src, d.name_start) {
@@ -2508,7 +2508,7 @@ const_array_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
   while j < je {
     i := dni_at(cnt, j)
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and n != 0
          and global_ref_candidate(decls, src, d, s, n) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
          and local_is_mut(src, d.name_start) == false {
@@ -2752,7 +2752,7 @@ global_array_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl 
   while j < je {
     i := dni_at(cnt, j)
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if global_ref_candidate(decls, src, d, ns, nl) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl) {
         return i64(i)
       }
@@ -2769,7 +2769,7 @@ global_array_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl 
 global_array_byte_eek := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> u8 {
   di := global_array_decl_idx(decls, src, ns, nl)
   if di < 0 { return 0 }
-  d := deref(decl_get(decls, usize(di)))
+  d := deref(lower_ctx::decl_get(decls, usize(di)))
   fixed_array_byte_eek(src, d.name_start, d.name_len)
 }
 ## #823 — the NICHE-FOLDED `Option(ptr(T))` type a module-level `mut` global `[ns, ns+nl)` is declared
@@ -2780,7 +2780,7 @@ global_folded_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
   if not is_module_mut_global(decls, src, ns, nl) { return CSpan(s = 0, n = 0) }
   di := global_array_decl_idx(decls, src, ns, nl)
   if di < 0 { return CSpan(s = 0, n = 0) }
-  d := deref(decl_get(decls, usize(di)))
+  d := deref(lower_ctx::decl_get(decls, usize(di)))
   lt := local_type_span(src, d.name_start, d.name_len)
   if is_niche_folded(src, lt.s, lt.n) { return CSpan(s = lt.s, n = lt.n) }
   CSpan(s = 0, n = 0)
@@ -2792,7 +2792,7 @@ global_folded_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
 global_folded_elem_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
   di := global_array_decl_idx(decls, src, ns, nl)
   if di < 0 { return CSpan(s = 0, n = 0) }
-  d := deref(decl_get(decls, usize(di)))
+  d := deref(lower_ctx::decl_get(decls, usize(di)))
   ## The same annotation question a LOCAL `[Option(ptr(T)); N]` asks (#808), at the declaration's name.
   folded_array_elem_span(src, d.name_start, d.name_len)
 }
@@ -2804,7 +2804,7 @@ global_array_len := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
   if ai.is_a { return ai.nel }
   di := global_array_decl_idx(decls, src, ns, nl)
   if di < 0 { return 0 }
-  d := deref(decl_get(decls, usize(di)))
+  d := deref(lower_ctx::decl_get(decls, usize(di)))
   lt := local_type_span(src, d.name_start, d.name_len)
   if lt.n != 0 and array_elem_span(src, lt.s, lt.n).n != 0 { return parse_arr_len(src, lt.s, lt.n) }
   0
@@ -2824,7 +2824,7 @@ is_module_mut_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
   while j < je {
     i := dni_at(cnt, j)
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0
          and global_ref_candidate(decls, src, d, s, n) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
          and local_is_mut(src, d.name_start) {
@@ -2847,7 +2847,7 @@ emit_global_label := fn(in out sb : strbuf::StrBuf, decls : ptr(rt::Vec), src : 
   while j < je {
     i := dni_at(cnt, j)
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       ## `global_needs_storage` covers a `mut` global AND a const ARRAY (both get a `.data` label);
       ## a scalar/struct const is inlined (no label), so it is correctly excluded.
       if global_ref_candidate(decls, src, d, s, n) and streq(src, d.name_start, d.name_len, gr.ns, gr.nl)
@@ -3404,8 +3404,8 @@ agg_members_agree := fn(decls : ptr(rt::Vec), src : ptr(u8), da : i64, db : i64)
   if da < 0 { return true }
   if db < 0 { return true }
   if da == db { return true }
-  wa := deref(decl_get(decls, usize(da)))
-  wb := deref(decl_get(decls, usize(db)))
+  wa := deref(lower_ctx::decl_get(decls, usize(da)))
+  wb := deref(lower_ctx::decl_get(decls, usize(db)))
   mut fa := wa.fields_head
   mut fb := wb.fields_head
   mut agree := true
@@ -4139,7 +4139,7 @@ emit_require_predicate := fn(pred : CSpan, under : CSpan, arg_off : i64, in out 
   if inline == false {
     pi := callee_decl_idx(cx.decls, cx.src, pred.s, pred.n, cx.mod_s, cx.mod_l)
     if pi < 0 { panic("selfhost: aggregate require predicate is not an in-scope function") }
-    pd := deref(decl_get(cx.decls, usize(pi)))
+    pd := deref(lower_ctx::decl_get(cx.decls, usize(pi)))
     if not pd.is_fn or pd.arity != 1 { panic("selfhost: aggregate require predicate must be an ordinary one-argument function") }
     pm := deref(param_p(param_at(pd.params_head, "selfhost: aggregate require predicate has no parameter")))
     pbn := base_type_name(cx.src, pm.ts, pm.tl)
@@ -8742,7 +8742,7 @@ call_ret_struct_span_sub := fn(inner : ptr(Expr), decls : ptr(rt::Vec), src : pt
         i := dni_at(cnt, jc)
         jc = jc + 1
         if dnh_skip(cnt, i, th) == false {
-          d := deref(decl_get(decls, i))
+          d := deref(lower_ctx::decl_get(decls, i))
           if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, nm.s, nm.n) { ci = i64(i) }
         }
       }
@@ -8830,7 +8830,7 @@ fn_decl_idx_by_name := fn(decls : ptr(rt::Vec), src : ptr(u8), nm : CSpan) -> i6
     i := dni_at(cnt, jc)
     jc = jc + 1
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, nm.s, nm.n) { ci = i64(i) }
     }
   }
@@ -8968,7 +8968,7 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
         i := dni_at(cnt, jc)
         jc = jc + 1
         if dnh_skip(cnt, i, th) == false {
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           ci = i64(i)
           if d.arity == nargs {
@@ -9566,7 +9566,7 @@ lam_idx_by_fnpos := fn(decls : ptr(rt::Vec), fnpos : usize) -> i64 {
   mut res : i64 = 0 - 1
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.name_len == 0 and d.name_start == fnpos { res = i64(i) }
     i = i + 1
   }
@@ -9575,7 +9575,7 @@ lam_idx_by_fnpos := fn(decls : ptr(rt::Vec), fnpos : usize) -> i64 {
 ## The NAME span of a lifted lambda's LAST parameter (the single trailing capture, this slice), given
 ## the lambda decl index; empty if it has no params.
 lam_last_param_span := fn(decls : ptr(rt::Vec), lidx : usize) -> CSpan {
-  d := deref(decl_get(decls, lidx))
+  d := deref(lower_ctx::decl_get(decls, lidx))
   mut pp := d.params_head
   mut r := CSpan(s = 0, n = 0)
   loop {
@@ -9593,7 +9593,7 @@ lam_last_param_span := fn(decls : ptr(rt::Vec), lidx : usize) -> CSpan {
 ## FN-11 multi-capture: the NAME span of the lifted lambda's param at 0-based index `idx` (empty if out
 ## of range). The trailing capture params are the LAST `ncap` of these, in append (capture) order.
 lam_param_span_at := fn(decls : ptr(rt::Vec), lidx : usize, idx : usize) -> CSpan {
-  d := deref(decl_get(decls, lidx))
+  d := deref(lower_ctx::decl_get(decls, lidx))
   mut pp := d.params_head
   mut i : usize = 0
   mut r := CSpan(s = 0, n = 0)
@@ -10934,7 +10934,7 @@ float_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool
         i := dni_at(cnt, jc)
         jc = jc + 1
         if dnh_skip(cnt, i, th) == false {
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           if fn_returns_float(d, src) { res = true }
           ## a GENERIC `-> T` callee instantiated at `f64`/`f32` (see `gen_ret_targ_float`). `src/`
@@ -11065,7 +11065,7 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
   ## so no `src/lib` call resolves here (its only @convert `to_char` targets the brand `char`).
   cvi0 := convert_callee_idx(cx.decls, cx.src, cs, cl)
   if cvi0 >= 0 {
-    cvd := deref(decl_get(cx.decls, usize(cvi0)))
+    cvd := deref(lower_ctx::decl_get(cx.decls, usize(cvi0)))
     cx.call_cidx = cvi0
     sc_shift0 := if cx.sret_call >= 0 { 1 } else { 0 }
     emit_call_args(args_head, -1, -1, -1, nargs, sb, cx, nl)
@@ -13326,7 +13326,6 @@ var_ptrstruct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSp
 ## top-of-block address). `T : type` arg0 lets `call_first_struct_span` recognize `deref(decl_at(T,h))`
 ## as a struct read (the `get(T,…)` shape), so the read deref-COPIES the record into a local.
 ## a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
-decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { hh := rt::vec_get(deref(decls), i) ; return lower_ctx::decl_at(Decl, hh) }
 ## A typed pointer to the AST node at arena OFFSET `h` — the lean replacement for `get(T, a,
 ## Handle(T)(idx=h))` (the self-host lower cannot compile the generic `get`/`Handle`/`scoped`
 ## allocator surface, only this `bitcast` accessor over the arena base; mirrors `parser::node_ptr`).
@@ -13635,7 +13634,7 @@ convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
   je := dcv_hi(cnt)
   while j < je {
     i := dcv_at(cnt, j)
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     mut isc := false
     if dic_live(cnt) { isc = dic_is_convert(cnt, i) } else { if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { isc = true } }
     if isc {
@@ -13673,7 +13672,7 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
   je := dcv_hi(cnt)
   while j < je {
     i := dcv_at(cnt, j)
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     mut isc := false
     if dic_live(cnt) { isc = dic_is_convert(cnt, i) } else { if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { isc = true } }
     if isc {
@@ -13710,7 +13709,7 @@ pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
     cnt := rt::vec_len(deref(decls))
     mut i : usize = 0
     while i < cnt {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if d.is_fn and streq(src, d.name_start, d.name_len, cs, cl) { return 0 - 1 }
       i += 1
     }
@@ -13802,7 +13801,7 @@ ret_call_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   while j < je {
     i := dni_at(cnt, j)
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
       res = i64(i)
       if d.arity == nargs {
@@ -14140,7 +14139,7 @@ gen_ret_targ_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
       while jc < jce {
         i = dni_at(cnt, jc)
         jc = jc + 1
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           mut tps := 0
           mut tpl := 0
@@ -14235,7 +14234,7 @@ ufcs_ret_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec
       while jc < jce {
         i = dni_at(cnt, jc)
         jc = jc + 1
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if res.n == 0 and d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           mut tps := 0
           mut tpl := 0
@@ -14326,7 +14325,7 @@ gen_ret_enum_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : 
       while jc < jce {
         i = dni_at(cnt, jc)
         jc = jc + 1
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           mut tps := 0
           mut tpl := 0
@@ -14802,7 +14801,7 @@ call_ret_ptrstruct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
         i := dni_at(cnt, jc)
         jc = jc + 1
         if dnh_skip(cnt, i, th) == false {
-          d := deref(decl_get(decls, i))
+          d := deref(lower_ctx::decl_get(decls, i))
           if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
             if str_at((src + d.ret_ts), d.ret_tl) == "ptr" { isptr = true }
           }
@@ -14838,7 +14837,7 @@ call_ret_ptrstruct_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr
       cnt := rt::vec_len(deref(decls))
       nm := callee_name_span(src, cs, cl)
       for i in 0..cnt {
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and not d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           ## The declared return type records only the BASE name (`ptr`); recover the FULL
           ## `ptr(<opt mut> P)` from the source, then take the pointee name. Accept it only when the
@@ -14877,7 +14876,7 @@ gen_ret_ptrstruct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
       while jc < jce {
         i = dni_at(cnt, jc)
         jc = jc + 1
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           mut tps := 0
           mut tpl := 0
@@ -14959,7 +14958,7 @@ call_ret_ptrenum_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
         i := dni_at(cnt, jc)
         jc = jc + 1
         if dnh_skip(cnt, i, th) == false {
-          d := deref(decl_get(decls, i))
+          d := deref(lower_ctx::decl_get(decls, i))
           if d.kind == 1 and not d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
             rfull := extend_type_span(src, d.ret_ts, d.ret_tl)
             pn := ptr_pointee_name(src, d.ret_ts, rfull)
@@ -15077,7 +15076,7 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
       i := dni_at(cnt, j0)
       j0 += 1
       if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if (d.kind == 1 or d.kind == 4) and d.is_generic == false and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         mut mm := false
         if segcmp { mm = mod_head_matches(src, d.mod_start, d.mod_len, pms, pml) } else { mm = streq(src, d.mod_start, d.mod_len, pms, pml) }
@@ -15115,7 +15114,7 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
       i := dni_at(cnt, jr)
       jr += 1
       if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           r := callee_mod_rank(src, d.mod_start, d.mod_len, ms, ml)
           if r > bestr { bestr = r }
@@ -15143,7 +15142,7 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
     i := dni_at(cnt, j)
     j += 1
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n)
        and (bestr < 0 or callee_mod_rank(src, d.mod_start, d.mod_len, ms, ml) == bestr)
        and (bml == 0 or mod_head_matches(src, d.mod_start, d.mod_len, bms, bml)) {
@@ -15259,7 +15258,7 @@ infer_map_targ3 := fn(decls : ptr(rt::Vec), src : ptr(u8), args_head : Option(pt
   mut rs := 0
   mut rn := 0
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.is_fn and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) { rs = d.ret_ts; rn = d.ret_tl }
   }
   if rn == 0 { return CSpan(s = 0, n = 0) }
@@ -15287,7 +15286,7 @@ recv_redirect_generic := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs
   cnt := rt::vec_len(deref(decls))
   mut best := gi
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, gd.name_start, gd.name_len) {
       sb := self_param_base(decls, src, i64(i), a)
       if sb.n != 0 and streq(src, sb.s, sb.n, rbs, rbl) {
@@ -15364,7 +15363,7 @@ generic_sig_redirect := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs 
   cnt := rt::vec_len(deref(decls))
   mut best := gi
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 and d.is_generic
        and streq(src, d.name_start, d.name_len, gd.name_start, gd.name_len)
        and streq(src, d.mod_start, d.mod_len, gd.mod_start, gd.mod_len) {
@@ -15666,7 +15665,7 @@ is_fn_name := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> b
   cnt := rt::vec_len(deref(decls))
   mut res := false
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.is_fn and streq(src, d.name_start, d.name_len, nm.s, nm.n) { res = true }
   }
   res
@@ -16189,7 +16188,7 @@ global_array_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan 
         mut i : usize = 0
         mut found := CSpan(s = 0, n = 0)
         while i < cnt {
-          d := deref(decl_get(cx.decls, i))
+          d := deref(lower_ctx::decl_get(cx.decls, i))
           if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0 and streq(cx.src, d.name_start, d.name_len, bv.s, bv.n) {
             lt := local_type_span(cx.src, d.name_start, d.name_len)
             if lt.n != 0 {
@@ -16391,7 +16390,7 @@ overload_set_count := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
   while j < je {
     i := dni_at(cnt, j)
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if (d.kind == 1 or d.kind == 4) and d.is_generic == false and streq(src, d.name_start, d.name_len, ns, nl) and streq(src, d.mod_start, d.mod_len, ms, ml) {
         c += 1
       }
@@ -16536,7 +16535,7 @@ nongen_type_match := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : us
       j := dni_at(cnt, jc)
       jc = jc + 1
       if dnh_skip(cnt, j, th) == false {
-        d := deref(decl_get(decls, j))
+        d := deref(lower_ctx::decl_get(decls, j))
         if (d.kind == 1 or d.kind == 4) and d.is_generic == false and d.arity == 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) { return true }
       }
     }
@@ -16548,7 +16547,7 @@ nongen_type_match := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : us
     i := dni_at(cnt, kc)
     kc = kc + 1
     if dnh_skip(cnt, i, th) == false {
-      d := deref(decl_get(decls, i))
+      d := deref(lower_ctx::decl_get(decls, i))
       if (d.kind == 1 or d.kind == 4) and d.is_generic == false and d.arity == nargs and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         fp := first_param_type_span(d, a, src)
         if fp.n != 0 and streq(src, fp.s, fp.n, ats, atl) { return true }
@@ -16636,7 +16635,7 @@ gen_ret_str_infer := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
       while jc < jce {
         i = dni_at(cnt, jc)
         jc = jc + 1
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
           mut tps := 0
           mut tpl := 0
@@ -17033,7 +17032,7 @@ overload_resolve_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl :
   mut nfound := 0
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if (d.kind == 1 or d.kind == 4) and d.is_generic == false and d.arity == nargs and streq(src, d.name_start, d.name_len, ns, nl) and streq(src, d.mod_start, d.mod_len, ms, ml) {
       if overload_args_match(d, args_head, cx, a) { found = i64(i); nfound = nfound + 1 }
     }
@@ -18350,7 +18349,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           }
           di := derive_cmp_decl(cx.decls, cx.src, use_lt)
           if di >= 0 {
-            dd := deref(decl_get(cx.decls, usize(di)))
+            dd := deref(lower_ctx::decl_get(cx.decls, usize(di)))
             ## `>` / `<=` compare `lt(b, a)` → the operands are swapped; everything else keeps `(a, b)`.
             swap := op == 25 or op == 26
             a0 := if swap { r } else { l }
@@ -18991,7 +18990,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             ## Dispatch by the @convert's OWN mangled name (there is no fn named `u64`) — mirror the
             ## value-position user-conversion dispatch (emit_call_dispatch's cvi0 branch), which
             ## `convert_callee_idx` would refuse here because the target name `u64` is a builtin conv.
-            acvd := deref(decl_get(cx.decls, usize(acvi)))
+            acvd := deref(lower_ctx::decl_get(cx.decls, usize(acvi)))
             cx.call_cidx = acvi
             sc_sh := if cx.sret_call >= 0 { 1 } else { 0 }
             emit_call_args(args_head, 0 - 1, 0 - 1, 0 - 1, nargs, sb, cx, nl)
@@ -21846,7 +21845,7 @@ param_tuple_layout_collect := fn(params_head : Option(ptr(mut Param)), slots : p
 validate_standard_byte_tuple_boundaries := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
   cnt := rt::vec_len(deref(decls))
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 {
       if d.ret_tl != 0 and tuple_span_has_byte_component(src, d.ret_ts, d.ret_tl) {
         panic("selfhost: a standard-layout byte tuple return is not supported yet (return ABI is word-based)")
@@ -25244,7 +25243,7 @@ guard_fold_inst := fn(cond : ptr(Expr), tp : ptr(GuardTP), decls : ptr(rt::Vec),
     Expr::Call(cs, cl, nargs, ah) => {
       idx := generic_decl_of(decls, src, cs, cl, 0, 0, nargs, ah, a)
       if idx < 0 { return -1 }
-      pd := deref(decl_get(decls, usize(idx)))
+      pd := deref(lower_ctx::decl_get(decls, usize(idx)))
       if pd.is_fn == false { return -1 }
       if pd.is_generic == false { return -1 }
       if str_at((src + pd.ret_ts), pd.ret_tl) == "bool" {
@@ -29331,7 +29330,7 @@ mark_op_body_helpers := fn(op : i64, rb : usize, decls : ptr(rt::Vec), src : ptr
     i := dni_at(cnt, jw)
     jw += 1
     if dnh_skip(cnt, i, th) == false {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     ## TYP-10 slice B: a GENERIC operator (a comptime-VALUE-param glyph fn, e.g. `uint(N)`'s `+`)
     ## is expanded at the site exactly like a concrete one, so its body is walked here too — the
     ## former `is_generic == false` gate is relaxed for it. Its first-param discriminator is the
@@ -29387,7 +29386,7 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
       mut j : usize = 0
       cntl := rt::vec_len(deref(decls))
       while j < cntl {
-        dj := deref(decl_get(decls, j))
+        dj := deref(lower_ctx::decl_get(decls, j))
         if dj.name_len == 0 and dj.name_start == fnpos { rb_set(rb, j, 1) }
         j = j + 1
       }
@@ -29715,7 +29714,7 @@ fill_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
     Expr::Call(cs, cl, nargs, ahead) => {
       idx := callee_decl_idx(decls, src, cs, cl, ms, ml)
       if idx >= 0 {
-        cd := deref(decl_get(decls, usize(idx)))
+        cd := deref(lower_ctx::decl_get(decls, usize(idx)))
         vf := decl_is_variadic(cd, src, deref(mar))
         fill_stop := if vf { cd.arity - 1 } else { cd.arity }
         if cd.is_fn and fill_stop > nargs {
@@ -29876,7 +29875,7 @@ fill_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u
 pub fill_program := fn(decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt::Arena)) {
   cnt := rt::vec_len(deref(decls))
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 or d.kind == 5 {
       fill_stmts(d.body_stmts, decls, src, d.mod_start, d.mod_len, mar)
       if unchecked bitcast(usize, d.value) != 0 { fill_expr(d.value, decls, src, d.mod_start, d.mod_len, mar) }
@@ -30004,7 +30003,7 @@ pub validate_repr := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
 emit_field_name_rodata := fn(decls : ptr(rt::Vec), src : ptr(u8), in out sb : strbuf::StrBuf, start : usize, count : usize) {
   for fk in 0..count {
     fi := start + fk
-    d := deref(decl_get(decls, fi))
+    d := deref(lower_ctx::decl_get(decls, fi))
     if d.kind == 2 or d.kind == 3 {
       mut fh := d.fields_head
       loop {
@@ -30044,7 +30043,7 @@ module_decl_ranges := fn(decls : ptr(rt::Vec), src : ptr(u8), base : usize) -> u
   mut nmod : usize = 0
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     ms := d.mod_start
     ml := d.mod_len
     ## extend the run over every following decl sharing this exact module span. CRITICAL seed idiom: an
@@ -30059,7 +30058,7 @@ module_decl_ranges := fn(decls : ptr(rt::Vec), src : ptr(u8), base : usize) -> u
     while go {
       mut cont := false
       if j < cnt {
-        dj := deref(decl_get(decls, j))
+        dj := deref(lower_ctx::decl_get(decls, j))
         if dj.mod_start == ms and dj.mod_len == ml { cont = true }
       }
       if cont == false { go = false }
@@ -30135,7 +30134,7 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
   ## the transitive worklist below (which substitutes the enclosing instance's type-arg). `src/`'s
   ## generic fns make no nested generic call, so skipping their bodies here is byte-identical.
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if (d.kind == 1 and d.is_generic == false) or d.kind == 5 {
       COLLECT_BODY = d.body_stmts
       COLLECT_MOD_S = d.mod_start
@@ -30335,7 +30334,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   ## leaves the decl untouched (active). `src/`+`lib/` carry no `when` (every `when_cond` is 0), so this
   ## loop neuters nothing there → the emitted GAS is byte-identical → the TOOL-1 fixpoint holds.
   for i in 0..cnt {
-    dg := deref(decl_get(decls, i))
+    dg := deref(lower_ctx::decl_get(decls, i))
     if unchecked bitcast(usize, dg.when_cond) != 0 {
       if decl_guard_fold(dg.when_cond, src) == 0 {
         gh := rt::vec_get(deref(decls), i)
@@ -30376,7 +30375,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   ## nothing → the `.rodata` (hence whole GAS) is byte-identical → the TOOL-1 fixpoint is unaffected.
   mut needs_fld := false
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 and str_at((src + d.name_start), d.name_len) == "display" and str_at((src + d.mod_start), d.mod_len) == "alloc__fmt" { needs_fld = true }
   }
   ## TOOL-6 slice 1b-iii: the leading whole-program FIELD-NAME `.rodata` block and the leading
@@ -30387,7 +30386,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   ## gate computations remain here: `needs_fld` (above, the aggregate renderer) and `has_gl` (below).
   mut has_gl := false
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if global_needs_storage(src, d) { has_gl = true }
   }
   ## GENERICS: the monomorphization instance set comes from `collect_program` (docs/ir-slice-1.md §8.1,
@@ -30429,7 +30428,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   mut test_artifact := false
   if sb.len >= 30 and str_at(sb.data, 30) == ".section .rodata\n.Ltestprefix:" { test_artifact = true }
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     ## A lifted inline @require predicate has no runtime AST caller: the contract call is emitted from
     ## the source-scanned `T(v)` site. Treat the matching synthetic lambda (`name_len == 0`, name_start
     ## == the predicate's `fn` offset) as a reachability root, otherwise DCE drops its definition while
@@ -30438,7 +30437,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     if d.kind == 1 and d.name_len == 0 {
       mut ri : usize = 0
       while ri < cnt {
-        rd := deref(decl_get(decls, ri))
+        rd := deref(lower_ctx::decl_get(decls, ri))
         if rd.kind == 0 and rd.arity == 1 {
           ## A WHOLE-PROGRAM pass asking about a declaration it already HAS: the naming module for the
           ## query is that declaration's own module (TYPE-ANCESTOR), never whichever module was
@@ -30481,7 +30480,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     changed = false
     for i in 0..cnt {
       if rb_get(rb, i) == 1 and rb_get(pb, i) == 0 {
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 or (test_artifact and d.kind == 5) {
           _mark_ms = d.mod_start
           _mark_ml = d.mod_len
@@ -30549,7 +30548,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     mut smin : usize = 0
     mut shas := 0
     for k in 0..tmc0 {
-      d := deref(decl_get(decls, tms0 + k))
+      d := deref(lower_ctx::decl_get(decls, tms0 + k))
       if shas == 0 { smin = d.name_start }
       if d.name_start < smin { smin = d.name_start }
       shas = 1
@@ -30557,7 +30556,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     ROD_HAS = 0
     ROD_MIN = 0
     for k in 0..tmc0 {
-      rd := deref(decl_get(decls, tms0 + k))
+      rd := deref(lower_ctx::decl_get(decls, tms0 + k))
       emit_rodata_decl(rd, decls, src, sb, a, ptr(seen), false)
     }
     mut sbase := msb
@@ -30600,7 +30599,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     ## those references in this module while its data image is emitted; `emit_fn` refreshes the same
     ## context for every following function body.
     if tmc != 0 {
-      tmd := deref(decl_get(decls, tms))
+      tmd := deref(lower_ctx::decl_get(decls, tms))
       set_global_ref_module(tmd.mod_start, tmd.mod_len, unchecked bitcast(usize, decls))
     }
     ## this module's `.rodata` string literals (decl-range order — identical to the old upfront `.rodata`
@@ -30608,7 +30607,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     push_str(sb, ".section .rodata\n")
     for rk in 0..tmc {
       ri := tms + rk
-      rd := deref(decl_get(decls, ri))
+      rd := deref(lower_ctx::decl_get(decls, ri))
       emit_rodata_decl(rd, decls, src, sb, a, ptr(seen), true)
     }
     ## TOOL-6 slice 1b-iii: this module's FIELD-NAME `.rodata` labels (folded from the former leading
@@ -30629,7 +30628,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     if has_gl {
       for gk in 0..tmc {
       gj := tms + gk
-      d := deref(decl_get(decls, gj))
+      d := deref(lower_ctx::decl_get(decls, gj))
       if global_needs_storage(src, d) {
         ## the placement section: `@section("name")` overrides the derived `.data` (Memory §2.3).
         ## Emitted PER global (so an `@section` one is isolated and the next unattributed one is back
@@ -30851,7 +30850,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     push_str(sb, ".text\n")
     for tk in 0..tmc {
     ti := tms + tk
-    d := deref(decl_get(decls, ti))
+    d := deref(lower_ctx::decl_get(decls, ti))
     ## a comptime-VARIADIC fn (§7.1) is expand-only — skip it here (it has no standalone runtime body).
     ## An `@extern` fn (Modules §7) is a bodyless import — its definition lives in another object, so
     ## emit no body here; calls to it were routed to the external symbol by `emit_mangled_call`.

@@ -2512,7 +2512,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     sslot := i64(sent.off)
     ncap := usize(sent.eek)
     lidx := lam_idx_by_fnpos(cx.decls, sent.sns)
-    larity := deref(decl_get(cx.decls, usize(lidx))).arity
+    larity := deref(lower_ctx::decl_get(cx.decls, usize(lidx))).arity
     for j in 0..ncap {
       capsp := lam_param_span_at(cx.decls, usize(lidx), larity - ncap + j)
       capslot := slot_of(cx.slots, cx.src, capsp.s, capsp.n)
@@ -2537,7 +2537,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     fms := sent.snl
     fml := sent.estride
     lidx := lam_idx_by_fnpos(cx.decls, fnpos)
-    larity := deref(decl_get(cx.decls, usize(lidx))).arity
+    larity := deref(lower_ctx::decl_get(cx.decls, usize(lidx))).arity
     lts := local_type_span(cx.src, ns, nl2)
     nuser := dyn_type_nuser(cx.src, lts.s, lts.n)
     if larity < nuser or (larity - nuser) < 1 { panic("selfhost: FN-11 — a `dyn` closure needs at least one capture (a zero-capture closure is a plain fn value)") }

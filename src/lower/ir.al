@@ -703,7 +703,7 @@ ir_is_vecbuild_call := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr)) ->
       cnt := rt::vec_len(deref(decls))
       mut i : usize = 0
       while i < cnt {
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, t.s, t.n) {
           if d.kind == 4 { return true }                          ## a @abi(syscall) fn (mmap)
           bn := base_type_name(src, d.ret_ts, d.ret_tl)
@@ -731,7 +731,7 @@ ir_call_returns_vec := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr)) ->
       cnt := rt::vec_len(deref(decls))
       mut i : usize = 0
       while i < cnt {
-        d := deref(decl_get(decls, i))
+        d := deref(lower_ctx::decl_get(decls, i))
         if d.is_fn and streq(src, d.name_start, d.name_len, t.s, t.n) {
           bn := base_type_name(src, d.ret_ts, d.ret_tl)
           if str_at((src + bn.s), bn.n) == "Vec" { return true }
@@ -1285,7 +1285,7 @@ ir_all_scalar_struct := fn(src : ptr(u8), decls : ptr(rt::Vec), ts : usize, tl :
   bn := base_type_name(src, ts, tl)
   di := struct_decl_of(decls, src, bn.s, bn.n)
   if di < 0 { return false }
-  cd := deref(decl_get(decls, usize(di)))
+  cd := deref(lower_ctx::decl_get(decls, usize(di)))
   mut f := cd.fields_head
   mut any := false
   mut ok := true
@@ -1311,7 +1311,7 @@ pub index_plain_scalar_struct := fn(src : ptr(u8), decls : ptr(rt::Vec), ts : us
   bn := base_type_name(src, ts, tl)
   di := struct_decl_of(decls, src, bn.s, bn.n)
   if di < 0 { return false }
-  d := deref(decl_get(decls, usize(di)))
+  d := deref(lower_ctx::decl_get(decls, usize(di)))
   if d.is_generic { return false }
   if is_packed(decls, src, ts, tl) { return false }
   if std_struct_has_byte_layout(decls, src, ts, tl, a) { return false }
@@ -1520,7 +1520,7 @@ ir_check_call := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl : usize,
   if idx < 0 {
     IRP_OK = false                                  ## unresolved / intrinsic (str_at/bitcast/…) → reject
   } else {
-    cd := deref(decl_get(decls, usize(idx)))
+    cd := deref(lower_ctx::decl_get(decls, usize(idx)))
     if cd.kind != 1 { IRP_OK = false }              ## plain fn only (not a syscall-fn / struct / enum)
     if cd.is_generic { IRP_OK = false }
     if extern_symbol(src, cd.name_start, cd.name_len).n != 0 { IRP_OK = false }   ## keep to internal fns

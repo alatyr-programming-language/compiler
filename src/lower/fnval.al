@@ -148,7 +148,7 @@ fn_decl_by_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usiz
   mut res : i64 = 0 - 1
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(decls, i))
+    d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 and streq(src, d.name_start, d.name_len, ns, nl) { res = i64(i) }
     i = i + 1
   }
@@ -204,7 +204,7 @@ fnval_ret_ty := fn(cs : usize, cl : usize, decls : ptr(rt::Vec), src : ptr(u8), 
   if tp != 0 { return fnty_ret_span(src, tp) }
   di := fnval_target_decl(cs, cl, decls, src, a)
   if di < 0 { return CSpan(s = 0, n = 0) }
-  fd := deref(decl_get(decls, usize(di)))
+  fd := deref(lower_ctx::decl_get(decls, usize(di)))
   CSpan(s = fd.ret_ts, n = fd.ret_tl)
 }
 
@@ -422,7 +422,7 @@ pub fnval_param_fmask := fn(cs : usize, cl : usize, cx : ptr(LCtx)) -> usize {
   }
   di := fnval_target_decl(cs, cl, cx.decls, cx.src, a)
   if di < 0 { return 0 }
-  d := deref(decl_get(cx.decls, usize(di)))
+  d := deref(lower_ctx::decl_get(cx.decls, usize(di)))
   mut pp := d.params_head
   mut k := 0
   loop {
@@ -695,7 +695,7 @@ pub dyn_user_arg_is_float := fn(cx : ptr(LCtx), ftpos : usize, i : usize) -> boo
 ## delivers every capture through an INTEGER register (it loads env words with `movq`), so a float-class
 ## capture parameter would be read from an %xmm the adapter never wrote — fail loud rather than miscompile.
 pub lam_cap_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), lidx : usize, larity : usize, ncap : usize) -> bool {
-  d := deref(decl_get(decls, lidx))
+  d := deref(lower_ctx::decl_get(decls, lidx))
   mut pp := d.params_head
   mut k : usize = 0
   mut r := false

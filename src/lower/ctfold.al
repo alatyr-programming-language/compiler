@@ -441,7 +441,7 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr
       mut as_ := 0
       mut al := 0
       while i < cnt {
-        d := deref(decl_get(cx.decls, i))
+        d := deref(lower_ctx::decl_get(cx.decls, i))
         if d.kind == 0 and d.arity == 0 and d.ret_tl != 0 and d.name_len == qml
           and streq(cx.src, d.name_start, d.name_len, qms, qml)
           and streq(cx.src, d.mod_start, d.mod_len, cx.mod_s, cx.mod_l) {
@@ -456,7 +456,7 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr
   mut found := false
   mut i : usize = 0
   while i < cnt {
-    d := deref(decl_get(cx.decls, i))
+    d := deref(lower_ctx::decl_get(cx.decls, i))
     mut name_ok := streq(cx.src, d.name_start, d.name_len, qns, qnl)
     mut module_ok := true
     if cp >= 0 { module_ok = mod_head_matches(cx.src, d.mod_start, d.mod_len, qms, qml) }

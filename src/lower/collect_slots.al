@@ -217,7 +217,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               lidx := lam_idx_by_fnpos(decls, fr.fnpos)
               mut ncap := 1
               if lidx >= 0 and nu >= 0 {
-                larity := deref(decl_get(decls, usize(lidx))).arity
+                larity := deref(lower_ctx::decl_get(decls, usize(lidx))).arity
                 if i64(larity) > nu { ncap = usize(i64(larity) - nu) }
               }
               bind_dyn_store_slot(slots, src, ns, nl, fr.fnpos, fr.ms, fr.ml, ncap)
