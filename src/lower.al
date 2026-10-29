@@ -1105,7 +1105,7 @@ projection_head_for := fn(src : ptr(u8), rs : usize, rl : usize, ns : usize, nl 
                      or str_at((src + q), 1) == "\n" or str_at((src + q), 1) == "\t"
                      or str_at((src + q), 1) == "\r") { q = q + 1 }
     mut r := q
-    while r < e and gref_ident_byte(src, r) { r = r + 1 }
+    while r < e and lower_layout::ll_ident_byte(src, r) { r = r + 1 }
     if r == q { q = q + 1 }
     else {
       if lower_ctx::streq(src, q, r - q, ns, nl) { hit = true }
@@ -2082,11 +2082,6 @@ global_ref_candidate := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl, s : us
   hits == 1
 }
 
-## Is the source byte at `i` an identifier byte (alnum or `_`)? The module-path scan below needs it.
-gref_ident_byte := fn(src : ptr(u8), i : usize) -> bool {
-  b := bytes(str_at((src + i), 1))[0]
-  (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
-}
 
 ## A global REFERENCE split into its module-path HEAD and its NAME: `geo::G` gives head `geo` + name
 ## `G`, a bare `G` gives an empty head + name `G` (Modules §2/§4 — a `::` path is ordinary navigation;
@@ -2117,7 +2112,7 @@ gref_split := fn(src : ptr(u8), s : usize, n : usize) -> GRefSpan {
   mut scanning := true
   while scanning {
     mut q := p
-    while q > 0 and gref_ident_byte(src, q - 1) { q = q - 1 }
+    while q > 0 and lower_layout::ll_ident_byte(src, q - 1) { q = q - 1 }
     if q == p { return z }
     p = q
     if p >= 2 and str_at((src + p - 2), 2) == "::" { p = p - 2 } else { scanning = false }
@@ -2333,7 +2328,7 @@ vis_check_projection := fn(decls : ptr(rt::Vec), src : ptr(u8), rs : usize, rl :
                      or str_at((src + q), 1) == "\n" or str_at((src + q), 1) == "\t"
                      or str_at((src + q), 1) == "\r") { q = q + 1 }
     mut r := q
-    while r < e and gref_ident_byte(src, r) { r = r + 1 }
+    while r < e and lower_layout::ll_ident_byte(src, r) { r = r + 1 }
     if r == q { q = q + 1 }
     else {
       vis_check_pair(decls, src, hs, hl, q, r - q, cs, cl, 1, 4, "function")
