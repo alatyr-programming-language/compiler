@@ -350,10 +350,10 @@ ll_show_src_line := fn(src : ptr(u8), off : usize) {
   }
   w := rt::sys_write(1, 2, wbase, wn)
 }
-ll_show_span := fn(src : ptr(u8), s : usize, n : usize) {
+pub ll_show_span := fn(src : ptr(u8), s : usize, n : usize) {
   w := rt::sys_write(1, 2, unchecked bitcast(usize, rt::addr(src, s)), n)
 }
-ll_show_str := fn(m : str) {
+pub ll_show_str := fn(m : str) {
   w := rt::sys_write(1, 2, unchecked bitcast(usize, m.ptr), m.len)
 }
 
@@ -407,7 +407,7 @@ qualified_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hn
 ## (returns the same index the linear scan would). Uses mut-global ARRAYS (`[0; 512]` repeat-init —
 ## verified to work; no-init/containers do not). Bucket empty ⇔ stored name-len 0 (a real name has n>0).
 _NCB := 512
-_name_hash := fn(src : ptr(u8), s : usize, n : usize) -> usize {
+pub _name_hash := fn(src : ptr(u8), s : usize, n : usize) -> usize {
   if n == 0 { return 0 }
   bs := bytes(str_at((src + s), n))
   h := unchecked { n * 131 + usize(bs[0]) * 7 + usize(bs[n - 1]) }
@@ -1838,7 +1838,7 @@ pub standard_type_byte_size := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usiz
 ## The leftmost source position of a tuple type-expression element. Keep this as a separate helper:
 ## the self-host seed has a known nested-match lowering scar, while the mono path's equivalent helper
 ## is deliberately a single match.
-layout_tuple_first_start := fn(e : ptr(Expr)) -> usize {
+pub layout_tuple_first_start := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::Var(s, n) => { s }
     Expr::Call(cs, cl, na, ah) => { cs }

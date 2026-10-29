@@ -1204,11 +1204,11 @@ callee_arity_collision := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl
 reject_callee_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize) {
   if callee_ambiguous(decls, src, cs, cl, ms, ml) == false { return }
   lower_show_src_line(src, cs)
-  vis_show_str("selfhost: the bare call `")
-  vis_show_span(src, cs, cl)
-  vis_show_str("` on the source line above names a function declared in MORE THAN ONE module, and Modules §3 lets module `")
-  vis_show_span(src, ms, ml)
-  vis_show_str("` name none of them.\n")
+  lower_layout::ll_show_str("selfhost: the bare call `")
+  lower_layout::ll_show_span(src, cs, cl)
+  lower_layout::ll_show_str("` on the source line above names a function declared in MORE THAN ONE module, and Modules §3 lets module `")
+  lower_layout::ll_show_span(src, ms, ml)
+  lower_layout::ll_show_str("` name none of them.\n")
   panic("selfhost: Modules §3 — a bare name resolves in the calling module and then UP its ancestor chain, nearest first; a sibling's, a descendant's or an unrelated module's declaration is reachable only through a path, and only when it is `pub`. Picking the first declaration in declaration order would call a function this program may not name (a silent wrong value), so the ambiguity is rejected: qualify the call with the module path it means.")
 }
 ## The decl index of a callee that is a COMPTIME-VARIADIC fn (a trailing param whose type text is
@@ -1945,12 +1945,7 @@ emit_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : Option(
 ## scans). These are checked for EVERY `Var` reference (most are locals → scan all decls, find nothing,
 ## return null — the expensive miss); the result POINTER is stable per compile, so a 512-bucket cache
 ## keyed by name text (bucket empty ⇔ stored len 0; a real name has n>0) returns it O(1). Byte-neutral.
-_lnhash := fn(src : ptr(u8), s : usize, n : usize) -> usize {
-  if n == 0 { return 0 }
-  bs := bytes(str_at((src + s), n))
-  h := unchecked { n * 131 + usize(bs[0]) * 7 + usize(bs[n - 1]) }
-  h & 511
-}
+
 mut _mcv_s : [usize; 512] = [0; 512]
 mut _mcv_n : [usize; 512] = [0; 512]
 mut _mcv_src : [usize; 512] = [0; 512]
@@ -2226,24 +2221,20 @@ reject_gref_unresolved_pub := fn(src : ptr(u8), s : usize, n : usize) {
 
 ## Write `[s, n)` verbatim to stderr — the span twin of `lower_show_src_line`, so a diagnostic can
 ## name the offending declaration by its own module + name spans without allocating.
-vis_show_span := fn(src : ptr(u8), s : usize, n : usize) {
-  w := rt::sys_write(1, 2, unchecked bitcast(usize, rt::addr(src, s)), n)
-}
-vis_show_str := fn(m : str) {
-  w := rt::sys_write(1, 2, unchecked bitcast(usize, m.ptr), m.len)
-}
+
+
 
 ## The LOCATED reject: the offending source line, then the declaration this reference names and the
 ## rule it breaks. `off` is the reference's own source offset (so the line printed is the USE site).
 reject_decl_not_visible := fn(src : ptr(u8), d : Decl, off : usize, what : str) {
   lower_show_src_line(src, off)
-  vis_show_str("selfhost: the source line above names the ")
-  vis_show_str(what)
-  vis_show_str(" `")
-  vis_show_span(src, d.name_start, d.name_len)
-  vis_show_str("` of module `")
-  vis_show_span(src, d.mod_start, d.mod_len)
-  vis_show_str("`, which is not `pub`.\n")
+  lower_layout::ll_show_str("selfhost: the source line above names the ")
+  lower_layout::ll_show_str(what)
+  lower_layout::ll_show_str(" `")
+  lower_layout::ll_show_span(src, d.name_start, d.name_len)
+  lower_layout::ll_show_str("` of module `")
+  lower_layout::ll_show_span(src, d.mod_start, d.mod_len)
+  lower_layout::ll_show_str("`, which is not `pub`.\n")
   panic("selfhost: Modules §3 — privacy flows DOWN the module tree and exposure flows UP only through `pub`: a non-`pub` declaration of module M is visible to M and to every module NESTED WITHIN M, and to nothing else. The naming module is neither, so this reference is rejected (mark the declaration `pub` to expose it upward).")
 }
 
@@ -2318,11 +2309,11 @@ vis_check_reexport := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : u
          and mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl)
          and decl_is_pub(src, d.name_start) == false {
         lower_show_src_line(src, ns)
-        vis_show_str("selfhost: the `pub` binding above re-exports `")
-        vis_show_span(src, d.name_start, d.name_len)
-        vis_show_str("` of module `")
-        vis_show_span(src, d.mod_start, d.mod_len)
-        vis_show_str("`, which is not `pub`.\n")
+        lower_layout::ll_show_str("selfhost: the `pub` binding above re-exports `")
+        lower_layout::ll_show_span(src, d.name_start, d.name_len)
+        lower_layout::ll_show_str("` of module `")
+        lower_layout::ll_show_span(src, d.mod_start, d.mod_len)
+        lower_layout::ll_show_str("`, which is not `pub`.\n")
         panic("selfhost: Modules §4.3 — a re-export may name only `pub` items. A descendant's down-tree access to an ancestor's non-`pub` item is for LOCAL use only; `pub name := path` would re-publish it upward and override the owner's privacy, so it is rejected. Re-export never elevates a private item to public.")
       }
     }
@@ -2429,7 +2420,7 @@ vis_check_program := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
 }
 
 module_const_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ptr(Expr) {
-  h := _lnhash(src, s, n)
+  h := lower_layout::_name_hash(src, s, n)
   if _mcv_n[h] == n and _mcv_src[h] == src and _mcv_ctx[h] == GLOBAL_REF_MOD_SET
      and _mcv_ml[h] == GLOBAL_REF_MOD_L
      and streq(src, _mcv_ms[h], _mcv_ml[h], GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
@@ -2465,7 +2456,7 @@ module_const_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
 ## stays ISOLATED in this frame — the caller then reads `struct_lit_info` in its own frame, matching the
 ## proven `const_struct_field` shape and avoiding the deep-stack fragility of returning a span directly).
 mut_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ptr(Expr) {
-  h := _lnhash(src, s, n)
+  h := lower_layout::_name_hash(src, s, n)
   if _mgv_n[h] == n and _mgv_src[h] == src and _mgv_ctx[h] == GLOBAL_REF_MOD_SET
      and _mgv_ml[h] == GLOBAL_REF_MOD_L
      and streq(src, _mgv_ms[h], _mgv_ml[h], GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
@@ -15572,16 +15563,7 @@ generic_inst_typearg_span := fn(e : ptr(Expr), src : ptr(u8)) -> CSpan {
 
 ## The leftmost SOURCE position of a type-expression `e` (a tuple type-arg's element) — the start
 ## of its `Var` lexeme or `Call` head. Used to anchor the backward scan to a tuple type-arg's `(`.
-tuple_first_start := fn(e : ptr(Expr)) -> usize {
-  match deref(e) {
-    Expr::Var(s, n) => { s }
-    Expr::Call(cs, cl, na, ah) => { cs }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
-      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
-  }
-}
+
 
 ## A TUPLE type-argument `(T0, T1, …)` used where a type is expected (`display((u64, u64), t, sb)`)
 ## parses as an `ArrayLit` (the tuple-literal node, §parser). The mono machinery keys instances on a
@@ -15598,7 +15580,7 @@ pub tuple_typearg_span := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> CSp
     Expr::ArrayLit(nel, ehead) => {
       e0 := arg_expr_at(ehead, 0, a)
       if unchecked bitcast(usize, e0) == 0 { return CSpan(s = 0, n = 0) }
-      s0 := tuple_first_start(e0)
+      s0 := lower_layout::layout_tuple_first_start(e0)
       if s0 == 0 { return CSpan(s = 0, n = 0) }
       ## scan back from the first element to the opening bracket — `(` (TUPLE type `(T0, …)`) or
       ## `[` (ARRAY type `[T; N]`). Both parse as an ArrayLit; the bracket kind decides the mangling.
@@ -18953,7 +18935,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## and crashes the self-host compiler instead of producing a located failure.
         if nargs != 1 {
           lower_show_src_line(cx.src, cs)
-          vis_show_str("selfhost: the scalar conversion call on the source line above requires exactly one operand.\n")
+          lower_layout::ll_show_str("selfhost: the scalar conversion call on the source line above requires exactly one operand.\n")
           panic("selfhost: scalar conversion requires exactly one operand (Types §4.6)")
         }
         a0 := arg_expr_at(args_head, 0, a)
@@ -29225,7 +29207,7 @@ mut _mn_ml : [usize; 512] = [0; 512]
 mut _mark_ms : usize = 0
 mut _mark_ml : usize = 0
 mark_name := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) {
-  h := _lnhash(src, ns, nl)
+  h := lower_layout::_name_hash(src, ns, nl)
   if _mn_n[h] == nl and _mn_src[h] == src and _mn_ms[h] == _mark_ms and _mn_ml[h] == _mark_ml and streq(src, _mn_s[h], _mn_n[h], ns, nl) { return }
   cnt := rt::vec_len(deref(decls))
   th := name_hash(src, ns, nl)
