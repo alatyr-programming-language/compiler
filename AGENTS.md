@@ -148,7 +148,13 @@ around it.
 3. **Decide with an exhaustive `match` on the value.** Never use `_` over an enum (#544, #464). Do not
    recover a variant from numbers (#716). Held by `scripts/wildcard_arm_check.sh`.
 4. **One decision, one place.** `grep` for the question before you answer it again (#540, #539). Held,
-   for the shapes it knows, by `scripts/idiom_gate.sh`.
+   for the shapes it knows, by `scripts/idiom_gate.sh`. The **private-copy** half is held by
+   `scripts/copy_lift.py --gate` (#1077): it matches brace-balanced bodies, so it reports a copy even
+   when its name differs from its home, and holds the exact set to a reviewed baseline, addition-only,
+   by name. A new copy needs `## copy-ok: #<issue> — <reason>` naming what forces it; a marker citing no
+   issue fails on its own. Deleting a copy passes and must lower the baseline. Textual identity is
+   *necessary, not sufficient*: only a build decides deletability — census the emitter **and its child
+   modules**, which resolve a bare name to the parent, and delete by span, never by line.
 5. **Width and signedness are spelled.** Annotate a local before `/`, `%` or an ordering. Never infer
    them from the form of an operand (#546, #608, #764–#766). The **signedness** half is held by
    `scripts/sign_census.sh --gate`: it compares every signedness decision each backend takes against the

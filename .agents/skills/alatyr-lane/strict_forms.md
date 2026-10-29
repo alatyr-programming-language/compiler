@@ -28,7 +28,7 @@ issue in the marker's reason. Do not quietly route around it.
 | 1 | absence is `Option(ptr(T))` walked with `match`, not a sentinel | 0 as null, −1 as "not found", 255 as "poisoned" | `strict_forms_check.sh` `null` (typed + lexical); the transitional marker names an open blocker (the historical #809 and #792 are closed) |
 | 2 | a kind is an enum, not an integer; flags are not packed into it | #583 (134 literal `.tag` sites), #626, `+128` mut flag | `strict_forms_check.sh` `kind-literal` |
 | 3 | decide with an exhaustive `match` on the value | #544 (249 blind wildcard arms), #716, #464 | `wildcard_arm_check.sh`; the rest by review |
-| 4 | one decision, one place | the #540 family, #539 | `idiom_gate.sh` (for the shapes it knows) |
+| 4 | one decision, one place | the #540 family, #539, #1077 (19 exact private copies of a shared decision sat in `lower.al`) | `idiom_gate.sh` (for the shapes it knows); **private copies: `copy_lift.py --gate`** (`# copy-ok`, addition-only by NAME, found by SHAPE) |
 | 5 | width and signedness are spelled, never inferred from a form | #546, #608, #707, #764–#766 | signedness: `sign_census.sh --gate` (4/0/0/0 measured on `fdc40f6`); width: review until slices 3 and 6 |
 | 6 | `unchecked` is explicit and justified; no implicit `usize` ↔ `ptr` | #529, #610 | `strict_forms_check.sh` `unchecked`, `ptrint`; the count by `ptrint_census.sh gate` (`op-cmp=0`, held only while `planted` proves the hook fires) |
 | 7 | bind a `?` before using its value | #752 | `strict_forms_check.sh` `try-inline` |
@@ -335,6 +335,42 @@ if pf.n != 0 { … }
 
 **Check.** `scripts/idiom_gate.sh` (the TABLE and SCAN rules) refuses a new duplicated decision of the
 shapes it knows. Anything it cannot see is held by review.
+
+**The private-copy half (#1077).** `scripts/copy_lift.py --gate` finds a copy by **shape**: it compares
+brace-matched, whitespace-normalized bodies, so it reports a copy whose name differs from its home —
+`_lnhash` over `_name_hash`, `streq` over `ll_show_str`, `colon_pos` over `d_colon_pos`. A name list
+cannot see those, and a name list is exactly what the first version of this check was: pasting
+`driver::streq` into `lower.al` under a fresh name left it at rc=0 with zero mentions. It holds the
+**exact** set to a reviewed baseline, by name, addition-only:
+
+```alatyr
+## not this — a second implementation of a decision that already has one, silently
+streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  str_at((src + a_s), a_n) == str_at((src + b_s), b_n)
+}
+
+## this — call the one that exists
+if lower_ctx::streq(src, d.name_start, d.name_len, gr.ns, gr.nl) { … }
+
+## and only where a second copy genuinely cannot be avoided yet — the marker names the blocker
+## copy-ok: #1103 — the shared home is private in sema.al, which that PR is editing
+streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool { … }
+```
+
+A `## copy-ok:` marker whose reason cites no issue is itself a failure — an unnamed reason is not a
+reason. Retirement is what the baseline is for: deleting a copy passes and lowers the count, so the
+baseline must be regenerated as copies go away, or it holds slack and stops refusing real regressions.
+Measured on `main`: **19** exact private copies, all grandfathered; the open slices #1110–#1116 take it
+to **7**, each deletion proven by a native x86_64 build rather than by reading. The remaining 7 wait on
+#1103 because every shared home they need is `private` in `sema.al`.
+
+Two things this half learned the hard way, both recorded so the next agent does not repeat them:
+**textual identity is necessary, not sufficient** — only a build decides deletability, and two of the
+first three names the detector called "deletable now" were wrong (`decl_get` still had 17 callers in
+`lower.al`'s own child modules, which resolve the bare name to the parent; a census of `lower.al` alone
+cannot see them). And **deleting a definition by line is wrong when its body spans lines** — cut the
+signature only and an orphan body fails with `parse: unexpected token \`if\``, the same defect class as
+the `parse()` span bug fixed in #1109.
 
 ## 5 · Width and signedness are spelled, never inferred from a form
 
