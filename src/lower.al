@@ -426,14 +426,7 @@ emit_mangled_def := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ms : usize, ml
 ## stdlib path `std::io::write` resolves to module `std::io` (mangled `std__io`) + fn `write`. For a
 ## plain 2-segment `mod::f` the last `::` IS the only one, so this is byte-identical to the former
 ## first-`::` scan (the entire self-host source is 2-segment → the TOOL-1 fixpoint is unaffected).
-colon_pos := fn(src : ptr(u8), cs : usize, cl : usize) -> i64 {
-  mut res := -1
-  mut i : usize = 0
-  while i + 1 < cl {
-    if str_at((src + cs + i), 1) == ":" and str_at((src + cs + i + 1), 1) == ":" { res = i64(i); i = i + 2 } else { i = i + 1 }
-  }
-  res
-}
+
 
 ## Compare two MODULE-name spans treating `::` and `__` as the SAME separator — so a qualified
 ## callee head (`alloc::map`, from source) matches a decl's MANGLED module (`alloc__map`). Both
@@ -776,10 +769,7 @@ cmp_route_name := fn(op : i64) -> str {
 }
 ## Whether a type-name text is a built-in INTEGER width (the operand types cmp.al's `lt`/`eq` cover for
 ## the comparison desugar) — excludes float (own NaN-aware compare path), bool/char/str, and user types.
-is_builtin_int_name := fn(t : str) -> bool {
-  return t == "u8" or t == "u16" or t == "u32" or t == "u64" or t == "usize"
-    or t == "i8" or t == "i16" or t == "i32" or t == "i64" or t == "isize"
-}
+
 ## The cmp.al `lt`/`eq` decl a built-in-INTEGER comparison `a <cmp> b` desugars to, else -1. Only
 ## built-in integer operands route (float/str/bool/user keep their own paths); the caller applies the
 ## operand swap (`>`/`<=`) and result negate (`!=`/`<=`/`>=`).
@@ -787,7 +777,7 @@ cmp_route_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), op : i64, ts : usize, t
   cn := cmp_route_name(op)
   if cn == "" { return -1 }
   if tn == 0 { return -1 }
-  if not is_builtin_int_name(str_at((src + ts), tn)) { return -1 }
+  if not cli::mf_is_int_type(str_at((src + ts), tn)) { return -1 }
   named_op_decl_idx(decls, src, cn, ts, tn, a)
 }
 ## PERF (emit hot path — ~30% of self-build time was O(cnt) decl-by-name scans, perf 2026-08-13): a
@@ -1277,7 +1267,7 @@ fn_param_count := fn(decls : ptr(rt::Vec), i : usize) -> usize {
 variadic_print_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, na : usize, ms : usize, ml : usize, a : rt::Arena) -> i64 {
   vi := callee_variadic_idx(decls, src, cs, cl, ms, ml, a)
   if vi < 0 { return -1 }
-  cp := colon_pos(src, cs, cl)
+  cp := driver::d_colon_pos(src, cs, cl)
   if cp >= 0 {
     ri := resolve_callee_idx(decls, src, cs, cl, ms, ml)
     if ri >= 0 and ri != vi and na <= fn_param_count(decls, usize(ri)) { return -1 }
@@ -2114,7 +2104,7 @@ GRefSpan := struct { ms : usize, ml : usize, ns : usize, nl : usize, qual : bool
 gref_split := fn(src : ptr(u8), s : usize, n : usize) -> GRefSpan {
   z := GRefSpan(ms = 0, ml = 0, ns = s, nl = n, qual = false)
   if n == 0 { return z }
-  cp := colon_pos(src, s, n)
+  cp := driver::d_colon_pos(src, s, n)
   if cp > 0 {
     hl := usize(cp)
     if hl + 2 < n { return GRefSpan(ms = s, ml = hl, ns = s + hl + 2, nl = n - hl - 2, qual = true) }
@@ -2958,7 +2948,7 @@ const_field_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : 
   res
 }
 emit_mangled_call := fn(in out sb : strbuf::StrBuf, src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, decls : ptr(rt::Vec)) {
-  cp := colon_pos(src, cs, cl)
+  cp := driver::d_colon_pos(src, cs, cl)
   if cp >= 0 {
     hl := usize(cp)                       ## head length (the module name OR a module ALIAS)
     ts := cs + hl + 2                     ## tail (fn) name span, skipping `::`
@@ -4988,7 +4978,7 @@ str_arg_tmp_off := fn(args_head : Option(ptr(mut Arg)), skip : i64, skip2 : i64,
 ## resolves preferring the caller's module. -1 if no matching decl (an intrinsic / unknown call).
 ## Used to read the callee's parameter modes for the out-scalar by-reference ABI.
 resolve_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize) -> i64 {
-  cp := colon_pos(src, cs, cl)
+  cp := driver::d_colon_pos(src, cs, cl)
   if cp >= 0 {
     hl := usize(cp)
     ts := cs + hl + 2
@@ -8936,7 +8926,7 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
       ## Resolve the callee the SAME way as `generic_decl_of`/`ret_call_target`: prefer a QUALIFIED
       ## call's MODULE + arity match (`base::result::map`), else an arity match (`option::map`/4 vs
       ## `vec::map`/5), else last — so the substituted return span is read off the RIGHT decl.
-      cpq := colon_pos(src, cs, cl)
+      cpq := driver::d_colon_pos(src, cs, cl)
       mut segcmp := false
       mut pms := 0
       mut pml := 0
@@ -9474,12 +9464,7 @@ try_ok_struct_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
 ## is an indirect call through `code`, passing `env` leading. x86_64; single scalar capture in this slice.
 
 ## Is the local-annotation type text `[s, s+n)` a `dyn fn(…)->R` type (leading `dyn` keyword)?
-is_dyn_type := fn(src : ptr(u8), s : usize, n : usize) -> bool {
-  if n < 4 { return false }
-  if str_at((src + s), 3) != "dyn" { return false }
-  c := str_at((src + s + 3), 1)
-  c == " " or c == "\t" or c == "\n" or c == "\r"
-}
+
 ## The number of USER parameters in a `dyn fn(T0, …)->R` annotation — top-level types inside `fn( )`
 ## (0 if the parameter list is empty). Depth-1 commas separate the params.
 dyn_type_nuser := fn(src : ptr(u8), s : usize, n : usize) -> usize {
@@ -9610,7 +9595,7 @@ dyn_store_nuser := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), s : usize, n 
               sv := dyn_over_store_span(av, a)
               if sv.n != 0 and lower_ctx::streq(src, sv.s, sv.n, s, n) {
                 lt := local_type_span(src, ans, anl)
-                if lt.n != 0 and is_dyn_type(src, lt.s, lt.n) { res = i64(dyn_type_nuser(src, lt.s, lt.n)) }
+                if lt.n != 0 and driver::d_is_dyn_annotation(src, lt.s, lt.n) { res = i64(dyn_type_nuser(src, lt.s, lt.n)) }
               }
             }
             st = anx
@@ -13768,7 +13753,7 @@ ret_call_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   ## vs struct vs str) agrees with the emitted call. Priority: a QUALIFIED call's MODULE + arity match
   ## (`base::result::map`); then a leading-type-arg-COUNT match (`map(u64,u64,u64,…)` → `result::map`/3
   ## over the same-arity `vec::map`/2); then arity; then last-match.
-  cpq := colon_pos(src, cs, cl)
+  cpq := driver::d_colon_pos(src, cs, cl)
   mut segcmp := false
   mut pms := 0
   mut pml := 0
@@ -14973,7 +14958,7 @@ call_ret_ptrenum_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
 ## mangling match on this tail (mirroring nameres, which keys a cross-module callee by its tail
 ## name); the head module is split off separately by `emit_mangled_call`.
 callee_name_span := fn(src : ptr(u8), cs : usize, cl : usize) -> CSpan {
-  cp := colon_pos(src, cs, cl)
+  cp := driver::d_colon_pos(src, cs, cl)
   if cp >= 0 {
     hl := usize(cp)                       ## head length (the module name)
     return CSpan(s = cs + hl + 2, n = cl - hl - 2)   ## skip `::`
@@ -15046,7 +15031,7 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   ## CALLER's module (`ms`/`ml`, a bare call). ONLY a NON-generic hit short-circuits; a GENERIC hit
   ## (every module's own `node_ptr`) falls through to the by-tail match, preserving last-match
   ## resolution → `src/`'s per-module generics are byte-identical (fixpoint-safe).
-  cpq := colon_pos(src, cs, cl)
+  cpq := driver::d_colon_pos(src, cs, cl)
   mut pms := ms
   mut pml := ml
   mut segcmp := false
@@ -16138,7 +16123,7 @@ index_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       }
       if lt.n == 0 { return CSpan(s = 0, n = 0) }
       es := array_elem_span(cx.src, lt.s, lt.n)
-      if es.n != 0 and is_builtin_int_name(str_at((cx.src + es.s), es.n)) { return es }
+      if es.n != 0 and cli::mf_is_int_type(str_at((cx.src + es.s), es.n)) { return es }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
@@ -16167,7 +16152,7 @@ global_array_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan 
             lt := local_type_span(cx.src, d.name_start, d.name_len)
             if lt.n != 0 {
               es := array_elem_span(cx.src, lt.s, lt.n)
-              if es.n != 0 and is_builtin_int_name(str_at((cx.src + es.s), es.n)) { found = CSpan(s = es.s, n = es.n) }
+              if es.n != 0 and cli::mf_is_int_type(str_at((cx.src + es.s), es.n)) { found = CSpan(s = es.s, n = es.n) }
             }
           }
           i += 1
@@ -16203,7 +16188,7 @@ slice_local_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       end := lt.s + lt.n
       while ee < end and str_at((cx.src + ee), 1) != ")" { ee += 1 }
       if ee == es or ee >= end { return CSpan(s = 0, n = 0) }
-      if is_builtin_int_name(str_at((cx.src + es), ee - es)) { return CSpan(s = es, n = ee - es) }
+      if cli::mf_is_int_type(str_at((cx.src + es), ee - es)) { return CSpan(s = es, n = ee - es) }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
@@ -16227,7 +16212,7 @@ slice_param_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
       if ent.ek != 5 or ent.is_ref == false or ent.sns != 1 or ent.snl != 1 { return CSpan(s = 0, n = 0) }
       es := slice_ann_elem_span(cx.src, ent.ns, ent.nl)
-      if es.n != 0 and is_builtin_int_name(str_at((cx.src + es.s), es.n)) { return es }
+      if es.n != 0 and cli::mf_is_int_type(str_at((cx.src + es.s), es.n)) { return es }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
@@ -16827,7 +16812,7 @@ param_type_has_tparam := fn(src : ptr(u8), ts : usize, tl : usize, tpn_s : usize
 ## inferred argument type. A no-op when the callee is not overloaded (every `src/` call). `a` is the
 ## EMIT arena (the Arg nodes' arena — the emit_gas / emit_call_dispatch `a` param).
 emit_overload_suffix := fn(in out sb : strbuf::StrBuf, cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena) {
-  cp := colon_pos(cx.src, cs, cl)
+  cp := driver::d_colon_pos(cx.src, cs, cl)
   mut idx := -1
   if cp >= 0 {
     hl := usize(cp)
@@ -24983,9 +24968,7 @@ guard_typeinfo_kind := fn(scrut : ptr(Expr), tp : ptr(GuardTP), decls : ptr(rt::
 
 ## Is `e` an integer literal? / its value. Split into two single-`match` helpers so `guard_fold_inst`
 ## needs no nested match (staying within the self-host lower idiom limits).
-guard_expr_is_num := fn(e : ptr(Expr)) -> bool {
-  match deref(e) { Expr::Num(v, s, n) => { true } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false } }
-}
+
 guard_expr_num := fn(e : ptr(Expr)) -> i64 {
   match deref(e) { Expr::Num(v, s, n) => { i64(v) } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 } }
 }
@@ -25195,13 +25178,13 @@ guard_fold_inst := fn(cond : ptr(Expr), tp : ptr(GuardTP), decls : ptr(rt::Vec),
       }
       ## `size(U) <op> N` — a comparison whose LHS is a `size(…)` comptime call and RHS an integer literal.
       lsz := guard_size_operand(l, tp, decls, src, a)
-      if lsz >= 0 and guard_expr_is_num(r) {
+      if lsz >= 0 and parser::expr_is_num(r) {
         return guard_cmp(i64(op), lsz, guard_expr_num(r))
       }
       ## `typeinfo(U).fields.len <op> N` — a structural FIELD/VARIANT-COUNT bound (appendix §4.1's
       ## `TypeInfo.Struct{fields:[Field]}` / `.Enum{variants:[Variant]}`), the count folded per-instance.
       lcnt := guard_field_count(l, tp, decls, src, a)
-      if lcnt >= 0 and guard_expr_is_num(r) {
+      if lcnt >= 0 and parser::expr_is_num(r) {
         return guard_cmp(i64(op), lcnt, guard_expr_num(r))
       }
       return -1
@@ -29249,7 +29232,7 @@ mark_name := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl 
 ## their module head in the source span, so use the same segment-aware matcher as lowering and only
 ## fall back to the basename scan when the head cannot be resolved (aliases/unknown imports).
 mark_qualified_name := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
-  cp := colon_pos(src, cs, cl)
+  cp := driver::d_colon_pos(src, cs, cl)
   if cp < 0 { return false }
   hl := usize(cp)
   ts := cs + hl + 2
@@ -29393,7 +29376,7 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
       }
     }
     Expr::Call(cs, cl, nargs, args_head) => {
-      if colon_pos(src, cs, cl) >= 0 {
+      if driver::d_colon_pos(src, cs, cl) >= 0 {
         ## Modules §3 — a QUALIFIED call names its module outright, so the callee must be `pub` unless
         ## the calling module is that module or one nested within it. `_mark_ms`/`_mark_ml` is the
         ## module of the declaration whose body this walk is in, which is the exact naming module.

@@ -1242,7 +1242,7 @@ d_count_prog_calls := fn(cs : usize, cl : usize, decls : rt::Vec, na : ptr(mut r
 }
 ## Byte offset (0-based) of the LAST `::` separator within span `[cs, cs+cl)`, else -1 (unqualified).
 ## Mirrors lower::colon_pos — splits `a::b::c` into module head `a::b` + tail fn `c`.
-d_colon_pos := fn(src : ptr(u8), cs : usize, cl : usize) -> i64 {
+pub d_colon_pos := fn(src : ptr(u8), cs : usize, cl : usize) -> i64 {
   mut res := -1
   mut i : usize = 0
   while i + 1 < cl {
@@ -2006,7 +2006,7 @@ d_rewrite_fwd_stmts := fn(head : Option(ptr(mut Stmt)), decls : rt::Vec, na : pt
 ## ANY appearance of the dyn local's name as an `Expr::Var` (returned / assigned / passed / stored in an
 ## aggregate) is an escape-shaped use → FAIL LOUD. Dormant in src/lib (no `dyn`-typed local exists → no
 ## name is ever flagged), so fixpoint-neutral.
-d_is_dyn_annotation := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+pub d_is_dyn_annotation := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   if n < 4 { return false }
   if str_at((src + s), 3) != "dyn" { return false }
   c := str_at((src + s + 3), 1)

@@ -342,7 +342,7 @@ closed_cmp_fold := fn(op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> i
   bfn := build_lhs_flag_name(l, src)
   if bfn.n == 0 { return -1 }
   mut eqv : i64 = 0 - 1
-  if guard_expr_is_num(r) {
+  if parser::expr_is_num(r) {
     eqv = build_flag_int_eq(str_at((src + bfn.s), bfn.n), guard_expr_num(r))
   } else {
     rhead := build_cmp_rhs_head(r, src)
@@ -421,7 +421,7 @@ comptime_query_arg_ok := fn(e : ptr(Expr), pm : ptr(mut Param), cx : ptr(LCtx), 
 }
 comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena, types : bool) -> bool {
   cnt := rt::vec_len(deref(cx.decls))
-  cp := colon_pos(cx.src, cs, cl)
+  cp := driver::d_colon_pos(cx.src, cs, cl)
   mut qns := cs
   mut qnl := cl
   mut qms := cx.mod_s
@@ -436,7 +436,7 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr
     ## this binding for `m::floor`; keep the query mirror on the same path.
     ## Only a single-segment head is an alias (multi-segment heads are already
     ## literal module paths), and the alias must belong to the caller module.
-    if colon_pos(cx.src, qms, qml) < 0 {
+    if driver::d_colon_pos(cx.src, qms, qml) < 0 {
       mut i : usize = 0
       mut as_ := 0
       mut al := 0
@@ -1054,12 +1054,12 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
       ## and `typeinfo(X).fields.len` / `.variants.len` / `.n` `<op> N` (appendix §4.1), each with `X`
       ## resolved through the 1st/2nd/3rd type-param bindings — or a plain LITERAL comparison
       ## `N <op> M` (Comptime §4: a closed comptime fact). All three used to fall to -1.
-      if guard_expr_is_num(r) {
+      if parser::expr_is_num(r) {
         lsz := guard_size_operand(l, tp, cx.decls, src, a)
         if lsz >= 0 { return guard_cmp(i64(op), lsz, guard_expr_num(r)) }
         lcnt := guard_field_count(l, tp, cx.decls, src, a)
         if lcnt >= 0 { return guard_cmp(i64(op), lcnt, guard_expr_num(r)) }
-        if guard_expr_is_num(l) { return guard_cmp(i64(op), guard_expr_num(l), guard_expr_num(r)) }
+        if parser::expr_is_num(l) { return guard_cmp(i64(op), guard_expr_num(l), guard_expr_num(r)) }
       }
       ## TYPE-NAME equality where BOTH sides are concrete type names (`u64 == u64`, `S != T` outside a
       ## generic) — Comptime §4.1's type equality as a closed comptime fact. Disjoint from the

@@ -202,7 +202,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               ## the stack, so reject. A DECLARATION (`NAME := v` / `NAME : T = v`) is excluded above: it
               ## introduces a new local and legitimately shadows the global's spelling.
               reject_gref_unresolved(decls, src, ns, nl)
-            } else if local_type_span(src, ns, nl).n != 0 and is_dyn_type(src, local_type_span(src, ns, nl).s, local_type_span(src, ns, nl).n) {
+            } else if local_type_span(src, ns, nl).n != 0 and driver::d_is_dyn_annotation(src, local_type_span(src, ns, nl).s, local_type_span(src, ns, nl).n) {
               ## FN-11: `d : dyn fn(…)->R = dyn_over(…)` — a two-word {code, env} fat pair (dormant: src/lib
               ## declare no `dyn` type, so this never fires there → fixpoint-neutral).
               bind_dyn_slot(slots, src, ns, nl)
