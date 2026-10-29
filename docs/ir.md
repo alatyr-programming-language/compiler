@@ -301,6 +301,114 @@ definition and diffed against its twins (prefix-normalised), not read off this t
   `collect_slots`, then reclassify the fixture to accept. Until the first is done the second would turn
   the gate red, and until both are done this row stays a disagreement with a named cause — which is what
   §3.8's attribution is for.
+- **the 19 are not one class, and the class matters more than the count — measured per name.** Each is
+  now classified A/B/C in `scripts/copy_lift.private.baseline`, because "delete the copy" is safe for two
+  of them and a behaviour change for one:
+  * **A — 2 names, 187 call sites, deletable today.** `decl_at` (`lower.al:13328`) and `decl_get`
+    (`lower.al:13330`) have a `pub` definition in `lower_ctx.al:33/:34` whose executable code is identical
+    — differing by the `pub` keyword and a `;` alone. The shared decision already exists and the emitter
+    keeps its own copy anyway: this is criterion 2 in its purest form, and repointing is mechanical.
+  * **B — 16 names, 53 call sites.** Duplicated only across PRIVATE module copies (`lower.al` ↔
+    `driver.al`/`sema.al`/`parser.al`/`cli.al`/`lower_layout.al`), no `pub` home exists. Two steps: lift
+    one to `lower_ctx`, then delete the rest; the lift is the reviewed part. Naming a private twin as the
+    target would send the next agent to a call that does not compile, so the detector prefers a `pub` home.
+  * **C — 1 name, 257 call sites, NOT deletable by repointing.** `streq`: the `pub` version in
+    `lower_ctx.al:41` has NO length-first fast reject that `lower.al:290` and `driver.al:62` both carry.
+    Two implementations of one signature. **Checked, not assumed benign:** emitting the shape and reading
+    the GAS shows `cmpq %rcx, %rsi; jne` before any byte compare — `==` on `str` compares length first,
+    so the fast reject is redundant at the machine level and the two are equivalent. It is a source-level
+    optimization, not a semantic difference; repointing is therefore safe on VALUE, which is exactly the
+    thing that had to be established before touching 257 call sites.
+  A stale comment is recorded here so it stops misleading: `lower.al:293-294` says the pointer arithmetic
+  "route[s] through `rt::addr`, not a checked integer `+` (I11 / CG-8)", while the two lines below it use
+  plain `src + a_s` — and `lower_ctx.al:39-40` says plain `+` is intentional for the same reason. Both
+  use `+`; the comment contradicts its own code.
+- **why the deletion is NOT attempted on this machine.** `alatyr check package.al` does not terminate in
+  120 s under Rosetta, and `alatyr check src/lower.al` cannot check a module standalone (`invalid at line
+  206`, it needs the package context). So a 187-call-site edit to `lower.al` cannot be compiled here at
+  all, and an unverifiable refactor of the emitter is precisely the silently-wrong result this goal
+  forbids. Class A is staged as the first deletion PR for a native x86_64 machine, with the repoint
+  targets named in the baseline.
+- **an instrument bug found while doing this, and what it invalidated.** `parse()` ended a definition at
+  `depth == 0 and j > i`, so a ONE-LINE definition never terminated on its own line: the scan ran past it
+  and swallowed every following definition until some accidental depth-0 — `lower_ctx.al:33 decl_at` came
+  back with `pub decl_get := fn(...)` inside its body. Text that is not the body both invents duplicates
+  and hides real ones, so every verdict downstream was unfounded. Fixed to `j >= i`, with two planted
+  self-test checks; the count held at 19 across the fix, which is the reassuring answer, not the expected
+  one. `copy_lift.py --self-test` now runs **30 checks, 0 failed**, and `--private-copies --write-baseline`
+  regenerates the committed baseline BYTE-IDENTICALLY (grouped by class, so a baseline diff means the tree
+  changed, not the sort).
+- **CORRECTION to the bullet below it, same day: the twins do not refuse at the span scan, so lifting
+  it is NEUTRAL for them — measured off the emitted text, not inferred.** Emitting the §7.2 fixtures with
+  the main build (`alatyr aarch64|riscv64|wat test/slice_variadic_enum_elem.al`, stdout captured) shows the
+  refusal site is the for-in lowering, a different decision: `ebreak # for-in over an unsupported iterable`
+  in both aarch64 and riscv64, `(unreachable) (; unsupported for-in-iterable ;)` in wasm. So the bullet
+  below is wrong in its mechanism and in the ordering it prescribes: giving the shared scan the variadic
+  branch does NOT turn these refusals into answers, and the fixture reclassification therefore does NOT
+  belong in the same PR as the lift — it waits, as §7.2 already says, for the `for`-in iterable support
+  (slice 6, "for-in 33 rows"). What the lift changes on the twins is only what they answer WHERE THEY
+  ALREADY ANSWER, which is the constraint the band note at `lower_ctx.al:528` meant and could not state.
+  The bound is safe and this was checked rather than assumed: x86 sets `LOWER_SRC_N = src_n` at
+  `lower.al:30318`, and every x86 emit site is preceded by a publish of the SAME buffer length into
+  `ast::set_src_extent` (`driver.al:2863`→`:2917`, `:2974`→`:3012`, `:3066`→`:3099`, `:5138`→`:5605`),
+  so `LOWER_SRC_N == ast::src_extent()` wherever the lifted scan would run.
+- **criterion 2 was unENFORCED, and now it is: `copy_lift.py` found only the copies someone had already
+  named.** Measured on this tree before the fix: pasting `driver::streq` verbatim into `lower.al` under
+  the fresh name `x86_private_streq` left `--gate` at **rc=0 with zero mentions of it** — `FAMILIES` is a
+  name list, so an unlisted copy walks through the check that exists to stop it. A census that knows only
+  the duplicates already listed does not hold "the private copies are gone"; this is the recurring class the
+  whole exercise is about, enforced by a list of names instead of by shape. Fixed by `private_exact()`,
+  which matches an emitter function against shared code by normalized SIGNATURE and BODY, name-agnostic,
+  plus `scripts/copy_lift.private.baseline` as the merge-base snapshot and a `## copy-ok: #<issue> — <why>`
+  marker for a copy that genuinely cannot move yet. Evidence, in order: the planted copy above now returns
+  **rc=1 naming `lower.al:30956 x86_private_streq duplicates driver.al:62`**; the self-test runs 28 checks
+  and 0 fail, including a non-vacuity control (the same tree passes once every copy is in the baseline) and
+  a refusal of a marker that cites no issue; and the clean tree holds at `liftable=0 baseline 0` unchanged.
+  **The measurement it made possible: `lower.al` carries 19 EXACT copies of decisions shared code already
+  makes** (`streq`≡`driver.al:62`, `_lnhash`≡`lower_layout.al:410`, `is_int_scalar_type`≡`sema.al:5716`,
+  `guard_expr_is_num`≡`parser.al:2789`, and 15 more, all listed in the baseline by name so a removal is
+  auditable and a swap is not). None is forced by layering, which was the obvious defence and does not
+  survive the grep: `lower.al` already references `driver::` (2 sites), `cli::` (1), `sema::` (5),
+  `parser::` (3), `lower_layout::` (81), `lower_ctx::` (1), `ast::` (25) — every module holding one of the
+  19 originals is already imported by the file holding its copy, so each is one call from deletion. Near-
+  matches were measured too and deliberately NOT refused: at a Jaccard floor of 0.6 over same-signature
+  pairs the tree yields **1068** hits, which is noise; refusing them would teach the next agent to lower
+  the floor or delete the check. Exact equality is the line that can be held, and it costs nothing to hold
+  at 19. `idiom_gate.sh` stays the reporting-only duplicate-decision detector AGENTS.md makes it — this
+  refuses one narrow shape it cannot see, and does not duplicate its remit.
+- **the x86 variadic branch is not incidental, and merging it is a behaviour change on three backends —
+  measured, so the next slice can be ordered.** The band note at `lower_ctx.al:528` says the open work is
+  "giving this scan the variadic branch without changing what the three twins answer today". Read as a
+  promise that nothing changes, that is unmeasurable and wrong; read as "do not change what the twins
+  answer WHEN THEY ANSWER", it is the right constraint. The measurement settles which it means:
+  `scripts/corpus.manifest` shows x86_64 the ONLY backend that implements §7.2 slice-variadic with a
+  non-scalar element — `test/slice_variadic_enum_elem.al` x86_64 `run 42` (the fixture's own expected
+  value, `esum(Sh.Sq(20), Sh.Tri(11)) = 20 + 22 = 42`) against aarch64 and riscv64 `run 133`
+  (= 128 + SIGTRAP, the `ebreak`/`brk #0` refusal) and wasm `run 134`; `test/signedness_slice_variadic.al`
+  likewise (x86 `run 42`, twins TRAP, wasm `assemble 1`). The reading of these numbers given here first —
+  "the twins answer nothing, so the merge turns a refusal into an answer and lowers the TRAP mass" — was
+  WRONG about where they refuse, and is corrected by the bullet above: they trap at the for-in lowering,
+  which the span scan does not touch. What the numbers still establish is the SCOPE: x86_64 is today the
+  only backend that carries §7.2 slice-variadic with a non-scalar element, and the span scan is one of the
+  decisions standing in the way of the twins getting it. Scope, counted: **29 corpus sites carry
+  the `name : ...T` annotation form** (27 in `test/*.al`, 2 in `lib/`), of which six are dedicated
+  §7.2 fixtures (`slice_variadic{,_fixed,_float,_enum8,_enum_elem}.al`, `signedness_slice_variadic.al`).
+  What the merge must preserve is the {0,0} answer for a BARE `...` (the §7.1 comptime variadic, no element
+  type) — x86's copy already returns {0,0} there (`lower.al:6301`, `if ve == vs`), so the branch is
+  additive on exactly the shapes the twins refuse. Plumbing is already in place and adds no state:
+  `lower_ctx.al` publishes `pub slice_scan_has` (:548) and `pub slice_scan_ws` (:555), byte-identical to
+  x86's `ptr_scan_has`/`ptr_scan_ws` (`lower.al:12514`, `:12519`), and the bound comes from
+  `ast::src_extent()` rather than a per-target global. So the lift is: add the variadic branch to
+  `lower_ctx::slice_elem_span`, delete x86's copy and its two helpers, repoint the four shared callers that
+  already reach into the emitter (`lower/place.al:237`, `:1230`, `lower/ir.al:1231`, `:1790`) — and land
+  the six fixtures' reclassification in the same PR, since a fixture that asserts a trap while the backend
+  now answers 42 is the gate going red for the right reason.
+- **#1108 does not block any of this.** Re-measured on the main build from a clean directory (the earlier
+  "hang" was two harness defects, recorded in `.worktrees/e2e-crash/target/1108-correction.md`: a
+  `docker inspect` false-pass race, and a self-host path entered because the diagnostic binary sat in
+  `target/debug/`): `alatyr` at `99476a5` returns rc=0 for BOTH `ir` and `check` on all eleven repro
+  programs. The repo's own gate scripts never inspect container state — the race was the scratch harness's
+  alone. Nothing here is a compiler defect, so slice 9 waits on the gate and the seed promotion, not on it.
 - **row 11 was wrong as written.** `enum_inst_words` has ONE definition (`src/lower_layout.al`), imported
   by all three twins; there is no copy to delete. wasm's real gap is that it calls `enum_max_arity`
   instead, leaving its `enum_inst_words` import dead — a call-site fix, not a deletion.
@@ -1095,3 +1203,52 @@ for the same functions.
 - **#777 and #778:** probes built from `a46b5bc` on the gate machine and run on all four backends; the
   programs and their exits are in those issues.
 - **Sizes:** `wc -l`.
+
+### 9.1 What a macOS dev box CANNOT measure, and how the gate survives it (measured 2026-10-29)
+
+Every claim above was taken on native x86_64. On the local macOS/arm64 machine four things fail, and
+each failure mode was reproduced rather than assumed, because three of them produced a PLAUSIBLE WRONG
+ANSWER before they were understood. Recorded so the next agent does not spend an hour rediscovering them
+or, worse, report a green from one of them.
+
+1. **The compiler cannot run at all.** `seed/alatyr` and every Stage binary are static x86_64 Linux
+   ELF: `cannot execute binary file: Exec format error`. They run only inside Docker (Rosetta), so any
+   check that invokes `$ALATYR` directly dies at once — `ptrint_census.sh planted` answered rc=126
+   that way, and its "NOT PROVEN — 13 of 13 classes" was the census reporting that IT could not run,
+   not that the tree was dirty.
+2. **The #529 census is unrunnable, not merely slow.** It opens its channel with a shell redirect
+   (`check "$2" 98>"$3"`, `ptrint_census.sh:52`) and the seed image has **no `/bin/sh`** (`stat
+   /bin/sh: no such file or directory`), so fd 98 cannot be forwarded into the container. `op-cmp=0`
+   therefore stays a baseline reading here and is verified only on the gate machine.
+3. **`scripts/ir_census.sh` does not run on macOS.** It calls `timeout 60 "$AL" ...` at `:174` and
+   macOS has no coreutils `timeout` (`command -v timeout` empty). The failure is misleading: the error
+   names the *redirect target*, not the missing command. A `timeout` shim plus a Docker wrapper got the
+   census to completion, and its answer was **`x86_64/aarch64/riscv64/wasm: programs 2335, with-IR 0,
+   refused 2335`** — every invocation failing, so `refused` there counts broken calls, not selector
+   refusals. A number that looks like a measurement and is not one.
+4. **`check package.al` crashes under emulation.** rc=135 (signal 7) after ~160 s, no output. So a
+   change to `lower.al` cannot be compile-checked locally at all, which is why the class-A deletions in
+   §2.4 are staged rather than applied: an unverifiable edit to the emitter is the silently-wrong
+   result this document forbids.
+
+**Why none of this can turn the real gate green by accident.** `full.sh:438-442` fails when
+`ir_census.sh --gate` prints no `ir coverage per backend:` line, and `:449-453` fails when it prints no
+`ir census gate:` line — "absent means the measurement did not happen — unknown, so a failure". A census
+that cannot run therefore cannot pass. The same proof-of-work pattern guards `wildcard_arm_check.sh`,
+`strict_forms_check.sh`, `corpus_manifest.sh`, `fmt_corpus.sh` and `sweeps.sh`. The gate is safe; what
+is unsafe is reading a number printed by a hand-rolled wrapper, which is exactly what happened twice in
+this session:
+
+- **the `created`-state false pass, hit twice.** `docker inspect -f '{{.State.Running}}'` is **false
+  while a container is still `created`**, and `{{.State.ExitCode}}` is **0 until the process has exited**.
+  A wait loop keyed on `Running != true` breaks before the process starts and reports rc=0. This voided
+  the entire #1108 splice corpus (`.worktrees/e2e-crash/target/1108-correction.md`), then reappeared
+  minutes later in a fresh wrapper written after that lesson was written down — which is the argument for
+  keying on `State.Status` and accepting an exit code only at `exited`, every single time, rather than
+  trusting the next loop.
+- **`mktemp` CREATES its file.** Using `[ -e "$flag" ]` as "the timer fired" is true from the moment of
+  creation, so a `timeout` shim built that way returned 124 for every command including `sleep 1` under
+  a 5 s cap. Remove the file after creating it; existence then means exactly what it is being read as.
+
+Both are the same shape: **a sentinel that is true before the event it stands for.** The gate's
+proof-of-work lines exist to catch this class; a scratch harness has to re-derive it, and did, twice.
