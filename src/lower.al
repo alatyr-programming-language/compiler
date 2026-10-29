@@ -518,7 +518,7 @@ mod_head_matches := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : 
 inline_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize) -> i64 {
   ci := callee_decl_idx(decls, src, cs, cl, ms, ml)
   if ci < 0 { return -1 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   if d.is_fn and fn_is_inline(src, d.name_start, d.name_len) { return ci }
   -1
 }
@@ -533,7 +533,7 @@ variadic_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : 
   ci := callee_decl_idx(decls, src, cs, cl, ms, ml)
   if ci < 0 { return -1 }
   if callee_decl_is_abi_c(decls, src, ci) { return -1 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   if decl_is_variadic(d, src, a) { return ci }
   -1
 }
@@ -542,7 +542,7 @@ variadic_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : 
 slice_variadic_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize) -> i64 {
   ci := callee_decl_idx(decls, src, cs, cl, ms, ml)
   if ci < 0 { return -1 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   if decl_is_slice_variadic(d) { return ci }
   -1
 }
@@ -748,7 +748,7 @@ operator_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), op : i64, ts : usiz
 ## determined from the operand (a non-literal value argument / no argument at all) — never fall
 ## through to the scalar lowering over the aggregate's words (the original silent-miscompile).
 op_ct_bind := fn(decls : ptr(rt::Vec), src : ptr(u8), opci : i64, ts : usize, tn : usize, a : rt::Arena) -> bool {
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(opci))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(opci))))
   mut nct := 0
   mut cns := 0
   mut cnl := 0
@@ -2884,7 +2884,7 @@ const_struct_field := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(r
   if sli.is_s == false { return z }
   di := struct_decl_of(decls, src, sli.ss, sli.sl)
   if di < 0 { return z }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut idx := 0
   mut found := 0 - 1
@@ -2929,7 +2929,7 @@ const_field_rhs := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
 struct_field_index := fn(decls : ptr(rt::Vec), src : ptr(u8), ss : usize, sl : usize, fs : usize, fl : usize, a : rt::Arena) -> i64 {
   di := struct_decl_of(decls, src, ss, sl)
   if di < 0 { return 0 - 1 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut idx := 0
   mut found := 0 - 1
@@ -2989,7 +2989,7 @@ emit_mangled_call := fn(in out sb : strbuf::StrBuf, src : ptr(u8), cs : usize, c
     mut out_ns := ts
     mut out_nl := tl
     if idx >= 0 {
-      cd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(idx))))
+      cd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(idx))))
       ## `@extern` callee (Modules §7): emit the EXTERNAL symbol, not the mangled name.
       esn := extern_symbol(src, cd.name_start, cd.name_len)
       if esn.n != 0 { push_str(sb, str_at((src + esn.s), esn.n)); return }
@@ -3015,7 +3015,7 @@ emit_mangled_call := fn(in out sb : strbuf::StrBuf, src : ptr(u8), cs : usize, c
     mut out_ns := cs
     mut out_nl := cl
     if idx >= 0 {
-      cd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(idx))))
+      cd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(idx))))
       ## `@extern` callee (Modules §7): emit the EXTERNAL symbol, not the mangled name.
       esn := extern_symbol(src, cd.name_start, cd.name_len)
       if esn.n != 0 { push_str(sb, str_at((src + esn.s), esn.n)); return }
@@ -3617,7 +3617,7 @@ pub field_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), sns : usize, snl 
   }
   di := struct_decl_of(decls, src, sns, snl)
   if di < 0 { return CSpan(s = 0, n = 0) }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut res := CSpan(s = 0, n = 0)
   loop {
@@ -5023,7 +5023,7 @@ resolve_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
 ## aggregate `out` param (those already pass by reference via their type branch).
 callee_out_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx : i64, pidx : usize) -> bool {
   if cidx < 0 { return false }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
   mut k : usize = 0
   loop {
@@ -5051,7 +5051,7 @@ callee_out_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx
 ## 0/0 for an unknown callee or an index past the list. Mirrors the walk in `callee_out_scalar`.
 callee_param_ty_span := fn(decls : ptr(rt::Vec), cidx : i64, pidx : usize) -> CSpan {
   if cidx < 0 { return CSpan(s = 0, n = 0) }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
   mut k : usize = 0
   loop {
@@ -5086,7 +5086,7 @@ callee_folded_arg := fn(e : ptr(Expr), cidx : i64, pidx : usize, cx : ptr(LCtx),
 ## the ELEMENT type), which reads such a parameter through its pointer as N packed bytes.
 callee_byte_array_param_eek := fn(cidx : i64, pidx : usize, cx : ptr(LCtx)) -> u8 {
   if cidx < 0 { return 0 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(cidx))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(cidx))))
   mut pp := d.params_head
   mut k : usize = 0
   loop {
@@ -5163,7 +5163,7 @@ emit_param_arg := fn(e : ptr(Expr), cidx : i64, pidx : usize, tmp_off : i64, in 
 ## invalid `take_u64(s[0])` cannot pass a pair address as if it were a u64 value.
 callee_param_is_scalar_value := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i64, pidx : usize) -> bool {
   if cidx < 0 { return false }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
   mut k : usize = 0
   loop {
@@ -5512,9 +5512,9 @@ struct_lit_info := fn(e : ptr(Expr)) -> SInfo {
 ## unchanged for a non-nominal name (a primitive, or an as-yet-undeclared type).
 type_lit_tag := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> CSpan {
   sd := struct_decl_of(decls, src, s, n)
-  if sd >= 0 { d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(sd)))); return CSpan(s = d.name_start, n = d.name_len) }
+  if sd >= 0 { d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(sd)))); return CSpan(s = d.name_start, n = d.name_len) }
   ed := enum_decl_of(decls, src, s, n)
-  if ed >= 0 { d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ed)))); return CSpan(s = d.name_start, n = d.name_len) }
+  if ed >= 0 { d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ed)))); return CSpan(s = d.name_start, n = d.name_len) }
   CSpan(s = s, n = n)
 }
 
@@ -5642,7 +5642,7 @@ emit_global_data_cells := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, decls : 
     ## not the two-word enum cell its bare `Option.None` initializer would otherwise lay down.
     mut gfd : Option(ptr(mut FieldDecl)) = Option.None
     gsdi := struct_decl_of(decls, src, sli.ss, sli.sl)
-    if gsdi >= 0 { gfd = (deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gsdi))))).fields_head }
+    if gsdi >= 0 { gfd = (deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gsdi))))).fields_head }
     mut k : usize = 0
     while k < nfa {
       gv := arg_expr_at(struct_lit_fields(e), k, a)
@@ -6146,7 +6146,7 @@ enum_type_payload_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   ebn := base_type_name(src, s, n)
   di := enum_decl_of(decls, src, ebn.s, ebn.n)
   if di < 0 { return 0 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   if d.is_generic { return enum_inst_words(decls, src, s, n, a) }
   mut f := d.fields_head
   mut mx : usize = 0
@@ -8192,7 +8192,7 @@ match_depth_stmts := fn(head : Option(ptr(mut Stmt)), a : rt::Arena, decls : ptr
 ## needs: its PARAM count (each param binds one arg slot). (Callee body-LOCALS are added when the
 ## statement-body inliner lands; for now a tail-expression `@inline` body uses only params.)
 inline_callee_pcount := fn(decls : ptr(rt::Vec), ci : i64, a : rt::Arena) -> usize {
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   mut c := 0
   mut p := d.params_head
   loop { match p { Some(pq) => { pm := deref(param_p(pq)); c = c + 1; p = pm.next }; None => { break } } }
@@ -8216,7 +8216,7 @@ param_words := fn(decls : ptr(rt::Vec), src : ptr(u8), pm : Param, a : rt::Arena
 ## A COMPTIME VALUE parameter (TYP-10 slice B) contributes NOTHING — it is bound at expansion time,
 ## never delivered on the value stack.
 inline_callee_pwords := fn(decls : ptr(rt::Vec), src : ptr(u8), ci : i64, a : rt::Arena) -> usize {
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   mut c : usize = 0
   mut p := d.params_head
   loop { match p { Some(pq) => { pm := deref(param_p(pq)); if param_is_comptime(src, pm.ns) == false { c = c + param_words(decls, src, pm, a) }; p = pm.next }; None => { break } } }
@@ -8231,7 +8231,7 @@ inline_callee_pwords := fn(decls : ptr(rt::Vec), src : ptr(u8), ci : i64, a : rt
 ## the seeds. Byte-identical for pre-slice-B callees: their bodies never copied a param into an
 ## aggregate local, so the seeds change no binding decision (offsets are rebased away).
 seed_inline_params := fn(in out slots : SVec, decls : ptr(rt::Vec), src : ptr(u8), ci : i64, a : rt::Arena) -> usize {
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   mut cnt := 0
   mut p := d.params_head
   loop {
@@ -8264,7 +8264,7 @@ seed_inline_params := fn(in out slots : SVec, decls : ptr(rt::Vec), src : ptr(u8
 ## (statement-body operators declare a local `out`). SVec is created + used LOCALLY (never returned —
 ## a 4-word SVec would truncate through the ≤3-register struct-return convention).
 inline_callee_lcount := fn(decls : ptr(rt::Vec), src : ptr(u8), ci : i64, mar : ptr(mut rt::Arena)) -> usize {
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   mut s := SVec(base = 0, len = 0, cap = 0, arena = mar)
   svec_new(s, mar, 8)
   mut cts := SVec(base = 0, len = 0, cap = 0, arena = mar)
@@ -8289,7 +8289,7 @@ mut INL_NEST_DEPTH := 0
 inline_callee_nested_need := fn(decls : ptr(rt::Vec), src : ptr(u8), ci : i64, a : rt::Arena, mar : ptr(mut rt::Arena)) -> usize {
   if INL_NEST_DEPTH >= 8 { return 0 }
   INL_NEST_DEPTH = INL_NEST_DEPTH + 1
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   mut sl := SVec(base = 0, len = 0, cap = 0, arena = mar)
   svec_new(sl, mar, 8)
   mut cts2 := SVec(base = 0, len = 0, cap = 0, arena = mar)
@@ -8470,7 +8470,7 @@ bin_operator_ret_struct := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
       if ots.n == 0 { ots = operand_type_from_slots(r, slots, src) }
       opci := operator_decl_idx(decls, src, op, ots.s, ots.n, a)
       if opci < 0 { return CSpan(s = 0, n = 0) }
-      od := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(opci))))
+      od := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(opci))))
       rbn := base_type_name(src, od.ret_ts, od.ret_tl)
       ## TYP-10 slice B: a GENERIC operator's declared return type is the UNBOUND `uint(N)` — its
       ## words would have to fold against the expansion-time binding, which does not exist at
@@ -8514,7 +8514,7 @@ inline_frame_need_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
       ## variadic, and the callee's own body locals ride the fixed +8 slack `emit_fn` adds to the region.
       vci := variadic_callee_idx(decls, src, cs, cl, ms, ml, a)
       if vci >= 0 {
-        vd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(vci))))
+        vd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(vci))))
         mut vw : usize = 1
         mut vp := vd.params_head
         mut vpc := usize(vd.arity) - 1
@@ -8747,7 +8747,7 @@ call_ret_struct_span_sub := fn(inner : ptr(Expr), decls : ptr(rt::Vec), src : pt
         }
       }
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         rfull := extend_type_span(src, d.ret_ts, d.ret_tl)
         pn := ptr_pointee_name(src, d.ret_ts, rfull)
         if pn.n != 0 {
@@ -8799,7 +8799,7 @@ deref_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(
 ## (walks the `Param` list). -1 if not a parameter. Local analogue of `lower_layout::param_pos` (not
 ## imported here) — used by `subst_enum_ret_span` to map a return type-arg name to the call's argument.
 callee_param_pos := fn(decls : ptr(rt::Vec), ci : usize, src : ptr(u8), ts : usize, tl : usize, a : rt::Arena) -> i64 {
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), ci)))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), ci)))
   mut pc := d.params_head
   mut pj := 0
   mut res := 0 - 1
@@ -8860,7 +8860,7 @@ call_ret_pointee_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
     Expr::Call(cs, cl, nargs, ah) => {
       ci := fn_decl_idx_by_name(decls, src, callee_name_span(src, cs, cl))
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         rfull := extend_type_span(src, d.ret_ts, d.ret_tl)
         pn := ptr_pointee_name(src, d.ret_ts, rfull)
         if pn.n != 0 {
@@ -8905,7 +8905,7 @@ call_ret_pointee_unresolved := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr
     Expr::Call(cs, cl, nargs, ah) => {
       ci := fn_decl_idx_by_name(decls, src, callee_name_span(src, cs, cl))
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         rfull := extend_type_span(src, d.ret_ts, d.ret_tl)
         pn := ptr_pointee_name(src, d.ret_ts, rfull)
         if pn.n != 0 {
@@ -8995,7 +8995,7 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
         }
       }
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         hs := d.ret_ts
         hl := d.ret_tl
         if enum_decl_of(decls, src, hs, hl) >= 0 {
@@ -9109,7 +9109,7 @@ subst_slice_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
     Expr::Call(cs, cl, nargs, ah) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, ah, a)
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         hs := d.ret_ts
         hl := d.ret_tl
         bn := base_type_name(src, hs, hl)
@@ -9220,7 +9220,7 @@ subst_inst_struct_span := fn(s : usize, n : usize, decls : ptr(rt::Vec), src : p
   bn := base_type_name(src, s, n)
   di := struct_decl_of(decls, src, bn.s, bn.n)
   if di < 0 { return res }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   if d.is_generic == false { return res }
   ## PASS 1 (no allocation): does any top-level type-arg MAP to an AGGREGATE? Only then does the
   ## instantiated layout differ from the raw span's, so only then is a synthesized span warranted.
@@ -9276,12 +9276,12 @@ subst_gen_struct_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
     Expr::Call(cs, cl, nargs, ah) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, ah, a)
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         if d.is_generic and d.ret_tl != 0 {
           bn := base_type_name(src, d.ret_ts, d.ret_tl)
           sdi := struct_decl_of(decls, src, bn.s, bn.n)
           if sdi >= 0 {
-            sd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(sdi))))
+            sd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(sdi))))
             if sd.is_generic {
               ## PASS 1 (no allocation): does any return type-arg name a callee type-param whose CALL
               ## argument is an aggregate type? Only then does the instantiated layout differ.
@@ -9753,7 +9753,7 @@ append_lit_type := fn(in out msb : strbuf::StrBuf, v : ptr(Expr), decls : ptr(rt
   push_str(msb, str_at((src + ef.es), ef.el))            ## the enum BASE name (`Option`)
   di := enum_decl_of(decls, src, ef.es, ef.el)
   if di < 0 { return }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   if d.is_generic == false { return }
   ## Locate this variant's (single-component) payload FIELD to learn which type-PARAM the payload binds.
   mut vf := d.fields_head
@@ -9818,7 +9818,7 @@ synth_lit_type := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
   if ef.is_e == false { return CSpan(s = 0, n = 0) }
   di := enum_decl_of(decls, src, ef.es, ef.el)
   if di < 0 { return CSpan(s = 0, n = 0) }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   if d.is_generic == false { return CSpan(s = 0, n = 0) }
   mut msb := rt::strbuf(deref(synth), 256)
   append_lit_type(msb, v, decls, src, a, slots)
@@ -10824,7 +10824,7 @@ fn_returns_float := fn(d : Decl, src : ptr(u8)) -> bool {
 ## Does the fn at decl index `cidx` return a float? (false for an unknown callee, `cidx < 0`.)
 callee_returns_float := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i64) -> bool {
   if cidx < 0 { return false }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   return fn_returns_float(d, src)
 }
 
@@ -10832,7 +10832,7 @@ callee_returns_float := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i64) -> b
 ## walk in `callee_out_scalar`. false for an unknown callee / out-of-range index.
 callee_param_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx : i64, pidx : usize) -> bool {
   if cidx < 0 { return false }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
   mut k : usize = 0
   mut res := false
@@ -10855,7 +10855,7 @@ callee_param_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, 
 ## byte-identical all-GPR pop loop runs unchanged, so the TOOL-1 fixpoint is unaffected.
 callee_has_float_param := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx : i64) -> bool {
   if cidx < 0 { return false }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
   mut res := false
   loop {
@@ -10991,7 +10991,7 @@ call_ret_ty_span := fn(recv : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
       ## `convert_callee_idx` (filters builtin/brand, so src/lib's `char(n)` never resolves here).
       if idx < 0 { idx = convert_callee_idx(decls, src, cs, cl) }
       if idx < 0 { return CSpan(s = 0, n = 0) }
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(idx))))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(idx))))
       return CSpan(s = d.ret_ts, n = d.ret_tl)
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -11162,7 +11162,7 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
       else if cx.gp3_l != 0 and cx.it3_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp3_s, cx.gp3_l) { ta3 = CSpan(s = cx.it3_s, n = cx.it3_l) }
     }
     ## IMPLICIT type-arg (`hash(key)`, T omitted): infer T from the value arg's type; erase nothing.
-    gdd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
+    gdd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
     mut did_impl := false
     ## IMPLICIT payload type-arg (an arm-body `g(p, …)` where arg 0 is the current variant PAYLOAD
     ## binding `cf_pay` — `display`'s enum arm `display(p, sb)`, `derive`'s `hash(p)`): the payload's
@@ -11230,7 +11230,7 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
     sc_shift := if cx.sret_call >= 0 { 1 } else { 0 }
     emit_call_args(args_head, eff_tpi, eff_tpi2, eff_tpi3, nvals, sb, cx, nl)
     push_str(sb, "  call ")
-    gd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
+    gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
     emit_generic_label(sb, cx.src, gd.mod_start, gd.mod_len, gd.name_start, gd.name_len, ta.s, ta.n, ta2.s, ta2.n, ta3.s, ta3.n)
     ## …plus the per-signature suffix when `gd` is one of a GENERIC OVERLOAD SET (#472). Derived from
     ## the RESOLVED decl, which is the same decl the mono pre-pass recorded the instance for.
@@ -11315,7 +11315,7 @@ struct_has_nonstr_agg_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize
   sbn := base_type_name(src, s, n)
   di := struct_decl_of(decls, src, sbn.s, sbn.n)
   if di < 0 { return false }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut res := false
   loop {
@@ -11562,7 +11562,7 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       di := struct_decl_of(cx.decls, cx.src, irsb.s, irsb.n)
       mut fd : Option(ptr(mut FieldDecl)) = Option.None
       if di >= 0 {
-        ddd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(di))))
+        ddd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(di))))
         fd = ddd.fields_head
       }
       mut sw := 0
@@ -13325,9 +13325,8 @@ var_ptrstruct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSp
 ## A typed pointer to the `T`-record at arena address `h` (the decls/AST handle = the down-growing
 ## top-of-block address). `T : type` arg0 lets `call_first_struct_span` recognize `deref(decl_at(T,h))`
 ## as a struct read (the `get(T,…)` shape), so the read deref-COPIES the record into a local.
-decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
 ## a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
-decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { hh := rt::vec_get(deref(decls), i) ; return decl_at(Decl, hh) }
+decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { hh := rt::vec_get(deref(decls), i) ; return lower_ctx::decl_at(Decl, hh) }
 ## A typed pointer to the AST node at arena OFFSET `h` — the lean replacement for `get(T, a,
 ## Handle(T)(idx=h))` (the self-host lower cannot compile the generic `get`/`Handle`/`scoped`
 ## allocator surface, only this `bitcast` accessor over the arena base; mirrors `parser::node_ptr`).
@@ -13480,7 +13479,7 @@ call_ret_enum_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       ## last-declared-name scan that disagreed with the gate for an implicit-UFCS multi-type-param method.
       ci := ret_call_target(cx.decls, cx.src, cs, cl, nargs, args_head, deref(cx.mar))
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(ci))))
         res = CSpan(s = d.ret_ts, n = d.ret_tl)
       } else {
         ## FN-6/FN-10 INDIRECT: the enum type of a call through a fn VALUE / a fn-value struct FIELD
@@ -13533,7 +13532,7 @@ match_call_scrut_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
   old_s := lower_layout::type_ref_mod_s()
   old_l := lower_layout::type_ref_mod_l()
   if owner_ci >= 0 {
-    owner_d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(owner_ci))))
+    owner_d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(owner_ci))))
     lower_layout::set_type_ref_module(owner_d.mod_start, owner_d.mod_len, ROOT_MOD_S, ROOT_MOD_L)
   }
   sp := call_ret_enum_span_d(e, decls, src, a)
@@ -13861,7 +13860,7 @@ enum_ret_call := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
         if fnfield_call_ret_enum(e, cx) { return true }
         return ind_call_ret_enum(e, cx.decls, cx.src, deref(cx.mar))
       }
-      d := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(ci))))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(ci))))
       fn_returns_enum(d, cx.decls, cx.src)
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -13880,7 +13879,7 @@ enum_ret_call_d := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
       if ci < 0 { return ind_call_ret_enum(e, decls, src, a) }   ## FN-6 INDIRECT — see `enum_ret_call`
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
       fn_returns_enum(d, decls, src)
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -13895,7 +13894,7 @@ call_ret_enum_span_d := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         res = CSpan(s = d.ret_ts, n = d.ret_tl)
       } else {
         ## FN-6 INDIRECT — see `enum_ret_call` (the fn-VALUE return class).
@@ -13923,7 +13922,7 @@ struct_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
         iw := ind_call_ret_struct_words(e, decls, src, a)
         return iw >= 1 and iw <= 7
       }
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
       fn_returns_struct(d, decls, src, a)
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -13948,7 +13947,7 @@ slice_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
       if ci < 0 { return false }
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
       if d.ret_tl == 0 { return false }
       bn := base_type_name(src, d.ret_ts, d.ret_tl)
       str_at((src + bn.s), bn.n) == "Slice"
@@ -13992,7 +13991,7 @@ fixed_array_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
       if ci < 0 { return false }
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
       rs := fixed_array_return_span(src, d.ret_ts, d.ret_tl)
       rs.n != 0 and array_elem_span(src, rs.s, rs.n).n != 0
     }
@@ -14034,7 +14033,7 @@ pub fixed_array_byte_return_len := fn(e : ptr(Expr), decls : ptr(rt::Vec), src :
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         n := fixed_array_byte_return_len_span(src, d.ret_ts, d.ret_tl)
         if n >= 1 { return n }
       }
@@ -14089,7 +14088,7 @@ slice_ret_elem := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
     Expr::Call(cs, cl, nargs, ah) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, ah, a)
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         if d.ret_tl != 0 {
           bn := base_type_name(src, d.ret_ts, d.ret_tl)
           if str_at((src + bn.s), bn.n) == "Slice" {
@@ -14378,7 +14377,7 @@ tuple_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
       if ci < 0 { return false }
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
       fn_returns_tuple(d, src)
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -14413,7 +14412,7 @@ call_ret_tuple_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         if fn_returns_tuple(d, src) { res = tuple_words(src, d.ret_ts, d.ret_tl) }
       }
     }
@@ -14439,7 +14438,7 @@ sret_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::
         ## exactly as for the direct call (`emit_call_args`'s `cx.sret_call` path).
         return ind_call_ret_struct_words(e, decls, src, a) >= 8
       }
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
       fn_returns_sret(d, decls, src, a)
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -14485,7 +14484,7 @@ enum_sret_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a :
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
       if ci < 0 { return false }
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
       fn_returns_enum_sret(d, decls, src, a)
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -14513,7 +14512,7 @@ generic_inferred_str_ret := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> 
     Expr::Call(cs, cl, nargs, args_head) => {
       gi := generic_decl_of(cx.decls, cx.src, cs, cl, cx.mod_s, cx.mod_l, nargs, args_head, a)
       if gi < 0 { return false }
-      gd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
+      gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
       if gd.is_generic == false { return false }
       if gd.ret_tl == 0 { return false }
       mut tpn_s := 0
@@ -14550,7 +14549,7 @@ str_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::A
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
       if ci < 0 { return false }
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
       fn_returns_str(d, src) or generic_str_return_instance(d, args_head, src, a)
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -14587,7 +14586,7 @@ call_ret_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
       if ci >= 0 {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
         res = CSpan(s = d.ret_ts, n = d.ret_tl)
       } else {
         ## FN-6 INDIRECT: the struct type of a call through a fn VALUE (`struct_ret_call`/
@@ -15168,7 +15167,7 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
 ## same-name cross-module generics (spec FN-7: "UFCS method dispatch is resolution keyed on the receiver").
 self_param_base := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, a : rt::Arena) -> CSpan {
   if gi < 0 { return CSpan(s = 0, n = 0) }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
   loop {
     match p {
@@ -15191,7 +15190,7 @@ self_param_base := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, a : rt::Are
 ## the receiver's full type text (`Result(u64, u64)`).
 implicit_targ_from_recv := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, recv_ts : usize, recv_tl : usize, which : usize, a : rt::Arena) -> CSpan {
   if gi < 0 { return CSpan(s = 0, n = 0) }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
   mut tpi : usize = 0
   mut tpn_s := 0
@@ -15284,7 +15283,7 @@ recv_redirect_generic := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs
   if rbl == 0 { return gi }
   csb := self_param_base(decls, src, gi, a)
   if streq(src, csb.s, csb.n, rbs, rbl) { return gi }
-  gd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
+  gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   cnt := rt::vec_len(deref(decls))
   mut best := gi
   for i in 0..cnt {
@@ -15358,7 +15357,7 @@ struct_lit_type_span := fn(e : ptr(Expr)) -> CSpan {
 generic_sig_redirect := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs : usize, ltac : usize, vbs : usize, vbl : usize, a : rt::Arena) -> i64 {
   if gi < 0 { return gi }
   if vbl == 0 { return gi }
-  gd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
+  gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   if generic_overload_set_count(decls, src, gd.name_start, gd.name_len, gd.mod_start, gd.mod_len) < 2 { return gi }
   csb := self_param_base(decls, src, gi, a)
   if streq(src, csb.s, csb.n, vbs, vbl) { return gi }
@@ -15385,7 +15384,7 @@ generic_sig_redirect := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs 
 ## "the type parameter is param 0": `allocate := fn(in out self, T : type, …)` has it at index 1.
 tparam_idx := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
   if gi < 0 { return 0 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
   mut i := 0
   mut res := 0
@@ -15409,7 +15408,7 @@ tparam_idx := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -
 ## erases + binds + mangles BOTH type-args.
 tparam_count := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
   if gi < 0 { return 0 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
   mut c := 0
   loop {
@@ -15429,7 +15428,7 @@ tparam_count := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena)
 ## fewer than two. For `map(T, U : type, …)` this is 1 (T at 0, U at 1).
 tparam_idx2 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
   if gi < 0 { return 0 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
   mut i := 0
   mut seen := 0
@@ -15454,7 +15453,7 @@ tparam_idx2 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) 
 ## `map(T, E, U, …)`). Mirrors `tparam_idx2` (the 3rd `: type` param). 0 if fewer than 3.
 tparam_idx3 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
   if gi < 0 { return 0 }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
   mut i := 0
   mut seen := 0
@@ -16690,7 +16689,7 @@ gen_ret_str_infer := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
 }
 
 infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
-  gd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
+  gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
   mut tpn_s := 0
   mut tpn_l := 0
   mut pc := gd.params_head
@@ -16864,7 +16863,7 @@ emit_overload_suffix := fn(in out sb : strbuf::StrBuf, cs : usize, cl : usize, a
     idx = callee_decl_idx(cx.decls, cx.src, cs, cl, cx.mod_s, cx.mod_l)
   }
   if idx < 0 { return }
-  cd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(idx))))
+  cd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(idx))))
   if overload_set_count(cx.decls, cx.src, cd.name_start, cd.name_len, cd.mod_start, cd.mod_len) < 2 { return }
   ## Resolve the TARGET overload by the complete argument signature (§1 item 3), then emit ITS full
   ## parameter-type suffix — matching the definition side. When resolution is ambiguous (too many
@@ -16874,7 +16873,7 @@ emit_overload_suffix := fn(in out sb : strbuf::StrBuf, cs : usize, cl : usize, a
   loop { match ga { Some(gaq) => { an := deref(arg_p(gaq)); nargs = nargs + 1; ga = an.next }; None => { break } } }
   ridx := overload_resolve_idx(cx.decls, cx.src, cd.name_start, cd.name_len, cd.mod_start, cd.mod_len, nargs, args_head, cx, a)
   if ridx < 0 { return }
-  rd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(ridx))))
+  rd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(ridx))))
   emit_sig_suffix(sb, cx.src, rd, deref(cx.mar))
 }
 
@@ -17153,7 +17152,7 @@ emit_arch_intr := fn(mn_s : usize, mn_l : usize, phead : Option(ptr(mut Arg)), i
 
 ## The WORD width of an operator/inline callee's RESULT (a user struct → its layout words, else 1).
 operator_result_words := fn(decls : ptr(rt::Vec), src : ptr(u8), ci : i64, a : rt::Arena) -> usize {
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   rbn := base_type_name(src, d.ret_ts, d.ret_tl)
   if rbn.n != 0 and struct_decl_of(decls, src, rbn.s, rbn.n) >= 0 { return struct_words(decls, src, rbn.s, rbn.n, a) }
   1
@@ -17280,7 +17279,7 @@ inline_param_kind := fn(decls : ptr(rt::Vec), src : ptr(u8), pm : Param) -> u8 {
 ## params + emit the body.
 ## The caller guarantees `inl_ci >= 0 and cx.inl_tmp >= 0`.
 emit_inline_call := fn(inl_ci : i64, args_head : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
-  icd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(inl_ci))))
+  icd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(inl_ci))))
   ## evaluate ALL args onto the stack FIRST (arg 0 at the bottom), THEN pop them into the scratch
   ## param slots in REVERSE — so a nested `@inline` in a LATER arg, which transiently reuses the
   ## same scratch, cannot clobber an earlier arg's value (it is still on the stack).
@@ -17453,7 +17452,7 @@ emit_inline_binop := fn(op : i64, inl_ci : i64, be : ptr(Expr), l : ptr(Expr), r
 ## operators) aliases the callee's own body-locals PAST the param words and redirects `return` to a
 ## fresh inline-end label. The result is left PUSHED on the stack (the emit_gas value-position ABI).
 emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
-  icd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(inl_ci))))
+  icd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(inl_ci))))
   totw := inline_callee_pwords(cx.decls, cx.src, inl_ci, a)
   ## NESTED-INLINE base (2b): this callee's params + body-locals occupy [inl_tmp, inl_tmp+totw+lcnt);
   ## a routed operator INSIDE the body (a num.al guard's `if out < a` routes `<` to cmp.al::lt) must
@@ -17645,7 +17644,7 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
 ## ≤6 gathered args (register-only), x86_64. A leading fixed param / >6 args / float element are
 ## follow-ups — fail-loud so there is never a silent miscompile.
 emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), nargs : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
-  scd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(sv_ci))))
+  scd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(sv_ci))))
   nfixed := usize(scd.arity) - 1
   ## §7.2 LEADING FIXED params (`fn(base : A, rest : ...T)`). The fixed args ride argreg(0..nfixed-1)
   ## and the gathered slice rides argreg(nfixed), so `nfixed <= 5` (the slice must still land in a GPR
@@ -17806,7 +17805,7 @@ emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : 
 ## `cx.pack_args`. The body's `comptime for v in <pack>` (a `CompForRange` with a null hi) unrolls over
 ## that pack. `nfixed = arity - 1` (the last param is the `...` rest). The caller guarantees `cx.inl_tmp >= 0`.
 emit_variadic_call := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
-  icd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(var_ci))))
+  icd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(var_ci))))
   nfixed := usize(icd.arity) - 1
   mut pi : usize = 0
   while pi < nfixed {
@@ -17822,7 +17821,7 @@ emit_variadic_call := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), in out 
 ## own locals PAST the fixed-param words, and emit the statement body with `return` redirected to a fresh
 ## inline-end label — so a variadic call lowers to straight-line code with its pack loop unrolled inline.
 emit_variadic_body := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), nfixed : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
-  icd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(var_ci))))
+  icd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(var_ci))))
   ## fixed-param word total (the pack param contributes no scratch words — its args stay as Arg exprs)
   mut totw : usize = 0
   mut cpp := icd.params_head
@@ -18659,7 +18658,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         mut call_owner_s := 0
         mut call_owner_l := 0
         if owner_ci >= 0 {
-          owner_d := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(owner_ci))))
+          owner_d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(owner_ci))))
           call_owner_s = owner_d.mod_start
           call_owner_l = owner_d.mod_len
           lower_layout::set_type_ref_module(owner_d.mod_start, owner_d.mod_len, ROOT_MOD_S, ROOT_MOD_L)
@@ -19658,7 +19657,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         }
         ## GENERAL implicit type-arg (`hash(key)`, T omitted, non-derive): the call passes only value
         ## args (`nargs == arity - ntpc`). Infer T from the value arg's type; nothing is erased.
-        gdi := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
+        gdi := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
         if impl_pay == false and ntpc == 1 and gdi.arity != 0 and nargs == gdi.arity - ntpc {
           iti := infer_implicit_targ(gi, args_head, cx, a)
           if iti.n != 0 { impl_pay = true; ta = iti }
@@ -19722,7 +19721,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## SAME `gd`, so emitting the call label from `gd` makes the two always agree (whereas the
         ## caller-module mangling of `emit_mangled_call` produced `<caller>__node_ptr__T`, for which
         ## no instance is defined). A qualified `mod::f` resolves to `mod`'s decl → same label.
-        gd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
+        gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
         emit_generic_label(sb, cx.src, gd.mod_start, gd.mod_len, gd.name_start, gd.name_len, ta.s, ta.n, ta2.s, ta2.n, ta3.s, ta3.n)
         ## …plus the per-signature suffix when `gd` is one of a GENERIC OVERLOAD SET (#472).
         emit_generic_sig_suffix(sb, cx.decls, cx.src, gd, deref(cx.mar))
@@ -23744,7 +23743,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
           tail_enum_owner_old_on = lower_layout::type_ref_mod_on()
           tail_enum_owner_old_s = lower_layout::type_ref_mod_s()
           tail_enum_owner_old_l = lower_layout::type_ref_mod_l()
-          tail_owner_d := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(tail_owner_ci))))
+          tail_owner_d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(tail_owner_ci))))
           tail_enum_owner_s = tail_owner_d.mod_start
           tail_enum_owner_l = tail_owner_d.mod_len
           lower_layout::set_type_ref_module(tail_owner_d.mod_start, tail_owner_d.mod_len, ROOT_MOD_S, ROOT_MOD_L)
@@ -24455,7 +24454,7 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
         enum_owner_old_s = lower_layout::type_ref_mod_s()
         enum_owner_old_l = lower_layout::type_ref_mod_l()
       }
-      owner_d := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(owner_ci))))
+      owner_d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(owner_ci))))
       enum_owner_s = owner_d.mod_start
       enum_owner_l = owner_d.mod_len
       lower_layout::set_type_ref_module(owner_d.mod_start, owner_d.mod_len, ROOT_MOD_S, ROOT_MOD_L)
@@ -25082,7 +25081,7 @@ guard_type_member_count := fn(rs : usize, rn : usize, decls : ptr(rt::Vec), src 
   bnt := base_type_name(src, rs, rn)
   sd := struct_decl_of(decls, src, bnt.s, bnt.n)
   if sd >= 0 {
-    sdd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(sd))))
+    sdd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(sd))))
     mut fc := 0
     mut f := sdd.fields_head
     loop { match f { Some(fq) => { fc = fc + 1 ; f = deref(fld_p(fq)).next }; None => { break } } }
@@ -25090,7 +25089,7 @@ guard_type_member_count := fn(rs : usize, rn : usize, decls : ptr(rt::Vec), src 
   }
   ed := enum_decl_of(decls, src, bnt.s, bnt.n)
   if ed >= 0 {
-    edd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ed))))
+    edd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ed))))
     mut vc := 0
     mut vf := edd.fields_head
     loop { match vf { Some(vfq) => { vc = vc + 1 ; vf = deref(fld_p(vfq)).next }; None => { break } } }
@@ -25674,7 +25673,7 @@ emit_st_comp_for := fn(cst : ptr(mut Stmt), cvs : usize, cvl : usize, cisvar : u
     ## `fmt_comptime_for` / `agg_compare_fields`. What WAS wrong — iterating the wrong type — is
     ## fixed above by honouring the header's own `typeinfo(X)` argument.
     if sdi >= 0 {
-      sd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(sdi))))
+      sd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(sdi))))
       ov_vs := cx.cf_var_s; ov_vl := cx.cf_var_l
       ov_fs := cx.cf_fld_s; ov_fl := cx.cf_fld_l
       ov_ts := cx.cf_ty_s; ov_tl := cx.cf_ty_l
@@ -25719,7 +25718,7 @@ emit_st_comp_for := fn(cst : ptr(mut Stmt), cvs : usize, cvl : usize, cisvar : u
     bne := base_type_name(cx.src, cfts, cftl)
     edi := enum_decl_of(cx.decls, cx.src, bne.s, bne.n)
     if edi >= 0 {
-      ed := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(edi))))
+      ed := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(edi))))
       ov_vs := cx.cf_var_s; ov_vl := cx.cf_var_l
       ov_fs := cx.cf_fld_s; ov_fl := cx.cf_fld_l
       ov_ts := cx.cf_ty_s; ov_tl := cx.cf_ty_l
@@ -28711,7 +28710,7 @@ fixed_array_param_len := fn(ns : usize, nl : usize, params : Option(ptr(mut Para
 ## substitutes to the concrete instance type (K→u64). 0/0 when not inferable. `src/` spells its
 ## type-args (never implicit) → never fires → fixpoint-neutral.
 infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
-  gd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
+  gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut tpn_s := 0
   mut tpn_l := 0
   mut pc := gd.params_head
@@ -29249,7 +29248,7 @@ mark_name := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl 
       j := dni_at(cnt, q)
       q += 1
       if dnh_skip(cnt, j, th) == false {
-        d := deref(decl_at(Decl, rt::vec_get(deref(decls), j)))
+        d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), j)))
         if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, ns, nl) {
           r := callee_mod_rank(src, d.mod_start, d.mod_len, _mark_ms, _mark_ml)
           if r > bestr { bestr = r }
@@ -29262,7 +29261,7 @@ mark_name := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl 
   while k < ke {
     j := dni_at(cnt, k)
     if dnh_skip(cnt, j, th) == false {
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), j)))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), j)))
       if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, ns, nl) and (bestr < 0 or callee_mod_rank(src, d.mod_start, d.mod_len, _mark_ms, _mark_ml) == bestr) {
         rb_set(rb, j, 1)
       }
@@ -29299,7 +29298,7 @@ mark_lit := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), nm : str) {
   while k < ke {
     j := dni_at(cnt, k)
     if dnh_skip(cnt, j, th) == false {
-      d := deref(decl_at(Decl, rt::vec_get(deref(decls), j)))
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), j)))
       if d.kind == 1 and str_at((src + d.name_start), d.name_len) == nm { rb_set(rb, j, 1) }
     }
     k += 1
@@ -29972,7 +29971,7 @@ pub peephole_and_respan := fn(inb : ptr(strbuf::StrBuf), spanbase : usize, a : r
 pub validate_repr := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
   cnt := rt::vec_len(deref(decls))
   for i in 0..cnt {
-    d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
+    d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), i)))
     if d.kind == 3 {
       ## spec Types §6.2 — "Two variants resolving to the same value are ill-formed." A duplicate
       ## effective discriminant (a `= N` pin colliding with another pin or an auto-incremented value) is
@@ -30165,7 +30164,7 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
     ie := ivec_at(ptr(insts), done)
     done += 1
     guard += 1
-    gd := deref(decl_at(Decl, rt::vec_get(deref(decls), ie.gi)))
+    gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), ie.gi)))
     if gd.is_generic and param_any(gd.params_head) {
       tp := deref(param_p(param_at(gd.params_head, "selfhost: generic instance has no type parameter")))
       ## the enclosing fn's SECOND type-param name (`map`'s `U`), 0/0 for a single-param generic —
@@ -30250,7 +30249,7 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
         bnf := base_type_name(src, ie.ts, ie.tl)
         sdf := struct_decl_of(decls, src, bnf.s, bnf.n)
         if sdf >= 0 {
-          sdd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(sdf))))
+          sdd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(sdf))))
           mut fdc := sdd.fields_head
           loop {
             match fdc {
@@ -30290,7 +30289,7 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
         bne := base_type_name(src, ie.ts, ie.tl)
         edc := enum_decl_of(decls, src, bne.s, bne.n)
         if edc >= 0 {
-          edd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(edc))))
+          edd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(edc))))
           mut fvc := edd.fields_head
           loop {
             match fvc {
@@ -30890,7 +30889,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   ni := ivec_len(insts_p)
   for i in 0..ni {
     e := ivec_at(insts_p, i)
-    gd := deref(decl_at(Decl, rt::vec_get(deref(decls), e.gi)))
+    gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), e.gi)))
     ## CT-4/CT-5 INSTANTIATION guard: a generic fn carrying a `when P(T)` predicate is emitted ONLY for
     ## instances whose concrete `T` satisfies `P` (an inline comptime-bool over `size(T)`, folded by
     ## `guard_fold_inst` with `T` = this instance's type). A FALSE fold makes the instance AS-IF-ABSENT
