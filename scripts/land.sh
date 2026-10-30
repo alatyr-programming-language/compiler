@@ -266,7 +266,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=73  # the exact count run; +2 #1106, +4 #1091
+LAND_SELFTEST_EXPECTED=77  # the exact count run; +2 #1106, +4 #1091, +4 #1090
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -289,6 +289,21 @@ land_push_capability_ok() { # remote-url credential-helper token -> 0 can, 1 can
   [ -n "$2" ] && return 0
   [ -n "$3" ] && return 0
   return 1
+}
+
+## Is the integration checkout dirty for the purpose of a gate? (#1090) Input: `git status --porcelain`.
+## Every tracked or staged change counts, and so does every untracked path, with ONE exception: the
+## root-level `.worktrees/` directory, which holds other checkouts (on omen a nested set of lane
+## worktrees sits there) and which no gate stage reads: the walkers use `git ls-files` or are limited to
+## `src/`, `lib/` and `test/`. The match is exact, so a lookalike such as `.worktrees.bak/` still counts.
+## Anything else untracked
+## still refuses — a stray `package.al` or fixture is exactly the hazard AGENTS.md records.
+land_tree_dirty() { # porcelain-text -> prints offending lines; 0 dirty, 1 clean
+  local rest
+  rest="$(printf '%s\n' "$1" | grep -v -x -e '' -e '?? .worktrees/' || true)"
+  [ -n "$rest" ] || return 1
+  printf '%s\n' "$rest"
+  return 0
 }
 
 land_shape_self_test() { # work-dir
@@ -377,6 +392,11 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
 
   # ---- push capability: the PHASE 7 stall, caught in PHASE 0 (#1085). ------------------
   # Both directions, so the probe cannot pass by always answering either way.
+  # #1090 · the dirt check tolerates the root `.worktrees/` and nothing else.
+  land_tree_dirty "?? .worktrees/" >/dev/null; [ $? = 1 ]; _ck $? dirty-check-refused-the-root-worktrees-dir
+  land_tree_dirty "$(printf '%s\n%s' '?? .worktrees/' '?? package.al')" >/dev/null; _ck $? dirty-check-missed-a-stray-file-beside-worktrees
+  land_tree_dirty " M src/lower.al" >/dev/null; _ck $? dirty-check-missed-a-tracked-edit
+  land_tree_dirty "?? .worktrees.bak/" >/dev/null; _ck $? dirty-check-tolerated-a-lookalike-of-worktrees
   land_push_capability_ok "git@github.com:o/r.git" "" ""; _ck $? push-capability-ssh-needs-no-helper
   land_push_capability_ok "ssh://git@github.com/o/r" "" ""; _ck $? push-capability-ssh-url-needs-no-helper
   land_push_capability_ok "https://github.com/o/r" "store" ""; _ck $? push-capability-https-with-helper
@@ -531,7 +551,8 @@ sha256_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' 
 say "PHASE 0 — preconditions"
 command -v gh  >/dev/null 2>&1 || die "gh is required to resolve PR #$PR"
 command -v git >/dev/null 2>&1 || die "git is required"
-[ -z "$(git status --porcelain)" ] || die "the integration checkout is dirty; commit or clean it first"
+DIRT="$(land_tree_dirty "$(git status --porcelain)")" && die "the integration checkout is dirty; commit or clean it first:
+$DIRT"
 [ -z "$(git stash list)" ] || die "a stash exists. \`git stash\` is forbidden here (one ref per repository,
      and two trees stashing at once swap each other's work). Resolve it before landing."
 git rev-parse --verify -q refs/heads/main >/dev/null || die "no local main"
