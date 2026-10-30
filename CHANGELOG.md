@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`for s in xs` over `str` elements binds the right strings on x86_64 (#1177).** Iterating a
+  `Slice(str)` parameter, a local `[str; N]`, a range of one written in the loop header, or a call
+  returning `Slice(str)` bound each element as one word, or copied it from the parameter's own
+  `{ptr, len}` block. The program then ran on with wrong strings and no diagnostic. Iterating a
+  range of a `Slice(str)` parameter (`for s in xs[1..n]`) is still wrong, tracked by #1180.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type
