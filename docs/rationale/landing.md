@@ -47,6 +47,26 @@ placed in `pre-commit` installs cleanly and never fires (measured). In prose and
 
 ## Oracle and landing rules
 
+- **The stated expectation and the known deviations (#1126 S3).** A fixture states what the
+  specification requires of it once, as `## expect:` (`scripts/fixture_oracle.sh`). The gate's
+  FIXTURE EXPECT stage judges every backend of the fresh corpus walk against it: the walk meets the
+  directive, or the pair is a row of `scripts/known-deviations.tsv` whose `observed` is exactly what the
+  walk saw, under an issue of `scripts/known-deviations.issues.tsv` (the published list `alatyr version`
+  names: per issue, the rule not met and the observable difference). Anything else is red, including a
+  row that no longer reproduces. So a behaviour fix lands as one PR with its code, its fixture and the
+  deletion of its own deviation rows, on one gate, with no oracle commit; a change that introduces a
+  deviation adds its row under an issue. The list is not an oracle: rows are sorted, one per pair, and
+  merge with `merge=union`, because each fix deletes disjoint lines and a row a union merge restores no
+  longer reproduces and fails. `land.sh` PHASE 2 checks that every issue in the table is open (the gate
+  has no credentials). A new fixture states its expectation: one with neither a directive nor a
+  committed manifest row is red.
+- **What `scripts/corpus.manifest` still holds.** Recording a directive fixture's rows too would make
+  every fix an oracle change again, so the committed manifest holds (a) every pair of a source with no
+  directive yet — the review list of `scripts/fixture_expect.sh --review`, which only shrinks — and (b)
+  every pair of a directive source that writes to stdout on some backend, because a directive states
+  phase and exit, not the bytes printed (the output sidecar; 39 sources, measured at S3). The walk
+  itself is kept whole at `target/corpus-manifest/observed.manifest`, and the gate's readers of what
+  each backend did (FIXTURE EXPECT, the xbackend ratchet) read that, never the committed scope.
 - The three oracle files are exclusive: `scripts/corpus.manifest`, `scripts/idiom.baseline`, and
   `scripts/needle.baseline`. At most one open PR may touch an oracle, and such a PR touches no other
   file. The repository marks them `-merge`; `scripts/land.sh` enforces the same rule. An intentional
