@@ -23,7 +23,6 @@ field-layout eightbytexpath wide-then-narrowxslice-element
 # ── GAP — a wrong-typed value into a field or an element, owned by #304 (priority-0) ────────────
 # `s.f = "text"` with `f : u64` is accepted and stores the string's address; `a[0] = "text"` likewise.
 # The assignment-type check follows the name and not the path.
-place-check targetxcheck array-elementxassignment-type
 place-check targetxcheck element-fieldxassignment-type
 place-check targetxcheck pointer-derefxassignment-type
 

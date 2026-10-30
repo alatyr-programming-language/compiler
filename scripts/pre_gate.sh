@@ -94,6 +94,12 @@ pre_gate_changed() {
     git -C "$ROOT" ls-files --others --exclude-standard; } | sort -u
 }
 
+## Every stage heading of a full.sh text on stdin, one per line: `echo "### NAME (…) ###"` or with single
+## quotes. The NOT RUN line is built from it, so a heading it misses silently drops a stage from that list.
+pre_gate_headings() {
+  sed -nE "s/^echo [\"']### ([A-Za-z0-9 .-]+[A-Za-z0-9]).*/\\1/p"
+}
+
 pre_gate_self_test() {
   local bad=0 got want
   t() { got="$(printf '%s\n' $2 | pre_gate_plan | tr '\n' ' ')"; want="$3"
@@ -112,6 +118,14 @@ pre_gate_self_test() {
   t 'the e2e table: all rows' 'scripts/e2e.sh' 'e2e all '
   t 'package.al: everything' 'package.al' 'e2e all sweep a64 sweep rv64 sweep wasm '
   t 'a rows-change after an all-change stays all' 'src/lower.al test/x.al' 'e2e all '
+  got="$(printf '%s\n' 'echo "### E2E ###"' "echo '### FMT CORPUS (every file) ###'" 'echo "### SIGN CENSUS (self-test) ###"' \
+    '  echo "### NOT A STAGE ###"' 'echo "plain"' | pre_gate_headings | tr '\n' '|')"
+  if [ "$got" = 'E2E|FMT CORPUS|SIGN CENSUS|' ]; then echo "  ok   headings: double- and single-quoted, not indented ones"
+  else echo "  FAIL headings: got '$got'"; bad=1; fi
+  n="$(pre_gate_headings < "$ROOT/scripts/full.sh" | wc -l | tr -d ' ')"
+  m="$(grep -cE "^echo [\"']### " "$ROOT/scripts/full.sh")"
+  if [ "$n" = "$m" ] && [ "$n" -gt 0 ]; then echo "  ok   headings: all $n of full.sh's stage lines parsed"
+  else echo "  FAIL headings: parsed $n of $m stage lines in full.sh"; bad=1; fi
   # The fixture selection, on a scratch repository in this checkout's target/: a module user, a
   # caller of the function a hunk touches, a changed fixture, and one bystander that must stay out.
   local r="$ROOT/target/pre_gate_selftest"
@@ -201,8 +215,7 @@ for s in $sweeps; do
   ran+=("sweep:$s"); [ "$rc" = 0 ] || red+=("sweep:$s")
 done
 # Every full-gate stage, by its own heading, less the two this script covers: the list cannot go stale.
-not_run="$(sed -nE "s/^echo [\"']### ([A-Za-z0-9 .-]+[A-Za-z0-9]).*/\\1/p" scripts/full.sh | grep -vxE 'E2E|SWEEPS' |
-  sed 's/ /_/g' | tr '\n' ' ')"
+not_run="$(pre_gate_headings < scripts/full.sh | grep -vxE 'E2E|SWEEPS' | sed 's/ /_/g' | tr '\n' ' ')"
 [ "$e2e" = all ] || not_run="E2E(rest) $not_run"
 for s in a64 rv64 wasm; do case " $sweeps " in *" $s "*) ;; *) not_run="sweep:$s $not_run" ;; esac; done
 verdict=GREEN; [ "${#red[@]}" = 0 ] || verdict=RED
