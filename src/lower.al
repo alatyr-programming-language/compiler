@@ -6101,6 +6101,50 @@ bind_array_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, 
 }
 
 
+## #1177 — where `for x in <iterable>` over `str` elements finds its {data ptr, len}: a by-value
+## two-word view in the frame (a `Slice(str)` local, or the non-var iterable's materialized temp),
+## a `Slice(str)` PARAM (its slot points to the caller's block), or a `[str; N]` array inline in the frame.
+StrIterSrc := enum { FrameView, ParamBlock, InlineArray }
+
+## #1177 — is `x` in `for x in <it>` a two-word `str`? The ONE answer the slot binder
+## (`collect_slots`, which binds `x` with `bind_str_slot`) and the emitter (which copies two words per
+## element) both take, so the loop var's width and the element copy cannot disagree. A `Slice(str)`
+## local or param, a `[str; N]` local, a range slice of one of those, or a call declared to return
+## `Slice(str)`. A mutable array GLOBAL never reaches here (its own path runs first).
+for_iter_str_elem := fn(it : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+  match deref(it) {
+    Expr::Var(s, n) => { str_elem_slot(slots, src, s, n) }
+    Expr::Slice(base, lo, hi) => {
+      bv := var_name_span(base)
+      bv.n != 0 and str_elem_slot(slots, src, bv.s, bv.n)
+    }
+    Expr::Call(cs, cl, nargs, ah) => {
+      ci := ret_call_target(decls, src, cs, cl, nargs, ah, a)
+      if ci < 0 { return false }
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      bn := base_type_name(src, d.ret_ts, d.ret_tl)
+      if str_at((src + bn.s), bn.n) != "Slice" { return false }
+      ta := typearg_at(src, d.ret_ts, d.ret_tl, 0)
+      ta.n != 0 and str_at((src + ta.s), ta.n) == "str"
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+
+## Is the local or param `s/n` a `str`-element array, slice view or slice param (`ek 5`, `eek 4`)?
+str_elem_slot := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> bool {
+  match local_entry(slots, src, s, n) {
+    Some(i) => {
+      e := deref(svec_at(SlotEntry, slots, usize(i)))
+      e.ek == 5 and e.eek == 4
+    }
+    None => { false }
+  }
+}
+
 ## The comptime element COUNT `N` of a FIXED array `[T; N]` named by `base` — a local that OWNS its
 ## storage (slot `ek == 5`, `is_ref == false`). Spec Types §6.4 ("`N` is a compile-time value") and
 ## Control-Flow §5.4 (the upper bound of `a[..]` is "a `[T; N]` array's OWN LENGTH" = the comptime
@@ -26103,7 +26147,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             mut is_arr := false
             mut is_agg_arr := false   ## a struct/enum-ELEMENT array (eek 2/3): loop var is that aggregate
             mut is_agg_slice := false ## a struct/enum-ELEMENT slice VIEW (eek 2/3, is_ref): copy via the ptr
-            mut is_str_slice := false ## a str-ELEMENT slice VIEW (eek 4, is_ref): loop var is a 2-word str
+            mut is_str_slice := false ## a str-ELEMENT iterable (`for_iter_str_elem`): loop var is a 2-word str
+            mut str_src := StrIterSrc.FrameView  ## where that iterable's {data ptr, len} live (#1177)
+            mut str_arr_n : i64 = 0  ## a `[str; N]` local's static element count N
             mut is_glob_arr := false  ## a MUTABLE ARRAY GLOBAL iterable (`for v in TABLE`): `.data` base
             mut glob_nel := 0        ## the global array's element count (from its ArrayLit)
             mut glob_is_agg := false  ## a STRUCT-element global array: copy `glob_stride` words per element
@@ -26136,6 +26182,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## pair pop) — both write ptr @ base, len @ base-1 (the up-growing 2-word layout).
               bslot = vslot + 3
               emit_arm_val_store(flo, i64(bslot), sb, cx, a, nl)
+              ## a `str`-element non-var iterable (`xs[1..n]`, a `Slice(str)`-returning call): the temp now
+              ## holds its {ptr, len} by value; each element is a 2-word str (#1177).
+              if for_iter_str_elem(flo, cx.slots, cx.decls, cx.src, a) { is_str_slice = true; b_estride = 2 }
             } else if unchecked bitcast(usize, gfor_mgv) != 0 and array_lit_info(gfor_mgv).is_a {
               is_glob_arr = true
               glob_nel = array_lit_info(gfor_mgv).nel
@@ -26165,11 +26214,19 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## scalar VIEW it has a runtime len + an element POINTER (word 0) — copy `stride` words per
               ## element FROM that pointer, not inline from the frame.
               is_agg_slice = bent.ek == 5 and (bent.eek == 2 or bent.eek == 3) and bent.is_ref
-              ## a str-element slice VIEW LOCAL (`s := strs[lo..hi]`, `ek==5 is_ref eek 4 sns==0`): like the
-              ## scalar VIEW it holds its {ptr,len} BY VALUE in the frame (word 0 = element ptr, word 1 =
-              ## runtime len). The loop var is a 2-word str; per element copy its {ptr,len} pair (2 words)
-              ## from the element addr. Gated `sns == 0` so a `Slice(str)` PARAM (`sns == 1`) is not intercepted.
-              is_str_slice = bent.ek == 5 and bent.eek == 4 and bent.is_ref and bent.sns == 0
+              ## a str-element iterable VAR (#1177): the loop var is a 2-word str; per element copy its
+              ## {ptr,len} pair (2 words) from the element addr. A slice VIEW LOCAL (`s := strs[lo..hi]`,
+              ## `is_ref`, `sns == 0`) holds its {ptr,len} BY VALUE in the frame (word 0 = element ptr, word 1
+              ## = runtime len); a `Slice(str)` PARAM (`is_ref`, `sns == 1`, `bind_param`) holds a POINTER to
+              ## the caller's block (ptr @ 0, len @ 8); a `[str; N]` local (not `is_ref`) is inline, element
+              ## `i` word `j` at slot `off - (i*2 + j)`, with the static count N.
+              is_str_slice = for_iter_str_elem(flo, cx.slots, cx.decls, cx.src, a)
+              if is_str_slice and not bent.is_ref {
+                str_src = StrIterSrc.InlineArray
+                str_arr_n = fixed_arr_len(flo, cx.slots, cx.src)
+              } else if is_str_slice and bent.sns == 1 {
+                str_src = StrIterSrc.ParamBlock
+              }
               ## a struct local (ek 2) whose type is `Vec(...)` → the arena-backed Vec iteration path.
               if bent.ek == 2 and bent.snl != 0 {
                 vbn := base_type_name(cx.src, bent.sns, bent.snl)
@@ -26256,11 +26313,25 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 push_str(sb, "(%rbp), %rbx\n")
               }
             } else if is_str_slice {
-              ## str-element slice LOCAL VIEW: the runtime len is stored BY VALUE in frame word 1 (at -bslot*8,
-              ## matching emit_array_slice_assign's `len @ base*8` store).
-              push_str(sb, "  movq -")
-              push_int(sb, i64(bslot * 8))
-              push_str(sb, "(%rbp), %rbx\n")
+              match str_src {
+                FrameView => {
+                  ## a by-value view (a local, or the non-var temp): the runtime len is frame word 1 (at
+                  ## -bslot*8, matching emit_array_slice_assign's `len @ base*8` store).
+                  push_str(sb, "  movq -")
+                  push_int(sb, i64(bslot * 8))
+                  push_str(sb, "(%rbp), %rbx\n")
+                }
+                ParamBlock => {
+                  push_str(sb, "  movq -")
+                  push_int(sb, i64((bslot + 1) * 8))
+                  push_str(sb, "(%rbp), %rax\n  movq 8(%rax), %rbx\n")
+                }
+                InlineArray => {
+                  push_str(sb, "  movq $")
+                  push_int(sb, str_arr_n)
+                  push_str(sb, ", %rbx\n")
+                }
+              }
             } else if is_vec {
               ## Vec.len = word 1, at slot vec_bslot-1 (§4 up-growing: word k at base-k) → frame -(vec_bslot)*8.
               push_str(sb, "  movq -")
@@ -26361,13 +26432,24 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               push_int(sb, i64((vslot + 1) * 8))
               push_str(sb, "(%rbp)\n")
             } else if is_str_slice {
-              ## x = element[__i] of a str slice LOCAL VIEW: data ptr @ frame word 0 (-(bslot+1)*8); element
-              ## __i's addr = dataptr + __i*stride*8 (stride = 2 words per str). Copy its {ptr,len} pair (2
-              ## words, word k at (k*8)(%rax)) into the loop var's str slots: ptr @ -(vslot+1)*8, len @
-              ## -(vslot)*8 — the down-growing str-local layout emit_str_pair reads back.
-              push_str(sb, "  movq -")
+              ## x = element[__i] of a str iterable: data ptr → %rax (by-value view: frame word 0 at
+              ## -(bslot+1)*8; param: word 0 of the caller's block; inline array: the address of element 0).
+              ## Element __i's addr = dataptr + __i*stride*8 (stride = 2 words per str). Copy its {ptr,len}
+              ## pair (2 words, word k at (k*8)(%rax)) into the loop var's str slots: ptr @ -(vslot+1)*8, len
+              ## @ -(vslot)*8 — the down-growing str-local layout emit_str_pair reads back.
+              match str_src {
+                FrameView => { push_str(sb, "  movq -") }
+                ParamBlock => { push_str(sb, "  movq -") }
+                InlineArray => { push_str(sb, "  leaq -") }
+              }
               push_int(sb, i64((bslot + 1) * 8))
-              push_str(sb, "(%rbp), %rax\n  movq -")
+              push_str(sb, "(%rbp), %rax\n")
+              match str_src {
+                FrameView => {}
+                ParamBlock => { push_str(sb, "  movq (%rax), %rax\n") }
+                InlineArray => {}
+              }
+              push_str(sb, "  movq -")
               push_int(sb, i64((islot + 1) * 8))
               push_str(sb, "(%rbp), %rcx\n  imulq $")
               push_int(sb, i64(b_estride * 8))
