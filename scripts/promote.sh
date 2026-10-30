@@ -147,7 +147,9 @@ cmd_prepare() {
   bump "$wt" "$new" || die "the bump failed"
   echo "promote: bumped package.al, seed/VERSION, scripts/package_cli_test.sh"
 
-  ## the stages: each compiler builds the tree into target/debug/alatyr, kept as target/promote/stageN
+  ## the stages: each compiler builds the tree into target/debug/alatyr, kept as target/stageN. Exactly
+  ## where fixpoint.sh keeps them: a compiler finds lib/ relative to itself (AGENTS.md), and one copied
+  ## to target/promote/ answered "cannot open source file" for every input (measured on omen).
   ## the manifest by its ABSOLUTE path, as fixpoint.sh passes it: a relative one is refused by the tree
   ## compiler's emit form ("cannot open source file", measured on omen)
   local cc=./seed/alatyr n M="$wt/package.al"
@@ -156,14 +158,14 @@ cmd_prepare() {
     rm -f target/debug/alatyr
     "$cc" build "$M" > "$P/build$n.log" 2>&1 || die "Stage$n build failed (see $P/build$n.log)"
     [ -x target/debug/alatyr ] || die "Stage$n: no target/debug/alatyr"
-    cp target/debug/alatyr "$P/stage$n"
-    "$P/stage$n" "$M" > "$P/gas$n.s" 2>/dev/null; [ -s "$P/gas$n.s" ] || die "Stage$n did not emit the tree's GAS"
-    case "$("$P/stage$n" --version)" in "alatyr $new, "*) ;; *) die "Stage$n answers '$("$P/stage$n" --version)', not alatyr $new (#586: bump first)" ;; esac
-    cc="$P/stage$n"
+    cp target/debug/alatyr "$wt/target/stage$n"
+    "$wt/target/stage$n" "$M" > "$P/gas$n.s" 2>/dev/null; [ -s "$P/gas$n.s" ] || die "Stage$n did not emit the tree's GAS"
+    case "$("$wt/target/stage$n" --version)" in "alatyr $new, "*) ;; *) die "Stage$n answers '$("$wt/target/stage$n" --version)', not alatyr $new (#586: bump first)" ;; esac
+    cc="$wt/target/stage$n"
   done
-  converged "$P/gas1.s" "$P/gas2.s" "$P/gas3.s" "$P/stage2" "$P/stage3" || die "no convergence (above); nothing is promoted"
+  converged "$P/gas1.s" "$P/gas2.s" "$P/gas3.s" "$wt/target/stage2" "$wt/target/stage3" || die "no convergence (above); nothing is promoted"
   printf 'main := fn() -> u64 { return 7 + 35 }\n' > "$P/smoke.al"
-  "$P/stage2" -o "$P/smoke" "$P/smoke.al" > /dev/null 2>&1; "$P/smoke"; local smoke=$?
+  "$wt/target/stage2" -o "$P/smoke" "$P/smoke.al" > /dev/null 2>&1; "$P/smoke"; local smoke=$?
   [ "$smoke" = 42 ] || die "Stage2 smoke answered $smoke, want 42"
 
   ## the delta, normalized, and a census of its line shapes (numbers folded) for the one-sentence reading
@@ -179,9 +181,9 @@ cmd_prepare() {
   ## promote Stage2 and bring the CURRENT SEED block to it
   local gas_lines gas_sha bin_sha bin_size today
   gas_lines="$(wc -l < "$P/gas2.s" | tr -d ' ')"; gas_sha="$(sha256sum "$P/gas2.s" | cut -d' ' -f1)"
-  bin_sha="$(sha256sum "$P/stage2" | cut -d' ' -f1)"; bin_size="$(wc -c < "$P/stage2" | tr -d ' ')"
+  bin_sha="$(sha256sum "$wt/target/stage2" | cut -d' ' -f1)"; bin_size="$(wc -c < "$wt/target/stage2" | tr -d ' ')"
   today="$(date -u +%F)"
-  cp "$P/stage2" seed/alatyr
+  cp "$wt/target/stage2" seed/alatyr
   sed -i -E -e "s/^current-seed-sha256: .*/current-seed-sha256: $bin_sha/" \
     -e "s/^# Promoted: .*/# Promoted:      $today (see the last entry in seed\/HISTORY.md)/" \
     -e "s/^# GAS at promotion: .*/# GAS at promotion: $gas_lines lines/" \
@@ -190,7 +192,7 @@ cmd_prepare() {
   ## the proof: fixpoint.sh on the promoted tree
   bash scripts/fixpoint.sh > "$P/fixpoint.log" 2>&1
   grep -q 'TOOL-1 FIXPOINT' "$P/fixpoint.log" || { tail -20 "$P/fixpoint.log" >&2; die "fixpoint.sh on the promoted tree did not converge (see $P/fixpoint.log)"; }
-  local spec; spec="$("$P/stage2" --version | sed -E 's/^alatyr [^,]*, //')"
+  local spec; spec="$("$wt/target/stage2" --version | sed -E 's/^alatyr [^,]*, //')"
 
   ## the record: measured facts filled in, the two judgements owed
   local entry="$P/history_entry"
