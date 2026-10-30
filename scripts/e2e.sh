@@ -12128,6 +12128,15 @@ run issue395_vec_subword_generic_deref 42
 run issue1209_deref_bitcast_struct 42
 run issue1209_deref_bitcast_ptr_fields 42
 run issue1209_deref_bitcast_field_inline 42
+## #986 — `<call>.expect(m)` and a statement `<call>?` were unwrapped inline with success hardcoded to
+## variant 0, wrong for the library `Option` (`{None, Some}`), and a struct payload bound with
+## `x := <call>.expect(m)` kept only word 0. NON-VACUOUS: on the parent `55fa477` (x86_64) the fixture
+## exits 1 — `some42().expect("v")` panicked on `Some(42)`.
+run issue986_expect_call_receiver 42
+## #986 — the value of `<call>.expect(m)` over a two-word struct, passed straight as an argument, is
+## refused instead of delivering one word. NON-VACUOUS: on the parent `55fa477` (x86_64) it built rc 0
+## and the program died with SIGSEGV (rc 139).
+build_reject_has issue986_expect_multiword_value_reject "only one word would arrive (#986)"
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
