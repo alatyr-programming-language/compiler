@@ -557,7 +557,11 @@ echo "  PR #$PR  head=${HEAD_LABEL:-?}  issue=${ISSUE_LINK:-<none declared>}  fo
 
 say "PHASE 1 — fetch the PR head"
 PR_REF="refs/remotes/pr/$PR"
-git fetch --quiet origin main "refs/pull/$PR/head:$PR_REF" || die "fetch failed"
+## The `+` is load-bearing (#1091). `$PR_REF` caches what origin says `refs/pull/N/head` is, and origin
+## moves that ref BACKWARDS on every rebase and force-push — which PHASE 3's own conflict verdict asks
+## for. Without `+` the second landing attempt of any rebased PR dies here as "fetch failed".
+git fetch --quiet origin main "+refs/pull/$PR/head:$PR_REF" \
+  || die "fetch failed: could not update $PR_REF from origin refs/pull/$PR/head (or origin main)"
 git rev-parse --verify -q "$PR_REF" >/dev/null || die "no selected PR head on origin"
 BASE="$(git rev-parse origin/main)"
 HEAD_SHA="$(git rev-parse "$PR_REF")"
