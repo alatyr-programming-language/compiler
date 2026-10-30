@@ -9452,25 +9452,30 @@ subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src 
   res
 }
 
-## #752 — the operand of a DIRECT `<call>?` value (the `x := <call>?` binding shape), else null. The
-## binding reads the Ok payload's words from the return registers itself, so it needs the `?`'s
-## operand, not the `?` value (which is only payload word 0).
-try_bind_inner := fn(v : ptr(Expr)) -> ptr(Expr) {
+## #752, #986 — the unwrap a binding's value DIRECTLY is: `<call>?` (kind 1) or `<call>.expect(m)`
+## (kind 2, the UFCS desugar `expect(<call>, m)`), else kind 0. The binding `x := …` reads the success
+## payload's words from the return registers itself, so it needs the operand, not the unwrapped value
+## (which is only payload word 0). Unlike `tryable_field_recv` this does not look through
+## `unchecked`/`bitcast`: a binding of those keeps its previous lowering.
+try_bind_unwrap := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena) -> TryField {
   match deref(v) {
-    Expr::Try(inner) => { inner }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+    Expr::Try(_inner) => { tryable_field_recv(v, src, a) }
+    Expr::Call(_cs, _cl, _na, _ah) => { tryable_field_recv(v, src, a) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::ArrayLit | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {
+      z := unchecked bitcast(ptr(Expr), 0)
+      TryField(kind = 0, recv = z, msg = z)
+    }
   }
 }
 
-## #752 — the word count of a `x := <call>?` binding's struct Ok payload, 0 when the value is not a
-## direct `<call>?` or its payload is not a struct. Locals, not chained reads of call results, so the
-## frozen seed lowers it (the shape #753 had to avoid).
+## #752 — the word count of a `x := <call>?` (or, #986, `x := <call>.expect(m)`) binding's struct
+## payload, 0 when the value is neither or its payload is not a struct. Locals, not chained reads of
+## call results, so the frozen seed lowers it (the shape #753 had to avoid).
 try_bind_struct_words := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
-  inner := try_bind_inner(v)
-  if unchecked bitcast(usize, inner) == 0 { return 0 }
+  if try_bind_unwrap(v, src, a).kind == 0 { return 0 }
   tos := try_ok_struct_span(v, slots, decls, src, a)
   if tos.n == 0 { return 0 }
   struct_words(decls, src, tos.s, tos.n, a)
@@ -9502,7 +9507,20 @@ try_ok_struct_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
     }
     Expr::Unchecked(inner) => { return try_ok_struct_span(inner, slots, decls, src, a) }
     Expr::Bitcast(inner, _bcs, _bcl) => { return try_ok_struct_span(inner, slots, decls, src, a) }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+    ## #986 — `<call>.expect(m)`: the receiver CALL's declared return type gives the payload, as
+    ## `<call>?`'s does. (An `expect` on a LOCAL goes through the library `expect`, which already
+    ## returns the payload whole.)
+    Expr::Call(_cs, _cl, _na, _ah) => {
+      tbf := tryable_field_recv(v, src, a)
+      if tbf.kind != 2 { return CSpan(s = 0, n = 0) }
+      es := call_ret_enum_span_d(tbf.recv, decls, src, a)
+      if es.n == 0 { return CSpan(s = 0, n = 0) }
+      eh := base_type_name(src, es.s, es.n)
+      ta := typearg_at(src, eh.s, eh.n, 0)
+      if ta.n != 0 and struct_decl_of(decls, src, ta.s, ta.n) >= 0 { return CSpan(s = ta.s, n = ta.n) }
+      return CSpan(s = 0, n = 0)
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::ArrayLit | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
       | Expr::FnRef | Expr::Loop => { return CSpan(s = 0, n = 0) }
@@ -10284,6 +10302,16 @@ payload_call_struct_words := fn(es : usize, el : usize, vs : usize, vl : usize, 
 ## falls through with the payload still in %rdx, %rcx, … on success. The caller then takes the words
 ## it needs: the value arm pushes word 0; the binding stores every word into its slots.
 emit_try_check := fn(inner : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  emit_unwrap_check(inner, Option(ptr(Expr)).None, sb, cx, a, nl)
+}
+
+## The ONE unwrap test behind `?` and `.expect(msg)` (#986): materialize the operand enum into the
+## return registers, compare its discriminant with the operand type's SUCCESS variant, and on failure
+## either return the whole enum from the enclosing fn (`?`, `msg` None) or write `msg` to stderr and
+## exit 1 (`expect`, `msg` Some). On success it falls through with payload word k in `emit_retreg(k+1)`. Every
+## site that unwraps inline calls this, so none of them can assume success is variant 0 — the lib
+## `Option` is `{None, Some}`, where Some is 1 (that assumption made `mk().expect(m)` panic on Some).
+emit_unwrap_check := fn(inner : ptr(Expr), msg : Option(ptr(Expr)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   emit_enum_value(inner, sb, cx, a, nl)   ## disc → %rax, payload[0] → %rdx
   ## SUCCESS = the operand enum's Some/Ok variant, NOT positionally variant 0 (a stdlib Option is
   ## `{None, Some}` → Some = 1). Resolve it from the operand's type; unresolved folds to 0.
@@ -10296,6 +10324,18 @@ emit_try_check := fn(inner : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
   push_str(sb, ", %rax\n  je ")
   emit_label(sb, lok)
   push_str(sb, "\n")
+  match msg {
+    Some(m) => {
+      ## `expect` failure: the `panic` sequence — msg {ptr,len} to fd 2, then exit(1).
+      emit_str_pair(m, sb, cx, a, nl)
+      push_str(sb, "  popq %rdx\n  popq %rsi\n  movq $2, %rdi\n  movq $1, %rax\n  syscall\n")
+      push_str(sb, "  movq $1, %rdi\n  movq $60, %rax\n  syscall\n")
+      emit_label(sb, lok)
+      push_str(sb, ":\n")
+      return
+    }
+    None => {}
+  }
   ## failure: %rax/%rdx already hold the whole enum — return it from the enclosing fn.
   ## DEFER (§9.3): the `?` early-exit runs the NESTED-frame defers (boundary `FRAME[0]`) before
   ## jumping — SAVE & RESTORE the ledger (an alternate runtime path). Gated on a nested defer frame
@@ -19347,24 +19387,20 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       }
       ## `<recv>.expect(msg)` in VALUE position (the unwrapped payload IS this expression's value,
       ## e.g. `find(s, p).expect("nf")` inside `u64(…)`). Inline the tryable unwrap like `Try`: eval
-      ## the receiver call (disc/%rax, payload[0]/%rdx); on Ok push the payload, on Err panic(msg).
+      ## the receiver call; on success push payload word 0, on failure panic(msg).
       ## WITHOUT this, the UFCS desugar `expect(recv, msg)` hit the generic 2-type-param `expect`
       ## whose arg 0 (the receiver) was ERASED as the type argument — the receiver went unevaluated
-      ## and the payload came back 0. (Offset-0 payload only — a wider payload needs words past %rdx.)
+      ## and the payload came back 0. #986: the success variant comes from the receiver's type
+      ## (`emit_unwrap_check`), and a payload wider than one word is refused here exactly as `?`'s is —
+      ## a binding `x := <call>.expect(m)` takes every word itself (`emit_st_assign`).
       if callee == "expect" {
         tbf := tryable_field_recv(e, cx.src, a)
         if tbf.kind == 2 and call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar)).n != 0 {
-          emit_enum_value(tbf.recv, sb, cx, a, nl)   ## disc → %rax, payload[0] → %rdx
-          lok := nl
-          nl += 1
-          push_str(sb, "  cmpq $0, %rax\n  je ")
-          emit_label(sb, lok)
-          push_str(sb, "\n")
-          emit_str_pair(tbf.msg, sb, cx, a, nl)
-          push_str(sb, "  popq %rdx\n  popq %rsi\n  movq $2, %rdi\n  movq $1, %rax\n  syscall\n")
-          push_str(sb, "  movq $1, %rdi\n  movq $60, %rax\n  syscall\n")
-          emit_label(sb, lok)
-          push_str(sb, ":\n  pushq %rdx\n")
+          if try_value_payload_words(tbf.recv, cx, a) > 1 {
+            panic("selfhost: the value of `.expect(…)` over a multi-word payload is used here, and only one word would arrive (#986); bind it first (`x := ….expect(…)`) and use `x`")
+          }
+          emit_unwrap_check(tbf.recv, Option(ptr(Expr)).Some(tbf.msg), sb, cx, a, nl)
+          push_str(sb, "  pushq %rdx\n")
           return
         }
       }
@@ -20260,17 +20296,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             if tbf.kind == 1 {
               emit_try_check(tbf.recv, sb, cx, a, nl)
             } else {
-              emit_enum_value(tbf.recv, sb, cx, a, nl)           ## disc → %rax, payload → %rdx, %rcx, …
-              lok := nl
-              nl += 1
-              push_str(sb, "  cmpq $0, %rax\n  je ")
-              emit_label(sb, lok)
-              push_str(sb, "\n")
-              emit_str_pair(tbf.msg, sb, cx, a, nl)              ## msg {ptr,len} → stack
-              push_str(sb, "  popq %rdx\n  popq %rsi\n  movq $2, %rdi\n  movq $1, %rax\n  syscall\n")
-              push_str(sb, "  movq $1, %rdi\n  movq $60, %rax\n  syscall\n")
-              emit_label(sb, lok)
-              push_str(sb, ":\n")
+              emit_unwrap_check(tbf.recv, Option(ptr(Expr)).Some(tbf.msg), sb, cx, a, nl)   ## #986 — the receiver type's success variant
             }
             push_str(sb, "  pushq ")
             emit_retreg(sb, usize(foff) + 1)
@@ -25313,24 +25339,13 @@ emit_st_expr_stmt := fn(e : ptr(Expr), nx : Option(ptr(mut Stmt)), head : Option
     if tbf.kind != 0 {
       rty := call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar))
       if rty.n != 0 {
-        emit_enum_value(tbf.recv, sb, cx, a, nl)   ## disc → %rax (evaluates the receiver call)
-        lok := nl
-        nl += 1
-        push_str(sb, "  cmpq $0, %rax\n  je ")
-        emit_label(sb, lok)
-        push_str(sb, "\n")
+        ## #986 — the receiver type's success variant, and `?`'s nested-frame defers, as in value position.
         if tbf.kind == 1 {
-          push_str(sb, "  jmp ")
-          emit_label(sb, cx.epi)
-          push_str(sb, "\n")
+          emit_unwrap_check(tbf.recv, Option(ptr(Expr)).None, sb, cx, a, nl)
         } else {
-          emit_str_pair(tbf.msg, sb, cx, a, nl)
-          push_str(sb, "  popq %rdx\n  popq %rsi\n  movq $2, %rdi\n  movq $1, %rax\n  syscall\n")
-          push_str(sb, "  movq $1, %rdi\n  movq $60, %rax\n  syscall\n")
+          emit_unwrap_check(tbf.recv, Option(ptr(Expr)).Some(tbf.msg), sb, cx, a, nl)
         }
-        emit_label(sb, lok)
-        push_str(sb, ":\n")   ## Ok: result discarded (a statement)
-        handled = true
+        handled = true   ## success: the payload is discarded (a statement)
       }
     }
     if handled == false {
