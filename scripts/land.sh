@@ -60,6 +60,20 @@ set -u
 
 SELF="$0"
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+## RUN FROM A COPY (#1093). bash reads a script incrementally, seeking through the file as it runs.
+## PHASE 3 merges the PR into this tree, so a PR that edits scripts/land.sh would rewrite the file
+## under the interpreter and execution would resume at a byte offset into different text. So the
+## script re-executes itself from a private copy under target/ before doing anything; ROOT resolves
+## to the same repository root from there. The version the integrator invoked governs this landing;
+## a merged change to land.sh takes effect from the next one.
+land_is_private_copy() { case "$(basename "$1")" in land-run-*.sh) return 0 ;; *) return 1 ;; esac; }
+if ! land_is_private_copy "$SELF"; then
+  mkdir -p "$ROOT/target" || { printf 'land: cannot create %s/target for the private copy\n' "$ROOT" >&2; exit 2; }
+  LAND_COPY="$ROOT/target/land-run-$$.sh"
+  cp "$SELF" "$LAND_COPY" || { printf 'land: cannot copy %s to %s\n' "$SELF" "$LAND_COPY" >&2; exit 2; }
+  exec "${BASH:-bash}" "$LAND_COPY" "$@"
+fi
+land_is_private_copy "$SELF" && trap 'rm -f "$SELF"' EXIT   # never the tracked file
 cd "$ROOT" || exit 2
 REPO="${ALATYR_REPO:-alatyr-programming-language/compiler}"
 
@@ -266,7 +280,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=80  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089
+LAND_SELFTEST_EXPECTED=85  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -405,6 +419,17 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
   land_tree_dirty "$(printf '%s\n%s' '?? .worktrees/' '?? package.al')" >/dev/null; _ck $? dirty-check-missed-a-stray-file-beside-worktrees
   land_tree_dirty " M src/lower.al" >/dev/null; _ck $? dirty-check-missed-a-tracked-edit
   land_tree_dirty "?? .worktrees.bak/" >/dev/null; _ck $? dirty-check-tolerated-a-lookalike-of-worktrees
+  # #1093 · only the private copy under target/ runs the procedure; the tracked file re-executes.
+  land_is_private_copy /r/target/land-run-123.sh; _ck $? private-copy-not-recognised
+  land_is_private_copy /r/scripts/land.sh; [ $? = 1 ]; _ck $? tracked-script-taken-for-a-private-copy
+  # …and this very run is such a copy (fails if the re-exec is gone), and a run through the tracked
+  # file leaves no copy behind (fails if the EXIT trap is gone). The usage path exits 2 at once.
+  land_is_private_copy "$SELF"; _ck $? self-test-not-running-from-a-private-copy
+  local before after
+  before="$(ls "$ROOT"/target/land-run-*.sh 2>/dev/null | sort)"
+  bash "$ROOT/scripts/land.sh" x >/dev/null 2>&1; [ $? = 2 ]; _ck $? usage-path-did-not-exit-2
+  after="$(ls "$ROOT"/target/land-run-*.sh 2>/dev/null | sort)"
+  [ "$before" = "$after" ]; _ck $? private-copy-left-behind-after-a-run
   # #1089 · the helper git would use for the remote. Configured as `gh auth setup-git` writes it (an
   # empty reset, then the gh helper, on the HOST-SPECIFIC key), with the machine's own global and
   # system config shut out, so a generic helper elsewhere cannot make the answer right by accident.
