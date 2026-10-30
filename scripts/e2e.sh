@@ -9015,14 +9015,17 @@ run trap_neg_compound_operand 132
 run accept_neg_unsigned_and_unchecked 42
 run accept_neg_narrow_no_trap 42
 ## #997 — float→int is NaN- and range-checked (Concurrency §7.7), and a u64 at or above 2^63 converts
-## exactly.
-run trap_f2i_nan 132
-run trap_f2i_u64_overflow 132
-run trap_f2i_negative_unsigned 132
-run trap_f2i_u8_overflow 132
-run trap_f2i_i64_at_2p63 132
-run trap_f2i_i8_below 132
+## exactly. The in-range edges hold on every backend, so that row is swept. The traps are x86_64-only
+## (`run_x86_trap`, outside the sweeps' `^run ` grep): aarch64, riscv64 and wasm still convert without
+## the check and answer a wrong value (gate run 41023140629's sweeps measured it), which is the open
+## twin half of #997, outside milestone M1. When it lands these rows become `run`.
 run accept_f2i_range_edges 42
+run_x86_trap trap_f2i_nan 132
+run_x86_trap trap_f2i_u64_overflow 132
+run_x86_trap trap_f2i_negative_unsigned 132
+run_x86_trap trap_f2i_u8_overflow 132
+run_x86_trap trap_f2i_i64_at_2p63 132
+run_x86_trap trap_f2i_i8_below 132
 ## regalloc commit 4: a scalar-leaf TRAILING-VALUE checked `*` overflow goes through `emit_fn_ir`
 ## (register-allocated), not the text path — it must still emit the guard and TRAP (132). Locks in
 ## that the register allocator never drops a checked-overflow guard.
