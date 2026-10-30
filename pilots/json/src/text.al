@@ -8,7 +8,6 @@
 
 Value := value::Value
 Member := value::Member
-String := alloc::string::String
 
 ## Why a parse failed.
 pub ErrorKind := enum {
@@ -248,7 +247,7 @@ parse_array := fn(in out p : Parser) -> Result(Value, Error) {
     }
   }
   p.depth -= 1
-  Result(Value, Error).Ok(Value.Arr(xs))
+  Result(Value, Error).Ok(Value.Arr(alloc::vec::as_slice(Value, ptr(xs))))
 }
 
 parse_object := fn(in out p : Parser) -> Result(Value, Error) {
@@ -290,7 +289,7 @@ parse_object := fn(in out p : Parser) -> Result(Value, Error) {
     }
   }
   p.depth -= 1
-  Result(Value, Error).Ok(Value.Obj(ms))
+  Result(Value, Error).Ok(Value.Obj(alloc::vec::as_slice(Member, ptr(ms))))
 }
 
 ## The value of the hex digit under the cursor.
@@ -340,7 +339,7 @@ read_unicode := fn(in out p : Parser) -> Result(u32, Error) {
 
 ## Append the text a one-letter escape stands for. The cursor is on the letter; an
 ## unknown letter is a `BadEscape` at the escape's backslash.
-put_escape := fn(in out p : Parser, in out out : String, b : u8) -> Result(usize, Error) {
+put_escape := fn(in out p : Parser, in out out : alloc::string::String, b : u8) -> Result(usize, Error) {
   mut t : str = ""
   if b == QUOTE { t = "\"" }
   else if b == BACKSLASH { t = "\\" }
@@ -358,7 +357,7 @@ put_escape := fn(in out p : Parser, in out out : String, b : u8) -> Result(usize
 }
 
 ## Append `s` to `out`.
-put := fn(in out out : String, s : str) -> Result(usize, AllocError) {
+put := fn(in out out : alloc::string::String, s : str) -> Result(usize, AllocError) {
   ## blocked-by: #1158 — `out.push_str(s)` on a `String` is refused as "invalid".
   alloc::string::push_str(out, s)
 }
@@ -379,7 +378,7 @@ parse_string := fn(in out p : Parser) -> Result(str, Error) {
 
 ## Decode the string literal under the cursor into `out`, leaving the cursor after its
 ## closing quote. Runs of plain bytes are copied as slices of the input.
-decode_string := fn(in out p : Parser, in out out : String) -> Result(usize, Error) {
+decode_string := fn(in out p : Parser, in out out : alloc::string::String) -> Result(usize, Error) {
   p.pos += 1
   ## blocked-by: #1162 — a local named like a fn in the consuming package's root is refused,
   ## so the run start is `from`, not `run`.
@@ -412,7 +411,7 @@ decode_string := fn(in out p : Parser, in out out : String) -> Result(usize, Err
 }
 
 ## Append the code point `cp` (a scalar value: `read_unicode` refuses lone surrogates).
-push_code_point := fn(in out out : String, cp : u32) -> Result(usize, AllocError) {
+push_code_point := fn(in out out : alloc::string::String, cp : u32) -> Result(usize, AllocError) {
   ## blocked-by: #607 — `char(cp)` fails at link unless the program names `base::char`
   ## elsewhere; this call is that mention.
   if base::char::is_digit(char(0x30)) == false { return Result(usize, AllocError).Ok(0) }
@@ -533,23 +532,18 @@ parse_number := fn(in out p : Parser) -> Result(Value, Error) {
   Result(Value, Error).Ok(Value.Float(if neg { 0.0 - x } else { x }))
 }
 
-## Render `v` as compact JSON text (no whitespace between tokens) into a new arena string.
+## Append `v` to `out` as compact JSON text (no whitespace between tokens) and return the
+## length of `out`. On `OutOfMemory`, `out` holds a prefix of the text.
 ## A non-finite `Float` (which `parse` never produces) renders as `null`, the one JSON
 ## value that does not claim a number.
-pub render := fn(a : ptr(mut Arena), v : Value) -> Result(String, AllocError) {
-  mut out := alloc::string::new(a)
-  match emit(out, v) {
-    Ok(_) => {
-      Result(String, AllocError).Ok(out)
-    }
-    Err(e) => {
-      alloc::string::free(out)
-      Result(String, AllocError).Err(e)
-    }
-  }
+## blocked-by: #876, #1170, #1168 — a function returning `Result(alloc::string::String, …)` cannot
+## be written (the qualified type argument and an alias under another name are refused, and an
+## alias named `String` corrupts every string binding), so the caller owns the string.
+pub render := fn(in out out : alloc::string::String, v : Value) -> Result(usize, AllocError) {
+  emit(out, v)
 }
 
-emit := fn(in out out : String, v : Value) -> Result(usize, AllocError) {
+emit := fn(in out out : alloc::string::String, v : Value) -> Result(usize, AllocError) {
   match v {
     Value.Null => {
       put(out, "null")?
@@ -569,9 +563,7 @@ emit := fn(in out out : String, v : Value) -> Result(usize, AllocError) {
     Value.Arr(xs) => {
       put(out, "[")?
       mut first := true
-      ## blocked-by: #1163 — a method-syntax call to a generic `alloc::vec` fn names its instance
-      ## after an argument's spelling (link failure or a crash), so the type is passed explicitly.
-      for x in alloc::vec::iter(Value, ptr(xs)) {
+      for x in xs {
         if first == false { put(out, ",")? }
         first = false
         emit(out, x)?
@@ -581,9 +573,7 @@ emit := fn(in out out : String, v : Value) -> Result(usize, AllocError) {
     Value.Obj(ms) => {
       put(out, "{")?
       mut first := true
-      ## blocked-by: #1163 — a method-syntax call to a generic `alloc::vec` fn names its instance
-      ## after an argument's spelling (link failure or a crash), so the type is passed explicitly.
-      for m in alloc::vec::iter(Member, ptr(ms)) {
+      for m in ms {
         if first == false { put(out, ",")? }
         first = false
         emit_string(out, m.key)?
@@ -598,9 +588,9 @@ emit := fn(in out out : String, v : Value) -> Result(usize, AllocError) {
 
 ## A float in a form `parse` reads back as a `Float`: plain decimal for magnitudes in
 ## [1e-4, 1e15), otherwise `<mantissa>e<exponent>` with the mantissa in [1, 10). The
-## fractional part is the stdlib's bounded six digits (Stdlib appendix §2.3, the interim
+## fractional part is the stdlib's bounded six digits (Stdlib appendix §2.7, the interim
 ## float layer), so a value with more significant digits round-trips approximately.
-emit_float := fn(in out out : String, x : f64) -> Result(usize, AllocError) {
+emit_float := fn(in out out : alloc::string::String, x : f64) -> Result(usize, AllocError) {
   if x != x or x - x != 0.0 {
     return put(out, "null")
   }
@@ -631,7 +621,7 @@ HEX : str = "0123456789abcdef"
 
 ## A string literal: `"` and `\` escaped, control bytes as their short escape or `\u00XX`,
 ## everything else (including non-ASCII UTF-8) copied through in runs.
-emit_string := fn(in out out : String, s : str) -> Result(usize, AllocError) {
+emit_string := fn(in out out : alloc::string::String, s : str) -> Result(usize, AllocError) {
   put(out, "\"")?
   bs := bytes(s)
   ## blocked-by: #1162 — a local named like a fn in the consuming package's root is refused,

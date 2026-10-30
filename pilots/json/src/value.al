@@ -8,14 +8,20 @@
 ## One JSON value. Numbers are split by their source form: an integer literal that fits
 ## `i64` is `Int`; a literal with a fraction or exponent, or an integer outside `i64`, is
 ## `Float`.
+##
+## A container's elements are a slice over the arena storage its parser filled; that
+## storage is complete once the container is parsed and is never grown again, so the
+## slice stays valid until the arena is freed.
+## blocked-by: #1172 — an `alloc::vec::Vec(T)` payload reads back wrong fields after a
+## `match`, so the payloads are `Slice`s rather than the `Vec`s themselves.
 pub Value := enum {
   Null,
   Bool(bool),
   Int(i64),
   Float(f64),
   Str(str),
-  Arr(alloc::vec::Vec(Value)),
-  Obj(alloc::vec::Vec(Member)),
+  Arr(Slice(Value)),
+  Obj(Slice(Member)),
 }
 
 ## One `"key": value` pair of an object.
@@ -29,9 +35,7 @@ pub Member := struct {
 pub find := fn(v : Value, key : str) -> Option(Value) {
   match v {
     Value.Obj(ms) => {
-      ## blocked-by: #1163 — a method-syntax call to a generic `alloc::vec` fn names its instance
-      ## after an argument's spelling (link failure or a crash), so the type is passed explicitly.
-      for m in alloc::vec::iter(Member, ptr(ms)) {
+      for m in ms {
         if m.key == key { return Option(Value).Some(m.val) }
       }
       Option(Value).None
@@ -46,14 +50,10 @@ pub find := fn(v : Value, key : str) -> Option(Value) {
 pub count := fn(v : Value) -> usize {
   match v {
     Value.Arr(xs) => {
-      ## blocked-by: #1163 — a method-syntax call to a generic `alloc::vec` fn names its instance
-      ## after an argument's spelling (link failure or a crash), so the type is passed explicitly.
-      alloc::vec::len(Value, ptr(xs))
+      xs.len
     }
     Value.Obj(ms) => {
-      ## blocked-by: #1163 — a method-syntax call to a generic `alloc::vec` fn names its instance
-      ## after an argument's spelling (link failure or a crash), so the type is passed explicitly.
-      alloc::vec::len(Member, ptr(ms))
+      ms.len
     }
     _ => {
       0
@@ -65,9 +65,8 @@ pub count := fn(v : Value) -> usize {
 pub item := fn(v : Value, i : usize) -> Option(Value) {
   match v {
     Value.Arr(xs) => {
-      ## blocked-by: #1163 — a method-syntax call to a generic `alloc::vec` fn names its instance
-      ## after an argument's spelling (link failure or a crash), so the type is passed explicitly.
-      alloc::vec::get(Value, ptr(xs), i)
+      if i < xs.len { return Option(Value).Some(xs[i]) }
+      Option(Value).None
     }
     _ => {
       Option(Value).None
@@ -125,29 +124,21 @@ pub equal := fn(a : Value, b : Value) -> bool {
   }
 }
 
-arrays_equal := fn(xs : alloc::vec::Vec(Value), ys : alloc::vec::Vec(Value)) -> bool {
-  ## blocked-by: #987 — `ys[i]` reads 0; `at` is the index operator's own read arm.
-  ## blocked-by: #1146 — `ys.at(i)` cannot infer `T`, so `at` is called with it.
-  ## blocked-by: #1163 — a method-syntax call to a generic `alloc::vec` fn names its instance
-  ## after an argument's spelling (link failure or a crash), so the type is passed explicitly.
-  if alloc::vec::len(Value, ptr(xs)) != alloc::vec::len(Value, ptr(ys)) { return false }
+arrays_equal := fn(xs : Slice(Value), ys : Slice(Value)) -> bool {
+  if xs.len != ys.len { return false }
   mut i : usize = 0
-  for x in alloc::vec::iter(Value, ptr(xs)) {
-    if equal(x, alloc::vec::at(Value, ptr(ys), i)) == false { return false }
+  for x in xs {
+    if equal(x, ys[i]) == false { return false }
     i += 1
   }
   true
 }
 
-objects_equal := fn(xs : alloc::vec::Vec(Member), ys : alloc::vec::Vec(Member)) -> bool {
-  ## blocked-by: #987 — `ys[i]` reads 0; `at` is the index operator's own read arm.
-  ## blocked-by: #1146 — `ys.at(i)` cannot infer `T`, so `at` is called with it.
-  ## blocked-by: #1163 — a method-syntax call to a generic `alloc::vec` fn names its instance
-  ## after an argument's spelling (link failure or a crash), so the type is passed explicitly.
-  if alloc::vec::len(Member, ptr(xs)) != alloc::vec::len(Member, ptr(ys)) { return false }
+objects_equal := fn(xs : Slice(Member), ys : Slice(Member)) -> bool {
+  if xs.len != ys.len { return false }
   mut i : usize = 0
-  for x in alloc::vec::iter(Member, ptr(xs)) {
-    y := alloc::vec::at(Member, ptr(ys), i)
+  for x in xs {
+    y := ys[i]
     if x.key != y.key { return false }
     if equal(x.val, y.val) == false { return false }
     i += 1

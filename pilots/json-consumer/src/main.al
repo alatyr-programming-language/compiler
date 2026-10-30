@@ -5,8 +5,9 @@
 round_trip := fn(a : ptr(mut Arena), text : str, want : str) -> bool {
   match json::text::parse(a, text) {
     Ok(v) => {
-      match json::text::render(a, v) {
-        Ok(out) => {
+      mut out := alloc::string::new(a)
+      match json::text::render(out, v) {
+        Ok(_) => {
           alloc::string::as_str(ptr(out)) == want
         }
         Err(_) => {
@@ -40,7 +41,7 @@ run := fn(a : ptr(mut Arena)) -> u64 {
   if round_trip(a, "\"a\\nb\\u0041\"", "\"a\\nbA\"") == false { return 5 }
   if round_trip(a, "[1, 2, 3]", "[1,2,3]") == false { return 6 }
   if round_trip(a, "{\"k\": [true, null], \"n\": -1}", "{\"k\":[true,null],\"n\":-1}") == false { return 7 }
-  if round_trip(a, "2.5", "2.500000") == false { return 8 }
+  if round_trip(a, "2.5", "2.5") == false { return 8 }
   if fails_at(a, "[1,]", json::text::ErrorKind.UnexpectedByte, 1, 4) == false { return 9 }
   if fails_at(a, "{\n \"a\" 1}", json::text::ErrorKind.UnexpectedByte, 2, 6) == false { return 10 }
   if fails_at(a, "01", json::text::ErrorKind.BadNumber, 1, 2) == false { return 11 }
