@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`for s in xs` over `str` elements binds the right strings on x86_64 (#1177).** Iterating a
+  `Slice(str)` parameter, a local `[str; N]`, a range of one written in the loop header, or a call
+  returning `Slice(str)` bound each element as one word, or copied it from the parameter's own
+  `{ptr, len}` block. The program then ran on with wrong strings and no diagnostic. Iterating a
+  range of a `Slice(str)` parameter (`for s in xs[1..n]`) is still wrong, tracked by #1180.
+
 - **The #529 ptrint census is in the gate, and it no longer lets an unmeasured zero read as clean
   (#529 step 3).** The gate ran `ptrint_census.sh planted` only — the proof that the counter *can*
   fire — so no ptrint number was ever pinned, and `OP-CMP = 0` described a run nobody repeated.
