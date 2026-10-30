@@ -119,8 +119,25 @@ history_append() {
     for (i = 1; i <= NR; i++) { if (i == last) { print ""; while ((getline x < f) > 0) print x } print L[i] } }' "$1"
 }
 
-## owed_left DIR -> 0 (and the places) when a PROMOTE-OWED marker is still in the tree or the message
-owed_left() { grep -n "$OWED" "$1/seed/HISTORY.md" "$1/CHANGELOG.md" "$1/target/promote/COMMIT_MSG" 2>/dev/null; }
+## owed_left DIR -> 0 (and the places) when a PROMOTE-OWED marker that `prepare` wrote is still there
+## Only the lines the promotion ADDS to seed/HISTORY.md and CHANGELOG.md are searched (DIR's working
+## tree against its HEAD), plus the whole commit message, which `prepare` writes from nothing. The
+## committed text may name the marker in prose — CHANGELOG.md's own entry for this script does — and
+## searching the whole file made `commit` refuse every promotion once that entry landed. A DIR that is
+## not a git worktree cannot be scoped, so it is owed (0), never waved through.
+owed_left() {
+  local d="$1" added top
+  top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$top" ] && [ "$top" = "$(cd "$d" && pwd -P)" ] \
+    || { echo "  $d: not the top of a git worktree, so the markers cannot be told from prose"; return 0; }
+  added="$(git -C "$d" diff --no-color --no-ext-diff -U0 HEAD -- seed/HISTORY.md CHANGELOG.md 2>/dev/null)" \
+    || { echo "  $d: not a git worktree, so the markers cannot be told from prose"; return 0; }
+  { printf '%s\n' "$added" | awk -v o="$OWED" '
+      /^\+\+\+ / { f = substr($0, 7); next }
+      /^\+/ && index($0, o) { print f ": " substr($0, 2) }'
+    grep -n "$OWED" "$d/target/promote/COMMIT_MSG" 2>/dev/null | sed 's|^|target/promote/COMMIT_MSG:|'
+  } | grep .
+}
 
 ## atomic_set_ok CHANGED-FILES -> 0 when the changed paths are exactly $ATOMIC
 atomic_set_ok() {
@@ -353,9 +370,20 @@ self_test() {
   got="$(history_append "$d/h" "$d/e" | tr '\n' '|')"
   chk "the entry goes inside the fence, after one blank line, as the entries before it" "$got" '# a|```|# e1||# e2|```|'
   printf '# a\n' > "$d/h"; history_append "$d/h" "$d/e" > /dev/null; chk "a history with no fence is refused" "$?" "2"
-  mkdir -p "$d/w/seed" "$d/w/target/promote"; printf 'ok\n' > "$d/w/seed/HISTORY.md"; printf 'ok\n' > "$d/w/CHANGELOG.md"; printf 'msg\n' > "$d/w/target/promote/COMMIT_MSG"
-  owed_left "$d/w" > /dev/null; chk "no marker left: nothing owed" "$?" "1"
+  mkdir -p "$d/w/seed" "$d/w/target/promote"; printf 'ok\n' > "$d/w/seed/HISTORY.md"; printf 'msg\n' > "$d/w/target/promote/COMMIT_MSG"
+  printf '## Unreleased\n\n- **A promotion is a script.** It marks the judgements `%s`.\n' "$OWED" > "$d/w/CHANGELOG.md"
+  git -C "$d/w" init -q && git -C "$d/w" add seed/HISTORY.md CHANGELOG.md \
+    && git -C "$d/w" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --no-verify -m base
+  owed_left "$d/w" > /dev/null; chk "no marker left: nothing owed, though committed prose names the marker" "$?" "1"
+  printf '\n## 0.2.18 — 2026-10-30\n\n- the release, written\n' >> "$d/w/CHANGELOG.md"
+  owed_left "$d/w" > /dev/null; chk "a release whose added lines are written owes nothing" "$?" "1"
+  printf -- "- $OWED — what this generation carries.\n" >> "$d/w/CHANGELOG.md"; owed_left "$d/w" > /dev/null; chk "a marker left in the release is owed" "$?" "0"
+  git -C "$d/w" checkout -q -- CHANGELOG.md
   printf "# $OWED x\n" >> "$d/w/seed/HISTORY.md"; owed_left "$d/w" > /dev/null; chk "a marker left in the entry is owed" "$?" "0"
+  git -C "$d/w" checkout -q -- seed/HISTORY.md
+  printf "msg $OWED\n" > "$d/w/target/promote/COMMIT_MSG"; owed_left "$d/w" > /dev/null; chk "a marker left in the message is owed" "$?" "0"
+  rm -rf "$d/w/.git"; printf 'msg\n' > "$d/w/target/promote/COMMIT_MSG"
+  owed_left "$d/w" > /dev/null 2>&1; chk "a directory that is not a worktree is owed, not waved through" "$?" "0"
   atomic_set_ok "$(printf '%s\n' $ATOMIC)" > /dev/null; chk "exactly the atomic set is accepted" "$?" "0"
   atomic_set_ok "$(printf '%s\n' $ATOMIC src/cli.al)" > /dev/null; chk "a source file in the promotion commit is refused" "$?" "1"
   atomic_set_ok "$(printf '%s\n' $ATOMIC | grep -v CHANGELOG)" > /dev/null; chk "a promotion without its CHANGELOG entry is refused" "$?" "1"
