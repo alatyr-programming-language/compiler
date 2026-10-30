@@ -532,10 +532,12 @@ fi
 # There used to be a second, REPORTING-ONLY stage here, `scripts/xbackend_report.sh`, which asked
 # one narrower question of the same rows (does a twin exit normally with a different, quiet answer?)
 # and exited 0 whatever it found. #1128 removed it: nothing in this script prints a finding and
-# passes. It was strictly weaker than the ratchet below. Measured: a planted quiet wrong value
-# (riscv64 41 where x86_64 runs 42, on test/accept_limit_no_unchecked_neg.al) made the report
-# print the row and exit 0, while `xbackend_diff.sh --ratchet` failed with "UNEXPLAINED quiet
-# disagreements GREW 0 -> 1".
+# passes. Measured: a planted quiet wrong value (riscv64 41 where x86_64 runs 42, on
+# test/accept_limit_no_unchecked_neg.al) made the report print the row and exit 0, while
+# `xbackend_diff.sh --ratchet` failed with "UNEXPLAINED quiet disagreements GREW 0 -> 1". The one
+# row shape only the report used to show was a quiet answer on a HW-DEFINED or RAW-ESCAPE path,
+# which leaves every other count; the ratchet now holds `hw-defined=` and `raw-escape=` on their own
+# (a wasm `unchecked_div_zero` trap turned quiet 7: report exit 0, old ratchet exit 0, now FAIL 8 -> 9).
 echo "### CROSS-BACKEND (xbackend_diff: RATCHET, growth gates) ###"
 XB_LOG="$LOGDIR/full_xbackend.log"
 : > "$XB_LOG"

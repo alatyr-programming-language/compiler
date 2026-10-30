@@ -252,7 +252,7 @@ xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained targ
     ; echo "  not have. Write one with: scripts/xbackend_diff.sh --ratchet --write" >&2; return 2; }
   bp="$(awk -F= '/^paths=/{print $2}' "$f" | head -1)"
   br="$(awk -F= '/^rows=/{print $2}' "$f" | head -1)"
-  bh="$(awk -F= '/^hw-defined=/{print $2}' "$f" | head -1)"
+  bh="$(awk -F= '/^hw-defined=/{print $2}' "$f" | head -1)"; bh="${bh:-0}"
   ## `raw-escape=` arrived with this class, so an older baseline simply has none of them recorded:
   ## absent reads as 0, which is the strictest reading (any path newly claimed is then reported).
   bn="$(awk -F= '/^raw-escape=/{print $2}' "$f" | head -1)"; bn="${bn:-0}"
@@ -275,6 +275,24 @@ xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained targ
     echo "  fixture and the arch in review, or fix the disagreement on the declared target."
     return 1
   fi
+  ## `hw-defined=` and `raw-escape=` are held on their own too, for target-na's reason (#1128). Both
+  ## classes are filtered out of `paths=`, `rows=` AND `unexplained=`, so a row that newly lands in
+  ## one — a wasm `unchecked` division that traps today turning into a quiet 7 — moves no other
+  ## counter at all. Before #1128 the retired xbackend_report.sh at least printed such a row; this
+  ## is what replaces it, and it fails rather than prints.
+  case "${4:-}" in ''|*[!0-9]*) ;; *) if [ "$4" -gt "$bh" ]; then
+    echo "xbackend ratchet: FAIL — hw-defined GREW past the baseline ($bh -> $4)."
+    echo "  A row newly classified hardware-defined is a documented platform difference, not a fix, and"
+    echo "  it leaves every other count. Name the path and its citation in review, or fix the lowering."
+    return 1
+  fi ;; esac
+  case "${5:-}" in ''|*[!0-9]*) ;; *) if [ "$5" -gt "$bn" ]; then
+    echo "xbackend ratchet: FAIL — raw-escape GREW past the baseline ($bn -> $5)."
+    echo "  A row newly claimed RAW-ESCAPE leaves every other count on the strength of Assembly §4"
+    echo "  (\"only \`as\` validates\"); that holds only while the disagreement IS the assembler's reading"
+    echo "  of verbatim text. Justify it in review."
+    return 1
+  fi ;; esac
   ## The unexplained ceiling first, and it fails on its own: a growing backlog that happens to shrink
   ## `paths` must not carry a live wrong value past the gate.
   if [ "${6:-0}" -gt "$bu" ]; then
@@ -288,15 +306,6 @@ xb_ratchet() { # baseline-file paths rows hw-defined raw-escape unexplained targ
   if [ "$2" -gt "$bp" ] || [ "$3" -gt "$br" ]; then
     echo "xbackend ratchet: FAIL — the disagreement count GREW past the baseline."
     echo "    paths $bp -> $2   rows $br -> $3"
-    if [ "$4" -gt "$bh" ]; then
-      echo "    hw-defined $bh -> $4 — a row newly claimed hardware-defined is a documented platform"
-      echo "      difference, not a fix; justify it in review."
-    fi
-    if [ "$5" -gt "$bn" ]; then
-      echo "    raw-escape $bn -> $5 — a row newly claimed RAW-ESCAPE leaves `paths=` on the strength"
-      echo "      of Assembly §4 (\"only \`as\` validates\"). That is a real exemption only while the"
-      echo "      disagreement IS the assembler's reading of verbatim text; justify it in review."
-    fi
     echo "  Each new path is a program that answers differently on two backends (#683). Either fix"
     echo "  the lowering, or refuse it at compile time with a located diagnostic. Do NOT raise the"
     echo "  baseline to make this pass."
@@ -693,6 +702,13 @@ if [ "$MODE" = selftest ]; then
   ok "ratchet: a pre-declaration baseline holds at 0" "$(xb_ratchet "$T/base" 10 20 1 1 0 0 >/dev/null; echo $?)" 0
   ok "ratchet: a pre-declaration baseline FAILS on one declared fixture" \
      "$(xb_ratchet "$T/base" 10 20 1 1 0 1 >/dev/null 2>&1; echo $?)" 1
+  ## #1128: hw-defined and raw-escape leave every other count, so each is held on its own, even
+  ## while paths and rows SHRINK (a trap turning into a quiet hardware-defined answer moves nothing else).
+  ok "ratchet: hw-defined FAILS on one more"    "$(xb_ratchet "$T/tn" 10 20 2 1 0 2 >/dev/null 2>&1; echo $?)" 1
+  ok "ratchet: hw-defined FAILS even as paths and rows SHRINK" \
+     "$(xb_ratchet "$T/tn" 4 8 2 1 0 2 >/dev/null 2>&1; echo $?)" 1
+  ok "ratchet: raw-escape FAILS on one more"    "$(xb_ratchet "$T/tn" 10 20 1 2 0 2 >/dev/null 2>&1; echo $?)" 1
+  ok "ratchet: hw-defined and raw-escape held when LOWER" "$(xb_ratchet "$T/tn" 10 20 0 0 0 2 >/dev/null 2>&1; echo $?)" 0
 
   ## ── the new-path split: coverage is not a regression, but a moved path still is. ──
   ## Rows are `class backend path x86 twin tag`. Two paths existed at base; `test/new.al` is added
