@@ -176,32 +176,32 @@ pr_seed_binary_check() { # changed-paths
   return 1
 }
 
-## `seed/VERSION` is append-only: never rewrite entries to make old hashes resolve.
+## The seed's promotion journal is append-only: never rewrite an entry to make an old hash resolve.
+## Since #1130 the journal is `seed/HISTORY.md`, and `seed/VERSION` keeps only its header and the
+## CURRENT SEED block. So the protected lines are every line of `seed/HISTORY.md`, plus the two
+## `current-seed-*` lines of `seed/VERSION`, which a PR never moves (a promotion is the integrator's,
+## and it is landed by hand). The header prose of `seed/VERSION` is not history and may be edited.
 pr_seed_version_append_only_check() { # changed-paths deleted-line-count
-  printf '%s\n' "$1" | grep -qx 'seed/VERSION' || return 0
+  printf '%s\n' "$1" | grep -qxE 'seed/(VERSION|HISTORY\.md)' || return 0
   case "${2:-0}" in ''|0) return 0 ;; esac
-  echo "  REFUSE: seed/VERSION is append-only and this PR deletes ${2} protected line(s) from it."
-  echo '          Protected means the dated promotion journal entries and the `current-seed-sha256`'
-  echo '          and `current-seed-version` lines: rewriting them is how an old hash is made to'
-  echo '          resolve. The ONE mutable line is `# spec-pin:` — see the checker below, which'
-  echo '          excludes exactly that prefix and counts every other deletion as protected.'
+  echo "  REFUSE: the seed journal is append-only and this PR deletes ${2} protected line(s)."
+  echo '          Protected means every line of seed/HISTORY.md (the dated promotion entries) and the'
+  echo '          `current-seed-sha256` and `current-seed-version` lines of seed/VERSION: rewriting them is'
+  echo '          how an old hash is made to resolve. A new promotion entry is APPENDED to seed/HISTORY.md.'
+  echo '          The ONE mutable line is `# spec-pin:` in seed/VERSION, which moves with the pin.'
   return 1
 }
 
-## The deletions in seed/VERSION that the rule above PROTECTS: every deleted line except the single
-## `# spec-pin:` line. That exclusion is not a loosening invented here — the file states it itself:
-##
-##   "The dated promotion entries below keep the pin as it stood when each was written — APPEND-ONLY
-##    history; this line, not those, is the current claim."
-##
-## So `# spec-pin:` is the CURRENT claim on a different axis from `current-seed-version`, and moving
-## the pin REQUIRES rewriting exactly that line. Counting it as a deletion made the append-only rule
-## refuse the only change its own target file documents as mandatory, and a spec release with a pin
-## move became unlandable (#1080 hit this: one modified `spec-pin:` line, `git diff` reports it as
-## 1 deletion + 1 addition, LAND REFUSED). Everything else stays protected exactly as before: the
-## journal entries, `current-seed-sha256`, `current-seed-version`.
-pr_seed_version_protected_deletions() { # deleted diff lines on stdin -> count of protected ones
-  grep -vE '^-# spec-pin: ' | wc -l | tr -d ' '
+## The deletions the rule above PROTECTS, from `git diff` lines on stdin, given the file they come from.
+## In seed/HISTORY.md every deleted line counts. In seed/VERSION only the two `current-seed-*` fields
+## count: `# spec-pin:` is the CURRENT pin claim and moving the pin REQUIRES rewriting exactly that line
+## (#1080 hit this when every deletion counted: one modified `spec-pin:` line, LAND REFUSED), and the
+## header prose is description, not the journal.
+pr_seed_version_protected_deletions() { # file ; deleted diff lines on stdin -> count of protected ones
+  case "${1:-seed/VERSION}" in
+    seed/HISTORY.md) grep -c '' ;;
+    *) grep -cE '^-current-seed-(sha256|version):' ;;
+  esac
 }
 
 ## The xbackend baseline is the line the ratchet holds, and a PR that moves it blesses its own
@@ -287,7 +287,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=85  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093
+LAND_SELFTEST_EXPECTED=87  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -409,15 +409,23 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
   [ "$(printf '%s\n' '-current-seed-version: 0.2.17' |
       pr_seed_version_protected_deletions)" = 1 ]
   _ck $? spec-pin-exemption-ate-a-seed-version-deletion
-  [ "$(printf '%s\n' '-Promoted:      2026-10-15 (see the last entry in this file)' |
-      pr_seed_version_protected_deletions)" = 1 ]
-  _ck $? spec-pin-exemption-ate-a-journal-deletion
+  [ "$(printf '%s\n' '-# Self-promoted 2026-08-19 — nested enum and Slice(T) payload construction' |
+      pr_seed_version_protected_deletions seed/HISTORY.md)" = 1 ]
+  _ck $? journal-deletion-from-seed/HISTORY.md-not-counted
+  ## #1130: the journal is a file of its own, and every line of it is protected — the spec-pin
+  ## exemption is a property of seed/VERSION's CURRENT SEED block, never of an old entry.
+  [ "$(printf '%s\n' '-# spec-pin: 1.1.0 (tag v1.1.0, spec commit 65a0c9b)' |
+      pr_seed_version_protected_deletions seed/HISTORY.md)" = 1 ]
+  _ck $? spec-pin-exemption-leaked-into-seed/HISTORY.md
+  pr_seed_version_append_only_check seed/HISTORY.md 1 >/dev/null 2>&1; [ $? = 1 ]
+  _ck $? append-only-allowed-a-deletion-from-seed/HISTORY.md
   [ "$(printf '%s\n%s\n' '-# spec-pin: 1.1.0 (tag v1.1.0, spec commit 65a0c9b)' \
       '-current-seed-sha256: ce7dca80b820918d80a0fab5c18460d74dd23d370700392558cb853e30e9dd0c' |
       pr_seed_version_protected_deletions)" = 1 ]
   _ck $? spec-pin-exemption-hid-an-unrelated-deletion
-  [ "$(printf '%s\n' '-# a plain comment line' | pr_seed_version_protected_deletions)" = 1 ]
-  _ck $? spec-pin-exemption-widened-to-any-comment
+  ## seed/VERSION's header prose is description, not the journal, since #1130 moved the entries out.
+  [ "$(printf '%s\n' '-# a plain comment line' | pr_seed_version_protected_deletions seed/VERSION)" = 0 ]
+  _ck $? seed/VERSION-header-prose-counted-as-journal
 
   # ---- push capability: the PHASE 7 stall, caught in PHASE 0 (#1085). ------------------
   # Both directions, so the probe cannot pass by always answering either way.
@@ -742,9 +750,12 @@ pr_delta_base_check "$CHANGED" "$DELTA_DECLARED_BASE" "$BASE_MANIFEST_SHA" || sh
 printf '%s\n' "$CHANGED" | grep -qx "$DELTA_REL" && [ "$DELTA_DECLARED_BASE" != absent ] &&
   echo "  predicted delta: $DELTA_REL declares $(git show "$HEAD_SHA:$DELTA_REL" | sed -n 's/^pairs=//p') pair(s) against main's manifest"
 dels=0
-printf '%s\n' "$CHANGED" | grep -qx 'seed/VERSION' &&
-  dels="$(git diff "$BASE...$HEAD_SHA" -- seed/VERSION | grep -E '^-' | grep -v '^--- ' |
-          pr_seed_version_protected_deletions)"
+for _sf in seed/VERSION seed/HISTORY.md; do
+  printf '%s\n' "$CHANGED" | grep -qx "$_sf" || continue
+  _n="$(git diff "$BASE...$HEAD_SHA" -- "$_sf" | grep -E '^-' | grep -v '^--- ' |
+        pr_seed_version_protected_deletions "$_sf")"
+  dels=$((dels + ${_n:-0}))
+done
 pr_xbackend_baseline_edit_check "$CHANGED" || shape_fail=1
 pr_seed_version_append_only_check "$CHANGED" "${dels:-0}" || shape_fail=1
 for oracle in scripts/corpus.manifest scripts/idiom.baseline scripts/needle.baseline; do

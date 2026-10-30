@@ -347,7 +347,7 @@ byte-identical once the `.L<N>` and `.Lra<N>_<k>` label families are normalized,
 `Stage2 == Stage3` in the **binary** → read the seed→Stage1 GAS delta line by line with both label
 families normalized (**this is the best place to find the compiler miscompiling itself** — one
 reseed surfaced four latent bugs) → copy **Stage2** over `seed/alatyr` and append the evidence to
-`seed/VERSION` → re-run `scripts/fixpoint.sh` on the promoted tree, which is the proof, not the
+`seed/HISTORY.md` → re-run `scripts/fixpoint.sh` on the promoted tree, which is the proof, not the
 label.
 
 Stage2, and the binary clause stops at `Stage2 == Stage3`, for two separate reasons. Stage1 is
@@ -381,8 +381,8 @@ reproducible (unlike a build-time commit string), and a promoted seed that keeps
 leaves two materially different compilers claiming to be the same build. Move the patch component for an
 ordinary promotion; `CHANGELOG.md`'s versioning order decides minor and major.
 
-Five files move together in **one commit**, and the order inside it is not free. Six rows below,
-because `seed/VERSION` is written twice: three rows go in **before** the stages are built, two after,
+Six files move together in **one commit**, and the order inside it is not free. Seven rows below,
+because `seed/VERSION` is written twice: three rows go in **before** the stages are built, three after,
 and `CHANGELOG.md` on either side.
 
 | file | what changes | when |
@@ -391,7 +391,8 @@ and `CHANGELOG.md` on either side.
 | `seed/VERSION` | the CURRENT SEED block's `current-seed-version` moves to that number | before the build |
 | `scripts/package_cli_test.sh` | its expected `alatyr <version>` line | before the build |
 | `seed/alatyr` | the promoted Stage2 binary | after the build |
-| `seed/VERSION` | the CURRENT SEED block's `current-seed-sha256` moves to the promoted digest, and the entry (three stage hashes + the **read** delta) is appended | after the build |
+| `seed/VERSION` | the CURRENT SEED block's `current-seed-sha256` moves to the promoted digest | after the build |
+| `seed/HISTORY.md` | the entry (three stage hashes + the **read** delta) is appended at the end (#1130) | after the build |
 | `CHANGELOG.md` | `## Unreleased` becomes `## <version> — <date>`; a fresh empty `## Unreleased` opens above it | either |
 
 `src/cli.al`'s `cli_version` answers `app.version`, which TOOL-15 injects as a compile-time constant,
@@ -431,7 +432,7 @@ After the promotion lands on `main`, place an **annotated** tag `v<version>` on 
 with the digest as its message — one paragraph on what this generation does that the previous one did
 not, the three hashes, the promoted stage, the gate line and the spec revision. The template is in
 `CHANGELOG.md`. The tag is created after the merge, so nothing reviews it: it is navigation, and the
-full delta audit stays in `seed/VERSION`, which the promotion PR does review. Push the tag explicitly
+full delta audit stays in `seed/HISTORY.md`, which the promotion PR does review. Push the tag explicitly
 (`git push origin v<version>`) — a branch push does not carry it.
 
 State the old and new version in the acceptance comment alongside the three stage hashes, and name the
@@ -864,7 +865,7 @@ label and stop. A worker never removes a claim after opening a PR.
 
 - A PR containing **`seed/alatyr`** — three-stage evidence is not a property of a diff, and GitHub
   renders `Binary file not shown`. Close it with a pointer to §3.
-- A PR **rewriting `seed/VERSION`** entries rather than appending.
+- A PR **rewriting `seed/HISTORY.md`** entries rather than appending, or moving a `current-seed-*` line of `seed/VERSION`.
 - A PR with no matching existing issue, neither a valid closing nor bounded-slice reference, or a
   diff that cannot be mapped line by line to that issue's acceptance criteria.
 - A PR whose safety cannot be established before execution, including unexplained control-plane or
