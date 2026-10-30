@@ -987,6 +987,13 @@ ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : As
   sp := ib_span_of(bp, e)
   f := ib_b_f(bp)
   unch := ib_b_unch(bp)
+  ## #1049 — a zero-left operation the one decision (`zero_left_no_overflow`) finds has no overflow
+  ## member — above all an UNSIGNED negation `-a`, whose value `2^N - a` is representable (§6.5) — is
+  ## emitted in the `wrap` operation MODE and narrowed by wrapping. That is CC-9's prescribed spelling
+  ## ("an operation mode or a distinct IR operation"); the parser no longer hands the builder an
+  ## `unchecked` scope the source never wrote. Only a sign sema names unsigned takes it: a signed or
+  ## unnamed one keeps the checked form, so `-MIN` traps.
+  nomember := (not unch) and ib_zero_left_no_member(b, l, not sgn_eq(k.sg, Sgn.SgU))
   if divides and not unch {
     z := ib_fresh(bp, a, ib_bool_ks())
     orv := o_vreg(rv)
@@ -1018,18 +1025,31 @@ ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : As
   orr := o_vreg(rv)
   mut tk := TrapKind.TkOverflow
   if divides { tk = TrapKind.TkDivZero }
-  if unch {
+  if unch or nomember {
     mut md := Mode.MdWrap
     if divides { md = Mode.MdHw }
     i6 := e_bin(f, a, io, md, wk.sg, Kty.KI64, d, ol, orr)
   } else {
     i7 := e_binc(f, a, io, wk.sg, Kty.KI64, d, ol, orr, tk, sp)
   }
+  if nomember {
+    w := ib_wrap_to(bp, a, d, k)
+    return Option(VRegId).Some(w)
+  }
   ## A narrow quotient that does not fit is `MIN / -1` at the narrow width: a division overflow.
   mut ntk := TrapKind.TkOverflow
   if divides { ntk = TrapKind.TkDivOverflow }
   nd := ib_narrow_to(bp, a, d, k, ntk, sp)
   Option(VRegId).Some(nd)
+}
+## The builder's question to the one zero-left decision (`ir::zero_left_no_overflow`, #1049).
+ib_zero_left_no_member := fn(b : AstBin, l : ptr(Expr), signed : bool) -> bool {
+  match b {
+    BAdd => { zero_left_no_overflow(ZeroLeftOp.ZlAdd, l, signed) }
+    BSub => { zero_left_no_overflow(ZeroLeftOp.ZlSub, l, signed) }
+    BMul => { zero_left_no_overflow(ZeroLeftOp.ZlMul, l, signed) }
+    BDiv | BRem | BBand | BBor | BBxor | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { false }
+  }
 }
 
 ## Bitwise `& | ^` on canonical operands is canonical at any width (V3), so it is emitted at its type.

@@ -18163,39 +18163,6 @@ arms_call_syscall := fn(ah : Option(ptr(mut Arm)), decls : ptr(rt::Vec), cnt : u
   result
 }
 
-## The parser lowers ordinary unary `-x` to `Unchecked(Bin(17, Num(0, 0, 0), x))` so the lower can
-## preserve its established two's-complement arithmetic path. The synthetic zero has no source span;
-## a written `0` always carries one. Keep this distinction local to the limits scan: it identifies
-## parser syntax, not an explicit verification-mode escape. In particular, `unchecked -x` is nested
-## `Unchecked(Unchecked(Bin(...)))` and the outer wrapper remains a real violation. Keep the child
-## `Num` test in a helper: the frozen seed has a known miscompile for a nested match on a bound child.
-limit_parser_synthetic_zero := fn(e : ptr(Expr)) -> bool {
-  mut result := false
-  match deref(e) {
-    Expr::Num(v, s, n) => { result = v == 0 and s == 0 and n == 0 }
-    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  result
-}
-limit_parser_unary_neg_body := fn(inner : ptr(Expr)) -> bool {
-  mut result := false
-  match deref(inner) {
-    Expr::Bin(op, l, r) => {
-      if op == 17 {
-        result = limit_parser_synthetic_zero(l)
-      }
-    }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-  }
-  result
-}
-
 ## Does the expression tree contain an `unchecked <expr>` (`Expr::Unchecked`) ANYWHERE? A FULL recursive
 ## expr walk (mirrors `expr_has_unbound`'s traversal — every `ptr(Expr)` child plus the Call/StructLit/
 ## EnumLit/ArrayLit arg lists and Match arms). Unlike the shallow `no_alloc`/`freestanding` scans this is
@@ -18206,11 +18173,9 @@ limit_parser_unary_neg_body := fn(inner : ptr(Expr)) -> bool {
 ## an expression … there is no statement block form to handle", which was the whole bug.
 expr_has_unchecked := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> bool {
   match deref(e) {
-    ## The outer wrapper around parser-generated unary `-` is an implementation marker, not source
-    ## syntax. Recurse through that one wrapper while retaining the ordinary explicit-escape result.
-    Expr::Unchecked(inner) => {
-      if limit_parser_unary_neg_body(inner) { expr_has_unchecked(inner, a) } else { true }
-    }
+    ## Every `Expr::Unchecked` is a written escape: the parser lowers unary `-x` to
+    ## `Bin(17, Num(0, 0, 0), x)` with no `unchecked` wrapper (#1049, CC-9).
+    Expr::Unchecked(inner) => { true }
     Expr::Bin(op, l, r) => { expr_has_unchecked(l, a) or expr_has_unchecked(r, a) }
     Expr::If(c, t, f) => { expr_has_unchecked(c, a) or expr_has_unchecked(t, a) or expr_has_unchecked(f, a) }
     Expr::Match(scrut, head) => {

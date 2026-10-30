@@ -69,7 +69,7 @@ variant_payload_type := lower_layout::variant_payload_type
 (callee_ret_is_signed, arrty_elem_signed, arrty_elem_unsigned, lit_arith_i64) := lower_layout
 (ct_kind_of_name, ct_num_kind_of_name, ct_scalar_num_kind, ct_type_kind, std_ty_aggregate, struct_plain, ty_is_scalar) := lower_layout
 (decl_tparam_count, decl_tparam_pos, decl_leading_tparam_run, generic_gi, gen_call_ok, param_tuple_open_at, param_tuple_allscalar_n, arrty_semi, arg_list_count) := lower_layout
-(ex_is_index, ex_index_base, ex_index_idx, ex_is_field, ex_is_num_lit, ex_is_zero_lit) := lower_layout
+(ex_is_index, ex_index_base, ex_index_idx, ex_is_field, ex_is_num_lit, ex_is_zero_lit, zero_left_guard_skip) := lower_layout
 (ex_var_ns, ex_var_nl, ex_call_argh, ex_struct_lit_args, ex_enum_lit_args, ex_is_array_lit, ex_array_lit_ehead, ex_is_slice, ex_slice_base, ex_slice_lo, ex_slice_hi) := lower_layout
 (ex_value_is_scalar, ex_value_init, ex_is_cmp_op, ex_is_no_tail, str_esc_byte, dec_digit_val, bind_list_index) := lower_layout
 (arch_rhs_span, arch_guard_fold, apply_when_guards) := lower_layout
@@ -272,8 +272,8 @@ wat_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
     ##
     ## Both are PROOF-ONLY and ONE-DIRECTIONAL: they can move an operand signed → unsigned, never the
     ## reverse, so the always-signed default still covers every operand the scan misses. A bare literal
-    ## has no signedness of its own and takes the proven partner's type; unary negation remains the
-    ## parsed arithmetic shape `Unchecked(Bin(17, Num(0), x))` and therefore follows that same type.
+    ## has no signedness of its own and takes the proven partner's type; unary negation is the parsed
+    ## arithmetic shape `Bin(17, Num(0), x)` (no wrapper since #1049) and so follows that same type.
     ## The x86_64 dual is `lower::unsigned_thru_unchecked`.
     Expr::Unchecked(inner) => { r = wat_operand_unsigned(inner, params_head, body_head, src, a) }
     Expr::Bin(op, bl, br) => {
@@ -5143,7 +5143,11 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## exactly like the register backends' a0/a1). UNSIGNED overflow iff out <u a; SIGNED iff
         ## (a^out)&(b^out) < 0. `unreachable` traps. Dropped under `unchecked` (WAT_CHK false) and skipped
         ## for a narrow width. POINTER offsetting routes through `rt::addr` (unchecked), never reaching here.
-        if (op == 16 or op == 17 or op == 18) and WAT_CHK and nw == "" and (not ex_is_zero_lit(l)) {
+        ## A `0` on the left omits the guard only where the operation has no overflow member — the one
+        ## decision `ir::zero_left_no_overflow` (#1049). Asked with `dl or dr`, the signedness the guard
+        ## blocks below test, so a skipped guard and an emitted one never disagree on the operation.
+        zskip := zero_left_guard_skip(i64(op), l, dl or dr)
+        if (op == 16 or op == 17 or op == 18) and WAT_CHK and nw == "" and (not zskip) {
           push_str(sb, "(block (result i64) ")
           emit_wat_expr(l, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           push_str(sb, " ")
@@ -5183,7 +5187,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         }
         ## CHECKED narrow-width path: compute the binop into $__ovo, TRAP if it doesn't fit the width,
         ## then apply the value-model wrap. Mirrors the native block above (globals are nesting-safe).
-        if nw != "" and (op == 16 or op == 17 or op == 18) and WAT_CHK and (not ex_is_zero_lit(l)) {
+        if nw != "" and (op == 16 or op == 17 or op == 18) and WAT_CHK and (not zskip) {
           push_str(sb, "(block (result i64) ")
           emit_wat_expr(l, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           push_str(sb, " ")

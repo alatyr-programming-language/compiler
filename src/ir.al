@@ -3044,6 +3044,45 @@ pub arith_sg_soft := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(
   }
   ValSg.VsNotInt
 }
+## THE ONE PLACE (#1049, #633) that decides when a checked `+ - *` whose LEFT operand is an integer `0`
+## carries no overflow member, so its guard is omitted. Every emitter asks this and keeps no copy: the
+## shared IR builder (`ib_bx_arith`), x86_64's text, routed and register paths (through
+## `lower_layout::zero_left_guard_skip`), and the three twins.
+##
+## A `0` on the left is three different facts, and only these are safe:
+##   * `0 + x` and `0 * x` — the result IS `x` / zero; nothing can overflow.
+##   * `0 - x` over an UNSIGNED operand — this is the parser's unary `-x` (a synthesized `Num(0)` with an
+##     empty span) or a written zero minus. §6.5 makes the unsigned negation's value `2^N - x`, a
+##     representable value, and §6.3 says "an unsigned negation … has no overflow member". No guard.
+## And this is NOT safe: `0 - x` over a SIGNED operand is negation, a member of the checked-overflow set
+## by name (Concurrency §6.1: "unary `−` (negating the minimum value)"), so the guard stays at every
+## width and traps exactly when `x` is the type's minimum. `signed` is the OPERATION's signedness as the
+## caller read it from sema's record (§6.5), never a shape.
+##
+## Before #1049 every emitter skipped on `0` alone, and the parser additionally wrapped every `-x` in an
+## `unchecked` the source never wrote (§6.6), so `-MIN` wrapped silently on all four targets and the
+## operand of a negation (`-(a * b)`) lost its own guards.
+##
+## Residual, recorded rather than widened here: a WRITTEN `0 - x` over an unsigned operand still takes
+## the negation's rule, although §6.5 makes a binary unsigned `-` borrow-checked.
+## The three checked operations a zero LEFT operand can meet; the builder maps its `AstBin`, the
+## byte-holding emitters their AST operator byte (`lower_layout::zero_left_guard_skip`).
+pub ZeroLeftOp := enum { ZlAdd, ZlSub, ZlMul }
+pub zero_left_no_overflow := fn(o : ZeroLeftOp, l : ptr(Expr), signed : bool) -> bool {
+  mut z := false
+  match deref(l) {
+    Expr::Num(v, s, n) => { z = v == 0 }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  if not z { return false }
+  match o {
+    ZlSub => { not signed }
+    ZlAdd | ZlMul => { true }
+  }
+}
 ## #943 — the record answers only where it NAMES an integer type with a spelled sign. A folded literal
 ## (`VcLit`) carries no sign of its own — spec §6.5 says the TYPE gives it one — so this returns
 ## `VsNotInt` there and the caller keeps its shape verdict. x86 cannot use `arith_sg_soft` directly for

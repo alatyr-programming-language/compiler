@@ -335,13 +335,17 @@ ir_emit_div_guard := fn(rok : usize, rov : i64, signed : bool) {
 ## i64/isize) — no narrow-width truncation and no pointer arithmetic are reachable here (there is no
 ## conversion / field / call expr in the admitted set), so the ONLY guard distinction is signed (`jno`)
 ## vs unsigned (`jnc`), matching the text path where `ovf_narrow`/pointer are both false. A literal-`0`
-## LEFT operand (`0 - x` / `0 * x`) skips the guard, exactly as the text path's `expr_is_zero(l)` does.
+## LEFT operand skips the guard only where `ir::zero_left_no_overflow` says so, exactly as the text path.
 ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx), unch : bool) -> IROperand {
   ## e3 (in parts): `/ %` read sema's record of the operator; `+ - *` now ask it first and keep the
   ## shape verdict only where the record is `VsNotInt` (#943).
   dsigned := if op == 19 or op == 29 { lower_layout::ir_arith_signed(be, l, r, cx.src) } else if op == 16 or op == 17 or op == 18 { lower_layout::ir_arith_signed_or(be, shape_is_signed_expr(l, cx) or shape_is_signed_expr(r, cx)) } else { false }
   ## docs/ir.md §3.8.5 — the census row for this division's signedness (no-op unless fd 97 is open).
   if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
+  ## A `0` on the left omits the guard only where the operation has no overflow member — the ONE
+  ## decision `ir::zero_left_no_overflow` (#1049): `0 + x`, `0 * x`, and `0 - x` over an UNSIGNED
+  ## operand. A signed negation keeps its guard, so `-MIN` traps here as on the text path.
+  zskip := lower_layout::zero_left_guard_skip(i64(op), l, dsigned)
   ## The guard's signedness is `dsigned` and nothing else (spec §6.5): a subexpression spelled as a
   ## negation is not thereby signed, and at `u64` the value `-a` IS `2^64-5`, so an enclosing `+` that
   ## overflows carries and must trap. The `gsigned := dsigned or expr_is_uneg(...)` override that used
@@ -358,16 +362,16 @@ ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : p
     mut iop := 1
     if op == 17 { iop = 2 }
     regalloc::ra_ir_emit(iop, 3, i64(t), ro.k, ro.v)           ## t (+|-)= R  (sets OF/CF)
-    ## CHECKED overflow (I11 / CG-8): trap on native-width `+`/`-` overflow — unless `unchecked` or a
-    ## `0 - x` negation. Signed → `jno`; unsigned → `jnc` (carry/borrow).
-    if (not unch) and (not lower_layout::ex_is_zero_lit(l)) { ir_emit_ovf_guard(dsigned) }
+    ## CHECKED overflow (I11 / CG-8): trap on native-width `+`/`-` overflow — unless `unchecked` or
+    ## `zskip`. Signed → `jno` (a signed `0 - MIN` sets OF); unsigned → `jnc` (carry/borrow).
+    if (not unch) and (not zskip) { ir_emit_ovf_guard(dsigned) }
     return IROperand(k = 3, v = i64(t))
   }
   if op == 18 {
     ## CHECKED `*`: SIGNED via 2-operand `imul` (op 3, sets OF on a >64-bit signed product → `jno`);
     ## UNSIGNED via 1-operand `mul` (op 5, rdx:rax, sets CF iff the high half is nonzero → `jnc`) — the
     ## same split the text path uses. `unchecked` (or a `0 * x`) keeps the plain `imul`, no guard.
-    if unch or lower_layout::ex_is_zero_lit(l) or dsigned {
+    if unch or zskip or dsigned {
       ## Keep an immediate left operand visible to the scalar-IR fold; the fresh destination vreg makes the
       ## `mov t, $lhs` form legal for the following two-operand imul.
       lo := ir_lower_expr(l, cx, unch)
@@ -375,7 +379,7 @@ ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : p
       t := ir_fresh_vreg()
       regalloc::ra_ir_emit(0, 3, i64(t), lo.k, lo.v)            ## mov t, L
       regalloc::ra_ir_emit(3, 3, i64(t), ro.k, ro.v)           ## imul t, R  (sets OF signed)
-      if (not unch) and (not lower_layout::ex_is_zero_lit(l)) { ir_emit_ovf_guard(true) }   ## dsigned here → jno
+      if (not unch) and (not zskip) { ir_emit_ovf_guard(true) }   ## dsigned here → jno
       return IROperand(k = 3, v = i64(t))
     }
     ## checked UNSIGNED multiply: mov rax, L; mul R; jnc CONT; ud2; CONT:; mov t, rax.

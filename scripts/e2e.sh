@@ -7642,6 +7642,9 @@ run_x86_out print_hole_unary_minus 42
 ## arm removed this program compiles, runs and exits 42 printing `v=[]`, which is what makes the row
 ## non-vacuous. The needle is deliberately absent from the fixture's own `##` comments. Residual #489.
 build_reject_has print_hole_unmatched_reject 'matched no renderer'
+## #1049 — with no `unchecked` wrapper around `-x`, a negated int NAME reaches `print_one_int` and
+## renders `v=[-5]`; the reject fixture above moved to a negated FLOAT, which still has no renderer.
+run_x86_out print_hole_neg_name_render 42
 ## Functions §7.1 / I11 — a call in STATEMENT position (result discarded) whose callee's TAIL name collides
 ## with the comptime-variadic `std::fmt::print` was routed into the `{}`-template desugar, which emits
 ## NOTHING when argument 0 is not a string literal: the whole statement — call, arguments, side effects —
@@ -8984,6 +8987,17 @@ run checked_add_ovf 132
 # a64/rv64/wasm sweeps assert a trap (>=128). Companions below prove `unchecked` scoping.
 run checked_mul_ovf 132
 run checked_sub_ovf 132
+## #1049 / #633 — unary `-` keeps the checked guard its operand type selects (Concurrency §6.1, §6.5,
+## §6.6): a signed negation of MIN traps at every width, an unsigned one and a written `unchecked -m`
+## do not, and a compound operand is no longer silently unchecked.
+run trap_neg_min_signed 132
+run trap_neg_min_i8 132
+run trap_neg_min_i16 132
+run trap_neg_min_i32 132
+run trap_neg_written_zero_sub 132
+run trap_neg_compound_operand 132
+run accept_neg_unsigned_and_unchecked 42
+run accept_neg_narrow_no_trap 42
 ## regalloc commit 4: a scalar-leaf TRAILING-VALUE checked `*` overflow goes through `emit_fn_ir`
 ## (register-allocated), not the text path — it must still emit the guard and TRAP (132). Locks in
 ## that the register allocator never drops a checked-overflow guard.

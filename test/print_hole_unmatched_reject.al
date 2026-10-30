@@ -27,7 +27,18 @@
 ## a negated NAME's type, this fixture is replaced by a rendering assertion — it pins today's refusal,
 ## not a permanent language rule.
 main := fn() -> u64 {
-  x := 5
-  print("v=[{}]\n", -x)
+  y : f64 = 1.5
+  print("v=[{}]\n", -y)
   42
 }
+
+## MOVED at #1049, and the reason is the point. This file used to write `-x` over an un-annotated INT
+## local. The desugar no longer wraps the negation in `Expr::Unchecked`, so the chain now SEES the
+## `Bin`, and `print_one_int` renders it exactly: `print("{}", -x)` answers `v=[-5]`, measured. That is
+## no longer a refusal to pin, and this file's own closing paragraph said what to do when the expansion
+## can resolve a negated name — write a rendering assertion instead. `test/print_hole_neg_name_render.al`
+## is that assertion. What still reaches the terminal arm is a negation over a FLOAT: the chain finds a
+## float hole by the argument's NAME, and a `Bin` has none, so without a refusal it prints the `f64` bit
+## pattern as an integer (`-4613937818241073152`, measured) — a silent wrong value, the forbidden outcome.
+## `lower::hole_arith_float_operand` refuses it, loudly and located, until #489 gives the expansion a
+## type for negated expressions. The non-vacuity of the terminal arm is preserved, on a harder shape.

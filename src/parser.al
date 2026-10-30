@@ -1446,7 +1446,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       uzero := newnode(pc.arena, Expr.Num(0, 0, 0))
       uinner := p_field(pc)
       ## #602 — a written NEGATIVE LITERAL is normalised to ONE `Num` carrying the negated value
-      ## and a raw span that INCLUDES the `-`, instead of the `Unchecked(Bin(17, Num(0), Num(N)))`
+      ## and a raw span that INCLUDES the `-`, instead of the `Bin(17, Num(0), Num(N))`
       ## tree the general case below builds. FIFTEEN predicates measurably open with "is this a
       ## numeric literal" and declined that tree, which produced six defects from one
       ## representation: #558/#581 (`x : f64 = unchecked 3` read back a denormal), #590 (a negative
@@ -1478,17 +1478,30 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       ## value of 4, in range — became a false rejection. Neither the corpus oracle (0 rows) nor
       ## `fmt_corpus.sh` could see either one, because no tracked file writes those spellings;
       ## `test/fmt_neg_lit_adjacency.al` writes all of them. `- (5)`, `-  7` and `- -4` keep the
-      ## `Unchecked(Bin(17, Num(0), …))` shape and every value below is unchanged.
+      ## `Bin(17, Num(0), …)` shape and every value below is unchanged.
       unm_fold := ulit.kind == 3 and ulit.start == umstart + 1 and unm_foldable(uinner) and unm_num_start(uinner) == ulit.start and unm_num_end(uinner) == ulit.start + ulit.len
       if unm_fold {
         return newnode(pc.arena, Expr.Num(unchecked (0 - unm_num_v(uinner)), umstart, unm_num_end(uinner) - umstart))
       }
-      ## Unary negation `-x` = `0 - x` is 2's-complement negation — INHERENTLY modular (a "negative
-      ## literal" `-17` on a u64 is the wrap `2^64-17`), so it must NOT trap under the checked `-`
-      ## underflow guard (I11 / CG-8). Wrap in `Expr.Unchecked` so the subtraction lowers guard-free;
-      ## a genuine binary `a - b` (not via this prefix path) keeps the guard.
+      ## Unary negation `-x` is an OPERATION on `x`, not a permission to wrap. It is built as the
+      ## subtraction `0 - x` (2's-complement negation) and carries NO verification-mode wrapper: the
+      ## guard is then chosen by the OPERAND'S TYPE at lowering, which is the rule Concurrency §6.1 /
+      ## §6.4 fix — over a SIGNED operand negating MIN is the checked failure, over an UNSIGNED operand
+      ## the result `2^N - x` is representable and there is no overflow member to guard (§6.5).
+      ##
+      ## The `Expr.Unchecked` wrapper this replaces did two kinds of damage, both measured on 0.2.17:
+      ##   * it granted wrapping to EVERY unary minus, so `-MIN` on `i64` wrapped silently instead of
+      ##     trapping (§6.1 names unary `−` in the checked-overflow set) — #1049; and
+      ##   * the grant is SCOPED, so it reached into the operand's own subtree: `-(a * b)` lowered the
+      ##     multiply with no overflow guard at all (`imulq` with neither `jno` nor `ud2`, measured on
+      ##     the tree at fdc40f6, where `a * b` written plainly emits both). Every compound operand of
+      ##     a negation was silently unchecked — an I11 hole wider than the one this issue was filed
+      ##     for.
+      ## A programmer who wants the wrap writes `unchecked -x`; that wrapper is parsed separately, wraps
+      ## this node, and lowers guard-free exactly as §6.2 says. `no_unchecked` fixtures get simpler too:
+      ## there is no internal marker left for them to forgive (`test/accept_limit_no_unchecked_neg.al`).
       subn := newnode(pc.arena, Expr.Bin(17, uzero, uinner))
-      return newnode(pc.arena, Expr.Unchecked(subn))
+      return subn
     }
     ## A leading `~` (kind 46) is UNARY bitwise NOT (one's complement, Grammar §130 / bitwise
     ## family `& | ^ ~`). Desugared to `x ^ (-1)`: XOR with the all-ones word (`Num(0 - 1)` is the
