@@ -126,6 +126,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **Unary `-` over a signed integer traps on the minimum value, at every width (#1049).** `-x` with
+  `x` at `i8`/`i16`/`i32`/`i64` MIN used to answer MIN on x86_64. A written signed `0 - x` and the
+  operand of a compound negation such as `-(a * b)` were unguarded too. All of these trap now
+  (Concurrency §6.1, §6.5). An unsigned `-x` still yields the negation modulo 2^N without a trap, and
+  `unchecked -x` still wraps. One residual remains: a written unsigned `0 - x` is still unguarded
+  (#1154).
+
 - **The #529 ptrint census is in the gate, and it no longer lets an unmeasured zero read as clean
   (#529 step 3).** The gate ran `ptrint_census.sh planted` only — the proof that the counter *can*
   fire — so no ptrint number was ever pinned, and `OP-CMP = 0` described a run nobody repeated.

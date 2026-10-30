@@ -1877,15 +1877,15 @@ emit_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : Option(
           ## Guarded to plain scalars: a struct/enum/array var is NOT rendered as int (it needs Display).
           emit_arg(argx, sb, cx, a, nl, cx.str_tmp)
           push_str(sb, "  popq %rdi\n  call std__fmt__print_one_int\n")
-        } else if expr_is_arith_bin(argx) or lit_arith_i64(argx, cx.src) {
+        } else if (expr_is_arith_bin(argx) or lit_arith_i64(argx, cx.src)) and (not hole_arith_float_operand(argx, cx)) and (not hole_neg_not_signed(argx, cx)) {
           ## an ARITHMETIC EXPRESSION hole (`a + b`) — an int-valued expression with no type span;
           ## the §7.1 default numeric renderer `print_one_int`. Without this it rendered nothing.
           ##
-          ## `lit_arith_i64` adds the ONE spelling `expr_is_arith_bin` cannot see. The parser desugars
-          ## unary minus to `Unchecked(Bin(17, Num(0), x))` (`p_factor`, so the negation is guard-free
-          ## 2's-complement), and that node's OUTER kind is `Expr::Unchecked`, not `Expr::Bin` — so
-          ## `print("{}", -4)` matched NO arm of this chain, contributed zero bytes and rendered the
-          ## EMPTY string on a clean compile that still exited correctly (#486). `unchecked` is a
+          ## `lit_arith_i64` adds the spellings `expr_is_arith_bin` cannot see: a written `unchecked`
+          ## around literal arithmetic, and a #602-folded negative literal. Before #1049 the parser
+          ## desugared unary minus to `Unchecked(Bin(17, Num(0), x))`, whose OUTER kind is not
+          ## `Expr::Bin`, so `print("{}", -4)` matched NO arm of this chain and rendered the EMPTY
+          ## string on a clean compile (#486); `-x` is now the plain `Bin(17, Num(0), x)`. `unchecked` is a
           ## VERIFICATION mode, never a type, so peeling it before the shape test is the shape-local
           ## decision; `lower_layout::lit_arith_i64` already IS that peel, and it is the same predicate
           ## aarch64/riscv64/wasm route this hole on, so all four surfaces now read one decision.
@@ -5846,6 +5846,62 @@ expr_is_arith_bin := fn(e : ptr(Expr)) -> bool {
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
+}
+
+## Is `e` a NAME whose slot holds a FLOAT? The `{}`-chain decides float-vs-int by the argument's slot
+## kind (`ek == 9`, the value lives in an xmm at the call boundary), because a local records NO type
+## span here — `expr_type_span` answers empty for `y : f64`, measured. A SEPARATE helper because a
+## `match` nested directly inside another `match` arm mis-lowers under the seed; the slot lookup mirrors
+## the one the chain already does a few lines above, guards included.
+slot_holds_float := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  mut r := false
+  svn := var_name_span(e)
+  if svn.n != 0 {
+    sent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, svn.s, svn.n)))
+    if lower_ctx::streq(cx.src, sent.ns, sent.nl, svn.s, svn.n) { if sent.ek == 9 { r = true } }
+  }
+  r
+}
+
+## Does an arithmetic-expression `print` hole carry a FLOAT operand? The chain spots a float hole by the
+## argument's NAME, and a `Bin` — which has none — never reaches that test, so it fell to the integer
+## renderer and printed an `f64` as the bit pattern read as an integer (`print("{}", -y)` with
+## `y : f64` answered `-4613937818241073152`, measured). Before #1049 a negation reached this chain as
+## `Expr::Unchecked`, matched no arm, and was REFUSED loudly; the desugar no longer wraps it, so the
+## refusal has to be made here rather than inherited from the wrapper. Loud refusal until #489 gives the
+## expansion a type for negated expressions — AGENTS.md: "a trap is acceptable; a wrong value is not".
+hole_arith_float_operand := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Bin(bop, bl, br) => { if slot_holds_float(bl, cx) or slot_holds_float(br, cx) { r = true } }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+## Is an arithmetic `print` hole a NEGATION `-x` whose value this chain cannot render right? The
+## terminal renderer here is `print_one_int`, the SIGNED i64 default. Over a `u64` operand `-x` is
+## `2^64 - x` (Concurrency §6.5), so the signed render of `x : u64 = 5; print("{}", -x)` printed `-5`
+## where the value is 18446744073709551611, measured. Before #1049 such a negation matched no arm
+## and was refused; this keeps it refused unless the value is known signed — literal arithmetic
+## (`lit_arith_i64`, as before) or an operation sema RECORDS as signed. The same signed render over a
+## `u64` sum is the separate pre-existing defect filed with this change.
+hole_neg_not_signed := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Bin(bop, bl, br) => {
+      if bop == 17 and lower_layout::ex_is_zero_lit(bl) {
+        r = not (lit_arith_i64(e, cx.src) or lower_layout::ir_arith_signed_or(e, false))
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
 }
 ## The integer value of an `Expr::Num` initializer (else 0) — the `.data` `.quad` initializer of a
 ## mutable module global (`mut COUNTER := 42`). Ptr-param match (a local-Expr `match deref` degenerates).
@@ -15919,8 +15975,8 @@ expr_is_pos_num := fn(e : ptr(Expr)) -> bool {
 ## `30 + -a` answer 25. That is falsified: at type `u64` the value `-a` IS `2^64-5`, so the sum overflows
 ## and must trap, and spec §6.5 states plainly that a subexpression's spelling is not its type — the
 ## guard follows the operand TYPE. The predicate had no other caller, so it goes with the override.
-## (The parser still desugars `-x` to `Unchecked(Bin(17, Num(0), x))`; making that grant visible, and
-## the signedness of `+ - *` a sema record rather than a shape, are §6.6 and #943.)
+## (#1049 removed the parser's `unchecked` wrapper around `-x`; the signedness of `+ - *` as a sema
+## record rather than a shape is #943.)
 ## Recover the declared array type of `Field(Var, field)` for the indexed-field signedness lane. Keep
 ## the variant destructure in a standalone one-level helper: the frozen seed mis-lowers a nested match
 ## over `Expr::Field` when it is placed inside another expression match arm.
@@ -17225,8 +17281,11 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
   if typ == "u8" or typ == "i8" { bits = 8 }
   if typ == "u16" or typ == "i16" { bits = 16 }
   if typ == "u32" or typ == "i32" { bits = 32 }
+  ## A `0` on the left omits the guard only where the operation has no overflow member — the ONE
+  ## decision `ir::zero_left_no_overflow` (#1049): never a signed negation, at any width.
+  zskip := lower_layout::zero_left_guard_skip(op, l, dsigned)
   if op == 16 {
-    if narrow and (not lower_layout::ex_is_zero_lit(l)) {
+    if narrow and (not zskip) {
       push_str(sb, "  movq %rax, %rcx\n  addq %rbx, %rcx\n")
       if dsigned {
         if bits == 8 { push_str(sb, "  movsbq %cl, %rdx\n") }
@@ -17238,14 +17297,14 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
         push_int(sb, bits)
         push_str(sb, ", %rdx\n  jz 1f\n  ud2\n1:\n")
       }
-    } else if not lower_layout::ex_is_zero_lit(l) {
+    } else if not zskip {
       push_str(sb, "  movq %rax, %rcx\n  addq %rbx, %rcx\n")
       if dsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") }
       else { push_str(sb, "  jnc 1f\n  ud2\n1:\n") }
     }
   }
   if op == 17 {
-    if narrow and (not lower_layout::ex_is_zero_lit(l)) {
+    if narrow and (not zskip) {
       push_str(sb, "  movq %rax, %rcx\n  subq %rbx, %rcx\n")
       if dsigned {
         if bits == 8 { push_str(sb, "  movsbq %cl, %rdx\n") }
@@ -17257,14 +17316,14 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
         push_int(sb, bits)
         push_str(sb, ", %rdx\n  jz 1f\n  ud2\n1:\n")
       }
-    } else if not lower_layout::ex_is_zero_lit(l) {
+    } else if not zskip {
       push_str(sb, "  movq %rax, %rcx\n  subq %rbx, %rcx\n")
       if dsigned { push_str(sb, "  jno 1f\n  ud2\n1:\n") }
       else { push_str(sb, "  jnc 1f\n  ud2\n1:\n") }
     }
   }
   if op == 18 {
-    if narrow and (not lower_layout::ex_is_zero_lit(l)) {
+    if narrow and (not zskip) {
       push_str(sb, "  movq %rax, %rcx\n  imulq %rbx, %rcx\n")
       if dsigned {
         if bits == 8 { push_str(sb, "  movsbq %cl, %rdx\n") }
@@ -17276,7 +17335,7 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
         push_int(sb, bits)
         push_str(sb, ", %rdx\n  jz 1f\n  ud2\n1:\n")
       }
-    } else if not lower_layout::ex_is_zero_lit(l) {
+    } else if not zskip {
       if dsigned {
         push_str(sb, "  movq %rax, %rcx\n  imulq %rbx, %rcx\n  jno 1f\n  ud2\n1:\n")
       } else {
@@ -18270,9 +18329,13 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           if is_narrowing_conv(str_at((cx.src + obn.s), obn.n)) { ovf_narrow = true }
         }
       }
-      ## a literal-`0` LEFT operand → negation/identity, never overflows → skip the guard (covers the
-      ## `0 - N` negative/sentinel idiom pervasive in src/). Also the parser wraps unary `-x` in Unchecked.
-      if lower_layout::ex_is_zero_lit(l) { ovf_narrow = true }
+      ## A literal-`0` LEFT operand is not a licence to skip: `0 + x` / `0 * x` have no overflow member,
+      ## and `0 - x` has none only over an UNSIGNED operand (§6.5: `2^N - x` is representable). A SIGNED
+      ## negation keeps its guard and traps on MIN (§6.1). The one decision is
+      ## `ir::zero_left_no_overflow` (#1049); before it this line skipped every zero-left operation,
+      ## and the parser wrapped every `-x` in an `unchecked` the source never wrote, so `-MIN` wrapped.
+      zskip := lower_layout::zero_left_guard_skip(i64(op), l, dsigned)
+      if zskip { ovf_narrow = true }
       ## POINTER arithmetic (`ptr + int` / `ptr - ptr`) is ADDRESS arithmetic — unchecked BY TYPE (CG-8 /
       ## Memory §4.5), never an I11 integer overflow. When an operand is a pointer, skip the overflow guard,
       ## so a folded `src + off` (usize→ptr Phase 3: dropping the `rt::addr` helper) traps no more than the
@@ -18338,10 +18401,12 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             ## CHECKED narrow-width OVERFLOW (I11 / CG-8): the 64-bit result in %rax must fit the narrow
             ## type, else TRAP — num.al's `if full > 255 { panic }`. UNSIGNED uN overflows iff any bit
             ## above bit N is set (`shr $N` nonzero); SIGNED iN overflows iff the sign-extension of the
-            ## low N bits differs from the full value. Dropped under `unchecked`; skipped for a `0 - x`
-            ## negation (`expr_is_zero`). The truncation below is then the `unchecked` value-model wrap.
+            ## low N bits differs from the full value. Dropped under `unchecked`; skipped where the
+            ## operation has no overflow member (`zskip`: an UNSIGNED negation, `0 + x`, `0 * x`) — a
+            ## SIGNED narrow negation keeps it, so `-v` with `v : i8 = -128` traps (128 does not fit, #633).
+            ## The truncation below is then the `unchecked` value-model wrap.
             ## Both operands have the result's type, so the 64-bit value's signedness is the target's.
-            if cx.vchk and (not lower_layout::ex_is_zero_lit(l)) { emit_int_fit_guard(sb, wnm, false) }
+            if cx.vchk and (not zskip) { emit_int_fit_guard(sb, wnm, false) }
             emit_int_narrow_reg(sb, wnm)
           }
         }

@@ -3430,8 +3430,8 @@ pub arrty_elem_unsigned := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 }
 
 ## An INTEGER-LITERAL leaf for `lit_arith_i64` below: a `Num`, an arithmetic combination of them, or
-## either inside an `unchecked` scope (a VERIFICATION mode, never a type — and the shape the parser
-## gives unary minus, `Unchecked(Bin(17, Num(0), x))`). Comparisons are excluded: they yield `bool`,
+## either inside an `unchecked` scope (a VERIFICATION mode, never a type). Unary minus is the plain
+## `Bin(17, Num(0), x)` since #1049. Comparisons are excluded: they yield `bool`,
 ## not an operand type. Structural on the AST tree, so it terminates without a depth cap.
 lit_arith_leaf := fn(e : ptr(Expr)) -> bool {
   mut r := false
@@ -3836,6 +3836,14 @@ pub ex_is_zero_lit := fn(e : ptr(Expr)) -> bool {
   mut r := false
   match deref(e) { Expr::Num(v, s, n) => { if v == 0 { r = true } } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
+}
+## May a checked `op` with this LEFT operand omit its overflow guard? The emitters' entry point to the
+## one decision, `ir::zero_left_no_overflow` (#1049) — read its comment; this keeps no copy.
+pub zero_left_guard_skip := fn(op : i64, l : ptr(Expr), signed : bool) -> bool {
+  if op == 16 { return ir::zero_left_no_overflow(ir::ZeroLeftOp.ZlAdd, l, signed) }
+  if op == 17 { return ir::zero_left_no_overflow(ir::ZeroLeftOp.ZlSub, l, signed) }
+  if op == 18 { return ir::zero_left_no_overflow(ir::ZeroLeftOp.ZlMul, l, signed) }
+  false
 }
 
 ## ─── The Expr ACCESSORS and the two byte tables ─────────────────────────────

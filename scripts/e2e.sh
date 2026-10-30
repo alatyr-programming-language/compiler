@@ -2792,13 +2792,14 @@ main := fn() -> u64 {
 
   ## ---- CONTROL 4: a NON-LITERAL operand keeps the old representation and the old behaviour -----
   ## The parser folds only a literal abutting the `-`. `-v` for a run-time `v` is §6.1's checked
-  ## negation family and is untouched — that residual is #633's, and #489's, not this unit's. The
-  ## row asserts the value the parent produced, so a later change to that family moves this row on
-  ## purpose rather than by accident.
+  ## negation family and is untouched by the fold. Until #1049 this row asserted the parent's WRAP of
+  ## `-v` at `v : i8 = -128` (answering -128); §6.1 puts negating the minimum in the checked-overflow
+  ## set, so that operation now traps and is asserted by `test/trap_neg_min_i8.al`. The row keeps an
+  ## in-range run-time negation at the same narrow width.
   _neg_accept nonliteral_operand_untouched 'main := fn() -> u64 {
-  v : i8 = 0 - 128
+  v : i8 = 0 - 127
   w := -v
-  if i64(w) != 0 - 128 { return 11 }
+  if i64(w) != 127 { return 11 }
   x : i64 = 5
   y := -x
   if y != 0 - 5 { return 12 }
@@ -2807,7 +2808,7 @@ main := fn() -> u64 {
 
   ## ---- CONTROL 5: the spellings the ADJACENCY GUARD deliberately leaves alone ------------------
   ## `- (5)`, `-  7` and `- -4` are not `-<int>` written adjacently, so they keep the
-  ## `Unchecked(Bin(17, Num(0), …))` shape and reach the range rules as non-literals — which is why
+  ## `Bin(17, Num(0), …)` shape and reach the range rules as non-literals — which is why
   ## `n : u8 = - -4`, whose value 4 IS in range, must not be refused.
   _neg_accept adjacency_untouched 'main := fn() -> u64 {
   n : u8 = - -4
@@ -7642,6 +7643,9 @@ run_x86_out print_hole_unary_minus 42
 ## arm removed this program compiles, runs and exits 42 printing `v=[]`, which is what makes the row
 ## non-vacuous. The needle is deliberately absent from the fixture's own `##` comments. Residual #489.
 build_reject_has print_hole_unmatched_reject 'matched no renderer'
+## #1049 — with no `unchecked` wrapper around `-x`, a negated int NAME reaches `print_one_int` and
+## renders `v=[-5]`; the reject fixture above moved to a negated FLOAT, which still has no renderer.
+run_x86_out print_hole_neg_name_render 42
 ## Functions §7.1 / I11 — a call in STATEMENT position (result discarded) whose callee's TAIL name collides
 ## with the comptime-variadic `std::fmt::print` was routed into the `{}`-template desugar, which emits
 ## NOTHING when argument 0 is not a string literal: the whole statement — call, arguments, side effects —
@@ -8984,6 +8988,17 @@ run checked_add_ovf 132
 # a64/rv64/wasm sweeps assert a trap (>=128). Companions below prove `unchecked` scoping.
 run checked_mul_ovf 132
 run checked_sub_ovf 132
+## #1049 / #633 — unary `-` keeps the checked guard its operand type selects (Concurrency §6.1, §6.5,
+## §6.6): a signed negation of MIN traps at every width, an unsigned one and a written `unchecked -m`
+## do not, and a compound operand is no longer silently unchecked.
+run trap_neg_min_signed 132
+run trap_neg_min_i8 132
+run trap_neg_min_i16 132
+run trap_neg_min_i32 132
+run trap_neg_written_zero_sub 132
+run trap_neg_compound_operand 132
+run accept_neg_unsigned_and_unchecked 42
+run accept_neg_narrow_no_trap 42
 ## regalloc commit 4: a scalar-leaf TRAILING-VALUE checked `*` overflow goes through `emit_fn_ir`
 ## (register-allocated), not the text path — it must still emit the guard and TRAP (132). Locks in
 ## that the register allocator never drops a checked-overflow guard.

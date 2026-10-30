@@ -54,7 +54,7 @@ cmp_operand_bitcast_kind := lower_layout::cmp_operand_bitcast_kind
 (callee_ret_is_signed, arrty_elem_signed, arrty_elem_unsigned, lit_arith_i64) := lower_layout
 (ct_kind_of_name, ct_num_kind_of_name, ct_scalar_num_kind, ct_type_kind, std_ty_aggregate, struct_plain, ty_is_scalar) := lower_layout
 (decl_tparam_count, decl_tparam_pos, decl_leading_tparam_run, generic_gi, gen_call_ok, param_tuple_open_at, param_tuple_allscalar_n, arrty_semi, arg_list_count) := lower_layout
-(ex_is_index, ex_index_base, ex_index_idx, ex_is_field, ex_is_num_lit, ex_is_zero_lit) := lower_layout
+(ex_is_index, ex_index_base, ex_index_idx, ex_is_field, ex_is_num_lit, ex_is_zero_lit, zero_left_guard_skip) := lower_layout
 (ex_var_ns, ex_var_nl, ex_call_argh, ex_struct_lit_args, ex_enum_lit_args, ex_is_array_lit, ex_array_lit_ehead, ex_is_slice, ex_slice_base, ex_slice_lo, ex_slice_hi) := lower_layout
 (ex_value_is_scalar, ex_value_init, ex_is_cmp_op, ex_is_no_tail, str_esc_byte, dec_digit_val, bind_list_index) := lower_layout
 (arch_rhs_span, arch_guard_fold, apply_when_guards) := lower_layout
@@ -3782,8 +3782,8 @@ a64_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
     ##
     ## Both are PROOF-ONLY and ONE-DIRECTIONAL: they can move an operand signed → unsigned, never the
     ## reverse, so the always-signed default still covers every operand the scan misses. A bare literal
-    ## has no signedness of its own and takes the proven partner's type; unary negation remains the
-    ## parsed arithmetic shape `Unchecked(Bin(17, Num(0), x))` and therefore follows that same type.
+    ## has no signedness of its own and takes the proven partner's type; unary negation is the parsed
+    ## arithmetic shape `Bin(17, Num(0), x)` (no wrapper since #1049) and so follows that same type.
     ## The x86_64 dual is `lower::unsigned_thru_unchecked`.
     Expr::Unchecked(inner) => { r = a64_operand_unsigned(inner, params_head, body_head, src, a) }
     Expr::Bin(op, bl, br) => {
@@ -5090,9 +5090,12 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           if dvn == "" { dvn = lower_layout::operand_narrow(r, params_head, body_head, src) }
           dvmin = narrow_signed_min(dvn)
         }
-        emit_a64_arith(op, dsigned, (nw != "") or ex_is_zero_lit(l), dvmin, sb)
+        ## A `0` on the left omits a guard only where the operation has no overflow member — the one
+        ## decision `ir::zero_left_no_overflow` (#1049): a signed negation keeps it at every width.
+        zskip := zero_left_guard_skip(i64(op), l, dsigned)
+        emit_a64_arith(op, dsigned, (nw != "") or zskip, dvmin, sb)
         if nw != "" {
-          if A64_CHK and (not ex_is_zero_lit(l)) { a64_emit_narrow_trap(nw, sb) }
+          if A64_CHK and (not zskip) { a64_emit_narrow_trap(nw, sb) }
           a64_emit_narrow(nw, sb)
         }
         ## narrow `~`/`^`: mask the xor result to the operand width (the `x^(-1)` desugar carries 64-bit

@@ -987,6 +987,13 @@ ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : As
   sp := ib_span_of(bp, e)
   f := ib_b_f(bp)
   unch := ib_b_unch(bp)
+  ## #1049 — a zero-left operation the one decision (`zero_left_no_overflow`) finds has no overflow
+  ## member — above all an UNSIGNED negation `-a`, whose value `2^N - a` is representable (§6.5) — is
+  ## emitted in the `wrap` operation MODE and narrowed by wrapping. That is CC-9's prescribed spelling
+  ## ("an operation mode or a distinct IR operation"); the parser no longer hands the builder an
+  ## `unchecked` scope the source never wrote. Only a sign sema names unsigned takes it: a signed or
+  ## unnamed one keeps the checked form, so `-MIN` traps.
+  nomember := (not unch) and ib_zero_left_no_member(b, l, not sgn_eq(k.sg, Sgn.SgU))
   if divides and not unch {
     z := ib_fresh(bp, a, ib_bool_ks())
     orv := o_vreg(rv)
@@ -1013,6 +1020,17 @@ ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : As
       i5 := e_trap_if(f, a, both, TrapKind.TkDivOverflow, sp, true)
     }
   }
+  if nomember {
+    ## Outside `unchecked` a `wrap` op is legal only where the builder proved the operation has no
+    ## overflow member (V10), and that proof is the zero-left decision just made: `0 + x` and `0 * x`
+    ## cannot overflow, and an unsigned `0 - x` is defined as `2^N - x` (§6.5). So it is marked proven.
+    ## A bare `wrap` here was refused by the verifier (V10) on every IR target as soon as a checked
+    ## function held a zero-left `0 + d` (`accept_block_scoped_signed_local::bin_inferred_sum`).
+    orp := o_vreg(rv)
+    pd := ib_proven(bp, a, io, wk, lv, orp)
+    w := ib_wrap_to(bp, a, pd, k)
+    return Option(VRegId).Some(w)
+  }
   d := ib_fresh(bp, a, wk)
   ol := o_vreg(lv)
   orr := o_vreg(rv)
@@ -1030,6 +1048,15 @@ ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : As
   if divides { ntk = TrapKind.TkDivOverflow }
   nd := ib_narrow_to(bp, a, d, k, ntk, sp)
   Option(VRegId).Some(nd)
+}
+## The builder's question to the one zero-left decision (`ir::zero_left_no_overflow`, #1049).
+ib_zero_left_no_member := fn(b : AstBin, l : ptr(Expr), signed : bool) -> bool {
+  match b {
+    BAdd => { zero_left_no_overflow(ZeroLeftOp.ZlAdd, l, signed) }
+    BSub => { zero_left_no_overflow(ZeroLeftOp.ZlSub, l, signed) }
+    BMul => { zero_left_no_overflow(ZeroLeftOp.ZlMul, l, signed) }
+    BDiv | BRem | BBand | BBor | BBxor | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { false }
+  }
 }
 
 ## Bitwise `& | ^` on canonical operands is canonical at any width (V3), so it is emitted at its type.

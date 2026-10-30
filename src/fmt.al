@@ -1063,14 +1063,17 @@ fmt_is_zero_num := fn(e : ptr(Expr)) -> bool {
   }
   r
 }
-## The unary-minus desugar is `Unchecked(Bin(17 /*-*/, Num(0), x))` (parser `p_factor`); return `x` (so
-## fmt renders `-x`, not the literal `unchecked 0 - x` — semantically identical, and idempotent since a
-## reparse of `-x` yields the same tree). 0 if `inner` is not that exact shape.
-fmt_neg_rhs := fn(inner : ptr(Expr)) -> ptr(Expr) {
-  mut r := unchecked bitcast(ptr(Expr), 0)
-  match deref(inner) {
-    Expr::Bin(bop, bl, br) => { if i64(bop) == 17 and fmt_is_zero_num(bl) { r = br } }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+
+## Is `e` a numeric literal carrying a NEGATIVE value — one the #602 fold normalised out of a written
+## `-N`, so its rendered text starts with `-`? A prefix `-` in front of such a literal must be
+## parenthesised (`-(-2)`), or the two minus signs collide on the page as `--2`, which is not stable
+## under a second `fmt` pass. A SEPARATE helper because a `match` nested directly inside another
+## `match` arm mis-lowers under the seed (the documented landmine).
+fmt_num_is_negative := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Num(v, s, n) => { if v < 0 { r = true } }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
@@ -1542,6 +1545,21 @@ emit_fmt_expr_core := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a
         } else {
           emit_fmt_expr(l, sb, src, a, decls)
         }
+      } else if i64(op) == 17 and fmt_is_zero_num(l) {
+        ## Unary minus `-x`, desugared by `p_factor` to `Bin(17, Num(0), x)` with a SYNTHESIZED zero
+        ## (empty span — `fmt_is_zero_num` tests `n == 0`, so a written `0 - x` never matches and keeps
+        ## its infix spelling). Rendered prefix so the formatter does not rewrite every `-x` in a user's
+        ## program into `0 - x`; before #1049 this render lived in the `Expr::Unchecked` arm, and the
+        ## wrapper it used to rely on is gone — the desugar carries no verification-mode grant now.
+        ## Same paren rule as there: unary minus binds tighter than every binary operator, so a `Bin`
+        ## operand keeps its parens (`-(a + b)` must not re-parse as `(-a) + b`); an atomic operand
+        ## (`fmt_expr_prec == 100`) never needs them.
+        push_str(sb, "-")
+        wrap_neg := fmt_expr_prec(r) < 100 or fmt_num_is_negative(r)
+        if wrap_neg { push_str(sb, "(") }
+        if wrap_neg { emit_fmt_expr_res(r, sb, src, a, decls, 1) }
+        if not wrap_neg { emit_fmt_expr(r, sb, src, a, decls) }
+        if wrap_neg { push_str(sb, ")") }
       } else {
         ## Re-insert grouping parens the parser erased: a LEFT child of strictly-lower precedence (or
         ## equal precedence under a non-associative comparison parent) and a RIGHT child of lower-OR-
@@ -1765,29 +1783,15 @@ emit_fmt_expr_core := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a
     ## `unchecked <inner>` — the scoped verification mode marker (Types §4.2). Render the keyword
     ## then the inner expression.
     Expr::Unchecked(inner) => {
-      rhs := fmt_neg_rhs(inner)
       ## `unchecked bitcast(T, v)` parses as `Unchecked(Bitcast(…))` — every target class keeps its
       ## node since #529. The render of the operand re-emits the whole
       ## `unchecked bitcast(…)` surface itself from the source marker, so emitting the keyword here too
-      ## would produce `unchecked unchecked bitcast(…)`, one more on every pass. Tested FIRST because
-      ## the cast can wrap the unary-minus desugar (`unchecked bitcast(usize, 0 - x)`), and
-      ## the `fmt_neg_rhs` branch below would otherwise render that as `-x` and delete the cast.
+      ## would produce `unchecked unchecked bitcast(…)`, one more on every pass. Every other operand,
+      ## a negation `unchecked -x` included (#1049: the parser no longer wraps `-x` itself), keeps
+      ## its written keyword below.
       inner_bc := fmt_is_bitcast(inner)
       if inner_bc {
         emit_fmt_expr_res(inner, sb, src, a, decls, reserve)
-      } else if unchecked bitcast(usize, rhs) != 0 {
-        ## Unary minus `-x` (desugared `unchecked 0 - x`) binds TIGHTER than EVERY binary operator
-        ## (it is a `p_factor` prefix, below `*`/`/`). So a `Bin` operand must keep its parens: a bare
-        ## `-(a + b)` re-emitted as `-a + b` RE-GROUPS to `(-a) + b` — a DIFFERENT program (the erased
-        ## surface parens leave no AST node). An atomic operand (`fmt_expr_prec == 100`: a var / literal
-        ## / call / field / index) never needs them. Idempotent: a re-parse of `-(a + b)` rebuilds the
-        ## same tree, so re-fmt re-wraps identically.
-        push_str(sb, "-")
-        wrap_neg := fmt_expr_prec(rhs) < 100
-        if wrap_neg { push_str(sb, "(") }
-        if wrap_neg { emit_fmt_expr_res(rhs, sb, src, a, decls, reserve + 1) }
-        if not wrap_neg { emit_fmt_expr(rhs, sb, src, a, decls) }
-        if wrap_neg { push_str(sb, ")") }
       } else {
         ## `unchecked` is a `p_factor` PREFIX: it binds tighter than every binary operator, so a `Bin`
         ## operand must keep grouping parens. `unchecked { a + 1 }` re-emitted as `unchecked a + 1`
