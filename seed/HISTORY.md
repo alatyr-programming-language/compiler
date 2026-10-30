@@ -1785,4 +1785,41 @@ The original reading note, verbatim:
 #
 # VERSION 0.2.16 -> 0.2.17, PATCH: a silent wrong value on x86_64 became a loud trap. The specification
 # pin (1.1.0, tag v1.1.0, spec commit 65a0c9b) did not move.
+# ---------------------------------------------------------------------------------------------
+# 0.2.17 -> 0.2.18   promoted 2026-10-31   seed/alatyr := Stage2
+#
+# WHY: #1049 (PR #1227) — unary `-` over a signed integer did not trap on the minimum value: x86_64
+# emitted the negation with no overflow check, so `-x` at i8/i16/i32/i64 MIN answered MIN. The
+# negation now carries the same checked-overflow guard as binary `-` (I11), and `unchecked -x` still
+# wraps. The compiler's own signed negations change, so the frozen seed must carry them; PR #1227's
+# gate (run 41055259877) was green in every stage but the fixpoint for that reason.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k>): 764 hunks, 2295 added, 1 removed. One sentence: every
+# signed negation in the compiler gains its overflow guard. 763 hunks are exactly `jno Nf` / `ud2` /
+# `N:` inserted directly after `subq %rbx, %rax` (the negation's subtraction from zero). The one other
+# hunk is `sema::i64_min_key`, `0 - 9223372036854775807 - 1`: the old seed folded its first step into
+# `movq $-9223372036854775807, %rcx`; it is now `movq $0` / `movq $9223372036854775807` / `subq` with
+# the same guard (`jno` / `ud2`), which cannot fire there. No other line shape moves.
+#
+# A first promotion (Stage2 19dedb48) trapped in its own parser: `pat_endpoint` negated a range
+# bound with a checked `0 - v`, so `-9223372036854775808` hit the new guard (SIGILL, 12 corpus pairs
+# compile/132). 8c9cd102 on PR #1227 writes it `unchecked(0 - v)`, the intended wrap; that one
+# negation is why this delta has 763 guard hunks, not 764. Stage1 is unchanged by it (the old seed
+# emits the same code for both). Filed as #1258: the gate never runs Stage2 over the corpus.
+#
+# CONVERGENCE (bump first; native x86_64 omen):
+# Stage1 == Stage2 == Stage3 GAS byte-identical RAW at 1600810 lines.
+# GAS SHA-256: dc83e5e008b2fc8d1998ff10287c6338b05a4871afc705adbc9652baa91dd8e8.
+# Stage2 == Stage3 BINARY SHA-256:
+# 6b08598da68cfed9aacacb1b4100575388136903ab61b674cc4f489ceb93fc34 (6096680 B).
+# Stage1 SHA-256: be2547c1f6780d37615dd79a313a3abfa6a38c04b2aa5e7d93d33e84fceb86c8.
+# All three answer `alatyr 0.2.18, spec 1.6.0`.
+# Superseded seed (0.2.17) SHA-256:
+# ce7dca80b820918d80a0fab5c18460d74dd23d370700392558cb853e30e9dd0c (6144152 B).
+#
+# The full gate ran on this promoted tree before it was pushed, and `scripts/fixpoint.sh` re-ran on it;
+# that run, not this label, is the proof (the acceptance comment on #1227 names it).
+#
+# VERSION 0.2.17 -> 0.2.18, PATCH: a silent wrong value on x86_64 became a loud trap. The specification
+# pin (1.6.0, a target revision per spec 9438d00) did not move.
 ```

@@ -126,6 +126,8 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+## 0.2.18 — 2026-10-31
+
 - **Unary `-` over a signed integer traps on the minimum value, at every width (#1049).** `-x` with
   `x` at `i8`/`i16`/`i32`/`i64` MIN used to answer MIN on x86_64. A written signed `0 - x` and the
   operand of a compound negation such as `-(a * b)` were unguarded too. All of these trap now
