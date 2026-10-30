@@ -12129,6 +12129,12 @@ run issue1209_deref_bitcast_struct 42
 run issue1209_deref_bitcast_ptr_fields 42
 run issue1209_deref_bitcast_field_inline 42
 
+## #988 — `v.push(x)` on a `Vec(u32)` infers `T` from the receiver; below two words the instance was
+## tagged by the receiver's NAME and `size(T)` inside it fell to 8 bytes, so every UFCS push on a
+## sub-word `Vec` stored with an 8-byte stride. NON-VACUOUS: on the parent with the #395 fix (x86_64)
+## the fixture exits 100 — the `Vec(u32)` element 1 read 0.
+run issue988_vec_ufcs_subword_instance 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================
