@@ -2462,6 +2462,17 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
   if local_is_uninit(cx.src, ns, nl2) {
     return
   }
+  ## #1139 — `s := unchecked mk(…)` over an aggregate-returning call: emit the binding of the bare
+  ## call with the verification mode off, so the call's value takes the same aggregate store as
+  ## `s := mk(…)`. `collect_slots` sized the slot from the same peeled call.
+  gr := granted_agg_call_rhs(v, cx.decls, cx.src, a)
+  if gr.granted {
+    ov := cx.vchk
+    cx.vchk = false
+    emit_st_assign(ns, nl2, gr.e, sb, cx, a, nl)
+    cx.vchk = ov
+    return
+  }
   ## resolve a module-CONSTANT Var RHS to its value (`p := ORIGIN` / `s := MSG`) so the copy
   ## rides the existing struct-lit / str-lit / scalar emit — matching collect_slots' binding.
   ## #589 — but a bind, parameter or local of the same name SHADOWS the constant (Declarations §6.1),
