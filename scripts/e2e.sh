@@ -12089,6 +12089,9 @@ run for_str_array 32
 run for_slice_str_range 35
 run for_slice_str_call 32
 run for_slice_str_bytes 15
+## A GENERIC `-> Slice(T)` call with `T = str`: the call arm takes `slice_ret_elem`'s answer, not a
+## private copy that matched only the literal `Slice(str)` return (review of PR #1224).
+run for_slice_str_call_generic 32
 
 ## #989 — an enum VALUE read through `deref(p)` was emitted as a null enum: `emit_enum_value` sent
 ## `Expr::Deref` to its catch-all, which built discriminant 0 with an empty payload. So `at`/`get` on

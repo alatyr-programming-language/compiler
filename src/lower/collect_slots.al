@@ -981,7 +981,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
                 ## a `str`-element iterable (a `Slice(str)` local or param, a `[str; N]` local, a range slice
                 ## of one, or a `Slice(str)`-returning call): the loop var is a 2-word str. The emitter asks
                 ## the same `for_iter_str_elem`, so the binding and the element copy agree (#1177).
-                lv_str = for_iter_str_elem(flo, slots, decls, src, a)
+                lv_str = for_iter_str_elem(flo, slots, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2)
               }
             }
             if lv_agg == 2 { bind_struct_slot(slots, decls, src, fns, fnl, lv_es, lv_el, struct_words(decls, src, lv_es, lv_el, a)) } else {
