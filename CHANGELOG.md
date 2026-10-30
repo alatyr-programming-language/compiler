@@ -164,6 +164,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `unchecked (K + 3)` hit the unroll budget instead of unrolling twice, and an `i32` product that
   wraps to 0 reached the compiler's own `idiv` as `i64::MIN / -1` (SIGFPE). The result now wraps to
   the operation's width (Comptime §2.6), on all four backends.
+- **`MIN / -1` and `MIN % -1` in a `comptime for` range bound are refused, and the compiler no longer
+  crashes on them (#1233).** The fold ran the host's `idiv` on them, and the compiler died with SIGFPE
+  on all four targets, with no message. They are now a located compile error on x86_64, under
+  `unchecked` too (Comptime §2.6: hardware-defined), and a trap on the twins until #1232. A `u64`
+  bound's `/` and `%` now divide unsigned. Before, they divided the bit patterns as signed values,
+  which crashed on `2^63 / (2^64 - 1)` and answered 0 for `(2^64 - 1) / 2^62`.
 
 ## 0.2.21 — 2026-11-01
 
