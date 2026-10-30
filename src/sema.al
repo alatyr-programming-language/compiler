@@ -52,6 +52,7 @@ stmt_label_span := ast::stmt_label_span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
 ## which enum is rejected.
 (enum_repr_ty, repr_ty_is_integer, repr_ty_capacity) := lower_layout
+(ct_width, ct_signed, ct_fits, ct_min, ct_ult, ct_umulov, ct_smulov, ct_arith_ovf) := lower_layout
 ## #602 — "was this `Num` written with a leading `-`?" is decided ONCE, in `lower_layout`, because
 ## the four emitters ask it too; re-deriving it here would let the two passes drift.
 lit_num_written_neg := lower_layout::lit_num_written_neg
@@ -12194,111 +12195,8 @@ ctor_lit_stmts_span := fn(head : Option(ptr(mut Stmt)), chk : bool, decls : ptr(
 CT_DIAG_MARKER : usize = 6917529027641081856
 comptime_err := fn(s : usize, kind : usize) -> CheckErr { CT_DIAG_MARKER + diag_span(s) * 8 + kind }
 
-## The operating WIDTH / SIGNEDNESS of a declared integer type name. An unknown name (a brand, a
-## float, a generic instance) reads as the native 64-bit signed word — the widest, least-rejecting
-## reading, so an unrecognized annotation can only UNDER-diagnose.
-ct_width := fn(w : str) -> i64 {
-  if w == "u8" or w == "i8" or w == "bits8" { return 8 }
-  if w == "u16" or w == "i16" or w == "bits16" { return 16 }
-  if w == "u32" or w == "i32" or w == "bits32" { return 32 }
-  64
-}
-ct_signed := fn(w : str) -> bool {
-  w == "i8" or w == "i16" or w == "i32" or w == "i64" or w == "isize"
-}
-## Is the exact value `v` representable in `w`? Native-width names answer true (every 64-bit pattern
-## is one of their values); the 64-bit overflow test above them is what judges those.
-ct_fits := fn(w : str, v : i64) -> bool {
-  if w == "u8" or w == "bits8" { return v >= 0 and v <= 255 }
-  if w == "u16" or w == "bits16" { return v >= 0 and v <= 65535 }
-  if w == "u32" or w == "bits32" { return v >= 0 and v <= 4294967295 }
-  if w == "i8" { return v >= (0 - 128) and v <= 127 }
-  if w == "i16" { return v >= (0 - 32768) and v <= 32767 }
-  if w == "i32" { return v >= (0 - 2147483648) and v <= 2147483647 }
-  true
-}
-## The MOST NEGATIVE value of a signed `w` (the `MIN / -1` operand of the checked-overflow set).
-ct_min := fn(w : str) -> i64 {
-  if w == "i8" { return 0 - 128 }
-  if w == "i16" { return 0 - 32768 }
-  if w == "i32" { return 0 - 2147483648 }
-  nmax := unchecked (0 - 9223372036854775807)
-  unchecked (nmax - 1)
-}
-
-## UNSIGNED 64-bit `<` over two raw patterns, using only SIGNED comparisons (the same discipline
-## `num_lit_out_of_range` keeps: nothing here depends on how an unsigned compare lowers). Equal sign
-## bits → the signed order is the unsigned order; differing → whichever has the high bit set is the
-## larger unsigned.
-ct_ult := fn(x : i64, y : i64) -> bool {
-  if (x < 0) == (y < 0) { return x < y }
-  return y < 0
-}
-## The unsigned high / low 32 bits of a raw 64-bit pattern. The high half comes from a LOGICAL right
-## shift (`shr` on a `u64`, OP-6) — a signed `/ 2^32` would truncate toward zero and read a negative
-## pattern as a small negative number rather than as its large unsigned value. The low half is then
-## exact by subtraction. Both results land in [0, 2^32), so every partial product below is computed
-## with non-negative arithmetic. (No `+`/`-` here takes a >32-bit literal operand: the x86 immediate
-## form is 32-bit signed, and the register allocator folds such a literal straight into the
-## instruction — the multiply loads it into a register instead.)
-ct_hi32 := fn(x : i64) -> i64 {
-  xu : u64 = unchecked bitcast(u64, x)
-  hs : u64 = shr(xu, 32)
-  unchecked bitcast(i64, hs)
-}
-ct_lo32 := fn(x : i64) -> i64 {
-  hu : u64 = unchecked bitcast(u64, ct_hi32(x))
-  hb : u64 = shl(hu, 32)
-  unchecked (x - unchecked bitcast(i64, hb))
-}
-## EXACT unsigned 64-bit multiply overflow: split both operands into 32-bit halves (each in
-## [0, 2^32), so every partial product is computed with non-negative arithmetic) and ask whether the
-## 128-bit product's high word is nonzero. `a*b = al*bl + (ah*bl + al*bh)*2^32 + ah*bh*2^64`.
-ct_umulov := fn(a : i64, b : i64) -> bool {
-  ah := ct_hi32(a)
-  al := ct_lo32(a)
-  bh := ct_hi32(b)
-  bl := ct_lo32(b)
-  if ah != 0 and bh != 0 { return true }
-  cross := unchecked (unchecked (ah * bl) + unchecked (al * bh))
-  if ct_hi32(cross) != 0 { return true }
-  lohi := ct_hi32(unchecked (al * bl))
-  return ct_hi32(unchecked (cross + lohi)) != 0
-}
-## EXACT signed 64-bit multiply overflow: `p / a != b` recovers the discarded high half; the one
-## case that division itself cannot answer (`MIN * -1`) is decided ahead of it.
-ct_smulov := fn(a : i64, b : i64) -> bool {
-  if a == 0 { return false }
-  mn := ct_min("i64")
-  if a == (0 - 1) and b == mn { return true }
-  if b == (0 - 1) and a == mn { return true }
-  p := unchecked (a * b)
-  return unchecked (p / a) != b
-}
-## Does `a <op> b` fail its CHECKED guard in the operating type `w`? Two tiers, mirroring the lower's
-## own emission (`jnc` unsigned / `jno` signed at native width, then the narrow-width range test):
-## the native 64-bit overflow first, then — for a sub-native `w` — representability of the exact
-## result in that width.
-ct_arith_ovf := fn(op : u8, a : i64, b : i64, w : str) -> bool {
-  sg := ct_signed(w)
-  mut s := 0
-  if op == 16 { s = unchecked (a + b) }
-  if op == 17 { s = unchecked (a - b) }
-  if op == 18 { s = unchecked (a * b) }
-  mut ov := false
-  if op == 16 {
-    if sg { ov = ((a < 0) == (b < 0)) and ((s < 0) != (a < 0)) } else { ov = ct_ult(s, a) }
-  }
-  if op == 17 {
-    if sg { ov = ((a < 0) != (b < 0)) and ((s < 0) != (a < 0)) } else { ov = ct_ult(a, b) }
-  }
-  if op == 18 {
-    if sg { ov = ct_smulov(a, b) } else { ov = ct_umulov(a, b) }
-  }
-  if ov { return true }
-  if ct_width(w) < 64 { return not ct_fits(w, s) }
-  false
-}
+## The CT-12 arithmetic judgement (`ct_width` … `ct_arith_ovf`) lives in `lower_layout`, one place for
+## this checker and both `comptime for` range-bound folders (#1234); imported above.
 
 ## Is `e` a literal `0`? The lower SKIPS the overflow guard on a `0 - x` left operand (the negation /
 ## sentinel idiom pervasive in `src/`), so this judgement must skip it too — check and build agree.

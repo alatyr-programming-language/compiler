@@ -10719,6 +10719,26 @@ run_wat reject_comptime_for_div_zero 134
 run_a64 reject_comptime_for_unchecked_mod_zero 133
 run_rv64 reject_comptime_for_unchecked_mod_zero 133
 run_wat reject_comptime_for_unchecked_mod_zero 134
+## #1234: a checked `+ - *` that overflows the operation's type in a range bound is a located
+## diagnostic (Comptime §2.6), never a wrapped bound; the twins trap until #1232. Inside `unchecked`
+## the wrap is defined and still folds.
+build_reject_has reject_comptime_for_overflow_u64 'this range bound overflows its type'
+build_reject_has reject_comptime_for_overflow_u64 'for the wrap. at line 15 in '
+build_reject_has reject_comptime_for_overflow_i64 'for the wrap. at line 12 in '
+build_reject_has reject_comptime_for_overflow_u32 'for the wrap. at line 14 in '
+run_a64 reject_comptime_for_overflow_u64 133
+run_rv64 reject_comptime_for_overflow_u64 133
+run_wat reject_comptime_for_overflow_u64 134
+run_a64 reject_comptime_for_overflow_i64 133
+run_rv64 reject_comptime_for_overflow_i64 133
+run_wat reject_comptime_for_overflow_i64 134
+run_a64 reject_comptime_for_overflow_u32 133
+run_rv64 reject_comptime_for_overflow_u32 133
+run_wat reject_comptime_for_overflow_u32 134
+run comptime_for_unchecked_wrap_bound 42
+run_a64 comptime_for_unchecked_wrap_bound 42
+run_rv64 comptime_for_unchecked_wrap_bound 42
+run_wat comptime_for_unchecked_wrap_bound 42
 ## #682 — the OTHER half: the arithmetic is INSIDE the const's initializer (`B := A + 1`), so the
 ## bound expression is a plain `Expr::Var` and never reaches the `Bin` arm #672 added. The twins
 ## resolved the name and read its value with `lower_layout::ex_value_init`, which answered 0 for a
