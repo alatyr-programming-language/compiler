@@ -5666,9 +5666,9 @@ comp_range_bound_at := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gp
     }
     ## CONST ARITHMETIC (#672): fold `+ - * / %` over already-folded operands, the same op set and the
     ## same recursion as `global_init_value`, so `0 .. N - 1` names the same element set on every
-    ## backend. A ZERO divisor is NOT folded — it answers `0`, today's value (#684) — because x86's
-    ## `unchecked (lv / rv)` SIGFPEs the compiler on that operand and propagating a crash to three more
-    ## surfaces is a different repair (Comptime §2.6 wants a located diagnostic there, on all four).
+    ## backend. A ZERO divisor is never divided (#684): the folder answers `None`, so the emitter
+    ## refuses it loudly instead of looping zero times (Comptime §2.6 wants a located diagnostic; x86
+    ## gives one, the twins trap).
     ## Independent guard-then-act `if`s, matching `lower/ctfold::ct_bound_fold`: a nested `if…else`
     ## inside an `if`-then is not a lowerable shape under the self-host lower.
     ## Both operands must fold (#696); an operand that does not leaves the whole bound `None`, never `0`.
@@ -5694,7 +5694,7 @@ pub opt_i64_or := fn(o : Option(i64), d : i64) -> i64 { match o { Some(x) => { x
 ## The const arithmetic of a `comptime for` range bound, ONE place for both folders (x86
 ## `ctfold::comptime_range_bound_at` and the twins' `comp_range_bound_at`, #696): `+ - * / %` over two
 ## folded operands, the same op set as `global_init_value`. Any other op is not a bound: `None`.
-## A ZERO divisor answers `0`, today's twin value (#684): x86 handles it before calling here.
+## A ZERO divisor is never divided: `None`, so it is refused, never the bound 0 (Comptime §2.6, #684).
 pub ct_range_arith := fn(op : u8, lv : i64, rv : i64) -> Option(i64) {
   mut v := 0
   mut dz := false
@@ -5706,7 +5706,7 @@ pub ct_range_arith := fn(op : u8, lv : i64, rv : i64) -> Option(i64) {
     if op == 19 { v = unchecked (lv / rv) }
     if op == 29 { v = unchecked (lv % rv) }
   }
-  if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 { return Option(i64).Some(v) }
+  if dz == false and (op == 16 or op == 17 or op == 18 or op == 19 or op == 29) { return Option(i64).Some(v) }
   Option(i64).None
 }
 

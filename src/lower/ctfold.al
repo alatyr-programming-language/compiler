@@ -1329,7 +1329,7 @@ pub comptime_range_bound := fn(e : ptr(Expr), cx : ptr(LCtx)) -> i64 {
 }
 ## The fold behind `comptime_range_bound`: `None` is "not comptime-known". `hops` counts
 ## const-to-const steps, capped like `ex_value_fold`'s, so a const cycle is refused, never a hang.
-## A ZERO divisor keeps `global_init_value`'s answer until #684 gives it its own diagnostic.
+## A ZERO divisor is a located reject (Comptime §2.6, #684), never a division the compiler runs.
 comptime_range_bound_at := fn(e : ptr(Expr), cx : ptr(LCtx), hops : i64) -> Option(i64) {
   mut r : Option(i64) = Option(i64).None
   match deref(e) {
@@ -1361,7 +1361,12 @@ comptime_range_bound_at := fn(e : ptr(Expr), cx : ptr(LCtx), hops : i64) -> Opti
         ## Independent guard-then-act `if`s: a nested `if…else` inside an `if`-then is not a lowerable
         ## shape under the self-host lower.
         dz := (op == 19 or op == 29) and rv == 0
-        if dz { r = Option(i64).Some(global_init_value(e, cx.decls, cx.src)) }
+        ## A zero divisor is a LOCATED diagnostic (Comptime §2.6, #684): the compiler's own division
+        ## must never run on it (x86 died with SIGFPE). The reject fails the build; the `0` is unread.
+        if dz {
+          codegen_reject(cx.src, comptime_cond_src_off(e), cx.mod_s, cx.mod_l, "`comptime for` — this range bound divides by zero. Comptime §2.6: a guard that fails during comptime evaluation is a compile-time diagnostic, under `unchecked` too.", deref(cx.mar))
+          r = Option(i64).Some(0)
+        }
         if dz == false { r = ct_range_arith(op, lv, rv) }
       }
     }
