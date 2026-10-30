@@ -117,6 +117,13 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/agents_size_check.sh" --self-test
   _full_agents_size_self_test_rc=$?
   [ "$_full_agents_size_self_test_rc" = 0 ] || exit "$_full_agents_size_self_test_rc"
+  # The scripted seed promotion's deciders (#1129): the version order, the label normalization, the
+  # convergence verdict, the bump, the owed-marker and atomic-set refusals and the cadence. Measured:
+  # a convergence check that ignores the binary, or a cadence that reads gh's silence as "not due",
+  # loses its plant.
+  bash "$ROOT/scripts/promote.sh" --self-test
+  _full_promote_self_test_rc=$?
+  [ "$_full_promote_self_test_rc" = 0 ] || exit "$_full_promote_self_test_rc"
   bash "$ROOT/scripts/land.sh" --self-test
   _full_land_self_test_rc=$?
   [ "$_full_land_self_test_rc" = 0 ] || exit "$_full_land_self_test_rc"
