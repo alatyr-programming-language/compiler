@@ -126,6 +126,14 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A float-to-integer conversion traps on NaN and on an out-of-range value on x86_64 (#997).**
+  `T(f)` used to be a bare truncating conversion with no check. `u64(1.0e30)` answered 2^63,
+  `u8(300.0)` answered 44, and `i64(NaN)` and `u64(-1.0)` answered the integer-indefinite value. Each
+  of these now traps (Concurrency §7.7, Types §4.2). `u64`/`usize` values at or above 2^63, such as
+  `u64(0.75 * 2^64)`, now convert correctly where they used to answer a wrong value. Inside `unchecked`
+  an out-of-range result stays hardware-defined. The aarch64, riscv64 and wasm conversions are
+  unchanged and remain open in #997.
+
 ## 0.2.18 — 2026-10-31
 
 - **Unary `-` over a signed integer traps on the minimum value, at every width (#1049).** `-x` with
