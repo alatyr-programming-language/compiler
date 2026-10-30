@@ -12123,6 +12123,16 @@ run unchecked_call_struct_wraps 42
 run unchecked_call_struct_wide 42
 run unchecked_call_ptr_struct 42
 run unchecked_call_enum 42
+## #1177 — `for s in <iterable>` over two-word `str` elements: a `Slice(str)` param, a local
+## `[str; N]`, a range of one written in the loop header, and a `Slice(str)`-returning call. The
+## loop variable was bound as one word, or copied from the param's {ptr, len} block. NON-VACUOUS on
+## the parent at 2cf60b45 (x86_64): they exited 1, 12, 11, 1 and 0 where 5, 32, 35, 32 and 15 are
+## due. A range of a `Slice(str)` PARAM in the header (`xs[1..n]`) is #1180.
+run for_slice_str_param 5
+run for_str_array 32
+run for_slice_str_range 35
+run for_slice_str_call 32
+run for_slice_str_bytes 15
 
 ## #989 — an enum VALUE read through `deref(p)` was emitted as a null enum: `emit_enum_value` sent
 ## `Expr::Deref` to its catch-all, which built discriminant 0 with an empty payload. So `at`/`get` on
