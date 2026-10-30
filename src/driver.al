@@ -488,7 +488,7 @@ d_nptr := fn(T : type, a : rt::Arena, h : usize) -> ptr(mut T) {
 
 ## The param count of a Param list.
 d_lam_arity := fn(ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena)) -> usize {
-  mut c := 0
+  mut c : usize = 0
   mut p := ph
   loop { match p { Some(pq) => { pm := deref(param_p(pq)); c = c + 1; p = pm.next }; None => { break } } }
   c
@@ -1087,7 +1087,7 @@ d_stmts_rw_calls := fn(head : Option(ptr(mut Stmt)), fs : usize, fl : usize, cap
 ## call-argument test below never binds a struct-returning-call local inside a match-arm while, a shape
 ## the frozen seed mis-sema's / crashes on; mirrors `d_array_lit`'s single-match style).
 d_is_var_named := fn(e : ptr(Expr), fs : usize, fl : usize, src : ptr(u8)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(e) {
     Expr::Var(vs, vn) => { if str_at((src + vs), vn) == str_at((src + fs), fl) { r = 1 } }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
@@ -1228,7 +1228,7 @@ d_count_calls_stmts := fn(head : Option(ptr(mut Stmt)), cs : usize, cl : usize, 
   }
 }
 d_count_prog_calls := fn(cs : usize, cl : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
-  mut cnt := 0
+  mut cnt : usize = 0
   mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -1322,7 +1322,7 @@ d_emission_paths := fn(decls : rt::Vec, pv : rt::Vec, name_start : rt::Vec, name
 ## of several same-tail-name generics (`alloc::vec::map` vs `result::map`) is resolved. Mirrors the
 ## lowerer's qualified-callee resolution (colon_pos + callee_name_span + mod_head_matches).
 d_find_fn_decl := fn(cs : usize, cl : usize, decls : rt::Vec, src : ptr(u8)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   mut i : usize = 0
   cp := d_colon_pos(src, cs, cl)
   if cp >= 0 {
@@ -1585,7 +1585,7 @@ d_single_return := fn(bh : Option(ptr(mut Stmt)), na : ptr(mut rt::Arena)) -> pt
 ## FN-11: is expr `e` an `AddrOf(Var([fs,fl)))` — i.e. `ptr(mut store)` for the store name? (A single
 ## match kept standalone — the child `Var` is read by a helper, not a nested deref-match.)
 d_addr_is_var := fn(e : ptr(Expr), fs : usize, fl : usize, src : ptr(u8)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(e) {
     Expr::AddrOf(inner) => { r = d_is_var_named(inner, fs, fl, src) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -1818,7 +1818,7 @@ d_ident_char := fn(c : str) -> bool {
 }
 ## Decl index+1 of a VALUE-returning fn named `[cs,cl)` (is_fn, return type not `type`), else 0.
 d_value_fn_idx := fn(decls : rt::Vec, cs : usize, cl : usize, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -1905,7 +1905,7 @@ d_arg_e_at := fn(fhead : Option(ptr(mut Arg)), j : usize, na : ptr(mut rt::Arena
 }
 d_arg_count := fn(fhead : Option(ptr(mut Arg)), na : ptr(mut rt::Arena)) -> usize {
   mut g : Option(ptr(mut Arg)) = fhead
-  mut k := 0
+  mut k : usize = 0
   loop { match g { Some(gq) => { ga := deref(arg_p(gq)); k = k + 1; g = ga.next }; None => { break } } }
   k
 }
@@ -2166,14 +2166,14 @@ d_arena_param_idx := fn(decls : rt::Vec, di : usize, na : ptr(mut rt::Arena), sr
 d_param_count := fn(decls : rt::Vec, di : usize, na : ptr(mut rt::Arena)) -> usize {
   d := deref(decl_at(Decl, rt::vec_get(decls, di)))
   mut ph := d.params_head
-  mut k := 0
+  mut k : usize = 0
   loop { match ph { Some(phq) => { pm := deref(param_p(phq)); k = k + 1; ph = pm.next }; None => { break } } }
   k
 }
 ## di+1 of a fn decl whose name (tail-matched) has a `ptr(mut Arena)` param, else 0.
 d_alloc_callee := fn(decls : rt::Vec, cs : usize, cl : usize, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
   ct := d_span_tail(src, cs, cl)
-  mut r := 0
+  mut r : usize = 0
   mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -2464,7 +2464,7 @@ d_self_param_base := fn(src : ptr(u8), d : Decl) -> DSpan {
 ## makes `next` an OVERLOAD SET (`CharIter`, `SplitIter`, `HashMapIter` each declare their own) rather
 ## than one function; a slice, array, range or `Vec` matches none of them and keeps the counted loop.
 d_iter_next_decl := fn(decls : rt::Vec, src : ptr(u8), ts : usize, tn : usize) -> usize {
-  mut r := 0
+  mut r : usize = 0
   mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -3985,7 +3985,7 @@ d_entry_matches_decl := fn(src : ptr(u8), d : Decl, entry : str) -> bool {
 ## declaration, not a linker-symbol lookup: zero and ambiguous matches are both rejected before GAS
 ## emission, which also keeps a same-named dependency from satisfying the root package's target.
 d_package_entry_count := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec) -> usize {
-  mut count := 0
+  mut count : usize = 0
   mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -4196,7 +4196,7 @@ dep_root_prefix := fn(p : str) -> usize {
   if DEP_ROOTS_N == 0 { return 0 }
   rows := str_at(DEP_ROOTS_P, DEP_ROOTS_N)
   mut i : usize = 0
-  mut hit := 0
+  mut hit : usize = 0
   while i < rows.len and hit == 0 {
     mut e := i
     while e < rows.len and bytes(rows)[e] != 10 { e += 1 }
@@ -5853,7 +5853,7 @@ d_ovl_pick := fn(decls : rt::Vec, src : ptr(u8), di : usize) -> usize {
 
 ## How many declarations share decl `cd`'s exact (module, name)?
 d_ovl_set_size := fn(decls : rt::Vec, src : ptr(u8), cd : Decl) -> usize {
-  mut n := 0
+  mut n : usize = 0
   mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -6112,7 +6112,7 @@ d_qual_expr := fn(e : ptr(Expr), ms : usize, ml : usize, decls : rt::Vec, na : p
 d_own_syscall := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::Vec, src : ptr(u8)) -> usize {
   if d_colon_pos(src, cs, cl) >= 0 { return 0 }
   cnt := rt::vec_len(decls)
-  mut r := 0
+  mut r : usize = 0
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -6152,7 +6152,7 @@ d_find_value_decl := fn(vs : usize, vl : usize, decls : rt::Vec, src : ptr(u8)) 
   ts := vs
   tl := vl
   cnt := rt::vec_len(decls)
-  mut r := 0
+  mut r : usize = 0
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -6166,7 +6166,7 @@ d_find_value_decl := fn(vs : usize, vl : usize, decls : rt::Vec, src : ptr(u8)) 
 ## How many module value declarations are named `[vs, vs+vl)`, across every module.
 d_value_name_count := fn(vs : usize, vl : usize, decls : rt::Vec, src : ptr(u8)) -> usize {
   cnt := rt::vec_len(decls)
-  mut k := 0
+  mut k : usize = 0
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -7776,7 +7776,7 @@ pub check := fn(src : str, in out a : Arena) -> usize {
   ## stdlib module ahead of it (parser.al `src_line_at` / `P_MOD_BASE`).
   parser::set_module_base(0)
   pr := parser::parse_program(pc, decls, tar)
-  mut rc := 0
+  mut rc : usize = 0
   match pr {
     Result::Ok(n) => {
       ## Issue #814 — the PASS-1 tables, sized from what PASS 1 produced (`d_enum_table_words`,

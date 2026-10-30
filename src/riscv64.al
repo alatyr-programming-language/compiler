@@ -230,7 +230,7 @@ rv_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
 
 rv_local_struct_ns := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut rs := 0
+  mut rs : usize = 0
   mut done := false
   loop {
     match s {
@@ -317,7 +317,7 @@ rv_local_struct_ns := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize
 }
 rv_local_struct_nl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut rn := 0
+  mut rn : usize = 0
   mut done := false
   loop {
     match s {
@@ -401,7 +401,7 @@ rv_local_struct_nl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize
 ## otherwise — passed by-reference (slot holds the base addr; read-only, a field write is trapped).
 rv_param_struct_ns := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> usize {
   mut p := params_head
-  mut rs := 0
+  mut rs : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -424,7 +424,7 @@ rv_param_struct_ns := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns
 }
 rv_param_struct_nl := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> usize {
   mut p := params_head
-  mut rn := 0
+  mut rn : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -1365,7 +1365,7 @@ rv_std_store_struct_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
 ## EnumLit shape accessors are shared through lower_ctx; enum resolution remains backend-local.
 rv_local_enum_ns := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut rs := 0
+  mut rs : usize = 0
   mut done := false
   loop {
     match s {
@@ -1408,7 +1408,7 @@ rv_local_enum_ns := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, 
 }
 rv_local_enum_nl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut rn := 0
+  mut rn : usize = 0
   mut done := false
   loop {
     match s {
@@ -1453,7 +1453,7 @@ rv_local_enum_nl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, 
 ## `match <param>` derefs it (§8 piece 3).
 rv_param_enum_ns := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> usize {
   mut p := params_head
-  mut rs := 0
+  mut rs : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -1476,7 +1476,7 @@ rv_param_enum_ns := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns :
 }
 rv_param_enum_nl := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> usize {
   mut p := params_head
-  mut rn := 0
+  mut rn : usize = 0
   loop {
     match p {
       Some(pq) => {

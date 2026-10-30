@@ -215,7 +215,7 @@ emit_tok := fn(in out toks : rt::Vec, in out ar : rt::Arena, kind : usize, start
 
 ## The byte at `i`, or 0 past the end (bounds-guarded peek).
 peek := fn(src : str, i : usize, n : usize) -> usize {
-  mut r := 0
+  mut r : usize = 0
   if i < n { r = bytes(src)[i] }
   return r
 }
@@ -229,7 +229,7 @@ peek := fn(src : str, i : usize, n : usize) -> usize {
 pub lex_rt := fn(src : str, base_off : usize, in out toks : rt::Vec, in out ar : rt::Arena) -> usize {
   n := src.len
   mut i : usize = 0
-  mut nt := 0
+  mut nt : usize = 0
   while i < n {
     b := bytes(src)[i]
     if is_space(b) {

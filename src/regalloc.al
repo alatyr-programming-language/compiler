@@ -661,7 +661,7 @@ ra_ir_restore := fn(n : usize) {
 ## allocation used (its prologue save + epilogue restore). This is the exact size the emitter produces, so a
 ## merge that trades a removed `mov` for a spill reload/store or a callee-save pair shows up as NO net win.
 ra_out_cost := fn() -> usize {
-  mut c := 0
+  mut c : usize = 0
   mut i := 0
   while i < RA_OUT_N {
     selfmv := OUT_OP[i] == 0 and OUT_O0K[i] == 2 and OUT_O1K[i] == 2 and OUT_O0V[i] == OUT_O1V[i]
@@ -735,7 +735,7 @@ ra_coalesce := fn(n : usize) {
 ra_fold_const_scalar := fn(n : usize) -> usize {
   mut i : usize = 0
   mut left := n
-  mut folded := 0
+  mut folded : usize = 0
   while i + 1 < left {
     first := RA_OP[i] == 0 and RA_O0K[i] == 3 and RA_O1K[i] == 1
     second := RA_O0K[i + 1] == 3 and RA_O1K[i + 1] == 1 and RA_O0V[i + 1] == RA_O0V[i]
@@ -784,7 +784,7 @@ ra_fold_const_scalar := fn(n : usize) -> usize {
 ra_fold_const_shift := fn(n : usize) -> usize {
   mut i : usize = 0
   mut left := n
-  mut folded := 0
+  mut folded : usize = 0
   while i + 2 < left {
     first := RA_OP[i] == 0 and RA_O0K[i] == 3 and RA_O1K[i] == 1
     count_mov := RA_OP[i + 1] == 0 and RA_O0K[i + 1] == 2 and RA_O0V[i + 1] == 2 and RA_O1K[i + 1] == 1
@@ -853,7 +853,7 @@ ra_widen_imm64 := fn(n : usize) -> usize {
     if RA_O2K[s] == 3 and RA_O2V[s] >= next_vreg { next_vreg = RA_O2V[s] + 1 }
     s = s + 1
   }
-  mut widened := 0
+  mut widened : usize = 0
   mut i : usize = 0
   while i < left {
     op := RA_OP[i]
