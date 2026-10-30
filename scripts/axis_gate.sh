@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # scripts/axis_gate.sh — the AXIS gate: which axis of a covered class has never been varied.
-# REPORTING ONLY. It never edits a fixture, and it needs no compiler.
+# It never edits a fixture and needs no compiler. Since #1128 it is a `full.sh` stage: a new or stale cell,
+# or a missing baseline, exits 1 and turns the gate red.
 #
 # WHY THIS EXISTS, AND WHY IT IS NOT A COVERAGE PERCENTAGE
 # -------------------------------------------------------

@@ -2,8 +2,8 @@
 #
 # One `<class> <axisAxaxisB> <valueAxvalueB>` per line, exactly as `--emit-baseline` prints it. A cell
 # listed here has been LOOKED AT and given a reason below; a cell NOT listed here is new and the gate
-# says so. The gate stays reporting-only either way: it exits 0 whether a cell is new or not, so this
-# file is a review record, never a permission slip.
+# says so. Since #1128 the gate fails (exit 1, a red `full.sh` AXIS stage) on a new cell and on a listed
+# cell that is no longer empty, so an entry here is reviewed permission, given with its reason.
 #
 # A reason is one of three kinds, and the difference matters:
 #   GAP     — the combination is missing and should exist. It carries the issue that owns the work.
