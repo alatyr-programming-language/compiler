@@ -493,6 +493,9 @@ compares a longer source with a shorter one and proves nothing.
   (`scripts/corpus_manifest.sh --explain` prints exactly that). If the maintainer deliberately
   publishes an oracle-only PR instead, it is a separate maintainer operation and carries the `oracle`
   label so §1's exclusivity count can see it.
+- **The labels `queue` and `queue-failed`, and `queue-head:` comments** — entering the merge queue
+  is the integrator's act after review (`scripts/queue.sh --enqueue`). Every panel posts as the same
+  account, so nothing but this rule keeps a lane from enqueueing its own PR.
 - **Before creating any file**, `git log -- <path>`. A lane once overwrote a stronger existing
   fixture that way.
 
