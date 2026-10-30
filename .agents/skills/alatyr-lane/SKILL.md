@@ -467,8 +467,9 @@ head, on a `gate/**` branch (the GitHub runner; do not run `full.sh` on omen, wh
 and every lane share):
 
 ```sh
+git diff --exit-code && git diff --cached --exit-code # the gate runs the commit, not your worktree
 git push origin HEAD:refs/heads/gate/<your-branch>    # full.sh --force-sweeps; must print GREEN (sweeps RAN)
-git diff --exit-code && git diff --cached --exit-code # the manifest ran --check, not --write
+gh run download <run-id> -D target/gate-<run-id>      # the verdict is the `*** FULL GATE` line of gate.log
 ```
 
 The gate's first stage is `scripts/corpus_enum_check.sh`, and it refuses in about a second when the
@@ -477,10 +478,10 @@ tracked one deleted without `git rm`. That refusal is not a stage failure to wor
 later stage would be measuring an input set nobody chose. Stage the file (or remove it) and start
 the gate again.
 
-Run the **full** table, not just your fixtures. For an ordinary change, the command must print GREEN;
-a red branch must not reach a pull request. There is one maintainer-controlled exception for an
+The gate runs the **full** table, not just your fixtures. For an ordinary change, its `gate.log` must
+print GREEN on the exact head; a red head must not be marked ready. There is one maintainer-controlled exception for an
 intentional behavior change that is expected to update an oracle: the lane still changes no oracle
-file, runs the full command, and may open a feature-only PR only when the sole failure is the expected
+file, gates the exact head, and may open a feature-only PR only when the sole failure is the expected
 affected-oracle mismatch. Every other stage, including the forced sweeps, must pass. Record the joined
 oracle transitions or reviewed baseline findings and state that the maintainer must regenerate the
 oracle in a separate one-file commit after the local merge. This first run is pre-landing evidence, not
@@ -524,6 +525,7 @@ oracle-only PR, if the maintainer chooses that publication form after reviewing 
 
 Fill the template's Evidence section with numbers that say **how they were obtained**. Your numbers
 are a claim: the integrator re-derives every one of them on the merged result, which is why an
-approval is not a landing and why your PR may sit while a ~6-minute gate runs. There is no CI.
+approval is not a landing. The `gate/**` run (about 2 hours) is evidence about your head; the merge
+queue gates the merged result again before anything reaches `main`.
 
 Then stop. You do not merge, and you do not push to `main`.

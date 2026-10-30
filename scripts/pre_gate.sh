@@ -15,7 +15,7 @@
 #   (the table itself). A compiler function is not named by any fixture, so no narrower choice is
 #   sound;
 # - otherwise the rows that mention a selected fixture: every changed `test/**.al`, and every fixture
-#   that names a changed `lib/` module (`std::<module>`) or a function whose definition a hunk touches;
+#   that names a changed `lib/<dir>/<module>` (`<dir>::<module>`; `lib/base`, the prelude, runs every row) or a function whose definition a hunk touches;
 #   past ALATYR_PRE_GATE_MAX_FIXTURES (400) selected fixtures it runs every row instead;
 # - the sweep of each backend whose emitter changed (`src/aarch64*` a64, `src/riscv64*` rv64,
 #   `src/wat*` wasm); all three for any other compiler change except the x86-only emit files that
@@ -52,7 +52,10 @@ pre_gate_plan() {
         for w in $PG_X86_ONLY; do [ "$f" = "$w" ] && x86only=1; done
         [ "$x86only" = 1 ] || { a64=1; rv64=1; wasm=1; } ;;
       scripts/e2e.sh) e2e=all ;;
-      test/*.al|lib/*.al) [ "$e2e" = all ] || e2e=rows ;;
+      # lib/base is the ambient prelude: it reaches every program, so every row runs. Any other
+      # lib/<dir>/<m>.al is reached through `<dir>::<m>` (std::channel, alloc::hashmap).
+      lib/base/*) e2e=all ;;
+      lib/*.al|test/*.al) [ "$e2e" = all ] || e2e=rows ;;
     esac
   done
   echo "e2e $e2e"
@@ -69,7 +72,7 @@ pre_gate_fixtures() {
     case "$f" in
       test/*.al) [ -f "$ROOT/$f" ] && { n="${f#test/}"; echo "${n%.al}"; } ;;
       lib/*.al)
-        mods+=("$(basename "$f" .al)")
+        n="${f#lib/}"; mods+=("${n%%/*}::$(basename "$f" .al)")
         # the function each hunk sits in (git's hunk header) and every definition a hunk adds or drops
         while IFS= read -r n; do names+=("$n"); done < <(
           { git -C "$ROOT" diff -U0 "$base" -- "$f" | sed -nE 's/^@@ [^@]* @@ (pub )?([A-Za-z_][A-Za-z0-9_]*) *:=.*/\2/p'
@@ -79,9 +82,9 @@ pre_gate_fixtures() {
   done
   [ "${#mods[@]}" -gt 0 ] || return 0
   local pat="" m
-  for m in "${mods[@]}"; do pat="$pat|std::$m\\b"; done
-  for m in "${names[@]}"; do pat="$pat|\\b$m\\b"; done
-  git -C "$ROOT" grep -lE "${pat#|}" -- 'test/*.al' 'test/**/*.al' 2>/dev/null |
+  for m in "${mods[@]}" "${names[@]}"; do pat="$pat|$m"; done
+  # -w (whole words) rather than \b, which git grep -E does not honour on every platform
+  git -C "$ROOT" grep -lwE "${pat#|}" -- 'test/*.al' 'test/**/*.al' 2>/dev/null |
     sed -e 's#^test/##' -e 's#\.al$##' | sort -u
 }
 
@@ -98,6 +101,9 @@ pre_gate_self_test() {
   t 'docs only: nothing to run' 'README.md docs/x.md' 'e2e none '
   t 'a fixture: its rows, no sweep' 'test/foo.al' 'e2e rows '
   t 'a lib module: rows, no sweep' 'lib/std/io.al' 'e2e rows '
+  t 'the prelude reaches every program: all rows' 'lib/base/option.al' 'e2e all '
+  t 'an alloc module: rows' 'test/x.al lib/alloc/hashmap.al' 'e2e rows '
+  t 'the prelude after a rows-change: all' 'lib/std/io.al lib/base/slice.al' 'e2e all '
   t 'the riscv64 emitter: all rows + its sweep' 'src/riscv64.al' 'e2e all sweep rv64 '
   t 'an aarch64 sub-file: all rows + its sweep' 'src/aarch64/emit.al' 'e2e all sweep a64 '
   t 'the wat emitter + a fixture' 'test/foo.al src/wat.al' 'e2e all sweep wasm '
@@ -106,6 +112,23 @@ pre_gate_self_test() {
   t 'the e2e table: all rows' 'scripts/e2e.sh' 'e2e all '
   t 'package.al: everything' 'package.al' 'e2e all sweep a64 sweep rv64 sweep wasm '
   t 'a rows-change after an all-change stays all' 'src/lower.al test/x.al' 'e2e all '
+  # The fixture selection, on a scratch repository in this checkout's target/: a module user, a
+  # caller of the function a hunk touches, a changed fixture, and one bystander that must stay out.
+  local r="$ROOT/target/pre_gate_selftest"
+  rm -rf "$r"; mkdir -p "$r/lib/alloc" "$r/test/sub"
+  printf 'pub grow := fn(x : u64) -> u64 {\n  x + 1\n}\n' > "$r/lib/alloc/vec.al"
+  printf 'main := fn() -> u64 { alloc::vec::len(1) }\n' > "$r/test/user.al"
+  printf 'main := fn() -> u64 { grow(1) }\n' > "$r/test/sub/caller.al"
+  printf 'main := fn() -> u64 { 42 }\n' > "$r/test/edited.al"
+  printf 'main := fn() -> u64 { regrow(1) }\n' > "$r/test/bystander.al"
+  ( cd "$r" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm base ) || bad=1
+  printf 'pub grow := fn(x : u64) -> u64 {\n  x + 2\n}\n' > "$r/lib/alloc/vec.al"
+  printf 'main := fn() -> u64 { 41 }\n' > "$r/test/edited.al"
+  got="$(printf 'lib/alloc/vec.al\ntest/edited.al\n' | ROOT="$r" pre_gate_fixtures HEAD | sort | tr '\n' ' ')"
+  want='edited sub/caller user '
+  if [ "$got" = "$want" ]; then echo "  ok   fixtures: module user, function caller, edited fixture; not the bystander"
+  else echo "  FAIL fixtures: got '$got' want '$want'"; bad=1; fi
+  rm -rf "$r"
   echo "pre_gate self-test: $([ "$bad" = 0 ] && echo PASS || echo FAIL)"
   return "$bad"
 }
@@ -178,7 +201,7 @@ for s in $sweeps; do
   ran+=("sweep:$s"); [ "$rc" = 0 ] || red+=("sweep:$s")
 done
 # Every full-gate stage, by its own heading, less the two this script covers: the list cannot go stale.
-not_run="$(sed -nE 's/^echo "### ([A-Z0-9 -]+[A-Z0-9]).*/\1/p' scripts/full.sh | grep -vxE 'E2E|SWEEPS' |
+not_run="$(sed -nE "s/^echo [\"']### ([A-Za-z0-9 .-]+[A-Za-z0-9]).*/\\1/p" scripts/full.sh | grep -vxE 'E2E|SWEEPS' |
   sed 's/ /_/g' | tr '\n' ' ')"
 [ "$e2e" = all ] || not_run="E2E(rest) $not_run"
 for s in a64 rv64 wasm; do case " $sweeps " in *" $s "*) ;; *) not_run="sweep:$s $not_run" ;; esac; done
