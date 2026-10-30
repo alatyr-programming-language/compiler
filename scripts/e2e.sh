@@ -12000,6 +12000,9 @@ run for_str_array 32
 run for_slice_str_range 35
 run for_slice_str_call 32
 run for_slice_str_bytes 15
+## A GENERIC `-> Slice(T)` call with `T = str`: the call arm takes `slice_ret_elem`'s answer, not a
+## private copy that matched only the literal `Slice(str)` return (review of PR #1224).
+run for_slice_str_call_generic 32
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
