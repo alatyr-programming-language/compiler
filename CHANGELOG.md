@@ -126,6 +126,15 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`.expect(…)` on a call that returns an `Option` no longer panics on `Some` (#986).** An inline
+  unwrap — `f().expect(m)`, `f().expect(m).field`, or a statement `f()?` / `f().expect(m)` — assumed the
+  success variant is the first one, which is true of `Result` and false of the library `Option`
+  (`None` comes first). So `f().expect(m)` panicked when `f` returned `Some`, and a statement `f()?`
+  returned early on `Some` and continued on `None`. All of these now take the success variant from the
+  receiver's type. `x := f().expect(m)` with a struct payload now binds every field, not just the
+  first; using such a multi-word value directly in another expression is refused at build time, as it
+  already was for `?`, instead of silently delivering one word.
+
 - **The #529 ptrint census is in the gate, and it no longer lets an unmeasured zero read as clean
   (#529 step 3).** The gate ran `ptrint_census.sh planted` only — the proof that the counter *can*
   fire — so no ptrint number was ever pinned, and `OP-CMP = 0` described a run nobody repeated.
