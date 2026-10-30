@@ -2,8 +2,8 @@
 
 Why the compiler answers to a tagged spec release, and what the pin does and does not claim.
 
-Moved verbatim from `AGENTS.md` (#1130); the rule itself stays there in one line, and this file
-keeps the reasons, measurements and history. Line citations are as of the move.
+Moved verbatim from `AGENTS.md` (#1130). `AGENTS.md` states each rule briefly; this file is the full
+text, with the reasons, measurements and history. Line citations are as of the move.
 
 ## Authority
 

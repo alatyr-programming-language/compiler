@@ -2,8 +2,8 @@
 
 What each check proves and does not, the evidence rules, and the docs-only gate in full.
 
-Moved verbatim from `AGENTS.md` (#1130); the rule itself stays there in one line, and this file
-keeps the reasons, measurements and history. Line citations are as of the move.
+Moved verbatim from `AGENTS.md` (#1130). `AGENTS.md` states each rule briefly; this file is the full
+text, with the reasons, measurements and history. Line citations are as of the move.
 
 ## What the gates prove
 
