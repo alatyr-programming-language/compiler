@@ -27,7 +27,11 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
 
+## Since #1126 S3 the committed scripts/corpus.manifest holds only the sources with no `## expect:`
+## directive (and the directive sources that print); the whole corpus is the last walk's observation,
+## which `scripts/corpus_manifest.sh --check` leaves in target/. Read that when it exists.
 MANIFEST="scripts/corpus.manifest"
+[ -f target/corpus-manifest/observed.manifest ] && MANIFEST=target/corpus-manifest/observed.manifest
 LIST=""
 QUIET=0
 while [ "$#" -gt 0 ]; do
