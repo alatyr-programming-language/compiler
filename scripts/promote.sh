@@ -148,14 +148,16 @@ cmd_prepare() {
   echo "promote: bumped package.al, seed/VERSION, scripts/package_cli_test.sh"
 
   ## the stages: each compiler builds the tree into target/debug/alatyr, kept as target/promote/stageN
-  local cc=./seed/alatyr n
-  ./seed/alatyr package.al > "$P/gas_seed.s" 2>/dev/null || die "the seed did not emit the tree's GAS"
+  ## the manifest by its ABSOLUTE path, as fixpoint.sh passes it: a relative one is refused by the tree
+  ## compiler's emit form ("cannot open source file", measured on omen)
+  local cc=./seed/alatyr n M="$wt/package.al"
+  ./seed/alatyr "$M" > "$P/gas_seed.s" 2>/dev/null; [ -s "$P/gas_seed.s" ] || die "the seed did not emit the tree's GAS"
   for n in 1 2 3; do
     rm -f target/debug/alatyr
-    "$cc" build package.al > "$P/build$n.log" 2>&1 || die "Stage$n build failed (see $P/build$n.log)"
+    "$cc" build "$M" > "$P/build$n.log" 2>&1 || die "Stage$n build failed (see $P/build$n.log)"
     [ -x target/debug/alatyr ] || die "Stage$n: no target/debug/alatyr"
     cp target/debug/alatyr "$P/stage$n"
-    "$P/stage$n" package.al > "$P/gas$n.s" 2>/dev/null || die "Stage$n did not emit the tree's GAS"
+    "$P/stage$n" "$M" > "$P/gas$n.s" 2>/dev/null; [ -s "$P/gas$n.s" ] || die "Stage$n did not emit the tree's GAS"
     case "$("$P/stage$n" --version)" in "alatyr $new, "*) ;; *) die "Stage$n answers '$("$P/stage$n" --version)', not alatyr $new (#586: bump first)" ;; esac
     cc="$P/stage$n"
   done
