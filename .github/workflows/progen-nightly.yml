@@ -8,11 +8,12 @@
 # (CRASH). Programs on which every finishing backend agrees with the others but not with progen's
 # model are listed as MODEL and do not fail the run. Each finding is reproducible from its seed alone
 # — `python3 scripts/progen.py show --seed S` prints the program, `model --seed S` its expected exit —
-# and becomes an issue, then a fixture.
+# and becomes an issue (the `report` job below, scripts/progen_report.py), then a fixture.
 #
 # The seeds move every night, so coverage grows: shard k of a run starting at BASE covers
 # BASE + k*COUNT .. BASE + (k+1)*COUNT - 1, and BASE is the UTC day number times 100000 unless a
-# manual dispatch names one. The job holds no write token and sees no secret: it only reads the tree.
+# manual dispatch names one. The generator job holds no write token and sees no secret: it only reads
+# the tree. The `report` job, which runs only on a red night, may write issues and nothing else.
 #
 # Artifacts, one per shard, uploaded for every run including a green one:
 #   progen.log         the run's output: one line per finding, the summary line last
@@ -37,6 +38,11 @@ on:
         description: 'Seeds per shard (four shards)'
         required: false
         default: '1000'
+      plant:
+        description: 'Plant one synthetic WRONG finding (seed 0) in shard 0, to prove the issue hook end to end'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -85,6 +91,7 @@ jobs:
           BASE_INPUT: ${{ github.event.inputs.base }}
           COUNT_INPUT: ${{ github.event.inputs.count }}
           SHARD: ${{ matrix.shard }}
+          PLANT_INPUT: ${{ github.event.inputs.plant }}
         run: |
           ulimit -c 0
           COUNT="${COUNT_INPUT:-1000}"
@@ -97,6 +104,13 @@ jobs:
             --jobs "$(nproc)" --out target/progen 2>&1 | tee -a target/progen/progen.log
           rc=${PIPESTATUS[0]}
           set -e
+          # The plant (#1128): a synthetic finding, so the issue hook below can be shown to open an issue
+          # on a red night without waiting for a real one. It is a dispatch input only; no schedule sets it.
+          if [ "$PLANT_INPUT" = true ] && [ "$SHARD" = 0 ]; then
+            printf 'WRONG\t0\tx86_64=9 aarch64=2 riscv64=2 wasm=2\t2\t-\t-\n' >> target/progen/findings.tsv
+            echo "WRONG    seed=0 PLANTED by the dispatch input" | tee -a target/progen/progen.log
+            rc=1
+          fi
           # the summary line, then one line per finding; the job fails on any WRONG, REFUSED or CRASH
           { tail -n 1 target/progen/progen.log; echo; grep -E '^(WRONG|REFUSED|CRASH|HANG|MODEL) ' target/progen/progen.log | sed 's/^/    /'; } >> "$GITHUB_STEP_SUMMARY" || true
           echo "progen exit: $rc"
@@ -109,3 +123,29 @@ jobs:
           path: target/progen/
           if-no-files-found: warn
           retention-days: 30
+
+  # The issue hook (#1128): a red night opens or updates one issue per (verdict, seed, backend), so a red
+  # streak cannot again go unseen for a week (2026-10-14..22). This job alone holds a write token, and
+  # only for issues. It runs main's scripts/progen_report.py over the artifacts as DATA: it does not
+  # build or run anything the night generated.
+  report:
+    needs: progen
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: progen-${{ github.run_id }}-shard*
+          path: target/progen-artifacts
+      - name: Open or update one issue per finding
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh label create progen --color 5319E7 --description 'Found by the progen nightly (scripts/progen_report.py)' 2>/dev/null || true
+          python3 scripts/progen_report.py --dir target/progen-artifacts \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

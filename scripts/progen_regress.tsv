@@ -1,0 +1,16 @@
+## scripts/progen_regress.tsv — progen seeds the full gate replays, one past finding per row (#1128).
+##
+## A progen finding that is fixed adds its row here in the fix PR, so it cannot come back unseen: the
+## PROGEN stage of scripts/full.sh runs `progen.py run --seed S --count 1 --forms F` for every row and
+## fails on any WRONG, REFUSED, CRASH or HANG. A seed that still fails on main is tracked by its issue,
+## not here (its row would turn every gate red). The nightly's issue (scripts/progen_report.py) tells
+## the fixer to add the row. The #966 rows agreed on all four backends at main 2cf60b45 (2026-10-30).
+##
+## Columns, tab-separated: seed, forms (as the finding was generated; `all` for the default), issue.
+## The program a seed produces depends on the generator, so a row replays the program the CURRENT
+## generator makes from that seed and those forms.
+2074800535	struct	#966
+2074802946	brand,enum,struct	#966
+2074803225	struct	#966
+2074803566	enum	#966
+2074803688	brand,struct	#966
