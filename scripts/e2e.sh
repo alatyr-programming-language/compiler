@@ -2792,13 +2792,14 @@ main := fn() -> u64 {
 
   ## ---- CONTROL 4: a NON-LITERAL operand keeps the old representation and the old behaviour -----
   ## The parser folds only a literal abutting the `-`. `-v` for a run-time `v` is §6.1's checked
-  ## negation family and is untouched — that residual is #633's, and #489's, not this unit's. The
-  ## row asserts the value the parent produced, so a later change to that family moves this row on
-  ## purpose rather than by accident.
+  ## negation family and is untouched by the fold. Until #1049 this row asserted the parent's WRAP of
+  ## `-v` at `v : i8 = -128` (answering -128); §6.1 puts negating the minimum in the checked-overflow
+  ## set, so that operation now traps and is asserted by `test/trap_neg_min_i8.al`. The row keeps an
+  ## in-range run-time negation at the same narrow width.
   _neg_accept nonliteral_operand_untouched 'main := fn() -> u64 {
-  v : i8 = 0 - 128
+  v : i8 = 0 - 127
   w := -v
-  if i64(w) != 0 - 128 { return 11 }
+  if i64(w) != 127 { return 11 }
   x : i64 = 5
   y := -x
   if y != 0 - 5 { return 12 }
@@ -2807,7 +2808,7 @@ main := fn() -> u64 {
 
   ## ---- CONTROL 5: the spellings the ADJACENCY GUARD deliberately leaves alone ------------------
   ## `- (5)`, `-  7` and `- -4` are not `-<int>` written adjacently, so they keep the
-  ## `Unchecked(Bin(17, Num(0), …))` shape and reach the range rules as non-literals — which is why
+  ## `Bin(17, Num(0), …)` shape and reach the range rules as non-literals — which is why
   ## `n : u8 = - -4`, whose value 4 IS in range, must not be refused.
   _neg_accept adjacency_untouched 'main := fn() -> u64 {
   n : u8 = - -4

@@ -1020,21 +1020,28 @@ ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : As
       i5 := e_trap_if(f, a, both, TrapKind.TkDivOverflow, sp, true)
     }
   }
+  if nomember {
+    ## Outside `unchecked` a `wrap` op is legal only where the builder proved the operation has no
+    ## overflow member (V10), and that proof is the zero-left decision just made: `0 + x` and `0 * x`
+    ## cannot overflow, and an unsigned `0 - x` is defined as `2^N - x` (§6.5). So it is marked proven.
+    ## A bare `wrap` here was refused by the verifier (V10) on every IR target as soon as a checked
+    ## function held a zero-left `0 + d` (`accept_block_scoped_signed_local::bin_inferred_sum`).
+    orp := o_vreg(rv)
+    pd := ib_proven(bp, a, io, wk, lv, orp)
+    w := ib_wrap_to(bp, a, pd, k)
+    return Option(VRegId).Some(w)
+  }
   d := ib_fresh(bp, a, wk)
   ol := o_vreg(lv)
   orr := o_vreg(rv)
   mut tk := TrapKind.TkOverflow
   if divides { tk = TrapKind.TkDivZero }
-  if unch or nomember {
+  if unch {
     mut md := Mode.MdWrap
     if divides { md = Mode.MdHw }
     i6 := e_bin(f, a, io, md, wk.sg, Kty.KI64, d, ol, orr)
   } else {
     i7 := e_binc(f, a, io, wk.sg, Kty.KI64, d, ol, orr, tk, sp)
-  }
-  if nomember {
-    w := ib_wrap_to(bp, a, d, k)
-    return Option(VRegId).Some(w)
   }
   ## A narrow quotient that does not fit is `MIN / -1` at the narrow width: a division overflow.
   mut ntk := TrapKind.TkOverflow
