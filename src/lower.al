@@ -6110,22 +6110,22 @@ StrIterSrc := enum { FrameView, ParamBlock, InlineArray }
 ## (`collect_slots`, which binds `x` with `bind_str_slot`) and the emitter (which copies two words per
 ## element) both take, so the loop var's width and the element copy cannot disagree. A `Slice(str)`
 ## local or param, a `[str; N]` local, a range slice of one of those, or a call declared to return
-## `Slice(str)`. A mutable array GLOBAL never reaches here (its own path runs first).
-for_iter_str_elem := fn(it : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+## `Slice(str)`. A mutable array GLOBAL never reaches here (its own path runs first). The call's element
+## is `slice_ret_elem`'s answer, so a generic `-> Slice(T)` with `T = str` (from the call's type argument
+## or the enclosing instance `gps…itl2`) is a str iterable too.
+for_iter_str_elem := fn(it : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize) -> bool {
   match deref(it) {
     Expr::Var(s, n) => { str_elem_slot(slots, src, s, n) }
     Expr::Slice(base, lo, hi) => {
       bv := var_name_span(base)
       bv.n != 0 and str_elem_slot(slots, src, bv.s, bv.n)
     }
-    Expr::Call(cs, cl, nargs, ah) => {
-      ci := ret_call_target(decls, src, cs, cl, nargs, ah, a)
-      if ci < 0 { return false }
-      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
-      bn := base_type_name(src, d.ret_ts, d.ret_tl)
-      if str_at((src + bn.s), bn.n) != "Slice" { return false }
-      ta := typearg_at(src, d.ret_ts, d.ret_tl, 0)
-      ta.n != 0 and str_at((src + ta.s), ta.n) == "str"
+    Expr::Call => {
+      ## bound before `.eek` is read: a field read straight off this call reads the wrong field
+      ## (`SliceRetInfo` has `bool`/`u8` fields), in the seed and the tree alike (#1228,
+      ## `scripts/seed_forms.tsv` row `call_field_subword`).
+      sri := slice_ret_elem(it, decls, src, a, gps, gpl, its, itl, gps2, gpl2, its2, itl2)
+      sri.eek == 4
     }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
@@ -26159,7 +26159,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               emit_arm_val_store(flo, i64(bslot), sb, cx, a, nl)
               ## a `str`-element non-var iterable (`xs[1..n]`, a `Slice(str)`-returning call): the temp now
               ## holds its {ptr, len} by value; each element is a 2-word str (#1177).
-              if for_iter_str_elem(flo, cx.slots, cx.decls, cx.src, a) { is_str_slice = true; b_estride = 2 }
+              if for_iter_str_elem(flo, cx.slots, cx.decls, cx.src, a, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l) { is_str_slice = true; b_estride = 2 }
             } else if unchecked bitcast(usize, gfor_mgv) != 0 and array_lit_info(gfor_mgv).is_a {
               is_glob_arr = true
               glob_nel = array_lit_info(gfor_mgv).nel
@@ -26195,7 +26195,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## = runtime len); a `Slice(str)` PARAM (`is_ref`, `sns == 1`, `bind_param`) holds a POINTER to
               ## the caller's block (ptr @ 0, len @ 8); a `[str; N]` local (not `is_ref`) is inline, element
               ## `i` word `j` at slot `off - (i*2 + j)`, with the static count N.
-              is_str_slice = for_iter_str_elem(flo, cx.slots, cx.decls, cx.src, a)
+              is_str_slice = for_iter_str_elem(flo, cx.slots, cx.decls, cx.src, a, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l)
               if is_str_slice and not bent.is_ref {
                 str_src = StrIterSrc.InlineArray
                 str_arr_n = fixed_arr_len(flo, cx.slots, cx.src)
