@@ -228,6 +228,24 @@ pr_xbackend_baseline_edit_check() { # changed-paths -> 0 clean, 1 REFUSE
   return 1
 }
 
+## Every issue the known deviations name is OPEN (#1126 S2). The gate holds the table's consistency
+## and runs with no GitHub credentials (queue.sh strips them), so the one fact it cannot see, an
+## issue's state, is checked here. The table is read from the PR head with `git show`, never by running
+## the PR's own scripts. A fix PR that closes an issue deletes its rows and its table line in the same
+## PR, so a closed issue still in the table is a row that outlived its fix, or a fix that never came.
+## Inputs: the table text and the open issue numbers, one per line. An empty open list is a failed query.
+pr_deviation_issues_open_check() { # table-text open-numbers -> 0 clean, 1 REFUSE, 2 no answer
+  [ -n "$1" ] || return 0
+  [ -n "$2" ] || { echo "  REFUSE: the open-issue list is empty, so the known-deviation issues cannot be checked (not a pass)"; return 2; }
+  local closed
+  closed="$(printf '%s\n' "$1" | awk -F'\t' 'NR == FNR { O[$1] = 1; next } /^#/ || $0 == "" { next } !($1 in O) { printf " #%s", $1 }' \
+    <(printf '%s\n' "$2") - )"
+  [ -z "$closed" ] && return 0
+  echo "  REFUSE: scripts/known-deviations.issues.tsv names issue(s) that are not open:$closed."
+  echo "          The fix that closed each one deletes its rows and its table line (#1126 S2)."
+  return 1
+}
+
 ## A regenerated oracle owns a commit that touches nothing else.
 pr_oracle_commit_isolation_check() { # oracle-path commit other-file-count
   case "${3:-0}" in ''|0) return 0 ;; esac
@@ -498,6 +516,15 @@ src/lower.al" 2>&1)"; rc=$?
   pr_xbackend_baseline_edit_check "scripts/xbackend_diff.baseline.bak
 docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
   _ck $? "baseline-edit-allowed-a-lookalike-path"
+  ## The known-deviation issues are open (#1126 S2).
+  _dt="$(printf '# issue\trule\tdifference\trows|none\n11\tr\td\trows\n14\tr\td\tnone')"
+  pr_deviation_issues_open_check "$_dt" "$(printf '11\n14\n99')" >/dev/null 2>&1
+  _ck $? "deviation-issues-refused-a-table-of-open-issues"
+  out="$(pr_deviation_issues_open_check "$_dt" "$(printf '11\n99')" 2>&1)"; rc=$?
+  [ "$rc" = 1 ]; _ck $? "deviation-issues-allowed-a-closed-issue"
+  case "$out" in *'#14.'*) _ck 0 x ;; *) _ck 1 deviation-issues-did-not-name-the-closed-one ;; esac
+  pr_deviation_issues_open_check "$_dt" "" >/dev/null 2>&1; [ "$?" = 2 ]
+  _ck $? "deviation-issues-took-an-empty-answer-for-a-pass"
 
   # ---- 3b · the ONE mutable line: `# spec-pin:` moves, the journal does not. ----------------
   # A pin move rewrites exactly one line and `git diff` spells that as a deletion. The counter
@@ -962,6 +989,10 @@ for _sf in seed/VERSION seed/HISTORY.md; do
   dels=$((dels + ${_n:-0}))
 done
 pr_xbackend_baseline_edit_check "$CHANGED" || shape_fail=1
+if git cat-file -e "$HEAD_SHA:scripts/known-deviations.issues.tsv" 2>/dev/null; then
+  DEV_OPEN="$(gh issue list -R "$REPO" --state open --limit 5000 --json number --jq '.[].number' 2>/dev/null)" || DEV_OPEN=""
+  pr_deviation_issues_open_check "$(git show "$HEAD_SHA:scripts/known-deviations.issues.tsv")" "$DEV_OPEN" || shape_fail=1
+fi
 pr_seed_version_append_only_check "$CHANGED" "${dels:-0}" || shape_fail=1
 for oracle in scripts/corpus.manifest scripts/idiom.baseline scripts/needle.baseline; do
   printf '%s\n' "$CHANGED" | grep -qx "$oracle" || continue
