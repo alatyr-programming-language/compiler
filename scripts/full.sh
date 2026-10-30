@@ -120,6 +120,9 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/land.sh" --self-test
   _full_land_self_test_rc=$?
   [ "$_full_land_self_test_rc" = 0 ] || exit "$_full_land_self_test_rc"
+  # The progen nightly's issue hook (#1128): which backend a finding blames, and open / comment /
+  # reopen on its marker. A hook nobody has seen decide is a hook that opens nothing on a red night.
+  python3 "$ROOT/scripts/progen_report.py" --self-test || exit 1
   # The merge queue's deciders (#1127): the reviewed-head marker and the bisection plan, against a
   # fake gate in which one PR of three is red. Measured: a driver that drops the rest of a split set
   # loses the plan checks; taking the first marker instead of the last loses the marker check.
@@ -711,6 +714,39 @@ if [ "$pg_rc" != 0 ]; then
   echo "  FAIL progen: rc=$pg_rc (WRONG, REFUSED or CRASH; artifacts and a reproduce: command are named in $PG_LOG)"
   grep -E '^(WRONG|CRASH|REFUSED|TIMEOUT|progen: NO program)' "$PG_LOG" | head -12 | sed 's/^/    /'
   fail=1
+fi
+# The REGRESSION LIST (#1128): every past progen finding that was fixed, replayed with its own forms, so
+# a fixed finding cannot return unseen. Each row must produce exactly one agreeing program; a malformed
+# row, a run with no summary, or a replayed count short of the row count is a failure, not a skip.
+PGR_LIST="$ROOT/scripts/progen_regress.tsv"
+PGR_LOG="$LOGDIR/full_progen_regress.log"
+: > "$PGR_LOG"
+pgr_rows=0; pgr_ok=0
+if [ ! -f "$PGR_LIST" ]; then
+  echo "  FAIL progen regress: no $PGR_LIST — the replay of past findings is unheld"; fail=1
+else
+  while IFS=$'\t' read -r pgr_seed pgr_forms pgr_issue pgr_rest; do
+    case "$pgr_seed" in ''|'#'*) continue ;; esac
+    pgr_rows=$((pgr_rows + 1))
+    if ! [[ "$pgr_seed" =~ ^[0-9]+$ ]] || [ -z "$pgr_forms" ] || ! [[ "$pgr_issue" =~ ^#[0-9]+$ ]] || [ -n "$pgr_rest" ]; then
+      echo "  FAIL progen regress: malformed row (want seed<TAB>forms<TAB>#issue): $pgr_seed $pgr_forms $pgr_issue $pgr_rest"
+      fail=1; continue
+    fi
+    pgr_fa=(); [ "$pgr_forms" = all ] || pgr_fa=(--forms "$pgr_forms")
+    pgr_out="$(python3 scripts/progen.py run --seed "$pgr_seed" --count 1 "${pgr_fa[@]}" \
+      --cc "$ROOT/target/debug/alatyr" --out "$ROOT/target/progen_regress" 2>&1 < /dev/null)"
+    pgr_rc=$?
+    printf '%s\n' "$pgr_out" >> "$PGR_LOG"
+    if [ "$pgr_rc" = 0 ] && printf '%s\n' "$pgr_out" | grep -qE '^progen: seeds=.* agree=1 .*hang=0 '; then
+      pgr_ok=$((pgr_ok + 1))
+    else
+      echo "  FAIL progen regress: seed $pgr_seed ($pgr_forms, $pgr_issue) no longer agrees (rc=$pgr_rc):"
+      printf '%s\n' "$pgr_out" | grep -E '^(WRONG|CRASH|REFUSED|HANG|MODEL|progen: )' | head -3 | sed 's/^/    /'
+      fail=1
+    fi
+  done < "$PGR_LIST"
+  echo "  progen regress: replayed=$pgr_ok/$pgr_rows rows of scripts/progen_regress.tsv"
+  [ "$pgr_rows" -gt 0 ] || { echo "  FAIL progen regress: the list holds no row"; fail=1; }
 fi
 
 if [ "$fail" != 0 ]; then
