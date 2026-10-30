@@ -12098,6 +12098,20 @@ run issue395_vec_subword_generic_deref 42
 ## the fixture exits 100 — the `Vec(u32)` element 1 read 0.
 run issue988_vec_ufcs_subword_instance 42
 
+## #987 — `v[i]`, `v[i] = x` and `v[lo..hi]` on a `Vec` are `at`, `index_set` and `index_range`
+## (Types §4.5, Stdlib appendix §6); they were the built-in index over the handle's own words.
+## NON-VACUOUS: on the parent `7bb90a3a` (x86_64) the fixture exits 100 — `v[0]` did not read 40.
+run issue987_vec_index_ops 42
+
+## #987 — `v.at(i)` / `v.index_set(i, x)` / `v.index_range(lo, hi)` infer `T` through the auto-ref
+## `ptr(Vec(T))` parameter. NON-VACUOUS: on the parent `7bb90a3a` (x86_64) the build is refused —
+## the generic call "cannot be inferred here".
+run issue987_vec_ufcs_autoref 42
+
+## #987 — `v[i].f = x` on a `Vec` is refused: `v[i]` is `at`, a value. NON-VACUOUS: on the parent
+## `7bb90a3a` (x86_64) the build fails (rc 1) with an unrelated lowering message, without the needle.
+build_reject_has issue987_vec_index_field_write "a value, not a place"
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================
