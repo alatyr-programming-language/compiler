@@ -126,6 +126,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`MIN / -1` and `MIN % -1` in a `comptime for` range bound are refused, and the compiler no longer
+  crashes on them (#1233).** The fold ran the host's `idiv` on them, and the compiler died with SIGFPE
+  on all four targets, with no message. They are now a located compile error on x86_64, under
+  `unchecked` too (Comptime §2.6: hardware-defined), and a trap on the twins until #1232. A `u64`
+  bound's `/` and `%` now divide unsigned. Before, they divided the bit patterns as signed values,
+  which crashed on `2^63 / (2^64 - 1)` and answered 0 for `(2^64 - 1) / 2^62`.
+
 - **A checked `+ - *` that overflows in a `comptime for` range bound is refused, not wrapped
   (#1234).** `0 .. K + 2` with `K : u64 = 2^64 - 1` wrapped to 1 and unrolled once on all four
   backends, and the `i64` shape wrapped to MIN and unrolled zero times. The fold now runs the
