@@ -12667,6 +12667,39 @@ ufcs_param_tpos := fn(src : ptr(u8), ps : usize, pl : usize, ts : usize, tl : us
   tpos
 }
 
+## #987 — the pointee `X` of a callee parameter typed `ptr(X)` / `ptr(mut X)` (`at`'s `v : ptr(Vec(T))`),
+## or None for any other parameter type. A value receiver reaches such a parameter by auto-ref
+## (Types §4.5: `v.at(i)` ≡ `at(ptr(v), i)`), so its type arguments are read against `X`. Read with
+## `typearg_at`, bounded by the type's own parentheses, NOT `ptr_pointee_name` over `extend_type_span`:
+## the collect pass runs before `emit_program` publishes `LOWER_SRC_N`, and that extent fails closed
+## at 0, so the two passes would name different instances (an undefined `at__v` at link time).
+ufcs_ref_pointee := fn(src : ptr(u8), ps : usize, pl : usize) -> Option(CSpan) {
+  bn := base_type_name(src, ps, pl)
+  if str_at((src + bn.s), bn.n) != "ptr" { return Option(CSpan).None }
+  pe := typearg_at(src, bn.s, bn.n, 0)
+  if pe.n > 4 and str_at((src + pe.s), 4) == "mut " { return Option(CSpan).Some(CSpan(s = pe.s + 4, n = pe.n - 4)) }
+  if pe.n == 0 { return Option(CSpan).None }
+  Option(CSpan).Some(CSpan(s = pe.s, n = pe.n))
+}
+
+## #987 — the type argument for the type parameter `[ts, tl)` that a UFCS receiver `e` supplies through
+## an auto-ref first parameter typed `[ps, pl)` = `ptr([mut] X)` (`v.at(i)` → `at(T, v, i)` with
+## `v : ptr(Vec(T))`), read from the receiver's bindings against `X` exactly as #988 reads a by-value
+## receiver. 0/0 when the parameter is not such a pointer, `X` does not take `T` directly, or the
+## bindings disagree or cannot be read — a pointer-typed receiver among them — and the call is then
+## refused (Comptime §3.3), never tagged by the receiver's name. Both mono passes call it.
+ufcs_autoref_targ := fn(e : ptr(Expr), ps : usize, pl : usize, ts : usize, tl : usize, body : Option(ptr(mut Stmt)), params : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  match ufcs_ref_pointee(src, ps, pl) {
+    Some(x) => {
+      match ufcs_param_tpos(src, x.s, x.n, ts, tl) {
+        Some(tp) => { return ufcs_recv_targ(e, tp, body, params, x.s, x.n, decls, src, a) }
+        None => { return CSpan(s = 0, n = 0) }
+      }
+    }
+    None => { return CSpan(s = 0, n = 0) }
+  }
+}
+
 ## #988 — the type argument at `tpos` of a UFCS receiver Var `e`, for a callee parameter typed `[ps, pl)`
 ## (`in out v : Vec(T)`). Read from EVERY binding of the receiver's name in the WHOLE fn: a parameter's
 ## type, a local's annotation, or the GENERIC call that initialises it (`v := vec::new(u32, ar)` →
@@ -16935,6 +16968,11 @@ infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(L
         if str_at((cx.src + pm.ts), pm.tl) == "type" {
           pc = pm.next
         } else {
+          ## #987 — an auto-ref receiver (`v.at(i)` into `v : ptr(Vec(T))`, Types §4.5); the pre-pass mirrors it.
+          if j2 == 0 {
+            art := ufcs_autoref_targ(arg_expr_at(args_head, 0, a), pm.ts, pm.tl, tpn_s, tpn_l, EMIT_BODY, EMIT_PARAMS, cx.decls, cx.src, deref(cx.mar))
+            if art.n != 0 { return inst_tparam_cx(art.s, art.n, cx) }
+          }
           if param_type_has_tparam(cx.src, pm.ts, pm.tl, tpn_s, tpn_l) {
             rae := arg_expr_at(args_head, j2, a)
             vn := var_name_span(rae)
@@ -28931,6 +28969,11 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
         if str_at((src + pmm.ts), pmm.tl) == "type" {
           pcm = pmm.next
         } else {
+          ## #987 — the COLLECT-side mirror of the emit side's auto-ref receiver step.
+          if jm == 0 {
+            art := ufcs_autoref_targ(arg_expr_at(args_head, 0, a), pmm.ts, pmm.tl, tpn_s, tpn_l, COLLECT_FN_BODY, penv, decls, src, a)
+            if art.n != 0 { return art }
+          }
           if param_type_has_tparam(src, pmm.ts, pmm.tl, tpn_s, tpn_l) {
             rty := recv_full_pre(arg_expr_at(args_head, jm, a), decls, src, penv, a)
             if rty.n != 0 {
