@@ -24,7 +24,7 @@ procedures in `.agents/skills/`. At most 150 lines (`scripts/agents_size_check.s
   then build Stage1 → Stage2 → Stage3. They must emit byte-identical GAS once the `.L<N>` and
   `.Lra<N>_<k>` labels are normalized, and the Stage2 and Stage3 binaries must match.
 - Run the full e2e and sweeps, and read the normalized seed-to-Stage1 delta: it must be describable in
-  one sentence, or stop. Promote **Stage2**, append the evidence to `seed/VERSION`, and re-run
+  one sentence, or stop. Promote **Stage2**, append the evidence to `seed/HISTORY.md`, and re-run
   `scripts/fixpoint.sh` on the promoted tree.
 - A promotion is a version release, and the version moves only on one. `scripts/fixpoint.sh` refuses a
   tree whose `package.al` version, `current-seed-version` and the seed's own `--version` disagree; on a

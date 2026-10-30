@@ -1,7 +1,7 @@
 # Changelog
 
 What a *user of the toolchain* would notice. The full record of how the compiler got here is its git
-history and `seed/VERSION`; this file is the short version, aimed at someone deciding whether a new
+history and `seed/HISTORY.md`; this file is the short version, aimed at someone deciding whether a new
 build changes anything for them.
 
 ## Versioning policy
@@ -84,7 +84,7 @@ Reproducibility section and `.agents/skills/alatyr-integrate/SKILL.md` §3 requi
 
 4. `seed/alatyr` — the promoted Stage2 binary, which now answers the new version.
 5. `seed/VERSION` — `current-seed-sha256` moves to the promoted digest, and the entry with the three
-   stage hashes and the **read** delta is appended. The entry is the reviewable part: it lands in the
+   stage hashes and the **read** delta is appended to `seed/HISTORY.md` (#1130). The entry is the reviewable part: it lands in the
    promotion PR, where a human can read the delta before it becomes history.
 6. This file — `## Unreleased` becomes `## <version> — <date>`, and a fresh empty `## Unreleased`
    opens above it.
@@ -117,11 +117,11 @@ Spec revision: <revision this build conforms to>
 EOF
 ```
 
-The full delta audit stays in `seed/VERSION`. A tag is not in the input tree — a source tarball loses
+The full delta audit stays in `seed/HISTORY.md`. A tag is not in the input tree — a source tarball loses
 it, and a tag can be moved with a force-push — so it is navigation, not the record.
 
 Two numbers that are **not** the compiler's version: the specification revision (this build cites it,
-`README.md` carries the badge) and the seed lineage in `seed/VERSION`. The specification's own tags
+`README.md` carries the badge) and the seed lineage in `seed/HISTORY.md`. The specification's own tags
 (`v1.0.0`, `v1.1.0`, …) live in the sibling repository; a `v1.1.0` here would mean something else entirely.
 
 ## Unreleased

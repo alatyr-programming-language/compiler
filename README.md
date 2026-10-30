@@ -44,7 +44,7 @@ the full pin and moves it in its own commit; `src/spec_revision.al` is the const
 with. The pin is an obligation, not a claim of completeness: where the tree lags it, the gap is an open
 issue. `alatyr help` (and `alatyr <command> --help` for one command), `alatyr version` and the
 diagnostic for an unrecognised argument are implemented. The Rust compiler that bootstrapped the first
-self-host binary is frozen and not published; `seed/VERSION` records the lineage.
+self-host binary is frozen and not published; `seed/HISTORY.md` records the lineage, and `seed/VERSION` the current seed.
 
 ## Version, and the two numbers `--version` prints
 

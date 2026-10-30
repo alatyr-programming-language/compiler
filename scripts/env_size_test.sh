@@ -19,7 +19,7 @@
 # Run standalone:  nix develop -c bash scripts/env_size_test.sh
 # `ALATYR` overrides the compiler under test (default: `target/alatyr`, the just-built Stage1).
 # The FROZEN SEED no longer carries the defect — the 2026-08-19/20 promote carried the envp fix into
-# the bootstrap binary itself (see the 2026-08-19/20 entries in `seed/VERSION`; without the fix every
+# the bootstrap binary itself (see the 2026-08-19/20 entries in `seed/HISTORY.md`; without the fix every
 # gate failed at "seed builds Stage1" in a
 # shell whose environment exceeded ~64 KiB). Measured 2026-08-21: `ALATYR=seed/alatyr` passes all 11
 # assertions. The subject here is still the tree's own compiler, not the seed.
