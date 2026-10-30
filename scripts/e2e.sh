@@ -10709,6 +10709,10 @@ build_reject_has reject_comptime_for_runtime_bound "range bound is not comptime-
 ## too; x86 died with SIGFPE and the twins unrolled zero times. The twins now trap, never loop 0 times.
 build_reject_has reject_comptime_for_div_zero "range bound divides by zero"
 build_reject_has reject_comptime_for_unchecked_mod_zero "range bound divides by zero"
+## The reject is located: the literal-only bound `4 / 0` has no named leaf, so it is placed at the
+## written divisor (it answered `at byte 0` before); the `%` bound is placed at `D`.
+build_reject_has reject_comptime_for_div_zero 'under `unchecked` too. at line 11 in '
+build_reject_has reject_comptime_for_unchecked_mod_zero 'under `unchecked` too. at line 14 in '
 run_a64 reject_comptime_for_div_zero 133
 run_rv64 reject_comptime_for_div_zero 133
 run_wat reject_comptime_for_div_zero 134
