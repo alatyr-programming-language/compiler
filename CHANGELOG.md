@@ -136,6 +136,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
   when the files are not the atomic set, and `gate` pushes the exact commit to `gate/**`. `due` answers
   the cadence: a week, an open `reseed-owed` issue, or a live `seed` row in `scripts/seed_forms.tsv`.
   The weekly `scripts/metrics.sh` report asks it, in a new `seed promotion` row.
+- **An aggregate-returning call under `unchecked` binds its whole value on x86_64 (#1139).**
+  `s := unchecked mk(41)` and `s := unchecked { mk(41) }` sized `s` as one scalar word and stored only
+  the first return register, so a 2- or 3-word struct read wrong fields with exit 0, a struct returned
+  through the hidden result pointer segfaulted, and an `Option(S)` result was refused at build. The
+  grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
+  aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
+  aarch64, riscv64 and wasm still trap on the granted form (#1157).
 
 ## 0.2.19 — 2026-10-31
 
