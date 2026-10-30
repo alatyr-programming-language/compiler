@@ -25,3 +25,10 @@
 ## (AGENTS.md, Authority); this file moves with it.
 
 pub SPEC_REVISION := "1.6.0"
+
+## Where the known deviations from SPEC_REVISION are published (Overview §6; TOOL-21 at spec 9438d00;
+## compiler#1000). SPEC_REVISION is this compiler's TARGET revision, not a conformance claim, so
+## `version` names it as a target and points here. The table lists, per issue, the rule not met and
+## the observable difference; scripts/known-deviations.tsv holds the fixture rows the gate holds to
+## it (#1126). On `main`, so the list is the one kept current with the build that names it.
+pub KNOWN_DEVIATIONS := "https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv"
