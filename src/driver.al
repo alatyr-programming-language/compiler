@@ -2576,12 +2576,16 @@ d_callee_name_matches := fn(src : ptr(u8), d : Decl, cs : usize, cl : usize) -> 
   str_at((src + d.name_start), d.name_len) == str_at((src + cs), cl)
 }
 
+## #987 — the module a type is resolved FROM, for a callee qualified through a module alias; `on`
+## false resolves names alone (the iterable `for`, unchanged).
+DModQ := struct { on : bool, s : usize, n : usize }
+
 ## The base name of a CALL's result type. One candidate (name + arity) answers directly; an OVERLOAD
 ## SET is disambiguated on argument 0's resolved type against each candidate's self-parameter type,
 ## which is what tells the appendix's `iter(CharIter)` and `iter(SplitIter)` apart at `for c in
 ## iter(cur)`. A callee naming no function is tried as a constructor `T(…)`, whose result type is `T`.
 ## `{0, 0}` means "not resolvable here", and every caller then leaves the statement alone.
-d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)), decls : rt::Vec, src : ptr(u8), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
+d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)), decls : rt::Vec, src : ptr(u8), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize, mq : DModQ) -> DSpan {
   mut cnt := 0
   mut hit := 0
   mut i : usize = 0
@@ -2596,7 +2600,7 @@ d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut
   }
   if cnt > 1 {
     if not arg_any(ah) { return DSpan(s = 0, n = 0) }
-    ab := d_expr_type_base(deref(arg_at(ah, "argument list ended early")).e, decls, src, body, ph, na, depth + 1)
+    ab := d_expr_type_base(deref(arg_at(ah, "argument list ended early")).e, decls, src, body, ph, na, depth + 1, mq)
     if ab.n == 0 { return DSpan(s = 0, n = 0) }
     mut c2 := 0
     mut h2 := 0
@@ -2612,6 +2616,16 @@ d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut
     if c2 != 1 { return DSpan(s = 0, n = 0) }
     d3 := deref(decl_at(Decl, rt::vec_get(decls, h2 - 1)))
     return d_type_base_span(src, d3.ret_ts, d3.ret_tl)
+  }
+  ## #987 — a callee qualified through a MODULE ALIAS (`vec := alloc::vec` then `vec::new(u64, ar)`)
+  ## names no decl by its source head; resolve it from the calling module `mq` exactly as the back
+  ## ends do (`d_qual_target`). The iterable `for` passes `on = false` and keeps the name-only answer.
+  if mq.on {
+    qd := d_qual_target(cs, cl, mq.s, mq.n, decls, src)
+    if qd != 0 {
+      dq := deref(decl_at(Decl, rt::vec_get(decls, qd - 1)))
+      return d_type_base_span(src, dq.ret_ts, dq.ret_tl)
+    }
   }
   mut tk := 0
   mut k : usize = 0
@@ -2630,7 +2644,7 @@ d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut
 ## parameter, a local (its annotation, else its initializer), a constructor literal, and a call — and
 ## anything else answers `{0, 0}`, which keeps the existing counted loop. The depth cap bounds the
 ## local-initializer chain.
-d_expr_type_base := fn(e : ptr(Expr), decls : rt::Vec, src : ptr(u8), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
+d_expr_type_base := fn(e : ptr(Expr), decls : rt::Vec, src : ptr(u8), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize, mq : DModQ) -> DSpan {
   if depth > 4 { return DSpan(s = 0, n = 0) }
   if unchecked bitcast(usize, e) == 0 { return DSpan(s = 0, n = 0) }
   mut r := DSpan(s = 0, n = 0)
@@ -2643,13 +2657,13 @@ d_expr_type_base := fn(e : ptr(Expr), decls : rt::Vec, src : ptr(u8), body : Opt
         if lb.nl != 0 {
           lts := ast::local_type_span(src, lb.ns, lb.nl)
           if lts.n != 0 { r = d_type_base_span(src, lts.s, lts.n) }
-          else if unchecked bitcast(usize, lb.init) != 0 { r = d_expr_type_base(lb.init, decls, src, body, ph, na, depth + 1) }
+          else if unchecked bitcast(usize, lb.init) != 0 { r = d_expr_type_base(lb.init, decls, src, body, ph, na, depth + 1, mq) }
         }
       }
     }
     Expr::StructLit(sns, snl, snn, sah) => { r = d_type_base_span(src, sns, snl) }
-    Expr::Call(cs, cl, cnn, cah) => { r = d_call_ret_base(cs, cl, cnn, cah, decls, src, body, ph, na, depth) }
-    Expr::Unchecked(inner) => { r = d_expr_type_base(inner, decls, src, body, ph, na, depth + 1) }
+    Expr::Call(cs, cl, cnn, cah) => { r = d_call_ret_base(cs, cl, cnn, cah, decls, src, body, ph, na, depth, mq) }
+    Expr::Unchecked(inner) => { r = d_expr_type_base(inner, decls, src, body, ph, na, depth + 1, mq) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field | Expr::EnumLit
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
@@ -2741,7 +2755,7 @@ d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(E
 ## A type that DOES provide `next` but in a shape this desugar cannot call is refused fail-loud: the
 ## counted loop is a measured wrong value for exactly those types, and a trap beats a wrong value.
 d_iterfor_try := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr), fb : Option(ptr(mut Stmt)), nx : Option(ptr(mut Stmt)), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
-  tb := d_expr_type_base(flo, decls, src, body, ph, na, 0)
+  tb := d_expr_type_base(flo, decls, src, body, ph, na, 0, DModQ(on = false, s = 0, n = 0))
   if tb.n == 0 { return }
   ni := d_iter_next_decl(decls, src, tb.s, tb.n)
   if ni == 0 { return }
@@ -2826,6 +2840,211 @@ d_desugar_iter_for := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)
   }
 }
 
+## ---- #987 — THE INDEX OPERATOR ON A LIBRARY AGGREGATE (Types §4.5 / OP-3, Stdlib appendix §6) ----
+## `a[i]` ≡ `at(a, i)`, `a[i] = x` ≡ `index_set(a, i, x)` and `a[lo..hi]` ≡ `index_range(a, lo, hi)`,
+## resolved by UFCS over the base's type. Arrays, slices and `str` are compiler-known and keep the
+## built-in element access; a LIBRARY aggregate (`Vec(T)`) supplies its own three functions, so its
+## index is rewritten here, once, on the shared AST, into exactly the UFCS call `a.at(i)` parses to
+## (`Call(at, [a, i])`), and every back end receives an ordinary call. Without it the built-in access
+## read and wrote the aggregate's own handle words (a silent wrong value) and `a[lo..hi]` viewed them.
+## The base's type is resolved the way the iterable `for` resolves its iterable (`d_expr_type_base`); a
+## base this cannot resolve keeps the built-in access, so the rewrite never fires on an array, a slice
+## or a `str`, which name no `at`. The receiver's type arguments are inferred by the auto-ref UFCS
+## step in the lowerer (`ufcs_autoref_targ`), or the call is refused there (Comptime §3.3).
+
+## The SELF type's base name of an index-operator function: its first value parameter, seen through
+## the scoped reference it takes the receiver by (`at`'s `v : ptr(Vec(T))` → `Vec`).
+d_idxop_self_base := fn(src : ptr(u8), d : Decl) -> DSpan {
+  sb := d_self_param_base(src, d)
+  if sb.n == 0 or str_at((src + sb.s), sb.n) != "ptr" { return sb }
+  mut pe := d_type_arg0_span(src, sb.s, sb.n)
+  if pe.n > 4 and str_at((src + pe.s), 4) == "mut " { pe = DSpan(s = pe.s + 4, n = pe.n - 4) }
+  d_type_base_span(src, pe.s, pe.n)
+}
+
+## Does the type named `[ts, ts+tn)` declare the index-operator function `name`?
+d_idxop_provides := fn(decls : rt::Vec, src : ptr(u8), name : str, ts : usize, tn : usize) -> bool {
+  mut i : usize = 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d.is_fn and d.name_len != 0 and str_at((src + d.name_start), d.name_len) == name {
+      sb := d_idxop_self_base(src, d)
+      if sb.n != 0 and streq(src, sb.s, sb.n, ts, tn) { return true }
+    }
+    i = i + 1
+  }
+  false
+}
+
+## Is base `b` of an index a library aggregate that declares `name`?
+d_idxop_base := fn(b : ptr(Expr), name : str, decls : rt::Vec, src : ptr(u8), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), mq : DModQ, na : ptr(mut rt::Arena)) -> bool {
+  tb := d_expr_type_base(b, decls, src, body, ph, na, 0, mq)
+  if tb.n == 0 { return false }
+  d_idxop_provides(decls, src, name, tb.s, tb.n)
+}
+
+## The call `name(a0, a1[, a2])` — the node a UFCS `a0.name(a1[, a2])` parses to.
+d_idxop_call := fn(na : ptr(mut rt::Arena), src : ptr(u8), name : str, a0 : ptr(Expr), a1 : ptr(Expr), a2 : Option(ptr(Expr))) -> Expr {
+  mut cl := 0
+  ## unchecked-ok: a synthesized name is addressed relative to the source base, as `d_iterfor_rewrite` does.
+  cs := d_iterfor_lit(na, unchecked bitcast(usize, src), name, ptr(cl))
+  mut nargs : usize = 2
+  mut tail : Option(ptr(mut Arg)) = Option.None
+  match a2 {
+    Some(x2) => { nargs = 3; tail = Option.Some(parser::gnode(na, Arg(e = x2, next = Option.None))) }
+    None => {}
+  }
+  g1 := parser::gnode(na, Arg(e = a1, next = tail))
+  g0 := parser::gnode(na, Arg(e = a0, next = Option.Some(g1)))
+  Expr.Call(cs, cl, nargs, Option.Some(g0))
+}
+
+## Rewrite every library-aggregate index inside expression `e`, children first.
+d_idxop_expr := fn(e : ptr(Expr), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), mq : DModQ, decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  ## null-ok: an arm with a statement body, a bare `return` and an `if` without `else` carry a null expression (ast.al).
+  if unchecked bitcast(usize, e) == 0 { return }
+  match deref(e) {
+    Expr::Index(b, ix) => {
+      d_idxop_expr(b, body, ph, mq, decls, src, na)
+      d_idxop_expr(ix, body, ph, mq, decls, src, na)
+      if d_idxop_base(b, "at", decls, src, body, ph, mq, na) {
+        ## Bound before the store: `deref(p) = f()` keeps only the first word of the node (#1237, seed form
+        ## `store_call_aggregate`).
+        ce := d_idxop_call(na, src, "at", b, ix, Option.None)
+        ## unchecked-ok: the AST arena owns the node; the in-place rewrite is the d_lift_expr idiom.
+        deref(unchecked bitcast(ptr(mut Expr), e)) = ce
+      }
+    }
+    Expr::Slice(b, lo, hi) => {
+      d_idxop_expr(b, body, ph, mq, decls, src, na)
+      d_idxop_expr(lo, body, ph, mq, decls, src, na)
+      d_idxop_expr(hi, body, ph, mq, decls, src, na)
+      if d_idxop_base(b, "index_range", decls, src, body, ph, mq, na) {
+        ## Bound before the store: `deref(p) = f()` keeps only the first word of the node (#1237, seed form
+        ## `store_call_aggregate`).
+        ce := d_idxop_call(na, src, "index_range", b, lo, Option.Some(hi))
+        ## unchecked-ok: the AST arena owns the node; the in-place rewrite is the d_lift_expr idiom.
+        deref(unchecked bitcast(ptr(mut Expr), e)) = ce
+      }
+    }
+    Expr::Bin(op, l, r) => { d_idxop_expr(l, body, ph, mq, decls, src, na); d_idxop_expr(r, body, ph, mq, decls, src, na) }
+    Expr::If(c, t, f) => { d_idxop_expr(c, body, ph, mq, decls, src, na); d_idxop_expr(t, body, ph, mq, decls, src, na); d_idxop_expr(f, body, ph, mq, decls, src, na) }
+    Expr::Match(sc, ah) => { d_idxop_expr(sc, body, ph, mq, decls, src, na); d_idxop_arms(ah, body, ph, mq, decls, src, na) }
+    Expr::Loop(lb) => { d_idxop_stmts(lb, body, ph, mq, decls, src, na) }
+    Expr::Call(cs, cl, nn, ah) => { d_idxop_args(ah, body, ph, mq, decls, src, na) }
+    Expr::StructLit(sns, snl, snn, sah) => { d_idxop_args(sah, body, ph, mq, decls, src, na) }
+    Expr::EnumLit(ets, etl, evs, evl, enp, eah) => { d_idxop_args(eah, body, ph, mq, decls, src, na) }
+    Expr::ArrayLit(an, aeh) => { d_idxop_args(aeh, body, ph, mq, decls, src, na) }
+    Expr::Field(b, fs, fl) => { d_idxop_expr(b, body, ph, mq, decls, src, na) }
+    Expr::AddrOf(p) => { d_idxop_expr(p, body, ph, mq, decls, src, na) }
+    Expr::Deref(p) => { d_idxop_expr(p, body, ph, mq, decls, src, na) }
+    Expr::Try(inner) => { d_idxop_expr(inner, body, ph, mq, decls, src, na) }
+    Expr::Unchecked(inner) => { d_idxop_expr(inner, body, ph, mq, decls, src, na) }
+    Expr::Bitcast(inner, bps, bpl) => { d_idxop_expr(inner, body, ph, mq, decls, src, na) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::CompField
+      | Expr::Lambda | Expr::FnRef => {}
+  }
+}
+
+## `d_idxop_expr` over an argument (or element / field initializer) list.
+d_idxop_args := fn(ah : Option(ptr(mut Arg)), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), mq : DModQ, decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => { ga := deref(arg_p(gq)); d_idxop_expr(ga.e, body, ph, mq, decls, src, na); g = ga.next }
+      None => { break }
+    }
+  }
+}
+
+## `d_idxop_stmts` across a match arm list: each arm's statements and its value.
+d_idxop_arms := fn(ah : Option(ptr(mut Arm)), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), mq : DModQ, decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  mut arm : Option(ptr(mut Arm)) = ah
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        d_idxop_stmts(am.body_stmts, body, ph, mq, decls, src, na)
+        d_idxop_expr(am.body, body, ph, mq, decls, src, na)
+        arm = am.next
+      }
+      None => { break }
+    }
+  }
+}
+
+## Rewrite every library-aggregate index in a statement list. `body`/`ph` stay the ENCLOSING
+## FUNCTION's body and parameters, the scope a base is resolved in. An element WRITE `a[i] = x`
+## becomes the statement `index_set(a, i, x)`, keeping its `next` link; a compound `a[i] += x` reads
+## through `at` on its right-hand side (the parser spells it `a[i] = a[i] + x`).
+d_idxop_stmts := fn(head : Option(ptr(mut Stmt)), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), mq : DModQ, decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::IndexAssign(b, ix, v, nx) => {
+            d_idxop_expr(b, body, ph, mq, decls, src, na)
+            d_idxop_expr(ix, body, ph, mq, decls, src, na)
+            d_idxop_expr(v, body, ph, mq, decls, src, na)
+            if d_idxop_base(b, "index_set", decls, src, body, ph, mq, na) {
+              ce := parser::newnode(na, d_idxop_call(na, src, "index_set", b, ix, Option.Some(v)))
+              deref(stmt_p(Stmt, sq)) = Stmt.ExprStmt(ce, nx)
+            }
+          }
+          Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => {
+            d_idxop_expr(ix, body, ph, mq, decls, src, na)
+            d_idxop_expr(v, body, ph, mq, decls, src, na)
+            ## `a[i].f = x` writes a field of the element in place; `at` returns the element by value
+            ## and `index_set` writes a whole one, so neither is this write. Refuse rather than store
+            ## into the aggregate's own handle words.
+            if d_idxop_base(b, "at", decls, src, body, ph, mq, na) {
+              panic("selfhost: `a[i].f = x` on a library aggregate (`Vec(T)`) is not lowered — `a[i]` is `at(a, i)`, a value, not a place (Types §4.5). Read the element, set the field, and write it back: `e := a[i]` then `a[i] = e`")
+            }
+          }
+          Stmt::Assign(ns, nl, v, nx) => { d_idxop_expr(v, body, ph, mq, decls, src, na) }
+          Stmt::Return(rv, nx) => { d_idxop_expr(rv, body, ph, mq, decls, src, na) }
+          Stmt::ExprStmt(e, nx) => { d_idxop_expr(e, body, ph, mq, decls, src, na) }
+          Stmt::DerefAssign(p, v, nx) => { d_idxop_expr(p, body, ph, mq, decls, src, na); d_idxop_expr(v, body, ph, mq, decls, src, na) }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_idxop_expr(fv, body, ph, mq, decls, src, na) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { d_idxop_expr(fpv, body, ph, mq, decls, src, na) }
+          Stmt::If(c, th, el, nx) => { d_idxop_expr(c, body, ph, mq, decls, src, na); d_idxop_stmts(th, body, ph, mq, decls, src, na); d_idxop_stmts(el, body, ph, mq, decls, src, na) }
+          Stmt::While(c, wb, nx) => { d_idxop_expr(c, body, ph, mq, decls, src, na); d_idxop_stmts(wb, body, ph, mq, decls, src, na) }
+          Stmt::For(fns, fnl, lo, hi, fb, nx) => { d_idxop_expr(lo, body, ph, mq, decls, src, na); d_idxop_expr(hi, body, ph, mq, decls, src, na); d_idxop_stmts(fb, body, ph, mq, decls, src, na) }
+          Stmt::Loop(lb, nx) => { d_idxop_stmts(lb, body, ph, mq, decls, src, na) }
+          Stmt::Unchecked(ub, nx) => { d_idxop_stmts(ub, body, ph, mq, decls, src, na) }
+          Stmt::AllocWith(ae, ab, nx) => { d_idxop_stmts(ab, body, ph, mq, decls, src, na) }
+          Stmt::Match(sc, ah, nx) => { d_idxop_expr(sc, body, ph, mq, decls, src, na); d_idxop_arms(ah, body, ph, mq, decls, src, na) }
+          Stmt::CompIf(c, th, el, nx) => { d_idxop_stmts(th, body, ph, mq, decls, src, na); d_idxop_stmts(el, body, ph, mq, decls, src, na) }
+          Stmt::CompFor(vs, vl, iv, cb, nx) => { d_idxop_stmts(cb, body, ph, mq, decls, src, na) }
+          Stmt::CompForRange(vs, vl, lo, hi, rb, nx) => { d_idxop_stmts(rb, body, ph, mq, decls, src, na) }
+          Stmt::CompMatch(sc, ah, nx) => { d_idxop_arms(ah, body, ph, mq, decls, src, na) }
+          Stmt::Break(bv, bl, nx) => { d_idxop_expr(bv, body, ph, mq, decls, src, na) }
+          Stmt::Continue => {}
+        }
+        s = stmt_next(sq)
+      }
+      None => { break }
+    }
+  }
+}
+
+## Entry point, run beside `d_desugar_iter_for` in each front-end path (and, like it, not by `fmt`,
+## which reprints the author's `a[i]`).
+d_desugar_index_ops := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut i : usize = 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d.is_fn {
+      mq := DModQ(on = true, s = d.mod_start, n = d.mod_len)
+      d_idxop_stmts(d.body_stmts, d.body_stmts, d.params_head, mq, decls, src, na)
+      d_idxop_expr(d.value, d.body_stmts, d.params_head, mq, decls, src, na)
+    }
+    i = i + 1
+  }
+}
+
 ## Entry point: scan every fn decl (incl. synthetic ones appended during the walk — the loop re-reads
 ## the count) for lambdas. Require-typed aliases are not functions, but their inline predicate is an
 ## Expr::Lambda stored in `Decl.value`, so lift that value too. Reads decls the WORKING driver way
@@ -2905,6 +3124,7 @@ pub compile := fn(src : str, in out a : Arena) -> strbuf::StrBuf {
   ## module, which lower maps to the `main` prefix), so a single-source program still works.
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
   d_desugar_iter_for(decls, ptr(na), base)
+  d_desugar_index_ops(decls, ptr(na), base)
   mut sb := strbuf::strbuf(tar, 4194304)
   ## Synthesize the `_start` → `main` wrapper ONLY when the program does not define its own `_start`
   ## (else the lower emits the user's `_start` as the ELF entry — a synthesized one would duplicate it).
@@ -3090,6 +3310,7 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
   }
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
   d_desugar_iter_for(decls, ptr(na), base)
+  d_desugar_index_ops(decls, ptr(na), base)
   ## --- emit the runnable program (bld stays alive: emit reads spans off its base) ---
   mut gas := strbuf::strbuf(tar, 16777216)
   strbuf::push_str(gas, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
@@ -5244,6 +5465,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   if root_k < n { d_manifest_drop_root_decl(decls, rt::vec_get(name_start, root_k), rt::vec_get(name_len, root_k)) }
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
   d_desugar_iter_for(decls, ptr(na), base)
+  d_desugar_index_ops(decls, ptr(na), base)
   d_manifest_module_decls(pv, name_start, name_len, decls, na, tar, nstr)
   d_manifest_rewrite_decls(decls, pv, name_start, name_len, base, nstr, ptr(na))
   ## TOOL-6 — lower groups the final declaration vector, including manifest/synthetic declarations, by
@@ -6714,6 +6936,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## through unchanged, while compile/compile_program/compile_files_mode all lift exactly once.
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
   d_desugar_iter_for(decls, ptr(na), base)
+  d_desugar_index_ops(decls, ptr(na), base)
   ## §5.1 fill omitted trailing parameter-defaults (same filler the x86_64 emit runs) so defaults are
   ## uniform across backends. No-op for a program with no defaults.
   lower::fill_program(ptr(decls), base, ptr(na))
@@ -7495,6 +7718,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   if root_k < n { d_manifest_drop_root_decl(decls, rt::vec_get(name_start, root_k), rt::vec_get(name_len, root_k)) }
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
   d_desugar_iter_for(decls, ptr(na), base)
+  d_desugar_index_ops(decls, ptr(na), base)
   d_manifest_module_decls(pv, name_start, name_len, decls, na, tar, nstr)
   d_manifest_rewrite_decls(decls, pv, name_start, name_len, base, nstr, ptr(na))
   d_manifest_set_sema_modules(pv, name_start, name_len, tar)
