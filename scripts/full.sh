@@ -281,7 +281,7 @@ grep -q "\*\*\* e2e: all green \*\*\*" "$E2E_LOG" || { echo "  FAILURES:"; grep 
 echo "### CORPUS MANIFEST ###"
 bash scripts/corpus_manifest.sh --check > "$CM_LOG" 2>&1
 cm_rc=$?
-grep -E "^corpus manifest: (  sha256|detector|re-observation|WARNING|rows=|match|MISMATCH|WROTE)" "$CM_LOG"
+grep -E "^corpus manifest: (  sha256|detector|re-observation|WARNING|rows=|scope|match|MISMATCH|WROTE)" "$CM_LOG"
 cm_cover="$(grep -E "^corpus manifest: rows=" "$CM_LOG" | tail -1 | sed 's/^corpus manifest: //')"
 if [ "$cm_rc" != 0 ]; then
   echo "  FAILURES (tail of $CM_LOG):"; tail -30 "$CM_LOG" | sed 's/^/    /'
@@ -350,20 +350,25 @@ if [ "$ig_cover" != 1 ]; then
   fail=1
 fi
 
-# FIXTURE EXPECT (#1126 S1, S2). It sets each fixture's `## expect:` directive beside its e2e.sh
-# registration (the reviewed claim), the committed manifest (what each backend observed) and
-# scripts/known-deviations.tsv. A source scan of the tree and the committed manifest, which the CORPUS
-# MANIFEST stage holds to the tree; it needs no compiler. Its self-test runs under `full.sh --self-test`.
-# `--gate` FAILS on (a) a header that contradicts its own registration, a malformed directive, a missed
-# directive with no deviation row, a row that no longer reproduces (the fix deletes its own row), a row
-# with no issue in scripts/known-deviations.issues.tsv, and unusable input (#1128: no stage prints a
-# finding and passes). Whether each issue in that table is still OPEN is the one fact this stage cannot
-# see: the gate runs with no GitHub credentials (queue.sh strips them), so `scripts/land.sh` PHASE 2
-# asks `gh` before a landing and refuses a closed one. The (b) and (c) counts stay a report: S3 is the
-# step that makes the directive the verdict for every fixture and retires corpus.manifest.
-echo "### FIXTURE EXPECT (directive vs registration, manifest and known deviations) ###"
+# FIXTURE EXPECT (#1126). The verdict on every fixture that states its expectation (`## expect:`):
+# on each backend, THIS walk's observation (the CORPUS MANIFEST stage leaves it whole at
+# target/corpus-manifest/observed.manifest) meets the directive, or the pair is a row of
+# scripts/known-deviations.tsv whose `observed` is exactly what the walk saw, under an issue of
+# scripts/known-deviations.issues.tsv. Since S3 the committed corpus.manifest no longer holds those
+# fixtures' rows (only the sources with no directive yet, and the directive sources that print), so a
+# behaviour fix on them lands with its code, its fixture and the deletion of its own deviation rows, and
+# no oracle commit. `--gate` FAILS on a header that contradicts its own registration, a malformed
+# directive, a missed directive with no row (UNLISTED), a row that no longer reproduces (STALE: the fix
+# deletes its own row), a row whose observation moved (CHANGED), a row no directive speaks for (ORPHAN),
+# a row with no issue, a pair the walk did not observe, a fixture with neither a directive nor a
+# committed manifest row (UNSTATED: a new fixture states its expectation), and unusable input (#1128: no
+# stage prints a finding and passes). Whether each issue in the table is still OPEN is the one fact this
+# stage cannot see: the gate runs with no GitHub credentials (queue.sh strips them), so
+# `scripts/land.sh` PHASE 2 asks `gh` before a landing and refuses a closed one. Its self-test runs
+# under `full.sh --self-test`.
+echo "### FIXTURE EXPECT (directive vs this walk and known deviations; registration) ###"
 FE_LOG="$LOGDIR/full_fixture_expect.log"
-bash scripts/fixture_expect.sh --gate > "$FE_LOG" 2>&1
+bash scripts/fixture_expect.sh --gate --observed "$ROOT/target/corpus-manifest/observed.manifest" > "$FE_LOG" 2>&1
 fe_rc=$?
 cat "$FE_LOG"
 if [ "$fe_rc" != 0 ]; then
@@ -559,8 +564,9 @@ if [ -z "$st_cover" ]; then
   fail=1; st_cover="UNKNOWN — no coverage line"
 fi
 
-# The CROSS-BACKEND ratchet (#683). It needs no compiler: it is a join over scripts/corpus.manifest,
-# which the CORPUS stage above has already checked against the tree on this same run.
+# The CROSS-BACKEND ratchet (#683). It needs no compiler: it is a join over the CORPUS MANIFEST stage's
+# whole observation of this run (target/corpus-manifest/observed.manifest). Since #1126 S3 the committed
+# scripts/corpus.manifest holds only part of the corpus, so the ratchet never reads it.
 #
 # There used to be a second, REPORTING-ONLY stage here, `scripts/xbackend_report.sh`, which asked
 # one narrower question of the same rows (does a twin exit normally with a different, quiet answer?)
@@ -585,7 +591,7 @@ XB_LOG="$LOGDIR/full_xbackend.log"
 ## missing proof line. Lowering the count passes and says to tighten the baseline in the same PR.
 bash scripts/xbackend_diff.sh --self-test >> "$XB_LOG" 2>&1
 xd_st_rc=$?
-bash scripts/xbackend_diff.sh --ratchet >> "$XB_LOG" 2>&1
+bash scripts/xbackend_diff.sh --ratchet "$ROOT/target/corpus-manifest/observed.manifest" >> "$XB_LOG" 2>&1
 xd_rc=$?
 grep -E "^(xbackend_diff self-test:|xbackend diff:|xbackend ratchet:)" "$XB_LOG"
 if [ "$xd_st_rc" != 0 ] || [ "$xd_rc" != 0 ] || [ "$(grep -cE '^xbackend diff: paths=' "$XB_LOG")" != 1 ]; then
