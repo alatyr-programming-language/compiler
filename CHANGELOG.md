@@ -126,6 +126,14 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **The json pilot and the PILOTS gate stage (#1125, first slice).** `pilots/json` is a JSON parser
+  and printer written as a library package (a recursive `Value` enum, `Result` with a located
+  `Error`, arena-owned strings and containers), and `pilots/json-consumer` depends on it by path and
+  checks thirteen documents. `scripts/pilots.sh` builds both from a copy under `target/pilots/` with
+  the tree compiler, requires every library `@test` to report ok and the consumer to exit 0, and its
+  `--self-test` plants a wrong check that must fail the stage; `scripts/full.sh` runs both. Each
+  workaround in the pilot carries `## blocked-by:` naming the open issue that forces it.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type
