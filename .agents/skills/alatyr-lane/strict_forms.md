@@ -150,7 +150,7 @@ depends on what the site actually asserts, and getting that backwards deletes a 
 drawn across them were wrong.** One revision claimed 19 of them sat on `unchecked bitcast(usize, p) != 0`
 with #529 as their blocker; the next retracted that to **one**. The retraction was the grosser error — it
 grepped each marker's *own* line for `bitcast`, while the convention, this file under "How the checks
-count" ("a marker on the line **or the line above** acknowledges a form"), `AGENTS.md:115`, and the gate at
+count" ("a marker on the line **or the line above** acknowledges a form"), `AGENTS.md` "Strict forms" (its preamble), and the gate at
 `strict_forms_scan.awk:106`, `a = ((rule, ln) in ack || (rule, ln - 1) in ack)`, reads the line *below*.
 Measured the way the gate measures:
 
@@ -182,7 +182,7 @@ teaches the next agent that a typed field needs a `null-ok` label.
 
 Do not read #529 into this. #529 is *"the checker accepts an implicit `usize` ↔ `ptr(T)` conversion,
 against Types §4.3 and Memory §4.5"* — the implicit seam, a different mechanism from a raw field that
-spells absence as null; per site, say which of the two applies. And per `AGENTS.md:127` a reason names
+spells absence as null; per site, say which of the two applies. And per `AGENTS.md` strict form 1 a reason names
 an **OPEN blocker**: "the legacy AST representation itself" is not one, so the reason cites #1069.
 
 The counts come with the pattern that produced them, because a remembered count is how a ratchet starts

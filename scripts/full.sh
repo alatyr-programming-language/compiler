@@ -113,6 +113,10 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/spec_pin_check_test.sh"
   _full_spec_pin_self_test_rc=$?
   [ "$_full_spec_pin_self_test_rc" = 0 ] || exit "$_full_spec_pin_self_test_rc"
+  # AGENTS.md's line limit (#1130): a decider that never refuses would print the same green line forever.
+  bash "$ROOT/scripts/agents_size_check.sh" --self-test
+  _full_agents_size_self_test_rc=$?
+  [ "$_full_agents_size_self_test_rc" = 0 ] || exit "$_full_agents_size_self_test_rc"
   bash "$ROOT/scripts/land.sh" --self-test
   _full_land_self_test_rc=$?
   [ "$_full_land_self_test_rc" = 0 ] || exit "$_full_land_self_test_rc"
@@ -196,6 +200,11 @@ if [ -z "$sp_cover" ]; then
   fail=1; sp_cover="UNKNOWN — no coverage line"
 fi
 
+# AGENTS.md stays at most 150 lines (#1130): rules there, reasons in docs/rationale/. A text count, cheap,
+# and like the pin check it does not stop the gate.
+echo '### AGENTS.md SIZE (rules only, at most 150 lines) ###'
+if ! bash scripts/agents_size_check.sh; then fail=1; fi
+
 # The WILDCARD-ARM check (issue #658). A pure source scan like the idiom gate — no compiler, ~8 s —
 # and it runs here, before the six minutes of building, because the author of a new `_ =>` arm should
 # hear about it at the cheapest moment. It holds NO oracle file: it counts the arms over enumerable
@@ -245,7 +254,7 @@ fi
 echo "### FIXPOINT ###"
 bash scripts/fixpoint.sh > "$FP_LOG" 2>&1
 grep -iE "TOOL-1 FIXPOINT|FAIL" "$FP_LOG"
-grep -q "TOOL-1 FIXPOINT: seed == Stage1 == Stage2" "$FP_LOG" || { echo "  (fixpoint NOT green — a reseed change needs the 3-stage check; see \"Reproducibility\" in AGENTS.md)"; fail=1; }
+grep -q "TOOL-1 FIXPOINT: seed == Stage1 == Stage2" "$FP_LOG" || { echo "  (fixpoint NOT green — a reseed change needs the 3-stage check; see \"Reproducibility\" in AGENTS.md and docs/rationale/reproducibility.md)"; fail=1; }
 
 echo "### E2E ###"
 bash scripts/e2e.sh > "$E2E_LOG" 2>&1

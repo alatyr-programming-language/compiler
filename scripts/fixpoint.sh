@@ -357,5 +357,5 @@ echo "   normalizing .L<N> and .Lra<N>_<k> first. In the BINARY require only Sta
 echo "   assembled by the stale seed, so its binary differs by construction. Read that normalized"
 echo "   seed->Stage1 delta line by line, copy STAGE2 — not Stage1 — over seed/alatyr, append the evidence"
 echo "   to seed/VERSION, and re-run this script on the promoted tree. Why Stage2, and what a readable"
-echo "   delta looks like: AGENTS.md's Reproducibility section and alatyr-integrate SKILL.md section 3.)"
+echo "   delta looks like: docs/rationale/reproducibility.md and alatyr-integrate SKILL.md section 3.)"
 exit 4

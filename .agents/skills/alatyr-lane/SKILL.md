@@ -16,7 +16,7 @@ description: >-
 # Taking one unit of work
 
 `AGENTS.md` holds what is true whatever you are doing — the gate blind spots, the measurement traps,
-the reseed rule, and the commit-message convention. Read it. This file is only the procedure.
+the reseed rule, and the commit-message convention — and `docs/rationale/` the reasons. Read it. This file is only the procedure.
 
 `needs-info` is an implementation hold, not an implementation target. Use
 `alatyr-research` to investigate it and accept only an objective specification-backed
@@ -83,7 +83,7 @@ Before ranking issues, the fallback reads every open PR's issue relation through
 `Refs #N`, or one complete `Closes #N`, `Fixes #N`, or `Resolves #N` relation whose number agrees
 with `closingIssuesReferences`; a bounded relation must not also carry a closing reference. A PR
 excludes the issue it names from candidacy, and a `hold` PR does not: `hold` is the maintainer's
-integration-side hold, and `AGENTS.md` excludes a held PR from the automatic same-account fallback,
+integration-side hold, and `AGENTS.md` (in full: `docs/rationale/work-reaching-main.md`) excludes a held PR from the automatic same-account fallback,
 so the issue's own `in-progress` claim and preflight check 5 below govern it instead.
 
 The selector separates two kinds of bad input, because they have different owners:
