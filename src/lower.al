@@ -9466,7 +9466,7 @@ try_bind_unwrap := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena) -> TryField {
       | Expr::ArrayLit | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {
       z := unchecked bitcast(ptr(Expr), 0)
-      TryField(kind = 0, recv = z, msg = z)
+      TryField(kind = UnwrapKind.NotUnwrap, recv = z, msg = z)
     }
   }
 }
@@ -9475,7 +9475,8 @@ try_bind_unwrap := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena) -> TryField {
 ## payload, 0 when the value is neither or its payload is not a struct. Locals, not chained reads of
 ## call results, so the frozen seed lowers it (the shape #753 had to avoid).
 try_bind_struct_words := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
-  if try_bind_unwrap(v, src, a).kind == 0 { return 0 }
+  tbu := try_bind_unwrap(v, src, a)
+  if not unwrap_is_some(tbu.kind) { return 0 }
   tos := try_ok_struct_span(v, slots, decls, src, a)
   if tos.n == 0 { return 0 }
   struct_words(decls, src, tos.s, tos.n, a)
@@ -9512,7 +9513,7 @@ try_ok_struct_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
     ## returns the payload whole.)
     Expr::Call(_cs, _cl, _na, _ah) => {
       tbf := tryable_field_recv(v, src, a)
-      if tbf.kind != 2 { return CSpan(s = 0, n = 0) }
+      if not unwrap_is_expect(tbf.kind) { return CSpan(s = 0, n = 0) }
       es := call_ret_enum_span_d(tbf.recv, decls, src, a)
       if es.n == 0 { return CSpan(s = 0, n = 0) }
       eh := base_type_name(src, es.s, es.n)
@@ -11012,21 +11013,31 @@ float_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool
 }
 
 ## A TRYABLE-unwrap base of a `Field` read: `<recv>?` (Try) or `<recv>.expect(msg)` (a Call to the
-## `expect` protocol method). `kind` 0 = neither, 1 = `?`, 2 = `expect`. Split into a helper so each
-## destructure is a single-level function-body match (the nested-match gotcha).
-TryField := struct { kind : u8, recv : ptr(Expr), msg : ptr(Expr) }
+## `expect` protocol method), or neither. Split into a helper so each destructure is a single-level
+## function-body match (the nested-match gotcha).
+UnwrapKind := enum { NotUnwrap, Try, Expect }
+unwrap_is_try := fn(k : UnwrapKind) -> bool {
+  match k { Try => { true }; NotUnwrap | Expect => { false } }
+}
+unwrap_is_expect := fn(k : UnwrapKind) -> bool {
+  match k { Expect => { true }; NotUnwrap | Try => { false } }
+}
+unwrap_is_some := fn(k : UnwrapKind) -> bool {
+  match k { Try | Expect => { true }; NotUnwrap => { false } }
+}
+TryField := struct { kind : UnwrapKind, recv : ptr(Expr), msg : ptr(Expr) }
 tryable_field_recv := fn(base : ptr(Expr), src : ptr(u8), a : rt::Arena) -> TryField {
   z := unchecked bitcast(ptr(Expr), 0)
-  mut res := TryField(kind = 0, recv = z, msg = z)
+  mut res := TryField(kind = UnwrapKind.NotUnwrap, recv = z, msg = z)
   match deref(base) {
-    Expr::Try(inner) => { res = TryField(kind = 1, recv = inner, msg = z) }
+    Expr::Try(inner) => { res = TryField(kind = UnwrapKind.Try, recv = inner, msg = z) }
     Expr::Unchecked(inner) => { res = tryable_field_recv(inner, src, a) }
     Expr::Bitcast(inner, _bcs, _bcl) => { res = tryable_field_recv(inner, src, a) }
     Expr::Call(cs, cl, nargs, args_head) => {
       if str_at((src + cs), cl) == "expect" and nargs >= 2 {
         r0 := arg_expr_at(args_head, 0, a)
         m1 := arg_expr_at(args_head, 1, a)
-        res = TryField(kind = 2, recv = r0, msg = m1)
+        res = TryField(kind = UnwrapKind.Expect, recv = r0, msg = m1)
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -19370,7 +19381,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## a binding `x := <call>.expect(m)` takes every word itself (`emit_st_assign`).
       if callee == "expect" {
         tbf := tryable_field_recv(e, cx.src, a)
-        if tbf.kind == 2 and call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar)).n != 0 {
+        if unwrap_is_expect(tbf.kind) and call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar)).n != 0 {
           if try_value_payload_words(tbf.recv, cx, a) > 1 {
             panic("selfhost: the value of `.expect(…)` over a multi-word payload is used here, and only one word would arrive (#986); bind it first (`x := ….expect(…)`) and use `x`")
           }
@@ -20249,10 +20260,10 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## since it is at offset 0. (Offset > 0 needs payload words past %rdx — not delivered here — so
       ## this fires ONLY for an offset-0 field; anything else falls through.)
       tbf := tryable_field_recv(base, cx.src, a)
-      if tbf.kind != 0 {
+      if unwrap_is_some(tbf.kind) {
         mut rty := call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar))
         ## #752 — `?` on an enum LOCAL (`r?.a`) types its payload from the local, as the value arm does.
-        if tbf.kind == 1 { rty = try_operand_ty_span(tbf.recv, cx, deref(cx.mar)) }
+        if unwrap_is_try(tbf.kind) { rty = try_operand_ty_span(tbf.recv, cx, deref(cx.mar)) }
         if rty.n != 0 {
           rhead := base_type_name(cx.src, rty.s, rty.n)         ## "Result" / "Option"
           pl := typearg_at(cx.src, rhead.s, rhead.n, 0)          ## the Ok-payload type span
@@ -20268,7 +20279,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             panic("selfhost: a field of a `?`/`expect` result wider than one word, or past the sixth payload word, is not lowered (#752); bind the result first (`x := …?`) and read `x.field`")
           }
           if foff >= 0 {
-            if tbf.kind == 1 {
+            if unwrap_is_try(tbf.kind) {
               emit_try_check(tbf.recv, sb, cx, a, nl)
             } else {
               emit_unwrap_check(tbf.recv, Option(ptr(Expr)).Some(tbf.msg), sb, cx, a, nl)   ## #986 — the receiver type's success variant
@@ -25311,11 +25322,11 @@ emit_st_expr_stmt := fn(e : ptr(Expr), nx : Option(ptr(mut Stmt)), head : Option
   if not vpr {
     tbf := tryable_field_recv(e, cx.src, a)
     mut handled := false
-    if tbf.kind != 0 {
+    if unwrap_is_some(tbf.kind) {
       rty := call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar))
       if rty.n != 0 {
         ## #986 — the receiver type's success variant, and `?`'s nested-frame defers, as in value position.
-        if tbf.kind == 1 {
+        if unwrap_is_try(tbf.kind) {
           emit_unwrap_check(tbf.recv, Option(ptr(Expr)).None, sb, cx, a, nl)
         } else {
           emit_unwrap_check(tbf.recv, Option(ptr(Expr)).Some(tbf.msg), sb, cx, a, nl)

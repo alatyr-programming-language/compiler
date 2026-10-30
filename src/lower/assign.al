@@ -2825,7 +2825,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     ## payload would come back through SRET, which this binding does not stage. Refuse it, located.
     if tw > 6 { panic("selfhost: `x := <call>?` over an Ok payload wider than six words is not lowered yet (#752); bind the Result and `match` it") }
     tbu := try_bind_unwrap(v, cx.src, deref(cx.mar))
-    if tbu.kind == 2 {
+    if unwrap_is_expect(tbu.kind) {
       emit_unwrap_check(tbu.recv, Option(ptr(Expr)).Some(tbu.msg), sb, cx, a, nl)
     } else {
       emit_unwrap_check(tbu.recv, Option(ptr(Expr)).None, sb, cx, a, nl)
