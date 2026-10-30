@@ -117,13 +117,14 @@ typed form is possible; if the typed form fails, file the defect and name it in 
 - An intentional oracle change: the feature PR stays oracle-free, and its only allowed gate failure is
   the expected oracle mismatch, never published. The integrator merges it, commits each oracle alone
   (oracle and reseed-evidence commits touch nothing else), re-runs the full gate, publishes the green.
-- Verify the locally merged result, not the contributor branch. Push exactly the object that passed;
-  never re-merge or modify it between verification and push.
-- The verdict is the `*** FULL GATE` line of `scripts/full.sh` on native x86_64: the integrator's
-  machine, or the `gate.log` artifact of `.github/workflows/gate.yml` on a `gate/**` push. Pull-request
-  status and other hosted checks are not authoritative.
-- After landing, delete the remote feature branch, and the local worktree only if its tip equals the
-  landed head and it is clean. Never force-delete; never delete a fork's branch.
+- Landing goes through the merge queue (`scripts/queue.sh`, a timer on omen): after review the
+  integrator runs `scripts/queue.sh --enqueue N=SHA`, and the queue gates, pushes, comments, cleans up.
+- By hand (a seed promotion, or the queue down): verify the locally merged result, not the branch,
+  and push exactly the object that passed; never re-merge or modify it between verification and push.
+- The verdict is the `*** FULL GATE` line of `scripts/full.sh` on native x86_64 (omen, or the `gate.log`
+  of `.github/workflows/gate.yml` on a `gate/**` push). PR status and hosted checks are not authoritative.
+- After a hand landing, delete the remote branch, and the worktree only if its tip is the landed head
+  and it is clean. Never force-delete; never delete a fork's branch.
 
 ## Gates — [what they prove](docs/rationale/gates.md)
 
