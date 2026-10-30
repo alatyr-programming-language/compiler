@@ -18930,6 +18930,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## then: int→float (`cvtsi2sd`), float→int (`cvttsd2si`, truncating), else IDENTITY (the bits
       ## already live in a 64-bit word — byte-identical to the former parse-time swallow).
       mut ck := conv_kind(callee)
+      ## The scalar type the conversion produces: `callee`, or a brand's underlying (resolved below).
+      ## The float→int range check (#997) needs the type's NAME, not only its kind.
+      mut conv_target := callee
       ## A NOMINAL BRAND construction `Id(v)` (`Id := brand(U)`) — reinterpret `v` to the underlying
       ## `U`, i.e. the SAME conversion `U(v)` performs (identity for a bits/int underlying, the SSE
       ## path for a float underlying). Resolve the brand's underlying, then reuse the scalar-conversion
@@ -18938,7 +18941,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       if ck < 0 {
         bu := brand_underlying(cx.decls, cx.src, cs, cl)
         if bu.n != 0 {
-          uk := conv_kind(str_at((cx.src + bu.s), bu.n))
+          conv_target = str_at((cx.src + bu.s), bu.n)
+          uk := conv_kind(conv_target)
           ck = if uk >= 0 { uk } else { 0 }
         }
       }
@@ -19004,14 +19008,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           push_str(sb, "  popq %rax\n  cvtsi2sd %rax, %xmm0\n  movq %xmm0, %rax\n  pushq %rax\n")
         } else if ck == 0 and srcf {
           ## float→int: toward zero, NaN- and range-checked in a checked scope (`emit_f2i`, #997). A
-          ## brand over an integer converts as its underlying (`ck` above came from it).
-          mut tname := callee
-          if conv_kind(callee) < 0 {
-            tbu := brand_underlying(cx.decls, cx.src, cs, cl)
-            tname = str_at((cx.src + tbu.s), tbu.n)
-          }
+          ## brand over an integer converts as its underlying (`conv_target`, resolved with `ck` above).
           push_str(sb, "  popq %rax\n")
-          emit_f2i(sb, tname, cx.vchk)
+          emit_f2i(sb, conv_target, cx.vchk)
           push_str(sb, "  pushq %rax\n")
         } else if ck == 0 {
           ## int→int. CHECKED by default (Types §4.4 "preserves the value", I11): trap when the value
