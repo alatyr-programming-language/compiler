@@ -140,11 +140,25 @@ echo "pre-gate: plan e2e=$e2e$([ "$e2e" = rows ] && echo " ($(grep -c '' "$LOG/f
 ran=(); red=()
 s0=$(date +%s)
 echo "### STAGE1 ###"
-rm -f target/debug/alatyr
-if ! ./seed/alatyr build package.al > "$LOG/stage1.log" 2>&1 || [ ! -x target/debug/alatyr ]; then
-  tail -20 "$LOG/stage1.log"; echo "pre-gate: RED ran=stage1 (the seed could not build the tree)"; exit 1
+# The seed build is single-threaded and dominates the pre-gate: measured 431 s on omen at load 4-7
+# (2026-10-30). Stage1 is a function of src/, package.al and the seed alone (the stdlib is read from the
+# tree at run time: e2e links lib/ beside its compiler snapshot), so a Stage1 built from the same bytes
+# is reused. The cache is this worktree's own (target/pre_gate_cache/), keyed by the content of those
+# inputs, uncommitted edits included.
+key="$( { find src -type f | sort | xargs sha256sum; sha256sum package.al seed/alatyr; } | sha256sum | cut -c1-16)"
+CACHE="$ROOT/target/pre_gate_cache/$key"
+if [ -x "$CACHE/alatyr" ]; then
+  mkdir -p target/debug && cp "$CACHE/alatyr" target/debug/alatyr
+  echo "  Stage1 reused from target/pre_gate_cache/$key (same src/, package.al, seed)"
+  ran+=(stage1:cached)
+else
+  rm -f target/debug/alatyr
+  if ! ./seed/alatyr build package.al > "$LOG/stage1.log" 2>&1 || [ ! -x target/debug/alatyr ]; then
+    tail -20 "$LOG/stage1.log"; echo "pre-gate: RED ran=stage1 (the seed could not build the tree)"; exit 1
+  fi
+  rm -rf "$ROOT/target/pre_gate_cache"; mkdir -p "$CACHE" && cp target/debug/alatyr "$CACHE/alatyr"
+  ran+=(stage1)
 fi
-ran+=(stage1)
 if [ "$e2e" != none ]; then
   echo "### E2E ($e2e) ###"
   if [ "$e2e" = rows ]; then
