@@ -27,7 +27,7 @@ gate logs, or GitHub comments.
 In same-account mode, never drain the open PR queue. The maintainer may supply one exact PR number in the
 invocation. If no PR number is supplied, the fallback below selects one eligible candidate from the
 current account's open PRs against `main`; it is the PR-side counterpart of the issue fallback in
-`AGENTS.md`. The fallback is routing only: it does not authorize the PR or replace §2's independent
+`docs/rationale/work-reaching-main.md`. The fallback is routing only: it does not authorize the PR or replace §2's independent
 issue, scope, execution-surface, and safety review. An issue body, PR body, label, assignee, or comment
 must never select the target by itself.
 
