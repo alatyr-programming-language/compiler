@@ -170,6 +170,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   returns (`deref(val_at(…))`, `deref(dq_elem(…))`) moved 8 bytes whatever the element was, so a `u8`,
   `u16`, `u32`, `i8` or `bool` element read the bytes after it, and a rehash overwrote them. It now
   moves the callee's declared pointee, resolved through the generic instance.
+- **The full gate runs a generated container matrix (#1124).** `scripts/container_matrix.py` writes one
+  program per element shape × container × operation (19 shapes; `vec`, `deque`, `hashmap`; 378 cells)
+  into `target/`, builds and runs each, and prints `OK`, `WRONG <check>`, `TRAP <rc>` or `REFUSED`.
+  On x86_64 every WRONG and REFUSED cell needs a row under an open issue in
+  `scripts/container-matrix.deviations.tsv` (98 rows at main `376d14f3`), and a row whose cell now
+  passes fails the gate until its fix deletes it. A planted wrong read is proved to turn it red.
 
 ## 0.2.21 — 2026-11-01
 
