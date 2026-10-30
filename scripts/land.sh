@@ -266,7 +266,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=77  # the exact count run; +2 #1106, +4 #1091, +4 #1090
+LAND_SELFTEST_EXPECTED=80  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -304,6 +304,14 @@ land_tree_dirty() { # porcelain-text -> prints offending lines; 0 dirty, 1 clean
   [ -n "$rest" ] || return 1
   printf '%s\n' "$rest"
   return 0
+}
+
+## Which credential helper would git use for this remote? (#1089) `gh auth setup-git` writes the
+## HOST-SPECIFIC key `credential.https://github.com.helper`, which is what git consults for an HTTPS
+## remote; reading only the generic `credential.helper` refused a checkout that could push. git's own
+## URL matching answers the question the push will ask, generic and host-specific keys alike.
+land_cred_helper_for() { # remote-url -> prints the helper git would use, or nothing
+  git config --get-urlmatch credential.helper "$1" 2>/dev/null || true
 }
 
 land_shape_self_test() { # work-dir
@@ -397,6 +405,17 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
   land_tree_dirty "$(printf '%s\n%s' '?? .worktrees/' '?? package.al')" >/dev/null; _ck $? dirty-check-missed-a-stray-file-beside-worktrees
   land_tree_dirty " M src/lower.al" >/dev/null; _ck $? dirty-check-missed-a-tracked-edit
   land_tree_dirty "?? .worktrees.bak/" >/dev/null; _ck $? dirty-check-tolerated-a-lookalike-of-worktrees
+  # #1089 · the helper git would use for the remote. Configured as `gh auth setup-git` writes it (an
+  # empty reset, then the gh helper, on the HOST-SPECIFIC key), with the machine's own global and
+  # system config shut out, so a generic helper elsewhere cannot make the answer right by accident.
+  git init -q "$st/cred" >/dev/null 2>&1
+  git -C "$st/cred" config --add credential.https://github.com.helper ''
+  git -C "$st/cred" config --add credential.https://github.com.helper '!gh auth git-credential'
+  [ "$(cd "$st/cred" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 land_cred_helper_for https://github.com/o/r.git)" = '!gh auth git-credential' ]
+  _ck $? cred-helper-missed-the-host-specific-key
+  [ -z "$(cd "$st/cred" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 land_cred_helper_for https://example.org/o/r.git)" ]; _ck $? cred-helper-applied-another-hosts-key
+  [ "$(cd "$st/cred" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 land_cred_helper_for https://user@github.com/o/r.git)" = '!gh auth git-credential' ]
+  _ck $? cred-helper-missed-a-remote-url-with-a-user
   land_push_capability_ok "git@github.com:o/r.git" "" ""; _ck $? push-capability-ssh-needs-no-helper
   land_push_capability_ok "ssh://git@github.com/o/r" "" ""; _ck $? push-capability-ssh-url-needs-no-helper
   land_push_capability_ok "https://github.com/o/r" "store" ""; _ck $? push-capability-https-with-helper
@@ -566,11 +585,12 @@ echo "  clean tree, no stash, gh present"
 ## An SSH remote needs no helper; an HTTPS one needs a helper OR a token in the environment.
 if [ "$DO_PUSH" = 1 ]; then
   REMOTE_URL="$(git remote get-url origin 2>/dev/null || true)"
-  CRED_HELPER="$(git config --get credential.helper 2>/dev/null || true)"
+  CRED_HELPER="$(land_cred_helper_for "$REMOTE_URL")"
   if ! land_push_capability_ok "$REMOTE_URL" "$CRED_HELPER" "${GH_TOKEN:-}${GITHUB_TOKEN:-}"; then
     die "this checkout cannot push over HTTPS: remote is '$REMOTE_URL', no credential.helper is configured
-     and neither \$GH_TOKEN nor \$GITHUB_TOKEN is set. Gate the tree here if you want, but publish from a
-     checkout that can (the same object, the same --force-with-lease). Run \`gh auth setup-git\` there."
+     for that URL (generic or host-specific key) and neither \$GH_TOKEN nor \$GITHUB_TOKEN is set.
+     Gate the tree here if you want, but publish from a checkout that can (the same object, the
+     same --force-with-lease). Run \`gh auth setup-git\` there."
   fi
   echo "  push capability: present"
 fi
