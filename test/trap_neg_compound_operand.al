@@ -1,6 +1,6 @@
 ## #1049 — the wider half of the defect: the grant the parser invented for `-x` was SCOPED, so it
 ## reached past the negation and into the operand's own subtree. `-(a * b)` lowered the multiply with NO
-## overflow guard at all — measured on 0.2.17 at fdc40f6, the emitted body was a bare `imulq` with
+## overflow guard at all — measured on x86_64 at the parent 2cf60b45, the body was a bare `imulq` with
 ## neither `jno` nor `ud2`, while the same `a * b` written plainly emitted both. Every compound operand of
 ## a negation was silently unchecked: an I11 hole much wider than the `-MIN` case the issue was filed
 ## for, and invisible to the corpus because no fixture wrote the spelling.

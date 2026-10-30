@@ -5,7 +5,7 @@
 ## checked failure. §6.6: no pass may introduce an `unchecked` the programmer did not write.
 ##
 ## 2^7 does not fit in `i8`, so the result must be checked against the 8-bit range, not only
-## against i64. Measured on x86_64 at origin/main 55fa477: no trap, exit 0 (the negation answered
+## against i64. Measured on x86_64 at the parent 2cf60b45: no trap, exit 0 (the negation answered
 ## MIN itself). The narrow fit guard was skipped for every zero-left subtraction (`ex_is_zero_lit`),
 ## and the parser had wrapped `-x` in an `unchecked` the source never wrote.
 ##

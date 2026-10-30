@@ -4,7 +4,7 @@
 ## does not fit. §6.5: the guard is chosen by the operand types and by nothing else, so a literal `0`
 ## on the left changes nothing about a SIGNED subtraction.
 ##
-## Measured on x86_64 at origin/main 55fa477: no trap, the program answered `0 - v == v` (exit 0).
+## Measured on x86_64 at the parent 2cf60b45: no trap, the program answered `0 - v == v` (exit 0).
 ## Every emitter skipped the overflow guard whenever the left operand was a zero literal
 ## (`ex_is_zero_lit`), signed or not. Now the skip is one decision (`ir::zero_left_no_overflow`): only
 ## an UNSIGNED zero-left subtraction, whose value `2^N - v` the negation rule defines, goes unguarded.

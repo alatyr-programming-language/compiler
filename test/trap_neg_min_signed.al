@@ -4,10 +4,10 @@
 ##
 ## It did not. The parser desugared `-x` to `Unchecked(Bin(17, Num(0), x))`, and the grant that wrapper
 ## carries is SCOPED — so it reached past the negation into the operand, and lowering's `ex_is_zero_lit(l)`
-## exemption then removed what was left. Measured on x86_64 at origin/main 55fa477: `-MIN` answered
-## MIN (reproduction exit 11). Earlier, on 0.2.17 at fdc40f6: `-(a * b)` emitted `imulq` with
-## neither `jno` nor `ud2`, where `a * b` written plainly emits both. `-MIN` answered MIN — a silent
-## wrong value, the one outcome I11 forbids.
+## exemption then removed what was left. Measured on x86_64 at the parent 2cf60b45: this
+## program exits 0, because `-MIN` answered MIN — a silent wrong value, the one outcome I11 forbids.
+## At the same parent `-(a * b)` emitted `imulq` with neither `jno` nor `ud2`
+## (`trap_neg_compound_operand.al`).
 ##
 ## Now: the desugar carries no verification-mode grant, and the guard is chosen by the OPERAND'S TYPE in
 ## one place (`ir::zero_left_no_overflow`). A signed negation therefore traps through the
