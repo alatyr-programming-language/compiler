@@ -892,6 +892,32 @@ pub comptime_cond_src_off := fn(e : ptr(Expr)) -> usize {
   }
 }
 
+## The SOURCE OFFSET a `comptime for` range-bound reject is located at (#684, Comptime §2.6). It is
+## `comptime_cond_src_off`'s leaf, so every bound that was located keeps its location. A bound built
+## only from written literals (`4 / 0`) has no such leaf; it falls back to the leftmost written integer
+## token. A synthesized `Num` has a zero span and stays 0.
+ct_bound_site_off := fn(e : ptr(Expr)) -> usize {
+  off := comptime_cond_src_off(e)
+  if off != 0 { return off }
+  ct_bound_lit_off(e)
+}
+## The leftmost written integer literal's offset in a range bound, through `Bin` and `unchecked`.
+ct_bound_lit_off := fn(e : ptr(Expr)) -> usize {
+  match deref(e) {
+    Expr::Num(v, ns, nn) => { ns }
+    Expr::Bin(bop, bl, br) => {
+      mut o := ct_bound_lit_off(bl)
+      if o == 0 { o = ct_bound_lit_off(br) }
+      o
+    }
+    Expr::Unchecked(inner) => { ct_bound_lit_off(inner) }
+    Expr::Var | Expr::Field | Expr::Call | Expr::StrLit | Expr::Match | Expr::BoolLit | Expr::If
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { 0 }
+  }
+}
+
 ## Fail LOUD on a `comptime if` condition the lower cannot fold. Comptime §9.1/§9.2: the controlling
 ## expression MUST be comptime-known and emission applies to the SELECTED branch — so "cannot fold"
 ## has no selected branch and MUST be a REJECT. Emitting NEITHER arm (the previous behaviour) silently
@@ -1322,7 +1348,7 @@ pub comptime_range_bound := fn(e : ptr(Expr), cx : ptr(LCtx)) -> i64 {
   match comptime_range_bound_at(e, cx, 0) {
     Some(v) => { v }
     None => {
-      codegen_reject(cx.src, comptime_cond_src_off(e), cx.mod_s, cx.mod_l, "`comptime for` — this range bound is not comptime-known. A bound is an integer literal, a module const, `unchecked e`, typeinfo(T).n/.len, a comptime parameter, or + - * / % over those (Comptime §9.1). Rejected rather than unrolling over a bound of 0.", deref(cx.mar))
+      codegen_reject(cx.src, ct_bound_site_off(e), cx.mod_s, cx.mod_l, "`comptime for` — this range bound is not comptime-known. A bound is an integer literal, a module const, `unchecked e`, typeinfo(T).n/.len, a comptime parameter, or + - * / % over those (Comptime §9.1). Rejected rather than unrolling over a bound of 0.", deref(cx.mar))
       0
     }
   }
@@ -1364,7 +1390,10 @@ comptime_range_bound_at := fn(e : ptr(Expr), cx : ptr(LCtx), hops : i64) -> Opti
         ## A zero divisor is a LOCATED diagnostic (Comptime §2.6, #684): the compiler's own division
         ## must never run on it (x86 died with SIGFPE). The reject fails the build; the `0` is unread.
         if dz {
-          codegen_reject(cx.src, comptime_cond_src_off(e), cx.mod_s, cx.mod_l, "`comptime for` — this range bound divides by zero. Comptime §2.6: a guard that fails during comptime evaluation is a compile-time diagnostic, under `unchecked` too.", deref(cx.mar))
+          ## Located at the divisor, the operand the guard is about; the whole bound if it has no span.
+          mut dzoff := ct_bound_site_off(rr)
+          if dzoff == 0 { dzoff = ct_bound_site_off(e) }
+          codegen_reject(cx.src, dzoff, cx.mod_s, cx.mod_l, "`comptime for` — this range bound divides by zero. Comptime §2.6: a guard that fails during comptime evaluation is a compile-time diagnostic, under `unchecked` too.", deref(cx.mar))
           r = Option(i64).Some(0)
         }
         if dz == false { r = ct_range_arith(op, lv, rv) }
