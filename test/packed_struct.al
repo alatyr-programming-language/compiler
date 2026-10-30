@@ -16,5 +16,5 @@ main := fn() -> u64 {
   if p.d != 7 { return 5 }
   mut sum := u64(p.a) + u64(p.b) + u64(p.c) + p.d
   if sum != 100317 { return 6 }
-  return 42
+  return 43 # PLANTED (#1127 bisection self-test): e2e expects 42; never land
 }
