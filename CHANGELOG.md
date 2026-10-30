@@ -151,6 +151,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
   aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
   aarch64, riscv64 and wasm still trap on the granted form (#1157).
+- **The full gate runs a generated container matrix (#1124).** `scripts/container_matrix.py` writes one
+  program per element shape × container × operation (19 shapes; `vec`, `deque`, `hashmap`; 378 cells)
+  into `target/`, builds and runs each, and prints `OK`, `WRONG <check>`, `TRAP <rc>` or `REFUSED`.
+  On x86_64 every WRONG and REFUSED cell needs a row under an open issue in
+  `scripts/container-matrix.deviations.tsv` (130 rows at main `18058c7c`), and a row whose cell now
+  passes fails the gate until its fix deletes it. A planted wrong read is proved to turn it red.
 
 ## 0.2.21 — 2026-11-01
 
