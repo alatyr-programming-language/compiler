@@ -116,6 +116,12 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/land.sh" --self-test
   _full_land_self_test_rc=$?
   [ "$_full_land_self_test_rc" = 0 ] || exit "$_full_land_self_test_rc"
+  # The merge queue's deciders (#1127): the reviewed-head marker and the bisection plan, against a
+  # fake gate in which one PR of three is red. Measured: a driver that drops the rest of a split set
+  # loses the plan checks; taking the first marker instead of the last loses the marker check.
+  bash "$ROOT/scripts/queue.sh" --self-test
+  _full_queue_self_test_rc=$?
+  [ "$_full_queue_self_test_rc" = 0 ] || exit "$_full_queue_self_test_rc"
   exit $?
 fi
 

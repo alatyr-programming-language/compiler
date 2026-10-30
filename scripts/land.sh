@@ -28,6 +28,11 @@
 #   scripts/land.sh <pr-number> [--push] [--no-rewalk]
 #       prepare + gate the merge, print the push command, stop; with --push, publish it if green.
 #       --no-rewalk skips the ~160 s corpus re-walk that spot-checks a predicted oracle commit (below).
+#   scripts/land.sh <pr-number> --screen
+#       PHASES 0-2 only (preconditions, fetch, provenance, PR shape); merges nothing. Prints one line
+#       `land-screen: pr=N head=SHA solo=yes|no link=<relation marker>` and exits 0 when the PR may be
+#       merged; solo=yes when it carries an oracle file or a predicted delta, which is gated alone.
+#       scripts/queue.sh (#1127) screens each queued PR this way before batching it.
 #   scripts/land.sh --self-test          exercise the PR-shape, provenance and oracle-commit deciders
 #                                        without GitHub or a merge
 #
@@ -579,9 +584,11 @@ case "$PR" in
 esac
 DO_PUSH=0
 DO_REWALK=1
+DO_SCREEN=0
 for a in "${@:2}"; do
   case "$a" in
     --push) DO_PUSH=1 ;;
+    --screen) DO_SCREEN=1 ;;
     --no-rewalk) DO_REWALK=0 ;;
     *) die "unknown option: $a" ;;
   esac
@@ -749,6 +756,15 @@ for f in $(git diff --name-only --diff-filter=A "$BASE...$HEAD_SHA"); do
 done
 [ "$shape_fail" = 0 ] && echo "  shape ok"
 [ "$shape_fail" = 0 ] || { verdict "LAND REFUSED (PR shape) — nothing was merged"; exit 1; }
+if [ "$DO_SCREEN" = 1 ]; then
+  SOLO=no
+  printf '%s\n' "$CHANGED" | grep -qx -e scripts/corpus.manifest -e scripts/idiom.baseline \
+    -e scripts/needle.baseline -e "$DELTA_REL" && SOLO=yes
+  [ "$IS_FORK" = no ] || { verdict "LAND REFUSED (screen) — a fork PR is landed by hand, never by the queue"; exit 1; }
+  echo "land-screen: pr=$PR head=$HEAD_SHA solo=$SOLO link=$ISSUE_LINK"
+  verdict "SCREEN OK — nothing was merged"
+  exit 0
+fi
 [ "$IS_FORK" = yes ] && {
   echo
   echo "  This PR is from a FORK. The gate below compiles and RUNS its fixtures — freestanding"
