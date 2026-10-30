@@ -129,6 +129,13 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/queue.sh" --self-test
   _full_queue_self_test_rc=$?
   [ "$_full_queue_self_test_rc" = 0 ] || exit "$_full_queue_self_test_rc"
+  # The weekly report's two local deciders (#1131): the lead-time median and the header-versus-x86_64-row
+  # comparison. The report itself needs `gh` and runs on a workstation, so nothing in the gate would
+  # otherwise execute it; eight planted inputs, including a prose header that must NOT be compared and an
+  # aarch64 row that must not count as x86_64, keep the deciders honest without the network.
+  bash "$ROOT/scripts/metrics.sh" --self-test
+  _full_metrics_self_test_rc=$?
+  [ "$_full_metrics_self_test_rc" = 0 ] || exit "$_full_metrics_self_test_rc"
   exit $?
 fi
 
