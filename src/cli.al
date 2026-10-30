@@ -4227,7 +4227,8 @@ cli_command_help := fn(in out a : rt::Arena, v : CliVerb) -> usize {
 }
 
 ## TOOL-21 — the version line identifies the implementation AND names the specification revision it is
-## answerable to. `app.version` is injected as a compile-time constant for modules owned by this package
+## answerable to. That revision is a TARGET, not conformance (compiler#1000, spec 9438d00 — Overview §6,
+## TOOL-21): the line says so, and names where the known deviations are published. `app.version` is injected as a compile-time constant for modules owned by this package
 ## (TOOL-15), and `spec_revision::SPEC_REVISION` is an ordinary source constant pinned to a tagged
 ## specification release, so this command neither opens package.al nor depends on the current working
 ## directory at runtime (issue #1000). Both numbers are compile-time constants of the same kind: the two
@@ -4235,11 +4236,15 @@ cli_command_help := fn(in out a : rt::Arena, v : CliVerb) -> usize {
 cli_version := fn(in out a : rt::Arena, fd : usize) -> usize {
   version := app.version
   spec := spec_revision::SPEC_REVISION
-  mut b := rt::strbuf(a, version.len + spec.len + 24)
+  devs := spec_revision::KNOWN_DEVIATIONS
+  mut b := rt::strbuf(a, version.len + spec.len + devs.len + 80)
   k0 := rt::push_str(b, "alatyr ")
   k1 := rt::push_str(b, version)
   k2 := rt::push_str(b, ", spec ")
   k3 := rt::push_str(b, spec)
+  k5 := rt::push_str(b, " (a target revision, not conformance; known deviations: ")
+  k6 := rt::push_str(b, devs)
+  k7 := rt::push_str(b, ")")
   k4 := rt::push_byte(b, 10)
   kf := diag_flush(b, fd)
   if kf != 0 { return kf }
