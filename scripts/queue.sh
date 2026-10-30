@@ -368,7 +368,7 @@ Description=Alatyr compiler merge queue, one pass (scripts/queue.sh, #1127)
 Type=oneshot
 WorkingDirectory=$wt
 Environment=PATH=/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin
-ExecStart=/run/current-system/sw/bin/bash -c 'git fetch -q origin main && git switch -q --detach origin/main && mkdir -p target/queue && git show origin/main:scripts/queue.sh > target/queue/queue-run.sh && exec nix shell nixpkgs#gh nixpkgs#util-linux nixpkgs#procps -c bash target/queue/queue-run.sh --once >> target/queue/queue.log 2>&1'
+ExecStart=/run/current-system/sw/bin/bash -c 'git fetch -q origin main && git switch -q --detach origin/main && mkdir -p target/queue && git show origin/main:scripts/queue.sh > target/queue/queue-run.sh && nix build --inputs-from . nixpkgs#gh -o target/queue/gh-tool && PATH="\$\$PWD/target/queue/gh-tool/bin:\$\$PATH" exec bash target/queue/queue-run.sh --once >> target/queue/queue.log 2>&1'
 TimeoutStartSec=12h
 EOF
   cat > "$unit/alatyr-queue.timer" <<EOF
