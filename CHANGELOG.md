@@ -126,6 +126,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`alloc::with(ar)` reaches through a `match` (#992).** An `alloc::with` written in a match arm,
+  or a `match` inside an `alloc::with` body, left the calls in it without their elided allocator
+  argument, and `vec::new(u64)` trapped "allocator out of memory". They are now passed `ptr(ar)`.
+
 - **The #529 ptrint census is in the gate, and it no longer lets an unmeasured zero read as clean
   (#529 step 3).** The gate ran `ptrint_census.sh planted` only — the proof that the counter *can*
   fire — so no ptrint number was ever pinned, and `OP-CMP = 0` described a run nobody repeated.
