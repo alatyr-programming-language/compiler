@@ -33,6 +33,8 @@
 #       `land-screen: pr=N head=SHA solo=yes|no link=<relation marker>` and exits 0 when the PR may be
 #       merged; solo=yes when it carries an oracle file or a predicted delta, which is gated alone.
 #       scripts/queue.sh (#1127) screens each queued PR this way before batching it.
+#   ALATYR_LAND_EXPECT_HEAD=<sha>  refuse unless the fetched PR head is exactly <sha> (the queue's
+#                                  reviewed head)
 #   scripts/land.sh --self-test          exercise the PR-shape, provenance and oracle-commit deciders
 #                                        without GitHub or a merge
 #
@@ -657,6 +659,11 @@ git rev-parse --verify -q "$PR_REF" >/dev/null || die "no selected PR head on or
 BASE="$(git rev-parse origin/main)"
 HEAD_SHA="$(git rev-parse "$PR_REF")"
 [ "$HEAD_SHA" = "$HEAD_OID" ] || die "selected PR head changed while fetching"
+## The merge queue (#1127) names the head its reviewer approved; any other object is not this landing's.
+if [ -n "${ALATYR_LAND_EXPECT_HEAD:-}" ] && [ "$HEAD_SHA" != "$ALATYR_LAND_EXPECT_HEAD" ]; then
+  verdict "LAND REFUSED (head moved) — the PR head is $HEAD_SHA, the reviewed head is $ALATYR_LAND_EXPECT_HEAD"
+  exit 1
+fi
 echo "  base=$BASE"
 echo "  head=$HEAD_SHA"
 

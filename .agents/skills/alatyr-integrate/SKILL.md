@@ -313,8 +313,10 @@ The screening is where the safety lives, and all of it happens before anything i
 5. Publish one acceptance per PR, each naming the batch membership and carrying the same joined
    transition counts, so that every PR's record is complete on its own.
 
-`scripts/land.sh` takes a single PR number, so a batch uses the manual merge above and the §4 gate;
-it does not inherit the script's phase separation and must keep the push its own leased statement.
+The merge queue does this screening and gating mechanically: after the §2 review, run
+`scripts/queue.sh --enqueue N`, and the timer on omen composes, gates, bisects and publishes (#1127;
+the rules are in the script's header). Only the integrator enqueues. A batch built by hand instead
+uses the manual merge above and the §4 gate, and keeps the push its own leased statement.
 
 Three boundaries bound this, and each of them was measured rather than imagined:
 
