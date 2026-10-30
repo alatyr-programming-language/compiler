@@ -12085,6 +12085,12 @@ run issue977_struct_lit_field_ctx 2
 ## a `Vec(E)` returned the first variant with zeros whatever was stored. NON-VACUOUS: on the parent
 ## `55fa477` (x86_64) the fixture exits 101 — element 0, `C(40)`, read back as a zeroed variant.
 run issue989_vec_multi_payload_enum 42
+## #395, #988 — a `deref(p)` inside a generic instance, where `p : ptr(mut T)` and `T` is a sub-word
+## type, loaded and stored 8 bytes: `deref_pointee_bytes` read `p`'s pointee as the raw spelling `T`
+## and fell to the 8-byte default. Every `Vec(u8/u16/u32/i8)` read through `at`/`try_at`/`get` widened
+## its neighbours into the value and every `set` clobbered them. NON-VACUOUS: on the parent `55fa477`
+## (x86_64) the fixture exits 100 — the `Vec(u8)` element 0 read back as 0xD3952A, not 42.
+run issue395_vec_subword_generic_deref 42
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.

@@ -146,6 +146,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `scripts/corpus.manifest` keeps only the sources with no directive yet and the directive sources that
   print; the xbackend ratchet reads the walk. A behaviour fix on a directive fixture carries no oracle
   commit: it deletes its own deviation rows.
+- **A `Vec` of a sub-word element no longer reads its neighbours into the value (#395).** Inside a
+  generic function, `deref(p)` with `p : ptr(mut T)` used 8 bytes whatever `T` was, so `at`, `try_at`,
+  `get` and `set` on a `Vec(u8)`, `Vec(u16)`, `Vec(u32)` or `Vec(i8)` read the next elements into the
+  value (or wrote over them). It now uses `T`'s width and signedness in that instance.
 
 ## 0.2.20 — 2026-10-31
 
