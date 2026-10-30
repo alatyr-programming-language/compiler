@@ -10,12 +10,17 @@
 #            (#1145), so rc 0 alone does not show that every test ran.
 #   program  `alatyr build` exits 0, and the built program exits with the pilot's stated value
 #            (0 for json-consumer: its exit code is the number of the first failed check).
+#   cli      `alatyr build` exits 0, and every case under the pilot's cases/ runs as stated:
+#            <name>.args (one argument per line), <name>.stdin (optional; /dev/null otherwise),
+#            <name>.out (the exact standard output) and <name>.rc (the exit status). A case with a
+#            nonzero status must also write something to standard error. Cases run in the pilot's
+#            directory, so an argument may name a data file under cases/.
 #
 # Usage (inside `nix develop`):
 #   bash scripts/pilots.sh                 # ALATYR defaults to target/debug/alatyr
 #   bash scripts/pilots.sh --self-test     # proves the stage fails on a planted wrong check
 #
-# The last line is `pilots: libraries=<n> tests=<n> programs=<n> failed=<n>`. The exit status is
+# The last line is `pilots: libraries=<n> tests=<n> programs=<n> cases=<n> failed=<n>`. The exit status is
 # 1 when anything failed or nothing ran: a stage that checked nothing is not green.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,6 +33,8 @@ TIMEOUT="${ALATYR_PILOT_TIMEOUT:-60}"
 PILOTS=(
   "lib json"
   "prog json-consumer 0"
+  "lib wc"
+  "cli wc"
 )
 
 # The artifact path from the compiler's `built: … artifact=<path>` line. The default name is not
@@ -39,7 +46,8 @@ artifact_of() {
 # run_pilots <pilots-copy-dir> — checks every row of PILOTS inside that copy; prints one line per
 # row and the summary; returns 0 only when every row passed and at least one ran.
 run_pilots() {
-  local dir="$1" libs=0 tests=0 progs=0 failed=0 row kind name want log rc due got art
+  local dir="$1" libs=0 tests=0 progs=0 cases=0 failed=0 row kind name want log rc due got art
+  local c cn in args
   for row in "${PILOTS[@]}"; do
     read -r kind name want <<<"$row"
     log="$dir/$name.log"
@@ -79,13 +87,62 @@ run_pilots() {
           failed=$((failed + 1))
         fi
         ;;
+      cli)
+        progs=$((progs + 1))
+        (cd "$dir/$name" && timeout "$TIMEOUT" "$ALATYR" build) > "$log" 2>&1
+        rc=$?
+        art="$(artifact_of "$log")"
+        if [ "$rc" != 0 ] || [ -z "$art" ] || [ ! -x "$art" ]; then
+          echo "  FAIL  $name: alatyr build rc=$rc, artifact '${art:-none}' (log: $log)"
+          sed 's/^/          /' "$log" | tail -5
+          failed=$((failed + 1))
+          continue
+        fi
+        due=0
+        got=0
+        for c in "$dir/$name"/cases/*.rc; do
+          [ -e "$c" ] || continue
+          due=$((due + 1))
+          cn="$(basename "$c" .rc)"
+          in="/dev/null"
+          [ -e "$dir/$name/cases/$cn.stdin" ] && in="$dir/$name/cases/$cn.stdin"
+          args=()
+          [ -s "$dir/$name/cases/$cn.args" ] && mapfile -t args < "$dir/$name/cases/$cn.args"
+          (cd "$dir/$name" && timeout "$TIMEOUT" "$art" "${args[@]}" < "$in" \
+            > "$dir/$name.$cn.stdout" 2> "$dir/$name.$cn.stderr")
+          rc=$?
+          want="$(cat "$c")"
+          if [ "$rc" != "$want" ]; then
+            echo "  FAIL  $name/$cn: exited $rc where $want is due"
+            failed=$((failed + 1))
+          elif ! cmp -s "$dir/$name.$cn.stdout" "$dir/$name/cases/$cn.out"; then
+            echo "  FAIL  $name/$cn: standard output differs from cases/$cn.out"
+            diff "$dir/$name/cases/$cn.out" "$dir/$name.$cn.stdout" | head -6 | sed 's/^/          /'
+            failed=$((failed + 1))
+          elif [ "$rc" != 0 ] && [ ! -s "$dir/$name.$cn.stderr" ]; then
+            echo "  FAIL  $name/$cn: exited $rc with nothing on standard error"
+            failed=$((failed + 1))
+          else
+            got=$((got + 1))
+            cases=$((cases + 1))
+          fi
+        done
+        if [ "$due" = 0 ]; then
+          echo "  FAIL  $name: no cases under cases/ — a CLI pilot that runs nothing is not green"
+          failed=$((failed + 1))
+        elif [ "$got" = "$due" ]; then
+          echo "  ok    $name: built; $got/$due command-line cases as stated"
+        else
+          echo "  FAIL  $name: built; $got/$due command-line cases as stated (failures above)"
+        fi
+        ;;
       *)
         echo "  FAIL  unknown pilot kind '$kind' in row '$row'"
         failed=$((failed + 1))
         ;;
     esac
   done
-  echo "pilots: libraries=$libs tests=$tests programs=$progs failed=$failed"
+  echo "pilots: libraries=$libs tests=$tests programs=$progs cases=$cases failed=$failed"
   [ "$failed" = 0 ] && [ $((libs + progs)) != 0 ]
 }
 
