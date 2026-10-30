@@ -10690,6 +10690,16 @@ run_a64 comptime_for_unchecked_bound 42
 run_rv64 comptime_for_unchecked_bound 42
 run_wat comptime_for_unchecked_bound 42
 build_reject_has reject_comptime_for_runtime_bound "range bound is not comptime-known"
+## #684: a zero divisor in a range bound is a located diagnostic (Comptime §2.6), under `unchecked`
+## too; x86 died with SIGFPE and the twins unrolled zero times. The twins now trap, never loop 0 times.
+build_reject_has reject_comptime_for_div_zero "range bound divides by zero"
+build_reject_has reject_comptime_for_unchecked_mod_zero "range bound divides by zero"
+run_a64 reject_comptime_for_div_zero 133
+run_rv64 reject_comptime_for_div_zero 133
+run_wat reject_comptime_for_div_zero 134
+run_a64 reject_comptime_for_unchecked_mod_zero 133
+run_rv64 reject_comptime_for_unchecked_mod_zero 133
+run_wat reject_comptime_for_unchecked_mod_zero 134
 ## #682 — the OTHER half: the arithmetic is INSIDE the const's initializer (`B := A + 1`), so the
 ## bound expression is a plain `Expr::Var` and never reaches the `Bin` arm #672 added. The twins
 ## resolved the name and read its value with `lower_layout::ex_value_init`, which answered 0 for a
