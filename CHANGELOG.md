@@ -126,6 +126,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A `comptime for` range bound under `unchecked` keeps its value, and a bound with no comptime
+  value is refused (#696).** `0 .. unchecked (N)`, `unchecked (1) .. 4`, a const whose initializer is
+  `unchecked (5)` and `typeinfo(T).fields.len - 1` used to read as 0 on all four backends, so the
+  loop ran a different number of times from a clean compile. `unchecked e` now yields its inner value
+  (Grammar §3.7). A bound that is not comptime-known, such as a call, is a located compile error on
+  x86_64 (Comptime §9.1) and a trap on the twins, never the bound 0.
+
 - **The #529 ptrint census is in the gate, and it no longer lets an unmeasured zero read as clean
   (#529 step 3).** The gate ran `ptrint_census.sh planted` only — the proof that the counter *can*
   fire — so no ptrint number was ever pinned, and `OP-CMP = 0` described a run nobody repeated.
