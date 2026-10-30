@@ -126,6 +126,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **The json pilot and the PILOTS gate stage (#1125, first slice).** `pilots/json` is a JSON parser
+  and printer written as a library package (a recursive `Value` enum, `Result` with a located
+  `Error`, arena-owned strings and containers), and `pilots/json-consumer` depends on it by path and
+  checks thirteen documents. `scripts/pilots.sh` builds both from a copy under `target/pilots/` with
+  the tree compiler, requires every library `@test` to report ok and the consumer to exit 0, and its
+  `--self-test` plants a wrong check that must fail the stage; `scripts/full.sh` runs both. Each
+  workaround in the pilot carries `## blocked-by:` naming the open issue that forces it.
 - **A field access on a scalar is a compile error (#703).** `x.a` on an annotated `u64`, `bool` or other
   scalar local, parameter or module global compiled and read a fabricated `0`, or dropped the store.
   A scalar has no fields (Modules §2, Types §6.1), so `check` now refuses it with a located diagnostic.
