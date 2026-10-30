@@ -67,6 +67,8 @@
 #
 #   ALATYR_JOBS=<n>            workers (default `nproc`); 1 = strict serial, in table order
 #   ALATYR_E2E_FILTER=<sub>    run only rows whose command contains <sub> (iteration; NOT the gate)
+#   ALATYR_E2E_FILTER_FILE=<f> run only rows whose command contains ANY line of <f> (scripts/pre_gate.sh;
+#                              NOT the gate); an unreadable or empty file, or both filters set, fails
 #   ALATYR_E2E_REBUILD=stale   rebuild Stage1 only when older than src//lib/ (iteration)
 #   ALATYR_E2E_TEST_DIR=<dir>  fixture root (default `test/`; used by the self-test)
 #   ALATYR_E2E_RUNTIME_TIMEOUT=<dur>  per-attempt deadline for a child this runner EXECUTES
@@ -94,6 +96,14 @@ JOBS="${ALATYR_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 case "$JOBS" in ''|*[!0-9]*) echo "FAIL: ALATYR_JOBS must be a positive integer, got '$JOBS'"; exit 1 ;; esac
 [ "$JOBS" -ge 1 ] || { echo "FAIL: ALATYR_JOBS must be >= 1, got '$JOBS'"; exit 1; }
 FILTER="${ALATYR_E2E_FILTER:-}"
+FILTER_SUBS=()
+if [ -n "${ALATYR_E2E_FILTER_FILE:-}" ]; then
+  [ -z "$FILTER" ] || { echo "FAIL: set ALATYR_E2E_FILTER or ALATYR_E2E_FILTER_FILE, not both"; exit 1; }
+  [ -r "$ALATYR_E2E_FILTER_FILE" ] || { echo "FAIL: ALATYR_E2E_FILTER_FILE '$ALATYR_E2E_FILTER_FILE' is not readable"; exit 1; }
+  mapfile -t FILTER_SUBS < <(grep -v '^[[:space:]]*$' "$ALATYR_E2E_FILTER_FILE")
+  [ "${#FILTER_SUBS[@]}" -gt 0 ] || { echo "FAIL: ALATYR_E2E_FILTER_FILE '$ALATYR_E2E_FILTER_FILE' names no substring"; exit 1; }
+  FILTER="file:$ALATYR_E2E_FILTER_FILE (${#FILTER_SUBS[@]} substrings)"
+fi
 E2E_TEST="${ALATYR_E2E_TEST_DIR:-$ROOT/test}"
 WORK="$ROOT/target/e2e"
 
@@ -12493,6 +12503,12 @@ if [ -n "$FILTER" ]; then
   declare -a KEEP=()
   keptn=0
   for ((i = 1; i <= E2E_N; i++)); do
+    if [ "${#FILTER_SUBS[@]}" -gt 0 ]; then
+      for _fs in "${FILTER_SUBS[@]}"; do
+        case "${E2E_ROW[i]}" in *"$_fs"*) keptn=$((keptn + 1)); KEEP[keptn]="${E2E_ROW[i]}"; break ;; esac
+      done
+      continue
+    fi
     case "${E2E_ROW[i]}" in *"$FILTER"*) keptn=$((keptn + 1)); KEEP[keptn]="${E2E_ROW[i]}" ;; esac
   done
   [ "$keptn" -gt 0 ] || { echo "FAIL: no row matches the filter '$FILTER'"; exit 1; }
