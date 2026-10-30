@@ -151,6 +151,9 @@ Two numbers that are **not** the compiler's version: the specification revision 
   grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
   aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
   aarch64, riscv64 and wasm still trap on the granted form (#1157).
+- **`alloc::with(ar)` reaches through a `match` (#992).** An `alloc::with` written in a match arm,
+  or a `match` inside an `alloc::with` body, left the calls in it without their elided allocator
+  argument, and `vec::new(u64)` trapped "allocator out of memory". They are now passed `ptr(ar)`.
 
 ## 0.2.21 — 2026-11-01
 
