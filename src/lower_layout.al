@@ -5580,15 +5580,15 @@ pub base_type_name := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
 ## it is peeled at every level, as `wat_int_const_expr` has done since #558. A module const is read
 ## through this same fold, so a const whose initializer is `unchecked (…)` folds too.
 pub comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize) -> Option(i64) {
-  comp_range_bound_at(e, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, 0)
+  comp_range_bound_at(e, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, 0, true)
 }
 ## `hops` counts const-to-const steps, capped like `ex_value_fold`'s, so a cycle is refused, never a hang.
-comp_range_bound_at := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize, hops : i64) -> Option(i64) {
+comp_range_bound_at := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize, hops : i64, chk : bool) -> Option(i64) {
   mut r : Option(i64) = Option(i64).None
   match deref(e) {
     Expr::Num(x, s, n) => { r = Option(i64).Some(i64(x)) }
     Expr::BoolLit(x) => { r = Option(i64).Some(i64(x)) }
-    Expr::Unchecked(inner) => { r = comp_range_bound_at(inner, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops) }
+    Expr::Unchecked(inner) => { r = comp_range_bound_at(inner, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops, false) }
     Expr::Var(vs, vn) => {
       cnt := rt::vec_len(deref(decls))
       mut i : usize = 0
@@ -5596,7 +5596,7 @@ comp_range_bound_at := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gp
         d := deref(decl_get(decls, i))
         if d.kind == 0 and d.is_fn == false and streq(src, d.name_start, d.name_len, vs, vn) and hops < EX_VALUE_DEPTH {
           ## null-ok: #1069 — `Decl.value` spells "no initializer" as a null ptr(Expr); guarded, never dereferenced.
-          if unchecked bitcast(usize, d.value) != 0 { r = comp_range_bound_at(d.value, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops + 1) }
+          if unchecked bitcast(usize, d.value) != 0 { r = comp_range_bound_at(d.value, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops + 1, true) }
         }
         i = i + 1
       }
@@ -5666,19 +5666,20 @@ comp_range_bound_at := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gp
     }
     ## CONST ARITHMETIC (#672): fold `+ - * / %` over already-folded operands, the same op set and the
     ## same recursion as `global_init_value`, so `0 .. N - 1` names the same element set on every
-    ## backend. A ZERO divisor is never divided (#684): the folder answers `None`, so the emitter
+    ## backend. A ZERO divisor is never divided (#684) and a checked overflow never wraps (#1234):
+    ## `ct_range_guard` fails, the folder answers `None`, so the emitter
     ## refuses it loudly instead of looping zero times (Comptime §2.6 wants a located diagnostic; x86
     ## gives one, the twins trap).
     ## Independent guard-then-act `if`s, matching `lower/ctfold::ct_bound_fold`: a nested `if…else`
     ## inside an `if`-then is not a lowerable shape under the self-host lower.
     ## Both operands must fold (#696); an operand that does not leaves the whole bound `None`, never `0`.
     Expr::Bin(bop, bl, brr) => {
-      lo := comp_range_bound_at(bl, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops)
-      ro := comp_range_bound_at(brr, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops)
+      lo := comp_range_bound_at(bl, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops, chk)
+      ro := comp_range_bound_at(brr, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops, chk)
       if opt_i64_is_some(lo) and opt_i64_is_some(ro) {
         lv := opt_i64_or(lo, 0)
         rv := opt_i64_or(ro, 0)
-        r = ct_range_arith(bop, lv, rv)
+        r = ct_range_arith(bop, lv, rv, ct_bound_w(e), chk)
       }
     }
     Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf
@@ -5691,22 +5692,168 @@ comp_range_bound_at := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gp
 ## Does `o` hold a value? / Its value, or `d`. Flat helpers, so a caller never nests a `match` in an arm.
 pub opt_i64_is_some := fn(o : Option(i64)) -> bool { match o { Some(x) => { true }; None => { false } } }
 pub opt_i64_or := fn(o : Option(i64), d : i64) -> i64 { match o { Some(x) => { x }; None => { d } } }
+## The operating WIDTH / SIGNEDNESS of a declared integer type name. An unknown name (a brand, a
+## float, a generic instance) reads as the native 64-bit signed word — the widest, least-rejecting
+## reading, so an unrecognized annotation can only UNDER-diagnose.
+pub ct_width := fn(w : str) -> i64 {
+  if w == "u8" or w == "i8" or w == "bits8" { return 8 }
+  if w == "u16" or w == "i16" or w == "bits16" { return 16 }
+  if w == "u32" or w == "i32" or w == "bits32" { return 32 }
+  64
+}
+pub ct_signed := fn(w : str) -> bool {
+  w == "i8" or w == "i16" or w == "i32" or w == "i64" or w == "isize"
+}
+## Is the exact value `v` representable in `w`? Native-width names answer true (every 64-bit pattern
+## is one of their values); the 64-bit overflow test above them is what judges those.
+pub ct_fits := fn(w : str, v : i64) -> bool {
+  if w == "u8" or w == "bits8" { return v >= 0 and v <= 255 }
+  if w == "u16" or w == "bits16" { return v >= 0 and v <= 65535 }
+  if w == "u32" or w == "bits32" { return v >= 0 and v <= 4294967295 }
+  if w == "i8" { return v >= (0 - 128) and v <= 127 }
+  if w == "i16" { return v >= (0 - 32768) and v <= 32767 }
+  if w == "i32" { return v >= (0 - 2147483648) and v <= 2147483647 }
+  true
+}
+## The MOST NEGATIVE value of a signed `w` (the `MIN / -1` operand of the checked-overflow set).
+pub ct_min := fn(w : str) -> i64 {
+  if w == "i8" { return 0 - 128 }
+  if w == "i16" { return 0 - 32768 }
+  if w == "i32" { return 0 - 2147483648 }
+  nmax := unchecked (0 - 9223372036854775807)
+  unchecked (nmax - 1)
+}
+
+## UNSIGNED 64-bit `<` over two raw patterns, using only SIGNED comparisons (the same discipline
+## `num_lit_out_of_range` keeps: nothing here depends on how an unsigned compare lowers). Equal sign
+## bits → the signed order is the unsigned order; differing → whichever has the high bit set is the
+## larger unsigned.
+pub ct_ult := fn(x : i64, y : i64) -> bool {
+  if (x < 0) == (y < 0) { return x < y }
+  return y < 0
+}
+## The unsigned high / low 32 bits of a raw 64-bit pattern. The high half comes from a LOGICAL right
+## shift (`shr` on a `u64`, OP-6) — a signed `/ 2^32` would truncate toward zero and read a negative
+## pattern as a small negative number rather than as its large unsigned value. The low half is then
+## exact by subtraction. Both results land in [0, 2^32), so every partial product below is computed
+## with non-negative arithmetic. (No `+`/`-` here takes a >32-bit literal operand: the x86 immediate
+## form is 32-bit signed, and the register allocator folds such a literal straight into the
+## instruction — the multiply loads it into a register instead.)
+pub ct_hi32 := fn(x : i64) -> i64 {
+  xu : u64 = unchecked bitcast(u64, x)
+  hs : u64 = shr(xu, 32)
+  unchecked bitcast(i64, hs)
+}
+pub ct_lo32 := fn(x : i64) -> i64 {
+  hu : u64 = unchecked bitcast(u64, ct_hi32(x))
+  hb : u64 = shl(hu, 32)
+  unchecked (x - unchecked bitcast(i64, hb))
+}
+## EXACT unsigned 64-bit multiply overflow: split both operands into 32-bit halves (each in
+## [0, 2^32), so every partial product is computed with non-negative arithmetic) and ask whether the
+## 128-bit product's high word is nonzero. `a*b = al*bl + (ah*bl + al*bh)*2^32 + ah*bh*2^64`.
+pub ct_umulov := fn(a : i64, b : i64) -> bool {
+  ah := ct_hi32(a)
+  al := ct_lo32(a)
+  bh := ct_hi32(b)
+  bl := ct_lo32(b)
+  if ah != 0 and bh != 0 { return true }
+  cross := unchecked (unchecked (ah * bl) + unchecked (al * bh))
+  if ct_hi32(cross) != 0 { return true }
+  lohi := ct_hi32(unchecked (al * bl))
+  return ct_hi32(unchecked (cross + lohi)) != 0
+}
+## EXACT signed 64-bit multiply overflow: `p / a != b` recovers the discarded high half; the one
+## case that division itself cannot answer (`MIN * -1`) is decided ahead of it.
+pub ct_smulov := fn(a : i64, b : i64) -> bool {
+  if a == 0 { return false }
+  mn := ct_min("i64")
+  if a == (0 - 1) and b == mn { return true }
+  if b == (0 - 1) and a == mn { return true }
+  p := unchecked (a * b)
+  return unchecked (p / a) != b
+}
+## Does `a <op> b` fail its CHECKED guard in the operating type `w`? Two tiers, mirroring the lower's
+## own emission (`jnc` unsigned / `jno` signed at native width, then the narrow-width range test):
+## the native 64-bit overflow first, then — for a sub-native `w` — representability of the exact
+## result in that width.
+pub ct_arith_ovf := fn(op : u8, a : i64, b : i64, w : str) -> bool {
+  sg := ct_signed(w)
+  mut s := 0
+  if op == 16 { s = unchecked (a + b) }
+  if op == 17 { s = unchecked (a - b) }
+  if op == 18 { s = unchecked (a * b) }
+  mut ov := false
+  if op == 16 {
+    if sg { ov = ((a < 0) == (b < 0)) and ((s < 0) != (a < 0)) } else { ov = ct_ult(s, a) }
+  }
+  if op == 17 {
+    if sg { ov = ((a < 0) != (b < 0)) and ((s < 0) != (a < 0)) } else { ov = ct_ult(a, b) }
+  }
+  if op == 18 {
+    if sg { ov = ct_smulov(a, b) } else { ov = ct_umulov(a, b) }
+  }
+  if ov { return true }
+  if ct_width(w) < 64 { return not ct_fits(w, s) }
+  false
+}
+## The integer type name a `comptime for` range-bound operation runs in: sema's record of the node
+## (`ir::sty_get_cur`; a literal-only bound took the native signed default, `sema_vty_range`), as the
+## `ct_*` judgement above spells it. `None` where sema recorded no integer type (a `typeinfo` member
+## count, #1260): there the guard has no type to judge an overflow in.
+pub ct_bound_w := fn(e : ptr(Expr)) -> Option(str) {
+  t : ir::VTy = ir::sty_get_cur(e)
+  if not ir::vty_is_int(t) { return Option(str).None }
+  g : ir::Sgn = t.sg
+  sg := match g { SgS => { true }; SgU | SgNone => { false } }
+  if sg and t.bytes == 1 { return Option(str).Some("i8") }
+  if sg and t.bytes == 2 { return Option(str).Some("i16") }
+  if sg and t.bytes == 4 { return Option(str).Some("i32") }
+  if sg and t.bytes == 8 { return Option(str).Some("i64") }
+  if t.bytes == 1 { return Option(str).Some("u8") }
+  if t.bytes == 2 { return Option(str).Some("u16") }
+  if t.bytes == 4 { return Option(str).Some("u32") }
+  if t.bytes == 8 { return Option(str).Some("u64") }
+  Option(str).None
+}
+## The verdict of one `comptime for` range-bound operation's CT-12 guard (Comptime §2.6): it may be
+## performed, or it fails as a checked overflow, or it divides by zero. Both folders decide on it with
+## an exhaustive `match`.
+pub RangeGuard := enum { RgPass, RgOverflow, RgDivZero }
+## Does a checked `a <op> b` overflow the recorded type `w`? No recorded type, no judgement: false.
+ct_bound_ovf := fn(op : u8, a : i64, b : i64, w : Option(str)) -> bool {
+  match w { Some(t) => { ct_arith_ovf(op, a, b, t) }; None => { false } }
+}
+## The CT-12 guard of one `comptime for` range-bound operation (Comptime §2.6), ONE place for both
+## folders. `w` is the operation's type (`ct_bound_w`), `chk` false inside `unchecked`. A zero divisor
+## fails in both modes (hardware-defined, #684); a checked `+ - *` fails when the exact result does
+## not fit `w` (#1234) — never a wrapped bound.
+pub ct_range_guard := fn(op : u8, lv : i64, rv : i64, w : Option(str), chk : bool) -> RangeGuard {
+  if (op == 19 or op == 29) and rv == 0 { return RangeGuard.RgDivZero }
+  if chk and (op == 16 or op == 17 or op == 18) and ct_bound_ovf(op, lv, rv, w) { return RangeGuard.RgOverflow }
+  RangeGuard.RgPass
+}
 ## The const arithmetic of a `comptime for` range bound, ONE place for both folders (x86
 ## `ctfold::comptime_range_bound_at` and the twins' `comp_range_bound_at`, #696): `+ - * / %` over two
 ## folded operands, the same op set as `global_init_value`. Any other op is not a bound: `None`.
-## A ZERO divisor is never divided: `None`, so it is refused, never the bound 0 (Comptime §2.6, #684).
-pub ct_range_arith := fn(op : u8, lv : i64, rv : i64) -> Option(i64) {
-  mut v := 0
-  mut dz := false
-  if (op == 19 or op == 29) and rv == 0 { dz = true }
-  if dz == false {
-    if op == 16 { v = unchecked (lv + rv) }
-    if op == 17 { v = unchecked (lv - rv) }
-    if op == 18 { v = unchecked (lv * rv) }
-    if op == 19 { v = unchecked (lv / rv) }
-    if op == 29 { v = unchecked (lv % rv) }
+## An operation whose guard fails (`ct_range_guard`) is never performed: `None`, so it is refused,
+## never a wrapped or 0 bound (Comptime §2.6, #684, #1234).
+pub ct_range_arith := fn(op : u8, lv : i64, rv : i64, w : Option(str), chk : bool) -> Option(i64) {
+  g : RangeGuard = ct_range_guard(op, lv, rv, w, chk)
+  match g {
+    RgPass => { ct_range_perform(op, lv, rv) }
+    RgOverflow | RgDivZero => { Option(i64).None }
   }
-  if dz == false and (op == 16 or op == 17 or op == 18 or op == 19 or op == 29) { return Option(i64).Some(v) }
+}
+## Perform a bound operation whose guard passed. Any op outside `+ - * / %` is not a bound: `None`.
+ct_range_perform := fn(op : u8, lv : i64, rv : i64) -> Option(i64) {
+  mut v := 0
+  if op == 16 { v = unchecked (lv + rv) }
+  if op == 17 { v = unchecked (lv - rv) }
+  if op == 18 { v = unchecked (lv * rv) }
+  if op == 19 { v = unchecked (lv / rv) }
+  if op == 29 { v = unchecked (lv % rv) }
+  if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 { return Option(i64).Some(v) }
   Option(i64).None
 }
 

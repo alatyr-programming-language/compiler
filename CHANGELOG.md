@@ -151,6 +151,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
   grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
   aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
   aarch64, riscv64 and wasm still trap on the granted form (#1157).
+- **A checked `+ - *` that overflows in a `comptime for` range bound is refused, not wrapped
+  (#1234).** `0 .. K + 2` with `K : u64 = 2^64 - 1` wrapped to 1 and unrolled once on all four
+  backends, and the `i64` shape wrapped to MIN and unrolled zero times. The fold now runs the
+  checked guard in the operation's own type and width (Comptime §2.6): a located compile error on
+  x86_64, a trap on the twins until #1232. Inside `unchecked` the wrap is defined and still folds.
+  The overflow judgement is now one function in `lower_layout`, shared by the const checker and both
+  range-bound folders.
 
 ## 0.2.21 — 2026-11-01
 
