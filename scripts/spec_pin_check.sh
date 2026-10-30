@@ -33,7 +33,7 @@
 # SKIPPED with the reason rather than passing silently. A skip that is not said out loud is how a check
 # becomes decoration.
 #
-# WHAT IT DELIBERATELY DOES NOT READ: the dated promotion entries of `seed/VERSION`. They are
+# WHAT IT DELIBERATELY DOES NOT READ: the dated promotion entries (in `seed/HISTORY.md` since #1130). They are
 # APPEND-ONLY records, and dozens of them end with "The specification pin (1.0.0 plus post-tag commits to
 # b4e7979) did not move." — a true statement about the promotion that wrote it and a FALSE one about
 # today. Scanning them would make this check permanently red, or would force rewriting history; both are

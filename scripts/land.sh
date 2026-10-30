@@ -179,14 +179,14 @@ pr_seed_binary_check() { # changed-paths
 ## The seed's promotion journal is append-only: never rewrite an entry to make an old hash resolve.
 ## Since #1130 the journal is `seed/HISTORY.md`, and `seed/VERSION` keeps only its header and the
 ## CURRENT SEED block. So the protected lines are every line of `seed/HISTORY.md`, plus the two
-## `current-seed-*` lines of `seed/VERSION`, which a PR never moves (a promotion is the integrator's,
+## `current-seed-*` lines and the `rs-ancestor:` line of `seed/VERSION`, which a PR never moves (a promotion is the integrator's,
 ## and it is landed by hand). The header prose of `seed/VERSION` is not history and may be edited.
 pr_seed_version_append_only_check() { # changed-paths deleted-line-count
   printf '%s\n' "$1" | grep -qxE 'seed/(VERSION|HISTORY\.md)' || return 0
   case "${2:-0}" in ''|0) return 0 ;; esac
   echo "  REFUSE: the seed journal is append-only and this PR deletes ${2} protected line(s)."
   echo '          Protected means every line of seed/HISTORY.md (the dated promotion entries) and the'
-  echo '          `current-seed-sha256` and `current-seed-version` lines of seed/VERSION: rewriting them is'
+  echo '          `current-seed-sha256`, `current-seed-version` and `rs-ancestor:` lines of seed/VERSION: rewriting them is'
   echo '          how an old hash is made to resolve. A new promotion entry is APPENDED to seed/HISTORY.md.'
   echo '          The ONE mutable line is `# spec-pin:` in seed/VERSION, which moves with the pin.'
   return 1
@@ -194,13 +194,13 @@ pr_seed_version_append_only_check() { # changed-paths deleted-line-count
 
 ## The deletions the rule above PROTECTS, from `git diff` lines on stdin, given the file they come from.
 ## In seed/HISTORY.md every deleted line counts. In seed/VERSION only the two `current-seed-*` fields
-## count: `# spec-pin:` is the CURRENT pin claim and moving the pin REQUIRES rewriting exactly that line
+## count, with the fixed `rs-ancestor:` provenance line: `# spec-pin:` is the CURRENT pin claim and moving the pin REQUIRES rewriting exactly that line
 ## (#1080 hit this when every deletion counted: one modified `spec-pin:` line, LAND REFUSED), and the
 ## header prose is description, not the journal.
 pr_seed_version_protected_deletions() { # file ; deleted diff lines on stdin -> count of protected ones
   case "${1:-seed/VERSION}" in
     seed/HISTORY.md) grep -c '' ;;
-    *) grep -cE '^-current-seed-(sha256|version):' ;;
+    *) grep -cE '^-(current-seed-(sha256|version)|rs-ancestor):' ;;
   esac
 }
 
@@ -264,7 +264,7 @@ source "$ROOT/scripts/attribution.sh"
 ##   3  an integrator tail commit — keep walking to its first parent
 ##   1  anything else — refuse
 LAND_TAIL_ORACLE_RE='^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline|scripts/xbackend_diff\.baseline)$'
-LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|scripts/package_cli_test\.sh|CHANGELOG\.md)$'
+LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scripts/package_cli_test\.sh|CHANGELOG\.md)$'
 main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
   if [ "$1" -ge 2 ]; then
     [ "$2" = yes ] && return 0
@@ -542,7 +542,7 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
   [ $? = 3 ]; _ck $? provenance-stopped-at-an-oracle-commit
   main_provenance_step 1 - "$(printf '%s\n%s' scripts/corpus.manifest scripts/xbackend_diff.baseline)" o2 >/dev/null 2>&1
   [ $? = 3 ]; _ck $? provenance-stopped-at-a-manifest-plus-ratchet-commit
-  main_provenance_step 1 - "$(printf '%s\n' package.al seed/alatyr seed/VERSION scripts/package_cli_test.sh CHANGELOG.md)" r1 >/dev/null 2>&1
+  main_provenance_step 1 - "$(printf '%s\n' package.al seed/alatyr seed/VERSION seed/HISTORY.md scripts/package_cli_test.sh CHANGELOG.md)" r1 >/dev/null 2>&1
   [ $? = 3 ]; _ck $? provenance-stopped-at-a-reseed-commit
   main_provenance_step 1 - CHANGELOG.md c1 >/dev/null 2>&1
   [ $? = 1 ]; _ck $? provenance-allowed-a-direct-CHANGELOG-push-as-a-reseed

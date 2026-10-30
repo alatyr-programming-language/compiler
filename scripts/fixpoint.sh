@@ -63,7 +63,7 @@ seed_identity_check() { # version-file package-file seed-binary
     echo "FAIL: seed/VERSION has no CURRENT SEED block (need both 'current-seed-sha256:' and"
     echo "      'current-seed-version:' lines). That block is the only place the file states which"
     echo "      compiler seed/alatyr IS — the entries themselves read in two directions, so the topmost"
-    echo "      one is not the newest. See the HOW TO READ THIS FILE header."
+    echo "      one is not the newest. See seed/HISTORY.md's reading note."
     return 6
   fi
   have_sha="$(sha256sum "$SEED" | cut -d' ' -f1)"

@@ -121,7 +121,7 @@ The full delta audit stays in `seed/HISTORY.md`. A tag is not in the input tree 
 it, and a tag can be moved with a force-push — so it is navigation, not the record.
 
 Two numbers that are **not** the compiler's version: the specification revision (this build cites it,
-`README.md` carries the badge) and the seed lineage in `seed/VERSION`. The specification's own tags
+`README.md` carries the badge) and the seed lineage in `seed/HISTORY.md`. The specification's own tags
 (`v1.0.0`, `v1.1.0`, …) live in the sibling repository; a `v1.1.0` here would mean something else entirely.
 
 ## Unreleased
