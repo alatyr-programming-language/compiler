@@ -140,6 +140,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   infers its type argument from the receiver was its own instance below two words, tagged by the
   receiver's name, and `size(T)` in it was 8 bytes: `push` on a `Vec(u8)`, `Vec(u16)` or `Vec(u32)`
   wrote with a word stride. It is now the same instance as `vec::push(u32, v, x)`.
+- **`v[i]`, `v[i] = x` and `v[lo..hi]` on a `Vec` call `at`, `index_set` and `index_range` (#987).**
+  They were the built-in array index over the `Vec` handle's own words: the read gave a handle word,
+  the write was lost and the range viewed the handle. `v.at(i)`, `v.index_set(i, x)` and
+  `v.index_range(lo, hi)` now infer `T` through the `ptr(Vec(T))` parameter instead of being refused.
+  `v[i].f = x` is refused with a diagnostic: `v[i]` is a value.
 
 ## 0.2.21 — 2026-11-01
 
