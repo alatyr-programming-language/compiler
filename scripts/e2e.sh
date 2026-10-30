@@ -74,6 +74,11 @@
 #   ALATYR_E2E_RUNTIME_RETRIES=<n>    extra observations of a child that breaches that deadline
 #                                     (default 1). `0` reproduces the pre-#537 one-observation
 #                                     behaviour on purpose and says so; a gate never sets it.
+#   ALATYR_E2E_LIST_ROWS=1     print every recorded row (`printf %q`-quoted, one per line, table order)
+#                              and exit 0, WITHOUT building or running anything. This is the table as
+#                              the driver itself sees it — loops and `_`-prefixed wrappers already
+#                              expanded — so a reader of the registrations (scripts/fixture_expect.sh,
+#                              #1126) parses the rows rather than re-deriving them with a grep.
 set -u
 # AGENTS.md: "Run everything with `ulimit -c 0` — fail-loud traps drop 8 MB core dumps." Several
 # fixtures trap ON PURPOSE (that IS the assertion), so the suite must set this itself rather than
@@ -92,6 +97,10 @@ FILTER="${ALATYR_E2E_FILTER:-}"
 E2E_TEST="${ALATYR_E2E_TEST_DIR:-$ROOT/test}"
 WORK="$ROOT/target/e2e"
 
+## ALATYR_E2E_LIST_ROWS needs no compiler: skip the build, the snapshot and the subtree copies (and the
+## `rm -rf "$WORK"` among them, so listing never disturbs an e2e run's scratch). Not indented, so that
+## the block it guards keeps its lines byte for byte.
+if [ -z "${ALATYR_E2E_LIST_ROWS:-}" ]; then
 STAGE1="$ROOT/target/debug/alatyr"
 if [ ! -x "$STAGE1" ] && [ -x "$ROOT/target/alatyr" ]; then STAGE1="$ROOT/target/alatyr"; fi
 rebuild=1
@@ -144,6 +153,7 @@ for _sub in package link; do
   fi
 done
 unset _sub
+fi # ALATYR_E2E_LIST_ROWS
 
 # `$T` is the CURRENT ROW's private scratch directory; the driver sets it per row. Assigning it here
 # (rather than leaving it unset) keeps `set -u` from turning a stray direct helper call into an
@@ -11997,6 +12007,10 @@ run issue977_struct_lit_field_ctx 2
 E2E_PHASE=dispatch
 _e2e_check_armed || exit 1
 E2E_RECORDED="$E2E_N"
+if [ -n "${ALATYR_E2E_LIST_ROWS:-}" ]; then
+  for ((i = 1; i <= E2E_RECORDED; i++)); do printf '%s\n' "${E2E_ROW[i]}"; done
+  exit 0
+fi
 
 ## A `*_has` needle that appears in its OWN fixture's comments makes the assertion VACUOUS. The
 ## helpers grep the whole formatted artifact, and `fmt_test` separately asserts comment fidelity, so
