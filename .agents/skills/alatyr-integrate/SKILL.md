@@ -314,7 +314,7 @@ The screening is where the safety lives, and all of it happens before anything i
    transition counts, so that every PR's record is complete on its own.
 
 The merge queue does this screening and gating mechanically: after the §2 review, run
-`scripts/queue.sh --enqueue N`, and the timer on omen composes, gates, bisects and publishes (#1127;
+`scripts/queue.sh --enqueue N=<the reviewed head sha>`, and the timer on omen composes, gates, bisects and publishes (#1127;
 the rules are in the script's header). Only the integrator enqueues. A batch built by hand instead
 uses the manual merge above and the §4 gate, and keeps the push its own leased statement.
 

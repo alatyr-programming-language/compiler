@@ -11,7 +11,7 @@
 #
 # ## The protocol
 #
-# - Entry is the label `queue` plus a marker comment `queue-head: <sha>`, both written by `--enqueue N`
+# - Entry is the label `queue` plus a marker comment `queue-head: <sha>`, both written by `--enqueue N=SHA`
 #   after the alatyr-integrate §2 review. Only the integrator enqueues (alatyr-integrate, alatyr-lane);
 #   every panel posts as the same GitHub account, so the marker records WHICH object was reviewed, not
 #   who reviewed it. A PR whose head moved past its marker is dropped with a comment, never gated.
@@ -142,6 +142,17 @@ queue_gate_running() { # ps-args-text -> 0 running, 1 not
   printf '%s\n' "$1" | awk '$1 ~ /(^|\/)bash$/ && $2 ~ /(^|\/)scripts\/full\.sh$/ { f = 1 } END { exit !f }'
 }
 
+## Strikes: a failure that is not visibly the PR's can still be caused by it (a PR that breaks
+## `nix develop`, or makes the corpus walk nondeterministic). The first one ends the pass quietly; the
+## SECOND in a row for the same PRs at the same heads is charged to them, so no PR blocks the queue by
+## failing the same way every pass. Keyed by the PR=head list; a verdict clears it.
+queue_strike() { # dir key -> prints the count after this strike
+  local f="$1/strike-$(printf '%s' "$2" | cksum | cut -d' ' -f1)" n=0
+  [ -f "$f" ] && n="$(cat "$f")"
+  n=$((n + 1)); printf '%s\n' "$n" > "$f"; echo "$n"
+}
+queue_strike_clear() { rm -f "$1/strike-$(printf '%s' "$2" | cksum | cut -d' ' -f1)"; } # dir key
+
 ## The bisection driver. It calls three functions the caller defines:
 ##   queue_try PR...   0 green, 1 red, 2 not the PRs' fault (ends the pass, everything stays queued)
 ##   queue_land PR...  publish the object queue_try last built for exactly these PRs
@@ -190,7 +201,7 @@ Closes #1")" ]; _ck $? entry-refused-a-ready-PR
   [ -n "$(queue_entry_refusal main false "" "Closes #1
 Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   [ -n "$(queue_entry_refusal main false "" "this Closes #1 mid-line")" ]; _ck $? entry-took-a-mid-line-marker
-  [ "$(queue_relation_link "$(printf 'Partly fixes #5 too.\n\nRefs #1127')")" = "Refs #1127" ]; _ck $? link-not-the-line-initial-marker
+  [ "$(queue_relation_link "$(printf 'Partly Fixes #5 too, and Closes #9 mid-line.\n\nRefs #1127')")" = "Refs #1127" ]; _ck $? link-not-the-line-initial-marker
   [ "$(queue_relation_link "$(printf 'x\nCloses #7 (all of it)')")" = "Closes #7" ]; _ck $? link-not-normalised
   queue_head_ok "$a" "$a"; _ck $? head-check-refused-the-reviewed-head
   queue_head_ok "$a" "$b"; [ $? = 1 ]; _ck $? head-check-took-a-moved-head
@@ -217,12 +228,19 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   [ "$(queue_solo_outcome "$t/s-moved-tree")" = infra ]; _ck $? solo-blamed-the-PR-for-a-tree-that-moved
   printf '*** NOT LANDABLE — a second walk of the same tree did not reproduce the oracle (rc 1) ***\n' > "$t/s-walk"
   [ "$(queue_solo_outcome "$t/s-walk")" = infra ]; _ck $? solo-blamed-the-PR-for-a-nondeterministic-walk
+  printf '*** FULL GATE: FAILURES ***\n\n*** NOT LANDABLE — gate rc 1, post-gate assertions FAILED ***\n' > "$t/s-red-moved"
+  [ "$(queue_solo_outcome "$t/s-red-moved")" = infra ]; _ck $? solo-blamed-the-PR-for-a-red-gate-on-a-moved-tree
+  printf 'error: nix develop failed\n\n*** NOT LANDABLE — gate rc 1, post-gate assertions ok ***\n' > "$t/s-died"
+  [ "$(queue_solo_outcome "$t/s-died")" = infra ]; _ck $? solo-blamed-the-PR-for-a-gate-that-never-ran
   printf '\n*** LAND REFUSED (PR shape) — nothing was merged ***\n' > "$t/s-shape"
   [ "$(queue_solo_outcome "$t/s-shape")" = refused ]; _ck $? solo-missed-a-shape-refusal
   printf '\n*** LAND REFUSED (head moved) — x ***\n' > "$t/s-head"
   [ "$(queue_solo_outcome "$t/s-head")" = moved ]; _ck $? solo-missed-a-moved-head
   printf '\n*** LAND REFUSED (provenance of main) — nothing was merged ***\n' > "$t/s-prov"
   [ "$(queue_solo_outcome "$t/s-prov")" = infra ]; _ck $? solo-blamed-the-PR-for-provenance
+  [ "$(queue_strike "$t" "1=$a")" = 1 ] && [ "$(queue_strike "$t" "1=$a")" = 2 ] && [ "$(queue_strike "$t" "1=$b")" = 1 ]
+  _ck $? strikes-not-counted-per-PR-and-head
+  queue_strike_clear "$t" "1=$a"; [ "$(queue_strike "$t" "1=$a")" = 1 ]; _ck $? strikes-not-cleared-by-a-verdict
   rm -rf "$t"
   [ "$(queue_push_args "$a" "$b")" = "--no-verify origin $a:refs/heads/main --force-with-lease=refs/heads/main:$b" ]
   _ck $? push-arguments-are-not-the-leased-exact-object
@@ -261,7 +279,7 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   if [ -n "$bad" ]; then echo "*** queue self-test: FAILED —$bad ***"; return 1; fi
   echo "ok   queue self-test: $k checks — reviewed-head marker, entry rules, head check, gate verdict,"
   echo "     push arguments, busy box and the bisection plan"
-  [ "$k" -ge 44 ] || { echo "queue self-test: $k checks, expected 44"; return 1; }
+  [ "$k" -ge 48 ] || { echo "queue self-test: $k checks, expected 48"; return 1; }
 }
 
 # ---- GitHub ------------------------------------------------------------------------------------------
@@ -327,12 +345,17 @@ ${LINK[$pr]}"
   rm -rf "$empty_gh"
   git diff --exit-code --quiet && git diff --cached --exit-code --quiet &&
     [ "$(git rev-parse HEAD)" = "$BUILT" ] || { say "the tree moved during the gate; this pass ends"; return 2; }
-  queue_gate_verdict "$rc" "$GATE_LOG"
-  case $? in
-    0) say "GREEN on $BUILT"; return 0 ;;
-    1) say "RED (full.sh rc $rc) on $BUILT"; return 1 ;;
-    *) say "the gate on $BUILT ended with no verdict (rc $rc); this pass ends, see $GATE_LOG"; return 2 ;;
+  local key="" v; for pr in "$@"; do key="$key $pr=${HEAD[$pr]}"; done
+  queue_gate_verdict "$rc" "$GATE_LOG"; v=$?
+  case $v in
+    0) queue_strike_clear "$QDIR" "$key"; say "GREEN on $BUILT"; return 0 ;;
+    1) queue_strike_clear "$QDIR" "$key"; say "RED (full.sh rc $rc) on $BUILT"; return 1 ;;
   esac
+  if [ "$(queue_strike "$QDIR" "$key")" -ge 2 ]; then
+    queue_strike_clear "$QDIR" "$key"
+    say "the gate on $BUILT ended with no verdict twice for the same heads; charged to them as red"; return 1
+  fi
+  say "the gate on $BUILT ended with no verdict (rc $rc); this pass ends, see $GATE_LOG"; return 2
 }
 
 gate_line() { grep -m1 '^\*\*\* FULL GATE' "$1" 2>/dev/null || echo '(no verdict line)'; }
@@ -436,11 +459,27 @@ queue_solo() { # pr -> 0 done (landed, failed or dropped), 2 the pass ends
       fi
       queue_publish "$obj" "$BUILT_BASE" || return 2
       queue_accept "alone, through land.sh" "$obj" "$BUILT_BASE" "$log" "$pr" ;;
-    red|refused) queue_fail "$pr" ;;
+    red) queue_strike_clear "$QDIR" "$pr=${HEAD[$pr]}"; queue_fail "$pr" ;;
+    refused)
+      comment "$pr" "**Merge queue: refused** on head \`${HEAD[$pr]}\` before any gate ran (\`land.sh $pr\`, solo). Its verdict lines:
+
+\`\`\`
+$(grep -E '^\*\*\* |REFUSE' "$log" | tail -n 15)
+\`\`\`"
+      relabel "$pr" queue-failed queue ;;
     moved)
       comment "$pr" "**Merge queue: dropped.** The head moved past the reviewed \`${HEAD[$pr]}\` before its solo gate. Review the current head and re-enqueue."
       relabel "$pr" "" queue ;;
-    *) say "solo landing of #$pr stopped for a reason that is not the PR's; this pass ends, see $log"; return 2 ;;
+    *) if [ "$(queue_strike "$QDIR" "$pr=${HEAD[$pr]}")" -ge 2 ]; then
+         queue_strike_clear "$QDIR" "$pr=${HEAD[$pr]}"
+         comment "$pr" "**Merge queue: stopped twice** on head \`${HEAD[$pr]}\` without a verdict that blames this PR, so it leaves the queue rather than block it. Last verdict lines (\`$(basename "$log")\` under \`target/queue/\` on omen):
+
+\`\`\`
+$(grep -E '^\*\*\* ' "$log" | tail -n 10)
+\`\`\`"
+         relabel "$pr" queue-failed queue; return 0
+       fi
+       say "solo landing of #$pr stopped for a reason that is not the PR's; this pass ends, see $log"; return 2 ;;
   esac
   return 0
 }
@@ -452,7 +491,7 @@ queue_once() {
     flock -n 9 || { say "another pass holds the lock"; return 0; }
   fi
   [ -z "$(git status --porcelain --untracked-files=no)" ] || die "the queue checkout is dirty"
-  local prs pr head marker out why solo batch=() shead rc
+  local prs pr head marker out why solo batch=() shead rc base draft labels body
   prs="$(gh_cmd pr list -R "$REPO" --label queue --state open --json number --jq '.[].number' | sort -n | head -n "$QUEUE_MAX")"
   [ -n "$prs" ] || { say "queue empty"; return 0; }
   say "queued: $(echo $prs)"
@@ -460,10 +499,9 @@ queue_once() {
     head="$(pr_field "$pr" headRefOid .headRefOid)" && [ -n "$head" ] &&
       marker="$(pr_marker "$pr")" || { say "could not read #$pr from GitHub; this pass ends"; return 0; }
     if ! queue_head_ok "$marker" "$head"; then
-      comment "$pr" "**Merge queue: dropped.** The reviewed head is \`${marker:-none}\`; the current head is \`$head\`. A verdict covers one object: review the current head and re-enqueue (\`scripts/queue.sh --enqueue $pr\`)."
+      comment "$pr" "**Merge queue: dropped.** The reviewed head is \`${marker:-none}\`; the current head is \`$head\`. A verdict covers one object: review the current head and re-enqueue (\`scripts/queue.sh --enqueue $pr=<reviewed sha>\`)."
       relabel "$pr" "" queue; continue
     fi
-    local base draft labels body
     base="$(pr_field "$pr" baseRefName .baseRefName)" && [ -n "$base" ] &&
       draft="$(pr_field "$pr" isDraft .isDraft)" && [ -n "$draft" ] &&
       labels="$(pr_field "$pr" labels '[.labels[].name] | join(",")')" &&
@@ -494,7 +532,8 @@ $(printf '%s\n' "$out" | tail -n 25)
       comment "$pr" "**Merge queue: refused** on head \`$head\`: the body's line-initial marker is \`${LINK[$pr]}\`, but land.sh reads the first relation anywhere in the title and body as another issue. Remove the other mention, or reword it, and re-enqueue."
       relabel "$pr" queue-failed queue; continue
     fi
-    BRANCH[$pr]="$(pr_field "$pr" headRefName .headRefName)"
+    BRANCH[$pr]="$(pr_field "$pr" headRefName .headRefName)" && [ -n "${BRANCH[$pr]}" ] ||
+      { say "could not read #$pr's branch from GitHub; this pass ends"; return 0; }
     solo="$(printf '%s\n' "$out" | sed -n 's/^land-screen: .* solo=\([a-z]*\) .*$/\1/p')"
     if [ "$solo" = yes ]; then
       [ "${#batch[@]}" = 0 ] || continue   # a solo PR waits until it is first in line
@@ -515,7 +554,8 @@ queue_enqueue() { # PR=SHA...  — the SHA is the head the review read; a later 
   local arg pr want head
   for arg in "$@"; do
     pr="${arg%%=*}"; want="${arg#*=}"
-    case "$pr/$want" in */*[!0-9a-f]*|*/|[!0-9]*) die "use --enqueue N=<reviewed 40-hex sha>, got '$arg'" ;; esac
+    case "$pr" in ''|0*|*[!0-9]*) die "use --enqueue N=<reviewed 40-hex sha>, got '$arg'" ;; esac
+    case "$want" in ''|*[!0-9a-f]*) die "use --enqueue N=<reviewed 40-hex sha>, got '$arg'" ;; esac
     [ "${#want}" = 40 ] || die "use the full 40-hex sha of the reviewed head, got '$want'"
     head="$(pr_field "$pr" headRefOid .headRefOid)" || die "cannot read #$pr"
     [ "$head" = "$want" ] || die "#$pr's head is $head, not the reviewed $want: review the current head"
@@ -555,7 +595,7 @@ Type=oneshot
 WorkingDirectory=$wt
 Environment=PATH=/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin
 Environment=QUEUE_LOCK_HELD=1
-ExecStart=/run/current-system/sw/bin/flock -n -o $wt/target/queue/lock /run/current-system/sw/bin/bash -c 'exec >> target/queue/queue.log 2>&1; git fetch -q origin main && git switch -q --detach origin/main && git show origin/main:scripts/queue.sh > target/queue/queue-run.sh && nix build --inputs-from . nixpkgs#gh -o target/queue/gh-tool && PATH="\$\$PWD/target/queue/gh-tool/bin:\$\$PATH" exec bash target/queue/queue-run.sh --once || echo "queue: bootstrap failed (rc \$\$?)"'
+ExecStart=/run/current-system/sw/bin/flock -n -o $wt/target/queue/lock /run/current-system/sw/bin/bash -c 'exec >> target/queue/queue.log 2>&1; git fetch -q origin main && git switch -q --detach origin/main && git show origin/main:scripts/queue.sh > target/queue/queue-run.sh && nix build --inputs-from . nixpkgs#gh -o target/queue/gh-tool && PATH="\$\$PWD/target/queue/gh-tool/bin:\$\$PATH" exec bash target/queue/queue-run.sh --once || { echo "queue: bootstrap failed (rc \$\$?)"; exit 1; }'
 TimeoutStartSec=infinity
 EOF
   cat > "$unit/alatyr-queue.timer" <<EOF
@@ -582,10 +622,10 @@ case "${1:-}" in
     ## under target/queue/ (a switch rewrites scripts/queue.sh under the running bash, the #1093 hazard).
     [ "$(basename "$ROOT")" = queue ] && [ "$(basename "$(dirname "$ROOT")")" = .worktrees ] ||
       [ "${ALATYR_QUEUE_ANY_CHECKOUT:-0}" = 1 ] || die "--once runs in .worktrees/queue, not $ROOT"
-    case "$SELF" in
-      "$QDIR"/*) : ;;
-      *) mkdir -p "$QDIR" && cp "$SELF" "$QDIR/queue-run-$$.sh" || die "cannot copy myself to $QDIR"
-         exec bash "$QDIR/queue-run-$$.sh" --once ;;
+    case "$(basename "$SELF")" in
+      queue-run-once-*.sh) trap 'rm -f "$SELF"' EXIT ;;
+      *) mkdir -p "$QDIR" && cp "$SELF" "$QDIR/queue-run-once-$$.sh" || die "cannot copy myself to $QDIR"
+         exec bash "$QDIR/queue-run-once-$$.sh" --once ;;
     esac
     cd "$ROOT" && queue_once ;;
   --install)   queue_install ;;
