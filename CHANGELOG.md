@@ -126,6 +126,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`alloc::with(ar)` reaches through a `match` (#992).** An `alloc::with` written in a match arm,
+  or a `match` inside an `alloc::with` body, left the calls in it without their elided allocator
+  argument, and `vec::new(u64)` trapped "allocator out of memory". They are now passed `ptr(ar)`.
+
 ## 0.2.18 — 2026-10-31
 
 - **Unary `-` over a signed integer traps on the minimum value, at every width (#1049).** `-x` with
