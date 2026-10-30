@@ -757,6 +757,46 @@ else
   [ "$pgr_rows" -gt 0 ] || { echo "  FAIL progen regress: the list holds no row"; fail=1; }
 fi
 
+# The CONTAINER MATRIX (#1124): element shape x container x operation, one generated program per cell
+# that stores known values in a library container and exits 42 only if every read equals what was
+# stored. On x86_64 every WRONG and REFUSED cell must have its row, under an open issue, in
+# scripts/container-matrix.deviations.tsv, and every row must still reproduce: the fix deletes its own
+# rows. A TRAP is a recorded outcome. The self-test runs first: a planted wrong read must come out WRONG
+# and turn the rule red, or a green matrix below would mean nothing.
+echo "### CONTAINER MATRIX (x86_64: WRONG/REFUSED held by scripts/container-matrix.deviations.tsv) ###"
+CMX_LOG="$LOGDIR/full_container_matrix.log"
+cmx_cover="NOT RUN"
+if [ ! -x "$ROOT/target/debug/alatyr" ]; then
+  echo "  FAIL container matrix: no executable at $ROOT/target/debug/alatyr"; fail=1
+else
+  rm -rf "$ROOT/target/container_matrix" "$ROOT/target/container_matrix_selftest"
+  python3 scripts/container_matrix.py --self-test "$ROOT/target/debug/alatyr" \
+    "$ROOT/target/container_matrix_selftest" > "$CMX_LOG" 2>&1
+  cmx_st=$?
+  grep -E '^container matrix self-test: [0-9]+ failed' "$CMX_LOG" | tail -1 | sed 's/^/  /'
+  if [ "$cmx_st" != 0 ]; then
+    echo "  FAIL container matrix self-test: rc=$cmx_st"
+    grep -E '^FAIL ' "$CMX_LOG" | head -8 | sed 's/^/    /'
+    fail=1
+  fi
+  python3 scripts/container_matrix.py --jobs "${ALATYR_MATRIX_JOBS:-4}" --gate "$ROOT/target/debug/alatyr" \
+    "$ROOT/target/container_matrix" >> "$CMX_LOG" 2>&1
+  cmx_rc=$?
+  cmx_line="$(grep -E '^container matrix: cells=' "$CMX_LOG" | tail -1)"
+  if [ -z "$cmx_line" ]; then
+    echo "  FAIL container matrix: no summary line; whether any cell ran is unknown"; fail=1
+    cmx_cover="UNKNOWN — no summary"
+  else
+    echo "  $cmx_line"
+    cmx_cover="${cmx_line#container matrix: }"
+  fi
+  if [ "$cmx_rc" != 0 ]; then
+    echo "  FAIL container matrix: rc=$cmx_rc (the cells and rows are named in $CMX_LOG)"
+    grep -E '^FAIL ' "$CMX_LOG" | head -12 | sed 's/^/    /'
+    fail=1
+  fi
+fi
+
 if [ "$fail" != 0 ]; then
   echo "*** FULL GATE: FAILURES ***"
 elif [ "$sw_status" = "RAN" ]; then
@@ -773,6 +813,7 @@ elif [ "$sw_status" = "RAN" ]; then
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
   echo "    progen:          ${pg_cover:-NO SUMMARY LINE}"
+  echo "    container matrix: $cmx_cover"
 else
   echo "*** FULL GATE: GREEN — but the SWEEPS DID NOT RUN (sweeps STATUS=$sw_status): the aarch64/"
   echo "    riscv64/wasm backends were NOT exercised by the sweeps. Re-run with --force-sweeps before"
@@ -789,5 +830,6 @@ else
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
   echo "    progen:          ${pg_cover:-NO SUMMARY LINE}"
+  echo "    container matrix: $cmx_cover"
 fi
 exit "$fail"
