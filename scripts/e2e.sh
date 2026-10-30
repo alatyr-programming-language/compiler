@@ -12041,7 +12041,8 @@ run for_slice_str_range 35
 run for_slice_str_call 32
 run for_slice_str_bytes 15
 ## A GENERIC `-> Slice(T)` call with `T = str`: the call arm takes `slice_ret_elem`'s answer, not a
-## private copy that matched only the literal `Slice(str)` return (review of PR #1224).
+## private copy that matched only the literal `Slice(str)` return (review of PR #1224). NON-VACUOUS: the
+## parent at 2cf60b45 (x86_64) exited 1, and so did the PR's first head 1618dd05.
 run for_slice_str_call_generic 32
 
 # ==================================================================================================
