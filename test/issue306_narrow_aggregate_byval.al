@@ -10,3 +10,4 @@ main := fn() -> u64 {
   pair := BytePair(left = 40, right = 2)
   sum_pair(pair)
 }
+## expect: run 42

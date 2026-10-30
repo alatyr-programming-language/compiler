@@ -49,3 +49,4 @@ main := fn() -> u64 {
   if r3.x + r3.y + r3.z != 42 { return 6 }
   return 42
 }
+## expect: run 42

@@ -35,3 +35,4 @@ main := fn() -> u64 {
   match w { E::Num(x) => { return 6 } E::Var(s, n) => { if s + n != 42 { return 7 } } E::Pair(x, y, z) => { return 8 } }
   42
 }
+## expect: run 42

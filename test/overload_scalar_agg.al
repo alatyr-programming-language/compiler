@@ -12,3 +12,4 @@ main := fn() -> u64 {
   y := g(A(v = 2))    ## struct arg     → g(A)   → 202
   return y - x - 50   ## 202 - 110 - 50 = 42
 }
+## expect: run 42

@@ -9,3 +9,4 @@ main := fn() -> u64 {
   ps : [P; 2] = [P(x = 1, y = 2), P(x = 3, y = 4)]
   cmp(ps)
 }
+## expect(x86_64): trap

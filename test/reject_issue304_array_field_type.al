@@ -5,3 +5,4 @@ main := fn() -> u64 {
   s.items[0].f = "text"
   return s.items[0].f
 }
+## expect: reject "type mismatch" "at line 5"

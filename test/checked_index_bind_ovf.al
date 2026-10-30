@@ -11,3 +11,4 @@ main := fn() -> u64 {
   y := x + 100
   return u64(y)
 }
+## expect: trap

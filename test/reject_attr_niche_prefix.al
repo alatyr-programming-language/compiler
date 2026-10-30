@@ -8,3 +8,4 @@ N := u64
 main := fn() -> u64 {
   return 3
 }
+## expect: reject

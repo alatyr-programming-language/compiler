@@ -7,3 +7,4 @@ main := fn() -> u64 {
   comptime if compiles(Pt(x = 1, y = 2).z) { return 3 } else { }
   42
 }
+## expect: run 42

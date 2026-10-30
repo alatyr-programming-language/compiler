@@ -14,3 +14,4 @@ main := fn() -> u64 {
   ## I11 / CG-8, would trap the old `111 - 212 + 143` which added 143 to an underflowed u64).
   return f(10, b) - f(10, a) - 59
 }
+## expect: run 42

@@ -7,3 +7,4 @@ main := fn() -> u64 {
   c := unchecked { 6 * 7 }
   a + b - c + 4
 }
+## expect(x86_64): run 42

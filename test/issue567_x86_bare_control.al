@@ -51,3 +51,4 @@ main := fn() -> u64 {
   if s5 != imax { return 11 }
   42
 }
+## expect(x86_64): run 42

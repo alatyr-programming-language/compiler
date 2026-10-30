@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if r.b != 8 { return 2 }
   r.u[0] + r.u[1] + r.u[2] + r.a - 6
 }
+## expect: run 42

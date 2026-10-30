@@ -7,3 +7,4 @@
 ## keeps the process exit code identical across the native and WASM exit conventions.
 udiv := fn(a : u64, b : u64) -> u64 { return a / b }
 main := fn() -> u64 { return udiv(18446744073709551615, 288230376151711744) }
+## expect: run 63

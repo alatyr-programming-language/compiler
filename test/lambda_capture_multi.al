@@ -5,3 +5,4 @@ main := fn() -> u64 {
   g := fn(x : u64, y : u64) -> u64 { return x + y + base }
   return g(8, 4)
 }
+## expect: run 42

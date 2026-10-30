@@ -12,3 +12,4 @@ main := fn() -> u64 {
   [1, 2, 3][0] = 65
   7
 }
+## expect: reject "or a pointer dereference [module value_expr_assign_array_lit_reject, at line 12"

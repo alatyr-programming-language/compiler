@@ -16,3 +16,4 @@ h := fn() -> u64 { comptime if target.arch != Arch.i386 { return 2 } else { retu
 main := fn() -> u64 {
   return f() + g() + h()
 }
+## expect: run 42

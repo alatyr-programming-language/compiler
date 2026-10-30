@@ -8,3 +8,4 @@ main := fn() -> u64 {
   xs := [S(c = Col.G(40), n = 1), S(c = Col.R, n = 1)]
   return match xs[0].c { Col::R => { 0 }; Col::G(v) => { v } } + xs[0].n + xs[1].n
 }
+## expect: run 42

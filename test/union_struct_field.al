@@ -9,3 +9,4 @@ main := fn() -> u64 {
   p := PackedHolder(u = U.p(Pair(x = 1, y = 2)), marker = 3)
   return h.u.p.x + h.u.p.y + h.marker + p.u.p.x + p.u.p.y + p.marker
 }
+## expect(x86_64): run 12

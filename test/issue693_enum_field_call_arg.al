@@ -7,3 +7,4 @@ main := fn() -> u64 {
   v := E.B(11, 22)
   id(v.a)
 }
+## expect: reject "not through a field name at line 8 in issue693_enum_field_call_arg"

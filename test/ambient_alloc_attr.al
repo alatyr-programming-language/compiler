@@ -18,3 +18,4 @@ main := fn() -> u64 {
   s := deref(get(P, ar, h))
   return s.x + s.y
 }
+## expect: run 42

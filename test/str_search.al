@@ -43,3 +43,4 @@ main := fn() -> u64 {
   if not (sm::str_cmp("abd", "abc") > 0) { return 14 }
   return 42
 }
+## expect: run 42

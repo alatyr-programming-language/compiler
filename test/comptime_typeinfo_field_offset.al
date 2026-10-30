@@ -10,3 +10,4 @@ sum_offsets := fn(T : type) -> u64 {
 }
 
 main := fn() -> u64 { sum_offsets(S) + sum_offsets(P) + sum_offsets(B) }
+## expect(x86_64): run 34

@@ -6,3 +6,4 @@ main := fn() -> u64 {
   b := Bad.A
   match b { Bad.A => { return 1 } Bad.B => { return 2 } }
 }
+## expect: reject "at line 4"

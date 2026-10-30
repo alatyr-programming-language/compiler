@@ -11,3 +11,4 @@ main := fn() -> u64 {
   deref(a.next).val = 2
   u64(a.val + b.val)
 }
+## expect(x86_64): run 42

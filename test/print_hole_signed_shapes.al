@@ -52,3 +52,4 @@ main := fn() -> u64 {
   print("uctl {}\n", uctl)
   42
 }
+## expect: run 42

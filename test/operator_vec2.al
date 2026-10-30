@@ -14,3 +14,4 @@ main := fn() -> u64 {
   r := p + q
   r.x + r.y
 }
+## expect: run 42

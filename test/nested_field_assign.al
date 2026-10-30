@@ -16,3 +16,4 @@ main := fn() -> u64 {
   ## read back via the nested-field READ path
   c.b.a.v + c.b.w + c.z   ## 40 + 1 + 1 = 42
 }
+## expect: run 42

@@ -4,3 +4,4 @@ main := fn() -> u64 {
   p : ptr(NoSuchTypeQQ) = ptr(mut y)
   return 42
 }
+## expect: reject "at line 4"

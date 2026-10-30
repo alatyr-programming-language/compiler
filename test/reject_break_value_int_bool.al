@@ -10,3 +10,4 @@ main := fn() -> u64 {
   }
   return z + k
 }
+## expect: reject

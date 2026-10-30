@@ -28,3 +28,4 @@ main := fn() -> u64 {
   z := idt(y)
   return (z.a + z.e + z.i) + (z.h - z.b)
 }
+## expect: run 24

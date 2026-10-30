@@ -9,3 +9,4 @@ main := fn() -> u64 {
   i : u64 = 8
   return TAB[i].x
 }
+## expect(x86_64): trap

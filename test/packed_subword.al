@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if sentinel != 6148914691236517121 { return 20 }
   return 42
 }
+## expect(x86_64): run 42

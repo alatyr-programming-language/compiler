@@ -25,3 +25,4 @@ main := fn() -> u64 {
   if not (mm::hypot(3.0, 4.0) == 5.0) { return 21 }
   return 42
 }
+## expect: run 42

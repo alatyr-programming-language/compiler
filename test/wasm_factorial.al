@@ -6,3 +6,6 @@ fact := fn(n : u64) -> u64 {
   return r
 }
 main := fn() -> u64 { return fact(5) }
+## expect(aarch64): run 120
+## expect(riscv64): run 120
+## expect(wasm): run 120

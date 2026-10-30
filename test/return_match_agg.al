@@ -21,3 +21,4 @@ main := fn() -> u64 {
   ev := match e { Opt::Some(x) => x, Opt::None => 0 }   ## 4
   s.a + s.b + t.0 + t.1 + r.0 + r.1 + nm.len - 5 + ev - 4   ## 32 + 8 + 2 + 5 - 5 + 4 - 4 = 42
 }
+## expect: run 42

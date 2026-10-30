@@ -44,3 +44,4 @@ shapes := fn(pr : ptr(mut C), pg : ptr(mut C), pb : ptr(mut C)) -> u64 {
 main := fn() -> u64 {
   return 42
 }
+## expect: run 42

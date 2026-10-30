@@ -29,3 +29,4 @@ main := fn() -> u64 {
   c := u64(n.len)
   return a + b + c + take(arr[0..3])
 }
+## expect: run 19

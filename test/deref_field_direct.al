@@ -17,3 +17,4 @@ main := fn() -> u64 {
   y := deref(bx.inner).b
   30 + x + y
 }
+## expect: run 42

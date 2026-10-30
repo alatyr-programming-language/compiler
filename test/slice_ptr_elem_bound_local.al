@@ -15,3 +15,4 @@ main := fn() -> u64 {
   }
   return sum - 3                       ## 42
 }
+## expect: run 42

@@ -6,3 +6,4 @@ take := fn(text : str) -> u64 { return text.len() }
 main := fn() -> u64 {
   return take(make())
 }
+## expect: reject

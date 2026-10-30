@@ -6,3 +6,4 @@ allocate := fn(n : u64) -> u64 { return n }
 f := fn() -> u64 { x := allocate(42)
   return x }
 main := fn() -> u64 { return f() }
+## expect: reject

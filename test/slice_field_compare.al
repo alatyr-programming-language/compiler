@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if p.v == short.v { return 2 }
   return 42
 }
+## expect(x86_64): run 42

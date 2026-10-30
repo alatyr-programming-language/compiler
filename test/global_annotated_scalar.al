@@ -5,3 +5,4 @@
 mut K : u64 = 40
 C : u64 = 2
 main := fn() -> u64 { return K + C }
+## expect: run 42

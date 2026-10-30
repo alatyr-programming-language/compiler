@@ -34,3 +34,4 @@ main := fn() -> u64 {
   if consume(y) != 42 { return 4 }
   return consume(Checked(Pair.Good(20, 22)))
 }
+## expect(x86_64): run 42

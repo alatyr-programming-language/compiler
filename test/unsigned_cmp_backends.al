@@ -24,3 +24,4 @@ main := fn() -> u64 {
   if a > b { r = r + 100 }    ## 0 > MAX   → false (signed miscompile → +100)
   return r
 }
+## expect: run 42

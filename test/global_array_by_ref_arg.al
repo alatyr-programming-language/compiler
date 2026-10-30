@@ -5,3 +5,4 @@
 mut TABLE := [40, 1, 1]
 sum3 := fn(a : [u64; 3]) -> u64 { a[0] + a[1] + a[2] }
 main := fn() -> u64 { sum3(TABLE) }
+## expect: run 42

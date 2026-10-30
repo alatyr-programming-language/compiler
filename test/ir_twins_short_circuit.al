@@ -13,3 +13,4 @@ main := fn() -> u64 {
   if not t { r = r + 2 }
   return r
 }
+## expect: run 42

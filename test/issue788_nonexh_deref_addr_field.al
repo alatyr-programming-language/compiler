@@ -8,3 +8,4 @@ main := fn() -> u64 {
   match deref(ptr(h)).t { R => { return 1 }; G => { return 2 } }
   return 0
 }
+## expect: reject "type mismatch at line 8"

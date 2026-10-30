@@ -9,3 +9,4 @@ main := fn() -> u64 {
   for e in ARR { acc = acc + e.x + e.y }
   acc
 }
+## expect: run 42

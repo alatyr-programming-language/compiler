@@ -24,3 +24,4 @@ main := fn() -> u64 {
   if z.words[1] != 0 { return 1 }
   return z.words[0]
 }
+## expect(x86_64): run 42

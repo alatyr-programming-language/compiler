@@ -18,3 +18,4 @@ main := fn() -> u64 {
   ps := [P(x = 10, y = 1), P(x = 2, y = 32)]
   return sum_idx(ps[0..2]) + sum_for(ps[0..2]) - 45
 }
+## expect: run 42

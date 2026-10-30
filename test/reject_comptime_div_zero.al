@@ -6,3 +6,4 @@ K : u64 = 10 / 0
 main := fn() -> i64 {
   return i64(K)
 }
+## expect: reject "comptime division by zero" "at line 4"

@@ -59,3 +59,4 @@ main := fn() -> u64 {
   if good == 21 { if bad == 0 { return 42 } }
   good * 4 + bad
 }
+## expect: run 42

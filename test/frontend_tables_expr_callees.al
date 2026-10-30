@@ -529,3 +529,4 @@ main := fn() -> u64 {
   r = fs[0](r)
   return r
 }
+## expect: run 42

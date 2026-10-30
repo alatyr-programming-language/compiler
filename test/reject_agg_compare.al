@@ -8,3 +8,4 @@ main := fn() -> u64 {
   b := P(x = 5, y = 9)   ## differs in word 1 only
   if a == b { 0 } else { 42 }
 }
+## expect: run 42

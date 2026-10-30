@@ -6,3 +6,4 @@ bad := fn() -> u64 {
   return value
 }
 main := fn() -> u64 { return 42 }
+## expect: reject "type mismatch"

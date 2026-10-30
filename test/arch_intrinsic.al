@@ -22,3 +22,4 @@ main := fn() -> u64 {
   comptime if target.arch == Arch.x86_64 { x86_64.addsd(f, 2.0) }   ## 42.0
   return a + (r - 42) + unchecked bitcast(u64, d + 42) + (u64(f) - 42)
 }
+## expect: run 42

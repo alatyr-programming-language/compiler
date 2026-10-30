@@ -29,3 +29,4 @@ main := fn() -> u64 {
   x := work(2)
   a + b + c + x - 28
 }
+## expect: run 42

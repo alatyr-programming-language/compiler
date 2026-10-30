@@ -54,3 +54,4 @@ main := fn() -> u64 {
   if p == q { return 42 }
   2
 }
+## expect: run 42

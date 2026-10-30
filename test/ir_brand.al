@@ -13,3 +13,4 @@ main := fn() -> u64 {
   n := NonZero(2)
   u64(t) - 20 + inv(n)
 }
+## expect: run 42

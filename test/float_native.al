@@ -6,3 +6,4 @@ main := fn() -> u64 {
   z := x + y
   return u64(z)
 }
+## expect: run 4

@@ -14,3 +14,4 @@ main := fn() -> u64 {
   b : u32 = 1
   return f(u64, a) + g(u32, b)
 }
+## expect: run 42

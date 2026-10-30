@@ -5,3 +5,4 @@ main := fn() -> u64 {
   if xs[1] != 41 { return 2 }
   return 42
 }
+## expect: run 42

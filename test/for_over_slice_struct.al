@@ -6,3 +6,4 @@ main := fn() -> u64 {
   for p in s { sum = sum + p.x }
   return sum
 }
+## expect: run 42

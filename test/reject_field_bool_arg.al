@@ -9,3 +9,4 @@ flagged := fn(s : S) -> u64 { widen(s.ok) }
 main := fn() -> u64 {
   return flagged(S(ok = true, n = 0))
 }
+## expect: reject "at line 7"

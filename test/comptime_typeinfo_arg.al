@@ -24,3 +24,4 @@ main := fn() -> u64 {
   comptime if (match typeinfo(E) { Enum(_) => true; _ => false }) { k = 33 } else { k = 100 }
   return top + ev + cross(A, x) + k
 }
+## expect: run 42

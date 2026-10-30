@@ -10,3 +10,4 @@ main := fn() -> u64 {
   c := true
   return u64(f(if c { Rec(a = 12, b = 30) } else { Rec(a = 0, b = 0) }))
 }
+## expect: run 42

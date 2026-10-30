@@ -25,3 +25,4 @@ main := fn() -> u64 {
   if u64(b.b1) != 34 { return 8 }            ## byte 1 = 0x22 (low byte)
   return 42
 }
+## expect: run 42

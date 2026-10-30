@@ -7,3 +7,4 @@ S := struct { a : u64 }
 f := fn(s : str) -> u64 { return s.len() }
 
 main := fn() -> u64 { return f(S(a = 1)) }
+## expect: reject "at line 9"

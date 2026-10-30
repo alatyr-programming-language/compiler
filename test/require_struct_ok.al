@@ -19,3 +19,4 @@ main := fn() -> u64 {
   ## alias the predicate's temporary copy, and the UFCS/prefix spellings must agree.
   return consume(CheckedPrefix(Pair(lo = 10, hi = 20)))
 }
+## expect(x86_64): run 10

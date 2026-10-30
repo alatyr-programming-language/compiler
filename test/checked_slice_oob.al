@@ -8,3 +8,4 @@ main := fn() -> u64 {
   i := 5
   return s[i]
 }
+## expect(x86_64): trap

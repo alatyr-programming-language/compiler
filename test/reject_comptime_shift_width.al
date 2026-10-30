@@ -5,3 +5,4 @@ K : u64 = shl(1, 64)
 main := fn() -> i64 {
   return i64(K)
 }
+## expect: reject "comptime shift out of range" "at line 3"

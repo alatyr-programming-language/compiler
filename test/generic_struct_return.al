@@ -14,3 +14,4 @@ main := fn() -> u64 {
   s := id(S, S(c = Col.G(9), n = 2))
   return p.x + p.y + match s.c { Col::R => { 0 }; Col::G(k) => { k } } + s.n
 }
+## expect: run 42

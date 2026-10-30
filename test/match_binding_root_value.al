@@ -9,3 +9,4 @@ main := fn() -> u64 {
     Opt::None => { 0 }
   }
 }
+## expect: run 80

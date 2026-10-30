@@ -13,3 +13,4 @@ main := fn() -> u64 {
   u := U.a(77)
   u.a
 }
+## expect: run 77

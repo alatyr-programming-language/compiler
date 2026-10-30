@@ -9,3 +9,4 @@ good_overload := compiles(S(a = 40) + 2)
 main := fn() -> u64 {
   if good_ctor and good_binary and good_overload { return S(a = 40) + 2 } else { return 1 }
 }
+## expect: run 42

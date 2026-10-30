@@ -31,3 +31,4 @@ main := fn() -> u64 {
   if a == 42 and b == 7 and c == 22 { return 42 }
   1
 }
+## expect: run 42

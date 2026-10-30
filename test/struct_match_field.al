@@ -9,3 +9,4 @@ main := fn() -> u64 {
   c := Col.R
   return (match c { Col::R => { f() } Col::G => { P(v = 7) } }).v
 }
+## expect: run 42

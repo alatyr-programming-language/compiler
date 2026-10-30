@@ -16,3 +16,4 @@ main := fn() -> u64 {
   r := ((x | y) & mask) ^ zero
   r.v
 }
+## expect: run 42

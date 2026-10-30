@@ -22,3 +22,4 @@ main := fn() -> u64 {
   if getx(o.inner) != 20 { return 1 }
   42
 }
+## expect: reject "check: invalid" "at line 22"

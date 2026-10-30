@@ -9,3 +9,4 @@ main := fn() -> u64 {
   std::fmt::print("point {}\n", p)
   42
 }
+## expect: run 42

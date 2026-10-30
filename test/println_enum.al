@@ -12,3 +12,4 @@ main := fn() -> u64 {
   if n == 8 { return 42 }
   1
 }
+## expect: run 42

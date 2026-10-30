@@ -179,3 +179,7 @@ main := fn() -> u64 {
   if pay_tail(Pay.A(9)) != 9 { return 90 }
   42
 }
+## expect(x86_64): run 42
+## expect(aarch64): trap
+## expect(riscv64): trap
+## expect(wasm): trap

@@ -6,3 +6,4 @@ main := fn() -> i64 {
   x := 9223372036854775808
   return 0
 }
+## expect: reject "at line 6"

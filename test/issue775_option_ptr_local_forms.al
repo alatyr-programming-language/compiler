@@ -73,3 +73,4 @@ main := fn() -> u64 {
   if f != 5 { return 120 + f }
   return 21 + walk(r)
 }
+## expect(x86_64): run 42

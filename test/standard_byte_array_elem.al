@@ -83,3 +83,4 @@ main := fn() -> u64 {
   if acc != 20 + 50 + 40 { return 28 }
   42
 }
+## expect(x86_64): run 42

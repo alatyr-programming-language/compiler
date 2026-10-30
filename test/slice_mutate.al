@@ -32,3 +32,4 @@ main := fn() -> u64 {
   if dst[0] != 2 or dst[1] != 4 or dst[2] != 6 { return 5 }
   return 42
 }
+## expect: run 42

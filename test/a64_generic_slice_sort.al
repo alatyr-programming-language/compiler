@@ -9,3 +9,4 @@ main := fn() -> u64 {
   if arr[0] != 1 or arr[2] != 3 or arr[4] != 5 { return 1 }
   42
 }
+## expect: run 42

@@ -21,3 +21,4 @@ main := fn() -> u64 {
   }
   return last
 }
+## expect: run 42

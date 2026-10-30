@@ -47,3 +47,4 @@ main := fn() -> u64 {
   if g == add1 { r7 = 10 }
   return r1 + acc + r3 + r4 + r5 + r6 + r7
 }
+## expect: run 70

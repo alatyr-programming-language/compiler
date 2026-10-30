@@ -22,3 +22,4 @@ main := fn() -> u64 {
   match G.head { Some(q) => { return G.k + G.m + deref(q).v }; None => { return 105 } }
   106
 }
+## expect(x86_64): run 42

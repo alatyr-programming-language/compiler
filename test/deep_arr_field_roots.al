@@ -12,3 +12,4 @@ main := fn() -> u64 {
   xs[0].cell.vals[1] = 7
   u64(xs[0].cell.vals[1] + read_param(xs))
 }
+## expect: run 14

@@ -6,3 +6,4 @@ main := fn() -> u64 {
   r := my_free(x)
   r
 }
+## expect: accept

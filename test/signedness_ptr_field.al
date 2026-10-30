@@ -15,3 +15,4 @@ main := fn() -> u64 {
   mut r := Rec(u = 18446744073709551615, s = 0 - 84)
   check_u(ptr(mut r)) + check_s(ptr(mut r))
 }
+## expect(x86_64): run 64

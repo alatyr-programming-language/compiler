@@ -7,3 +7,4 @@ bad := fn() -> Result(usize, missing::Error) {
 main := fn() -> u64 {
   match bad() { Ok(n) => { return u64(n) } Err(_) => { return 1 } }
 }
+## expect: reject "at line 3"

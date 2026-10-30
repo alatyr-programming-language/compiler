@@ -23,3 +23,4 @@ main := fn() -> u64 {
   b := foldn(u64, dbl, 5, 2)
   u64(a + b)
 }
+## expect: run 42

@@ -13,3 +13,4 @@ main := fn() -> u64 {
   mut x := C.G
   f(ptr(mut x))
 }
+## expect: run 42

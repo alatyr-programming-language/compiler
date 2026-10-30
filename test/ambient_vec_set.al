@@ -20,3 +20,4 @@ main := fn() -> u64 {
   u := alloc::vec::at(u64, ptr(v), 2)
   return s + t + u
 }
+## expect: run 42

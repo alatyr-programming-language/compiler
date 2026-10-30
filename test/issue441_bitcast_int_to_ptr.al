@@ -36,3 +36,4 @@ main := fn() -> u64 {
   if cap_of(s) != 13 { return 12 }
   return 42
 }
+## expect: run 42

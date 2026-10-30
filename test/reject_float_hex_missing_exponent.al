@@ -3,3 +3,4 @@ main := fn() -> u64 {
   x : f64 = 0x1.0
   return u64(x)
 }
+## expect: reject

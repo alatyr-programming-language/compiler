@@ -11,3 +11,4 @@ main := fn() -> u64 {
   mut p := P(x = 40, y = 99)
   u64(gf(p, u64, 2))
 }
+## expect: run 42

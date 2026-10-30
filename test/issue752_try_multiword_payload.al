@@ -19,3 +19,4 @@ main := fn() -> u64 {
   match g() { Result::Ok(v) => { return v } Result::Err(e) => { return 1 } }
   0
 }
+## expect: run 42

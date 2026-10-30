@@ -7,3 +7,4 @@ main := fn() -> u64 {
   p = P(xs = [p.xs[1], p.xs[0]], z = 21)
   p.xs[0] * 10 + p.xs[1] + p.z
 }
+## expect: run 42

@@ -16,3 +16,4 @@ main := fn() -> u64 {
   ## a `(`-prefixed grouped trailing expression (no `return`) over aggregate-call bindings
   (q + 32) + (p.a + p.b - 42) + (r.a + r.b - 7)   ## 42 + 0 + 0 = 42
 }
+## expect: run 42

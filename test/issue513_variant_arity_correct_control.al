@@ -23,3 +23,4 @@ sum := fn(p : Pay) -> u64 {
 main := fn() -> u64 {
   sum(pick(0)) + sum(pick(1)) + sum(pick(2))
 }
+## expect: run 42

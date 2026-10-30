@@ -30,3 +30,4 @@ main := fn() -> u64 {
     W::Small(x) => 0
   }
 }
+## expect: run 22

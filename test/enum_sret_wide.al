@@ -17,3 +17,4 @@ main := fn() -> u64 {
   t : u64 = match n { W::Some(x) => 0, W::None => 14 }                                         ## 14
   s + t                                                                                    ## 42
 }
+## expect: run 42

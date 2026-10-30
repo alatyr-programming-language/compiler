@@ -2,3 +2,4 @@
 @limits(no_alloc)
 g := fn(x : u64, y : u64) -> u64 { return x + y }
 main := fn() -> u64 { return g(40, 2) }
+## expect: run 42

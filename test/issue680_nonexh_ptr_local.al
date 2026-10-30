@@ -13,3 +13,4 @@ main := fn() -> u64 {
   match deref(p) { R => { return 42 }; G => { return 1 } }
   return 2
 }
+## expect: reject "type mismatch at line 13"

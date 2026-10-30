@@ -9,3 +9,5 @@ main := fn() -> u64 {
   deref(p).inner.flag = true
   o.inner.f + if o.inner.flag { 2 } else { 0 }
 }
+## expect: accept
+## expect(x86_64): run 42

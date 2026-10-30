@@ -23,3 +23,4 @@ main := fn() -> u64 {
   if GS[1].z != 5 { return 5 }
   GS[0].x + GS[0].y + GS[0].z + GS[1].x + GS[1].y + GS[1].z   ## 33 + 12 = 45
 }
+## expect: run 45

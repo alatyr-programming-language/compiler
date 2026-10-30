@@ -34,3 +34,4 @@ main := fn() -> u64 {
   d := r.name.len - 3                  ## "hey".len = 3 → 0
   a + b + c + d                        ## 32 + 10 + 0 + 0 = 42
 }
+## expect: run 42

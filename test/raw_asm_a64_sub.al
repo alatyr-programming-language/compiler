@@ -7,3 +7,4 @@ main := fn() -> u64 {
   asm("svc #0")
   0
 }
+## expect(aarch64): run 42

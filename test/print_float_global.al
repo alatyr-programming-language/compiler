@@ -6,3 +6,4 @@ main := fn() -> u64 {
   std::fmt::print("F {}\n", F)
   42
 }
+## expect: run 42

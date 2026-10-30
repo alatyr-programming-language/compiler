@@ -16,3 +16,4 @@ BROKEN := fn( -> u64 {
 main := fn() -> u64 {
   42
 }
+## expect: reject "ends inside an unclosed"

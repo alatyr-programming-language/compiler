@@ -6,3 +6,4 @@ main := fn() -> u64 {
   if true { o.inner.a = 20 } else { o.inner.a = 22 }
   return o.inner.a * 2
 }
+## expect(x86_64): run 40

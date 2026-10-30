@@ -9,3 +9,4 @@ main := fn() -> u64 {
   y := x + 2
   return u64(y)
 }
+## expect: run 42

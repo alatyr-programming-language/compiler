@@ -11,3 +11,4 @@ main := fn() -> u64 {
   if unwrap(o) != 42 { return 2 }
   42
 }
+## expect(x86_64): run 42

@@ -13,3 +13,4 @@ helper := fn() -> u64 {
 main := fn() -> u64 {
   return exported() + helper()
 }
+## expect: reject "duplicate linker symbol at line 5"

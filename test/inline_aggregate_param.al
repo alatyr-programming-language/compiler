@@ -10,3 +10,5 @@ main := fn() -> u64 {
   s := Slice(u8)(ptr = ptr(buf[0]), len = 2)
   u64(head(s))
 }
+## expect: accept
+## expect(x86_64): run 42

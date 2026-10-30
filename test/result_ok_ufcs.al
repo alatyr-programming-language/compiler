@@ -8,3 +8,4 @@ main := fn() -> u64 {
   b := r2.ok()                                  ## None
   return unchecked (a.unwrap() + b.unwrap_or(0))   ## 42 + 0 = 42
 }
+## expect: run 42

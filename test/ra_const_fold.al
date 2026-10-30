@@ -8,3 +8,4 @@ main := fn() -> u64 {
   c := 40 ^ 2
   a + b
 }
+## expect(x86_64): run 42

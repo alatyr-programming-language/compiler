@@ -11,3 +11,4 @@ main := fn() -> u64 {
   x := add(1, 1)
   t + x
 }
+## expect(x86_64): run 42

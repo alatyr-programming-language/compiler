@@ -37,3 +37,4 @@ main := fn() -> u64 {
   if xs[1].inner.y != 26 { return 2 }
   42
 }
+## expect: run 42

@@ -10,3 +10,4 @@ main := fn() -> u64 {
   v := APP.name
   return len_of(v) + 37
 }
+## expect: run 42

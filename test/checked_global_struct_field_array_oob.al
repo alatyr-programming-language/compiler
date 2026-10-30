@@ -28,3 +28,4 @@ main := fn() -> u64 {
   i : u64 = 3
   return gg.xs[i]
 }
+## expect(x86_64): trap

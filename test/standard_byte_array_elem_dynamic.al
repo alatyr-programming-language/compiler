@@ -23,3 +23,4 @@ main := fn() -> u64 {
   if u64(xs[1].inner.b) != 35 { return 7 }
   42
 }
+## expect: run 42

@@ -9,3 +9,4 @@ main := fn() -> u64 {
   q := add(p, 5)
   p + q
 }
+## expect(x86_64): run 69

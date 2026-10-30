@@ -36,3 +36,4 @@ main := fn() -> u64 {
   }
   acc + take(make(d, 6)) + 28
 }
+## expect: run 42

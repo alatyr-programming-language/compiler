@@ -9,3 +9,4 @@ main := fn() -> u64 {
   r := mk(40)
   return r.x + r.y
 }
+## expect: reject

@@ -26,3 +26,4 @@ main := fn() -> u64 {
   r := mk10v(S10)       ## 10 words — SRET, `return <local>` (the Var form)
   u64(p.a + p.g + q.a + q.j + r.a + r.j)   ## 8 + 13 + 5 = 26
 }
+## expect: run 26

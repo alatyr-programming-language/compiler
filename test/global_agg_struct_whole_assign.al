@@ -10,3 +10,4 @@ main := fn() -> u64 {
   G = R(a = 12, b = 20, c = 10)
   G.a + G.b + G.c
 }
+## expect: run 42

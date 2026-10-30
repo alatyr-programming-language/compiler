@@ -9,3 +9,4 @@ main := fn() -> u64 {
   b := ps[1]
   return a.x + a.y + b.x + b.y
 }
+## expect(x86_64): run 42

@@ -44,3 +44,4 @@ main := fn() -> u64 {
   if ACC + x_for != 425 { return 3 }
   25
 }
+## expect: run 25

@@ -8,3 +8,4 @@ main := fn() -> u64 {
   atomic::fetch_add(p, 22, Ordering.seq_cst)
   TABLE[1]
 }
+## expect: run 42

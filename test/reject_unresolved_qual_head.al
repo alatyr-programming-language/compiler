@@ -14,3 +14,4 @@ aa := fn() -> u64 { 7 }
 main := fn() -> u64 {
   zzz::aa()
 }
+## expect: reject "no module, type, or alias named"

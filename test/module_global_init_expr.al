@@ -10,3 +10,4 @@ mut T := [BASE - 6, 0 - 0]
 main := fn() -> u64 {
   G + S.x + S.y + T[0]
 }
+## expect: run 42

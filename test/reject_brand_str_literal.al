@@ -5,3 +5,4 @@ main := fn() -> u64 {
   a : A = "x"
   return 1
 }
+## expect: reject "at line 5"

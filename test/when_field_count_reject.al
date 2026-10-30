@@ -12,3 +12,4 @@ pick := fn(T : type, x : u64) -> u64 when typeinfo(T).fields.len >= 2 { x }
 main := fn() -> u64 {
   pick(One, 42)
 }
+## expect: reject "at line 13"

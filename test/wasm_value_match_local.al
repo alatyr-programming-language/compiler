@@ -6,3 +6,4 @@ main := fn() -> u64 {
     Opt::Some(x) => { x + 2 }
   }
 }
+## expect(wasm): run 42

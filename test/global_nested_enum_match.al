@@ -6,3 +6,4 @@ Inner := struct { c : Col, k : u64 }
 Outer := struct { i : Inner, n : u64 }
 mut STATE := Outer(i = Inner(c = Col.G(35), k = 0), n = 7)
 main := fn() -> u64 { return match STATE.i.c { Col::R => { 0 }; Col::G(v) => { v } } + STATE.n }
+## expect: run 42

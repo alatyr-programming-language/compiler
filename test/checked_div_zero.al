@@ -6,3 +6,4 @@
 ## non-x86 backend TRAPS (exit >= 128) rather than returning a wrong low exit code.
 divide := fn(a : i64, b : i64) -> i64 { return a / b }
 main := fn() -> i64 { return divide(42, 0) }
+## expect: trap

@@ -4,3 +4,4 @@ main := fn() -> u64 {
   x : [u64; 2] = 7
   return 0
 }
+## expect: reject "at line 4"

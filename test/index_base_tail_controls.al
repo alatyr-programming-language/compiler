@@ -88,3 +88,5 @@ main := fn() -> u64 {
   if xs[1..3].len != 2 { return 34 }
   42
 }
+## expect: accept
+## expect(x86_64): run 42

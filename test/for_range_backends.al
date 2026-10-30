@@ -7,3 +7,4 @@ main := fn() -> u64 {
   for i in 0..u64(9) { s = s + i }   ## 0+1+...+8 = 36
   s + 6                          ## 42
 }
+## expect: run 42

@@ -12,3 +12,5 @@ main := fn() -> u64 {
   if std::math::floor(61.9) == 61.0 { return 61 }
   return 1
 }
+## expect: accept
+## expect(x86_64): run 61

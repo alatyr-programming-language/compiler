@@ -5,3 +5,4 @@ S := struct { a : u64 }
 main := fn() -> u64 {
   comptime if compiles(S(a = 1) + 1) { return 1 } else { return 42 }
 }
+## expect: run 42

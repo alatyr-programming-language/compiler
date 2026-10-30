@@ -11,3 +11,4 @@ mk := fn() -> Outer { return Outer(a = 7, b = Inner(c = 33, d = 99)) }
 main := fn() -> u64 {
   return mk().b.c
 }
+## expect: run 33

@@ -20,3 +20,4 @@ main := fn() -> u64 {
   m : f64 = mix(3, 2.0)
   return u64(s) + u64(m)
 }
+## expect: run 17

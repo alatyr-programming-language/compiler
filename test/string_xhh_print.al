@@ -3,3 +3,4 @@ main := fn() -> u64 {
   print("\x41\xC3\xA9")
   42
 }
+## expect(x86_64): run 42

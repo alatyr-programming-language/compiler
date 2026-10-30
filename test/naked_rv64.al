@@ -8,3 +8,4 @@ add2 := @abi(naked) fn(a : i64, b : i64) -> i64 {
 main := fn() -> u64 {
   add2(40, 2)
 }
+## expect(riscv64): run 42

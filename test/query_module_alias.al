@@ -11,3 +11,4 @@ pick_resolve := fn() -> u64 {
 }
 
 main := fn() -> u64 { return pick_compile() + pick_resolve() }
+## expect: run 42

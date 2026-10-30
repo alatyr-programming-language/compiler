@@ -73,3 +73,4 @@ main := fn() -> u64 {
   if align(Outer) != 8 { return 31 }
   42
 }
+## expect(x86_64): run 42

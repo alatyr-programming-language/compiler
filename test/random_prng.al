@@ -21,3 +21,4 @@ main := fn() -> u64 {
   if det and inrange and advance { return 42 }
   return 7
 }
+## expect: run 42

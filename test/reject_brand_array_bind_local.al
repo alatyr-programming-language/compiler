@@ -10,3 +10,4 @@ main := fn() -> u64 {
   ys : [A; 2] = bs
   return u64(ys[0]) + u64(ys[1]) * 10
 }
+## expect: reject "implicit brand conversion"

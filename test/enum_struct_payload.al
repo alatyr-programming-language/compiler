@@ -11,3 +11,4 @@ main := fn() -> u64 {
     Box::Empty => { 1 }
   }
 }
+## expect: run 42

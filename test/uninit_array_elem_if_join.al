@@ -4,3 +4,4 @@ main := fn() -> u64 {
   if true { xs[0] = 20 } else { xs[0] = 22 }
   return xs[0] * 2
 }
+## expect(x86_64): run 40

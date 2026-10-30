@@ -4,3 +4,4 @@ main := fn() -> u64 {
   a : [i8; 3] = [-128, 127, -129]
   return u64(a[1])
 }
+## expect: reject "type mismatch at line 4"

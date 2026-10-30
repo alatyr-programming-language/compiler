@@ -8,3 +8,4 @@ main := fn() -> u64 {
   b := [30, 5]
   return first(a) + u64(sumi(b))
 }
+## expect: run 42

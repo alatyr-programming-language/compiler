@@ -7,3 +7,4 @@ ready := fn() -> bool { true }
 main := fn() -> u64 {
   return ready() + 41
 }
+## expect: reject "at line 8"

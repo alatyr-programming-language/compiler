@@ -83,3 +83,4 @@ main := fn() -> u64 {
   if not str_eq(e, "abc") { return 20 }
   return 42
 }
+## expect: run 42

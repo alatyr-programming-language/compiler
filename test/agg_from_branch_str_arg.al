@@ -8,3 +8,4 @@ main := fn() -> u64 {
   c := true
   return 36 + f(if c { "hello!" } else { "yo" })
 }
+## expect: run 42

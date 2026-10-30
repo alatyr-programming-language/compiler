@@ -4,3 +4,4 @@ E := enum { Known(u64) }
 main := fn() -> E {
   return E.Zzz(1)
 }
+## expect: reject

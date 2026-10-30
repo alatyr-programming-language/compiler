@@ -9,3 +9,4 @@ id := fn(T : type, x : T) -> T { return x }
 main := fn() -> u64 {
   return id(P, P(a = 40, b = 2)).b
 }
+## expect: run 2

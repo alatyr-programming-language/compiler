@@ -7,3 +7,4 @@ main := fn() -> u64 {
   o := id(Opt, Opt.Some(42))
   match o { Opt::None => { return 0 }; Opt::Some(x) => { return x } }
 }
+## expect: run 42

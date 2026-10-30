@@ -7,3 +7,4 @@ f := fn(xs : [C; 2]) -> u64 {
   return 0
 }
 main := fn() -> u64 { return f([C.R, C.B]) }
+## expect: reject "type mismatch at line 6"

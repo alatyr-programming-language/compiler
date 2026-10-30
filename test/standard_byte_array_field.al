@@ -26,3 +26,4 @@ main := fn() -> u64 {
   if align(S) != 2 { return 10 }
   42
 }
+## expect(x86_64): run 42

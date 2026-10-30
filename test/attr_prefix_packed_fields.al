@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if u64(v.tail) != 7 { return 7 }
   return 42
 }
+## expect(x86_64): run 42

@@ -26,3 +26,4 @@ main := fn() -> u64 {
   if bc != 12 { return 7 }
   ba + bb + bc
 }
+## expect(x86_64): run 42

@@ -13,3 +13,4 @@ main := fn() -> u64 {
   v : f64 = 2.5
   return u64(d1(v, 3))
 }
+## expect: run 15

@@ -7,3 +7,4 @@ main := fn() -> u64 {
   w := v.a
   w
 }
+## expect: reject "not through a field name at line 7 in issue693_enum_field_local_init"

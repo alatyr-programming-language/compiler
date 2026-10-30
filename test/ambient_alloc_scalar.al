@@ -13,3 +13,4 @@ main := fn() -> u64 {
   p := get(isize, ar, x)
   return u64(deref(p))
 }
+## expect: run 42

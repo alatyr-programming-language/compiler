@@ -12,3 +12,4 @@ accum := fn(base : u64, args : ...) -> u64 {
 main := fn() -> u64 {
   return accum(100, 10, 20, 12)
 }
+## expect: run 142

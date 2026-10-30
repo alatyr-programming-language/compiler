@@ -33,3 +33,4 @@ main := fn() -> u64 {
   if c.n != 3 { return 5 }
   return (u64(a.v.len) + a.n) + (u64(b.v.len) + b.n) + u64(c.n) + byref(b)
 }
+## expect: run 30

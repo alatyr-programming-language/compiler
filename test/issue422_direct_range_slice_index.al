@@ -80,3 +80,4 @@ main := fn() -> u64 {
   ## shape this change does not deliver. x86_64 answers 2 for it; that asymmetry stays with #422.
   42
 }
+## expect: run 42

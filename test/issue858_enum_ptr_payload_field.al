@@ -104,3 +104,4 @@ main := fn() -> u64 {
   if tail_read(E.Z) != 0 { return 113 }
   42
 }
+## expect(x86_64): run 42

@@ -6,3 +6,4 @@ main := fn() -> u64 {
   if y == 1 { return 42 }
   return y
 }
+## expect(wasm): run 42

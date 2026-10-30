@@ -4,3 +4,4 @@ main := fn() -> u64 {
   if true { x = 41 }
   return x
 }
+## expect: reject

@@ -38,3 +38,4 @@ main := fn() -> u64 {
   if k == 6 { return 42 }
   k
 }
+## expect(x86_64): run 42

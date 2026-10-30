@@ -8,3 +8,4 @@ main := fn() -> u64 {
   for v in TABLE { acc = acc + v }
   acc
 }
+## expect: run 42

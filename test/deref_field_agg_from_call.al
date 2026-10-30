@@ -20,3 +20,4 @@ main := fn() -> u64 {
   if o.t == 7 { r = r + 14 }                                 ## neighbour word intact (no over-write)
   r                                                          ## 42 iff both deliveries copied every word
 }
+## expect(x86_64): run 42

@@ -11,3 +11,4 @@ main := fn() -> u64 {
   j : u64 = 1
   return u64(xs[i] + xs[j])
 }
+## expect: trap

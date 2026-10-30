@@ -22,3 +22,4 @@ main := fn() -> u64 {
   if GW[0].i != 1 { return 6 }
   GW[1].a + GW[1].b + GW[1].c + GW[1].d + GW[1].e + GW[1].f + GW[1].g + GW[1].h + GW[1].i + GW[0].i   ## 45 + 1 = 46
 }
+## expect: run 46

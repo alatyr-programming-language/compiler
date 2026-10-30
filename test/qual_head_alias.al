@@ -20,3 +20,5 @@ main := fn() -> u64 {
   if m::floor(4.9) == 4.0 { return v + 4 }
   return 1
 }
+## expect: accept
+## expect(x86_64): run 64

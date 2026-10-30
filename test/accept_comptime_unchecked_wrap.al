@@ -30,3 +30,4 @@ main := fn() -> i64 {
   if x != 18446744073709551613 { return 9 }
   return 42
 }
+## expect: run 42

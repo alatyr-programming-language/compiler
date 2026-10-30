@@ -21,3 +21,4 @@ main := fn() -> u64 {
   if t.2 != 9 { return 10 }
   return 42
 }
+## expect: run 42

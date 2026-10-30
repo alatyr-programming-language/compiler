@@ -71,3 +71,4 @@ main := fn() -> u64 {
   link_ref(y, ptr(mut c))
   sum(Option.Some(ptr(mut x)))
 }
+## expect(x86_64): run 42

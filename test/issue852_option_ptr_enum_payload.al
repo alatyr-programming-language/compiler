@@ -46,3 +46,4 @@ main := fn() -> u64 {
   r := match e { A(p, k, q) => { val(p) + k + val(q) }; B(p) => { 200 }; C => { 201 } }
   r
 }
+## expect(x86_64): run 42

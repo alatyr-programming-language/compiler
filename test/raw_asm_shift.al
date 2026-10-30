@@ -14,3 +14,4 @@ shifty := @abi(naked) fn(a : i64) -> i64 {
 main := fn() -> u64 {
   shifty(21)
 }
+## expect(x86_64): run 42

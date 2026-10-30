@@ -147,3 +147,4 @@ main := fn() -> u64 {
   if bin_unsigned_untouched() != 9223372036854775805 { return 11 }
   return 42
 }
+## expect: run 42

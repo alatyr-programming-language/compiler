@@ -18,3 +18,4 @@ main := fn() -> u64 {
   y := deref(deref(pp)).w              ## 2
   return x + y                         ## 42
 }
+## expect: run 42

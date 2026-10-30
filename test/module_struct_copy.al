@@ -9,3 +9,4 @@ main := fn() -> u64 {
   p.x = 40
   p.x + p.y
 }
+## expect: run 42

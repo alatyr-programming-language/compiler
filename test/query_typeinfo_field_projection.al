@@ -21,3 +21,4 @@ comptime for f in typeinfo(S).fields {
 }
 if sum_projection(v) == 42 and query_hits == 2 { 42 } else { 1 }
 }
+## expect: run 42

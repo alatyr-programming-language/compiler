@@ -48,3 +48,4 @@ main := fn() -> u64 {
   t : u64 = g(mke(5), g(E.A(1), 2))
   return r0 + r1 + r2 + r3 + r4 + r5 + r6 + t
 }
+## expect: run 99

@@ -32,3 +32,4 @@ main := fn() -> u64 {
   fmt::print("sum = {}\n", sum)
   sum
 }
+## expect: run 42

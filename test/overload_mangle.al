@@ -14,3 +14,4 @@ main := fn() -> u64 {
   r2 := isum(0 - 5, 0 - 5)
   return r1 + unchecked bitcast(u64, r2 + 12)
 }
+## expect: run 42

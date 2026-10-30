@@ -7,3 +7,4 @@ main := fn() -> u64 {
   s := S(a = 11, b = 44)
   s.a + s.b
 }
+## expect: run 55

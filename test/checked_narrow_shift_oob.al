@@ -4,3 +4,4 @@ main := fn() -> u64 {
   x : u8 = 1
   return shl(x, 8)
 }
+## expect: trap

@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if read_index(s, 2) != 5 { return 1 }
   sum_cast(s)
 }
+## expect: run 17

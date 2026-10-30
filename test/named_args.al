@@ -6,3 +6,4 @@ combine := fn(a : u64, b : u64, c : u64) -> u64 { a - b - c }
 main := fn() -> u64 {
   combine(c = 3, a = 50, b = 5)
 }
+## expect: run 42

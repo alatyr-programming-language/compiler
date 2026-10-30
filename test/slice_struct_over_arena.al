@@ -26,3 +26,4 @@ main := fn() -> u64 {
   v1 := vs[1]                                ## element 1 = Rec(15, 20) — stride-aware
   u64(v0.a + v0.b + v1.a + v1.b)             ## (3 + 4) + (15 + 20) = 42
 }
+## expect: run 42

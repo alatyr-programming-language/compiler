@@ -34,3 +34,4 @@ main := fn() -> u64 {
   match h.items[1] { E::A(v) => { return 11 } E::B(v) => { if u64(v) != 5 { return 12 } } }
   42
 }
+## expect: run 42

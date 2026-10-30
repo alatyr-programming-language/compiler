@@ -14,3 +14,4 @@ main := fn() -> u64 {
   b := twice(u64, inc, 9)
   u64(a + b)
 }
+## expect: run 42

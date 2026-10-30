@@ -42,3 +42,4 @@ main := fn() -> u64 {
   match GC { Some(p) => { deref(p) = deref(p) + val(GB) }; None => { return 111 } }
   C
 }
+## expect(x86_64): run 42

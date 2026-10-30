@@ -30,3 +30,4 @@ main := fn() -> u64 {
   if is_some(u) { return 7 }
   42
 }
+## expect(x86_64): run 42

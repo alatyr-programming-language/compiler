@@ -5,3 +5,4 @@ main := fn() -> u64 {
   s := S(unknown = 42)
   s.x
 }
+## expect: reject

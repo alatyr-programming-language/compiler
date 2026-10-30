@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if s != -14 { return 200 + u64(s + 200) }
   return 42
 }
+## expect: run 42

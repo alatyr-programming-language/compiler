@@ -4,3 +4,4 @@ main := fn() -> i64 {
   x : i8 = 200
   return i64(x)
 }
+## expect: reject "at line 4"

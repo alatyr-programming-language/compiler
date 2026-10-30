@@ -14,3 +14,4 @@ main := fn() -> u64 {
   deref(p).i = nv                     ## multi-word struct VAR written through a pointer
   o.i.v + o.i.w + o.t                 ## 30 + 7 + 5 = 42 (both field words + neighbour intact)
 }
+## expect(x86_64): run 42

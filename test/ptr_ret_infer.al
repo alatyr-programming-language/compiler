@@ -12,3 +12,4 @@ main := fn() -> u64 {
   ## recover the pointee struct from the callee's declared return type.
   return deref(p).v + deref(get(ptr(b))).w
 }
+## expect: run 42

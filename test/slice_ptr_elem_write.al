@@ -13,3 +13,4 @@ main := fn() -> u64 {
   ## b0={14,100} b1={14,0} b2={14,0} → 14*3 + 100 - 100 = 42; verifies each write took.
   return b0.v + b1.v + b2.v + b0.w - 100
 }
+## expect: run 42

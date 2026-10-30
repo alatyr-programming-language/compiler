@@ -9,3 +9,4 @@ choose := fn(cond : bool) -> u64 {
 main := fn() -> u64 {
   return choose(true) + choose(false)
 }
+## expect: reject "ambiguous call"

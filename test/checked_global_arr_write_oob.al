@@ -9,3 +9,4 @@ main := fn() -> u64 {
   TAB[i] = P(x = 9, y = 9)
   return 0
 }
+## expect(x86_64): trap

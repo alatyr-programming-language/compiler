@@ -46,3 +46,4 @@ main := fn() -> u64 {
   print("u64max {}\n", u)
   42
 }
+## expect: run 42

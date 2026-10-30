@@ -4,3 +4,4 @@ main := fn() -> u64 {
   x : Option = Option(u64).None
   0
 }
+## expect: reject "type function `Option` is not a type until it is applied" "at line 4 in issue857_unapplied_local"

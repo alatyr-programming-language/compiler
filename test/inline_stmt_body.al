@@ -17,3 +17,4 @@
 main := fn() -> u64 {
   mydiv(84, 2)
 }
+## expect: run 42

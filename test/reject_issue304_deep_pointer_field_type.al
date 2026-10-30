@@ -9,3 +9,4 @@ main := fn() -> u64 {
   deref(p).inner.f = "text"
   deref(p).inner.keep
 }
+## expect: reject "type mismatch" "at line 9"

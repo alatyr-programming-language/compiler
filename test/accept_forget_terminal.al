@@ -5,3 +5,4 @@ main := fn() -> u64 {
   forget(x)
   0
 }
+## expect: accept

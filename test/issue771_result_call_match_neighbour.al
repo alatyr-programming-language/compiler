@@ -57,3 +57,4 @@ main := fn() -> u64 {
   if nested() != 45 { return 5 }
   42
 }
+## expect: run 42

@@ -23,3 +23,4 @@ main := fn() -> u64 {
   if u64(unchecked "Kc"[1]) != 99 { return 112 }
   return 42
 }
+## expect: run 42

@@ -10,3 +10,4 @@ main := fn() -> u64 {
   if b { return a[0] + a[1] }
   return 0
 }
+## expect: run 7

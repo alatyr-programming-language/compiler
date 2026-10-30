@@ -20,3 +20,4 @@ main := fn() -> u64 {
   p := o.g(40)
   return p.x + p.y
 }
+## expect: reject "at line 20"

@@ -3,3 +3,4 @@ main := fn() -> u64 {
   compiles()
   42
 }
+## expect: reject

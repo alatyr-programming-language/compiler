@@ -27,3 +27,4 @@ BAD_GLOBAL := make_pair()
 main := fn() -> u64 {
   BAD_GLOBAL.a
 }
+## expect: reject "build the value inside a function" "at line 25" "at line 25 in issue426_long_check_diagnostic_module_name_overflow"

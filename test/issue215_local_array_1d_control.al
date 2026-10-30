@@ -8,3 +8,4 @@ main := fn() -> u64 {
   if xs[0] != 21 or xs[1] != 29 { return 2 }
   42
 }
+## expect: run 42

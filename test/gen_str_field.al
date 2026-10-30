@@ -24,3 +24,4 @@ main := fn() -> u64 {
   s := Box(u64)(v = 5, n = 7)
   return (d.v.len + d.n) + (g.v.len + g.n) + (s.v + s.n)
 }
+## expect: run 31

@@ -45,3 +45,4 @@ main := fn() -> u64 {
   acc = acc + if acc > 0 { 1 } else { if acc == 0 { 5 } else { 9 } }
   acc + 2
 }
+## expect: run 42

@@ -9,3 +9,4 @@ main := fn() -> u64 {
   q := NonNull(p)
   return deref(q)
 }
+## expect(x86_64): run 42

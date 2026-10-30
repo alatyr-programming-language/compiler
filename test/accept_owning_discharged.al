@@ -7,3 +7,4 @@ main := fn() -> u64 {
   forget(h)
   0
 }
+## expect: accept

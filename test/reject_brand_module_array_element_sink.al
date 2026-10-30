@@ -33,3 +33,4 @@ B := brand(u64)
 G : [2]A = [B(1), B(2)]
 
 main := fn() -> u64 { return u64(G[0]) }
+## expect: reject "at line 33 in reject_brand_module_array_element_sink" "implicit brand conversion"

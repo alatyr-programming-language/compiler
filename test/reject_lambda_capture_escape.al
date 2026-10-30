@@ -10,3 +10,4 @@ main := fn() -> u64 {
   g := f
   return g(20) + c
 }
+## expect: reject

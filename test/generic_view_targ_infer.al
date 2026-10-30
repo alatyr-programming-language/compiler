@@ -35,3 +35,4 @@ main := fn() -> u64 {
 }
 
 id := fn(T : type, v : T) -> T { return v }
+## expect(x86_64): run 42

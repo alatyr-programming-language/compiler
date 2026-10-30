@@ -19,3 +19,4 @@ main := fn() -> u64 {
   ## 5 + 6 + (20+2) + 4 + (3+2) = 42
   s.len + t.len + p.a + p.b + ev + tu.0 + tu.1
 }
+## expect: run 42

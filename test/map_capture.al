@@ -33,3 +33,5 @@ main := fn() -> u64 {
   }
   u64(sum)
 }
+## expect: accept
+## expect(x86_64): run 42

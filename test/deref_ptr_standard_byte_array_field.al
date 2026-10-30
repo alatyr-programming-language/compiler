@@ -12,3 +12,4 @@ main := fn() -> u64 {
   if s.tail != 7 { return 3 }
   42
 }
+## expect(x86_64): run 42

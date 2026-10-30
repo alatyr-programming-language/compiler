@@ -11,3 +11,4 @@ main := fn() -> u64 {
   c : u64 = 2
   a | b & c
 }
+## expect: run 42

@@ -10,3 +10,4 @@ main := fn() -> u64 {
   bs : [B; 2] = [b, c]
   return take(bs)
 }
+## expect: reject "implicit brand conversion"

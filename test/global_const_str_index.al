@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if b64_char(0) != literal_char(0) { return 1 }
   42
 }
+## expect(x86_64): run 42

@@ -13,3 +13,4 @@ addf := fn(x : f64) -> f64 { return x + 1.0 }
 main := fn() -> u64 {
   return u64(twice(f64, addf, 10.0))
 }
+## expect: run 12

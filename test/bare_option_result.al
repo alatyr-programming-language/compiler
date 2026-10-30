@@ -9,3 +9,4 @@ main := fn() -> u64 {
   match r { Result::Ok(v) => { b = v } Result::Err(e) => { b = 0 } }
   return a + b
 }
+## expect: run 42

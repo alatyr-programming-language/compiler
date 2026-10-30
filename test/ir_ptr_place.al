@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if s.a == 0 - 12 and s.b == 4 and n == 14 { return 42 }
   1
 }
+## expect: run 42

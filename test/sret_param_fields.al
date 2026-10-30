@@ -14,3 +14,4 @@ main := fn() -> u64 {
   u := bump(s, 10)
   return u.a + u.e + u.i
 }
+## expect: run 45

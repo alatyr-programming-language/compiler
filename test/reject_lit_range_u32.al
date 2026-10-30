@@ -3,3 +3,4 @@ main := fn() -> i64 {
   x : u32 = 5000000000
   return i64(x)
 }
+## expect: reject "at line 3"

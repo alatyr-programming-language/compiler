@@ -16,3 +16,4 @@ G := mk()
 main := fn() -> u64 {
   return u64(G.a + G.b)
 }
+## expect: reject "CONST module-level global initialized by a runtime CALL"

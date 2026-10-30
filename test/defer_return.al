@@ -12,3 +12,4 @@ main := fn() -> u64 {
   r := body(1)
   return FLAG + r
 }
+## expect: run 8

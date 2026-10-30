@@ -4,3 +4,4 @@ main := fn() -> u64 {
   std::os::free(std::os::arena(4096))
   return 42
 }
+## expect: reject "type mismatch"

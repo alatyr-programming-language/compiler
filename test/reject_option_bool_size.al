@@ -4,3 +4,4 @@ main := fn() -> u64 {
   s := size(Option(bool))
   if s == 0 { 42 } else { 1 }
 }
+## expect: reject "at line 4"

@@ -60,3 +60,4 @@ main := fn() -> u64 {
   ## a different issue. Asserting it here would make this fixture red for a gap it does not claim.
   return 42
 }
+## expect: run 42

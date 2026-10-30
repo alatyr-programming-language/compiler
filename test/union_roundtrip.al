@@ -5,3 +5,4 @@ main := fn() -> u64 {
   u := U.a(42)
   return u.a
 }
+## expect: run 42

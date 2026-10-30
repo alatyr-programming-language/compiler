@@ -4,3 +4,4 @@
 f32 := fn() -> u64 { return 1 }
 
 main := fn() -> u64 { return f32() }
+## expect: reject "scalar conversion requires exactly one operand"

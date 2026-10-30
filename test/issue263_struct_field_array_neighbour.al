@@ -47,3 +47,4 @@ main := fn() -> u64 {
   if sw.items[0].b != 2002 { return 123 }
   42
 }
+## expect: run 42

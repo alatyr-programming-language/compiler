@@ -5,3 +5,4 @@ main := fn() -> u64 {
   b := unchecked shr(17, 1)
   a + b
 }
+## expect(x86_64): run 42

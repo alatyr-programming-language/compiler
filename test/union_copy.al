@@ -7,3 +7,4 @@ main := fn() -> u64 {
   b := a
   return b.p.x + b.p.y
 }
+## expect: run 42

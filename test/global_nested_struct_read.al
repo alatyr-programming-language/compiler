@@ -5,3 +5,4 @@ P := struct { a : u64, b : u64 }
 Outer := struct { inner : P, n : u64 }
 mut STATE := Outer(inner = P(a = 10, b = 27), n = 5)
 main := fn() -> u64 { return STATE.inner.a + STATE.inner.b + STATE.n }
+## expect: run 42

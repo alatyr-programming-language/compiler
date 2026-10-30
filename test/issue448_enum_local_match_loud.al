@@ -24,3 +24,4 @@ main := fn() -> u64 {
   if bound_local(Tag.Red) != 11 { return 52 }
   42
 }
+## expect: run 42

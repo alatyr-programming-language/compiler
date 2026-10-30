@@ -6,3 +6,4 @@ g := fn(x : i64) -> u64 { return 2 }
 main := fn() -> u64 {
   return g(10)
 }
+## expect: reject "ambiguous call" "at line 7"

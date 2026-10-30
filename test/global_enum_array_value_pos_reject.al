@@ -7,3 +7,4 @@ E := enum { N, A(u64) }
 mut GE := [E.A(1), E.N]
 f := fn(e : E) -> u64 { match e { E::N => { 0 } E::A(n) => { n } } }
 main := fn() -> u64 { f(GE[0]) }
+## expect: reject "ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly) at line 9 in global_enum_array_value_pos_reject"

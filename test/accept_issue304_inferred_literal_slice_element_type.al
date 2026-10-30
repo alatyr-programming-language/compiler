@@ -9,3 +9,4 @@ main := fn() -> u64 {
   if sf[0] { return sx[0] + 2 }
   0
 }
+## expect: run 42

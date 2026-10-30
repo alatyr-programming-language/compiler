@@ -170,3 +170,6 @@ main := fn() -> u64 {
   if r11 != 0 { return r11 }
   42
 }
+## expect(x86_64): run 42
+## expect(aarch64): trap
+## expect(riscv64): trap

@@ -22,3 +22,4 @@ main := fn() -> u64 {
   n := kindof(u64, 7)
   s + n - 100
 }
+## expect: run 42

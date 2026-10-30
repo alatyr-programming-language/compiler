@@ -6,3 +6,4 @@ main := fn() -> u64 {
   xs[0].inner.x = 1
   return xs[0].inner.y
 }
+## expect: reject

@@ -41,3 +41,4 @@ main := fn() -> u64 {
   d := sum_mixed((5, 2.0))
   return a + b + c + d   ## 14 + 11 + 10 + 7 = 42
 }
+## expect(x86_64): run 42

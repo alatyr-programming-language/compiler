@@ -5,3 +5,4 @@ main := fn() -> u64 {
   std::fmt::print("a {}\n", a)
   42
 }
+## expect: run 42

@@ -20,3 +20,4 @@ main := fn() -> u64 {
   match h.head { Some(_q) => { return h.k + h.m }; None => { return 104 } }
   105
 }
+## expect(x86_64): run 42

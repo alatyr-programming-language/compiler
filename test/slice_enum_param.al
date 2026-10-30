@@ -18,3 +18,4 @@ main := fn() -> u64 {
   s := es[0..2]
   return sum(es[0..2]) + sum(s) - 42
 }
+## expect: run 42

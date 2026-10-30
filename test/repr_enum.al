@@ -32,3 +32,4 @@ main := fn() -> u64 {
   }
   acc
 }
+## expect(x86_64): run 42

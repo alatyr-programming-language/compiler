@@ -4,3 +4,4 @@ main := fn() -> u64 {
   t : (Col, u64) = (Col.G(40), 2)
   return match t.0 { Col::R => { 0 }; Col::G(v) => { v } } + t.1
 }
+## expect: run 42

@@ -29,3 +29,4 @@ main := fn() -> u64 {
   if ro_tag_of(r) != 6 { return 21 }
   return 42
 }
+## expect: run 42

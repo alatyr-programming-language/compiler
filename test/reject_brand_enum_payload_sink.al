@@ -35,3 +35,4 @@ main := fn() -> u64 {
   ev := match e { E::One(v) => { u64(v) } E::Two => { 0 } }
   return ev
 }
+## expect: reject "implicit brand conversion"

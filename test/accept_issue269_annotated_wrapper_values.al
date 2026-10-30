@@ -11,3 +11,4 @@ keep_option := fn() -> Option(u64) {
   return value
 }
 main := fn() -> u64 { return 42 }
+## expect: accept

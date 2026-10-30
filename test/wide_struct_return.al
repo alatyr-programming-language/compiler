@@ -13,3 +13,4 @@ main := fn() -> u64 {
   s := mk(10)
   return (s.a + s.b + s.c + s.d + s.e + s.f + s.g + s.h + s.i + s.j) / 13
 }
+## expect: run 42

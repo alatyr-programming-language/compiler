@@ -21,3 +21,4 @@ main := fn() -> u64 {
   ## (3) same-function local bind of a concrete Option(struct) — read BOTH fields (1 + 0 handled elsewhere)
   s0 + s1
 }
+## expect: run 42

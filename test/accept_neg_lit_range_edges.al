@@ -69,3 +69,4 @@ main := fn() -> u64 {
   if i64(g8()) != 0 - 128 { return 23 }
   return 42
 }
+## expect: run 42

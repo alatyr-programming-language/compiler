@@ -52,3 +52,4 @@ main := fn() -> u64 {
   if x_for != 7 or ACC != 211 { return 3 }
   42
 }
+## expect: run 42

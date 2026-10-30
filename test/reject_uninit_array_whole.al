@@ -4,3 +4,4 @@ main := fn() -> u64 {
   xs[0] = 42
   return xs
 }
+## expect: reject

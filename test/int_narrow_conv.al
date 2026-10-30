@@ -25,3 +25,4 @@ main := fn() -> u64 {
   if not ok { return 1 }
   a + b + c + 28
 }
+## expect: run 42

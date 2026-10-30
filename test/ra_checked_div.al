@@ -8,3 +8,4 @@ dm := fn(a : u64, b : u64) -> u64 { (a / b) + (a % b) }
 main := fn() -> u64 {
   dm(122, 3)
 }
+## expect: run 42

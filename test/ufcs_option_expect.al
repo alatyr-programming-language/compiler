@@ -15,3 +15,4 @@ main := fn() -> u64 {
   if unchecked (c != 100) { acc = 0 }
   return unchecked acc
 }
+## expect: run 42

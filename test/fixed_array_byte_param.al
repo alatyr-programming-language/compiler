@@ -26,3 +26,4 @@ main := fn() -> u64 {
   if sum_bit_bytes(bits) != 11 { return 3 }
   42
 }
+## expect(x86_64): run 42

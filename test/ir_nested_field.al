@@ -15,3 +15,4 @@ main := fn() -> u64 {
   q.inner = I(x = q.inner.x + 1, y = q.inner.y)
   u64(q.inner.x * 10 + q.inner.y + q.z) + w - 44
 }
+## expect: run 42

@@ -7,3 +7,4 @@ missing := fn() -> u64 {
   comptime if resolves(no_such_name()) { return 1 } else { return 0 }
 }
 main := fn() -> u64 { known() + pick() + missing() }
+## expect: run 42

@@ -7,3 +7,4 @@ main := fn() -> u64 {
     Color::Blue => 42
   }
 }
+## expect(wasm): run 42

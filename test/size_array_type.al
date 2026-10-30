@@ -20,3 +20,4 @@ main := fn() -> u64 {
   ok := (s1 == 24) and (s2 == 4) and (s3 == 32) and (s4 == 0) and (s5 == 0) and (s6 == 24) and (s7 == 32) and (s8 == 24) and (s9 == 16) and (s10 == 0) and (s11 == 0)
   if ok { 42 } else { 1 }
 }
+## expect: run 42

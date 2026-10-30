@@ -39,3 +39,4 @@ val := fn(base : u64) -> u64 {
 main := fn() -> u64 {
   return stmt(1) + val(1)
 }
+## expect: run 32

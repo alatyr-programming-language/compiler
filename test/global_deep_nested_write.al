@@ -10,3 +10,4 @@ main := fn() -> u64 {
   STATE.i1.m = 7
   return STATE.i1.i2.c + STATE.i1.i2.d + STATE.i1.m + STATE.n
 }
+## expect: run 42

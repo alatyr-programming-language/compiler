@@ -6,3 +6,5 @@
 head := fn(s : Slice(u8)) -> u8 { s[0] }
 
 main := fn() -> u64 { u64(head(bytes("*"))) }
+## expect: accept
+## expect(x86_64): run 42

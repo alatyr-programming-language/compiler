@@ -4,3 +4,4 @@ main := fn() -> u64 {
   p := make()
   return p.x + p.y
 }
+## expect(wasm): run 42

@@ -9,3 +9,4 @@ main := fn() -> u64 {
   G = mk()
   G.a + G.b
 }
+## expect: reject "whole-value assignment of a NON-LITERAL aggregate"

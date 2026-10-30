@@ -11,3 +11,4 @@ sum := fn(p : Pair) -> u64 { p.a + p.b }
 main := fn() -> u64 {
   sum(mk())
 }
+## expect: run 42

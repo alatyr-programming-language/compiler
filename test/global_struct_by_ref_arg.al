@@ -9,3 +9,4 @@ main := fn() -> u64 {
   std::fmt::print("S {}\n", S)
   sum(S)
 }
+## expect: run 42

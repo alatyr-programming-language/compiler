@@ -6,3 +6,4 @@ main := fn() -> u64 {
   q := ps[0]
   return q.x + q.y
 }
+## expect(x86_64): run 42

@@ -3,3 +3,4 @@ main := fn() -> u64 {
   mut x : u64
   return x
 }
+## expect: reject

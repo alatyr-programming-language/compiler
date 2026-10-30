@@ -10,3 +10,4 @@ main := fn() -> u64 {
   if s.y.len() != 2 { return 2 }
   42
 }
+## expect: run 42

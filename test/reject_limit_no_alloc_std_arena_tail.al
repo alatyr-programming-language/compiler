@@ -3,3 +3,4 @@
 @limits(no_alloc)
 make := fn() { std::os::arena(4096) }
 main := fn() -> u64 { 42 }
+## expect: reject "@limits(no_alloc) violation" "at line 4"

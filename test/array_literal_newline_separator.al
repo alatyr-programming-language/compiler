@@ -8,3 +8,4 @@ main := fn() -> u64 {
   mut i : usize = 5
   u64(T[i]) + 21
 }
+## expect: run 42

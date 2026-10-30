@@ -24,3 +24,4 @@ main := fn() -> u64 {
   if through_ptr(S1(k1 = 13)) != 13 { return 4 }
   42
 }
+## expect: run 42

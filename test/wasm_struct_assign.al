@@ -5,3 +5,6 @@ main := fn() -> u64 {
   p.y = 2
   return p.x + p.y
 }
+## expect(aarch64): run 42
+## expect(riscv64): run 42
+## expect(wasm): run 42

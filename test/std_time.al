@@ -25,3 +25,4 @@ main := fn() -> u64 {
   if d >= 0 and rn > 0 and rm > 0 and pn == 2500000000 { return 42 }
   return 7
 }
+## expect: run 42

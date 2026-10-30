@@ -12,3 +12,4 @@ main := fn() -> u64 {
     E.Pt(x, y) => { return x + y }
   }
 }
+## expect: run 42

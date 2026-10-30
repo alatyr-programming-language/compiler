@@ -21,3 +21,4 @@ main := fn() -> u64 {
   match w_call_src() { R => { total += 7 }; _ => {} }
   return total
 }
+## expect: run 42

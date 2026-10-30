@@ -11,3 +11,4 @@ main := fn() -> u64 {
   }
   first + second
 }
+## expect: run 42

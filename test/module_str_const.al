@@ -7,3 +7,4 @@ main := fn() -> u64 {
   n := std::io::print(GREETING)
   u64(n) + 39
 }
+## expect: run 42

@@ -15,3 +15,6 @@ main := fn() -> u64 {
   if q == ones { return 42 }
   return 7
 }
+## expect(x86_64): run 136
+## expect(aarch64): run 41
+## expect(riscv64): run 42

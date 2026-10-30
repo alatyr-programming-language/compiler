@@ -8,3 +8,4 @@ main := fn() -> u64 {
   h.values[0] = "text"
   0
 }
+## expect: reject "type mismatch" "at line 8"

@@ -17,3 +17,4 @@ main := fn() -> u64 {
   match pick(30) { E::A(v) => { acc = acc + 100 }; E::B(v) => { acc = acc + v } }
   acc + u64(c) + 6
 }
+## expect: run 42

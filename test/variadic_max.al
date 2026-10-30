@@ -14,3 +14,4 @@ maxof := fn(first : u64, rest : ...) -> u64 {
 main := fn() -> u64 {
   return maxof(3, 42, 7, 20)
 }
+## expect: run 42

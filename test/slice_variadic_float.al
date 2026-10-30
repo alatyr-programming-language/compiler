@@ -13,3 +13,4 @@ fsum := fn(xs : ...f64) -> f64 {
 main := fn() -> u64 {
   return u64(fsum(1.5, 2.5, 38.0))
 }
+## expect(x86_64): run 42

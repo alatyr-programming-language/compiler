@@ -12,3 +12,4 @@ count_b := fn(T : type, value : T) -> u64 {
 }
 
 main := fn() -> u64 { count_b(u64, 1) + 24 }
+## expect: run 42

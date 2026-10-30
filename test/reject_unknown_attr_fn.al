@@ -8,3 +8,4 @@ helper := fn(x : i64) -> i64 {
 main := fn() -> i64 {
   return helper(41)
 }
+## expect: reject "at line 7"

@@ -9,3 +9,4 @@ main := fn() -> u64 {
     E.B(x, y) => { x + y }
   }
 }
+## expect: run 33

@@ -25,3 +25,4 @@ main := fn() -> u64 {
   if deref(unchecked bitcast(ptr(u64), base + 8)) != 100 { return 5 }
   42
 }
+## expect(x86_64): run 42

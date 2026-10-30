@@ -29,3 +29,4 @@ sumf := fn(c : S9) -> u64 {
 main := fn() -> u64 {
   return sumf(bump(mk(1)))
 }
+## expect: run 18

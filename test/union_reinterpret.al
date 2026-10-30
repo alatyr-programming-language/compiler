@@ -10,3 +10,4 @@ main := fn() -> u64 {
   if v == 18446744073709551615 { return 42 }
   return 7
 }
+## expect: run 42

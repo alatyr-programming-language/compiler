@@ -27,3 +27,4 @@ main := fn() -> u64 {
   forwarded := wrapper(x, y)
   if direct == 5 and forwarded == 5 { 42 } else { 0 }
 }
+## expect: run 42

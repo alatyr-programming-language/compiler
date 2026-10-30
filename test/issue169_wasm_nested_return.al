@@ -11,3 +11,4 @@ main := fn() -> u64 {
   r := make_outer()
   u64(r.a) * 10 + u64(r.inner.b) + u64(r.inner.c)
 }
+## expect: run 23

@@ -15,3 +15,4 @@ esum := fn(xs : ...Sh) -> u64 {
 main := fn() -> u64 {
   return esum(Sh.Sq(5), Sh.Sq(5), Sh.Sq(5), Sh.Sq(5), Sh.Sq(5), Sh.Sq(5), Sh.Sq(6), Sh.Sq(6))
 }
+## expect: run 42

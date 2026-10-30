@@ -6,3 +6,4 @@ touch_alloc := fn() -> u64 {
   42
 }
 main := fn() -> u64 { return touch_alloc() }
+## expect: reject "@limits(no_alloc) violation" "at line 4"

@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if f_str_byte("ab") != 2 { return 102 }
   return 42
 }
+## expect(x86_64): run 42

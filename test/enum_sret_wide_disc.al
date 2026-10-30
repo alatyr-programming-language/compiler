@@ -14,3 +14,4 @@ main := fn() -> u64 {
     W::Big(a, b, c, d, e, f, g, h, i) => a + e + i   ## word1(5) + word5(25) + word9(45) = 75
   }
 }
+## expect: run 75

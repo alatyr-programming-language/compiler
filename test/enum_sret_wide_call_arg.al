@@ -29,3 +29,4 @@ use_it := fn(w : W) -> u64 {
 main := fn() -> u64 {
   use_it(mk(1))
 }
+## expect: run 22

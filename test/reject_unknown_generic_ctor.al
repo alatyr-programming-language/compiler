@@ -9,3 +9,4 @@ main := fn() -> u64 {
   x := X(128)(words = [1, 2])
   x.words[0]
 }
+## expect: reject "unknown type constructor"

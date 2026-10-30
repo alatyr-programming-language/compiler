@@ -22,3 +22,4 @@ main := fn() -> u64 {
   if o.pad != 1 { return 4 }
   42
 }
+## expect: run 42

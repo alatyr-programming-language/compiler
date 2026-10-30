@@ -17,3 +17,4 @@ main := fn() -> u64 {
   ## 5 + 30 + 7 (element 0) + 11 + 20 + 3 (element 2) = 76; xs[1] stays untouched.
   u64(xs[0].inner.x + xs[0].inner.y + xs[0].z + xs[2].inner.x + xs[2].inner.y + xs[2].z)
 }
+## expect: run 76

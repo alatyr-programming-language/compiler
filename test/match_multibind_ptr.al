@@ -29,3 +29,4 @@ main := fn() -> u64 {
   if two == 42 and three == 42 and agg == 42 { return 42 }
   return 1
 }
+## expect: run 42

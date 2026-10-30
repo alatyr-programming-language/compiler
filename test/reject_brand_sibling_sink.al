@@ -19,3 +19,4 @@ main := fn() -> u64 {
   b : B = B(2)
   return take_a(b)
 }
+## expect: reject "implicit brand conversion"

@@ -14,3 +14,4 @@ main := fn() -> u64 {
   qs : [P; 3] = [P(x = 0, y = 0, z = 0), P(x = 1, y = 5, z = 3), P(x = 7, y = 8, z = 9)]
   cmp(ps, qs)
 }
+## expect(x86_64): run 42

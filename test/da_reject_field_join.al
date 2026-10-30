@@ -6,3 +6,4 @@ main := fn() -> u64 {
   if true { s.x = 1 } else { s.y = 2 }
   return s.x
 }
+## expect: reject

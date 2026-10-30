@@ -6,3 +6,4 @@ main := fn() -> u64 {
   xs[0].inner.x = 42
   return xs[0].inner.x
 }
+## expect: run 42
