@@ -11,7 +11,7 @@
 ## this fixture exits 8: `u64(0.75 * 2^64)` answered the wrong value, because the signed `cvttsd2si`
 ## returns 2^63 for any value above i64 MAX.
 ##
-## Each check returns its own code if it fails. Expected: exit 42, no trap.
+## Each check returns its own code if it fails. Expected: exit 42, no trap (wasm: 134 at check 13).
 main := fn() -> u64 {
   mut one : f64 = 1.0                       ## run-time 1.0, so nothing folds at compile time
   if i8(127.9 * one) != 127 { return 1 }
@@ -28,7 +28,7 @@ main := fn() -> u64 {
   if i64(0.0 - t * t * 0.5) != 0 - 9223372036854775807 - 1 { return 11 }   ## exactly i64 MIN
   if i64(0.0 - 3.9 * one) != 0 - 3 { return 12 }                    ## toward zero
   mut z : f64 = 0.0
-  w := unchecked u64(z / z)                 ## NaN, unchecked: hardware-defined, no trap
+  w := unchecked u64(z / z)                 ## NaN, unchecked: hardware-defined (traps on wasm)
   if w == 1 { return 13 }                  ## (keeps `w` live; the hardware never answers 1)
   return 42
 }
