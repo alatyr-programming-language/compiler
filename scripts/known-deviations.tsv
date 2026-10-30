@@ -194,6 +194,9 @@ aarch64	test/higher_order.al	run/133	#1200
 aarch64	test/higher_order_map.al	run/133	#1200
 aarch64	test/hof_float_pool_shared_cell.al	run/133	#1196
 aarch64	test/if_return_agg.al	run/133	#1184
+aarch64	test/issue1049_neg_min_i64_traps.al	run/7	#1049
+aarch64	test/issue1065_het_eq_declared.al	run/133	#1192
+aarch64	test/issue1065_het_eq_undeclared.al	run/133	#1065
 aarch64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 aarch64	test/issue169_wasm_nested_return.al	run/133	#1191
 aarch64	test/issue171_global_const_str.al	run/133	#1200
@@ -632,6 +635,9 @@ riscv64	test/higher_order_map.al	run/133	#1200
 riscv64	test/hof_float_pool_shared_cell.al	run/133	#1196
 riscv64	test/if_return_agg.al	run/133	#1191
 riscv64	test/ir_ptr_agree.al	run/133	#1187
+riscv64	test/issue1049_neg_min_i64_traps.al	run/7	#1049
+riscv64	test/issue1065_het_eq_declared.al	run/133	#1192
+riscv64	test/issue1065_het_eq_undeclared.al	run/133	#1065
 riscv64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200
@@ -1072,6 +1078,9 @@ wasm	test/higher_order_map.al	run/134	#1186
 wasm	test/hof_float_pool_shared_cell.al	run/134	#1195
 wasm	test/if_return_agg.al	run/134	#1184
 wasm	test/ir_ptr_agree.al	run/134	#1187
+wasm	test/issue1049_neg_min_i64_traps.al	run/7	#1049
+wasm	test/issue1065_het_eq_declared.al	run/134	#1192
+wasm	test/issue1065_het_eq_undeclared.al	run/134	#1065
 wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
 wasm	test/issue169_wasm_array_write.al	run/134	#1194
 wasm	test/issue169_wasm_nested_return.al	run/134	#1191
@@ -1316,3 +1325,6 @@ wasm	test/wat_hof_note_wellformed.al	run/134	#1195
 wasm	test/when_guard_arch.al	run/134	#1200
 wasm	test/word_layout_struct_by_value_control.al	run/134	#1187
 wasm	test/zst_and_empty_ctor.al	run/134	#713
+x86_64	test/issue1049_neg_min_i64_traps.al	run/7	#1049
+x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
+x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
