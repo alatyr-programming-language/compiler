@@ -163,7 +163,7 @@ pr_seed_version_append_only_check() { # changed-paths deleted-line-count
   echo '          Protected means the dated promotion journal entries and the `current-seed-sha256`'
   echo '          and `current-seed-version` lines: rewriting them is how an old hash is made to'
   echo '          resolve. The ONE mutable line is `# spec-pin:` — see the checker below, which'
-  echo '          excludes exactly that prefix and counts every other deletion as protected.' 
+  echo '          excludes exactly that prefix and counts every other deletion as protected.'
   return 1
 }
 
