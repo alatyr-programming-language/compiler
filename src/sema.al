@@ -6875,6 +6875,8 @@ ret_sink_err := fn(head : Option(ptr(mut Stmt)), rts : usize, rtl : usize, decls
         if agg_scalar_bad(rts, rtl, rv, decls, upto, src, locals, nloc) or ann_lit_range_bad(src, rts, rtl, rv) { res = RET_SINK_AGG }
         rbe := sema_brand_ret_err(rts, rtl, rv, sema_brand_span(s_of(rv, a), rts), decls, upto, src, locals, nloc, a)
         if rbe != 0 and res == 0 { res = rbe }
+        rse := sema_ret_sign_err(rts, rtl, rv, decls, src, a)
+        if rse != 0 and res == 0 { res = rse }
       }
       Stmt::If(c, th, el, nx) => {
         te := ret_sink_err(th, rts, rtl, decls, upto, src, locals, nloc, a)
@@ -8571,6 +8573,16 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     }
   }
   r
+}
+## #942 — Types §4.2/§4.3: a value returned to a declared integer result of the OTHER signedness is a
+## NUMERIC conversion, which is always explicit. `0` when the records agree or either is not an integer
+## (a literal takes the result type, Types §2.3), else the located refusal `sema_mixed_signedness` uses.
+sema_ret_sign_err := fn(rts : usize, rtl : usize, rv : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> CheckErr {
+  if not ir::sty_on() { return 0 }
+  want : ir::VTy = sema_vty_name(src, rts, rtl, decls)
+  got : ir::VTy = sema_sty_get(rv)
+  if not ir::vty_is_int(want) or not ir::vty_is_int(got) or ir::vty_same_sign(want, got) { return 0 }
+  signedness_conversion_err(s_of(rv, a))
 }
 ## docs/ir.md §3.8 item 9 — the location of a binary operator whose two operands sema recorded as
 ## integers of opposite signedness (its left operand's), `None` when there is none. A literal-only
@@ -16860,6 +16872,8 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         if tbe != 0 { err = tbe; failed = true }
         ptrint_probe_site("RESULT-TAIL", "tailexpr", true, tail_ty.kind, rett.kind, s_of(d.value, a), src)
         if not ty_compat(tail_ty, rett, src) { err = mismatch_err(s_of(d.value, a), 0); failed = true }
+        tse := sema_ret_sign_err(d.ret_ts, d.ret_tl, d.value, decls, src, a)
+        if tse != 0 { err = tse; failed = true }
         ## The same literal fallback is needed for a tail expression: `fn() -> u64 { "x" }` has no
         ## explicit Stmt::Return for the ordinary tag check to see, while `lbv_lit_tag` knows the exact
         ## `StrLit` shape. Unknown tails stay poison-tolerant when the declared result is unresolved.
