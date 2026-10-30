@@ -112,11 +112,11 @@ typed form is possible; if the typed form fails, file the defect and name it in 
 
 ## Oracles and landing — [rationale](docs/rationale/landing.md)
 
-- The oracles `scripts/corpus.manifest`, `scripts/idiom.baseline` and `scripts/needle.baseline` are
-  exclusive: at most one open PR touches one, and it touches nothing else. A worker never changes one.
-- An intentional oracle change: the feature PR stays oracle-free, and its only allowed gate failure is
-  the expected oracle mismatch, never published. The integrator merges it, commits each oracle alone
-  (oracle and reseed-evidence commits touch nothing else), re-runs the full gate, publishes the green.
+- A fixture states its result once, `## expect:`, judged on every backend's run. A miss is a row of
+  `scripts/known-deviations.tsv` under an open issue, no oracle: a fix deletes its own rows (#1126).
+- The oracles `scripts/corpus.manifest`, `idiom.baseline` and `needle.baseline` are exclusive: at most one
+  open PR touches one, and nothing else; a worker never changes one. A feature PR stays oracle-free, its only
+  gate failure the expected, unpublished mismatch; the integrator commits each oracle (or reseed evidence) alone.
 - Landing goes through the merge queue (`scripts/queue.sh`, a timer on omen): after review the
   integrator runs `scripts/queue.sh --enqueue N=SHA`; the queue gates, pushes, comments, deletes the branch.
 - By hand (a seed promotion, or the queue down): verify the locally merged result, not the branch,
