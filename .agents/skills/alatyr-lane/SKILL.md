@@ -451,11 +451,23 @@ example or normative behavior changed. Record the exact paths and checks as `doc
 The classifier's zero is necessary but not sufficient; this manual review is the second half of the
 gate.
 
-For every other change, including a modification to the classifier or workflow policy:
+For every other change, including a modification to the classifier or workflow policy, first the
+**pre-gate** (#1128), on omen, against the PR's base. A PR is not marked ready until it prints
+`pre-gate: GREEN`; paste that line and its `NOT RUN` line into the PR's Evidence section:
 
 ```sh
 ulimit -c 0
-nix develop -c bash scripts/full.sh --force-sweeps    # ~6 min; must print GREEN (sweeps RAN)
+nix develop -c bash scripts/pre_gate.sh "$BASE"       # the rows and sweeps the change reaches
+```
+
+It runs every e2e row for a compiler change, the rows naming a changed fixture, lib module or lib
+function otherwise, and the sweep of each changed emitter. It names the full-gate stages it did not
+run, so a green pre-gate is "worth a full gate", never a verdict. Then the full gate, on the exact
+head, on a `gate/**` branch (the GitHub runner; do not run `full.sh` on omen, which the merge queue
+and every lane share):
+
+```sh
+git push origin HEAD:refs/heads/gate/<your-branch>    # full.sh --force-sweeps; must print GREEN (sweeps RAN)
 git diff --exit-code && git diff --cached --exit-code # the manifest ran --check, not --write
 ```
 
