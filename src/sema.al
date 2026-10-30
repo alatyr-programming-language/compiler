@@ -8582,6 +8582,23 @@ sema_ret_sign_err := fn(rts : usize, rtl : usize, rv : ptr(Expr), decls : ptr(rt
   want : ir::VTy = sema_vty_name(src, rts, rtl, decls)
   got : ir::VTy = sema_sty_get(rv)
   if not ir::vty_is_int(want) or not ir::vty_is_int(got) or ir::vty_same_sign(want, got) { return 0 }
+  if ptrint_probe_open() {
+    mut pa := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
+    mut sb := ptrint_probe_buf(pa)
+    w0 := rt::push_str(sb, "#942 RET ")
+    mns := PTRINT_MOD_NS
+    mnl := PTRINT_MOD_NL
+    if mnl == 0 { d0 := rt::push_str(sb, "-") } else { d1 := rt::push_str(sb, str_at((src + mns), mnl)) }
+    m1 := rt::push_str(sb, " ")
+    dns := PTRINT_DECL_NS
+    dnl := PTRINT_DECL_NL
+    if dnl == 0 { e0 := rt::push_str(sb, "-") } else { e1 := rt::push_str(sb, str_at((src + dns), dnl)) }
+    m3 := rt::push_str(sb, " |")
+    ls := brand_probe_line(src, s_of(rv, a))
+    w9 := rt::push_str(sb, str_at((src + ls.s), ls.n))
+    ptrint_probe_send(sb)
+    return 0
+  }
   signedness_conversion_err(s_of(rv, a))
 }
 ## docs/ir.md §3.8 item 9 — the location of a binary operator whose two operands sema recorded as
