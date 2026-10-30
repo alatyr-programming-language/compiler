@@ -725,7 +725,8 @@ pgr_rows=0; pgr_ok=0
 if [ ! -f "$PGR_LIST" ]; then
   echo "  FAIL progen regress: no $PGR_LIST — the replay of past findings is unheld"; fail=1
 else
-  while IFS=$'\t' read -r pgr_seed pgr_forms pgr_issue pgr_rest; do
+  # `|| [ -n … ]` keeps a last row that has no trailing newline (read fails on it, but has filled it).
+  while IFS=$'\t' read -r pgr_seed pgr_forms pgr_issue pgr_rest || [ -n "$pgr_seed" ]; do
     case "$pgr_seed" in ''|'#'*) continue ;; esac
     pgr_rows=$((pgr_rows + 1))
     if ! [[ "$pgr_seed" =~ ^[0-9]+$ ]] || [ -z "$pgr_forms" ] || ! [[ "$pgr_issue" =~ ^#[0-9]+$ ]] || [ -n "$pgr_rest" ]; then

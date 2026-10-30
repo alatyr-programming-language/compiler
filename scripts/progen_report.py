@@ -202,9 +202,12 @@ def self_test():
           {'x86_64': 3, 'aarch64': 'build:crash: sig 11', 'wasm': 7})
     check('tag parse: no tag', parse_tag('-'), {})
     check('REFUSED blames x86_64', blamed('REFUSED', {'x86_64': 'build: x'}, '3'), ['x86_64'])
-    check('CRASH blames each crashed compiler',
-          blamed('CRASH', {'x86_64': 3, 'riscv64': 'build:crash: a', 'wasm': 'build:crash: b'}, '3'),
+    check('CRASH blames each crashed compiler, not a trap or a refusal',
+          blamed('CRASH', {'x86_64': 3, 'aarch64': 'trap', 'riscv64': 'build:crash: a',
+                           'wasm': 'build:crash: b'}, '3'),
           ['riscv64', 'wasm'])
+    check('tag parse needs a space or the start before a backend name',
+          parse_tag('x86_64=build: no xwasm=1 wasm=2'), {'x86_64': 'build: no xwasm=1', 'wasm': 2})
     check('WRONG blames the backends off the model',
           blamed('WRONG', {'x86_64': 4, 'aarch64': 2, 'riscv64': 2, 'wasm': 'trap'}, '2'), ['x86_64'])
     check('WRONG without a model blames the minority',
@@ -228,6 +231,27 @@ def self_test():
     other = [{'number': 7, 'state': 'OPEN', 'body': marker('WRONG', 77, 'wasm')}]
     check('the marker keys on the backend too',
           [a[0] for a in plan([f], other, 'RUN')], ['open'])
+
+    # findings() and body_of() over a planted artifact directory, as the nightly lays it out.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        sd = os.path.join(d, 'progen-1-shard0')
+        os.makedirs(sd)
+        with open(os.path.join(sd, 'findings.tsv'), 'w') as t:
+            t.write('WRONG\t11\tx86_64=4 aarch64=2\t2\tx86_64=4 aarch64=2\t2\n'
+                    'WRONG\t11\tx86_64=4 aarch64=2\t2\tx86_64=4 aarch64=2\t2\n'
+                    'MODEL\t12\tx86_64=1 aarch64=1\t2\t-\t-\n'
+                    'HANG\t13\tx86_64=hang\t2\t-\t-\n'
+                    'REFUSED\t14\tx86_64=build: x\t5\t-\t-\n')
+        with open(os.path.join(sd, 'wrong-11.al'), 'w') as t:
+            t.write('PLANTED-PROGRAM-TEXT\n')
+        fs = findings(d)
+        check('findings: failing verdicts only, each (verdict, seed) once',
+              [(f['verdict'], f['seed']) for f in fs], [('WRONG', 11), ('REFUSED', 14)])
+        check('findings: the model is the fourth column', fs[0]['model'], '2')
+        b = body_of(fs[0], 'x86_64', 'RUN')
+        check('body: the reduced program from the artifact', 'PLANTED-PROGRAM-TEXT' in b, True)
+        check('body: both outputs and the run', all(x in b for x in ('x86_64=4 aarch64=2', 'RUN')), True)
 
     print(f"progen_report self-test: {'PASS' if not bad else 'FAIL'}")
     return 1 if bad else 0
