@@ -126,6 +126,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **An enum read out of a `Vec` is the one that was stored (#989).** `at`, `get` and every other
+  `deref(p)` of an enum value through a pointer returned the first variant with a zero payload. The
+  value is now read word by word from the pointer; a pointee type that cannot be resolved is refused
+  with a located diagnostic instead of guessed.
+
 ## 0.2.20 — 2026-10-31
 
 - **A seed promotion is a script (#1129).** `scripts/promote.sh prepare <version>` runs the
