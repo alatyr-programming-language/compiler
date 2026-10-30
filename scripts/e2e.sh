@@ -12072,6 +12072,19 @@ run_wat trap_literal_ctx_field_u64 134
 ## by machine; hand-narrowing does not reproduce it — the shape needs the whole set of temporaries.
 run issue973_if_branch_context 2
 run issue977_struct_lit_field_ctx 2
+## #1139 — a binding of an aggregate-returning call under an `unchecked` grant (`s := unchecked mk(41)`,
+## `s := unchecked { mk(41) }`). The grant changes only the verification mode (Concurrency §6.2,
+## CG-7), but the binding was sized and stored as one scalar word. NON-VACUOUS on the parent at
+## 55fa477 (x86_64): the struct rows built and exited 0 where 42 is due, the wide (hidden result
+## pointer) row segfaulted (139), and the enum row was refused at build. `_wraps` proves the grant
+## still reaches the call's arguments (`M + 42` wraps instead of trapping).
+run unchecked_call_struct3 42
+run unchecked_call_struct2 42
+run unchecked_block_struct3 42
+run unchecked_call_struct_wraps 42
+run unchecked_call_struct_wide 42
+run unchecked_call_ptr_struct 42
+run unchecked_call_enum 42
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
