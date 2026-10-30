@@ -110,7 +110,10 @@ if [ "${1:-}" = "--self-test" ]; then
   # pass. Planted fixtures drive every class: a header/registration disagreement, the x86_64 row that
   # differs from its registration, a conflict, a pin, each malformed shape (no colon, a status over
   # 255), the twins' classes, every reason the generator holds a fixture back (#1178's formatter hold
-  # included), and `--gate` failing on (a) and malformed while passing beside (b), (c) and the twins.
+  # included), and `--gate` failing on (a) and malformed while passing beside (b) and (c). The known
+  # deviations (#1126 S2) have their own plants: a listed deviation passes, and each of an unlisted one,
+  # a changed observation, a stale row, an orphan row, an unnamed or unknown issue, an issue no row
+  # names, an issue marked `none` that rows name, and an unsorted list fails.
   bash "$ROOT/scripts/fixture_expect.sh" --self-test
   _full_fixture_expect_self_test_rc=$?
   [ "$_full_fixture_expect_self_test_rc" = 0 ] || exit "$_full_fixture_expect_self_test_rc"
@@ -347,20 +350,24 @@ if [ "$ig_cover" != 1 ]; then
   fail=1
 fi
 
-# FIXTURE EXPECT (#1126 S1). It sets each fixture's `## expect:` directive beside its e2e.sh
-# registration (the reviewed claim) and the committed manifest (what x86_64 observed). A source scan of
-# the tree and the committed manifest; it needs no compiler. Its self-test runs under `full.sh --self-test`.
-# `--gate` FAILS on (a) a header that contradicts its own registration, on a malformed directive, and on
-# unusable input (#1128: no stage prints a finding and passes). The (b), (c) and twins counts it prints
-# beside them stay a report: they are the input of S2's known-deviations list, and S3 is the step that
-# turns header-against-observed into the verdict and retires corpus.manifest.
-echo "### FIXTURE EXPECT (header vs registration vs x86_64 observation: (a) and malformed gate) ###"
+# FIXTURE EXPECT (#1126 S1, S2). It sets each fixture's `## expect:` directive beside its e2e.sh
+# registration (the reviewed claim), the committed manifest (what each backend observed) and
+# scripts/known-deviations.tsv. A source scan of the tree and the committed manifest, which the CORPUS
+# MANIFEST stage holds to the tree; it needs no compiler. Its self-test runs under `full.sh --self-test`.
+# `--gate` FAILS on (a) a header that contradicts its own registration, a malformed directive, a missed
+# directive with no deviation row, a row that no longer reproduces (the fix deletes its own row), a row
+# with no issue in scripts/known-deviations.issues.tsv, and unusable input (#1128: no stage prints a
+# finding and passes). Whether each issue in that table is still OPEN is the one fact this stage cannot
+# see: the gate runs with no GitHub credentials (queue.sh strips them), so `scripts/land.sh` PHASE 2
+# asks `gh` before a landing and refuses a closed one. The (b) and (c) counts stay a report: S3 is the
+# step that makes the directive the verdict for every fixture and retires corpus.manifest.
+echo "### FIXTURE EXPECT (directive vs registration, manifest and known deviations) ###"
 FE_LOG="$LOGDIR/full_fixture_expect.log"
 bash scripts/fixture_expect.sh --gate > "$FE_LOG" 2>&1
 fe_rc=$?
 cat "$FE_LOG"
 if [ "$fe_rc" != 0 ]; then
-  echo "  scripts/fixture_expect.sh --gate exited $fe_rc (1: (a) or a malformed directive; 2: unusable input) — see $FE_LOG"
+  echo "  scripts/fixture_expect.sh --gate exited $fe_rc (1: a finding above; 2: unusable input) — see $FE_LOG"
   fail=1
 fi
 
