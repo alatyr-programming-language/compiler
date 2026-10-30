@@ -165,6 +165,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   returning `Slice(str)` bound each element as one word, or copied it from the parameter's own
   `{ptr, len}` block. The program then ran on with wrong strings and no diagnostic. Iterating a
   range of a `Slice(str)` parameter (`for s in xs[1..n]`) is still wrong, tracked by #1180.
+- **The full gate runs a generated container matrix (#1124).** `scripts/container_matrix.py` writes one
+  program per element shape × container × operation (19 shapes; `vec`, `deque`, `hashmap`; 378 cells)
+  into `target/`, builds and runs each, and prints `OK`, `WRONG <check>`, `TRAP <rc>` or `REFUSED`.
+  On x86_64 every WRONG and REFUSED cell needs a row under an open issue in
+  `scripts/container-matrix.deviations.tsv` (116 rows at main `e77d025e`), and a row whose cell now
+  passes fails the gate until its fix deletes it. A planted wrong read is proved to turn it red.
 
 ## 0.2.21 — 2026-11-01
 
