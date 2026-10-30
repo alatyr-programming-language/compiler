@@ -144,6 +144,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   receiver's type. `x := f().expect(m)` with a struct payload now binds every field, not just the
   first; using such a multi-word value directly in another expression is refused at build time, as it
   already was for `?`, instead of silently delivering one word.
+- **`v.push(x)` on a `Vec` of a sub-word element stores what it is given (#988).** A UFCS call that
+  infers its type argument from the receiver was its own instance below two words, tagged by the
+  receiver's name, and `size(T)` in it was 8 bytes: `push` on a `Vec(u8)`, `Vec(u16)` or `Vec(u32)`
+  wrote with a word stride. It is now the same instance as `vec::push(u32, v, x)`.
 
 ## 0.2.21 — 2026-11-01
 
