@@ -416,7 +416,11 @@ output of a **stage**, so it goes stale the moment `package.al` moves and fails 
 that never mentions the version. Note also that the fixpoint does **not** catch a wrong version by
 itself, for the reason just measured; the seed-identity check at the top of `scripts/fixpoint.sh` is
 what catches it, in both directions: a promotion that forgot the bump, and a `package.al` bump made on
-its own.
+its own. It also asks the seed, so the bumped tree, whose seed still answers the previous number, is
+refused too, until you say it is a promotion in progress: build the stages with
+`ALATYR_RESEED=1 scripts/fixpoint.sh` (#1104). The flag accepts only both rows bumped, the digest
+unchanged and a seed answering an **older** version. A flagged run ends at rc 4 and never reports the
+fixpoint, so the proof is still the unflagged run on the promoted tree.
 
 What that check does **not** catch is a tree where `package.al` and `current-seed-version` agree and
 the seed answers a third thing — which is precisely the intermediate state of a bump-first promotion,

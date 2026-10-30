@@ -13,6 +13,11 @@
 # compiler bakes the version of the tree it was COMPILED FROM (src/cli.al's cli_version reads the
 # TOOL-15-injected app.version), so a Stage2 built before the bump answers the previous number for
 # its whole life; that is #586, and the seed committed here is the proof.
+# Between that bump and the promotion the committed seed still answers the PREVIOUS number, which
+# scripts/fixpoint.sh refuses unless told: run it as `ALATYR_RESEED=1 scripts/fixpoint.sh` to build
+# the stages of that tree (#1104). The flag accepts exactly this state — both rows bumped, the digest
+# unchanged, the seed answering an OLDER version — and a flagged run never reports the fixpoint
+# reached. (scripts/promote.sh, where present, builds the stages itself and needs no flag.)
 # THEN build Stage1, have it build Stage2 and Stage3. Require Stage1 == Stage2 == Stage3 in
 # the emitted GAS, byte-identical after normalizing the .L<N> and .Lra<N>_<k> label families (do
 # that first, or the diff is drowned in renumbering), and Stage2 == Stage3 in the BINARY. Read the
