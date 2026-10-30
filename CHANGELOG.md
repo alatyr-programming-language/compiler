@@ -171,6 +171,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `IB_I64_MIN : i64 = 0 - 9223372036854775807 - 1` the two subtractions are now signed and guarded
   (`jno`) where they were an unguarded zero-left subtraction and a borrow guard (`jnc`), and
   `i64(0 - 1)` in `lower::param_tuple_layout_collect` gains its signed guard.
+- **An aggregate-returning call under `unchecked` binds its whole value on x86_64 (#1139).**
+  `s := unchecked mk(41)` and `s := unchecked { mk(41) }` sized `s` as one scalar word and stored only
+  the first return register, so a 2- or 3-word struct read wrong fields with exit 0, a struct returned
+  through the hidden result pointer segfaulted, and an `Option(S)` result was refused at build. The
+  grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
+  aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
+  aarch64, riscv64 and wasm still trap on the granted form (#1157).
 
 ## 0.2.19 — 2026-10-31
 
