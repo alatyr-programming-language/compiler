@@ -9126,7 +9126,9 @@ run trap_written_zero_sub_unsigned 132
 run accept_written_zero_sub_no_borrow 42
 run accept_neg_unsigned_hof_clone 42
 ## #997 — float→int is NaN- and range-checked (Concurrency §7.7), and a u64 at or above 2^63 converts
-## exactly. The in-range edges hold on every backend, so that row is swept. The traps are x86_64-only
+## exactly. The in-range edges (checks 1-12) hold on every backend, so that row is swept; on wasm the
+## fixture's last check, `unchecked u64(NaN)`, traps (wasm's truncation traps on NaN), which the sweep
+## accepts and the corpus manifest pins as run/134, reached only after checks 1-12 passed. The traps are x86_64-only
 ## (`run_x86_trap`, outside the sweeps' `^run ` grep): aarch64, riscv64 and wasm still convert without
 ## the check and answer a wrong value (gate run 41023140629's sweeps measured it), which is the open
 ## twin half of #997, outside milestone M1. When it lands these rows become `run`.
