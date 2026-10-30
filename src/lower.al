@@ -12648,7 +12648,7 @@ ufcs_param_tpos := fn(src : ptr(u8), ps : usize, pl : usize, ts : usize, tl : us
 ## `new`'s `-> Vec(T)` → `u32`), nested blocks included. Inner scopes may shadow (Declarations §6), so
 ## every binding must give the same answer, and a binding this cannot read (a `for` variable, a match
 ## binding, a reassignment from another local) leaves it unresolved: 0/0, the existing tagging, never
-## a guess. Both mono passes call it with the fn's whole body and params — never a narrowed block — so
+## a guess. That fallback still stores a sub-word element at the 8-byte stride: #1230, open. Both mono passes call it with the fn's whole body and params — never a narrowed block — so
 ## the instance one collects is the one the other calls, whichever emit path reaches the call (the IR
 ## path emits a barrier call after it has left the block). The type must have the parameter's head.
 UfcsBindAcc := struct { s : usize, n : usize, unread : bool }
@@ -12765,7 +12765,7 @@ ufcs_bind_arms := fn(ah : Option(ptr(mut Arm)), ns : usize, nl : usize, tpos : u
 
 ## #988 — the bindings inside an expression's own blocks (a `match`, `loop` or `if` used as a value).
 ufcs_bind_expr := fn(e : ptr(Expr), ns : usize, nl : usize, tpos : usize, hs : usize, hn : usize, in out acc : UfcsBindAcc, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
-  ## null-ok: Arm.body — an arm with a statement body carries a null value expression (ast.al); so do a bare `return` and an `if` without `else`.
+  ## null-ok: #1069 — Arm.body — an arm with a statement body carries a null value expression (ast.al); so do a bare `return` and an `if` without `else`.
   if unchecked bitcast(usize, e) == 0 { return }
   match deref(e) {
     Expr::Match(sc, mh) => {
