@@ -9034,6 +9034,15 @@ run trap_neg_written_zero_sub 132
 run trap_neg_compound_operand 132
 run accept_neg_unsigned_and_unchecked 42
 run accept_neg_narrow_no_trap 42
+## #997 — float→int is NaN- and range-checked (Concurrency §7.7), and a u64 at or above 2^63 converts
+## exactly.
+run trap_f2i_nan 132
+run trap_f2i_u64_overflow 132
+run trap_f2i_negative_unsigned 132
+run trap_f2i_u8_overflow 132
+run trap_f2i_i64_at_2p63 132
+run trap_f2i_i8_below 132
+run accept_f2i_range_edges 42
 ## regalloc commit 4: a scalar-leaf TRAILING-VALUE checked `*` overflow goes through `emit_fn_ir`
 ## (register-allocated), not the text path — it must still emit the guard and TRAP (132). Locks in
 ## that the register allocator never drops a checked-overflow guard.
