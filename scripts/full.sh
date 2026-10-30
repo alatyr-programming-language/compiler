@@ -316,12 +316,12 @@ if [ "$fc_cover" != 2 ]; then
   fail=1
 fi
 
-# The IDIOM gate. REPORTING ONLY, and it needs no compiler — a pure source scan, so it can never
+# The IDIOM gate. A ratchet: it needs no compiler — a pure source scan, so it can never
 # collide with another lane over target/debug/alatyr. It fails only on a duplicate decision that is NOT in
 # scripts/idiom.baseline, and it runs its own gate-of-the-gate first (five planted defects that every
 # rule must fire on, and a clean twin that none may fire on) — so a green here means the detector was
 # alive when it said so.
-echo "### IDIOM (duplicate-decision detector, reporting only) ###"
+echo "### IDIOM (duplicate-decision detector: a decision outside scripts/idiom.baseline fails) ###"
 IG_LOG="$LOGDIR/full_idiom.log"
 bash scripts/idiom_gate.sh > "$IG_LOG" 2>&1
 ig_rc=$?
@@ -526,47 +526,24 @@ if [ -z "$st_cover" ]; then
   fail=1; st_cover="UNKNOWN — no coverage line"
 fi
 
-# The CROSS-BACKEND report (#683). Like the idiom gate it needs no compiler — it is a join over
-# scripts/corpus.manifest, which the CORPUS stage above has already checked against the tree on this
-# same run — so it cannot collide with another lane over target/debug/alatyr.
+# The CROSS-BACKEND ratchet (#683). It needs no compiler: it is a join over scripts/corpus.manifest,
+# which the CORPUS stage above has already checked against the tree on this same run.
 #
-# Unlike the idiom gate it carries NO baseline, and a FINDING never sets `fail`. That asymmetry is
-# deliberate. What the report names is real, undeclared cross-backend divergence that nobody has read
-# yet; #683's triage counted 18 paths of it. Gating on that today would be permanently red, and
-# blessing the 18 into a baseline to get green is exactly the failure #683 was filed about — the
-# manifest has been freezing these disagreements AS the expected state all along.
-#
-# What DOES set `fail` is the detector being broken or silent about its own coverage:
-#   * its planted-defect self-test must pass — AGENTS.md: "a green gate that never fails its own
-#     planted defect is not evidence", and a report nobody has seen fire is decoration;
-#   * it must print its proof-of-work line, so "found nothing" can be told apart from "walked
-#     nothing" — the same rule, and the same failure mode, as `idiom gate: files=` above.
-echo "### CROSS-BACKEND (report: reporting only; xbackend_diff: RATCHET, growth gates) ###"
+# There used to be a second, REPORTING-ONLY stage here, `scripts/xbackend_report.sh`, which asked
+# one narrower question of the same rows (does a twin exit normally with a different, quiet answer?)
+# and exited 0 whatever it found. #1128 removed it: nothing in this script prints a finding and
+# passes. Measured: a planted quiet wrong value (riscv64 41 where x86_64 runs 42, on
+# test/accept_limit_no_unchecked_neg.al) made the report print the row and exit 0, while
+# `xbackend_diff.sh --ratchet` failed with "UNEXPLAINED quiet disagreements GREW 0 -> 1". The one
+# row shape only the report used to show was a quiet answer on a HW-DEFINED or RAW-ESCAPE path,
+# which leaves every other count; the ratchet now holds `hw-defined=` and `raw-escape=` on their own
+# (a wasm `unchecked_div_zero` trap turned quiet 7: report exit 0, old ratchet exit 0, now FAIL 8 -> 9).
+echo "### CROSS-BACKEND (xbackend_diff: RATCHET, growth gates) ###"
 XB_LOG="$LOGDIR/full_xbackend.log"
-bash scripts/xbackend_report.sh --self-test > "$XB_LOG" 2>&1
-xb_st_rc=$?
-bash scripts/xbackend_report.sh --quiet >> "$XB_LOG" 2>&1
-xb_rc=$?
-grep -E "^(xbackend_report self-test:|xbackend report:)" "$XB_LOG"
-if [ "$xb_st_rc" != 0 ]; then
-  echo "  the cross-backend report FAILED ITS OWN planted-defect self-test — its findings, and its"
-  echo "  silence, prove nothing (from $XB_LOG):"
-  grep -E "^  FAIL " "$XB_LOG" | head -5 | sed 's/^/    /'
-  fail=1
-fi
-if [ "$xb_rc" = 2 ]; then
-  echo "  the cross-backend report could not read scripts/corpus.manifest (from $XB_LOG)"
-  fail=1
-fi
-xb_cover="$(grep -cE "^xbackend report: paths=" "$XB_LOG")"
-if [ "$xb_cover" != 1 ]; then
-  echo "  (scripts/xbackend_report.sh printed no 'xbackend report: paths=' proof-of-work line — what"
-  echo "   it walked is unknown, treating as a failure)"
-  fail=1
-fi
-## The same manifest, the WIDER question (#683): every (phase, exit) disagreement between x86_64 and a
+: > "$XB_LOG"
+## The WIDER question (#683): every (phase, exit) disagreement between x86_64 and a
 ## twin, classified — traps, crashes, build-step failures and twins accepting what x86_64 refuses, not
-## only the quiet wrong values above. `--ratchet`, NOT `--count`: the count used to be reporting-only
+## only quiet wrong values. `--ratchet`, NOT `--count`: the count used to be reporting-only
 ## (`--count` ended in `exit 0` whatever it printed), so a PR that ADDED a disagreement passed and the
 ## only trace was a number in a log nobody read — that is how `paths` reached 950. The ratchet holds
 ## the line without pretending the backlog is empty: the count may not GROW, and it never demands zero
@@ -588,12 +565,12 @@ fi
 
 # The x86 DIFFERENTIAL of the shared IR (`docs/ir.md` §7.1 rule 5, IR slice 1d). Every corpus program
 # with a function the IR builds and `src/lower/isel.al` selects is built and run through the default x86
-# path and through the `alatyr x86-ir` dev verb, and the two exits and stdouts are compared. REPORTING
-# ONLY, by the cross-backend report's argument: each disagreement is a triage item (an IR bug, or a
-# legacy x86 bug the IR answers per the specification — #872's narrowing, the signedness family), so a
-# finding never sets `fail`. A broken self-test, an unreadable run, or a proof line that walked no
+# path and through the `alatyr x86-ir` dev verb, and the two exits and stdouts are compared. Each
+# disagreement is a triage item (an IR bug, or a legacy x86 bug the IR answers per the specification —
+# #872's narrowing, the signedness family), so a single row does not set `fail`; the COUNT of them is
+# ratcheted below by scripts/ir_diff.baseline, and growth does. A broken self-test, an unreadable run, or a proof line that walked no
 # program with a selected function does: "found nothing" must be told apart from "compared nothing".
-echo "### IR DIFF (x86 vs x86-via-IR, reporting only, findings never gate) ###"
+echo "### IR DIFF (x86 vs x86-via-IR: the disagree count is RATCHETED by scripts/ir_diff.baseline) ###"
 IRD_LOG="$LOGDIR/full_ir_diff.log"
 bash scripts/ir_diff.sh --self-test > "$IRD_LOG" 2>&1
 ird_st_rc=$?
@@ -747,7 +724,7 @@ elif [ "$sw_status" = "RAN" ]; then
   echo "    strict typed:    $st_cover"
   echo "    seed forms:      $sfr_cover"
   echo "    ir verifier:     $irv_cover"
-  echo "    ir diff:         ${ird_cover:-NO COVERAGE LINE} (reporting only)"
+  echo "    ir diff:         ${ird_cover:-NO COVERAGE LINE} (count ratcheted)"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
@@ -763,7 +740,7 @@ else
   echo "    strict typed:    $st_cover"
   echo "    seed forms:      $sfr_cover"
   echo "    ir verifier:     $irv_cover"
-  echo "    ir diff:         ${ird_cover:-NO COVERAGE LINE} (reporting only)"
+  echo "    ir diff:         ${ird_cover:-NO COVERAGE LINE} (count ratcheted)"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
