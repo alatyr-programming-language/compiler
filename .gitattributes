@@ -46,3 +46,12 @@ scripts/axis.baseline -merge
 # oracles' reason — two branches declaring DISJOINT rows must not merge clean into a prediction
 # neither of them made; it is not an oracle, and land.sh does not treat it as one.
 scripts/corpus.expected-delta -merge
+
+# The KNOWN DEVIATIONS (#1126 S2) are `merge=union`, the opposite of the oracles above, and the
+# difference is what the gate checks. Each behaviour fix deletes its OWN rows, so independent fixes
+# touch disjoint lines and a union merge keeps both deletions. When two deletions sit in one hunk,
+# union keeps BOTH sides' lines: the rows come back. A manifest merged that way would be wrong and
+# pass, which is why the manifest is `-merge`. A deviation row that comes back is caught: it no longer
+# reproduces (STALE), and the restored lines are out of sort order. `fixture_expect.sh --gate` fails
+# on both, on the merged object, before it can land.
+scripts/known-deviations.tsv merge=union
