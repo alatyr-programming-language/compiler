@@ -2,9 +2,9 @@
 # scripts/xbackend_diff.sh — EVERY cross-backend disagreement in the corpus manifest, classified (#683).
 #
 # `scripts/corpus.manifest` records each tracked source on all four backends, and each row is only
-# ever compared with its own recorded past. `scripts/xbackend_report.sh` asks ONE question of the
-# four rows — does a twin exit NORMALLY with a different, quiet, undeclared answer? — and is wired
-# into the gate as a reporting line. This script asks the wider one #683's goal needs: on which
+# ever compared with its own recorded past. The retired `scripts/xbackend_report.sh` (removed by #1128)
+# asked ONE question of the four rows — does a twin exit NORMALLY with a different, quiet, undeclared
+# answer? — as a reporting line; that class is this script's WRONG-VALUE. This script asks the wider one #683's goal needs: on which
 # sources do the four rows disagree AT ALL in (phase, exit), and why? A trap on a twin where x86_64
 # runs is acceptable to AGENTS.md's "a trap is acceptable, a wrong value is not", but it is still a
 # program that works on one backend and not on another, and #683 now counts it as a disagreement to
