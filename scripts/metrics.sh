@@ -51,11 +51,14 @@ LIST=0
 
 ## median_hours: one duration in seconds per line on stdin -> the median, in hours with one decimal, or
 ## `n/a` for an empty input. The one decider this script owns about lead time; the self-test drives it.
+## awk, not jq: the full gate runs this self-test inside `nix develop`, whose flake carries no jq.
 median_hours() {
-  jq -rs 'sort | length as $n
-    | if $n == 0 then "n/a"
-      elif $n % 2 == 1 then (.[($n - 1) / 2] / 3600 * 10 | round / 10 | tostring)
-      else ((.[$n / 2 - 1] + .[$n / 2]) / 2 / 3600 * 10 | round / 10 | tostring) end'
+  sort -n | awk '{ v[NR] = $1 }
+    END {
+      if (NR == 0) { print "n/a"; exit }
+      m = (NR % 2 == 1) ? v[(NR + 1) / 2] : (v[NR / 2] + v[NR / 2 + 1]) / 2
+      print int(m / 3600 * 10 + 0.5) / 10
+    }'
 }
 
 ## x86_disagreements MANIFEST TESTDIR-PREFIX -> one line per declaring fixture:
@@ -100,11 +103,12 @@ self_test() {
   printf '## Expected exit: 42.\nmain := fn() -> u64 { return 0 }\n'       > "$d/test/wrong.al"
   printf '## build_reject — due\nmain := fn() -> u64 { return 1 }\n'       > "$d/test/rej.al"
   printf '## build_reject — due\nmain := fn() -> u64 { return 1 }\n'       > "$d/test/rej_runs.al"
-  printf '## prose only, exit 42 is mentioned\nmain := fn() -> u64 { return 1 }\n' > "$d/test/prose.al"
+  printf '## Expected behaviour per spec: it returns one\nmain := fn() -> u64 { return 1 }\n' > "$d/test/prose.al"
   printf '## Expected exit: 7.\nmain := fn() -> u64 { return 7 }\n'        > "$d/test/new.al"
   printf '%s\n' \
-    "x86_64	test/ok.al	run	42	h	h"       "aarch64	test/wrong.al	run	42	h	h" \
-    "x86_64	test/wrong.al	run	0	h	h"   "x86_64	test/rej.al	compile	1	h	h" \
+    "x86_64	test/ok.al	run	42	h	h" \
+    "x86_64	test/wrong.al	run	0	h	h"   "aarch64	test/wrong.al	run	42	h	h" \
+    "x86_64	test/rej.al	compile	1	h	h" \
     "x86_64	test/rej_runs.al	run	1	h	h" "x86_64	test/prose.al	run	9	h	h" > "$d/m"
   x86_disagreements "$d/m" "$d" | sort > "$d/out"
   got="$(grep -c '^agree' "$d/out")";      chk "a matching run and a refused build agree"          "$got" "2"
@@ -119,8 +123,10 @@ self_test() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --days) DAYS="${2:-}"; shift 2 ;;
-    --repo) REPO="${2:-}"; shift 2 ;;
+    --days|--repo)
+      [ $# -ge 2 ] || { echo "metrics.sh: $1 needs a value" >&2; exit 2; }
+      case "$1" in --days) DAYS="$2" ;; *) REPO="$2" ;; esac
+      shift 2 ;;
     --no-fetch) FETCH=0; shift ;;
     --list) LIST=1; shift ;;
     --self-test) self_test; exit $? ;;
