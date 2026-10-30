@@ -1013,7 +1013,11 @@ set_arm_body_stmts := fn(a : ptr(mut rt::Arena), h : ptr(mut Arm), bs : Option(p
 pat_endpoint := fn(in out pc : PC) -> i64 {
   t := cur(pc)
   if t.kind == 41 { pc.idx = pc.idx + 1; return char_lit_val(pc.src, t.start, t.len) }
-  if t.kind == 17 { pc.idx = pc.idx + 1; v := pat_int(pc); pc.idx = pc.idx + 1; return 0 - v }
+  ## A negative bound is the two's-complement negation of its magnitude: `-9223372036854775808` reads the
+  ## magnitude 2^63 as i64 MIN and negates it back to MIN. That wrap is the answer, not an overflow, so it
+  ## is `unchecked`: since #1049 a checked `0 - MIN` traps, and the self-built compiler died here (SIGILL)
+  ## on test/issue805_exhaustive_controls.al, issue805_nonexh_i64_range.al and issue806_u64_range_high_bound.al.
+  if t.kind == 17 { pc.idx = pc.idx + 1; v := pat_int(pc); pc.idx = pc.idx + 1; return unchecked(0 - v) }
   v := pat_int(pc); pc.idx = pc.idx + 1
   v
 }
