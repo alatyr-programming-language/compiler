@@ -126,7 +126,9 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
-- **The json pilot and the PILOTS gate stage (#1125, first slice).** `pilots/json` is a JSON parser
+- **The json and wc pilots and the PILOTS gate stage (#1125, first slice).** `pilots/wc` is a
+  `wc -l/-w/-c` command-line tool (argv, files and standard input, messages on standard error, exit
+  0/1/2), checked by three `@test`s and six command-line cases under `pilots/wc/cases/`. `pilots/json` is a JSON parser
   and printer written as a library package (a recursive `Value` enum, `Result` with a located
   `Error`, arena-owned strings and containers), and `pilots/json-consumer` depends on it by path and
   checks thirteen documents. `scripts/pilots.sh` builds both from a copy under `target/pilots/` with
