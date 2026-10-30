@@ -194,6 +194,16 @@ around it.
 10. **A quantity with an identity is a `brand`**, not a bare number: a byte offset, a word count and a
     slot index get distinct brands, converted by named functions (#167, #760, #299). The checker
     refuses a sibling or raw mix since #299. Choosing a brand for a new quantity is **review-only**.
+11. **A field a reader turns into a value type is not a place to put metadata.** A field that has
+    always answered zero is not free to fill in: its meaning is whatever reads it does. Carrying the
+    pointee span into `Ty.ns/nl` at `Expr::AddrOf` trapped six rows on three backends (#1097), because
+    `sema_vty_record` (`src/sema.al:8740`) tries the **name** before the `TyPtr` kind — so
+    `ptr(mut n)` where `n : i64` records the address node as `VcInt`, 8 bytes, signed (`ir.al:2527`),
+    and `ir/build.al:230` builds an integer where a pointer belongs. "Zero staying zero" is the only
+    case that cannot change behaviour, and non-zero was the point; "strictly additive" is therefore never
+    a safety argument for filling a field in. Needs a field no reader converts (#1099). Held by review
+    until a registry exists — the audit cannot be derived lexically, but once made it is holdable the
+    way form 8's `seed_forms.tsv` is; read the **sema-side** hits first, that is where this one was.
 
 ## Work reaching `main`
 
