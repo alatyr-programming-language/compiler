@@ -10779,6 +10779,29 @@ run comptime_for_i32_unchecked_wrap_div 40
 run_a64 comptime_for_i32_unchecked_wrap_div 40
 run_rv64 comptime_for_i32_unchecked_wrap_div 40
 run_wat comptime_for_i32_unchecked_wrap_div 40
+## #1233: `MIN / -1` and `MIN % -1` in a range bound are a located diagnostic, under `unchecked` too
+## (Comptime §2.6: hardware-defined); the compiler died with SIGFPE. An unsigned `/ %` divides unsigned.
+build_reject_has reject_comptime_for_min_div_neg1 'this range bound divides the minimum of a signed type by -1'
+build_reject_has reject_comptime_for_min_div_neg1 'under `unchecked` too. at line 14 in '
+build_reject_has reject_comptime_for_unchecked_min_div_neg1 'under `unchecked` too. at line 16 in '
+build_reject_has reject_comptime_for_unchecked_min_mod_neg1 'under `unchecked` too. at line 14 in '
+build_reject_has reject_comptime_for_min_mod_neg1 'under `unchecked` too. at line 14 in '
+run_a64 reject_comptime_for_min_div_neg1 133
+run_rv64 reject_comptime_for_min_div_neg1 133
+run_wat reject_comptime_for_min_div_neg1 134
+run_a64 reject_comptime_for_unchecked_min_div_neg1 133
+run_rv64 reject_comptime_for_unchecked_min_div_neg1 133
+run_wat reject_comptime_for_unchecked_min_div_neg1 134
+run_a64 reject_comptime_for_unchecked_min_mod_neg1 133
+run_rv64 reject_comptime_for_unchecked_min_mod_neg1 133
+run_wat reject_comptime_for_unchecked_min_mod_neg1 134
+run_a64 reject_comptime_for_min_mod_neg1 133
+run_rv64 reject_comptime_for_min_mod_neg1 133
+run_wat reject_comptime_for_min_mod_neg1 134
+run comptime_for_div_bound_signedness 42
+run_a64 comptime_for_div_bound_signedness 42
+run_rv64 comptime_for_div_bound_signedness 42
+run_wat comptime_for_div_bound_signedness 42
 ## #682 — the OTHER half: the arithmetic is INSIDE the const's initializer (`B := A + 1`), so the
 ## bound expression is a plain `Expr::Var` and never reaches the `Bin` arm #672 added. The twins
 ## resolved the name and read its value with `lower_layout::ex_value_init`, which answered 0 for a
