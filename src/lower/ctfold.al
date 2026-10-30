@@ -1395,8 +1395,8 @@ comptime_range_bound_at := fn(e : ptr(Expr), cx : ptr(LCtx), hops : i64, chk : b
 }
 ## One folded `l <op> r` of a range bound, decided on its guard with an exhaustive `match`. The guard
 ## is `ct_range_guard`, the twins' too (Comptime §2.6): a failing one is a LOCATED diagnostic and the
-## compiler never performs the operation (x86 died with SIGFPE on a zero divisor, #684; a checked
-## `+ - *` wrapped and unrolled the wrapped count, #1234). The reject fails the build; its `0` is
+## compiler never performs the operation (x86 died with SIGFPE on a zero divisor, #684, and on
+## `MIN / -1`, #1233; a checked `+ - *` wrapped and unrolled the wrapped count, #1234). The reject fails the build; its `0` is
 ## unread. A flat helper, so its `match` never nests inside the caller's `Bin` arm.
 ct_bound_guarded := fn(e : ptr(Expr), rr : ptr(Expr), cx : ptr(LCtx), op : u8, lv : i64, rv : i64, chk : bool) -> Option(i64) {
   w : Option(str) = ct_bound_w(e)
@@ -1408,6 +1408,10 @@ ct_bound_guarded := fn(e : ptr(Expr), rr : ptr(Expr), cx : ptr(LCtx), op : u8, l
       mut dzoff := ct_bound_site_off(rr)
       if dzoff == 0 { dzoff = ct_bound_site_off(e) }
       codegen_reject(cx.src, dzoff, cx.mod_s, cx.mod_l, "`comptime for` — this range bound divides by zero. Comptime §2.6: a guard that fails during comptime evaluation is a compile-time diagnostic, under `unchecked` too.", deref(cx.mar))
+      Option(i64).Some(0)
+    }
+    RgMinDivNeg1 => {
+      codegen_reject(cx.src, ct_bound_site_off(e), cx.mod_s, cx.mod_l, "`comptime for` — this range bound divides the minimum of a signed type by -1. Comptime §2.6: `MIN / -1` and `MIN % -1` are a compile-time diagnostic, under `unchecked` too.", deref(cx.mar))
       Option(i64).Some(0)
     }
     RgOverflow => {
