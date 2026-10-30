@@ -266,12 +266,20 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=45  # +2 for #1106: the refusal must name the fields it protects
+LAND_SELFTEST_EXPECTED=73  # the exact count run; +2 #1106, +4 #1091
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
 ## Defined ABOVE `land_shape_self_test`, which calls it: bash defines a function when execution reaches
 ## its definition, and the self-test runs before the PHASE 0 block that uses it for real.
+## The `+` is load-bearing (#1091). The PR ref caches what the remote says `refs/pull/N/head` is, and
+## GitHub moves that ref BACKWARDS on every rebase and force-push — which PHASE 3's own conflict verdict
+## asks for. Without `+` the second landing attempt of any rebased PR dies as "fetch failed". The ref is
+## only a local cache: PHASE 1 compares what it fetched with the head GitHub reports before using it.
+land_fetch_pr_ref() { # remote pr-number local-ref -> git fetch's status
+  git fetch --quiet "$1" main "+refs/pull/$2/head:$3"
+}
+
 land_push_capability_ok() { # remote-url credential-helper token -> 0 can, 1 cannot
   case "$1" in
     git@*|ssh://*) return 0 ;;
@@ -375,6 +383,19 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
   land_push_capability_ok "https://github.com/o/r" "" "ghp_token"; _ck $? push-capability-https-with-token
   land_push_capability_ok "https://github.com/o/r" "" ""; [ $? = 1 ]
   _ck $? push-capability-https-without-helper-or-token-was-accepted
+  # #1091 · a PR ref that moved BACKWARDS on the remote (a rebase) is fetched again, not refused.
+  local fo="$st/fetch-origin.git" fc="$st/fetch-clone" p1 p2
+  git init -q --bare "$fo" && git init -q "$fc" &&
+    git -C "$fc" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one &&
+    git -C "$fc" -c user.name=t -c user.email=t@t commit -q --allow-empty -m two &&
+    git -C "$fc" push -q "$fo" HEAD:refs/heads/main HEAD:refs/pull/7/head &&
+    git -C "$fc" remote add origin "$fo"; _ck $? fetch-fixture-could-not-be-built
+  ( cd "$fc" && land_fetch_pr_ref origin 7 refs/remotes/pr/7 ); _ck $? fetch-pr-ref-failed-on-a-first-fetch
+  p1="$(git -C "$fc" rev-parse HEAD~1)"
+  git -C "$fo" update-ref refs/pull/7/head "$p1"
+  ( cd "$fc" && land_fetch_pr_ref origin 7 refs/remotes/pr/7 ) 2>/dev/null; _ck $? fetch-pr-ref-refused-a-ref-that-moved-backwards
+  p2="$(git -C "$fc" rev-parse refs/remotes/pr/7 2>/dev/null)"
+  [ "$p2" = "$p1" ]; _ck $? fetch-pr-ref-kept-the-stale-head
 
   # ---- 4 · an oracle commit touches that oracle alone. -------------------------------------
   out="$(pr_oracle_commit_isolation_check scripts/corpus.manifest deadbeef 2 2>&1)"
@@ -557,10 +578,7 @@ echo "  PR #$PR  head=${HEAD_LABEL:-?}  issue=${ISSUE_LINK:-<none declared>}  fo
 
 say "PHASE 1 — fetch the PR head"
 PR_REF="refs/remotes/pr/$PR"
-## The `+` is load-bearing (#1091). `$PR_REF` caches what origin says `refs/pull/N/head` is, and origin
-## moves that ref BACKWARDS on every rebase and force-push — which PHASE 3's own conflict verdict asks
-## for. Without `+` the second landing attempt of any rebased PR dies here as "fetch failed".
-git fetch --quiet origin main "+refs/pull/$PR/head:$PR_REF" \
+land_fetch_pr_ref origin "$PR" "$PR_REF" \
   || die "fetch failed: could not update $PR_REF from origin refs/pull/$PR/head (or origin main)"
 git rev-parse --verify -q "$PR_REF" >/dev/null || die "no selected PR head on origin"
 BASE="$(git rev-parse origin/main)"
