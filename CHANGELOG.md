@@ -222,6 +222,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `u64(sub(10))` was refused as a "str/view expression". Both compile and run. `sub` is not a keyword
   (Grammar §2.3) and no prelude declares it, so the program's declaration wins (Declarations §6.1); an
   *undeclared* `sub(…)` keeps the internal view path unchanged.
+- **The full gate runs a generated container matrix (#1124).** `scripts/container_matrix.py` writes one
+  program per element shape × container × operation (19 shapes; `vec`, `deque`, `hashmap`; 378 cells)
+  into `target/`, builds and runs each, and prints `OK`, `WRONG <check>`, `TRAP <rc>` or `REFUSED`.
+  On x86_64 every WRONG and REFUSED cell needs a row under an open issue in
+  `scripts/container-matrix.deviations.tsv` (83 rows at main `8ca9478d`), and a row whose cell now
+  passes fails the gate until its fix deletes it. A planted wrong read is proved to turn it red.
 
 ## 0.2.21 — 2026-11-01
 

@@ -55,3 +55,7 @@ scripts/corpus.expected-delta -merge
 # reproduces (STALE), and the restored lines are out of sort order. `fixture_expect.sh --gate` fails
 # on both, on the merged object, before it can land.
 scripts/known-deviations.tsv merge=union
+# The container matrix's deviations list (#1124): each fix deletes its own rows, so independent fixes
+# touch disjoint lines. A row that union merging restores no longer reproduces, and the gate fails it
+# as STALE on the merged object.
+scripts/container-matrix.deviations.tsv merge=union
