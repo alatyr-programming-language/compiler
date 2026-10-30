@@ -9,7 +9,8 @@
 #            count is checked because the runner stops at the first failure without a summary
 #            (#1145), so rc 0 alone does not show that every test ran.
 #   program  `alatyr build` exits 0, and the built program exits with the pilot's stated value
-#            (0 for json-consumer: its exit code is the number of the first failed check).
+#            (0 for json-consumer, whose exit code is the number of the first failed check, and for
+#            pipeline, which exits 2 or 3 when its threaded or reference check fails).
 #   cli      `alatyr build` exits 0, and every case under the pilot's cases/ runs as stated:
 #            <name>.args (one argument per line), <name>.stdin (optional; /dev/null otherwise),
 #            <name>.out (the exact standard output) and <name>.rc (the exit status). A case with a
@@ -35,6 +36,8 @@ PILOTS=(
   "prog json-consumer 0"
   "lib wc"
   "cli wc"
+  "lib pipeline"
+  "prog pipeline 0"
 )
 
 # The artifact path from the compiler's `built: … artifact=<path>` line. The default name is not

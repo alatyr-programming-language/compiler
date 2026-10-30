@@ -126,7 +126,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
-- **The json and wc pilots and the PILOTS gate stage (#1125, first slice).** `pilots/wc` is a
+- **The json, wc and pipeline pilots and the PILOTS gate stage (#1125).** `pilots/pipeline` runs
+  four worker threads that take chunk numbers from a bounded `std::channel` and fold FNV-1a hashes
+  of a generated input into a `std::sync::Mutex` total. It exits 0 only when the threaded total
+  equals the one-thread fold and a value computed by an independent implementation, and four
+  `@test`s check the hash against published vectors. `pilots/wc` is a
   `wc -l/-w/-c` command-line tool (argv, files and standard input, messages on standard error, exit
   0/1/2), checked by three `@test`s and six command-line cases under `pilots/wc/cases/`. `pilots/json` is a JSON parser
   and printer written as a library package (a recursive `Value` enum, `Result` with a located
