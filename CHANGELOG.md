@@ -130,6 +130,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `deref(p)` of an enum value through a pointer returned the first variant with a zero payload. The
   value is now read word by word from the pointer; a pointee type that cannot be resolved is refused
   with a located diagnostic instead of guessed.
+- **A `comptime for` range bound under `unchecked` keeps its value, and a bound with no comptime
+  value is refused (#696).** `0 .. unchecked (N)`, `unchecked (1) .. 4`, a const whose initializer is
+  `unchecked (5)` and `typeinfo(T).fields.len - 1` used to read as 0 on all four backends, so the
+  loop ran a different number of times from a clean compile. `unchecked e` now yields its inner value
+  (Grammar §3.7). A bound that is not comptime-known, such as a call, is a located compile error on
+  x86_64 (Comptime §9.1) and a trap on the twins, never the bound 0.
 
 ## 0.2.20 — 2026-10-31
 

@@ -812,11 +812,10 @@ count_params := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), a : rt::
 ## `wat_comp_cond_fold`, `wat_cf_offset_value`). These answer a comptime question about the ACTIVE
 ## descriptor, and three of the four carry an explicit NOT-AN-ANSWER sentinel (`-1`) that the caller
 ## tests before using the value; for those, the absorbed forms are simply "this is not the query" and
-## the ordinary fail-loud path stays. `wat_comp_range_bound` is the exception and it is the reason
-## #696 exists: its initial `mut r := 0` is a REPRESENTABLE bound, so a caller cannot tell "not
-## foldable" from "the bound is zero" — the #659 shape, where an accessor whose default is a real
-## value is read by a caller that has already committed. Spelling its absorbed list out is what made
-## `Expr::Unchecked` visible there. See the census note above `lower_layout::local_ann_signed`.
+## the ordinary fail-loud path stays. `wat_comp_range_bound` was the exception and the reason #696
+## existed: its initial `mut r := 0` was a REPRESENTABLE bound, so a caller could not tell "not
+## foldable" from "the bound is zero" (the #659 shape). It now answers `Option(i64)`, and the caller
+## traps on `None`. See the census note above `lower_layout::local_ann_signed`.
 wat_cf_mutable_value := fn(e : ptr(Expr), src : ptr(u8)) -> i64 {
   if WAT_CF_VAR_L == 0 { return 0 - 1 }
   match deref(e) {
@@ -839,7 +838,7 @@ wat_cf_mutable_value := fn(e : ptr(Expr), src : ptr(u8)) -> i64 {
 ## supplies the one piece of state that is genuinely this emitter's — its active generic substitution
 ## table, which `typeinfo_arg_span` (lower_ctx.al:463) takes as ordinary scalar arguments. The decision
 ## of WHAT the bound is lives once; only WHERE the substitutions are recorded differs per backend.
-wat_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> i64 {
+wat_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> Option(i64) {
   lower_layout::comp_range_bound(e, decls, src, WAT_SUB_GPS, WAT_SUB_GPL, WAT_SUB_ITS, WAT_SUB_ITL, WAT_SUB_GPS2, WAT_SUB_GPL2, WAT_SUB_ITS2, WAT_SUB_ITL2, WAT_SUB_GPS3, WAT_SUB_GPL3, WAT_SUB_ITS3, WAT_SUB_ITL3)
 }
 
@@ -7675,9 +7674,13 @@ emit_wat_stmts := fn(list_head : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut
               vidx := name_local_index(fn_head, src, rvs, rvl, pcount, a, decls)
               if vidx < 0 { push_str(sb, "    (unreachable) (; comptime-for loop var unresolved ;)\n") }
               else {
-                lo := wat_comp_range_bound(rlo, decls, src)
-                hi := wat_comp_range_bound(rhi, decls, src)
-                if hi - lo > 100000 { push_str(sb, "    (unreachable) (; comptime-for range exceeds the unroll budget ;)\n") }
+                ## A bound the shared fold cannot evaluate is a fail-loud trap, never a silent `0` (#696).
+                lo_o := wat_comp_range_bound(rlo, decls, src)
+                hi_o := wat_comp_range_bound(rhi, decls, src)
+                lo := lower_layout::opt_i64_or(lo_o, 0)
+                hi := lower_layout::opt_i64_or(hi_o, 0)
+                if lower_layout::opt_i64_is_some(lo_o) == false or lower_layout::opt_i64_is_some(hi_o) == false { push_str(sb, "    (unreachable) (; comptime-for range bound is not comptime-known ;)\n") }
+                else if hi - lo > 100000 { push_str(sb, "    (unreachable) (; comptime-for range exceeds the unroll budget ;)\n") }
                 else {
                   ## The counter is `i64` and, since #602 folds a written negative literal, `lo` is now
                   ## reachably NEGATIVE — `comptime for i in -2..2` used to fold to 0 here and unroll the
