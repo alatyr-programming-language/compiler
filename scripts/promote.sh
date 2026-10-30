@@ -23,9 +23,10 @@
 #       normalized seed->Stage1 delta (DIR/target/promote/delta.diff) and its summary (delta.txt),
 #       Stage2 copied over seed/alatyr, the CURRENT SEED block brought to the promoted seed, and
 #       scripts/fixpoint.sh on the promoted tree, which must reach its TOOL-1 FIXPOINT line. It writes
-#       the seed/HISTORY.md entry, a CHANGELOG.md section and DIR/target/promote/COMMIT_MSG with every
-#       measured fact filled in and the judgements marked PROMOTE-OWED. It prints the delta summary
-#       and stops.
+#       the seed/HISTORY.md entry, releases CHANGELOG.md's `## Unreleased` as `## <new-version> — <date>`
+#       under a fresh empty one, and writes DIR/target/promote/COMMIT_MSG, with every measured fact
+#       filled in and the judgements (the delta sentence, the why, the version class) marked
+#       PROMOTE-OWED. It prints the delta summary and stops.
 #   scripts/promote.sh commit DIR
 #       Refuses while a PROMOTE-OWED marker is left, or when the changed files are not exactly the
 #       atomic set; else one commit from COMMIT_MSG. Never pushes.
@@ -91,6 +92,31 @@ bump() {
   [ "$n" = 1 ] || { echo "promote: scripts/package_cli_test.sh has $n expected --version lines, want 1" >&2; return 2; }
   sed -i.bak -E "s/printf 'alatyr [0-9]+\.[0-9]+\.[0-9]+, spec /printf 'alatyr $new, spec /" "$d/scripts/package_cli_test.sh" \
     && rm -f "$d/scripts/package_cli_test.sh.bak"
+}
+
+## changelog_release FILE NEW DATE -> stdout: FILE with its one `## Unreleased` heading become
+## `## NEW — DATE` and a fresh empty `## Unreleased` opened above it (CHANGELOG.md, "When the version
+## moves", step 6), so the accumulated entries are released with the version. A released section with
+## no entry gets a PROMOTE-OWED line, because a release that says nothing is a judgement left unmade.
+## 2 when the heading is not there exactly once.
+changelog_release() {
+  local n; n="$(grep -c '^## Unreleased[[:space:]]*$' "$1")"
+  [ "$n" = 1 ] || { echo "promote: CHANGELOG.md has $n '## Unreleased' headings, want 1" >&2; return 2; }
+  awk -v v="$2" -v d="$3" -v o="$OWED" '
+    function flush() { if (open && !entries) { print "- " o " — what this generation carries, and its version class."; print "" } open = 0 }
+    /^## Unreleased[[:space:]]*$/ { print; print ""; print "## " v " — " d; open = 1; entries = 0; next }
+    open && /^## / { flush() }
+    open && /^- / { entries = 1 }
+    { print }
+    END { flush() }' "$1"
+}
+
+## history_append FILE ENTRY -> stdout: FILE with ENTRY appended inside its fenced block, after one blank
+## line, right before the closing fence, as the entries before it are laid out; 2 when there is no fence
+history_append() {
+  awk -v f="$2" '{ L[NR] = $0 } END { for (i = NR; i > 0; i--) if (L[i] == "```") { last = i; break }
+    if (!last) exit 2
+    for (i = 1; i <= NR; i++) { if (i == last) { print ""; while ((getline x < f) > 0) print x } print L[i] } }' "$1"
 }
 
 ## owed_left DIR -> 0 (and the places) when a PROMOTE-OWED marker is still in the tree or the message
@@ -217,14 +243,14 @@ cmd_prepare() {
     echo "#"
     echo "# scripts/fixpoint.sh was re-run on the promoted tree: $(grep 'TOOL-1 FIXPOINT' "$P/fixpoint.log" | head -1)"
     echo "# The full gate is \`scripts/promote.sh gate\` on the committed promotion; its run is named in the PR."
+    echo "#"
+    echo "# VERSION $old -> $new, $OWED: PATCH, MINOR or MAJOR by CHANGELOG.md \"Versioning policy\", and why."
+    echo "# The specification pin ($spec) did not move."
   } > "$entry"
-  ## HISTORY.md's entries sit inside one fenced block: insert before its closing fence
-  awk -v f="$entry" '{ L[NR] = $0 } END { for (i = NR; i > 0; i--) if (L[i] == "```") { last = i; break }
-    for (i = 1; i <= NR; i++) { if (i == last) { while ((getline x < f) > 0) print x; print "" } print L[i] } }' \
-    seed/HISTORY.md > "$P/HISTORY.md" && cp "$P/HISTORY.md" seed/HISTORY.md
-  awk -v v="$new" -v d="$today" -v o="$OWED" '!done && /^## [0-9]+\.[0-9]+\.[0-9]+ / {
-      print "## " v " — " d; print ""; print "- " o " — what the promotion carries, and the version class (CHANGELOG.md \"Versioning policy\")."; print ""; done = 1 }
-    { print }' CHANGELOG.md > "$P/CHANGELOG.md" && cp "$P/CHANGELOG.md" CHANGELOG.md
+  history_append seed/HISTORY.md "$entry" > "$P/HISTORY.md" || die "seed/HISTORY.md has no closing fence"
+  cp "$P/HISTORY.md" seed/HISTORY.md
+  changelog_release CHANGELOG.md "$new" "$today" > "$P/CHANGELOG.md" || die "CHANGELOG.md cannot be released (above)"
+  cp "$P/CHANGELOG.md" CHANGELOG.md
   {
     echo "chore(seed): promote $old -> $new — $OWED one line on what the seed now carries"
     echo
@@ -313,6 +339,20 @@ self_test() {
   chk "the bump moves the first package version, the CURRENT SEED line and the --version line, nothing else" "$got" "0:1:1:0.2.18:1"
   printf "  printf 'alatyr 0.2.18, spec 1.6.0\\\\n'\n  printf 'alatyr 0.2.18, spec 1.6.0\\\\n'\n" > "$d/t/scripts/package_cli_test.sh"
   bump "$d/t" 0.2.19 2> /dev/null; chk "two expected --version lines are refused, not both rewritten" "$?" "2"
+  printf '# Changelog\n\n## Unreleased\n\n- **A fix (#1).** It moves.\n\n## 0.2.17 — 2026-10-24\n\n- old\n' > "$d/cl"
+  got="$(changelog_release "$d/cl" 0.2.18 2026-10-30 | tr '\n' '|')"
+  chk "the Unreleased entries are released under the version, and a fresh empty Unreleased opens above" "$got" \
+    "# Changelog||## Unreleased||## 0.2.18 — 2026-10-30||- **A fix (#1).** It moves.||## 0.2.17 — 2026-10-24||- old|"
+  printf '## Unreleased\n\n## 0.2.17 — 2026-10-24\n' > "$d/cl"
+  got="$(changelog_release "$d/cl" 0.2.18 2026-10-30 | tr '\n' '|')"
+  chk "an empty release is owed a line, not shipped silent" "$got" \
+    "## Unreleased||## 0.2.18 — 2026-10-30||- $OWED — what this generation carries, and its version class.||## 0.2.17 — 2026-10-24|"
+  printf '## Unreleased\n\n## Unreleased\n' > "$d/cl"; changelog_release "$d/cl" 0.2.18 2026-10-30 > /dev/null 2>&1
+  chk "two Unreleased headings are refused, not both released" "$?" "2"
+  printf '# a\n```\n# e1\n```\n' > "$d/h"; printf '# e2\n' > "$d/e"
+  got="$(history_append "$d/h" "$d/e" | tr '\n' '|')"
+  chk "the entry goes inside the fence, after one blank line, as the entries before it" "$got" '# a|```|# e1||# e2|```|'
+  printf '# a\n' > "$d/h"; history_append "$d/h" "$d/e" > /dev/null; chk "a history with no fence is refused" "$?" "2"
   mkdir -p "$d/w/seed" "$d/w/target/promote"; printf 'ok\n' > "$d/w/seed/HISTORY.md"; printf 'ok\n' > "$d/w/CHANGELOG.md"; printf 'msg\n' > "$d/w/target/promote/COMMIT_MSG"
   owed_left "$d/w" > /dev/null; chk "no marker left: nothing owed" "$?" "1"
   printf "# $OWED x\n" >> "$d/w/seed/HISTORY.md"; owed_left "$d/w" > /dev/null; chk "a marker left in the entry is owed" "$?" "0"
