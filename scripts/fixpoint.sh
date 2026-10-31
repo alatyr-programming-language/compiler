@@ -183,7 +183,37 @@ seed_identity_check() { # version-file package-file seed-binary
 ## invocation, BEFORE the decision it is about — and in a SUBSHELL, because a `set -u` unbound
 ## variable or an arithmetic error inside a driven function unwinds to top level and ENDS THE
 ## SCRIPT, printing nothing at all; the completion marker below is what notices instead.
-FIXPOINT_SELFTEST_EXPECTED=42  # +12 for the #1104 opt-in: 4 bump-first tree, 2 verdict line, 1 version order, 5 limits
+FIXPOINT_SELFTEST_EXPECTED=47  # +12 for the #1104 opt-in: 4 bump-first tree, 2 verdict line, 1 version order, 5 limits; +5 the end-of-run verdict (PR #1105 review)
+# The verdict at the end of a run, a function so the self-test drives the REAL decision (review of
+# PR #1105): a mid-promotion run (ALATYR_RESEED=1) must end at rc 4 and never print the fixpoint
+# line, even when seed == Stage1 == Stage2.
+fixpoint_verdict() { # mid-promotion(0|1) gas-seed gas1 gas2
+  if [ "$1" = 1 ]; then
+    echo "mid-promotion: seed=$(wc -l<"$2") gas1=$(wc -l<"$3") gas2=$(wc -l<"$4") lines"
+    if [ -s "$3" ] && diff -q "$3" "$4" >/dev/null 2>&1; then
+      echo "  Stage1 == Stage2 in the emitted GAS. Build Stage3, promote Stage2, then re-run this script"
+      echo "  WITHOUT ALATYR_RESEED: that run, on the promoted tree, is the proof. Not a fixpoint verdict."
+    else
+      echo "  FAIL: Stage1 != Stage2 in the emitted GAS — nothing here can be promoted."
+    fi
+    return 4
+  fi
+  if [ -s "$3" ] && diff -q "$3" "$4" >/dev/null 2>&1 && diff -q "$2" "$3" >/dev/null 2>&1; then
+    echo "*** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 ($(wc -l < "$3") lines); self-built compiler builds standalone ***"
+    return 0
+  fi
+  echo "DIFFER: seed=$(wc -l<"$2") gas1=$(wc -l<"$3") gas2=$(wc -l<"$4")"
+  echo "  (seed != Stage1 means the committed seed/alatyr is STALE vs src/. The recovery is a SELF-PROMOTE,"
+  echo "   not a rebuild from the frozen Rust ancestor — that ancestor can no longer parse the current src/."
+  echo "   Build Stage1, let it build Stage2 and Stage3. Require Stage1 == Stage2 == Stage3 in the emitted GAS,"
+  echo "   normalizing .L<N> and .Lra<N>_<k> first. In the BINARY require only Stage2 == Stage3: Stage1 was"
+  echo "   assembled by the stale seed, so its binary differs by construction. Read that normalized"
+  echo "   seed->Stage1 delta line by line, copy STAGE2 — not Stage1 — over seed/alatyr, append the evidence"
+  echo "   to seed/HISTORY.md, and re-run this script on the promoted tree. Why Stage2, and what a readable"
+  echo "   delta looks like: docs/rationale/reproducibility.md and alatyr-integrate SKILL.md section 3.)"
+  return 4
+}
+
 fixpoint_seed_identity_selftest() { # work-dir
   local st="$1" bad="" k=0 out rc
   # The self-test drives the REAL decision, so it owns the variable some of its checks are about:
@@ -354,6 +384,18 @@ fixpoint_seed_identity_selftest() { # work-dir
   ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" >/dev/null 2>&1
   [ $? = 6 ]; _ck $? opt-in-masked-a-digest-disagreement
 
+  # 1105 review · the end-of-run verdict. A flagged run must stop at rc 4 without the fixpoint line,
+  #        even when all three emissions agree; an unflagged agreeing run reports it at rc 0.
+  printf 'a\n' > "$st/g0"; printf 'a\n' > "$st/g1"; printf 'a\n' > "$st/g2"; printf 'b\n' > "$st/gx"
+  out="$(fixpoint_verdict 1 "$st/g0" "$st/g1" "$st/g2" 2>&1)"; rc=$?
+  [ "$rc" = 4 ]; _ck $? "flagged-run-did-not-end-at-rc-4(rc=$rc)"
+  case "$out" in *'TOOL-1 FIXPOINT'*) _ck 1 "flagged-run-printed-the-fixpoint-verdict" ;; *) _ck 0 x ;; esac
+  out="$(fixpoint_verdict 0 "$st/g0" "$st/g1" "$st/g2" 2>&1)"; rc=$?
+  [ "$rc" = 0 ]; _ck $? "unflagged-agreeing-run-not-rc-0(rc=$rc)"
+  case "$out" in *'TOOL-1 FIXPOINT'*) _ck 0 x ;; *) _ck 1 "unflagged-agreeing-run-without-the-verdict" ;; esac
+  out="$(fixpoint_verdict 0 "$st/gx" "$st/g1" "$st/g2" 2>&1)"; rc=$?
+  [ "$rc" = 4 ]; _ck $? "a-stale-seed-reported-a-fixpoint(rc=$rc)"
+
   printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
   if [ -n "$bad" ]; then echo "*** fixpoint seed-identity selftest: FAILED —$bad ***"; return 1; fi
   if [ "$k" -lt "$FIXPOINT_SELFTEST_EXPECTED" ]; then
@@ -439,27 +481,5 @@ step "fixpoint"
 # leave seed == Stage1 == Stage2 (the version moves both emissions at once). That is still a tree whose
 # committed seed answers the previous release, so a flagged run never reports the fixpoint reached:
 # the proof is the unflagged run on the promoted tree.
-if [ "${FP_MID_PROMOTION:-0}" = 1 ]; then
-  echo "mid-promotion: seed=$(wc -l<target/gas_seed.s) gas1=$(wc -l<target/gas1.s) gas2=$(wc -l<target/gas2.s) lines"
-  if [ -s target/gas1.s ] && diff -q target/gas1.s target/gas2.s >/dev/null 2>&1; then
-    echo "  Stage1 == Stage2 in the emitted GAS. Build Stage3, promote Stage2, then re-run this script"
-    echo "  WITHOUT ALATYR_RESEED: that run, on the promoted tree, is the proof. Not a fixpoint verdict."
-  else
-    echo "  FAIL: Stage1 != Stage2 in the emitted GAS — nothing here can be promoted."
-  fi
-  exit 4
-fi
-if [ -s target/gas1.s ] && diff -q target/gas1.s target/gas2.s >/dev/null 2>&1 && diff -q target/gas_seed.s target/gas1.s >/dev/null 2>&1; then
-  echo "*** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 ($(wc -l < target/gas1.s) lines); self-built compiler builds standalone ***"
-  exit 0
-fi
-echo "DIFFER: seed=$(wc -l<target/gas_seed.s) gas1=$(wc -l<target/gas1.s) gas2=$(wc -l<target/gas2.s)"
-echo "  (seed != Stage1 means the committed seed/alatyr is STALE vs src/. The recovery is a SELF-PROMOTE,"
-echo "   not a rebuild from the frozen Rust ancestor — that ancestor can no longer parse the current src/."
-echo "   Build Stage1, let it build Stage2 and Stage3. Require Stage1 == Stage2 == Stage3 in the emitted GAS,"
-echo "   normalizing .L<N> and .Lra<N>_<k> first. In the BINARY require only Stage2 == Stage3: Stage1 was"
-echo "   assembled by the stale seed, so its binary differs by construction. Read that normalized"
-echo "   seed->Stage1 delta line by line, copy STAGE2 — not Stage1 — over seed/alatyr, append the evidence"
-echo "   to seed/HISTORY.md, and re-run this script on the promoted tree. Why Stage2, and what a readable"
-echo "   delta looks like: docs/rationale/reproducibility.md and alatyr-integrate SKILL.md section 3.)"
-exit 4
+fixpoint_verdict "${FP_MID_PROMOTION:-0}" target/gas_seed.s target/gas1.s target/gas2.s
+exit $?
