@@ -129,8 +129,8 @@
 #   --observed FILE                                 what each backend did. Required by --gate. Otherwise
 #                                                   the default is the walk at target/corpus-manifest/
 #                                                   observed.manifest; with no walk, --report and --list
-#                                                   stale|unlisted|changed|pending refuse, and the rest
-#                                                   read the --manifest file
+#                                                   stale|unlisted|changed|unissued|pending refuse, and
+#                                                   the rest read the --manifest file
 set -u
 export LC_ALL=C
 
@@ -487,8 +487,9 @@ evaluate() {
 ## --observed, else the walk `corpus_manifest.sh --check` leaves behind, as sites_triage.sh and
 ## twin_coverage.sh do. With neither, the modes that judge deviations refuse: since S3 the committed
 ## manifest no longer holds the directive fixtures, so reading it skips every pair as unobserved and
-## `--list unlisted` printed nothing with exit 0 (#1128: never a silent "nothing to add"). The S1 review
-## modes keep the committed manifest: their subjects are the fixtures it still holds.
+## `--list unlisted` printed nothing with exit 0 (#1128: never a silent "nothing to add"); `unissued`
+## too, since it is counted only on an observed pair. With a walk, every mode reads the walk. Only with
+## no walk do the S1 review modes fall back to the committed manifest, whose fixtures are their subject.
 observation_for() { # mode gate observed walk manifest -> the path on stdout, or a refusal on stderr and 2
   local mode="$1" gate="$2" obs="$3" walk="$4" manifest="$5"
   if [ -n "$obs" ]; then printf '%s\n' "$obs"; return 0; fi
@@ -502,7 +503,7 @@ observation_for() { # mode gate observed walk manifest -> the path on stdout, or
     printf '%s\n' "$walk"; return 0
   fi
   case "$mode" in
-    report|list:stale|list:unlisted|list:changed|list:pending)
+    report|list:stale|list:unlisted|list:changed|list:unissued|list:pending)
       echo "fixture_expect.sh: ${mode#list:} judges deviations and needs an observation of this tree: run" >&2
       echo "  scripts/corpus_manifest.sh --check (it leaves target/corpus-manifest/observed.manifest), or pass" >&2
       echo "  --observed <walk>; the committed manifest no longer holds the directive fixtures (S3)" >&2
@@ -513,7 +514,7 @@ observation_for() { # mode gate observed walk manifest -> the path on stdout, or
 
 run_mode() { # mode rows manifest test-dir [deviations issues [observed]]
   ## manifest: the committed corpus.manifest (which sources it holds); observed: what each backend did
-  ## (the fresh walk under --gate; the committed manifest itself when absent)
+  ## (the driver's is chosen by observation_for; a self-test call that omits it reads the manifest)
   local mode="$1" rows="$2" manifest="$3" dir="$4" devs="${5:-}" issues="${6:-}" observed="${7:-$3}" w rc=0
   mkdir -p "$ROOT/target" && w="$(mktemp -d "$ROOT/target/fixture-expect.XXXXXX")" || return 2
   claims "$rows" "$dir" > "$w/claims"
@@ -720,12 +721,21 @@ EOF
   OF() { local o rc; o="$(observation_for "$1" "$2" "$3" "$4" "$d/m2" 2>/dev/null)"; rc=$?; echo "${o#"$d/"}:$rc"; }
   dv "$R1" "$R2"; got="$(run_mode list:unlisted "$d/rows" "$d/m2" "$d/g" "$d/dv" "$d/is" "$(observation_for list:unlisted 0 "" "$d/m" "$d/m2" 2>/dev/null)" | cut -f1,2 | tr '\t' ':')"
   chk "--list unlisted with no --observed reads the walk and lists the missed row" "$got" "wasm:test/good.al"
-  got=""; for md in report list:stale list:unlisted list:changed list:pending; do got="$got $(OF "$md" 0 "" "$d/nowalk")"; done
-  chk "...and with no walk, every mode that judges deviations refuses (2), never the committed scope" "$got" " :2 :2 :2 :2 :2"
+  got=""; for md in report list:stale list:unlisted list:changed list:unissued list:pending; do got="$got $(OF "$md" 0 "" "$d/nowalk")"; done
+  chk "...and with no walk, every mode that judges deviations refuses (2), never the committed scope" "$got" " :2 :2 :2 :2 :2 :2"
   got="$(OF list:b 0 "" "$d/nowalk") $(OF list:unstated 0 "" "$d/nowalk")"
   chk "the S1 review modes with no walk keep the committed manifest" "$got" "m2:0 m2:0"
   got="$(OF report 1 "" "$d/m") $(OF report 1 "$d/m2" "$d/m") $(OF list:unlisted 0 "$d/m2" "$d/m")"
   chk "--gate never takes a leftover walk; an explicit --observed wins over the walk" "$got" ":2 m2:0 m2:0"
+  ## The same through the command line, from a copy of this script whose ROOT has no walk, then one:
+  ## the driver, not only the helper, must refuse (the old fallback printed nothing with exit 0).
+  mkdir -p "$d/root/scripts"; cp "$ROOT/scripts/fixture_expect.sh" "$ROOT/scripts/fixture_oracle.sh" "$d/root/scripts/"
+  dv "$R1" "$R2" "wasm${T}test/good.al${T}compile/1${T}#?"
+  CL() { local o rc; o="$(bash "$d/root/scripts/fixture_expect.sh" --list "$1" --rows "$d/rows" --manifest "$d/m2" --test-dir "$d/g" --deviations "$d/dv" --issues "$d/is" 2>/dev/null)"; rc=$?; echo "$rc:$(printf '%s' "$o" | cut -f1,2 | tr '\t\n' ': ')"; }
+  got="$(CL unissued) $(CL unlisted)"; chk "CLI: --list unissued and --list unlisted with no walk exit 2 and print nothing" "$got" "2: 2:"
+  mkdir -p "$d/root/target/corpus-manifest"; cp "$d/m" "$d/root/target/corpus-manifest/observed.manifest"
+  dv "$R1" "$R2" "wasm${T}test/good.al${T}compile/1${T}#?"; got="$(CL unissued)"
+  chk "CLI: with the walk in place, --list unissued reads it and lists the #? row" "$got" "0:wasm:test/good.al "
   dv "$R1" "$R2" "$R3"
   dv "$R1" "$R2" "wasm${T}test/good.al${T}compile/1${T}#12"; got="$(G) $(LD unissued)"
   chk "a row naming an issue the table lacks fails" "$got" "1 wasm:test/good.al "
