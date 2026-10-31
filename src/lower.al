@@ -2892,6 +2892,33 @@ const_field_rhs := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
   }
   v
 }
+## #1139 — a binding's value with an `unchecked` grant peeled off a runtime call that returns an
+## AGGREGATE (`s := unchecked mk(41)`, `s := unchecked { mk(41) }`). The grant changes only the
+## verification mode (Concurrency §6.2, CG-7), never the value, but every slot-shape classifier asks
+## for a bare `Call` and none looks through the wrapper: the slot was sized as one scalar word and
+## only %rax was stored, so the struct's other words read whatever the frame held (a silent wrong
+## value; a wide return segfaulted on a missing result pointer). `granted` tells `emit_st_assign` to
+## emit the peeled call with `cx.vchk` FALSE, as `emit_gas`' own `Expr::Unchecked` arm does, and
+## `collect_slots` sizes the slot from the same peeled call. A `require(...)` value keeps its own
+## grant handling (`require_agg_parts`), and a scalar value keeps the wrapper: its typing reads the
+## grant (`infer_local_scalar_type`), so peeling it would move a value, not just a slot.
+GrantedRhs := struct { e : ptr(Expr), granted : bool }
+granted_agg_call_rhs := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> GrantedRhs {
+  mut res := GrantedRhs(e = v, granted = false)
+  if require_agg_parts(v, decls, src, a).ok { return res }
+  match deref(v) {
+    Expr::Unchecked(inner) => {
+      g := granted_agg_call_rhs(inner, decls, src, a)
+      if global_init_agg_call(g.e, decls, src, a) { res = GrantedRhs(e = g.e, granted = true) }
+    }
+    ## Not a grant: the value is its own answer.
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  res
+}
 ## The DECLARATION index of field `[fs, fl)` within struct type `[ss, sl)` (-1 if absent) — the shared
 ## field-ordering that struct layout, const-struct field reads, and mutable struct-global fields use.
 struct_field_index := fn(decls : ptr(rt::Vec), src : ptr(u8), ss : usize, sl : usize, fs : usize, fl : usize, a : rt::Arena) -> i64 {
