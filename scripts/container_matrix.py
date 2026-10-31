@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """The container matrix (#1124): element shape x container x operation, generated and run.
 
+Containers: vec, deque, hashmap (key and value), omap (key and value), oset, map and strmap (u64 values),
+string and strbuf (the shapes they push: str, char, u8, u64, i64). An ordered container takes the shapes
+with an order (ORDER below), each cell passing its `lt`.
+
 Each cell is one program under target/ that stores known values in a library container, reads them
 back and exits 42 only if every read equals what was stored. A failed check exits with its own code
 in 10..99 (never 42), so a wrong value is told apart from a trap. The programs are generated, never
@@ -39,6 +43,9 @@ DEVIATIONS = os.path.join(HERE, "container-matrix.deviations.tsv")
 # The exit status of the language's trap on x86_64: `ud2` raises SIGILL (4), and the shell's and
 # subprocess's convention is 128 + the signal. Every other way to stop is a CRASH (#1277).
 TRAP_RC = 128 + 4
+# The containers #1124 names (lib/alloc). `map` and `strmap` are monomorphic (u64 values) and the string
+# builders take the shapes they push, so those cover only their own shapes.
+CONTAINERS = ("vec", "deque", "hashmap", "map", "omap", "oset", "strmap", "string", "strbuf")
 N = 20  # elements stored per cell: more than every container's initial capacity, so the cells grow
 
 PRELUDE = """\
@@ -161,14 +168,29 @@ shape("array3", "[u32; 3]", "[u32(k), u32(k % 1000) * 7 + 1, u32(4000000000 + k 
       "x[0] == y[0] and x[1] == y[1] and x[2] == y[2]", hashable=False)
 
 
-def shape_src(sh):
+# The shapes the ordered containers (omap keys, oset) take, with `lt(x, y)`: a strict order consistent
+# with `same` (#1278). The other shapes have no order the library could be asked for.
+ORDER = {
+    "u8": "x < y", "u16": "x < y", "u32": "x < y", "u64": "x < y", "i8": "x < y", "i64": "x < y",
+    "f64": "x < y", "char": "x < y", "brand": "u64(x) < u64(y)", "struct1": "x.a < y.a",
+    "str": "{\n  c := base::str::str_cmp(x, y)\n  z : i64 = 0\n  c < z\n}",
+}
+for _sh in SHAPES:
+    SHAPES[_sh]["ordered"] = _sh in ORDER
+
+
+def shape_src(sh, ordered=False):
     s = SHAPES[sh]
     ty = s["ty"]
     val = s["val"]
     body = val if val.startswith("{") else "{ " + val + " }"
+    lt = ""
+    if ordered and sh in ORDER:
+        o = ORDER[sh]
+        lt = f"lt := fn(x : {ty}, y : {ty}) -> bool {o if o.startswith('{') else '{ ' + o + ' }'}\n"
     return (s["decls"]
             + f"val := fn(k : u64) -> {ty} {body}\n"
-            + f"same := fn(x : {ty}, y : {ty}) -> bool {{ {s['same']} }}\n")
+            + f"same := fn(x : {ty}, y : {ty}) -> bool {{ {s['same']} }}\n" + lt)
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -187,8 +209,11 @@ FILL_VEC = f"""\
 OPS = {}
 
 
-def op(container, name, body, needs=None):
-    OPS[(container, name)] = dict(body=body, needs=needs)
+def op(container, name, body, needs=None, shapes=None):
+    """`body` is a template over `T`, or a function of the shape name for a cell whose expected result
+    the generator computes (the string cells). `needs` names a shape property the cell requires;
+    `shapes` lists the only shapes a container takes (the monomorphic `map`, `strmap`, `string`)."""
+    OPS[(container, name)] = dict(body=body, needs=needs, shapes=shapes)
 
 
 # The control: no container. A shape whose control is not OK says nothing about the containers.
@@ -473,11 +498,224 @@ op("hashmap", "key", f"""\
   }}
 """, needs="hashable")
 
+# The ordered map (#1278): `omap` as value (key u64, every shape) and as key (the ordered shapes).
+# `omap_values`/`omap_keys` hand the entries back in key order; the keys below rise with i.
+op("omap", "value", f"""\
+  mut m := om::omap(u64, T, ptr(ar), 2)
+  mut i : u64 = 0
+  while i < {N} {{
+    key := i * 31 + 5
+    p := om::omap_insert(u64, T, m, key, val(i), ult)
+    i += 1
+  }}
+  if om::omap_len(u64, T, ptr(m)) != {N} {{ return 10 }}
+  i = 0
+  while i < {N} {{
+    key := i * 31 + 5
+    o18 := om::omap_get(u64, T, ptr(m), key, ult)
+    match o18 {{
+      Option::Some(x) => {{ if not same(x, val(i)) {{ return 11 }} }}
+      Option::None => {{ return 12 }}
+    }}
+    i += 1
+  }}
+  vs := om::omap_values(u64, T, ptr(m))
+  if vs.len != {N} {{ return 13 }}
+  i = 0
+  while i < {N} {{
+    e := vs[i]
+    if not same(e, val(i)) {{ return 14 }}
+    i += 1
+  }}
+  o19 := om::omap_get(u64, T, ptr(m), 6, ult)
+  match o19 {{
+    Option::Some(x) => {{ return 15 }}
+    Option::None => {{}}
+  }}
+""")
+op("omap", "key", f"""\
+  mut m := om::omap(T, u64, ptr(ar), 2)
+  mut i : u64 = 0
+  while i < {N} {{
+    p := om::omap_insert(T, u64, m, val(i), i, lt)
+    i += 1
+  }}
+  i = 0
+  while i < {N} {{
+    o20 := om::omap_get(T, u64, ptr(m), val(i), lt)
+    match o20 {{
+      Option::Some(x) => {{ if not same(val(x), val(i)) {{ return 10 }} }}
+      Option::None => {{ return 11 }}
+    }}
+    if not om::omap_contains(T, u64, ptr(m), val(i), lt) {{ return 12 }}
+    i += 1
+  }}
+  ks := om::omap_keys(T, u64, ptr(m))
+  if ks.len != om::omap_len(T, u64, ptr(m)) {{ return 13 }}
+  mut j : u64 = 1
+  while j < ks.len {{
+    a := ks[j - 1]
+    b := ks[j]
+    if not lt(a, b) {{ return 14 }}
+    j += 1
+  }}
+""", needs="ordered")
+
+# The ordered set (#1278): every value inserted is contained, a repeat is not added, and the slice is
+# strictly rising.
+op("oset", "insert_contains", f"""\
+  mut s := os::oset(T, ptr(ar), 2)
+  mut i : u64 = 0
+  while i < {N} {{
+    p := os::oset_insert(T, s, val(i), lt)
+    i += 1
+  }}
+  i = 0
+  while i < {N} {{
+    if not os::oset_contains(T, ptr(s), val(i), lt) {{ return 10 }}
+    i += 1
+  }}
+  n := os::oset_len(T, ptr(s))
+  d := os::oset_insert(T, s, val(0), lt)
+  if os::oset_len(T, ptr(s)) != n {{ return 11 }}
+  xs := os::oset_as_slice(T, ptr(s))
+  if xs.len != n {{ return 12 }}
+  mut j : u64 = 1
+  while j < xs.len {{
+    a := xs[j - 1]
+    b := xs[j]
+    if not lt(a, b) {{ return 13 }}
+    j += 1
+  }}
+""", needs="ordered")
+
+# The monomorphic maps (#1278): `map` is u64 -> u64 and `strmap` is bytes -> u64, so their only shape is
+# u64. Neither grows: the capacity exceeds N.
+op("map", "insert_get", f"""\
+  m := amap::map_new(ptr(ar), 64)
+  mut i : u64 = 0
+  while i < {N} {{
+    amap::insert(m, i * 31 + 5, val(i))
+    i += 1
+  }}
+  amap::insert(m, 5, val(77))
+  i = 0
+  while i < {N} {{
+    k := if i == 0 {{ u64(77) }} else {{ i }}
+    o21 := amap::get(m, i * 31 + 5)
+    match o21 {{
+      Option::Some(x) => {{ if not same(x, val(k)) {{ return 10 }} }}
+      Option::None => {{ return 11 }}
+    }}
+    if not amap::contains(m, i * 31 + 5) {{ return 12 }}
+    i += 1
+  }}
+  if amap::contains(m, 6) {{ return 13 }}
+""", shapes=("u64",))
+
+
+def strmap_body(sh):
+    keys = "\n".join(f'  if i == {i} {{ return "key-{i}-{"x" * (i % 5)}" }}' for i in range(N))
+    return f"""\
+  m := sm::strmap_new(ptr(ar), 64)
+  mut i : u64 = 0
+  while i < {N} {{
+    sm::strmap_insert(m, bytes(kname(i)), val(i))
+    i += 1
+  }}
+  i = 0
+  while i < {N} {{
+    o22 := sm::strmap_get(m, bytes(kname(i)))
+    match o22 {{
+      Option::Some(x) => {{ if not same(x, val(i)) {{ return 10 }} }}
+      Option::None => {{ return 11 }}
+    }}
+    if not sm::strmap_contains(m, bytes(kname(i))) {{ return 12 }}
+    i += 1
+  }}
+  if sm::strmap_contains(m, bytes("key-0-x")) {{ return 13 }}
+""", keys
+
+
+op("strmap", "value", lambda sh: strmap_body(sh)[0], shapes=("u64",))
+
+
+# The string builders (#1278): each pushes N values and compares the bytes it holds with the text the
+# generator expects, computed here from the same values the cell's `val(k)` gives.
+def py_val(sh, k):
+    if sh == "str":
+        return ["alpha", "", "gamma-delta-epsilon", "z"][k % 4]
+    if sh == "char":
+        return chr([97, 945, 8364, 128512][k % 4])
+    if sh == "u64":
+        return str(k * 1000000007 + 9)
+    if sh == "i64":
+        return str(-k * 1000000007 - 5)
+    raise ValueError(sh)
+
+
+def text_check(sh, getter):
+    exp = "".join(py_val(sh, k) for k in range(N))
+    return f"""\
+  t := {getter}
+  tb := bytes(t)
+  eb := bytes("{exp}")
+  if tb.len != eb.len {{ return 10 }}
+  mut j : u64 = 0
+  while j < eb.len {{
+    if tb[j] != eb[j] {{ return 11 }}
+    j += 1
+  }}
+"""
+
+
+def push_body(ctor, push, sh):
+    return f"""\
+  mut s := {ctor}
+  mut i : u64 = 0
+  while i < {N} {{
+    p := {push}(s, val(i))
+    i += 1
+  }}
+""" + text_check(sh, "astr::as_str(ptr(s))")
+
+
+op("string", "push_str", lambda sh: push_body("astr::with_capacity(ptr(ar), 2)", "astr::push_str", sh),
+   shapes=("str",))
+op("string", "push", lambda sh: push_body("astr::with_capacity(ptr(ar), 2)", "astr::push", sh),
+   shapes=("char",))
+op("strbuf", "push_str", lambda sh: push_body("asb::strbuf(ptr(ar), 2)", "asb::push_str", sh),
+   shapes=("str",))
+op("strbuf", "push_char", lambda sh: push_body("asb::strbuf(ptr(ar), 2)", "asb::push_char", sh),
+   shapes=("char",))
+op("strbuf", "push_uint", lambda sh: push_body("asb::strbuf(ptr(ar), 2)", "asb::push_uint", sh),
+   shapes=("u64",))
+op("strbuf", "push_int", lambda sh: push_body("asb::strbuf(ptr(ar), 2)", "asb::push_int", sh),
+   shapes=("i64",))
+op("strbuf", "push_byte", f"""\
+  mut s := asb::strbuf(ptr(ar), 2)
+  mut i : u64 = 0
+  while i < {N} {{
+    p := asb::push_byte(s, val(i))
+    i += 1
+  }}
+  if asb::buf_len(ptr(s)) != {N} {{ return 10 }}
+  tb := astr::as_bytes(ptr(s))
+  if tb.len != {N} {{ return 11 }}
+  i = 0
+  while i < {N} {{
+    if tb[i] != val(i) {{ return 12 }}
+    i += 1
+  }}
+""", shapes=("u8",))
+
 
 def cells():
     for (cont, opn), o in sorted(OPS.items()):
         for sh in SHAPES:
             if o["needs"] and not SHAPES[sh][o["needs"]]:
+                continue
+            if o["shapes"] and sh not in o["shapes"]:
                 continue
             yield f"{cont}.{opn}.{sh}", cont, opn, sh
 
@@ -485,11 +723,18 @@ def cells():
 def program(cont, opn, sh):
     ty = SHAPES[sh]["ty"]
     imports = {"vec": "vec := alloc::vec\n", "deque": "deque := alloc::deque\n",
-               "hashmap": "hashmap := alloc::hashmap\n"}.get(cont, "")
-    body = OPS[(cont, opn)]["body"].replace("(T,", f"({ty},").replace(", T,", f", {ty},") \
-        .replace(", T)", f", {ty})")
+               "hashmap": "hashmap := alloc::hashmap\n", "omap": "om := alloc::omap\n",
+               "oset": "os := alloc::oset\n", "map": "amap := alloc::map\n",
+               "strmap": "sm := alloc::strmap\n", "string": "astr := alloc::string\n",
+               "strbuf": "asb := alloc::strbuf\nastr := alloc::string\n"}.get(cont, "")
+    body = OPS[(cont, opn)]["body"]
+    if callable(body):
+        body = body(sh)
+    body = body.replace("(T,", f"({ty},").replace(", T,", f", {ty},").replace(", T)", f", {ty})")
+    extra = {"omap": "ult := fn(x : u64, y : u64) -> bool { x < y }\n",
+             "strmap": "kname := fn(i : u64) -> str {\n" + strmap_body(sh)[1] + '\n  ""\n}\n'}.get(cont, "")
     return (f"## generated by scripts/container_matrix.py (#1124): cell {cont}.{opn}.{sh}\n"
-            + imports + PRELUDE + shape_src(sh)
+            + imports + PRELUDE + shape_src(sh, cont in ("omap", "oset")) + extra
             + f"pass := fn(x : {ty}) -> {ty} {{ x }}\n"
             + "main := fn() -> u64 {\n" + ARENA + body + "  42\n}\n")
 
@@ -682,7 +927,13 @@ def self_test(cc, d, jobs):
     expect("the planted segfault fails the gate", hold({"plant.crash": got["plant.crash"]}, {}) != [])
     expect(f"planted checked overflow is TRAP 132 (got {got['plant.trap']})", got["plant.trap"] == "TRAP 132")
 
-    # 3. The committed list parses and every row names a generated cell.
+    # 3. Every container #1124 names has cells (#1278): one dropped from the generator fails here, not
+    #    silently as a smaller matrix.
+    conts = {c for _, c, _, _ in cells()}
+    missing = sorted(set(CONTAINERS) - conts)
+    expect(f"every container #1124 names has cells (missing: {missing or 'none'})", not missing)
+
+    # 4. The committed list parses and every row names a generated cell.
     names = {cid for cid, *_ in cells()}
     rows = load_deviations(DEVIATIONS)
     unknown = [cid for (_, cid) in rows if cid not in names]

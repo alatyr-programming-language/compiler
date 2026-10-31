@@ -136,6 +136,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   is a `TRAP`; a segfault, any other signal, a timeout or a stray exit code is now `CRASH <rc>`, held
   like `WRONG`. The 92 crash cells this exposed are rows under #987, #1211, #1256, #1302 and #1303, and
   a planted segfault is proved to turn the gate red.
+- **The container matrix covers every container #1124 names (#1278).** It adds `omap` (key and value),
+  `oset`, `map`, `strmap`, `string` and `strbuf`: 50 cells, 428 in all. The 28 that fail are rows under
+  #1244, #1250, #1255, #1305, #1306, #1307 and #1308, and the self-test fails if a named container
+  has no cells.
 
 ## 0.2.19 — 2026-10-31
 
