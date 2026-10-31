@@ -96,7 +96,9 @@
 #                        pair's FROM side moved there (#1264): the same rows, base_sha256 and
 #                        result_sha256 recomputed, exactly what --emit-expected would write against
 #                        NEWBASE. 0 = written to OUT (or stdout); 1 = refused, every overlapping pair
-#                        named; 2 = malformed. scripts/land.sh applies it to a stale delta at PHASE 2
+#                        named; 2 = malformed. scripts/land.sh applies it to a stale delta at PHASE 2.
+#                        The result is a hypothesis: NEWBASE's code may run the rows differently, and
+#                        only a walk (the gate, or land.sh's PHASE 3b pre-walk) decides it
 #       --rebase-from OLDBASE  first require DELTA's rows to rebuild its own result_sha256 on OLDBASE,
 #                        the manifest it was predicted against (1 when they do not: the change moves a
 #                        header line or the row order, which no rebase can carry). land.sh always gives it
@@ -712,20 +714,30 @@ delta_check() { # committed fresh delta-file
 
 ## THE REBASE (#1264). A delta names the manifest it was predicted against, so every other oracle
 ## commit made it stale: with N delta PRs in flight, each landing sent the other N-1 back for a rebase
-## and a fresh native walk, although none of them touched the rows that moved. Most of the time the
-## prediction is still exactly right on the new base, and that is decidable from text alone:
-##   a declared pair is still right when its FROM side is the new base's row for that (backend, path),
-##   or the pair is absent from the new base for a declared ADDED pair.
-## Then the rows carry over VERBATIM (a class is a function of FROM and TO, and neither moved), and only
-## the two hashes are recomputed: base_sha256 is the new base, and result_sha256 is the new base with
-## exactly the declared transitions applied. The output is what `--emit-expected <new-base> <result>`
-## writes, byte for byte. That is how it is built: the result manifest is assembled, then emitted and
-## compared with the declared rows. When any declared FROM side differs, the other change moved a row
-## this one predicts, and only a fresh walk knows the answer. That is a refusal naming every such pair,
-## never a guess.
+## and a fresh native walk, although none of them touched the rows that moved.
+##
+## A rebased delta is a HYPOTHESIS, and the gate tests it. Text alone decides only that the two
+## predictions do not collide in the manifest:
+##   every declared pair's FROM side is the new base's row for that (backend, path), or, for a declared
+##   ADDED pair, the new base has no row for it.
+## It cannot decide that the TO side still holds. The rows were measured by running the PR's fixtures
+## on the code of the PR's old base, and the other landing changed main's CODE, not only its manifest.
+## That change can move what the PR's own new or changed fixtures do without moving any row the
+## manifest held. #1215 is the case: #1227's guard, on main, turned #1215's new fixture's run/7 into
+## run/132-134, and the four mechanically rebased ADDED rows still said run/7. So a disjoint rebase can
+## still be a red gate.
+##
+## When the FROM sides hold, the rows carry over VERBATIM and only the two hashes are recomputed:
+## base_sha256 is the new base, and result_sha256 is the new base with exactly the declared transitions
+## applied. The output is what `--emit-expected <new-base> <result>` writes, byte for byte. That is how
+## it is built: the result manifest is assembled, then emitted and compared with the declared rows.
+## When any declared FROM side differs, the other change moved a row this one predicts. That is a
+## refusal naming every such pair, never a guess.
 ##
 ## Nothing gets weaker. The gate still demands that the fresh walk realise the rebased delta exactly,
-## result_sha256 included, so a wrong rebase is a red gate and never a silent pass.
+## result_sha256 included, so a wrong hypothesis is a red gate (MISPREDICTED) and never a silent pass.
+## scripts/land.sh walks the corpus alone first (PHASE 3b) when it rebased a delta, so a wrong one costs
+## minutes, not a full gate.
 ##
 ## The result's row order is the walk's: sources sorted bytewise (`git ls-files | sort` under the gate's
 ## C collation), then backend_order within a source. The rebase checks that the new base is already in
@@ -736,9 +748,10 @@ delta_check() { # committed fresh delta-file
 ## A delta whose result is not "the base with these rows changed", one that adds a header line or
 ## reorders the file, cannot be carried over this way. Given the manifest the delta was predicted
 ## against (<old-base>, whose sha256 must be base_sha256), the rebase first rebuilds result_sha256 there
-## from the rows alone, and refuses when it cannot. That check is what tells a rebase that will be
-## realised from one that would only turn the gate red after ninety minutes. scripts/land.sh always
-## supplies <old-base>, from main's history.
+## from the rows alone, and refuses when it cannot. That check refuses, before any walk, a rebase whose
+## result_sha256 would be wrong even if every row still held. It says nothing about whether the rows
+## hold on the new code; see the hypothesis above. scripts/land.sh always supplies <old-base>, from
+## main's history.
 ##   0  rebased; the new delta is on stdout, or in <out> when given
 ##   1  refused: an overlapping pair (each named), a result the rows alone do not rebuild on <old-base>,
 ##      or the new base IS the delta's result (spent)
