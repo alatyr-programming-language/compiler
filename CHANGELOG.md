@@ -126,6 +126,8 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+## 0.2.19 — 2026-10-31
+
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type
   (#1248).** `f := fn(k : u64) -> i64 { match k { 0 => { 7 }; _ => { 5 - 7 } } }` trapped on all four
   backends: a body ending in a statement `match` has no tail expression, so the declared result

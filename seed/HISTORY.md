@@ -1822,4 +1822,38 @@ The original reading note, verbatim:
 #
 # VERSION 0.2.17 -> 0.2.18, PATCH: a silent wrong value on x86_64 became a loud trap. The specification
 # pin (1.6.0, a target revision per spec 9438d00) did not move.
+# ---------------------------------------------------------------------------------------------
+# 0.2.18 -> 0.2.19   promoted 2026-10-31   seed/alatyr := Stage2
+#
+# WHY: #1248 (PR #1266) — a function whose body ends in a statement `match` (or `if`, `unchecked`,
+# `@alloc` block) has no tail expression, so its arms' values never took the declared result type:
+# a literal-only `5 - 7` in such an arm of an `-> i64` function kept the operands' unsigned shape and
+# trapped on the borrow. The arms now take the declared result type (Types §2.3), so the arithmetic
+# guard is the result type's (Concurrency §6.5). The compiler's own trailing-match arms change, so
+# the frozen seed must carry them; PR #1266's gate (run 41160558820) was red only at the fixpoint.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k>): 26 hunks, 78 added, 0 removed. One sentence: every
+# literal `0 - 1` arm of a trailing statement match in an `-> i64` compiler function gains i64's
+# signed overflow guard. Each hunk is exactly `jno 1f` / `ud2` / `1:` inserted directly after
+# `subq %rbx, %rax`: 23 in lower::call_ret_enum_target_d, 2 in lower::ir::ir_find_accum, 1 in
+# lower_layout::variant_index. The guard cannot fire on `0 - 1`. No other line shape moves.
+#
+# CONVERGENCE (bump first; native x86_64 omen):
+# Stage1 == Stage2 == Stage3 GAS byte-identical RAW at 1601270 lines.
+# GAS SHA-256: 6667f6b1b9a60dbd317f8cb5c9ad43cb9ca7ccd75e29723500c29cfbcfafb538.
+# Stage2 == Stage3 BINARY SHA-256:
+# 05071d7f9e18d3d0d4fe865aef95c7fe01d11d35382b1f8e7b6d45930cdd47fb (6096728 B).
+# Stage1 SHA-256: 6ca9edd35e4f14af2632763bafea4820b4992858214c648670d1657a8fa69725.
+# All three answer `alatyr 0.2.19, spec 1.6.0`.
+# Superseded seed (0.2.18) SHA-256:
+# 6b08598da68cfed9aacacb1b4100575388136903ab61b674cc4f489ceb93fc34 (6096680 B).
+#
+# The corpus was walked with Stage2 before promotion (#1258): it matches PR #1266's declared delta,
+# result 2596be9a, with no compile/132 pair.
+#
+# The full gate ran on this promoted tree before it was pushed, and `scripts/fixpoint.sh` re-ran on it;
+# that run, not this label, is the proof (the acceptance comment on #1266 names it).
+#
+# VERSION 0.2.18 -> 0.2.19, PATCH: a wrong trap on x86_64 became the correct value. The specification
+# pin (1.6.0, a target revision per spec 9438d00) did not move.
 ```
