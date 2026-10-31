@@ -142,14 +142,14 @@ retype_ptr_copy := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize, 
   if k < 0 { return }
   ue := deref(svec_at(SlotEntry, slots, usize(k)))
   if not lower_ctx::streq(src, ue.ns, ue.nl, ns, nl) or ue.ek != 0 or ue.snl != 0 or ue.is_ref { return }
-  deref(svec_at(SlotEntry, slots, usize(k))) = SlotEntry(ns = ue.ns, nl = ue.nl, off = ue.off, sns = ps, snl = pn, ek = ek, estride = ue.estride, eek = ue.eek, is_ref = false, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l)
+  deref(svec_at(SlotEntry, slots, usize(k))) = SlotEntry(ns = ue.ns, nl = ue.nl, off = ue.off, sns = ps, snl = pn, ek = ek, estride = ue.estride, eek = ue.eek, is_ref = false, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l, is_param = ue.is_param)
 }
 
 ## Drop the name of slot entry `k`, keeping its frame word (an arm-local binding's collect-time type
 ## must not leak to the rest of the function).
 unname_slot := fn(slots : ptr(SVec), k : usize) {
   ue := deref(svec_at(SlotEntry, slots, k))
-  deref(svec_at(SlotEntry, slots, k)) = SlotEntry(ns = 0, nl = 0, off = ue.off, sns = ue.sns, snl = ue.snl, ek = ue.ek, estride = ue.estride, eek = ue.eek, is_ref = ue.is_ref, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l)
+  deref(svec_at(SlotEntry, slots, k)) = SlotEntry(ns = 0, nl = 0, off = ue.off, sns = ue.sns, snl = ue.snl, ek = ue.ek, estride = ue.estride, eek = ue.eek, is_ref = ue.is_ref, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l, is_param = ue.is_param)
 }
 
 pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), sub : ptr(Subst), ctslots : ptr(SVec)) {
