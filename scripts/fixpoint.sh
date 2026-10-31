@@ -402,9 +402,10 @@ fixpoint_seed_identity_selftest() { # work-dir
   _bumped 0.4.2 0.4.3; FP_MID_PROMOTION=x
   ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" > "$st/o" 2>&1
   [ "$FP_MID_PROMOTION" = 1 ]; _ck $? "flagged-bump-first-tree-did-not-set-FP_MID_PROMOTION($FP_MID_PROMOTION)"
-  _ans 0.4.3; FP_MID_PROMOTION=x
-  ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" > "$st/o" 2>&1
-  [ "$FP_MID_PROMOTION" = 0 ]; _ck $? "a-promoted-tree-under-the-flag-set-FP_MID_PROMOTION($FP_MID_PROMOTION)"
+  _bumped 0.4.3 0.4.3; FP_MID_PROMOTION=x
+  ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" > "$st/o" 2>&1; rc=$?
+  [ "$rc" = 0 ] && [ "$FP_MID_PROMOTION" = 0 ]
+  _ck $? "a-promoted-tree-under-the-flag-was-refused-or-set-FP_MID_PROMOTION(rc=$rc,$FP_MID_PROMOTION)"
   grep -qx 'fixpoint_verdict "${FP_MID_PROMOTION:-0}" target/gas_seed.s target/gas1.s target/gas2.s' "$ROOT/scripts/fixpoint.sh"
   _ck $? "the-run-does-not-pass-FP_MID_PROMOTION-to-fixpoint_verdict"
 
