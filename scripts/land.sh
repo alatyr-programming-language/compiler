@@ -56,6 +56,16 @@
 # the first in those two manifest-reading checks; everything else the gate runs is a function of the
 # source tree, and an oracle commit changes no source byte.
 #
+# A delta predicted against an older manifest (another delta PR's oracle commit landed first) is not
+# refused for that alone: PHASE 2 rebases it onto BASE's manifest with `corpus_manifest.sh
+# --rebase-delta` (#1264), and refuses only when a declared pair overlaps what moved, or when its rows
+# do not rebuild its own result. PHASE 3 puts that rebased copy into the merge commit. Every delta PR
+# edits the one `-merge` file, so it is also the one conflict PHASE 3 settles. The merge message says
+# so, and the PR's branch is never rewritten. The rebased rows are a hypothesis about main's code, not
+# a fact (#1215), so PHASE 3b walks the corpus alone on the merge and refuses there when the walk does
+# not realise them. The gate then reads the rebased delta as the merged tree's own file, and PHASE 6a
+# commits what it realised.
+#
 # Without a delta file nothing changed: an oracle mismatch is a red gate, the merged tree is left
 # detached for inspection, and the maintainer's separate oracle commit plus a complete second gate is
 # the path (alatyr-integrate §4). `idiom.baseline` and `needle.baseline` always take that path.
@@ -87,6 +97,7 @@ REPO="${ALATYR_REPO:-alatyr-programming-language/compiler}"
 say()  { printf '\n=== %s\n' "$*"; }
 die()  { printf 'land: %s\n' "$*" >&2; exit 2; }
 verdict() { printf '\n*** %s ***\n' "$*"; }
+sha256_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi; }
 
 # A JSON or shell layer that escapes a newline one time too many leaves the two literal characters
 # backslash+n in a one-line message. Existing main history contains this debt and is deliberately not
@@ -226,19 +237,107 @@ pr_oracle_commit_isolation_check() { # oracle-path commit other-file-count
   return 1
 }
 
-## The predicted delta must have been predicted against the oracle this merge starts from. Refused
-## here, before a 55-minute gate, because the gate would only reach the same verdict at its end: a
-## delta whose base is not the committed manifest is INERT, so the walk then needs a byte-for-byte
-## match it cannot have. The cure is a rebase and a fresh `--emit-expected`, never a hand edit.
+## The predicted delta must be a prediction against the oracle this merge starts from, because a delta
+## whose base is not the committed manifest is INERT, and the walk then needs a byte-for-byte match it
+## cannot have. Decided here, before a 55-minute gate:
+##   0  nothing to decide (no delta, a deleted one), or LIVE: predicted against this very manifest
+##   1  refused: no base_sha256 at all
+##   3  STALE: predicted against another manifest. Another delta PR's oracle commit makes every other
+##      delta in flight stale (#1264), so the caller REBASES it (`corpus_manifest.sh --rebase-delta`)
+##      and refuses only when that refuses, when a declared pair overlaps what moved.
 DELTA_REL=scripts/corpus.expected-delta
 pr_delta_base_check() { # changed-paths declared-base-sha|absent base-manifest-sha
   printf '%s\n' "$1" | grep -qx "$DELTA_REL" || return 0
   [ "$2" = absent ] && return 0          # the PR deletes a spent delta: nothing is declared
   [ -n "$2" ] && [ "$2" = "$3" ] && return 0
-  echo "  REFUSE: $DELTA_REL was predicted against manifest ${2:-<no base_sha256>},"
-  echo "          but this merge starts from ${3:-<unknown>}. Rebase onto main and re-emit it with"
-  echo "          scripts/corpus_manifest.sh --emit-expected from a walk of the rebased branch."
-  return 1
+  if [ -z "$2" ]; then
+    echo "  REFUSE: $DELTA_REL names no base_sha256, so it is a prediction against nothing."
+    echo "          Re-emit it with scripts/corpus_manifest.sh --emit-expected; never hand-edit it."
+    return 1
+  fi
+  echo "  predicted delta: STALE — $DELTA_REL was predicted against manifest $2,"
+  echo "          but this merge starts from ${3:-<unknown>}; rebasing it onto that manifest (#1264)"
+  return 3
+}
+
+## The manifest a stale delta was predicted against, found by its sha256 among the manifests of
+## <revs> (tried in order) and written to <out>. Its job: `--rebase-from` checks on it that the delta's
+## rows rebuild its own result there. A delta whose base is nowhere in reach cannot be checked that
+## way, and is refused rather than rebased blind.
+land_manifest_by_sha() { # sha256 out rev...
+  local want="$1" out="$2" rev; shift 2
+  for rev in "$@"; do
+    git show "$rev:scripts/corpus.manifest" > "$out" 2>/dev/null || continue
+    [ "$(sha256_of < "$out")" = "$want" ] && return 0
+  done
+  rm -f "$out"; return 1
+}
+
+## THE PRE-WALK (#1264). A rebased delta is a hypothesis, not a fact. Its rows were measured on the
+## code of the PR's own base, and the rebase checks them against main's manifest, never against main's
+## code. A change on main can move what the PR's own new or changed fixtures do while no row the delta
+## names moves in the manifest. #1215 is the case: #1227's guard turned its new fixture's run/7 into
+## run/132-134, and the four mechanically rebased ADDED rows still said run/7. The full gate catches
+## that (MISPREDICTED, red), but only after ~90 minutes. So a landing that rebased its delta builds the
+## merged compiler (seed -> Stage1 -> Stage2) and walks the corpus alone first: ~15 minutes on omen
+## (measured on #1215: 833 s, of which the walk was 255 s at four jobs). The full gate runs only when that
+## walk realises the rebased delta, and a walk that cannot answer leaves the decision to the full gate.
+## A live delta goes straight to the full gate, as before: its author walked it against the manifest
+## main still holds, and the landing did not rewrite it. The pre-walk is for a prediction the landing
+## rewrote.
+##   land_prewalk_needed: 0 run the pre-walk, 1 go straight to the full gate
+land_prewalk_needed() { [ -n "$1" ]; } # rebased-from-sha|''
+## What the pre-walk decided, from its exit status and log. Prints one of:
+##   realised    `match by the declared delta`, exit 0: the full gate runs
+##   unrealised  the walk finished and the fresh manifest is NOT the rebased delta's result: refuse now
+##   unknown     anything else (a build failure, a malformed delta, a TIMED-OUT pair, an inert delta, a
+##               walk that died): not a verdict on the prediction, so the full gate decides
+land_prewalk_outcome() { # walk-rc walk-log
+  if [ "$1" = 0 ] && grep -q '^corpus manifest: match by the declared delta' "$2" 2>/dev/null; then
+    echo realised; return; fi
+  ## The timeout test reads the delta report alone: the walk's own self-test banners name
+  ## `compile_timeout` and `TIMED-OUT` on every run (measured on #1215's pre-walk log).
+  if [ "$1" = 1 ] && grep -q '^corpus manifest: MISMATCH against the declared delta' "$2" 2>/dev/null &&
+     grep -q '^corpus delta: the fresh manifest does NOT differ' "$2" &&
+     ! land_prewalk_report "$2" | grep -q -E 'TIMED-OUT|_timeout/'; then
+    echo unrealised; return; fi
+  echo unknown
+}
+## The walk's delta report: from its first line to the MISMATCH verdict, nothing else of the log.
+land_prewalk_report() { # walk-log
+  sed -n '/^corpus delta: the fresh manifest does NOT differ/,/^corpus manifest: MISMATCH against the declared delta/p' "$1"
+}
+
+## PHASE 3's merge. Every delta PR edits the ONE file scripts/corpus.expected-delta, and .gitattributes
+## marks it `-merge`, so after any delta PR lands, every other one conflicts on it, whatever else it
+## does. <landing-delta> is the prediction this landing gates (the PR's own when it is live, its
+## rebase when it was stale), and the merge carries it. When that file is the ONLY conflict, it resolves
+## the conflict; on a clean merge whose copy differs, it replaces that copy. Any other conflicted path
+## aborts the merge, as before. <note> goes into the merge message whenever the file was written, so
+## the merge commit says why its delta differs from the PR's.
+##   0  merged (HEAD is the merge commit)    1  a conflict this does not resolve (merge aborted)
+land_merge_pr() { # pr-ref subject link landing-delta|'' note
+  local ref="$1" subj="$2" link="$3" ld="$4" note="$5" unmerged wrote=0 msg
+  if ! git merge --no-ff --no-commit --no-verify "$ref" >/dev/null 2>&1; then
+    unmerged="$(git diff --name-only --diff-filter=U)"
+    if [ -z "$ld" ] || [ "$unmerged" != "$DELTA_REL" ]; then
+      git merge --abort 2>/dev/null; return 1
+    fi
+  fi
+  if [ -n "$ld" ] && { [ -n "$(git diff --name-only --diff-filter=U)" ] || ! cmp -s "$ld" "$DELTA_REL"; }; then
+    cp "$ld" "$DELTA_REL" && git add -- "$DELTA_REL" || { git merge --abort 2>/dev/null; return 1; }
+    wrote=1
+  fi
+  msg="$subj"
+  [ "$wrote" = 1 ] && [ -n "$note" ] && msg="$msg
+
+$note"
+  [ -n "$link" ] && msg="$msg
+
+$link"
+  git commit --quiet --no-verify -m "$msg" >/dev/null 2>&1 || { git merge --abort 2>/dev/null; return 1; }
+  [ -z "$ld" ] || git show "HEAD:$DELTA_REL" | cmp -s - "$ld" || return 1
+  return 0
 }
 
 ## The oracle commit PHASE 6a makes changes the corpus manifest and NOTHING else — the whole argument
@@ -287,7 +386,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=87  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130
+LAND_SELFTEST_EXPECTED=105  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -485,18 +584,89 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
   _ck $? oracle-commit-refused-a-one-file-oracle-commit
 
   # ---- 5 · the predicted delta's base, checked before the gate. ----------------------------
+  #     A stale delta is neither passed as live nor refused outright: it is handed to the rebase (3).
   out="$(pr_delta_base_check "$(printf '%s\n%s' src/lower.al "$DELTA_REL")" aaaa bbbb 2>&1)"
-  [ $? = 1 ]; _ck $? delta-base-allowed-a-delta-predicted-against-another-manifest
+  [ $? = 3 ]; _ck $? delta-base-did-not-send-a-stale-delta-to-the-rebase
   case "$out" in *'predicted against manifest aaaa'*'starts from bbbb'*) _ck 0 x ;;
                  *) _ck 1 delta-base-did-not-name-both-manifests ;; esac
+  case "$out" in *REFUSE*) _ck 1 delta-base-refused-a-stale-delta-before-the-rebase-decided ;; *) _ck 0 x ;; esac
   pr_delta_base_check "$(printf '%s\n%s' src/lower.al "$DELTA_REL")" bbbb bbbb >/dev/null 2>&1
   _ck $? delta-base-refused-a-delta-predicted-against-this-merge-base
   pr_delta_base_check "$(printf '%s\n%s' src/lower.al "$DELTA_REL")" '' bbbb >/dev/null 2>&1
   [ $? = 1 ]; _ck $? delta-base-allowed-a-delta-with-no-base
+
+  # ---- 5b · PHASE 3's merge on a real repository: the delta file is the one conflict it settles. --
+  #      main and the PR both changed scripts/corpus.expected-delta (`-merge`, as in this repository).
+  local g="$st/git" lb
+  ( set -e
+    git init --quiet -b b0 "$g"; cd "$g"
+    git config user.name t; git config user.email t@t; git config commit.gpgsign false; git config core.hooksPath /dev/null
+    mkdir scripts; printf '%s -merge\n' "$DELTA_REL" > .gitattributes
+    echo spent-0 > "$DELTA_REL"; echo x0 > x; echo m0 > scripts/corpus.manifest
+    git add -A; git commit --quiet -m base
+    git switch --quiet -c pr; echo pr-delta > "$DELTA_REL"; echo y > y; git add -A; git commit --quiet -m pr
+    git switch --quiet -c prx b0; echo pr-delta > "$DELTA_REL"; echo x-pr > x; git add -A; git commit --quiet -m prx
+    git switch --quiet -c prc b0; echo y > y; git add -A; git commit --quiet -m prc
+    git switch --quiet -c trunk b0; echo spent-1 > "$DELTA_REL"; echo x-main > x; echo m1 > scripts/corpus.manifest
+    git add -A; git commit --quiet -m main ) >/dev/null 2>&1
+  _ck $? selftest-could-not-build-the-merge-repository
+  echo rebased-delta > "$st/ld"
+  ( cd "$g" && git switch --quiet --detach trunk &&
+    land_merge_pr pr 'merge #1: pr' 'Closes #9' "$st/ld" 'NOTE: rebased' &&
+    [ "$(git rev-list --parents -n 1 HEAD | wc -w | tr -d ' ')" = 3 ] &&
+    [ "$(git show "HEAD:$DELTA_REL")" = rebased-delta ] && [ "$(git show HEAD:y)" = y ] &&
+    [ "$(git show HEAD:x)" = x-main ] && [ "$(git log -1 --format=%B HEAD)" = "$(printf 'merge #1: pr\n\nNOTE: rebased\n\nCloses #9')" ] &&
+    [ "$(git show pr:"$DELTA_REL")" = pr-delta ] ) >/dev/null 2>&1
+  _ck $? merge-did-not-settle-the-delta-conflict-with-the-landing-delta
+  ( cd "$g" && git switch --quiet --detach trunk && lb="$(git rev-parse HEAD)" &&
+    ! land_merge_pr pr 'merge #1: pr' '' '' '' &&
+    [ "$(git rev-parse HEAD)" = "$lb" ] && ! git rev-parse -q --verify MERGE_HEAD ) >/dev/null 2>&1
+  _ck $? merge-settled-a-delta-conflict-with-no-landing-delta
+  ( cd "$g" && git switch --quiet --detach trunk && lb="$(git rev-parse HEAD)" &&
+    ! land_merge_pr prx 'merge #2: prx' '' "$st/ld" 'NOTE' &&
+    [ "$(git rev-parse HEAD)" = "$lb" ] && [ -z "$(git status --porcelain --untracked-files=no)" ] ) >/dev/null 2>&1
+  _ck $? merge-settled-a-conflict-in-another-file-beside-the-delta
+  ( cd "$g" && git switch --quiet --detach trunk &&
+    land_merge_pr prc 'merge #3: prc' '' "$st/ld" 'NOTE: rebased' &&
+    [ "$(git show "HEAD:$DELTA_REL")" = rebased-delta ] && git log -1 --format=%B HEAD | grep -qx 'NOTE: rebased' ) >/dev/null 2>&1
+  _ck $? merge-left-a-stale-delta-on-a-clean-merge
+  ( cd "$g" && git switch --quiet --detach trunk &&
+    land_merge_pr prc 'merge #4: prc' '' '' 'NOTE' &&
+    [ "$(git show "HEAD:$DELTA_REL")" = spent-1 ] && ! git log -1 --format=%B HEAD | grep -q NOTE ) >/dev/null 2>&1
+  _ck $? merge-touched-the-delta-of-a-PR-that-declares-none
+  # …and the old-base finder: by sha256, among the revisions given, or nothing.
+  ( cd "$g" && land_manifest_by_sha "$(printf 'm0\n' | sha256_of)" "$st/ob" trunk b0 && [ "$(cat "$st/ob")" = m0 ] ) >/dev/null 2>&1
+  _ck $? old-base-finder-missed-a-manifest-in-reach
+  ( cd "$g" && ! land_manifest_by_sha "$(printf 'zz\n' | sha256_of)" "$st/ob2" trunk b0 && [ ! -e "$st/ob2" ] ) >/dev/null 2>&1
+  _ck $? old-base-finder-invented-a-manifest
   pr_delta_base_check src/lower.al aaaa bbbb >/dev/null 2>&1
   _ck $? delta-base-fired-on-a-PR-that-does-not-carry-a-delta
   pr_delta_base_check "$DELTA_REL" absent bbbb >/dev/null 2>&1
   _ck $? delta-base-refused-the-deletion-of-a-spent-delta
+
+  # ---- 5c · PHASE 3b: a rebased delta is walked alone before the full gate; a live one is not. ----
+  land_prewalk_needed aaaa; _ck $? prewalk-skipped-for-a-rebased-delta
+  land_prewalk_needed ''; [ $? = 1 ]; _ck $? prewalk-ran-for-a-delta-the-landing-did-not-rebase
+  printf 'corpus manifest: rows=8\ncorpus manifest: match by the declared delta — x\n' > "$st/pw-ok"
+  [ "$(land_prewalk_outcome 0 "$st/pw-ok")" = realised ]; _ck $? prewalk-missed-a-realised-delta
+  #      The log's shape is #1215's real pre-walk: the walk's self-test banners (which name
+  #      compile_timeout and TIMED-OUT on every run) come first, then the report, then the verdict.
+  { echo 'corpus manifest: stream separation self-test ok (child hash stable, supervisor stderr separate, run rc=124, compile_timeout preserved)'
+    echo '  unrealised, mispredicted (exit, hash, class), wrong result, malformed and TIMED-OUT deltas refused;'
+    echo 'corpus delta: the fresh manifest does NOT differ from the committed one by exactly the declared delta'
+    printf '  MISPREDICTED  x86_64   test/n.al  declared ADDED  - -> run/7 out:e3b0c442 err:e3b0c442\n'
+    printf '%72s observed ADDED  - -> run/132 out:e3b0c442 err:e3b0c442\n' ''
+    echo 'corpus delta: 0 undeclared, 0 unrealised, 1 mispredicted pair(s)'
+    echo 'corpus manifest: MISMATCH against the declared delta in scripts/corpus.expected-delta (report above)'; } > "$st/pw-red"
+  [ "$(land_prewalk_outcome 1 "$st/pw-red")" = unrealised ]; _ck $? prewalk-missed-an-unrealised-delta
+  [ "$(land_prewalk_outcome 0 "$st/pw-red")" = unknown ]; _ck $? prewalk-refused-on-a-log-its-exit-contradicts
+  sed 's|- -> run/132 out|- -> run_timeout/124 out|' "$st/pw-red" > "$st/pw-to"
+  [ "$(land_prewalk_outcome 1 "$st/pw-to")" = unknown ]; _ck $? prewalk-refused-on-a-timeout
+  [ "$(land_prewalk_report "$st/pw-red" | grep -c '')" = 5 ]; _ck $? prewalk-report-is-not-the-delta-report-alone
+  printf 'error: seed build failed\n' > "$st/pw-died"
+  [ "$(land_prewalk_outcome 1 "$st/pw-died")" = unknown ]; _ck $? prewalk-refused-on-a-walk-that-never-ran
+  printf 'corpus manifest: match (8 rows)\n' > "$st/pw-inert"
+  [ "$(land_prewalk_outcome 0 "$st/pw-inert")" = unknown ]; _ck $? prewalk-took-a-plain-match-as-the-rebased-delta
 
   # ---- 6 · the oracle commit PHASE 6a makes is exactly one path. ----------------------------
   oracle_commit_paths_check scripts/corpus.manifest >/dev/null 2>&1
@@ -603,7 +773,6 @@ for a in "${@:2}"; do
     *) die "unknown option: $a" ;;
   esac
 done
-sha256_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi; }
 
 # --- PHASE 0 — preconditions ----------------------------------------------------------------------
 # Each of these has cost somebody a measurement. A dirty tree makes "the gate ran on the merge" false;
@@ -746,9 +915,45 @@ if git cat-file -e "$HEAD_SHA:$DELTA_REL" 2>/dev/null; then
   DELTA_DECLARED_BASE="$(git show "$HEAD_SHA:$DELTA_REL" | sed -n 's/^base_sha256=//p' | head -n 1)"
 fi
 BASE_MANIFEST_SHA="$(git show "$BASE:scripts/corpus.manifest" | sha256_of)"
-pr_delta_base_check "$CHANGED" "$DELTA_DECLARED_BASE" "$BASE_MANIFEST_SHA" || shape_fail=1
-printf '%s\n' "$CHANGED" | grep -qx "$DELTA_REL" && [ "$DELTA_DECLARED_BASE" != absent ] &&
-  echo "  predicted delta: $DELTA_REL declares $(git show "$HEAD_SHA:$DELTA_REL" | sed -n 's/^pairs=//p') pair(s) against main's manifest"
+## LANDING_DELTA is the prediction this landing gates and PHASE 3 puts into the merge: the PR's own
+## file when it is live, its rebase onto BASE's manifest when it was stale (#1264). The PR's branch is
+## never rewritten; the merge commit carries the rebased copy and says so.
+LANDING_DELTA=
+DELTA_REBASED_FROM=
+LD_DIR="$ROOT/target/land-delta-$PR"
+pr_delta_base_check "$CHANGED" "$DELTA_DECLARED_BASE" "$BASE_MANIFEST_SHA"; dbc_rc=$?
+case "$dbc_rc" in
+  0)
+    if printf '%s\n' "$CHANGED" | grep -qx "$DELTA_REL" && [ "$DELTA_DECLARED_BASE" != absent ]; then
+      rm -rf "$LD_DIR"; mkdir -p "$LD_DIR" && git show "$HEAD_SHA:$DELTA_REL" > "$LD_DIR/pr.delta" ||
+        die "could not stage $DELTA_REL under $LD_DIR"
+      LANDING_DELTA="$LD_DIR/pr.delta"
+    fi ;;
+  3)
+    rm -rf "$LD_DIR"; mkdir -p "$LD_DIR" && git show "$HEAD_SHA:$DELTA_REL" > "$LD_DIR/pr.delta" &&
+      git show "$BASE:scripts/corpus.manifest" > "$LD_DIR/base.manifest" ||
+      die "could not stage $DELTA_REL and main's manifest under $LD_DIR"
+    if ! land_manifest_by_sha "$DELTA_DECLARED_BASE" "$LD_DIR/old.manifest" \
+           "$(git merge-base "$BASE" "$HEAD_SHA")" "$HEAD_SHA" $(git rev-list -n 60 "$BASE" -- scripts/corpus.manifest); then
+      echo "  REFUSE: no manifest with sha256 $DELTA_DECLARED_BASE is in reach (the PR's merge base, its"
+      echo "          head, or the last 60 versions on main), so the rebase cannot check that the delta's rows"
+      echo "          rebuild its own result. Rebase onto main and re-emit it with --emit-expected."
+      shape_fail=1
+    elif bash scripts/corpus_manifest.sh --rebase-delta "$LD_DIR/pr.delta" "$LD_DIR/base.manifest" \
+           "$LD_DIR/rebased.delta" --rebase-from "$LD_DIR/old.manifest" > "$LD_DIR/rebase.log" 2>&1; then
+      sed 's/^/  /' "$LD_DIR/rebase.log"
+      LANDING_DELTA="$LD_DIR/rebased.delta"
+      DELTA_REBASED_FROM="$DELTA_DECLARED_BASE"
+    else
+      sed 's/^/  /' "$LD_DIR/rebase.log"
+      echo "  REFUSE: $DELTA_REL is stale and cannot be rebased mechanically (above). Rebase onto main and"
+      echo "          re-emit it with scripts/corpus_manifest.sh --emit-expected from a walk of the rebased branch."
+      shape_fail=1
+    fi ;;
+  *) shape_fail=1 ;;
+esac
+[ -n "$LANDING_DELTA" ] &&
+  echo "  predicted delta: $DELTA_REL declares $(sed -n 's/^pairs=//p' "$LANDING_DELTA") pair(s) against main's manifest$([ -n "$DELTA_REBASED_FROM" ] && echo ' (rebased)')"
 dels=0
 for _sf in seed/VERSION seed/HISTORY.md; do
   printf '%s\n' "$CHANGED" | grep -qx "$_sf" || continue
@@ -794,11 +999,11 @@ fi
 # --- PHASE 3 — build the merge locally ------------------------------------------------------------
 say "PHASE 3 — merge locally (--no-ff, so the PR head stays an ancestor and GitHub marks it Merged)"
 git switch --quiet --detach "$BASE" || die "could not detach at base"
-msg="merge #$PR: ${HEAD_LABEL:-pr-$PR}"
-[ -n "$ISSUE_LINK" ] && msg="$msg
-
-$ISSUE_LINK"
-git merge --no-ff --no-verify -m "$msg" "$PR_REF" >/dev/null 2>&1 || {
+DELTA_NOTE="$DELTA_REL: the PR's own prediction, taken over the copy on main."
+[ -n "$DELTA_REBASED_FROM" ] && DELTA_NOTE="$DELTA_REL: the PR's prediction rebased from manifest
+$(printf '%s' "$DELTA_REBASED_FROM" | cut -c1-12) onto $(printf '%s' "$BASE_MANIFEST_SHA" | cut -c1-12) by scripts/corpus_manifest.sh --rebase-delta (#1264).
+Its rows are the PR's verbatim; base_sha256 and result_sha256 are recomputed."
+land_merge_pr "$PR_REF" "merge #$PR: ${HEAD_LABEL:-pr-$PR}" "$ISSUE_LINK" "$LANDING_DELTA" "$DELTA_NOTE" || {
   git merge --abort 2>/dev/null
   git switch --quiet - 2>/dev/null
   verdict "LAND REFUSED (the merge conflicts) — ask for a rebase onto $BASE"
@@ -806,8 +1011,39 @@ git merge --no-ff --no-verify -m "$msg" "$PR_REF" >/dev/null 2>&1 || {
 }
 M="$(git rev-parse HEAD)"
 echo "  merged as $M"
+[ -n "$LANDING_DELTA" ] && ! git diff --quiet "$PR_REF" "$M" -- "$DELTA_REL" &&
+  echo "  $DELTA_REL in the merge is $LANDING_DELTA; the PR's branch is unchanged"
 echo "  a reseed, if one is owed, is committed ON TOP OF THIS COMMIT, before the gate runs —"
 echo "  so that the fixpoint that is verified is the fixpoint that ships."
+
+# --- PHASE 3b — the corpus pre-walk, when PHASE 2 rebased the delta (#1264) -----------------------
+# See land_prewalk_needed: the rebased rows are a hypothesis about main's code, and this tests it in
+# minutes. It builds the merged compiler the way fixpoint.sh does (seed -> Stage1 -> Stage2) and runs
+# the corpus stage alone. Only an `unrealised` answer stops here; full.sh rebuilds and re-walks anyway.
+if land_prewalk_needed "$DELTA_REBASED_FROM"; then
+  say "PHASE 3b — corpus pre-walk: does the merged tree realise the REBASED $DELTA_REL? (~15 min: two self-builds and one walk)"
+  PW_LOG="$ROOT/target/land-prewalk.log"
+  ( ulimit -c 0; nix develop -c bash -c '
+      rm -f target/debug/alatyr target/debug/alatyr.s target/debug/alatyr.o &&
+      seed/alatyr build package.al && cp target/debug/alatyr target/land-prewalk-stage1 &&
+      target/land-prewalk-stage1 build package.al && rm -f target/land-prewalk-stage1 &&
+      bash scripts/corpus_manifest.sh --check' ) > "$PW_LOG" 2>&1
+  pw_rc=$?
+  grep -E '^corpus manifest: (rows=|match|MISMATCH)' "$PW_LOG" | sed 's/^/  /'
+  case "$(land_prewalk_outcome "$pw_rc" "$PW_LOG")" in
+    realised) echo "  the walk realises the rebased delta; the full gate decides" ;;
+    unrealised)
+      echo "  The rebased delta is NOT what the merged tree does: the rows were measured on the PR's old base,"
+      echo "  and main's code changed what they describe (or they never held). The walk's report"
+      echo "  (log $PW_LOG):"
+      land_prewalk_report "$PW_LOG" | head -n 60 | sed 's/^/  pre-walk MISMATCH | /'
+      echo "  Rebase the branch onto main and re-emit $DELTA_REL from a native walk of it (--emit-expected)."
+      verdict "NOT LANDABLE — the corpus pre-walk does not realise the rebased $DELTA_REL; the full gate was not run"
+      echo "The merge commit $M is left in place, detached, for inspection. \`git switch main\` to leave it."
+      exit 1 ;;
+    *) echo "  the pre-walk gave no answer on the prediction (rc $pw_rc, log $PW_LOG); the full gate decides" ;;
+  esac
+fi
 
 # --- PHASE 4 — the authoritative gate, on the merge -----------------------------------------------
 say "PHASE 4 — the authoritative gate, on the merged tree"
@@ -872,7 +1108,9 @@ if [ -f "$CM_LOG" ] && [ "$CM_LOG" -nt "$GATE_STAMP" ] && grep -q '^corpus manif
     printf 'chore(oracle): record the corpus transitions #%s predicted\n\n' "$PR"
     printf 'The corpus manifest the full gate generated on merge %s, committed byte for byte. That\n' "$(git rev-parse --short "$M")"
     printf 'walk differed from the committed manifest by exactly the %s pair(s) declared in\n' "$O_PAIRS"
-    printf '%s (base %s, result %s), so this commit\n' "$DELTA_REL" "$(printf '%s' "$BASE_MANIFEST_SHA" | cut -c1-12)" "$(printf '%s' "$O_RESULT" | cut -c1-12)"
+    printf '%s (base %s, result %s)' "$DELTA_REL" "$(printf '%s' "$BASE_MANIFEST_SHA" | cut -c1-12)" "$(printf '%s' "$O_RESULT" | cut -c1-12)"
+    [ -n "$DELTA_REBASED_FROM" ] && printf ',\nrebased by PHASE 2 from the PR'"'"'s prediction against %s (#1264)' "$(printf '%s' "$DELTA_REBASED_FROM" | cut -c1-12)"
+    printf ', so this commit\n'
     printf 'changes no source byte and the gate on its parent is its verdict (scripts/land.sh PHASE 6a).\n\n'
     printf 'scripts/corpus_manifest.sh --explain <baseline> <new>, verbatim:\n\n'
     printf '%s\n' "$O_EXPLAIN" | sed 's/^/  /'

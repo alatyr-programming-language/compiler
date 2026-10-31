@@ -193,11 +193,21 @@ oracle commit.
 
 Three things follow from how the delta is checked:
 
-- **A rebase means re-emitting the delta.** The delta names the manifest it was computed against
-  (`base_sha256`). Once `main`'s manifest moves, your delta is *inert*, and the gate wants a plain
-  match again. A delta left behind can never make a mismatch pass, so a stale one only turns your
-  gate red. `.gitattributes` marks the file `-merge`, so two feature PRs that both declare one
-  conflict instead of merging into a prediction neither of them made.
+- **A stale delta is rebased for you when nothing you predict moved, and the walk still decides.**
+  The delta names the manifest it was computed against (`base_sha256`). Once `main`'s manifest moves,
+  your delta is *inert*, and the gate would want a plain match again. `scripts/land.sh` therefore
+  rebases it at PHASE 2 with `scripts/corpus_manifest.sh --rebase-delta` (#1264): when every pair you
+  declare still starts from the row `main` now holds, the same rows are carried over and only the two
+  hashes move. The merge commit carries that copy; your branch is left alone. When another change
+  moved a row you predict, or your change also moves a header line, the rebase refuses and names why:
+  then rebase your branch and re-emit.
+  A rebase that goes through is still only a hypothesis. Your rows were measured on your old base's
+  code, and `main`'s code can change what your own new or changed fixtures do without moving any row
+  of the manifest (#1215: a guard on `main` turned a new fixture's `run/7` into `run/132`). So a
+  disjoint rebase can still be red. `land.sh` walks the corpus alone first (PHASE 3b, about 15 minutes)
+  and refuses with the walk's report before the full gate; then rebase your branch and re-emit. `.gitattributes` marks the file `-merge`, so two feature PRs that both declare one
+  conflict instead of merging into a prediction neither of them made; that conflict, alone, is the
+  one the landing settles, with the rebased copy.
 - **Leave `scripts/xbackend_diff.baseline` alone in the feature PR.** The gate's ratchet reads the
   committed (old) manifest. `scripts/land.sh` runs the ratchet on the new manifest when it writes
   the oracle commit, and a lowered baseline follows in its own commit after that.

@@ -530,7 +530,14 @@ are `--explain`'s joined transitions, and a regression row is refused here, befo
 Then run `scripts/land.sh <pr>`. Every step is a check that stops on failure:
 
 - **PHASE 2** checks that the delta's `base_sha256` is `BASE`'s manifest. A delta emitted against an
-  older `main` is refused before the gate; the author re-emits it.
+  older `main` is rebased onto it (`corpus_manifest.sh --rebase-delta`, #1264), and PHASE 3's merge
+  carries the rebased copy. It is refused at PHASE 2 when a declared pair overlaps what moved, or when
+  its rows do not rebuild its own result (a header change); the author re-emits it.
+- **PHASE 3b**, for a rebased delta only: the rebase is a hypothesis about `main`'s code, which can
+  change what the PR's own fixtures do without moving a manifest row (#1215). land.sh builds the merge
+  and walks the corpus alone (~15 min with the two self-builds); a walk that does not realise the rebased delta is
+  `NOT LANDABLE` with the walk's report, before the full gate. A walk with no answer (build failure,
+  timeout) leaves the verdict to the gate.
 - **The gate.** The corpus stage must print `corpus manifest: match by the declared delta`. That
   means the fresh manifest differs from the committed one by exactly the declared rows. A
   mismatch is red, with UNDECLARED / UNREALISED / MISPREDICTED lines. Nothing about it is

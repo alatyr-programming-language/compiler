@@ -87,11 +87,21 @@
 #                        corpus or write scripts/corpus.manifest
 #
 #   The predicted delta (an intentional behaviour change gated ONCE — see "THE PREDICTED DELTA" below).
-#   These three need no compiler, no cross tool and no `nix develop`:
+#   These four need no compiler, no cross tool and no `nix develop`:
 #     --emit-expected COMMITTED FRESH      print the delta that takes COMMITTED to FRESH, in --explain's
 #                        classes; a PR author redirects it into scripts/corpus.expected-delta
 #     --check-delta COMMITTED FRESH DELTA  0 = FRESH differs from COMMITTED by exactly DELTA; 1 = it does
 #                        not (the report names every pair); 2 = malformed; 3 = DELTA is inert here
+#     --rebase-delta DELTA NEWBASE [OUT]  carry DELTA over to the manifest NEWBASE when no declared
+#                        pair's FROM side moved there (#1264): the same rows, base_sha256 and
+#                        result_sha256 recomputed, exactly what --emit-expected would write against
+#                        NEWBASE. 0 = written to OUT (or stdout); 1 = refused, every overlapping pair
+#                        named; 2 = malformed. scripts/land.sh applies it to a stale delta at PHASE 2.
+#                        The result is a hypothesis: NEWBASE's code may run the rows differently, and
+#                        only a walk (the gate, or land.sh's PHASE 3b pre-walk) decides it
+#       --rebase-from OLDBASE  first require DELTA's rows to rebuild its own result_sha256 on OLDBASE,
+#                        the manifest it was predicted against (1 when they do not: the change moves a
+#                        header line or the row order, which no rebase can carry). land.sh always gives it
 #     --delta-self-test  the predicted-delta decider's planted self-test alone
 #
 #   With scripts/corpus.expected-delta present and LIVE (its base_sha256 is the committed manifest),
@@ -368,6 +378,13 @@ while [ "$#" -gt 0 ]; do
     --check-delta)
       [ "$#" -ge 4 ] || { echo "corpus manifest: --check-delta needs the committed manifest, the fresh one and a delta file" >&2; exit 2; }
       MODE=check-delta; EXPLAIN_A="$2"; EXPLAIN_B="$3"; DELTA_ARG="$4"; shift 3 ;;
+    --rebase-delta)
+      [ "$#" -ge 3 ] || { echo "corpus manifest: --rebase-delta needs a delta file and the new base manifest" >&2; exit 2; }
+      MODE=rebase-delta; DELTA_ARG="$2"; EXPLAIN_A="$3"; REBASE_OUT=; shift 2
+      case "${2:-}" in ''|--*) ;; *) REBASE_OUT="$2"; shift ;; esac ;;
+    --rebase-from)
+      [ "$#" -ge 2 ] || { echo "corpus manifest: --rebase-from needs the manifest the delta was predicted against" >&2; exit 2; }
+      REBASE_FROM="$2"; shift ;;
     --delta-self-test) MODE=delta-selftest ;;
     --help|-h) usage; exit 0 ;;
     *) echo "corpus manifest: unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -518,7 +535,9 @@ END {
 # `base_sha256`. Once the oracle commit it predicted has landed, or once any other oracle moves under
 # it, it is INERT and the plain byte-for-byte match is required again — so a delta left behind on
 # `main` can never make a later mismatch pass, and a stale prediction can only ever turn a gate red.
-# Write one with `--emit-expected`; never by hand.
+# Write one with `--emit-expected`; never by hand. A stale one whose declared pairs the other change did
+# not touch is carried to the new base by `--rebase-delta` (#1264): the same rows, the two hashes
+# recomputed. scripts/land.sh does that at PHASE 2 and lands the rebased copy.
 # ---------------------------------------------------------------------------------------------------
 DELTA_FORMAT=alatyr-corpus-delta-v1
 DELTA_FILE_REL=scripts/corpus.expected-delta
@@ -609,9 +628,14 @@ delta_declared_rows() { # delta-file
 ## Reads only its arguments, so the self-test drives the real decision on synthetic files.
 DELTA_STATE=
 DELTA_PAIRS=
-delta_check() { # committed fresh delta-file
-  local committed="$1" fresh="$2" delta="$3" fmt base result pairs csha fsha tmp n
-  DELTA_STATE=malformed; DELTA_PAIRS=
+## Read a delta file into <dir>/declared (its rows, sorted) and DELTA_BASE / DELTA_RESULT /
+## DELTA_PAIRS, or rc 2 with the reason on stderr. The one reader of the file's header and rows: the
+## decider below and the rebase (`delta_rebase`) must refuse exactly the same malformed files.
+DELTA_BASE=
+DELTA_RESULT=
+delta_parse() { # delta-file work-dir
+  local delta="$1" dir="$2" fmt base result pairs n
+  DELTA_BASE=; DELTA_RESULT=; DELTA_PAIRS=
   [ -f "$delta" ] || { echo "corpus delta: no such delta file: $delta" >&2; return 2; }
   fmt="$(delta_field "$delta" format)"
   [ "$fmt" = "$DELTA_FORMAT" ] ||
@@ -624,20 +648,28 @@ delta_check() { # committed fresh delta-file
     echo "corpus delta: $delta must name base_sha256 and result_sha256 as 64 hex digits" >&2; return 2
   fi
   case "$pairs" in ''|*[!0-9]*) echo "corpus delta: $delta has no numeric pairs= line" >&2; return 2 ;; esac
-  manifest_usable "$committed" committed || return 2
-  tmp="$(mktemp -d "${TMPDIR:-/tmp}/corpus-delta.XXXXXX")" || return 2
-  cp "$delta" "$tmp/delta"
-  delta_declared_rows "$tmp/delta" > "$tmp/declared" || { rm -rf "$tmp"; return 2; }
-  n="$(grep -c '' < "$tmp/declared" || true)"
+  cp "$delta" "$dir/delta"
+  delta_declared_rows "$dir/delta" > "$dir/declared" || return 2
+  n="$(grep -c '' < "$dir/declared" || true)"
   if [ "$n" != "$pairs" ] || [ "$n" = 0 ]; then
-    echo "corpus delta: $delta declares pairs=$pairs but holds $n row(s)" >&2; rm -rf "$tmp"; return 2
+    echo "corpus delta: $delta declares pairs=$pairs but holds $n row(s)" >&2; return 2
   fi
-  if awk -F'\t' '$1 == "TIMED-OUT" {f = 1} END {exit !f}' "$tmp/declared"; then
+  if awk -F'\t' '$1 == "TIMED-OUT" {f = 1} END {exit !f}' "$dir/declared"; then
     echo "corpus delta: $delta declares a TIMED-OUT pair. A timeout is never an intended behaviour;" >&2
     echo "  regenerate the delta from a walk that finished." >&2
-    rm -rf "$tmp"; return 2
+    return 2
   fi
-  DELTA_PAIRS="$n"
+  DELTA_BASE="$base"; DELTA_RESULT="$result"; DELTA_PAIRS="$n"
+  return 0
+}
+
+delta_check() { # committed fresh delta-file
+  local committed="$1" fresh="$2" delta="$3" base result csha fsha tmp n
+  DELTA_STATE=malformed; DELTA_PAIRS=
+  manifest_usable "$committed" committed || return 2
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/corpus-delta.XXXXXX")" || return 2
+  delta_parse "$delta" "$tmp" || { rm -rf "$tmp"; DELTA_PAIRS=; return 2; }
+  base="$DELTA_BASE"; result="$DELTA_RESULT"; n="$DELTA_PAIRS"
   csha="$(sha_file "$committed")"
   if [ "$csha" != "$base" ]; then
     if [ "$csha" = "$result" ]; then DELTA_STATE=spent; else DELTA_STATE=stale; fi
@@ -680,11 +712,146 @@ delta_check() { # committed fresh delta-file
   return 1
 }
 
+## THE REBASE (#1264). A delta names the manifest it was predicted against, so every other oracle
+## commit made it stale: with N delta PRs in flight, each landing sent the other N-1 back for a rebase
+## and a fresh native walk, although none of them touched the rows that moved.
+##
+## A rebased delta is a HYPOTHESIS, and the gate tests it. Text alone decides only that the two
+## predictions do not collide in the manifest:
+##   every declared pair's FROM side is the new base's row for that (backend, path), or, for a declared
+##   ADDED pair, the new base has no row for it.
+## It cannot decide that the TO side still holds. The rows were measured by running the PR's fixtures
+## on the code of the PR's old base, and the other landing changed main's CODE, not only its manifest.
+## That change can move what the PR's own new or changed fixtures do without moving any row the
+## manifest held. #1215 is the case: #1227's guard, on main, turned #1215's new fixture's run/7 into
+## run/132-134, and the four mechanically rebased ADDED rows still said run/7. So a disjoint rebase can
+## still be a red gate.
+##
+## When the FROM sides hold, the rows carry over VERBATIM and only the two hashes are recomputed:
+## base_sha256 is the new base, and result_sha256 is the new base with exactly the declared transitions
+## applied. The output is what `--emit-expected <new-base> <result>` writes, byte for byte. That is how
+## it is built: the result manifest is assembled, then emitted and compared with the declared rows.
+## When any declared FROM side differs, the other change moved a row this one predicts. That is a
+## refusal naming every such pair, never a guess.
+##
+## Nothing gets weaker. The gate still demands that the fresh walk realise the rebased delta exactly,
+## result_sha256 included, so a wrong hypothesis is a red gate (MISPREDICTED) and never a silent pass.
+## scripts/land.sh walks the corpus alone first (PHASE 3b) when it rebased a delta, so a wrong one costs
+## minutes, not a full gate.
+##
+## The result's row order is the walk's: sources sorted bytewise (`git ls-files | sort` under the gate's
+## C collation), then backend_order within a source. The rebase checks that the new base is already in
+## that order before it inserts a row into it, and refuses when it is not, rather than predicting a
+## file the walk would not write. Every header line except source_count and row_count is copied from
+## the new base.
+##
+## A delta whose result is not "the base with these rows changed", one that adds a header line or
+## reorders the file, cannot be carried over this way. Given the manifest the delta was predicted
+## against (<old-base>, whose sha256 must be base_sha256), the rebase first rebuilds result_sha256 there
+## from the rows alone, and refuses when it cannot. That check refuses, before any walk, a rebase whose
+## result_sha256 would be wrong even if every row still held. It says nothing about whether the rows
+## hold on the new code; see the hypothesis above. scripts/land.sh always supplies <old-base>, from
+## main's history.
+##   0  rebased; the new delta is on stdout, or in <out> when given
+##   1  refused: an overlapping pair (each named), a result the rows alone do not rebuild on <old-base>,
+##      or the new base IS the delta's result (spent)
+##   2  malformed input, an <old-base> that is not the delta's base, or a base the rebase cannot place
+##      rows in
+
+## <base> with the declared transitions applied, written to <out>: TO `-` drops the pair, any other TO
+## replaces or adds it, in the walk's row order; source_count and row_count recounted, every other header
+## line copied. rc 2 when <base> is not in the walk's order or its source_count is not its own.
+delta_apply() { # declared-rows base out work-dir
+  local declared="$1" base="$2" out="$3" w="$4"
+  awk -F'\t' 'BEGIN { OFS = "\t"; split("x86_64 aarch64 riscv64 wasm", o, " "); for (i = 1; i <= 4; i++) bi[o[i]] = i }
+    NF == 6 && ($1 in bi) { print $2, bi[$1], $0 }' "$base" > "$w/keyed"
+  LC_ALL=C sort -t "$TAB" -k1,1 -k2,2n "$w/keyed" | cmp -s - "$w/keyed" || {
+    echo "corpus delta: REFUSED — the rows of $base are not in the walk's order (sources sorted bytewise," >&2
+    echo "  then backend_order), so a rebased row could not be placed where a walk writes it." >&2
+    return 2; }
+  awk -F'\t' 'NF == 6 && $1 ~ /^(x86_64|aarch64|riscv64|wasm)$/ { n++; if (!($2 in s)) { s[$2]; p++ } }
+              /^source_count=/ { sc = substr($0, 14) } END { exit !(n > 0 && sc == p) }' "$base" || {
+    echo "corpus delta: REFUSED — source_count= in $base is not the number of sources its rows name." >&2
+    return 2; }
+  awk -F'\t' 'BEGIN { OFS = "\t"; split("x86_64 aarch64 riscv64 wasm", o, " "); for (i = 1; i <= 4; i++) bi[o[i]] = i }
+    side == 1 { t[$2 FS $3] = $5; next }
+    { k = $3 FS $4 } (k in t) { seen[k]; if (t[k] != "-") { split(t[k], v, "/"); print $1, $2, $3, $4, v[1], v[2], v[3], v[4] }; next }
+    { print }
+    END { for (k in t) if (!(k in seen) && t[k] != "-") { split(k, kk, FS); split(t[k], v, "/")
+            print kk[2], bi[kk[1]], kk[1], kk[2], v[1], v[2], v[3], v[4] } }
+  ' side=1 "$declared" side=2 "$w/keyed" | LC_ALL=C sort -t "$TAB" -k1,1 -k2,2n | cut -f3- > "$w/body"
+  awk -F'\t' -v ROWS="$(grep -c '' < "$w/body")" -v SRCS="$(cut -f2 "$w/body" | sort -u | grep -c '')" '
+    NF == 6 && $1 ~ /^(x86_64|aarch64|riscv64|wasm)$/ { exit }
+    /^source_count=/ { print "source_count=" SRCS; next }
+    /^row_count=/ { print "row_count=" ROWS; next }
+    { print }' "$base" > "$out"
+  cat "$w/body" >> "$out"
+}
+
+## Every declared pair whose FROM side is not <base>'s row, one CONFLICT line each; nothing when none.
+delta_conflicts() { # declared-rows base
+  awk -F'\t' '
+    side == 1 { if (NF == 6 && $1 ~ /^(x86_64|aarch64|riscv64|wasm)$/) b[$1 FS $2] = $3 "/" $4 "/" $5 "/" $6; next }
+    { k = $2 FS $3; cur = (k in b) ? b[k] : "-"
+      if ($4 != cur) printf "  CONFLICT  %-8s %-46s %-15s declared FROM %s, the new base holds %s\n", $2, $3, $1, $4, cur }
+  ' side=1 "$2" side=2 "$1"
+}
+
+delta_rebase() { # delta-file new-base [out] [old-base]
+  local delta="$1" nb="$2" out="${3:-}" ob="${4:-}" tmp nsha conflicts
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/corpus-rebase.XXXXXX")" || return 2
+  delta_parse "$delta" "$tmp" || { rm -rf "$tmp"; return 2; }
+  manifest_usable "$nb" "new base" || { rm -rf "$tmp"; return 2; }
+  if [ -n "$ob" ]; then
+    manifest_usable "$ob" "old base" || { rm -rf "$tmp"; return 2; }
+    [ "$(sha_file "$ob")" = "$DELTA_BASE" ] && [ -z "$(delta_conflicts "$tmp/declared" "$ob")" ] || {
+      echo "corpus delta: $ob is not the manifest $delta was predicted against (base_sha256)" >&2
+      rm -rf "$tmp"; return 2; }
+    delta_apply "$tmp/declared" "$ob" "$tmp/rebuilt" "$tmp" || { rm -rf "$tmp"; return 2; }
+    [ "$(sha_file "$tmp/rebuilt")" = "$DELTA_RESULT" ] || {
+      echo "corpus delta: REFUSED — $delta cannot be carried to another base: its rows applied to its own" >&2
+      echo "  base do not rebuild its result_sha256, so the change moves more of the manifest than its rows" >&2
+      echo "  (a header line, the row order). Only a fresh walk of the rebased branch (--emit-expected) can" >&2
+      echo "  predict it. Rebuilt $(sha_file "$tmp/rebuilt" | cut -c1-12), declared $(printf '%s' "$DELTA_RESULT" | cut -c1-12)." >&2
+      rm -rf "$tmp"; return 1; }
+  fi
+  nsha="$(sha_file "$nb")"
+  if [ "$nsha" = "$DELTA_RESULT" ]; then
+    echo "corpus delta: REFUSED — $nb IS the manifest $delta predicts (result_sha256): the delta is spent," >&2
+    echo "  its oracle commit has landed, and there is nothing left to rebase." >&2
+    rm -rf "$tmp"; return 1
+  fi
+  conflicts="$(delta_conflicts "$tmp/declared" "$nb")"
+  if [ -n "$conflicts" ]; then
+    echo "corpus delta: REFUSED — $delta cannot be rebased onto $nb: $(printf '%s\n' "$conflicts" | grep -c '') of" >&2
+    echo "  its $DELTA_PAIRS declared pair(s) start from a row the new base no longer holds. Another change moved" >&2
+    echo "  what this one predicts; only a fresh walk of the rebased branch (--emit-expected) can answer:" >&2
+    printf '%s\n' "$conflicts" >&2
+    rm -rf "$tmp"; return 1
+  fi
+  delta_apply "$tmp/declared" "$nb" "$tmp/result" "$tmp" || { rm -rf "$tmp"; return 2; }
+  ## Built, not trusted: the emitter must see exactly the declared rows between the two manifests.
+  emit_expected "$nb" "$tmp/result" > "$tmp/rebased" 2>"$tmp/emit.err" &&
+    delta_declared_rows "$tmp/rebased" > "$tmp/redeclared" 2>>"$tmp/emit.err" &&
+    cmp -s "$tmp/declared" "$tmp/redeclared" || {
+    echo "corpus delta: REFUSED — the rebased result does not reproduce the declared rows when emitted" >&2
+    echo "  against $nb; this is a defect of the rebase, not of the delta:" >&2
+    sed 's/^/  /' "$tmp/emit.err" >&2
+    diff "$tmp/declared" "$tmp/redeclared" 2>/dev/null | head -n 8 | sed 's/^/  /' >&2
+    rm -rf "$tmp"; return 2; }
+  if [ -n "$out" ]; then cp "$tmp/rebased" "$out.tmp.$$" && mv "$out.tmp.$$" "$out" || { rm -rf "$tmp"; return 2; }
+  else cat "$tmp/rebased"; fi
+  echo "corpus delta: REBASED — $DELTA_PAIRS pair(s), none overlapping; base $(printf '%s' "$DELTA_BASE" | cut -c1-12) -> $(printf '%s' "$nsha" | cut -c1-12)," >&2
+  echo "  result $(delta_field "$tmp/rebased" result_sha256 | cut -c1-12); the rows are the original's verbatim$([ -n "$ob" ] && echo ', and they rebuild its own result on its own base' || echo '; NOT checked against its own base (no old base given)')" >&2
+  rm -rf "$tmp"
+  return 0
+}
+
 ## The predicted delta's own gate of the gate. Synthetic manifests, no compiler, no walk: every way the
 ## decider must refuse, planted, and the controls it must accept — an always-refusing decider loses
 ## the controls, an always-accepting one loses the plants. Run on every `--check`/`--self-test` and by
 ## `--delta-self-test` alone (which is also what `scripts/land.sh --self-test` drives).
-CM_DELTA_SELFTEST_EXPECTED=35
+CM_DELTA_SELFTEST_EXPECTED=60
 delta_selftest() { # work-dir
   local st="$1" bad="" k=0 out rc
   rm -rf "$st"; mkdir -p "$st" || return 1
@@ -827,6 +994,98 @@ delta_selftest() { # work-dir
   emit_expected "$st/base" "$st/fresh" > "$st/delta2" 2>/dev/null
   cmp -s "$st/delta" "$st/delta2"; _dk $? emit-is-not-deterministic
 
+  # 14 · THE REBASE (#1264). Another change's oracle landed under the delta. Each expected manifest
+  #      below is written out row by row, never derived by the code under test.
+  local x
+  x="$(printf '\t')"
+  # 14a · a DISJOINT move: test/a.al now answers 9 on wasm, and a new fixture test/aa.al (sorting
+  #       between a and b, so the rebase must insert rows mid-file) adds four rows.
+  awk -F'\t' -v H="$h1" -v E="$e0" 'BEGIN { OFS = "\t" }
+    $2 == "test/a.al" && $1 == "wasm" { $4 = 9 }
+    { print }
+    $2 == "test/a.al" && $1 == "wasm" { split("x86_64 aarch64 riscv64 wasm", b, " "); for (i = 1; i <= 4; i++) print b[i], "test/aa.al", "run", 5, H, E }' \
+    "$st/base.body" > "$st/b2.body"
+  _mf "$st/b2" "$st/b2.body"
+  # …and the walk of the rebased branch, by hand: b2 with this delta's transitions, e.al last.
+  awk -F'\t' -v E="$e0" 'BEGIN { OFS = "\t" }
+    $2 == "test/b.al" && $1 != "x86_64" { $3 = "run"; $4 = 133 }
+    $2 == "test/c.al" && $1 == "wasm"   { $4 = 7 }
+    { print }
+    END { split("x86_64 aarch64 riscv64 wasm", b, " ")
+          for (i = 1; i <= 4; i++) print b[i], "test/e.al", "run", 42, "3333333333333333333333333333333333333333333333333333333333333333", E }' \
+    "$st/b2.body" > "$st/f2.body"
+  _mf "$st/f2" "$st/f2.body"
+  delta_check "$st/b2" "$st/f2" "$st/delta" >/dev/null 2>&1; rc=$?
+  [ "$rc" = 3 ]; _dk $? "selftest-the-stale-delta-is-not-inert-on-the-moved-base(rc=$rc)"
+  delta_rebase "$st/delta" "$st/b2" "$st/d.rebased" 2>"$st/e"; rc=$?
+  [ "$rc" = 0 ] && [ -f "$st/d.rebased" ]; _dk $? "rebase-refused-a-disjoint-delta(rc=$rc: $(cat "$st/e"))"
+  delta_check "$st/b2" "$st/f2" "$st/d.rebased" >/dev/null 2>"$st/e"; rc=$?
+  [ "$rc" = 0 ]; _dk $? "check-refused-the-rebased-delta-on-the-realised-walk(rc=$rc: $(cat "$st/e"))"
+  [ "$(delta_field "$st/d.rebased" base_sha256)" = "$(sha_file "$st/b2")" ] &&
+    [ "$(delta_field "$st/d.rebased" result_sha256)" = "$(sha_file "$st/f2")" ]
+  _dk $? rebase-did-not-recompute-both-hashes
+  grep -v -e '^base_sha256=' -e '^result_sha256=' "$st/delta" > "$st/r.a"
+  grep -v -e '^base_sha256=' -e '^result_sha256=' "$st/d.rebased" > "$st/r.b" 2>/dev/null
+  cmp -s "$st/r.a" "$st/r.b"; _dk $? rebase-changed-more-than-the-two-hashes
+  emit_expected "$st/b2" "$st/f2" 2>/dev/null | cmp -s - "$st/d.rebased"; _dk $? rebase-is-not-what-emit-expected-writes-on-the-new-base
+  # 14b · the identity: a LIVE delta rebased onto its own base is itself, byte for byte (the header and
+  #       row placement are rebuilt, and must land on the manifest the walk wrote).
+  delta_rebase "$st/delta" "$st/base" 2>/dev/null | cmp -s - "$st/delta"; _dk $? rebase-onto-its-own-base-is-not-the-identity
+  # 14c · REMOVED pairs: a deleted fixture moves source_count and row_count in the rebased result.
+  awk -F'\t' 'BEGIN{OFS="\t"} $2=="test/d.al" {next} $2=="test/b.al" && $1=="aarch64" {$3="link"} $2=="test/b.al" && $1=="riscv64" {$4=2} {print}' \
+    "$st/b2.body" > "$st/rm2.body"
+  _mf "$st/rm2" "$st/rm2.body"
+  delta_rebase "$st/d.rm" "$st/b2" "$st/d.rm2" 2>/dev/null &&
+    delta_check "$st/b2" "$st/rm2" "$st/d.rm2" >/dev/null 2>&1
+  _dk $? rebase-mishandled-a-removal-delta
+  # 14d · an OVERLAP: the other change moved test/c.al on wasm too (42 -> 5). Refused, pair named,
+  #       nothing written.
+  sed "s/^\(wasm${x}test\/c.al${x}run${x}\)42${x}/\15${x}/" "$st/base" > "$st/b3"
+  cmp -s "$st/base" "$st/b3"; [ $? = 1 ]; _dk $? selftest-failed-to-plant-an-overlap
+  rm -f "$st/d.over"
+  out="$(delta_rebase "$st/delta" "$st/b3" "$st/d.over" 2>&1)"; rc=$?
+  [ "$rc" = 1 ] && [ ! -e "$st/d.over" ]; _dk $? "rebase-accepted-an-overlapping-delta(rc=$rc)"
+  case "$out" in *'CONFLICT  wasm     test/c.al'*'declared FROM run/42/'*'the new base holds run/5/'*) _dk 0 x ;;
+                 *) _dk 1 "overlap-pair-not-named($out)" ;; esac
+  case "$out" in *'test/b.al'*|*'test/e.al'*) _dk 1 "rebase-named-a-pair-that-does-not-overlap" ;; *) _dk 0 x ;; esac
+  # 14e · an ADDED pair whose path the new base already holds: test/e.al landed elsewhere first.
+  { cat "$st/base.body"
+    for b in x86_64 aarch64 riscv64 wasm; do printf '%s\ttest/e.al\trun\t1\t%s\t%s\n' "$b" "$h1" "$e0"; done; } > "$st/b4.body"
+  _mf "$st/b4" "$st/b4.body"
+  out="$(delta_rebase "$st/delta" "$st/b4" 2>&1)"; rc=$?
+  [ "$rc" = 1 ]; _dk $? "rebase-accepted-an-ADDED-pair-the-base-already-holds(rc=$rc)"
+  case "$out" in *'4 of'*'CONFLICT  aarch64  test/e.al'*'ADDED'*'declared FROM -, the new base holds run/1/'*) _dk 0 x ;;
+                 *) _dk 1 "added-pair-not-named($out)" ;; esac
+  # 14f · spent, malformed and out-of-order inputs are refusals, never a rebase.
+  delta_rebase "$st/delta" "$st/fresh" >/dev/null 2>&1; [ $? = 1 ]; _dk $? rebase-accepted-a-spent-delta
+  delta_rebase "$st/d.count" "$st/b2" >/dev/null 2>&1; [ $? = 2 ]; _dk $? rebase-accepted-a-malformed-delta
+  #       Rows the emitter would never write, rebased with NO old base, so only the built-not-trusted net
+  #       (emit the result, compare the rows) stands between them and an output file: a duplicate
+  #       (backend, path) row with pairs= bumped to match, and an ADDED row relabelled NOW-RUNS.
+  awk -F'\t' '{ print } $1 == "ADDED" && $2 == "wasm" { print }' "$st/delta" | sed 's/^pairs=8$/pairs=9/' > "$st/d.dup"
+  [ "$(grep -c "^ADDED${x}wasm${x}test/e.al${x}" "$st/d.dup")" = 2 ]; _dk $? selftest-failed-to-plant-a-duplicate-row
+  rm -f "$st/d.dup2"
+  delta_rebase "$st/d.dup" "$st/b2" "$st/d.dup2" >/dev/null 2>&1; rc=$?
+  [ "$rc" = 2 ] && [ ! -e "$st/d.dup2" ]; _dk $? "rebase-carried-a-duplicate-row-without-an-old-base(rc=$rc)"
+  sed "s/^ADDED${x}wasm${x}/NOW-RUNS${x}wasm${x}/" "$st/delta" > "$st/d.lbl"
+  rm -f "$st/d.lbl2"
+  delta_rebase "$st/d.lbl" "$st/b2" "$st/d.lbl2" >/dev/null 2>&1; rc=$?
+  [ "$rc" = 2 ] && [ ! -e "$st/d.lbl2" ]; _dk $? "rebase-carried-a-mislabelled-row-without-an-old-base(rc=$rc)"
+  { sed -n '1,/^columns=/p' "$st/b2"; sed '1,/^columns=/d' "$st/b2" | LC_ALL=C sort -r; } > "$st/b5"
+  delta_rebase "$st/delta" "$st/b5" >/dev/null 2>&1; [ $? = 2 ]; _dk $? rebase-placed-rows-in-a-base-that-is-not-in-walk-order
+  # 14g · a change that also moves a HEADER line (its result has a `scope=` line its base lacks). The
+  #       rows alone cannot carry that, so given its own base the rebase refuses it; a delta whose rows
+  #       do rebuild its result passes the same check; a wrong old base is malformed input.
+  awk '{ print } $0 == "format=alatyr-corpus-manifest-v2" { print "scope=planted" }' "$st/fresh" > "$st/fh"
+  grep -qx 'scope=planted' "$st/fh"; _dk $? selftest-failed-to-plant-a-header-line
+  emit_expected "$st/base" "$st/fh" > "$st/d.hdr" 2>/dev/null
+  out="$(delta_rebase "$st/d.hdr" "$st/b2" "$st/d.hdr2" "$st/base" 2>&1)"; rc=$?
+  [ "$rc" = 1 ] && [ ! -e "$st/d.hdr2" ]; _dk $? "rebase-carried-a-delta-whose-rows-do-not-rebuild-its-result(rc=$rc)"
+  case "$out" in *'cannot be carried to another base'*) _dk 0 x ;; *) _dk 1 "header-move-not-named($out)" ;; esac
+  delta_rebase "$st/delta" "$st/b2" "$st/d.rb3" "$st/base" 2>/dev/null && cmp -s "$st/d.rb3" "$st/d.rebased"
+  _dk $? rebase-refused-a-delta-whose-rows-rebuild-its-result-on-its-own-base
+  delta_rebase "$st/delta" "$st/b2" "$st/d.wrong" "$st/b2" >/dev/null 2>&1; [ $? = 2 ]; _dk $? rebase-took-a-wrong-old-base
+
   printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
   unset -f _dk _mf
   if [ -n "$bad" ]; then echo "corpus manifest: predicted-delta self-test FAILED —$bad" >&2; return 1; fi
@@ -836,7 +1095,8 @@ delta_selftest() { # work-dir
   fi
   echo "corpus manifest: predicted-delta self-test ok ($k checks — exact realisation accepted; undeclared,"
   echo "  unrealised, mispredicted (exit, hash, class), wrong result, malformed and TIMED-OUT deltas refused;"
-  echo "  spent and stale deltas inert)"
+  echo "  spent and stale deltas inert; a disjoint stale delta rebased and realised, an overlapping one and"
+  echo "  an ADDED pair the new base already holds refused with the pair named)"
   return 0
 }
 
@@ -871,6 +1131,9 @@ case "$MODE" in
       3) echo "corpus delta: INERT ($DELTA_STATE) — $EXPLAIN_A is not the manifest $DELTA_ARG was predicted against" ;;
     esac
     exit "$drc" ;;
+  rebase-delta)
+    delta_rebase "$DELTA_ARG" "$EXPLAIN_A" "$REBASE_OUT" "${REBASE_FROM:-}"
+    exit $? ;;
   delta-selftest)
     run_delta_selftest || exit 2
     exit 0 ;;
