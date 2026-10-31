@@ -16,7 +16,9 @@
 #   sound;
 # - otherwise the rows that mention a selected fixture: every changed `test/**.al`, and every fixture
 #   that names a changed `lib/<dir>/<module>` (`<dir>::<module>`; `lib/base`, the prelude, runs every row) or a function whose definition a hunk touches;
-#   past ALATYR_PRE_GATE_MAX_FIXTURES (400) selected fixtures it runs every row instead;
+#   past ALATYR_PRE_GATE_MAX_FIXTURES (400) selected fixtures it runs every row instead. A selected
+#   fixture no e2e row names is judged by CORPUS MANIFEST and FIXTURE EXPECT, which it does not run: it
+#   is named as theirs, and when no selected fixture has a row, no e2e runs (#1294);
 # - the sweep of each backend whose emitter changed (`src/aarch64*` a64, `src/riscv64*` rv64,
 #   `src/wat*` wasm); all three for any other compiler change except the x86-only emit files that
 #   scripts/sweeps.sh also exempts; none for a `lib/`- or `test/`-only change (the full gate runs them).
@@ -88,6 +90,22 @@ pre_gate_fixtures() {
     sed -e 's#^test/##' -e 's#\.al$##' | sort -u
 }
 
+## The e2e plan for the selected fixtures, pure: $1 the e2e rows (ALATYR_E2E_LIST_ROWS=1 scripts/e2e.sh),
+## $2 the selected fixtures, $3 the cap. Prints `e2e rows|all|none`, then `row <name>` for each fixture
+## some row names (by substring, as e2e.sh's filter matches) and `corpus <name>` for each that none
+## names. A fixture only CORPUS MANIFEST and FIXTURE EXPECT judge has no row, and e2e.sh rightly refuses
+## a filter that keeps none, so a set of such fixtures plans `e2e none` instead of a red pre-gate (#1294).
+pre_gate_select() {
+  local rows="$1" sel="$2" max="$3" f n=0 nrow=0 out=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$((n + 1))
+    if grep -qF -- "$f" "$rows"; then nrow=$((nrow + 1)); out="${out}row $f"$'\n'; else out="${out}corpus $f"$'\n'; fi
+  done < "$sel"
+  if [ "$n" -gt "$max" ]; then echo "e2e all"; elif [ "$nrow" = 0 ]; then echo "e2e none"; else echo "e2e rows"; fi
+  printf '%s' "$out"
+}
+
 ## All changed paths since $1: committed, staged, unstaged, untracked.
 pre_gate_changed() {
   { git -C "$ROOT" diff --name-only "$1"
@@ -143,6 +161,39 @@ pre_gate_self_test() {
   if [ "$got" = "$want" ]; then echo "  ok   fixtures: module user, function caller, edited fixture; not the bystander"
   else echo "  FAIL fixtures: got '$got' want '$want'"; bad=1; fi
   rm -rf "$r"
+  # The e2e plan for the selected fixtures (#1294): a fixture no row names is the corpus's, and a set of
+  # only those plans no e2e rather than a filter e2e.sh refuses ("no row matches the filter").
+  mkdir -p "$r"
+  printf '%s\n' 'run issue12_ok 42' 'build_reject_has issue13_rej needle' > "$r/rows"
+  sel() { printf '%s\n' "$@" | grep -v '^$' > "$r/sel"; pre_gate_select "$r/rows" "$r/sel" 2 | tr '\n' ' '; }
+  for c in "a fixture a row names: rows|issue12_ok|e2e rows row issue12_ok " \
+           "only fixtures no row names: no e2e, each named|issue99_corpus|e2e none corpus issue99_corpus " \
+           "mixed: rows for the named, the rest the corpus's|issue13_rej issue98_corpus|e2e rows row issue13_rej corpus issue98_corpus " \
+           "past the cap: every row|issue12_ok issue13_rej issue97_corpus|e2e all row issue12_ok row issue13_rej corpus issue97_corpus " \
+           "nothing selected: no e2e||e2e none "; do
+    IFS='|' read -r name fx want <<< "$c"
+    # shellcheck disable=SC2086
+    got="$(sel $fx)"
+    if [ "$got" = "$want" ]; then echo "  ok   select: $name"; else echo "  FAIL select: $name: got '$got' want '$want'"; bad=1; fi
+  done
+  rm -rf "$r"
+  # The driver, end to end in --plan mode, on a scratch repository whose e2e table names no row for a new
+  # fixture: the plan is `e2e=none`, never the filter that e2e.sh refuses (the parent planned `rows`).
+  mkdir -p "$r/scripts" "$r/test"
+  cp "$ROOT/scripts/pre_gate.sh" "$r/scripts/"
+  printf '#!/usr/bin/env bash\n[ -n "${ALATYR_E2E_LIST_ROWS:-}" ] && echo "run old 42"\n' > "$r/scripts/e2e.sh"
+  printf 'echo "### E2E ###"\necho "### CORPUS MANIFEST ###"\n' > "$r/scripts/full.sh"
+  printf 'main := fn() -> u64 { 42 }\n' > "$r/test/old.al"
+  ( cd "$r" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm base ) || bad=1
+  printf 'main := fn() -> u64 { 42 }\n## expect: run 42\n' > "$r/test/corpus_only.al"
+  got="$(bash "$r/scripts/pre_gate.sh" --plan HEAD 2>&1 | sed -n 's/^pre-gate: plan //p')"
+  if [ "$got" = 'e2e=none sweeps=none' ]; then echo "  ok   driver: a new fixture no row names plans no e2e"
+  else echo "  FAIL driver: a new fixture no row names: got '$got' want 'e2e=none sweeps=none'"; bad=1; fi
+  printf '\n' >> "$r/test/old.al"
+  got="$(bash "$r/scripts/pre_gate.sh" --plan HEAD 2>&1 | sed -n 's/^pre-gate: plan //p')"
+  if [ "$got" = 'e2e=rows (1 fixtures: old …) sweeps=none' ]; then echo "  ok   driver: beside an edited fixture with a row, only that row runs"
+  else echo "  FAIL driver: mixed: got '$got'"; bad=1; fi
+  rm -rf "$r"
   echo "pre_gate self-test: $([ "$bad" = 0 ] && echo PASS || echo FAIL)"
   return "$bad"
 }
@@ -165,10 +216,17 @@ plan="$(pre_gate_plan < "$LOG/changed")"
 e2e="$(printf '%s\n' "$plan" | sed -n 's/^e2e //p')"
 sweeps="$(printf '%s\n' "$plan" | sed -n 's/^sweep //p' | tr '\n' ' ')"
 if [ "$e2e" = rows ]; then
-  pre_gate_fixtures "$base" < "$LOG/changed" > "$LOG/fixtures"
-  nf="$(grep -c '' "$LOG/fixtures")"
-  if [ "$nf" -gt "$PG_MAX" ]; then e2e=all; echo "pre-gate: $nf fixtures selected (> $PG_MAX): every row"
-  elif [ "$nf" = 0 ]; then e2e=none; fi
+  pre_gate_fixtures "$base" < "$LOG/changed" > "$LOG/selected"
+  ALATYR_E2E_LIST_ROWS=1 bash scripts/e2e.sh > "$LOG/rows" 2> "$LOG/rows.err" && [ -s "$LOG/rows" ] ||
+    { cat "$LOG/rows.err"; echo "pre-gate: ALATYR_E2E_LIST_ROWS=1 scripts/e2e.sh listed no rows"; exit 2; }
+  pre_gate_select "$LOG/rows" "$LOG/selected" "$PG_MAX" > "$LOG/select"
+  e2e="$(sed -n 's/^e2e //p' "$LOG/select")"
+  sed -n 's/^row //p' "$LOG/select" > "$LOG/fixtures"
+  sed -n 's/^corpus //p' "$LOG/select" > "$LOG/corpus_only"
+  nf="$(grep -c '' "$LOG/selected")"
+  [ "$e2e" != all ] || echo "pre-gate: $nf fixtures selected (> $PG_MAX): every row"
+  nc="$(grep -c '' "$LOG/corpus_only")"
+  [ "$e2e" = all ] || [ "$nc" = 0 ] || echo "pre-gate: $nc selected fixture(s) no e2e row names; CORPUS MANIFEST and FIXTURE EXPECT judge them (NOT RUN below): $(head -8 "$LOG/corpus_only" | tr '\n' ' ')…"
 fi
 echo "pre-gate: base $(git rev-parse --short "$base"), $(grep -c '' "$LOG/changed") changed path(s)"
 echo "pre-gate: plan e2e=$e2e$([ "$e2e" = rows ] && echo " ($(grep -c '' "$LOG/fixtures") fixtures: $(head -8 "$LOG/fixtures" | tr '\n' ' ')…)") sweeps=${sweeps:-none}"
