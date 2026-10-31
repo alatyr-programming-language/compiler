@@ -53,13 +53,14 @@ $ target/debug/alatyr --version
 alatyr 0.2.19, spec 1.6.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)
 ```
 
-Two axes, per Tooling §4 (TOOL-21): **`0.2.16`** is this implementation's own version, injected from
+Two axes, per Tooling §4 (TOOL-21): **`0.2.19`** is this implementation's own version, injected from
 `package.al` (TOOL-15), and it moves on a seed promotion and only on one; **`1.6.0`** is the
 specification revision this build is answerable to, pinned in `src/spec_revision.al`, and it moves with
 the pin. It is a **target revision**, not a conformance claim (Overview §6, TOOL-21 as refined by spec
 `9438d00`; #1000): the line says so, and names the published list of known deviations,
 `scripts/known-deviations.issues.tsv` (the rule not met and the observable difference, per issue), whose
-fixture rows in `scripts/known-deviations.tsv` the gate holds (#1126). Reporting only the first leaves a user unable to tell what the toolchain implements, which is why
+fixture rows in `scripts/known-deviations.tsv` the gate holds (#1126). Reporting only the first leaves
+a user unable to tell what the toolchain implements, which is why
 the second is now on the line (#1000). `scripts/spec_pin_check.sh` refuses a tree where those two
 numbers are stated differently in the places that state them — the constant, this file, `AGENTS.md`,
 `scripts/package_cli_test.sh` and `seed/VERSION`. Neither number is parsed by anything: the content of
