@@ -126,6 +126,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **An `unchecked` `+ - *` in a `comptime for` range bound wraps at its type's width (#1271).** The fold
+  kept every bound as an `i64` pattern, so an `i32` or `u32` wrap never happened: with `K : i32` at
+  MAX, `0 .. unchecked (K + 1) - 2147483600` built and ran 48 times instead of being refused, `u32`
+  `unchecked (K + 3)` hit the unroll budget instead of unrolling twice, and an `i32` product that
+  wraps to 0 reached the compiler's own `idiv` as `i64::MIN / -1` (SIGFPE). The result now wraps to
+  the operation's width (Comptime §2.6), on all four backends.
+
 - **A checked `+ - *` that overflows in a `comptime for` range bound is refused, not wrapped
   (#1234).** `0 .. K + 2` with `K : u64 = 2^64 - 1` wrapped to 1 and unrolled once on all four
   backends, and the `i64` shape wrapped to MIN and unrolled zero times. The fold now runs the

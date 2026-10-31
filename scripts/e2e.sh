@@ -10764,6 +10764,21 @@ run comptime_for_unchecked_wrap_bound 42
 run_a64 comptime_for_unchecked_wrap_bound 42
 run_rv64 comptime_for_unchecked_wrap_bound 42
 run_wat comptime_for_unchecked_wrap_bound 42
+## #1271: an `unchecked` `+ - *` in a range bound wraps at the operation type's width (Comptime §2.6),
+## as at run time, so a later checked step judges a value the type can hold.
+build_reject_has reject_comptime_for_wrap_then_overflow_i32 'this range bound overflows its type'
+build_reject_has reject_comptime_for_wrap_then_overflow_i32 'for the wrap. at line 16 in '
+run_a64 reject_comptime_for_wrap_then_overflow_i32 133
+run_rv64 reject_comptime_for_wrap_then_overflow_i32 133
+run_wat reject_comptime_for_wrap_then_overflow_i32 134
+run comptime_for_u32_unchecked_wrap 42
+run_a64 comptime_for_u32_unchecked_wrap 42
+run_rv64 comptime_for_u32_unchecked_wrap 42
+run_wat comptime_for_u32_unchecked_wrap 42
+run comptime_for_i32_unchecked_wrap_div 40
+run_a64 comptime_for_i32_unchecked_wrap_div 40
+run_rv64 comptime_for_i32_unchecked_wrap_div 40
+run_wat comptime_for_i32_unchecked_wrap_div 40
 ## #682 — the OTHER half: the arithmetic is INSIDE the const's initializer (`B := A + 1`), so the
 ## bound expression is a plain `Expr::Var` and never reaches the `Bin` arm #672 added. The twins
 ## resolved the name and read its value with `lower_layout::ex_value_init`, which answered 0 for a
