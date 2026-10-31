@@ -4228,7 +4228,8 @@ cli_command_help := fn(in out a : rt::Arena, v : CliVerb) -> usize {
 
 ## TOOL-21 — the version line identifies the implementation AND names the specification revision it is
 ## answerable to. That revision is a TARGET, not conformance (compiler#1000, spec 9438d00 — Overview §6,
-## TOOL-21): the line says so, and names where the known deviations are published. `app.version` is injected as a compile-time constant for modules owned by this package
+## TOOL-21): the line says so, and names where the known deviations are published. `app.version` is
+## injected as a compile-time constant for modules owned by this package
 ## (TOOL-15), and `spec_revision::SPEC_REVISION` is an ordinary source constant pinned to a tagged
 ## specification release, so this command neither opens package.al nor depends on the current working
 ## directory at runtime (issue #1000). Both numbers are compile-time constants of the same kind: the two
