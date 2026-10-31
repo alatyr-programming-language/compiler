@@ -10698,6 +10698,47 @@ run comptime_for_const_arith_bound 42
 run_a64 comptime_for_const_arith_bound 42
 run_rv64 comptime_for_const_arith_bound 42
 run_wat comptime_for_const_arith_bound 42
+## #696: an `unchecked` range bound names its inner value (Grammar §3.7) on all four backends, and a
+## bound with no comptime value is a located reject, never a silent 0 (Comptime §9.1).
+run comptime_for_unchecked_bound 42
+run_a64 comptime_for_unchecked_bound 42
+run_rv64 comptime_for_unchecked_bound 42
+run_wat comptime_for_unchecked_bound 42
+build_reject_has reject_comptime_for_runtime_bound "range bound is not comptime-known"
+## #684: a zero divisor in a range bound is a located diagnostic (Comptime §2.6), under `unchecked`
+## too; x86 died with SIGFPE and the twins unrolled zero times. The twins now trap, never loop 0 times.
+build_reject_has reject_comptime_for_div_zero "range bound divides by zero"
+build_reject_has reject_comptime_for_unchecked_mod_zero "range bound divides by zero"
+## The reject is located: the literal-only bound `4 / 0` has no named leaf, so it is placed at the
+## written divisor (it answered `at byte 0` before); the `%` bound is placed at `D`.
+build_reject_has reject_comptime_for_div_zero 'under `unchecked` too. at line 11 in '
+build_reject_has reject_comptime_for_unchecked_mod_zero 'under `unchecked` too. at line 14 in '
+run_a64 reject_comptime_for_div_zero 133
+run_rv64 reject_comptime_for_div_zero 133
+run_wat reject_comptime_for_div_zero 134
+run_a64 reject_comptime_for_unchecked_mod_zero 133
+run_rv64 reject_comptime_for_unchecked_mod_zero 133
+run_wat reject_comptime_for_unchecked_mod_zero 134
+## #1234: a checked `+ - *` that overflows the operation's type in a range bound is a located
+## diagnostic (Comptime §2.6), never a wrapped bound; the twins trap until #1232. Inside `unchecked`
+## the wrap is defined and still folds.
+build_reject_has reject_comptime_for_overflow_u64 'this range bound overflows its type'
+build_reject_has reject_comptime_for_overflow_u64 'for the wrap. at line 15 in '
+build_reject_has reject_comptime_for_overflow_i64 'for the wrap. at line 12 in '
+build_reject_has reject_comptime_for_overflow_u32 'for the wrap. at line 14 in '
+run_a64 reject_comptime_for_overflow_u64 133
+run_rv64 reject_comptime_for_overflow_u64 133
+run_wat reject_comptime_for_overflow_u64 134
+run_a64 reject_comptime_for_overflow_i64 133
+run_rv64 reject_comptime_for_overflow_i64 133
+run_wat reject_comptime_for_overflow_i64 134
+run_a64 reject_comptime_for_overflow_u32 133
+run_rv64 reject_comptime_for_overflow_u32 133
+run_wat reject_comptime_for_overflow_u32 134
+run comptime_for_unchecked_wrap_bound 42
+run_a64 comptime_for_unchecked_wrap_bound 42
+run_rv64 comptime_for_unchecked_wrap_bound 42
+run_wat comptime_for_unchecked_wrap_bound 42
 ## #682 — the OTHER half: the arithmetic is INSIDE the const's initializer (`B := A + 1`), so the
 ## bound expression is a plain `Expr::Var` and never reaches the `Bin` arm #672 added. The twins
 ## resolved the name and read its value with `lower_layout::ex_value_init`, which answered 0 for a

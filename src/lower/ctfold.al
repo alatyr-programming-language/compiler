@@ -42,6 +42,7 @@ stmt_p := ast::stmt_p
 (push_str, push_int) := strbuf
 (CSpan, LCtx, arg_expr_at, var_name_span) := lower_ctx
 (base_type_name, ct_bind_depth, ct_bound_value, enum_decl_of, struct_decl_of, typearg_at) := lower_layout
+(EX_VALUE_DEPTH, RangeGuard, ct_bound_w, ct_range_arith, ct_range_guard, opt_i64_is_some, opt_i64_or) := lower_layout
 ## moved to `lower_layout` so sema reads a `comptime for` header the way this lowering does (docs/ir-slice-1.md §8.4)
 (comptime_arg_end, compfor_iter_arg) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
@@ -891,6 +892,32 @@ pub comptime_cond_src_off := fn(e : ptr(Expr)) -> usize {
   }
 }
 
+## The SOURCE OFFSET a `comptime for` range-bound reject is located at (#684, Comptime §2.6). It is
+## `comptime_cond_src_off`'s leaf, so every bound that was located keeps its location. A bound built
+## only from written literals (`4 / 0`) has no such leaf; it falls back to the leftmost written integer
+## token. A synthesized `Num` has a zero span and stays 0.
+ct_bound_site_off := fn(e : ptr(Expr)) -> usize {
+  off := comptime_cond_src_off(e)
+  if off != 0 { return off }
+  ct_bound_lit_off(e)
+}
+## The leftmost written integer literal's offset in a range bound, through `Bin` and `unchecked`.
+ct_bound_lit_off := fn(e : ptr(Expr)) -> usize {
+  match deref(e) {
+    Expr::Num(v, ns, nn) => { ns }
+    Expr::Bin(bop, bl, br) => {
+      mut o := ct_bound_lit_off(bl)
+      if o == 0 { o = ct_bound_lit_off(br) }
+      o
+    }
+    Expr::Unchecked(inner) => { ct_bound_lit_off(inner) }
+    Expr::Var | Expr::Field | Expr::Call | Expr::StrLit | Expr::Match | Expr::BoolLit | Expr::If
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { 0 }
+  }
+}
+
 ## Fail LOUD on a `comptime if` condition the lower cannot fold. Comptime §9.1/§9.2: the controlling
 ## expression MUST be comptime-known and emission applies to the SELECTED branch — so "cannot fold"
 ## has no selected branch and MUST be a REJECT. Emitting NEITHER arm (the previous behaviour) silently
@@ -1308,7 +1335,9 @@ comptime_typeinfo_count := fn(ts : usize, tl : usize, cx : ptr(LCtx)) -> i64 {
 
 ## Evaluate a `comptime for` RANGE bound to a compile-time integer. A `typeinfo(X).n` / `.len` bound
 ## resolves against the TYPE NAMED BY X, not automatically against the enclosing instance `cx.it`.
-## Any other bound (a literal / module const / const arithmetic) goes through `global_init_value`.
+## Any other bound is a literal, a module const, `unchecked e` (Grammar §3.7: the inner value), or
+## const arithmetic over those. A bound that is none of these is not comptime-known, and Comptime
+## §9.1 makes that a compile error: a LOCATED REJECT, never the silent `0` it used to be (#696).
 pub comptime_range_bound := fn(e : ptr(Expr), cx : ptr(LCtx)) -> i64 {
   ## slice B: inside a generic-operator expansion, a bound over the comptime parameter folds
   ## against the binding FIRST (`N/64` → `3`); a non-foldable bound takes the ordinary path.
@@ -1316,16 +1345,74 @@ pub comptime_range_bound := fn(e : ptr(Expr), cx : ptr(LCtx)) -> i64 {
     bfv := ct_bound_fold(e, cx)
     if bfv >= 0 { return bfv }
   }
-  fp := field_place_parts(e)
-  if unchecked bitcast(usize, fp.base) != 0 {
-    fnm := str_at((cx.src + fp.fs), fp.fl)
-    ## `typeinfo(X).n` / `.len` — the comptime MEMBER COUNT of X (§Comptime 5.1). The AST preserves the
-    ## typeinfo call as `fp.base`; resolve that argument through generic substitutions before counting.
-    if fnm == "n" or fnm == "len" {
-      rt := comptime_range_typeinfo_arg(fp.base, cx, deref(cx.mar))
-      cnt := comptime_typeinfo_count(rt.s, rt.n, cx)
-      if cnt >= 0 { return cnt }
+  match comptime_range_bound_at(e, cx, 0, true) {
+    Some(v) => { v }
+    None => {
+      codegen_reject(cx.src, ct_bound_site_off(e), cx.mod_s, cx.mod_l, "`comptime for` — this range bound is not comptime-known. A bound is an integer literal, a module const, `unchecked e`, typeinfo(T).n/.len, a comptime parameter, or + - * / % over those (Comptime §9.1). Rejected rather than unrolling over a bound of 0.", deref(cx.mar))
+      0
     }
   }
-  global_init_value(e, cx.decls, cx.src)
+}
+## The fold behind `comptime_range_bound`: `None` is "not comptime-known". `hops` counts
+## const-to-const steps, capped like `ex_value_fold`'s, so a const cycle is refused, never a hang.
+## A ZERO divisor is a located reject (Comptime §2.6, #684), never a division the compiler runs.
+comptime_range_bound_at := fn(e : ptr(Expr), cx : ptr(LCtx), hops : i64, chk : bool) -> Option(i64) {
+  mut r : Option(i64) = Option(i64).None
+  match deref(e) {
+    Expr::Num(v, s, n) => { r = Option(i64).Some(i64(v)) }
+    Expr::BoolLit(v) => { r = Option(i64).Some(i64(v)) }
+    Expr::Unchecked(inner) => { r = comptime_range_bound_at(inner, cx, hops, false) }
+    Expr::Var(vs, vn) => {
+      bv := ct_bound_value(cx.src, vs, vn)
+      mcv := module_const_value(cx.decls, cx.src, vs, vn)
+      if bv >= 0 { r = Option(i64).Some(bv) }
+      else if unchecked bitcast(usize, mcv) != 0 and hops < EX_VALUE_DEPTH { r = comptime_range_bound_at(mcv, cx, hops + 1, true) }
+    }
+    ## `typeinfo(X).n` / `.len` — the comptime MEMBER COUNT of X (§Comptime 5.1). The AST preserves the
+    ## typeinfo call as the field base; resolve that argument through generic substitutions first.
+    Expr::Field(fb, ffs, ffl) => {
+      fnm := str_at((cx.src + ffs), ffl)
+      if fnm == "n" or fnm == "len" {
+        rt := comptime_range_typeinfo_arg(fb, cx, deref(cx.mar))
+        cnt := comptime_typeinfo_count(rt.s, rt.n, cx)
+        if cnt >= 0 { r = Option(i64).Some(cnt) }
+      }
+    }
+    Expr::Bin(op, l, rr) => {
+      lo := comptime_range_bound_at(l, cx, hops, chk)
+      ro := comptime_range_bound_at(rr, cx, hops, chk)
+      if opt_i64_is_some(lo) and opt_i64_is_some(ro) {
+        lv := opt_i64_or(lo, 0)
+        rv := opt_i64_or(ro, 0)
+        r = ct_bound_guarded(e, rr, cx, op, lv, rv, chk)
+      }
+    }
+    Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf
+      | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+## One folded `l <op> r` of a range bound, decided on its guard with an exhaustive `match`. The guard
+## is `ct_range_guard`, the twins' too (Comptime §2.6): a failing one is a LOCATED diagnostic and the
+## compiler never performs the operation (x86 died with SIGFPE on a zero divisor, #684; a checked
+## `+ - *` wrapped and unrolled the wrapped count, #1234). The reject fails the build; its `0` is
+## unread. A flat helper, so its `match` never nests inside the caller's `Bin` arm.
+ct_bound_guarded := fn(e : ptr(Expr), rr : ptr(Expr), cx : ptr(LCtx), op : u8, lv : i64, rv : i64, chk : bool) -> Option(i64) {
+  w : Option(str) = ct_bound_w(e)
+  g : RangeGuard = ct_range_guard(op, lv, rv, w, chk)
+  match g {
+    RgPass => { ct_range_arith(op, lv, rv, w, chk) }
+    RgDivZero => {
+      ## Located at the divisor, the operand the guard is about; the whole bound if it has no span.
+      mut dzoff := ct_bound_site_off(rr)
+      if dzoff == 0 { dzoff = ct_bound_site_off(e) }
+      codegen_reject(cx.src, dzoff, cx.mod_s, cx.mod_l, "`comptime for` — this range bound divides by zero. Comptime §2.6: a guard that fails during comptime evaluation is a compile-time diagnostic, under `unchecked` too.", deref(cx.mar))
+      Option(i64).Some(0)
+    }
+    RgOverflow => {
+      codegen_reject(cx.src, ct_bound_site_off(e), cx.mod_s, cx.mod_l, "`comptime for` — this range bound overflows its type. Comptime §2.6: a checked operation that fails during comptime evaluation is a compile-time diagnostic, never a wrapped bound; write `unchecked (…)` for the wrap.", deref(cx.mar))
+      Option(i64).Some(0)
+    }
+  }
 }
