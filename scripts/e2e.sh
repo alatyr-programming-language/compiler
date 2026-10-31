@@ -12073,6 +12073,16 @@ run_wat trap_literal_ctx_field_u64 134
 run issue973_if_branch_context 2
 run issue977_struct_lit_field_ctx 2
 
+## #986 — `<call>.expect(m)` and a statement `<call>?` were unwrapped inline with success hardcoded to
+## variant 0, wrong for the library `Option` (`{None, Some}`), and a struct payload bound with
+## `x := <call>.expect(m)` kept only word 0. NON-VACUOUS: on the parent `55fa477` (x86_64) the fixture
+## exits 1 — `some42().expect("v")` panicked on `Some(42)`.
+run issue986_expect_call_receiver 42
+## #986 — the value of `<call>.expect(m)` over a two-word struct, passed straight as an argument, is
+## refused instead of delivering one word. NON-VACUOUS: on the parent `55fa477` (x86_64) it built rc 0
+## and the program died with SIGSEGV (rc 139).
+build_reject_has issue986_expect_multiword_value_reject "only one word would arrive (#986)"
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================
