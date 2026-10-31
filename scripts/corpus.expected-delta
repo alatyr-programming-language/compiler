@@ -2,13 +2,17 @@
 # The feature PR declares the transitions it causes; the gate requires the fresh manifest to differ
 # from the committed one by EXACTLY these rows, and scripts/land.sh then commits that fresh manifest as
 # the oracle. Inert once the committed manifest is no longer base_sha256. Regenerate, never hand-edit.
-#   ADDED              4 pair(s)  [ x86_64 1 aarch64 1 riscv64 1 wasm 1 ]
+#   ADDED              8 pair(s)  [ x86_64 2 aarch64 2 riscv64 2 wasm 2 ]
 format=alatyr-corpus-delta-v1
 base_sha256=2596be9af128ce6f9cac42013f13709da03bc74bad7dba8e0928fb6ddcc0c9d1
-result_sha256=09e937a433d9e3c2ea83f389a41779994425f32eb9cff86275760d2cf75f3e01
-pairs=4
+result_sha256=0a0737a1511a024c3566993d559653478f62baf4d52a3816510ac67791833429
+pairs=8
 columns=class<TAB>backend<TAB>path<TAB>before<TAB>after
 ADDED	aarch64	test/issue1182_annotated_view_local.al	-	run/133/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/eaf0528b31c430624b5c4620c9c17389b9f5e75572ddcd4411c932db63e52e76
+ADDED	aarch64	test/issue1182_for_array_param_agg.al	-	run/133/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/eaf0528b31c430624b5c4620c9c17389b9f5e75572ddcd4411c932db63e52e76
 ADDED	riscv64	test/issue1182_annotated_view_local.al	-	run/133/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+ADDED	riscv64	test/issue1182_for_array_param_agg.al	-	run/133/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ADDED	wasm	test/issue1182_annotated_view_local.al	-	run/134/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/0ad64270e31bcc753fa8cf76474ef43cf44e264a21c033f72ccae05dc22766d9
+ADDED	wasm	test/issue1182_for_array_param_agg.al	-	run/134/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/9c017c0d0cd802372d01febce3cdd0c563bb45c9d5e64762f2949f93085498e2
 ADDED	x86_64	test/issue1182_annotated_view_local.al	-	run/42/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+ADDED	x86_64	test/issue1182_for_array_param_agg.al	-	run/132/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
