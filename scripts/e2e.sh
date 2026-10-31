@@ -10887,6 +10887,9 @@ run deque_of_str_roundtrip 42
 run hashmap_str_value_roundtrip 42
 run omap_str_value_roundtrip 42
 run oset_of_str_roundtrip 42
+## #1254 — `push_front`, `pop_front` and `pop_back` at a sub-word element: `slot := dq_elem(T, …)` then
+## `deref(slot) = x` / `v := deref(slot)` moved 8 bytes. NON-VACUOUS: on the parent `c4e20937` (x86_64) it exits 10.
+run issue1254_deque_subword_slot 42
 run deref_view_pointee 42
 ## Types §7 — a `[T]`/`str` view IS its two-word {ptr,len} pair wherever it appears. A view ARGUMENT that is
 ## not a plain local (a struct FIELD at any depth, a `sub(…)`/range sub-view, a `[str;N]` element, a str field
