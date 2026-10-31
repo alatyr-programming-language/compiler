@@ -192,6 +192,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   x86_64 lowering took any annotated name for one: `xs[0].b`, `xs[1]`, `xs[1..2]` and `for p in xs`
   dereferenced the view's data pointer once more and crashed (SIGSEGV). Parameter-ness is now recorded
   where parameters are bound, so the annotated local reads exactly like `xs := t[0..2]`.
+- **`for p in f(…)` over a `Slice(T)` of structs, enums or `str` that a call returned binds the right
+  elements on x86_64 (#1211).** A local bound from the call (`r := f(…)`) took the nominal two-word
+  `Slice` struct, and a call iterated directly knew only a `str` element, so the loop variable was one
+  word and the program read zeros. Every `for` over `alloc::vec::as_slice` of a struct was affected.
 
 ## 0.2.21 — 2026-11-01
 
@@ -219,6 +223,7 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `scripts/corpus.manifest` keeps only the sources with no directive yet and the directive sources that
   print; the xbackend ratchet reads the walk. A behaviour fix on a directive fixture carries no oracle
   commit: it deletes its own deviation rows.
+
 
 ## 0.2.20 — 2026-10-31
 
