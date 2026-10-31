@@ -126,6 +126,22 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`v[i]`, `v[i] = x` and `v[lo..hi]` on a `Vec` call `at`, `index_set` and `index_range` (#987).**
+  They were the built-in array index over the `Vec` handle's own words: the read gave a handle word,
+  the write was lost and the range viewed the handle. `v.at(i)`, `v.index_set(i, x)` and
+  `v.index_range(lo, hi)` now infer `T` through the `ptr(Vec(T))` parameter instead of being refused.
+  `v[i].f = x` is refused with a diagnostic: `v[i]` is a value.
+
+- **`v.push(x)` on a `Vec` of a sub-word element stores what it is given (#988).** A UFCS call that
+  infers its type argument from the receiver was its own instance below two words, tagged by the
+  receiver's name, and `size(T)` in it was 8 bytes: `push` on a `Vec(u8)`, `Vec(u16)` or `Vec(u32)`
+  wrote with a word stride. It is now the same instance as `vec::push(u32, v, x)`.
+
+- **A `Vec` of a sub-word element no longer reads its neighbours into the value (#395).** Inside a
+  generic function, `deref(p)` with `p : ptr(mut T)` used 8 bytes whatever `T` was, so `at`, `try_at`,
+  `get` and `set` on a `Vec(u8)`, `Vec(u16)`, `Vec(u32)` or `Vec(i8)` read the next elements into the
+  value (or wrote over them). It now uses `T`'s width and signedness in that instance.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type
