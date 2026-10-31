@@ -783,6 +783,30 @@ else
   [ "$pgr_rows" -gt 0 ] || { echo "  FAIL progen regress: the list holds no row"; fail=1; }
 fi
 
+# The PILOTS stage (#1125): the packages under pilots/ are written as a user would write them, so
+# they reach shapes the corpus does not. scripts/pilots.sh builds each from a copy under target/ with
+# the tree compiler, runs a library's `alatyr test` (every `@test` must report ok) and a program to
+# its stated exit value. Its self-test plants a wrong check first: a stage that cannot fail is not
+# evidence.
+echo "### PILOTS (pilot packages: library tests and programs, x86_64) ###"
+PL_LOG="$LOGDIR/full_pilots.log"
+ALATYR="$ROOT/target/debug/alatyr" bash scripts/pilots.sh --self-test > "$PL_LOG" 2>&1
+pl_st_rc=$?
+grep -E "^pilots self-test:" "$PL_LOG" | tail -1 | sed 's/^/  /'
+[ "$pl_st_rc" = 0 ] || { echo "  FAIL pilots self-test: rc=$pl_st_rc — the stage is not proven to fail"; fail=1; }
+ALATYR="$ROOT/target/debug/alatyr" bash scripts/pilots.sh >> "$PL_LOG" 2>&1
+pl_rc=$?
+grep -E "^  (ok|FAIL) " "$PL_LOG" | sed 's/^/  /'
+pl_line="$(grep -E '^pilots: libraries=' "$PL_LOG" | tail -1)"
+if [ -z "$pl_line" ]; then
+  echo "  (pilots printed no summary line — treating as a failure)"
+  fail=1; pl_cover="UNKNOWN — no pilots summary"
+else
+  echo "  $pl_line"
+  pl_cover="${pl_line#pilots: }"
+fi
+[ "$pl_rc" = 0 ] || { echo "  FAIL pilots: rc=$pl_rc (log: $PL_LOG)"; fail=1; }
+
 if [ "$fail" != 0 ]; then
   echo "*** FULL GATE: FAILURES ***"
 elif [ "$sw_status" = "RAN" ]; then
@@ -799,6 +823,7 @@ elif [ "$sw_status" = "RAN" ]; then
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
   echo "    progen:          ${pg_cover:-NO SUMMARY LINE}"
+  echo "    pilots:          ${pl_cover:-NO SUMMARY LINE}"
 else
   echo "*** FULL GATE: GREEN — but the SWEEPS DID NOT RUN (sweeps STATUS=$sw_status): the aarch64/"
   echo "    riscv64/wasm backends were NOT exercised by the sweeps. Re-run with --force-sweeps before"
@@ -815,5 +840,6 @@ else
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
   echo "    progen:          ${pg_cover:-NO SUMMARY LINE}"
+  echo "    pilots:          ${pl_cover:-NO SUMMARY LINE}"
 fi
 exit "$fail"

@@ -126,6 +126,20 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **The json, wc and pipeline pilots and the PILOTS gate stage (#1125).** `pilots/pipeline` runs
+  four worker threads that take chunk numbers from a bounded `std::channel` and fold FNV-1a hashes
+  of a generated input into a `std::sync::Mutex` total. It exits 0 only when the threaded total
+  equals the one-thread fold and a value computed by an independent implementation, and four
+  `@test`s check the hash against published vectors. `pilots/wc` is a
+  `wc -l/-w/-c` command-line tool (argv, files and standard input, messages on standard error, exit
+  0/1/2), checked by three `@test`s and six command-line cases under `pilots/wc/cases/`. `pilots/json` is a JSON parser
+  and printer written as a library package (a recursive `Value` enum, `Result` with a located
+  `Error`, arena-owned strings and containers), and `pilots/json-consumer` depends on it by path and
+  checks thirteen documents. `scripts/pilots.sh` builds both from a copy under `target/pilots/` with
+  the tree compiler, requires every library `@test` to report ok and the consumer to exit 0, and its
+  `--self-test` plants a wrong check that must fail the stage; `scripts/full.sh` runs both. Each
+  workaround in the pilot carries `## blocked-by:` naming the open issue that forces it.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type
