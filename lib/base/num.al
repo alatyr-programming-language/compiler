@@ -879,15 +879,17 @@ pub overflowing_mul := fn(a : i64, b : i64) -> (i64, bool) {
   comptime if target.arch == Arch.aarch64 { aarch64.smulh(hi, a, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.mulh(hi, a, b) }
   comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 {
+    ## `-1` here is a negation, never a written `0 - 1`: sema types this branch for x86_64 only (#1273),
+    ## so on the target that takes it a written zero-left `-` reads unsigned and borrows (#1154).
     hi = b
-    if a != 0 and a != (0 - 1) { hi = unchecked { w / a } }
-    if a == (0 - 1) and b == (0 - 9223372036854775807 - 1) { hi = 0 }
+    if a != 0 and a != (-1) { hi = unchecked { w / a } }
+    if a == (-1) and b == (-9223372036854775807 - 1) { hi = 0 }
     if hi != b {
       hi = 1
       if w < 0 { hi = 0 }
     } else {
       hi = 0
-      if w < 0 { hi = 0 - 1 }
+      if w < 0 { hi = -1 }
     }
   }
   mut o : bool = false
@@ -914,15 +916,17 @@ pub checked_mul := fn(a : i64, b : i64) -> Option(i64) {
   comptime if target.arch == Arch.aarch64 { aarch64.smulh(hi, a, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.mulh(hi, a, b) }
   comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 {
+    ## `-1` here is a negation, never a written `0 - 1`: sema types this branch for x86_64 only (#1273),
+    ## so on the target that takes it a written zero-left `-` reads unsigned and borrows (#1154).
     hi = b
-    if a != 0 and a != (0 - 1) { hi = unchecked { w / a } }
-    if a == (0 - 1) and b == (0 - 9223372036854775807 - 1) { hi = 0 }
+    if a != 0 and a != (-1) { hi = unchecked { w / a } }
+    if a == (-1) and b == (-9223372036854775807 - 1) { hi = 0 }
     if hi != b {
       hi = 1
       if w < 0 { hi = 0 }
     } else {
       hi = 0
-      if w < 0 { hi = 0 - 1 }
+      if w < 0 { hi = -1 }
     }
   }
   if w >= 0 and hi != 0 { return Option(i64).None }
@@ -948,15 +952,17 @@ pub saturating_mul := fn(a : i64, b : i64) -> i64 {
   comptime if target.arch == Arch.aarch64 { aarch64.smulh(hi, a, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.mulh(hi, a, b) }
   comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 {
+    ## `-1` here is a negation, never a written `0 - 1`: sema types this branch for x86_64 only (#1273),
+    ## so on the target that takes it a written zero-left `-` reads unsigned and borrows (#1154).
     hi = b
-    if a != 0 and a != (0 - 1) { hi = unchecked { w / a } }
-    if a == (0 - 1) and b == (0 - 9223372036854775807 - 1) { hi = 0 }
+    if a != 0 and a != (-1) { hi = unchecked { w / a } }
+    if a == (-1) and b == (-9223372036854775807 - 1) { hi = 0 }
     if hi != b {
       hi = 1
       if w < 0 { hi = 0 }
     } else {
       hi = 0
-      if w < 0 { hi = 0 - 1 }
+      if w < 0 { hi = -1 }
     }
   }
   mut ovf : bool = false

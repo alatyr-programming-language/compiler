@@ -10,7 +10,7 @@
 ## into a `u32`'s 64-bit computation, and the `0 - N` sentinel idiom.
 K : u64 = unchecked (18446744073709551615 + 3)   ## wraps to 2
 M : u64 = unchecked (9223372036854775807 * 4)    ## wraps to 2^64 - 4
-N : u64 = 0 - 1                                  ## the u64 MAX sentinel idiom
+N : u64 = unchecked (0 - 1)                      ## the u64 MAX sentinel idiom: an unsigned `0 - 1` borrows (§6.5), so the wrap is written
 P : i64 = 0 - 9223372036854775807
 Q : u64 = 4294967295 * 4294967295                ## 18446744065119617025 — fits u64 exactly
 R : u32 = 65535 * 65535                          ## 4294836225 — fits u32 exactly

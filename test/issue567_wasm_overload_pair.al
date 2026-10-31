@@ -33,9 +33,11 @@ pq := fn(one : u64, two : u64, zero : u64, umax : u64) -> u64 when target.arch !
   if s0 != 0 { return 21 }
   0
 }
+## `-1` below is a negation, not a written `0 - 1`: sema does not type a `when`-guarded body for the
+## twins (#1273), so a written zero-left `-` there reads unsigned and borrows.
 pi := fn(one : i64, two : i64, imin : i64, ione : i64) -> u64 when target.arch != Arch.x86_64 {
   si : i64 = base::num::saturating_sub(one, two)
-  if si != (0 - 1) { return 22 }
+  if si != (-1) { return 22 }
   ## i64 MIN - 1 does not fit and saturates DOWNWARD, where the unsigned member would answer 0.
   sm : i64 = base::num::saturating_sub(imin, ione)
   if sm != imin { return 23 }

@@ -2,7 +2,8 @@
 ## OWN signedness. `lt(T,a,b)` is instantiated twice, on the same bit pattern `-1` seen two ways:
 ##   lt(i64, 0-1, 1)   signed   -1 < 1     TRUE   -> adds 2
 ##                       (unsigned it would be huge < 1, FALSE)
-##   lt(u64, 1, 0-1)   unsigned  1 < huge  TRUE   -> adds 40
+##   lt(u64, 1, MAX)   unsigned  1 < huge  TRUE   -> adds 40  (MAX = 2^64 - 1, the bits of -1; a
+##                       written `0 - 1` at u64 borrows and traps, Concurrency §6.5, #1154)
 ##                       (signed it would be 1 < -1, FALSE)
 ## So 2 + 40 = 42 exactly when each instance keeps the signedness it was instantiated with. A
 ## compiler that types every `T` comparison alike answers 2 (all signed) or 40 (all unsigned).
@@ -16,6 +17,6 @@ lt := fn(T : type, a : T, b : T) -> bool { return a < b }
 main := fn() -> u64 {
   mut acc : u64 = 0
   if lt(i64, 0 - 1, 1) { acc = acc + 2 }
-  if lt(u64, 1, 0 - 1) { acc = acc + 40 }
+  if lt(u64, 1, 18446744073709551615) { acc = acc + 40 }
   return acc
 }

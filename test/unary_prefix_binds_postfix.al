@@ -44,6 +44,12 @@
 ## Whole-fixture exit, parent -> this tree: x86_64 101 -> 42, aarch64 133 -> 42, riscv64 133 -> 42,
 ## wat 134 -> 42. The three non-x86 backends TRAPPED on the parent rather than producing a second
 ## wrong value, so only x86_64 could report the defect as an exit code.
+##
+## #1154: each `nK` is a `u64` `2^64 - c`, so the checks negate it back with the unary `-` (its
+## negation modulo 2^64, no overflow member). They used to write `0 - nK`, a BINARY unsigned
+## subtraction that borrows; that wrapped only because a written zero minus skipped its guard. With
+## that fixed the written form traps (132), so the checks now say what they mean. Expected 42 on all
+## four backends; measured on the parent (`2adae89f`): 42 on all four.
 P := struct { a : u64, b : u64 }
 
 add1 := fn(v : u64) -> u64 { v + 1 }
@@ -52,31 +58,31 @@ main := fn() -> u64 {
   xs : [u64; 4] = [71, 42, 93, 55]
   ## a fixed-array local base — the most ordinary index there is.
   n1 := -xs[1]
-  if 0 - n1 != 42 { return 101 }
+  if -n1 != 42 { return 101 }
   ## element 0 is non-zero, so reading the frame's slot 0 stays distinguishable from reading xs[0].
   n0 := -xs[0]
-  if 0 - n0 != 71 { return 102 }
+  if -n0 != 71 { return 102 }
   ## `~~x` is `x`, so the double complement recovers the element the source named.
   if u64(~~xs[2]) != 93 { return 103 }
   ## a typed slice base — `xs[1..3]` is the view {42, 93}, so element 1 is 93.
   v := xs[1..3]
   n2 := -v[1]
-  if 0 - n2 != 93 { return 104 }
+  if -n2 != 93 { return 104 }
   ## a struct FIELD base: `-p.b` is `-(p.b)`, not `(-p).b`.
   p := P(a = 71, b = 42)
   n3 := -p.b
-  if 0 - n3 != 42 { return 105 }
+  if -n3 != 42 { return 105 }
   if u64(~~p.a) != 71 { return 106 }
   ## a TUPLE component base — `.N` is the same postfix step as `.f`.
   t := (71, 42)
   n4 := -t.1
-  if 0 - n4 != 42 { return 107 }
+  if -n4 != 42 { return 107 }
   ## a UFCS call applied to an index: the whole postfix CHAIN is the operand.
   n5 := -xs[1].add1()
-  if 0 - n5 != 43 { return 108 }
+  if -n5 != 43 { return 108 }
   ## CONTROL — the parenthesized spelling was already right and must stay right.
   n6 := -(xs[1])
-  if 0 - n6 != 42 { return 109 }
+  if -n6 != 42 { return 109 }
   ## CONTROL — `&` still binds LOOSER than `~`, so this is `(~a) & b` and not `~(a & b)`:
   ## ~5 = …11111010, & 63 = 58. (`~(5 & 63)` would be the all-ones complement of 5, not 58.)
   a : u64 = 5
@@ -90,6 +96,6 @@ main := fn() -> u64 {
   ## Grouping the WHOLE prefix expression is not the same rescue as grouping the OPERAND: on the
   ## parent `(-xs[3])` still parsed as `((-xs))[3]`, because the outer parens close after the index.
   n7 := (-xs[3])
-  if 0 - n7 != 55 { return 112 }
+  if -n7 != 55 { return 112 }
   return 42
 }
