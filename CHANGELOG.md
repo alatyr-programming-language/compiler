@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A `HashMap` of a sub-word value or key returns what was inserted (#1255), and so do `dq_at`,
+  `front` and `back` on a sub-word `Deque` (part of #1254).** A `deref` through a pointer a call
+  returns (`deref(val_at(…))`, `deref(dq_elem(…))`) moved 8 bytes whatever the element was, so a `u8`,
+  `u16`, `u32`, `i8` or `bool` element read the bytes after it, and a rehash overwrote them. It now
+  moves the callee's declared pointee, resolved through the generic instance.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type

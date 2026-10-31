@@ -12662,7 +12662,16 @@ deref_pointee_bytes := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
     ## `local_type_span` / `slot_name_is_annotated` idiom) — it fires only for an INFERRED `q := <view>.ptr`
     ## local, and neither `src/` nor `lib/` binds one → fixpoint-neutral.
     Expr::Var(vs, vn) => { if byte_ptr_local(cx, vs, vn) { w = 1 } }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+    ## #1254 — a pointer a CALL returns, declared `-> ptr(mut T)` (`deref(dq_elem(T, d, i))` in
+    ## `Deque(T)`'s `dq_at`, `front`, `back`): the pointee is the callee's declared return, mapped to the
+    ## call's type argument and then through the enclosing instance — the resolver the store side already
+    ## uses. It fell to the 8-byte default, so a `Deque(u8)` read returned the element plus the 7 bytes
+    ## after it: right only while those bytes were still zero.
+    Expr::Call(_cs, _cl, _na, _ah) => {
+      cty := deref_dest_pointee_span(p, cx)
+      if cty.n != 0 { w = scalar_byte_size(cx.src, cty.s, cty.n) }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
       | Expr::FnRef | Expr::Loop => {}
@@ -12861,7 +12870,12 @@ deref_pointee_signed := fn(p : ptr(Expr), cx : ptr(LCtx)) -> bool {
       pty := local_ptr_pointee_span(cx, vs, vn)
       if pty.n != 0 { sg = str_at((cx.src + pty.s), 1) == "i" }
     }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+    ## #1254 — through the call's declared return, as `deref_pointee_bytes` resolves it.
+    Expr::Call(_cs, _cl, _na, _ah) => {
+      cty := deref_dest_pointee_span(p, cx)
+      if cty.n != 0 { sg = str_at((cx.src + cty.s), 1) == "i" }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
       | Expr::FnRef | Expr::Loop => {}
