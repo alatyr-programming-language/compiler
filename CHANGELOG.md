@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`push_front`, `pop_front` and `pop_back` on a `Deque` of a sub-word element move that element
+  only (#1254).** They reach the slot through a local, `slot := dq_elem(T, ptr(d), i)`, which recorded no
+  pointee type, so inside a `Deque(u8)`, `Deque(i16)` or `Deque(bool)` instance `deref(slot) = x` wrote
+  8 bytes over the elements after the slot and `deref(slot)` read them into the value. A local bound
+  from a call that returns a pointer to a sub-word scalar now carries that pointee.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type
