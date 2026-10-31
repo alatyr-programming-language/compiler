@@ -23,8 +23,9 @@ field-layout eightbytexpath wide-then-narrowxslice-element
 # ── GAP — a wrong-typed value into a field or an element, owned by #304 (priority-0) ────────────
 # `s.f = "text"` with `f : u64` is accepted and stores the string's address; `a[0] = "text"` likewise.
 # The assignment-type check follows the name and not the path.
-place-check targetxcheck element-fieldxassignment-type
-place-check targetxcheck pointer-derefxassignment-type
+# Its two cells (element-field and pointer-deref x assignment-type) are filled: the reject_issue304_*
+# fixtures name the check in their `## expect: reject "type mismatch"` lines (#1153). #304 stays open
+# for what those fixtures do not cover; its scope is in the issue, not in this baseline.
 
 # ── GAP — the residual of #298 at the two remaining targets ─────────────────────────────────────
 # #303 landed the mutability check for a field, a bare element, a slice element and a global. A write to
