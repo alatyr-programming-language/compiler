@@ -126,6 +126,17 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A seed promotion is a script (#1129).** `scripts/promote.sh prepare <version>` runs the
+  Reproducibility procedure in a derived worktree: the bump first, Stage1 -> Stage2 -> Stage3, the
+  convergence checks (normalized GAS, Stage2 == Stage3 binary), the normalized seed-to-Stage1 delta with
+  a census of its line shapes, Stage2 over `seed/alatyr`, the CURRENT SEED block brought to it, and
+  `fixpoint.sh` on the promoted tree. It writes the history entry and the commit message with every
+  measured fact, releases `## Unreleased` under the new version, and marks the judgements (the
+  one-sentence delta, the why, the version class) `PROMOTE-OWED`; `commit` refuses while one is left or
+  when the files are not the atomic set, and `gate` pushes the exact commit to `gate/**`. `due` answers
+  the cadence: a week, an open `reseed-owed` issue, or a live `seed` row in `scripts/seed_forms.tsv`.
+  The weekly `scripts/metrics.sh` report asks it, in a new `seed promotion` row.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type

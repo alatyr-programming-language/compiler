@@ -38,6 +38,9 @@
 #               scripts/known-deviations.tsv exists (#1126 S2) its rows per backend are reported instead.
 #   gate time   `gh run list --workflow gate.yml`: the last five completed (green or red) hosted runs,
 #               updatedAt − startedAt. Cancelled runs are skipped: they did not run to a verdict.
+#   seed        `scripts/promote.sh due` (#1129), given the open `reseed-owed` count above and the date
+#               of the last commit on origin/main that touched seed/alatyr: due on an owed issue, a live
+#               `seed` row in scripts/seed_forms.tsv, or seven days; `n/a` when it cannot tell.
 set -u
 export LC_ALL=C
 
@@ -204,6 +207,15 @@ gate_line="$(gh run list -R "$REPO" --workflow gate.yml -L 40 \
       else "\(map(tostring + " min") | join(", ")) (last \(length) hosted gate.yml runs, newest first)" end')"
 [ -n "$gate_line" ] || gate_line="n/a — gh run list failed"
 
+## ---- seed promotion cadence (#1129) ------------------------------------------------------------------
+## scripts/promote.sh owns the decision; this report is what asks it every week. The owed count comes from
+## the issue list above and the last promotion from origin/main, so the answer is about main, not this tree.
+seed_last="$(git log -1 --format=%cs origin/main -- seed/alatyr)"
+seed_line="$(bash scripts/promote.sh due --owed "$(lab reseed-owed)" --last "$seed_last")"
+seed_rc=$?
+seed_line="${seed_line#"${seed_line%%[! ]*}"}"
+case $seed_rc in 0) seed_line="**due** — $seed_line (\`scripts/promote.sh prepare\`)" ;; 1) ;; *) seed_line="n/a — $seed_line" ;; esac
+
 ## ---- the block --------------------------------------------------------------------------------------
 cat <<EOF
 ### Metrics — $today (window: $DAYS days, since $week_from; origin/main $MAIN)
@@ -221,6 +233,7 @@ cat <<EOF
 | pilots green / red | n/a — no pilot exists on main yet (#1125) |
 | full-gate wall time, hosted | $gate_line |
 | full-gate wall time, omen | n/a — omen runs are not recorded anywhere this script can read |
+| seed promotion (last $seed_last) | $seed_line |
 
 <sub>Produced by \`scripts/metrics.sh --days $DAYS\`; every number above comes from a command in that script.</sub>
 EOF
