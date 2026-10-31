@@ -36,9 +36,8 @@ scripts/needle.baseline  -merge
 # three oracles do: two branches recording DISJOINT reviewed cells would merge clean into a file that
 # matches neither run of the detector. It is deliberately NOT being called a fourth oracle here — that
 # word carries `scripts/land.sh`'s enforcement and the one-oracle-per-PR rule, and the protocol's list
-# lives in AGENTS.md, CONTRIBUTING.md, the PR template, land.sh and three skills. `scripts/axis_gate.sh`
-# is not wired into `full.sh`, so this file gates nothing yet; promoting it is a maintainer decision and
-# a separate change. This line is the part that is safe and useful today.
+# lives in AGENTS.md, CONTRIBUTING.md, the PR template, land.sh and three skills. Since #1128
+# `scripts/axis_gate.sh` is a `full.sh` stage that fails on a new or stale cell, so this file gates.
 scripts/axis.baseline -merge
 
 # The PREDICTED DELTA a behaviour-changing feature PR declares (scripts/corpus_manifest.sh,

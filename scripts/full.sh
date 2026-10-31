@@ -381,6 +381,18 @@ if [ "$fe_rc" != 0 ]; then
   fail=1
 fi
 
+# The AXIS gate (#1128: no report-only stage). A ratchet over scripts/axis.baseline in both directions:
+# an empty coverage cell not in the baseline, or a baseline line whose cell is filled, fails. Its
+# self-test (a planted fixture fills one empty cell and is removed) runs first. No compiler needed.
+echo "### AXIS (coverage cells: an empty cell outside scripts/axis.baseline, or a stale line, fails) ###"
+AX_LOG="$LOGDIR/full_axis.log"
+{ bash scripts/axis_gate.sh --self-test && bash scripts/axis_gate.sh; } > "$AX_LOG" 2>&1
+ax_rc=$?
+grep -E "^axis gate: (self-test|reviewed|empty cells)|^  (NEW|STALE) " "$AX_LOG" | head -20
+if [ "$ax_rc" != 0 ] || ! grep -qE "^axis gate: reviewed baseline=" "$AX_LOG"; then
+  echo "  FAILURES (from $AX_LOG): rc=$ax_rc"; fail=1
+fi
+
 # The #299 BRAND CENSUS's planted non-vacuity (`scripts/brand_census.sh planted`). The census counts
 # brand crossings on file descriptor 99 and is what #544 stage 0's refusals were licensed by, so a
 # blind counter is not a harmless one: #679 was a counter that could not fire on any array element,

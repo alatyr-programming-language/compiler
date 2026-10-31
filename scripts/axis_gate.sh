@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # scripts/axis_gate.sh — the AXIS gate: which axis of a covered class has never been varied.
-# REPORTING ONLY. It never edits a fixture, and it needs no compiler.
+# It never edits a fixture and needs no compiler. Since #1128 it is a `full.sh` stage: a new or stale cell,
+# or a missing baseline, exits 1 and turns the gate red.
 #
 # WHY THIS EXISTS, AND WHY IT IS NOT A COVERAGE PERCENTAGE
 # -------------------------------------------------------
@@ -133,7 +134,7 @@ test "$tracked" -gt 0 || { echo "axis gate: no *.al under $CORPUS" >&2; exit 2; 
 # (cell x fixture) and takes minutes on a thousand fixtures, which is long enough that nobody runs it.
 declare -A CLASS_NAME
 declare -A AXIS_VALUES
-SETS="$(mktemp -d)"
+mkdir -p "$ROOT/target" && SETS="$(mktemp -d "$ROOT/target/axis_gate.XXXXXX")"
 trap 'rm -rf "$SETS"' EXIT
 # Private to this run, never a fixed shared path: --self-test invokes this script recursively, and a
 # shared scratch file would have the inner run overwrite the outer one's findings.
@@ -288,7 +289,7 @@ echo "axis gate: empty cells=$empty_cells"
 # pass this test.
 if [ "$SELF_TEST" = 1 ]; then
   echo "axis gate: self-test"
-  tmp="$(mktemp -d)"
+  tmp="$(mktemp -d "$ROOT/target/axis_gate_self.XXXXXX")"
   trap 'rm -rf "$SETS" "$tmp"' EXIT
   cp -a "$CORPUS/." "$tmp/" || { echo "axis gate: self-test could not copy the corpus" >&2; exit 1; }
 
@@ -339,7 +340,8 @@ fi
 
 # ── the baseline ─────────────────────────────────────────────────────────────────────────────────
 # Reviewed empty cells live in scripts/axis.baseline, one `<class> <axis> <value>` per line. A cell
-# not listed there is NEW and worth a look; the tool still exits 0 — it reports, it does not gate.
+# not listed there is NEW, and a baseline line whose cell is filled is STALE: either one exits 1, so the
+# full gate holds the file as a ratchet in both directions (#1128: no report-only stage).
 if [ -f "$BASELINE" ]; then
   new=0
   while IFS= read -r c; do
@@ -357,7 +359,9 @@ if [ -f "$BASELINE" ]; then
     grep -Fxq -- "$c" "$EMPTY_LIST" 2>/dev/null || { echo "  STALE baseline line, the cell is filled now: $c"; stale=$((stale + 1)); }
   done < "$BASELINE"
   echo "axis gate: reviewed baseline=$reviewed new=$new stale=$stale"
+  [ "$new" = 0 ] && [ "$stale" = 0 ] || exit 1
 else
-  echo "axis gate: no scripts/axis.baseline yet — every empty cell above is unreviewed"
+  echo "axis gate: no scripts/axis.baseline — every empty cell above is unreviewed"
+  exit 1
 fi
 exit 0
