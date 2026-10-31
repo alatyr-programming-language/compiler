@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **An annotated struct-element slice view local no longer crashes on x86_64 (#1182).** A local
+  written `xs : Slice(P) = t[0..2]` over a struct array was read as a `Slice(P)` parameter, because the
+  x86_64 lowering took any annotated name for one: `xs[0].b`, `xs[1]`, `xs[1..2]` and `for p in xs`
+  dereferenced the view's data pointer once more and crashed (SIGSEGV). Parameter-ness is now recorded
+  where parameters are bound, so the annotated local reads exactly like `xs := t[0..2]`.
+
 - **A seed promotion is a script (#1129).** `scripts/promote.sh prepare <version>` runs the
   Reproducibility procedure in a derived worktree: the bump first, Stage1 -> Stage2 -> Stage3, the
   convergence checks (normalized GAS, Stage2 == Stage3 binary), the normalized seed-to-Stage1 delta with
