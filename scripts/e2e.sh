@@ -11251,6 +11251,13 @@ run slice_range_return 36
 ## regression. Note `Slice(u8)`/`Slice(u32)` param copies are CORRECT today, which is why no blanket reject was
 ## added: it would refuse spec-valid working code. 4 + 7 = 11.
 run slice_param_copy_local 11
+## #1180 — a range slice `xs[lo..hi]` of a `Slice(T)` PARAM (bound, indexed, iterated; u64, str and struct
+## elements) is a view of the param's elements. The range base was the caller's {ptr, len} block, not its
+## data pointer. NON-VACUOUS on the parent at c4e20937 (x86_64): they exited 230, 30, 0 and 200.
+run slice_param_range_u64 221
+run slice_param_range_for 21
+run slice_param_range_str 21
+run slice_param_range_struct 246
 ## a plain Var-to-Var copy of a VIEW (`t := s` for a `str` / `Slice(T)`) matched NO aggregate branch — a str slot
 ## (ek 4) and a slice slot (ek 5) both report ek 0 from var_agg_info — so only ONE word was reserved and stored:
 ## `t.len` read the neighbouring slot (0), and for a PARAM source the single stored word was the block ADDRESS,

@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
+  `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
+  bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead
+  of the data, and ran on with wrong elements and no diagnostic. Both range deliverers now load the
+  data pointer from the block, through the same `slot_is_slice_param` question an element read asks.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type
