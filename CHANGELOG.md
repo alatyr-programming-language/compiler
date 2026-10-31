@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **An annotated struct-element slice view local no longer crashes on x86_64 (#1182).** A local
+  written `xs : Slice(P) = t[0..2]` over a struct array was read as a `Slice(P)` parameter, because the
+  x86_64 lowering took any annotated name for one: `xs[0].b`, `xs[1]`, `xs[1..2]` and `for p in xs`
+  dereferenced the view's data pointer once more and crashed (SIGSEGV). Parameter-ness is now recorded
+  where parameters are bound, so the annotated local reads exactly like `xs := t[0..2]`.
+
 ## 0.2.21 — 2026-11-01
 
 - **A struct read through `deref(unchecked bitcast(ptr(S), x))` is the whole `S` (#1209).** Binding it
