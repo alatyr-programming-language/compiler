@@ -12044,6 +12044,11 @@ run for_slice_str_bytes 15
 ## private copy that matched only the literal `Slice(str)` return (review of PR #1224). NON-VACUOUS: the
 ## parent at 2cf60b45 (x86_64) exited 1, and so did the PR's first head 1618dd05.
 run for_slice_str_call_generic 32
+## #1211 — `for p in r` over a `Slice(T)` a CALL returned, `T` a struct, enum or `str`: bound first
+## (`r := pass(…)`) or iterated directly. x86_64 bound `r` as the nominal two-word `Slice` struct, and a
+## direct call iterable knew only a `str` element, so the loop var was one word. NON-VACUOUS on the parent
+## 869eeb34 (x86_64): the fixture is refused at build (`r[1].a`); without that row it exits 1, not 42.
+run for_slice_call_agg 42
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.

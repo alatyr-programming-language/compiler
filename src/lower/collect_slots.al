@@ -388,6 +388,13 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               ## through to a bare SCALAR slot and every field read 0 (a silent miscompile).
               gssp := gen_ret_sret_span(v, decls, src, a)
               bind_struct_slot(slots, decls, src, ns, nl, gssp.s, gssp.n, struct_words(decls, src, gssp.s, gssp.n, a))
+            } else if slice_ret_view_call(v, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2) {
+              ## #1211 — `r := f(…)` with `f -> Slice(T)`, `T` a struct, enum or `str`: bind `r` as a typed
+              ## slice VIEW, like `r := t[lo..hi]`, BEFORE `struct_ret_call` (which owns every call once the
+              ## lib declares `Slice`) binds it as the nominal two-word struct and drops the element: a
+              ## `for p in r` then bound `p` as one scalar word. A scalar element keeps the struct binding.
+              vsri := slice_ret_elem(v, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2)
+              bind_slice_slot(slots, src, ns, nl, vsri.stride, vsri.eek, vsri.ess, vsri.esl)
             } else if struct_ret_call(v, decls, src, a) {
               ## a `name := f(…)` binding where `f` returns a 2-word struct — reserve `name` as that
               ## struct (2 slots); the result arrives in %rax/%rdx and is stored into the two slots.
@@ -982,6 +989,11 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
                 ## of one, or a `Slice(str)`-returning call): the loop var is a 2-word str. The emitter asks
                 ## the same `for_iter_str_elem`, so the binding and the element copy agree (#1177).
                 lv_str = for_iter_str_elem(flo, slots, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2)
+                ## a struct/enum-element `Slice(T)`-returning call iterated directly: the loop var is that
+                ## aggregate. The emitter asks the same `for_call_agg_elem` (#1211).
+                fca := for_call_agg_elem(flo, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2)
+                if fca.eek == 2 { lv_agg = 2; lv_es = fca.ess; lv_el = fca.esl }
+                if fca.eek == 3 { lv_agg = 3; lv_es = fca.ess; lv_el = fca.esl }
               }
             }
             if lv_agg == 2 { bind_struct_slot(slots, decls, src, fns, fnl, lv_es, lv_el, struct_words(decls, src, lv_es, lv_el, a)) } else {
