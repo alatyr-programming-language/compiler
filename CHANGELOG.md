@@ -126,6 +126,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A `+ - *` over a global narrow constant wraps, or traps, at the constant's width on x86_64
+  (#1272).** x86_64 took the width of a `+ - *` only from its operands' source spelling, and a global
+  const operand has none, so with `A : i32 = 2147483647` the result stayed 64-bit: `unchecked (A + A)`
+  read as 2^32 - 2 instead of -2, `unchecked ((H * H * (0 - 8)) / (0 - 1))` reached `idivq` as
+  `i64::MIN / -1` and died with SIGFPE, and a checked `A + (k + 1)` stored 2^31 in an `i32` instead of
+  trapping. Where no operand names a width, sema's record of the operation now gives it.
+
 ## 0.2.23 — 2026-11-07
 
 - **A checked `MIN % -1` yields 0 instead of trapping (#1398).** `x % y` over `i64` or `isize` with a
