@@ -406,6 +406,11 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               mut csp_n := raw_csp.n
               if sub_csp.n != 0 { csp_s = sub_csp.s; csp_n = sub_csp.n }
               if gen_csp.n != 0 { csp_s = gen_csp.s; csp_n = gen_csp.n }
+              else {
+                ## #1257: the same application when the call omits its type arguments (`v[1..3]`)
+                ucs := ufcs_gen_struct_ret_span(v, ptr(slots), decls, src, a, synth)
+                if ucs.n != 0 { csp_s = ucs.s; csp_n = ucs.n }
+              }
               nf := struct_words(decls, src, csp_s, csp_n, a)
               bind_struct_slot(slots, decls, src, ns, nl, csp_s, csp_n, nf)
             } else if slice_ret_call(v, decls, src, a) {
