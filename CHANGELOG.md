@@ -160,6 +160,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   the write was lost and the range viewed the handle. `v.at(i)`, `v.index_set(i, x)` and
   `v.index_range(lo, hi)` now infer `T` through the `ptr(Vec(T))` parameter instead of being refused.
   `v[i].f = x` is refused with a diagnostic: `v[i]` is a value.
+- **`for s in xs` over `str` elements binds the right strings on x86_64 (#1177).** Iterating a
+  `Slice(str)` parameter, a local `[str; N]`, a range of one written in the loop header, or a call
+  returning `Slice(str)` bound each element as one word, or copied it from the parameter's own
+  `{ptr, len}` block. The program then ran on with wrong strings and no diagnostic. Iterating a
+  range of a `Slice(str)` parameter (`for s in xs[1..n]`) is still wrong, tracked by #1180.
 
 ## 0.2.21 — 2026-11-01
 
@@ -212,11 +217,6 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `IB_I64_MIN : i64 = 0 - 9223372036854775807 - 1` the two subtractions are now signed and guarded
   (`jno`) where they were an unguarded zero-left subtraction and a borrow guard (`jnc`), and
   `i64(0 - 1)` in `lower::param_tuple_layout_collect` gains its signed guard.
-- **`for s in xs` over `str` elements binds the right strings on x86_64 (#1177).** Iterating a
-  `Slice(str)` parameter, a local `[str; N]`, a range of one written in the loop header, or a call
-  returning `Slice(str)` bound each element as one word, or copied it from the parameter's own
-  `{ptr, len}` block. The program then ran on with wrong strings and no diagnostic. Iterating a
-  range of a `Slice(str)` parameter (`for s in xs[1..n]`) is still wrong, tracked by #1180.
 
 ## 0.2.19 — 2026-10-31
 
