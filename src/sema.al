@@ -282,6 +282,11 @@ seam_cmp_outside_grant_err := fn(s : usize) -> CheckErr {
   SEAM_CMP_GRANT_DIAG_MARKER + diag_span(s) * 4
 }
 enum_field_access_err := fn(s : usize) -> CheckErr { ENUM_FIELD_ACCESS_DIAG_MARKER + diag_span(s) * 4 }
+## Issue #703 / Types §6.1 — a FIELD ACCESS whose OWNER is a plain SCALAR (`sema_scalar_owner_field_err`).
+## Placed above SEAM_CMP_GRANT_DIAG_MARKER and below the CT window, so only the seam window's upper bound
+## moves and every other decoded CheckErr range stays byte-identical.
+SCALAR_FIELD_ACCESS_DIAG_MARKER : usize = 6903000000000000000
+scalar_field_access_err := fn(s : usize) -> CheckErr { SCALAR_FIELD_ACCESS_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -6799,6 +6804,43 @@ sema_enum_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::Ve
   if bt.nl != 0 and is_union_decl(decls, src, bt.ns, bt.nl) { return 0 }
   enum_field_access_err(fs)
 }
+## Issue #703 / Types §6.1 + Modules §2 — a FIELD ACCESS whose OWNER is a plain SCALAR. A field access
+## selects a field of a struct or union, a position of a tuple (`.N`), or — one level through a pointer —
+## a field of the pointed-to struct; an integer, `bool`, `char` or float has no fields, so `x.a` names
+## nothing. Measured on the parent, `x : u64 = 3  x.a` compiled at rc 0 and answered a fabricated `0`.
+## The owner is identified only by a DECLARED type span (an annotated local, a parameter, or an annotated
+## module global) naming a builtin scalar (`sema_is_scalar_name`, which leaves out the multiword
+## `u128`/`i128`: library structs with a `words` field). An unannotated local is not decided here: its
+## recorded kind reads `TyInt` for a user-operator result or a `u128` value as well as for `x := 3`, so
+## the bare kind would refuse legal struct reads (#703 census: 24 such rows in test/, all legal).
+## A LOCAL or PARAMETER typed `u16`, `i16`, `i8`, `char`, `f32` or `f64` records no span either (`resolve_ty`
+## keeps one only for the types it classifies), so it is not decided here yet (#703 residual); a module
+## global reads its declared span.
+sema_scalar_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  if is_prelude_ns_var(base, src) { return 0 }
+  bv := expr_var_span(base)
+  if bv.n == 0 or not sema_name_owner_is_scalar(decls, src, locals, nloc, bv.s, bv.n) { return 0 }
+  scalar_field_access_err(fs)
+}
+## …the same question over a NAME place `[s, s+n)` — the read walkers above and the `v.a = x` store,
+## which the parser keeps as two name spans that no expression walker sees.
+sema_name_owner_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> bool {
+  mut ts : usize = 0
+  mut tl : usize = 0
+  if nloc != 0 and local_in(locals, nloc, src, s, n) {
+    ## A recorded provenance means the span is not the binding's own type: a range-slice view and an
+    ## inferred array literal record their ELEMENT type (`s := a[0..2]` reads `u64`, and `s.len` is legal).
+    if local_prov(locals, nloc, src, s, n) != 0 { return false }
+    lt := local_lookup(locals, nloc, src, s, n)
+    ts = lt.ty.ns
+    tl = lt.ty.nl
+  } else {
+    gt := global_type_span(decls, src, s, n)
+    ts = gt.s
+    tl = gt.n
+  }
+  tl != 0 and sema_is_scalar_name(str_at((src + ts), tl))
+}
 ## The direct/local/global field-name fence. A known struct must contain the selected field; otherwise
 ## the old `field_ty` returned unknown and the lower read/stored word zero. Keep prelude namespace and
 ## unknown-owner accesses tolerant, because their associated/pointer layouts are outside this bounded
@@ -8316,6 +8358,8 @@ expr_statement_has_unbound_m := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
       ## consult a field table at all — an enum has none — so the operand walk an `if`/`while`
       ## condition takes must ask it too, and the `if` row is exactly where the fabricated zero was
       ## measured choosing a branch.
+      sfe := sema_scalar_owner_field_err(base, fs, decls, upto, src, locals, nloc)
+      if sfe != 0 { mark_failed(locals, sfe); bad = true }
       efe := sema_enum_owner_field_err(base, fs, decls, upto, src, locals, nloc)
       if efe != 0 { mark_failed(locals, efe); bad = true }
       if fldck and not bad and sema_field_name_missing(base, fs, fl, decls, upto, src, locals, nloc, a) { bad = true }
@@ -8510,6 +8554,8 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       if not is_prelude_ns_var(base, src) { bad = expr_has_unbound(base, decls, upto, src, a, locals, nloc) }
       ## Issue #693 — the same enum-owner refusal on the full walk. Both walks reach `Expr::Field`
       ## from different callers and neither subsumes the other.
+      sfe := sema_scalar_owner_field_err(base, fs, decls, upto, src, locals, nloc)
+      if sfe != 0 { mark_failed(locals, sfe); bad = true }
       efe := sema_enum_owner_field_err(base, fs, decls, upto, src, locals, nloc)
       if efe != 0 { mark_failed(locals, efe); bad = true }
       if not bad and sema_field_name_missing(base, fs, fl, decls, upto, src, locals, nloc, a) { bad = true }
@@ -15117,6 +15163,10 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         ## owner, over the recorded local type a name place carries.
         if sema_name_owner_is_enum(decls, src, locals, cnt, bns, bnl) {
           return Result(usize, CheckErr).Err(enum_field_access_err(fns))
+        }
+        ## Issue #703 — the same write path for a SCALAR owner (`x.a = 4` on `x : u64`).
+        if sema_name_owner_is_scalar(decls, src, locals, cnt, bns, bnl) {
+          return Result(usize, CheckErr).Err(scalar_field_access_err(fns))
         }
         ## A known struct write must name one of that struct's declared fields. The parser stores this
         ## write as separate base/field spans, so the expression walker cannot validate it for us.
