@@ -11996,6 +11996,37 @@ run issue693_match_control 33
 check_accept issue693_match_control
 run issue693_union_member_control 77
 check_accept issue693_union_member_control
+## Issue #703 — a FIELD ACCESS whose owner is a declared builtin SCALAR (an integer, `bool` or float
+## local, parameter or module global) is refused at the access (Modules §2, Types §6.1). Parent
+## verdicts (main f00fcd8c, native x86_64, read outside a pipeline): check 0, build 0, and the program
+## answered the fabricated zero (`x.a` tail 0, `if x.a == 0` 7, the store 3 with the write dropped).
+## Bounded slice: an unannotated local, and a `u16`/`i16`/`i8`/`char`/`f32`/`f64` local or parameter,
+## record no type span in the sema local table and stay accepted, as do non-scalar owners (#703 residual).
+## Each row is asserted on `build` and `check`; the tail and store rows on the three emit surfaces too.
+build_reject_has issue703_scalar_field_tail "a scalar has no field to name at line 6 in issue703_scalar_field_tail"
+build_reject_has issue703_scalar_field_if_cond "a scalar has no field to name at line 6 in issue703_scalar_field_if_cond"
+build_reject_has issue703_scalar_field_store "a scalar has no field to name at line 6 in issue703_scalar_field_store"
+build_reject_has issue703_scalar_field_param "a scalar has no field to name at line 3 in issue703_scalar_field_param"
+build_reject_has issue703_scalar_field_global "a scalar has no field to name at line 4 in issue703_scalar_field_global"
+build_reject_has issue703_scalar_field_local_init "a scalar has no field to name at line 5 in issue703_scalar_field_local_init"
+build_reject_has issue703_scalar_field_bool "a scalar has no field to name at line 5 in issue703_scalar_field_bool"
+check_reject_has issue703_scalar_field_tail "a scalar has no field to name at line 6 in issue703_scalar_field_tail"
+check_reject_has issue703_scalar_field_if_cond "a scalar has no field to name at line 6 in issue703_scalar_field_if_cond"
+check_reject_has issue703_scalar_field_store "a scalar has no field to name at line 6 in issue703_scalar_field_store"
+check_reject_has issue703_scalar_field_param "a scalar has no field to name at line 3 in issue703_scalar_field_param"
+check_reject_has issue703_scalar_field_global "a scalar has no field to name at line 4 in issue703_scalar_field_global"
+check_reject_has issue703_scalar_field_local_init "a scalar has no field to name at line 5 in issue703_scalar_field_local_init"
+check_reject_has issue703_scalar_field_bool "a scalar has no field to name at line 5 in issue703_scalar_field_bool"
+emit_reject_has wat issue703_scalar_field_tail "a scalar has no field to name at line 6 in issue703_scalar_field_tail"
+emit_reject_has aarch64 issue703_scalar_field_tail "a scalar has no field to name at line 6 in issue703_scalar_field_tail"
+emit_reject_has riscv64 issue703_scalar_field_tail "a scalar has no field to name at line 6 in issue703_scalar_field_tail"
+emit_reject_has wat issue703_scalar_field_store "a scalar has no field to name at line 6 in issue703_scalar_field_store"
+emit_reject_has aarch64 issue703_scalar_field_store "a scalar has no field to name at line 6 in issue703_scalar_field_store"
+emit_reject_has riscv64 issue703_scalar_field_store "a scalar has no field to name at line 6 in issue703_scalar_field_store"
+## The control: a struct field through a pointer, a tuple position, a union member, a slice view's and a
+## str's length keep compiling and answer 21 on the parent and after.
+run issue703_scalar_owner_controls 21
+check_accept issue703_scalar_owner_controls
 ## The over-reach fence for the predicate's other direction is the four fixtures whose desugared callee
 ## span IS synthesized and which must keep COMPILING and answering their own values —
 ## `ambient_alloc_scalar` and `ambient_alloc_attr` (42, four backends), `map_capture` (42, `run_x86`
