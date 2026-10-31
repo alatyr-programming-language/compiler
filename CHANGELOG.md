@@ -132,6 +132,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   A global owner resolves in the module of the access, and a qualified owner (`z::cfg.x`) is left to
   the module it names. Programs that relied on the old behaviour were invalid. A local or parameter typed
   `u16`, `i16`, `i8`, `char` or a float is not decided yet (#703 stays open for it).
+- **A `HashMap` of a sub-word value or key returns what was inserted (#1255), and so do `dq_at`,
+  `front` and `back` on a sub-word `Deque` (part of #1254).** A `deref` through a pointer a call
+  returns (`deref(val_at(…))`, `deref(dq_elem(…))`) moved 8 bytes whatever the element was, so a `u8`,
+  `u16`, `u32`, `i8` or `bool` element read the bytes after it, and a rehash overwrote them. It now
+  moves the callee's declared pointee, resolved through the generic instance.
 
 ## 0.2.21 — 2026-11-01
 
