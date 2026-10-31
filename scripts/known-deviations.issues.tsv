@@ -1,0 +1,38 @@
+# scripts/known-deviations.issues.tsv — the issues the known deviations name, with the rule each one
+# does not meet and the observable difference (#1126 S2).
+#
+# Columns, TAB-separated: issue number, rule not met (spec chapter and section, or decision ID),
+# observable difference, and `rows` when scripts/known-deviations.tsv names it or `none` when the
+# deviation has no fixture row (no program-visible value differs: the defect is in how the result is
+# reached). Every issue here must be open: scripts/land.sh PHASE 2 refuses a closed one, and
+# `scripts/fixture_expect.sh --issues-open` asks `gh` by hand. The gate holds the rest without network.
+550	Overview §6 (code consistent with the normative lowering rules, per selected target); Memory §4.1	aarch64/riscv64: a deref store through a 1-byte pointee needs the @repr/sub-word byte image, and traps	rows
+551	Overview §6 (code consistent with the normative lowering rules, per selected target); Types §4.4	aarch64/riscv64: `bitcast` to a bare user aggregate has no lowering, and traps	rows
+577	Overview §6 (code consistent with the normative lowering rules, per selected target)	aarch64/riscv64: a statement-position `match` traps (fail-loud stub `unsupported match statement`)	rows
+713	Overview §6 (code consistent with the normative lowering rules, per selected target)	`size(T)` is unlowered on aarch64, riscv64 and wasm: the program traps at run time	rows
+1065	Stdlib appendix §2.6; Memory §4.5 (MEM-10)	a comparison over two different types ignores a declared heterogeneous `eq` (a wrong value), and with none declared it compares structurally instead of refusing	rows
+1081	Stdlib appendix §2.6; Memory §4.5; Types §4.4	the derived hash/eq over a pointer reaches the address with `u64(v)`, a conversion with no class in the lattice, instead of the spelled `unchecked bitcast(usize, …)`; no program-visible value differs	none
+1123	Overview §6 (code consistent with the normative lowering rules, per selected target); Functions §7.2	aarch64, riscv64 and wasm do not implement the slice-variadic gather: the program traps or fails to assemble	rows
+1184	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: a string literal in expression position is a fail-loud stub (`unsupported expr StrLit`)	rows
+1186	Overview §6 (code consistent with the normative lowering rules, per selected target)	wasm: `sys_mmap` has no lowering, so a program that allocates on the heap traps	rows
+1187	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: field access and field stores are fail-loud stubs on aarch64, riscv64 and wasm	rows
+1188	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: `ptr(place)` over a place the emitter cannot resolve is a fail-loud stub	rows
+1189	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: a name the emitter cannot resolve to a slot is a fail-loud stub (`unresolved var`)	rows
+1190	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: `match` in expression position, over an aggregate, or binding an aggregate is a fail-loud stub	rows
+1191	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: aggregate values (struct/array/enum literals, by-value copies, aggregate returns) are fail-loud stubs	rows
+1192	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: `==`/`<` over an aggregate needs the structural eq/lt and is a fail-loud stub	rows
+1193	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: code that needs a monomorphization context is a fail-loud stub (comptime-if, comptime-for, generic calls)	rows
+1194	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: indexing, indexed stores and aggregate elements are fail-loud stubs	rows
+1195	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: local lambdas beyond eight scalar words, and lambda values, are fail-loud stubs	rows
+1196	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: a call through a function-valued parameter does not resolve (`undefined/builtin callee g`)	rows
+1197	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: a brand conversion `A(x)` is lowered as a call to an undefined function `A`	rows
+1198	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: `defer` is lowered as a call to an undefined builtin `__defer`	rows
+1199	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: the ambient allocator calls (`alloc_into`, `allocate`) are undefined builtins	rows
+1200	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: library and prelude callees (`alloc::vec::new`, `unwrap`, `map`, `std::…`) do not resolve	rows
+1201	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: `for x in <iterable>` over a non-range iterable is a fail-loud stub	rows
+1202	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: `loop` as an expression, labeled `break`, `break` with a value and `?` are fail-loud stubs	rows
+1203	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: an enum variant with a `str` payload is a fail-loud stub	rows
+1204	Overview §6 (code consistent with the normative lowering rules, per selected target)	wasm: a float module global has no initializer and traps on read or assignment	rows
+1205	Overview §6 (code consistent with the normative lowering rules, per selected target)	wasm: `bitcast` in these shapes is a fail-loud stub (`unsupported bitcast`)	rows
+1206	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: overloaded functions do not assemble on aarch64, riscv64 and wasm	rows
+1207	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: two programs fail to assemble or link on aarch64 and riscv64	rows
