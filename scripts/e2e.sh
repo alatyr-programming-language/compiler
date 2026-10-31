@@ -12030,6 +12030,38 @@ run issue966_unchecked_div_signed 42
 run issue966_nested_agg_arg_wasm 11
 run issue966_enum_payload_literal_ctx 2
 
+## #1268 — a literal-only `+ - *` takes its position's type as its context (Declarations §3.4, Types
+## §9.1/§9.2): a module constant's annotation, a conversion's `T`, a stored field's type, an array
+## literal's element type, a type parameter's argument, a union member's type, and the native signed
+## default in a `print` hole. Each was an unsigned subtraction that borrowed and trapped.
+run accept_literal_ctx_module_const 42
+run accept_literal_ctx_conversion 42
+run_a64 accept_literal_ctx_conversion 42
+run_rv64 accept_literal_ctx_conversion 42
+run_wat accept_literal_ctx_conversion 42
+run accept_literal_ctx_field_assign 42
+run_a64 accept_literal_ctx_field_assign 42
+run_rv64 accept_literal_ctx_field_assign 42
+run_wat accept_literal_ctx_field_assign 42
+run accept_literal_ctx_array_elems 42
+run_a64 accept_literal_ctx_array_elems 42
+run_rv64 accept_literal_ctx_array_elems 42
+run_wat accept_literal_ctx_array_elems 42
+run accept_literal_ctx_generic_arg 42
+run_a64 accept_literal_ctx_generic_arg 42
+run_rv64 accept_literal_ctx_generic_arg 42
+run_wat accept_literal_ctx_generic_arg 42
+run accept_literal_ctx_union_ctor 42
+run_x86_out accept_literal_ctx_print_hole 42
+run_a64_out accept_literal_ctx_print_hole '-1 -7' 42
+run_rv64_out accept_literal_ctx_print_hole '-1 -7' 42
+run_wat_out accept_literal_ctx_print_hole '-1 -7' 42
+## The control: a `u64` field is an unsigned context, so the same `5 - 6` still traps, never a wrapped value.
+run trap_literal_ctx_field_u64 132
+run_a64 trap_literal_ctx_field_u64 133
+run_rv64 trap_literal_ctx_field_u64 133
+run_wat trap_literal_ctx_field_u64 134
+
 ## #973 — the same fallback, through a gap #966 did not close. `ib_bx_if` built each branch of an
 ## `if`-in-value-position with `ib_bx`, which asks the expression its OWN type; the bare literal branch
 ## `else { 1000 }` has none (`VcLit`), so the branch refused, `g13` was refused as `sema-gap literal`

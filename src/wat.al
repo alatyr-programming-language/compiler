@@ -5124,6 +5124,10 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           if ir::vs_signed(sg) { dsigned = true }
           if ir::vs_unsigned(sg) { dsigned = false }
         }
+        ## #1268 — `+ - *` read sema's record where it NAMES an integer type and keep the shape verdict
+        ## everywhere else: the one decision x86_64 makes (`lower_layout::ir_arith_signed_or`, #943). A
+        ## literal-only `5 - 6` whose context sema gave `i64` is a signed subtraction, never a borrow.
+        if op == 16 or op == 17 or op == 18 { dsigned = lower_layout::ir_arith_signed_or(e, dl or dr) }
         opname := wat_binop(op, dsigned)
         if op == 19 or op == 29 { ir::sign_row("wasm", op, l, r, src, dsigned) }
         ## NARROW-WIDTH WRAP (§4 value model): a +/-/* over a narrow-typed (uN/iN, N<64) operand truncates
@@ -5144,9 +5148,9 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## (a^out)&(b^out) < 0. `unreachable` traps. Dropped under `unchecked` (WAT_CHK false) and skipped
         ## for a narrow width. POINTER offsetting routes through `rt::addr` (unchecked), never reaching here.
         ## A `0` on the left omits the guard only where the operation has no overflow member — the one
-        ## decision `ir::zero_left_no_overflow` (#1049). Asked with `dl or dr`, the signedness the guard
+        ## decision `ir::zero_left_no_overflow` (#1049). Asked with `dsigned`, the signedness the guard
         ## blocks below test, so a skipped guard and an emitted one never disagree on the operation.
-        zskip := zero_left_guard_skip(i64(op), l, dl or dr)
+        zskip := zero_left_guard_skip(i64(op), l, dsigned)
         if (op == 16 or op == 17 or op == 18) and WAT_CHK and nw == "" and (not zskip) {
           push_str(sb, "(block (result i64) ")
           emit_wat_expr(l, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -5162,11 +5166,11 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           ##   -  unsigned: out >u a   ; signed: (a^b)&(a^out) < 0
           ##   *  a != 0 and out/a != b  (div_u unsigned / div_s signed; div_s MIN/-1 self-traps = overflow)
           if op == 16 {
-            if dl or dr { push_str(sb, " (if (i64.lt_s (i64.and (i64.xor (global.get $__ova) (global.get $__ovo)) (i64.xor (global.get $__ovb) (global.get $__ovo))) (i64.const 0)) (then (unreachable)))") }
+            if dsigned { push_str(sb, " (if (i64.lt_s (i64.and (i64.xor (global.get $__ova) (global.get $__ovo)) (i64.xor (global.get $__ovb) (global.get $__ovo))) (i64.const 0)) (then (unreachable)))") }
             else { push_str(sb, " (if (i64.lt_u (global.get $__ovo) (global.get $__ova)) (then (unreachable)))") }
           }
           if op == 17 {
-            if dl or dr { push_str(sb, " (if (i64.lt_s (i64.and (i64.xor (global.get $__ova) (global.get $__ovb)) (i64.xor (global.get $__ova) (global.get $__ovo))) (i64.const 0)) (then (unreachable)))") }
+            if dsigned { push_str(sb, " (if (i64.lt_s (i64.and (i64.xor (global.get $__ova) (global.get $__ovb)) (i64.xor (global.get $__ova) (global.get $__ovo))) (i64.const 0)) (then (unreachable)))") }
             else { push_str(sb, " (if (i64.gt_u (global.get $__ovo) (global.get $__ova)) (then (unreachable)))") }
           }
           ## NB: `i64.ne` yields an i32 boolean, so the two comparisons combine with `i32.and` (not
@@ -5179,7 +5183,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           ## therefore forced non-zero (`select a, 1` on `a != 0`); when a == 0 the quotient is a
           ## harmless 0 and the `a != 0` conjunct already makes the guard false.
           if op == 18 {
-            if dl or dr { push_str(sb, " (if (i32.and (i64.ne (global.get $__ova) (i64.const 0)) (i64.ne (i64.div_s (global.get $__ovo) (select (global.get $__ova) (i64.const 1) (i64.ne (global.get $__ova) (i64.const 0)))) (global.get $__ovb))) (then (unreachable)))") }
+            if dsigned { push_str(sb, " (if (i32.and (i64.ne (global.get $__ova) (i64.const 0)) (i64.ne (i64.div_s (global.get $__ovo) (select (global.get $__ova) (i64.const 1) (i64.ne (global.get $__ova) (i64.const 0)))) (global.get $__ovb))) (then (unreachable)))") }
             else { push_str(sb, " (if (i32.and (i64.ne (global.get $__ova) (i64.const 0)) (i64.ne (i64.div_u (global.get $__ovo) (select (global.get $__ova) (i64.const 1) (i64.ne (global.get $__ova) (i64.const 0)))) (global.get $__ovb))) (then (unreachable)))") }
           }
           push_str(sb, " (global.get $__ovo))")

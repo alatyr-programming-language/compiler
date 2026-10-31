@@ -136,6 +136,18 @@ Two numbers that are **not** the compiler's version: the specification revision 
   when the files are not the atomic set, and `gate` pushes the exact commit to `gate/**`. `due` answers
   the cadence: a week, an open `reseed-owed` issue, or a live `seed` row in `scripts/seed_forms.tsv`.
   The weekly `scripts/metrics.sh` report asks it, in a new `seed promotion` row.
+- **A literal-only `+ - *` takes its position's type as its context (#1268).** `i64(5 - 6)`,
+  `M : i64 = 5 - 6`, `s.f = 5 - 6`, `[i64; 2] = [5 - 6, 0]`, `lt(i64, 5 - 6, 1)`, `U.s(5 - 6)` and
+  `print("{}", 5 - 6)` all trapped on x86_64 (and most on the twins): sema gave the expression no type
+  there, so it read as an unsigned subtraction and the borrow guard fired on `-1`. A conversion's `T`,
+  a module constant's annotation, a stored field's type, an array literal's element type, a type
+  parameter's argument and a union member's type are now the context, and a `print` hole takes the
+  native signed default (Declarations §3.4, Types §9.1/§9.2). A `u64` context still traps on `5 - 6`.
+  aarch64, riscv64 and wasm read sema's signedness for `+ - *` as x86_64 does. In the compiler's own
+  source five guard decisions change (seed-to-Stage1 GAS, 5 hunks, +11/-2): at both inlined reads of
+  `IB_I64_MIN : i64 = 0 - 9223372036854775807 - 1` the two subtractions are now signed and guarded
+  (`jno`) where they were an unguarded zero-left subtraction and a borrow guard (`jnc`), and
+  `i64(0 - 1)` in `lower::param_tuple_layout_collect` gains its signed guard.
 
 ## 0.2.19 — 2026-10-31
 
