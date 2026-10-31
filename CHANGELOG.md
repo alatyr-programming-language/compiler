@@ -126,6 +126,14 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type
+  (#1248).** `f := fn(k : u64) -> i64 { match k { 0 => { 7 }; _ => { 5 - 7 } } }` trapped on all four
+  backends: a body ending in a statement `match` has no tail expression, so the declared result
+  never reached the arm, `5 - 7` kept its unsigned shape, and the borrow guard fired on `-2`. Sema
+  now gives the result type to the values of a statement tail (trailing `match` arms, `if` branches,
+  `unchecked` and `@alloc` blocks; Types §2.3). In the compiler's own source 26 guard decisions flip
+  from unsigned to signed, among them the 23 `=> { 0 - 1 }` arms #1154 counted.
+
 ## 0.2.18 — 2026-10-31
 
 - **Unary `-` over a signed integer traps on the minimum value, at every width (#1049).** `-x` with
