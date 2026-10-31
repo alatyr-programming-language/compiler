@@ -5,7 +5,8 @@
 # A TRAP (the checked-failure `ud2`, rc 132) is a recorded outcome and has no row; any other signal, a
 # timeout or a stray exit code is a CRASH and is held (#1277). The verdict holds a WRONG's check code, a
 # CRASH's rc and only the kind of a refusal (its message carries absolute paths). WRONG and REFUSED rows
-# measured at main 488186d7, CRASH rows at a487d7ce, on omen, native x86_64.
+# measured at main 488186d7, CRASH rows and the map/omap/oset/strmap/string/strbuf rows (#1278) at
+# a487d7ce, on omen, native x86_64.
 x86_64	deque.front_back.array3	REFUSED	#1250
 x86_64	deque.front_back.bool	WRONG 10	#1254
 x86_64	deque.front_back.char	REFUSED	#1244
@@ -84,9 +85,37 @@ x86_64	hashmap.value.option_u64	CRASH 139	#1302
 x86_64	hashmap.value.u16	WRONG 11	#1255
 x86_64	hashmap.value.u32	WRONG 11	#1255
 x86_64	hashmap.value.u8	WRONG 11	#1255
+x86_64	map.insert_get.u64	WRONG 10	#1305
 x86_64	none.control.array3	REFUSED	#1250
 x86_64	none.control.char	REFUSED	#1244
 x86_64	none.control.option_u64	REFUSED	#1249
+x86_64	omap.key.char	REFUSED	#1244
+x86_64	omap.key.i8	WRONG 11	#1307
+x86_64	omap.key.struct1	CRASH 139	#1308
+x86_64	omap.key.u16	WRONG 11	#1255
+x86_64	omap.key.u32	WRONG 11	#1255
+x86_64	omap.key.u8	WRONG 11	#1255
+x86_64	omap.value.array3	REFUSED	#1250
+x86_64	omap.value.bool	WRONG 11	#1255
+x86_64	omap.value.char	REFUSED	#1244
+x86_64	omap.value.enum0	CRASH 139	#1308
+x86_64	omap.value.enumN	WRONG 11	#1308
+x86_64	omap.value.i8	WRONG 11	#1255
+x86_64	omap.value.option_ptr	CRASH 139	#1308
+x86_64	omap.value.option_u64	CRASH 139	#1308
+x86_64	omap.value.struct1	CRASH 139	#1308
+x86_64	omap.value.u16	WRONG 11	#1255
+x86_64	omap.value.u32	WRONG 11	#1255
+x86_64	omap.value.u8	WRONG 11	#1255
+x86_64	oset.insert_contains.char	REFUSED	#1244
+x86_64	oset.insert_contains.i8	WRONG 10	#1307
+x86_64	oset.insert_contains.struct1	CRASH 139	#1308
+x86_64	oset.insert_contains.u16	WRONG 10	#1255
+x86_64	oset.insert_contains.u32	WRONG 10	#1255
+x86_64	oset.insert_contains.u8	WRONG 10	#1255
+x86_64	strbuf.push_byte.u8	REFUSED	#1306
+x86_64	strbuf.push_char.char	REFUSED	#1244
+x86_64	string.push.char	REFUSED	#1244
 x86_64	vec.for_in.array3	REFUSED	#1250
 x86_64	vec.for_in.bool	WRONG 10	#1238
 x86_64	vec.for_in.char	REFUSED	#1244
