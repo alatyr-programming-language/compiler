@@ -204,7 +204,7 @@ Three things follow from how the delta is checked:
   A rebase that goes through is still only a hypothesis. Your rows were measured on your old base's
   code, and `main`'s code can change what your own new or changed fixtures do without moving any row
   of the manifest (#1215: a guard on `main` turned a new fixture's `run/7` into `run/132`). So a
-  disjoint rebase can still be red. `land.sh` walks the corpus alone first (PHASE 3b, a few minutes)
+  disjoint rebase can still be red. `land.sh` walks the corpus alone first (PHASE 3b, about 15 minutes)
   and refuses with the walk's report before the full gate; then rebase your branch and re-emit. `.gitattributes` marks the file `-merge`, so two feature PRs that both declare one
   conflict instead of merging into a prediction neither of them made; that conflict, alone, is the
   one the landing settles, with the rebased copy.

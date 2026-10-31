@@ -532,7 +532,7 @@ Then run `scripts/land.sh <pr>`. Every step is a check that stops on failure:
   its rows do not rebuild its own result (a header change); the author re-emits it.
 - **PHASE 3b**, for a rebased delta only: the rebase is a hypothesis about `main`'s code, which can
   change what the PR's own fixtures do without moving a manifest row (#1215). land.sh builds the merge
-  and walks the corpus alone (~160 s); a walk that does not realise the rebased delta is
+  and walks the corpus alone (~15 min with the two self-builds); a walk that does not realise the rebased delta is
   `NOT LANDABLE` with the walk's report, before the full gate. A walk with no answer (build failure,
   timeout) leaves the verdict to the gate.
 - **The gate.** The corpus stage must print `corpus manifest: match by the declared delta`. That

@@ -279,7 +279,8 @@ land_manifest_by_sha() { # sha256 out rev...
 ## names moves in the manifest. #1215 is the case: #1227's guard turned its new fixture's run/7 into
 ## run/132-134, and the four mechanically rebased ADDED rows still said run/7. The full gate catches
 ## that (MISPREDICTED, red), but only after ~90 minutes. So a landing that rebased its delta builds the
-## merged compiler and walks the corpus alone first (~160 s on omen). The full gate runs only when that
+## merged compiler (seed -> Stage1 -> Stage2) and walks the corpus alone first: ~15 minutes on omen
+## (measured on #1215: 833 s, of which the walk was 255 s at four jobs). The full gate runs only when that
 ## walk realises the rebased delta, and a walk that cannot answer leaves the decision to the full gate.
 ## A live delta goes straight to the full gate, as before: its author walked it against the manifest
 ## main still holds, and the landing did not rewrite it. The pre-walk is for a prediction the landing
@@ -294,11 +295,17 @@ land_prewalk_needed() { [ -n "$1" ]; } # rebased-from-sha|''
 land_prewalk_outcome() { # walk-rc walk-log
   if [ "$1" = 0 ] && grep -q '^corpus manifest: match by the declared delta' "$2" 2>/dev/null; then
     echo realised; return; fi
+  ## The timeout test reads the delta report alone: the walk's own self-test banners name
+  ## `compile_timeout` and `TIMED-OUT` on every run (measured on #1215's pre-walk log).
   if [ "$1" = 1 ] && grep -q '^corpus manifest: MISMATCH against the declared delta' "$2" 2>/dev/null &&
      grep -q '^corpus delta: the fresh manifest does NOT differ' "$2" &&
-     ! grep -q 'TIMED-OUT\|_timeout' "$2"; then
+     ! land_prewalk_report "$2" | grep -q -E 'TIMED-OUT|_timeout/'; then
     echo unrealised; return; fi
   echo unknown
+}
+## The walk's delta report: from its first line to the MISMATCH verdict, nothing else of the log.
+land_prewalk_report() { # walk-log
+  sed -n '/^corpus delta: the fresh manifest does NOT differ/,/^corpus manifest: MISMATCH against the declared delta/p' "$1"
 }
 
 ## PHASE 3's merge. Every delta PR edits the ONE file scripts/corpus.expected-delta, and .gitattributes
@@ -379,7 +386,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=104  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +8 #1264 pre-walk
+LAND_SELFTEST_EXPECTED=105  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -642,13 +649,20 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
   land_prewalk_needed ''; [ $? = 1 ]; _ck $? prewalk-ran-for-a-delta-the-landing-did-not-rebase
   printf 'corpus manifest: rows=8\ncorpus manifest: match by the declared delta — x\n' > "$st/pw-ok"
   [ "$(land_prewalk_outcome 0 "$st/pw-ok")" = realised ]; _ck $? prewalk-missed-a-realised-delta
-  { echo 'corpus delta: the fresh manifest does NOT differ from the committed one by exactly the declared delta'
-    printf '  MISPREDICTED  x86_64   test/n.al  declared ADDED  - -> run/7/e/e\n'
+  #      The log's shape is #1215's real pre-walk: the walk's self-test banners (which name
+  #      compile_timeout and TIMED-OUT on every run) come first, then the report, then the verdict.
+  { echo 'corpus manifest: stream separation self-test ok (child hash stable, supervisor stderr separate, run rc=124, compile_timeout preserved)'
+    echo '  unrealised, mispredicted (exit, hash, class), wrong result, malformed and TIMED-OUT deltas refused;'
+    echo 'corpus delta: the fresh manifest does NOT differ from the committed one by exactly the declared delta'
+    printf '  MISPREDICTED  x86_64   test/n.al  declared ADDED  - -> run/7 out:e3b0c442 err:e3b0c442\n'
+    printf '%72s observed ADDED  - -> run/132 out:e3b0c442 err:e3b0c442\n' ''
+    echo 'corpus delta: 0 undeclared, 0 unrealised, 1 mispredicted pair(s)'
     echo 'corpus manifest: MISMATCH against the declared delta in scripts/corpus.expected-delta (report above)'; } > "$st/pw-red"
   [ "$(land_prewalk_outcome 1 "$st/pw-red")" = unrealised ]; _ck $? prewalk-missed-an-unrealised-delta
   [ "$(land_prewalk_outcome 0 "$st/pw-red")" = unknown ]; _ck $? prewalk-refused-on-a-log-its-exit-contradicts
-  { cat "$st/pw-red"; echo '  UNDECLARED    wasm  test/q.al  observed TIMED-OUT  run/0/e/e -> run_timeout/124/e/e'; } > "$st/pw-to"
+  sed 's|- -> run/132 out|- -> run_timeout/124 out|' "$st/pw-red" > "$st/pw-to"
   [ "$(land_prewalk_outcome 1 "$st/pw-to")" = unknown ]; _ck $? prewalk-refused-on-a-timeout
+  [ "$(land_prewalk_report "$st/pw-red" | grep -c '')" = 5 ]; _ck $? prewalk-report-is-not-the-delta-report-alone
   printf 'error: seed build failed\n' > "$st/pw-died"
   [ "$(land_prewalk_outcome 1 "$st/pw-died")" = unknown ]; _ck $? prewalk-refused-on-a-walk-that-never-ran
   printf 'corpus manifest: match (8 rows)\n' > "$st/pw-inert"
@@ -1007,7 +1021,7 @@ echo "  so that the fixpoint that is verified is the fixpoint that ships."
 # minutes. It builds the merged compiler the way fixpoint.sh does (seed -> Stage1 -> Stage2) and runs
 # the corpus stage alone. Only an `unrealised` answer stops here; full.sh rebuilds and re-walks anyway.
 if land_prewalk_needed "$DELTA_REBASED_FROM"; then
-  say "PHASE 3b — corpus pre-walk: does the merged tree realise the REBASED $DELTA_REL? (~160 s walk + build)"
+  say "PHASE 3b — corpus pre-walk: does the merged tree realise the REBASED $DELTA_REL? (~15 min: two self-builds and one walk)"
   PW_LOG="$ROOT/target/land-prewalk.log"
   ( ulimit -c 0; nix develop -c bash -c '
       rm -f target/debug/alatyr target/debug/alatyr.s target/debug/alatyr.o &&
@@ -1022,8 +1036,7 @@ if land_prewalk_needed "$DELTA_REBASED_FROM"; then
       echo "  The rebased delta is NOT what the merged tree does: the rows were measured on the PR's old base,"
       echo "  and main's code changed what they describe (or they never held). The walk's report"
       echo "  (log $PW_LOG):"
-      sed -n '/^corpus delta: the fresh manifest does NOT differ/,/^corpus manifest: MISMATCH against the declared delta/p' \
-        "$PW_LOG" | head -n 60 | sed 's/^/  pre-walk MISMATCH | /'
+      land_prewalk_report "$PW_LOG" | head -n 60 | sed 's/^/  pre-walk MISMATCH | /'
       echo "  Rebase the branch onto main and re-emit $DELTA_REL from a native walk of it (--emit-expected)."
       verdict "NOT LANDABLE — the corpus pre-walk does not realise the rebased $DELTA_REL; the full gate was not run"
       echo "The merge commit $M is left in place, detached, for inspection. \`git switch main\` to leave it."
