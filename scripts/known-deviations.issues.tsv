@@ -10,7 +10,6 @@
 551	Overview §6 (code consistent with the normative lowering rules, per selected target); Types §4.4	aarch64/riscv64: `bitcast` to a bare user aggregate has no lowering, and traps	rows
 577	Overview §6 (code consistent with the normative lowering rules, per selected target)	aarch64/riscv64: a statement-position `match` traps (fail-loud stub `unsupported match statement`)	rows
 713	Overview §6 (code consistent with the normative lowering rules, per selected target)	`size(T)` is unlowered on aarch64, riscv64 and wasm: the program traps at run time	rows
-1049	Concurrency §6.1, §6.2; CC-9	unary `-` on the minimum signed value wraps instead of trapping: the builder lowers `-x` as an `unchecked` scope the source never wrote	rows
 1065	Stdlib appendix §2.6; Memory §4.5 (MEM-10)	a comparison over two different types ignores a declared heterogeneous `eq` (a wrong value), and with none declared it compares structurally instead of refusing	rows
 1081	Stdlib appendix §2.6; Memory §4.5; Types §4.4	the derived hash/eq over a pointer reaches the address with `u64(v)`, a conversion with no class in the lattice, instead of the spelled `unchecked bitcast(usize, …)`; no program-visible value differs	none
 1123	Overview §6 (code consistent with the normative lowering rules, per selected target); Functions §7.2	aarch64, riscv64 and wasm do not implement the slice-variadic gather: the program traps or fails to assemble	rows
