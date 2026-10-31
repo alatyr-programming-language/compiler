@@ -416,17 +416,20 @@ output of a **stage**, so it goes stale the moment `package.al` moves and fails 
 that never mentions the version. Note also that the fixpoint does **not** catch a wrong version by
 itself, for the reason just measured; the seed-identity check at the top of `scripts/fixpoint.sh` is
 what catches it, in both directions: a promotion that forgot the bump, and a `package.al` bump made on
-its own.
+its own. It also asks the seed, so the bumped tree, whose seed still answers the previous number, is
+refused too, until you say it is a promotion in progress: build the stages with
+`ALATYR_RESEED=1 scripts/fixpoint.sh` (#1104). The flag accepts only both rows bumped, the digest
+unchanged and a seed answering an **older** version. A flagged run ends at rc 4 and never reports the
+fixpoint, so the proof is still the unflagged run on the promoted tree.
 
-What that check does **not** catch is a tree where `package.al` and `current-seed-version` agree and
-the seed answers a third thing — which is precisely the intermediate state of a bump-first promotion,
-and precisely the state `main` is in. Only the digest side of the CURRENT SEED block is checked
-against the artifact; the version side compares one claim to another. The promotion commit's
-**atomicity** is therefore what keeps that state out of a published tree: never commit the bump
-without the seed replacement, and never resolve the awkwardness by moving the bump back. #586's next
-step compares `./seed/alatyr --version` and closes the hole; it can land only with or after the first
-promotion built in this order, because on today's tree it would be correctly red with no way to make
-it green short of a promotion.
+That check asks the seed, so a tree where `package.al` and `current-seed-version` agree and the seed
+answers a third thing — the intermediate state of a bump-first promotion — is refused (rc 6) unless
+`ALATYR_RESEED=1` says it is a promotion in progress and the seed's answer is the **older** number.
+On a host that cannot execute the seed the question is skipped and the log says so; there only the
+digest is checked against the artifact. The promotion commit's **atomicity** therefore still matters:
+never commit the bump without the seed replacement, and never resolve the awkwardness by moving the
+bump back. Leaving the flag set on an already-promoted tree changes nothing: the seed answers the
+block's number, the flag is not consulted, and the run reports the fixpoint as usual.
 
 After the promotion lands on `main`, place an **annotated** tag `v<version>` on the promotion commit,
 with the digest as its message — one paragraph on what this generation does that the previous one did

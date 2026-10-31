@@ -38,8 +38,14 @@ step() { printf '=== %s ===\n' "$1"; }
 #
 # Returns 0 when `seed/VERSION`'s CURRENT SEED block describes the committed seed and agrees with
 # `package.al`; 6 otherwise, having said which of the five ways it broke.
+# version_older A B — true when A sorts strictly before B as a version (0.2.9 < 0.2.10).
+version_older() {
+  [ -n "$1" ] && [ -n "$2" ] && [ "$1" != "$2" ] || return 1
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
 seed_identity_check() { # version-file package-file seed-binary
-  local VF="$1" M="$2" SEED="$3" f n want_sha want_ver have_sha have_ver
+  local VF="$1" M="$2" SEED="$3" f n want_sha want_ver have_sha have_ver MID_PROMOTION=0
+  FP_MID_PROMOTION=0  # global: the caller reads it to keep a flagged run from ever passing as the proof
   [ -f "$VF" ] || { echo "FAIL: no seed/VERSION at $VF"; return 6; }
   field() { # <name> -> the single value, or empty when the line is absent
     grep -oE "^${1}:[[:space:]]*[^[:space:]]+" "$VF" 2>/dev/null | head -1 | sed -E "s/^${1}:[[:space:]]*//"
@@ -92,6 +98,7 @@ seed_identity_check() { # version-file package-file seed-binary
     echo "      forgot the bump, and a bump made without a promotion. Note the version IS part of the"
     echo "      emission — it is a compile-time constant (src/cli.al, TOOL-21) — but changing it moves"
     echo "      the seed's and Stage1's output identically, so the fixpoint below would NOT catch this."
+    echo "      They agree even mid-promotion: seed/VERSION's order bumps BOTH before the build (#1104)."
     return 6
   fi
   # THE THIRD AXIS — ASK THE ARTIFACT (#586). The two comparisons above are claims checked against
@@ -125,7 +132,24 @@ seed_identity_check() { # version-file package-file seed-binary
     asked="${ans#alatyr }"
     asked="${asked%%,*}"
     asked="$(printf '%s' "$asked" | tr -d '[:space:]')"
-    if [ "$asked" != "$want_ver" ]; then
+    if [ "$asked" != "$want_ver" ] && [ "${ALATYR_RESEED:-0}" = "1" ] && version_older "$asked" "$want_ver"; then
+      # ALATYR_RESEED=1 — MID-PROMOTION, the one state where the artifact may lag the block (#1104).
+      # seed/VERSION's promote order (and alatyr-integrate's reseed section) is "bump FIRST, then
+      # build": package.al AND current-seed-version move to the new number before Stage1 is built,
+      # because a compiler bakes the version of the tree it was compiled from (#586). Until Stage2 is
+      # copied over seed/alatyr, the committed seed therefore answers the PREVIOUS number while the
+      # block already names the new one — and without this opt-in fixpoint.sh refused that tree here,
+      # before it built anything, so the order the prose requires could not be run.
+      # What the opt-in does NOT relax: the digest still has to match (current-seed-sha256 moves only
+      # after the build), package.al and the block still have to agree, and the artifact still has to
+      # answer, with a version strictly OLDER than the block's. A seed answering a newer or the same-
+      # but-garbled number is still #586 and still rc 6. And a flagged run never reports the fixpoint
+      # as reached (see the end of this script): the proof is the unflagged run on the promoted tree.
+      echo "NOTE: mid-promotion (ALATYR_RESEED=1): the version is bumped ahead of the committed seed."
+      echo "      package.al, seed/VERSION current-seed-version: $want_ver  <- the tree about to be built"
+      echo "      ./seed/alatyr --version:                       $ans  <- the seed being replaced"
+      MID_PROMOTION=1; FP_MID_PROMOTION=1
+    elif [ "$asked" != "$want_ver" ]; then
       echo "FAIL: the seed answers a different version than seed/VERSION records."
       echo "      ./seed/alatyr --version:         $ans"
       echo "      seed/VERSION current-seed-version: $want_ver"
@@ -133,13 +157,24 @@ seed_identity_check() { # version-file package-file seed-binary
       echo "      stale, or the promoted binary is not the one the block describes. AGENTS.md's"
       echo "      bump-precedes-the-build order makes the promoted Stage2 answer the version it is"
       echo "      released under; a disagreement here means that order was not followed, which is #586."
+      if version_older "$asked" "$want_ver"; then
+        echo "      If this is a promotion in progress — bumped first, Stage2 not yet copied over the seed —"
+        echo "      build the stages with ALATYR_RESEED=1 (#1104); the proof is the unflagged run afterwards."
+      fi
       return 6
     fi
   fi
-  if [ -n "$asked" ]; then
-    echo "seed identity ok: sha256 ${have_sha:0:16}… version $have_ver (seed/VERSION agrees; the seed was asked and answered $asked)"
+  # The verdict names the version that was VERIFIED, never one merely declared. Mid-promotion that
+  # is the seed's own answer, the previous release: printing package.al's number there produced
+  # `version 0.2.18 (seed/VERSION agrees; the seed … answered 0.2.17)` on the #1072 reseed run — a
+  # verdict line asserting agreement on a number the artifact does not carry, which is the exact
+  # defect this file's own header warns about. (Mid-promotion is only ever entered by asking.)
+  if [ "${MID_PROMOTION:-0}" = "1" ]; then
+    echo "seed identity ok: sha256 ${have_sha:0:16}… version $asked (mid-promotion: the seed was asked and answered $asked; package.al and seed/VERSION are bumped AHEAD to $want_ver, the version of the tree about to be built)"
+  elif [ -n "$asked" ]; then
+    echo "seed identity ok: sha256 ${have_sha:0:16}… version $want_ver (seed/VERSION agrees; the seed was asked and answered $asked)"
   else
-    echo "seed identity ok: sha256 ${have_sha:0:16}… version $have_ver (seed/VERSION agrees; the seed was NOT asked on this host)"
+    echo "seed identity ok: sha256 ${have_sha:0:16}… version $want_ver (seed/VERSION agrees; the seed was NOT asked on this host)"
   fi
   return 0
 }
@@ -148,9 +183,45 @@ seed_identity_check() { # version-file package-file seed-binary
 ## invocation, BEFORE the decision it is about — and in a SUBSHELL, because a `set -u` unbound
 ## variable or an arithmetic error inside a driven function unwinds to top level and ENDS THE
 ## SCRIPT, printing nothing at all; the completion marker below is what notices instead.
-FIXPOINT_SELFTEST_EXPECTED=30
+FIXPOINT_SELFTEST_EXPECTED=50  # +12 for the #1104 opt-in: 4 bump-first tree, 2 verdict line, 1 version order, 5 limits; +5 the end-of-run verdict, +3 the flag reaching it (PR #1105 reviews)
+# The verdict at the end of a run, a function so the self-test drives the REAL decision (review of
+# PR #1105): a mid-promotion run (ALATYR_RESEED=1) must end at rc 4 and never print the fixpoint
+# line, even when seed == Stage1 == Stage2.
+fixpoint_verdict() { # mid-promotion(0|1) gas-seed gas1 gas2
+  if [ "$1" = 1 ]; then
+    echo "mid-promotion: seed=$(wc -l<"$2") gas1=$(wc -l<"$3") gas2=$(wc -l<"$4") lines"
+    if [ -s "$3" ] && diff -q "$3" "$4" >/dev/null 2>&1; then
+      echo "  Stage1 == Stage2 in the emitted GAS. Build Stage3, promote Stage2, then re-run this script"
+      echo "  WITHOUT ALATYR_RESEED: that run, on the promoted tree, is the proof. Not a fixpoint verdict."
+    else
+      echo "  FAIL: Stage1 != Stage2 in the emitted GAS — nothing here can be promoted."
+    fi
+    return 4
+  fi
+  if [ -s "$3" ] && diff -q "$3" "$4" >/dev/null 2>&1 && diff -q "$2" "$3" >/dev/null 2>&1; then
+    echo "*** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 ($(wc -l < "$3") lines); self-built compiler builds standalone ***"
+    return 0
+  fi
+  echo "DIFFER: seed=$(wc -l<"$2") gas1=$(wc -l<"$3") gas2=$(wc -l<"$4")"
+  echo "  (seed != Stage1 means the committed seed/alatyr is STALE vs src/. The recovery is a SELF-PROMOTE,"
+  echo "   not a rebuild from the frozen Rust ancestor — that ancestor can no longer parse the current src/."
+  echo "   Build Stage1, let it build Stage2 and Stage3. Require Stage1 == Stage2 == Stage3 in the emitted GAS,"
+  echo "   normalizing .L<N> and .Lra<N>_<k> first. In the BINARY require only Stage2 == Stage3: Stage1 was"
+  echo "   assembled by the stale seed, so its binary differs by construction. Read that normalized"
+  echo "   seed->Stage1 delta line by line, copy STAGE2 — not Stage1 — over seed/alatyr, append the evidence"
+  echo "   to seed/HISTORY.md, and re-run this script on the promoted tree. Why Stage2, and what a readable"
+  echo "   delta looks like: docs/rationale/reproducibility.md and alatyr-integrate SKILL.md section 3.)"
+  return 4
+}
+
 fixpoint_seed_identity_selftest() { # work-dir
   local st="$1" bad="" k=0 out rc
+  # The self-test drives the REAL decision, so it owns the variable some of its checks are about:
+  # a run launched WITH ALATYR_RESEED=1 must not leak the flag into the negative controls, or
+  # 'a bump made without a promotion' answers rc=0 and the self-test that is supposed to catch
+  # exactly that goes silent — measured, it failed rc=1 with two such labels when the whole
+  # fixpoint run carried the flag. Checks that exercise the opt-in set it explicitly per call.
+  local ALATYR_RESEED=0
   rm -rf "$st"; mkdir -p "$st" || return 1
   _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
   printf 'a frozen seed\n' > "$st/seed"
@@ -265,6 +336,79 @@ fixpoint_seed_identity_selftest() { # work-dir
   case "$out" in *'NOT asked'*) _ck 0 x ;;
                  *) _ck 1 "identity-claimed-an-asking-it-could-not-do($out)" ;; esac
 
+  # 1104 · the mid-promotion opt-in. seed/VERSION's order is "bump FIRST, then build": package.al and
+  #        current-seed-version both move to the new number, the digest and the binary do not yet. So
+  #        the seed answers the PREVIOUS number while block and manifest agree on the next one, and
+  #        fixpoint.sh refused that tree before any stage built. These drive the opt-in and, more
+  #        importantly, its LIMITS: the artifact still governs, so an opt-in cannot mask #586.
+  _bumped() { # seed-answer block-and-package-version -> a bump-first tree over a seed answering $1
+    _ans "$1"; _vf "$sha" "$2"; _pkg "$2"
+  }
+  _bumped 0.4.2 0.4.3
+  out="$(seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 6 ]; _ck $? "identity-accepted-a-bump-first-tree-without-the-flag(rc=$rc)"
+  case "$out" in *'ALATYR_RESEED=1'*) _ck 0 x ;;
+                 *) _ck 1 "identity-refusal-did-not-name-the-opt-in($out)" ;; esac
+  out="$(ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 0 ]; _ck $? "identity-refused-a-bump-first-tree-with-the-flag(rc=$rc: $out)"
+  case "$out" in *'mid-promotion'*) _ck 0 x ;;
+                 *) _ck 1 "opt-in-did-not-say-it-was-mid-promotion($out)" ;; esac
+  # The VERDICT LINE names the version that was verified, the seed's answer, and marks the bump as
+  # ahead of it: on the #1072 run it claimed `version 0.2.18 (seed/VERSION agrees …)` for a seed
+  # answering 0.2.17.
+  case "$out" in *'version 0.4.2 (mid-promotion'*) _ck 0 x ;;
+                 *) _ck 1 "verdict-line-named-the-declared-not-the-verified-version($out)" ;; esac
+  case "$out" in *'bumped AHEAD to 0.4.3'*) _ck 0 x ;;
+                 *) _ck 1 "verdict-line-did-not-mark-the-bump-ahead($out)" ;; esac
+  # Version order, not string order: 0.4.9 -> 0.4.10 is a bump.
+  _bumped 0.4.9 0.4.10
+  ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" >/dev/null 2>&1
+  [ $? = 0 ]; _ck $? opt-in-compared-versions-as-strings
+  # LIMIT 1: the seed answers a NEWER number than the block. No promotion order produces that; it
+  #          is #586 the other way round and stays rc 6 with the flag.
+  _bumped 0.4.4 0.4.3
+  out="$(ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 6 ]; _ck $? "opt-in-masked-a-seed-answering-a-newer-version(rc=$rc)"
+  case "$out" in *'different version than seed/VERSION records'*) _ck 0 x ;;
+                 *) _ck 1 "opt-in-did-not-still-ask-the-artifact($out)" ;; esac
+  # LIMIT 2: half a bump — package.al ahead, the block left behind. The documented order moves both,
+  #          so the flag does not make this one runnable: it stays the 'bump without a promotion'.
+  _ans 0.4.2; _pkg 0.4.3
+  out="$(ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" 2>&1)"; rc=$?
+  [ "$rc" = 6 ]; _ck $? "opt-in-accepted-a-half-bump(rc=$rc)"
+  case "$out" in *"package.al's version and the promoted seed's version disagree"*) _ck 0 x ;;
+                 *) _ck 1 "half-bump-refusal-did-not-name-the-disagreement($out)" ;; esac
+  # LIMIT 3: the digest. current-seed-sha256 moves only after the build, so mid-promotion it still
+  #          describes the committed seed; a block describing another binary stays rc 6.
+  _bumped 0.4.2 0.4.3; _vf "${sha//[0-9a-f]/0}" 0.4.3
+  ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" >/dev/null 2>&1
+  [ $? = 6 ]; _ck $? opt-in-masked-a-digest-disagreement
+
+  # 1105 review · the end-of-run verdict. A flagged run must stop at rc 4 without the fixpoint line,
+  #        even when all three emissions agree; an unflagged agreeing run reports it at rc 0.
+  printf 'a\n' > "$st/g0"; printf 'a\n' > "$st/g1"; printf 'a\n' > "$st/g2"; printf 'b\n' > "$st/gx"
+  out="$(fixpoint_verdict 1 "$st/g0" "$st/g1" "$st/g2" 2>&1)"; rc=$?
+  [ "$rc" = 4 ]; _ck $? "flagged-run-did-not-end-at-rc-4(rc=$rc)"
+  case "$out" in *'TOOL-1 FIXPOINT'*) _ck 1 "flagged-run-printed-the-fixpoint-verdict" ;; *) _ck 0 x ;; esac
+  out="$(fixpoint_verdict 0 "$st/g0" "$st/g1" "$st/g2" 2>&1)"; rc=$?
+  [ "$rc" = 0 ]; _ck $? "unflagged-agreeing-run-not-rc-0(rc=$rc)"
+  case "$out" in *'TOOL-1 FIXPOINT'*) _ck 0 x ;; *) _ck 1 "unflagged-agreeing-run-without-the-verdict" ;; esac
+  out="$(fixpoint_verdict 0 "$st/gx" "$st/g1" "$st/g2" 2>&1)"; rc=$?
+  [ "$rc" = 4 ]; _ck $? "a-stale-seed-reported-a-fixpoint(rc=$rc)"
+
+  # 1105 review (2nd) · the flag reaches the verdict. The rc-4 checks above drive fixpoint_verdict with
+  #        a literal 1; these prove the two links that feed it: seed_identity_check sets the global on a
+  #        bump-first tree under the flag (and only there), and the run's one call passes that global.
+  _bumped 0.4.2 0.4.3; FP_MID_PROMOTION=x
+  ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" > "$st/o" 2>&1
+  [ "$FP_MID_PROMOTION" = 1 ]; _ck $? "flagged-bump-first-tree-did-not-set-FP_MID_PROMOTION($FP_MID_PROMOTION)"
+  _bumped 0.4.3 0.4.3; FP_MID_PROMOTION=x
+  ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" > "$st/o" 2>&1; rc=$?
+  [ "$rc" = 0 ] && [ "$FP_MID_PROMOTION" = 0 ]
+  _ck $? "a-promoted-tree-under-the-flag-was-refused-or-set-FP_MID_PROMOTION(rc=$rc,$FP_MID_PROMOTION)"
+  grep -qx 'fixpoint_verdict "${FP_MID_PROMOTION:-0}" target/gas_seed.s target/gas1.s target/gas2.s' "$ROOT/scripts/fixpoint.sh"
+  _ck $? "the-run-does-not-pass-FP_MID_PROMOTION-to-fixpoint_verdict"
+
   printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
   if [ -n "$bad" ]; then echo "*** fixpoint seed-identity selftest: FAILED —$bad ***"; return 1; fi
   if [ "$k" -lt "$FIXPOINT_SELFTEST_EXPECTED" ]; then
@@ -278,7 +422,8 @@ fixpoint_seed_identity_selftest() { # work-dir
   echo "  block, a missing file, a manifest with no version, and the seed ASKED in all four states:"
   echo "  answers right, answers wrong, fails to answer, and cannot be executed (the skip says so);"
   echo '  and the spec suffix the CLI cites (`alatyr <ver>, spec <pin>`), in both directions and with'
-  echo "  no version before the comma, so the parse cannot become a rubber stamp"
+  echo "  no version before the comma, so the parse cannot become a rubber stamp; and the #1104"
+  echo "  mid-promotion opt-in with its limits: a newer answer, a half bump and a foreign digest stay refused"
   return 0
 }
 
@@ -345,17 +490,9 @@ printf 'main := fn() -> u64 { return 7 + 35 }\n' > target/smoke.al
 echo "smoke = $sc (self-built compiler builds standalone)"
 
 step "fixpoint"
-if [ -s target/gas1.s ] && diff -q target/gas1.s target/gas2.s >/dev/null 2>&1 && diff -q target/gas_seed.s target/gas1.s >/dev/null 2>&1; then
-  echo "*** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 ($(wc -l < target/gas1.s) lines); self-built compiler builds standalone ***"
-  exit 0
-fi
-echo "DIFFER: seed=$(wc -l<target/gas_seed.s) gas1=$(wc -l<target/gas1.s) gas2=$(wc -l<target/gas2.s)"
-echo "  (seed != Stage1 means the committed seed/alatyr is STALE vs src/. The recovery is a SELF-PROMOTE,"
-echo "   not a rebuild from the frozen Rust ancestor — that ancestor can no longer parse the current src/."
-echo "   Build Stage1, let it build Stage2 and Stage3. Require Stage1 == Stage2 == Stage3 in the emitted GAS,"
-echo "   normalizing .L<N> and .Lra<N>_<k> first. In the BINARY require only Stage2 == Stage3: Stage1 was"
-echo "   assembled by the stale seed, so its binary differs by construction. Read that normalized"
-echo "   seed->Stage1 delta line by line, copy STAGE2 — not Stage1 — over seed/alatyr, append the evidence"
-echo "   to seed/HISTORY.md, and re-run this script on the promoted tree. Why Stage2, and what a readable"
-echo "   delta looks like: docs/rationale/reproducibility.md and alatyr-integrate SKILL.md section 3.)"
-exit 4
+# A mid-promotion run (ALATYR_RESEED=1, #1104) builds the stages, and a bump with no src/ change can
+# leave seed == Stage1 == Stage2 (the version moves both emissions at once). That is still a tree whose
+# committed seed answers the previous release, so a flagged run never reports the fixpoint reached:
+# the proof is the unflagged run on the promoted tree.
+fixpoint_verdict "${FP_MID_PROMOTION:-0}" target/gas_seed.s target/gas1.s target/gas2.s
+exit $?
