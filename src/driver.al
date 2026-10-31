@@ -2901,7 +2901,7 @@ d_idxop_call := fn(na : ptr(mut rt::Arena), src : ptr(u8), name : str, a0 : ptr(
 
 ## Rewrite every library-aggregate index inside expression `e`, children first.
 d_idxop_expr := fn(e : ptr(Expr), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), mq : DModQ, decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
-  ## null-ok: an arm with a statement body, a bare `return` and an `if` without `else` carry a null expression (ast.al).
+  ## null-ok: #1069 — an arm with a statement body, a bare `return` and an `if` without `else` carry a null expression (ast.al).
   if unchecked bitcast(usize, e) == 0 { return }
   match deref(e) {
     Expr::Index(b, ix) => {
