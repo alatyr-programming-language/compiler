@@ -4632,8 +4632,15 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   ## materialize its register-returned words (`emit_retreg(k)`) into the agg-temp block, then push the
   ## block's word-0 ADDRESS — the by-ref convention, exactly like the ctor case above. Enables the
   ## complex-receiver UFCS the parser now desugars to `Call(method, [receiver-call, …])`.
-  if struct_ret_call(e, cx.decls, cx.src, a) and cx.agg_tmp >= 0 {
-    csp := call_ret_struct_span(e, cx.decls, cx.src, deref(cx.mar))
+  ## #1256 — the same staging serves a GENERIC call returning its type parameter (`mk(S1, x)`,
+  ## `vec::at(S1, ptr(v), i)`): `struct_ret_call` reads the declared `-> T` and answers no, so the call
+  ## fell to the scalar default and its first returned word was pushed as the callee's by-reference
+  ## block pointer (SIGSEGV). `gen_ret_struct_span` resolves the return through the call's type
+  ## argument, as the binding `x := mk(S1, …)` does; the sret and enum arms below do the same.
+  gas1256 := gen_ret_struct_span(e, cx.decls, cx.src, a)
+  if (struct_ret_call(e, cx.decls, cx.src, a) or gas1256.n != 0) and cx.agg_tmp >= 0 {
+    mut csp := gas1256
+    if csp.n == 0 { csp = call_ret_struct_span(e, cx.decls, cx.src, deref(cx.mar)) }
     rw := struct_words(cx.decls, cx.src, csp.s, csp.n, a)
     emit_struct_value(e, sb, cx, a, nl)
     caoff := agg_alloc(cx)
@@ -4657,7 +4664,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   ## same block's word-0 address by reference, like every other aggregate arg. Without this the call fell
   ## through to the scalar `emit_gas` path with NO hidden pointer set up, and the callee wrote the struct
   ## through whatever %rdi happened to hold → SIGSEGV. `src/`+`lib/` pass no such argument → dormant.
-  if sret_ret_call(e, cx.decls, cx.src, a) and cx.agg_tmp >= 0 {
+  if (sret_ret_call(e, cx.decls, cx.src, a) or gen_ret_sret_span(e, cx.decls, cx.src, a).n != 0) and cx.agg_tmp >= 0 {
     wsoff := agg_alloc(cx)
     ovwsc := cx.sret_call
     cx.sret_call = wsoff
@@ -4696,8 +4703,12 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   ## (disc/%rax + payload/%rdx… via `emit_enum_value`), stage `1 + max-payload` words into a fresh
   ## agg-temp block, and pass that block's ADDRESS by reference (ek 3). src/ binds such results to a
   ## local first (the idiom), so this never fires on the self-host build → fixpoint-neutral.
-  if enum_ret_call_d(e, cx.decls, cx.src, a) and cx.agg_tmp >= 0 {
-    esp := call_ret_enum_span_d(e, cx.decls, cx.src, deref(cx.mar))
+  ## #1256: or a generic `-> T` call at an enum (`gen_ret_enum_span`, which refuses a wider-than-seven-
+  ## word instance, #1324).
+  ges1256 := gen_ret_enum_span(e, cx.decls, cx.src, a)
+  if (enum_ret_call_d(e, cx.decls, cx.src, a) or ges1256.n != 0) and cx.agg_tmp >= 0 {
+    mut esp := ges1256
+    if esp.n == 0 { esp = call_ret_enum_span_d(e, cx.decls, cx.src, deref(cx.mar)) }
     rw := 1 + enum_inst_words(cx.decls, cx.src, esp.s, esp.n, a)
     emit_enum_value(e, sb, cx, a, nl)
     eaoff := agg_alloc(cx)
@@ -14384,7 +14395,10 @@ gen_ret_enum_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : 
             }
             if ta.n != 0 {
               tab := base_type_name(src, ta.s, ta.n)
-              if enum_decl_of(decls, src, tab.s, tab.n) >= 0 { res = CSpan(s = ta.s, n = ta.n) }
+              if enum_decl_of(decls, src, tab.s, tab.n) >= 0 {
+                refuse_wide_gen_enum_ret(decls, src, cs, ta.s, ta.n, a)
+                res = CSpan(s = ta.s, n = ta.n)
+              }
             }
           }
         }
@@ -14397,6 +14411,19 @@ gen_ret_enum_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : 
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
+}
+
+## #1324 — a generic `-> T` instance at an enum wider than seven words (the discriminant plus more than
+## six payload words, `mk(Option(S9), …)`) has no SRET path yet: the instance returns through the
+## register convention, which stops at %r11, so the payload's tail is lost (a bound result read 10, a
+## passed one crashed). Refuse it with a located diagnostic in every position, bound, passed or
+## returned: `gen_ret_enum_span` asks at the call (`at` = the callee span) and `emit_fn_pool` asks for
+## the instance itself. Nothing in src/ or lib/ returns such an instance (fixpoint-neutral).
+refuse_wide_gen_enum_ret := fn(decls : ptr(rt::Vec), src : ptr(u8), at : usize, s : usize, n : usize, a : rt::Arena) {
+  if 1 + enum_inst_words(decls, src, s, n, a) >= 8 {
+    lower_show_src_line(src, at)
+    panic("selfhost: a generic call returning an enum wider than seven words is not supported yet (#1324)")
+  }
 }
 
 ## Is `e` a `Call` to a fn returning a TUPLE `(…)`? The caller receives it from %rax/%rdx/… into the
@@ -28306,7 +28333,16 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## helper is neutral for a scalar/non-generic layout and therefore leaves existing returns intact.
   rpsub := subst_param_enum_span(d.ret_ts, d.ret_tl, p.decls, p.src, deref(p.mar), p.mar, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
   if rpsub.n != 0 { ers = rpsub.s; erl = rpsub.n }
-  renum := erl != 0 and enum_decl_of(p.decls, p.src, ers, erl) >= 0
+  ## #1256 — a `-> T` instance at a GENERIC-ENUM instance (`vec::at(Option(u64), …)`, `mk(Option(u64),
+  ## …)`) presents the full `Option(u64)` text here, which names no enum decl: the return was classified
+  ## scalar and delivered the discriminant alone, so the payload the caller staged from %rdx was stale.
+  ## Look the enum up by its base name, as the struct check below does (#473). A niche-folded
+  ## `Option(ptr(P))` is one word and keeps the scalar delivery every caller already expects.
+  tpret := gpl != 0 and d.ret_tl != 0 and lower_ctx::streq(p.src, d.ret_ts, d.ret_tl, gps, gpl)
+  ersb1256 := base_type_name(p.src, ers, erl)
+  tpenum := tpret and rpsub.n == 0 and erl != 0 and is_niche_folded(p.src, ers, erl) == false and enum_decl_of(p.decls, p.src, ersb1256.s, ersb1256.n) >= 0
+  if tpenum { refuse_wide_gen_enum_ret(p.decls, p.src, d.ret_ts, ers, erl, deref(p.mar)) }
+  renum := erl != 0 and (enum_decl_of(p.decls, p.src, ers, erl) >= 0 or tpenum)
   ## STRIP `(…)` type-args for the struct-decl LOOKUP of the EFFECTIVE return type. `ers`/`erl` is
   ## the SUBSTITUTED span, so a generic fn declared `-> T` instantiated at a GENERIC-STRUCT instance
   ## (`unwrap(Pair(u64, u64), o) -> Pair(u64, u64)`) presents the full text here, which streqs no decl
