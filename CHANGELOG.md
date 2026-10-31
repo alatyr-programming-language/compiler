@@ -230,6 +230,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   and now copies the whole one. When an `if`/`match` operand's type cannot be worked out yet (its first
   branch is a local), or both operands are `if`/`match`, the compiler reports the comparison with its
   source line and asks to bind the operand to a local first, instead of answering wrongly.
+- **A generic call's struct or enum result can be passed straight on (#1256).** `same(mk(S1, x), y)`
+  and `same(vec::at(S1, ptr(v), i), y)` crashed: the first returned word was handed over as the
+  argument's address. The result is now staged in a block and its address passed. A `-> T` instance at
+  a generic enum such as `Option(u64)` also returns its payload now, not the discriminant alone. Such a
+  call at an enum wider than seven words (`mk(Option(S9), …)`) returned a wrong value or crashed; it is
+  now refused at the call until it gets a hidden result pointer (#1324).
 
 ## 0.2.24 — 2026-11-07
 
