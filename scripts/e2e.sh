@@ -12079,6 +12079,11 @@ run issue977_struct_lit_field_ctx 2
 ## `55fa477` (x86_64) the fixture exits 101 — element 0, `C(40)`, read back as a zeroed variant.
 run issue989_vec_multi_payload_enum 42
 
+## #1321 — `for x in xs` over struct/enum elements kept its hidden index at `slot(x) + stride`, which
+## is the body's first local, so a body binding a local reset the index and the loop ran once.
+## NON-VACUOUS: on the parent `c5fc685d` (x86_64) the fixture exits 1.
+run for_aggregate_body_local 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

@@ -126,6 +126,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A `for` loop over structs or enums visits every element (#1321).** When the loop body bound a
+  local, x86_64 stored that local over the hidden loop index, and the loop stopped after the first
+  element. The index now sits in the one slot reserved for it, whatever the element's width.
+
 - **An enum read out of a `Vec` is the one that was stored (#989).** `at`, `get` and every other
   `deref(p)` of an enum value through a pointer returned the first variant with a zero payload. The
   value is now read word by word from the pointer; a pointee type that cannot be resolved is refused
