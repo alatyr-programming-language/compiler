@@ -9250,6 +9250,40 @@ sema_vty_ctx := fn(e : ptr(Expr), s : usize, n : usize, decls : ptr(rt::Vec), sr
   t : ir::VTy = sema_vty_name(src, s, n, decls)
   if ir::vty_is_int(t) { sema_vty_push(e, t) }
 }
+## #1248 — a declared type `[s, s+n)` is the context of a STATEMENT tail: the value each trailing
+## `match` arm, `if` branch, `unchecked` or `@alloc` block delivers (the shapes `stmts_tail_value_end`
+## accepts as a fn's result). A fn whose body ends in a statement `match` has no tail expression, so
+## `sema_vty_ctx` on `d.value` never reached its arms: `_ => { 5 - 7 }` in an `-> i64` fn stayed
+## `VcLit`, the `+ - *` guard fell back to the operands' unsigned shape, and the `-2` trapped on all
+## four backends. Types §2.3: the arm's value has the fn's result type, so its literals take it.
+sema_vty_tail_stmts := fn(h : Option(ptr(mut Stmt)), s : usize, n : usize, decls : ptr(rt::Vec), src : ptr(u8)) {
+  if not ir::sty_on() or n == 0 { return }
+  match h {
+    Some(hq) => {
+      end := deref(stmt_p(Stmt, stmt_last(hq)))
+      match end {
+        Stmt::ExprStmt(e, nx) => { sema_vty_ctx(e, s, n, decls, src) }
+        Stmt::Match(sc, ah, nx) => {
+          mut arm : Option(ptr(mut Arm)) = ah
+          loop {
+            match arm {
+              Some(armq) => { am := deref(arm_p(armq)); sema_vty_tail_stmts(am.body_stmts, s, n, decls, src); arm = am.next }
+              None => { break }
+            }
+          }
+        }
+        Stmt::If(c, th, el, nx) => { sema_vty_tail_stmts(th, s, n, decls, src); sema_vty_tail_stmts(el, s, n, decls, src) }
+        Stmt::CompIf(c, th, el, nx) => { sema_vty_tail_stmts(th, s, n, decls, src); sema_vty_tail_stmts(el, s, n, decls, src) }
+        Stmt::Unchecked(b, nx) => { sema_vty_tail_stmts(b, s, n, decls, src) }
+        Stmt::AllocWith(ae, b, nx) => { sema_vty_tail_stmts(b, s, n, decls, src) }
+        Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::For | Stmt::DerefAssign
+          | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break
+          | Stmt::Continue | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+      }
+    }
+    None => {}
+  }
+}
 ## ── docs/ir.md §3.8 item 8: the spelling of a value's type ─────────────────────────────────────────────
 ##
 ## `check_expr` answers a `Ty` the checker can afford to be tolerant with: it resolves names among the
@@ -16784,6 +16818,9 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     Result::Ok(n) => { nloc = n }
     Result::Err(e) => { err = e; failed = true }
   }
+  ## docs/ir.md §3.8, #1248 — with no tail expression, the declared result type is the context of the
+  ## statement tail's values (the ordinary tail's `sema_vty_ctx` below does the same for `d.value`).
+  if no_tail { sema_vty_tail_stmts(d.body_stmts, d.ret_ts, d.ret_tl, decls, src) }
   ## Issue #269 — after the ordinary statement pass has populated the local table, fence direct
   ## Option/Result calls at every explicit return sink. The helper deliberately runs only after the
   ## parent checks succeeded, so an existing, more specific semantic diagnostic remains authoritative.

@@ -8854,6 +8854,17 @@ run_x86 issue567_x86_bare_control 42
 ## narrow index add returns 42, and a native-width `[u64;N]` index add is unaffected (42). Registered
 ## cross-backend since #683: the three emit twins read the element width too (they answered 300 → 44).
 run checked_index_overflow 132
+## #1248: a literal-only `+ - *` reaching a fn's result through a statement tail (a trailing `match`
+## arm, `if` branch, `unchecked` block) takes the declared result type (Types §2.3), so its guard is
+## the result type's: `5 - 7` in an `-> i64` arm is -2, and in a `-> u64` arm it still traps.
+run accept_tail_match_literal_arm_i64 42
+run_a64 accept_tail_match_literal_arm_i64 42
+run_rv64 accept_tail_match_literal_arm_i64 42
+run_wat accept_tail_match_literal_arm_i64 42
+run trap_tail_match_literal_arm_u64 132
+run_a64 trap_tail_match_literal_arm_u64 133
+run_rv64 trap_tail_match_literal_arm_u64 133
+run_wat trap_tail_match_literal_arm_u64 134
 run checked_index_narrow_ok 42
 run checked_index_native_ok 42
 ## CG-6 through an index-read BINDING: `x := xs[i]` on `[u8;N]` types `x` as `u8`, so a later
