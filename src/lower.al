@@ -172,7 +172,11 @@ ecallee_is := ast::ecallee_is
 ## aggregate's word 0 — `leaq` its frame address). The pointer word is one slot; the caller
 ## passes the address (a local's word-0 frame address via `leaq`, or another by-ref param's
 ## pointer threaded through). See `emit_agg_base_addr` / `emit_fn`'s param binding.
-pub SlotEntry := struct { ns : usize, nl : usize, off : usize, sns : usize, snl : usize, ek : u8, estride : usize, eek : u8, is_ref : bool, tmod_s : usize, tmod_l : usize }
+## `pps`/`ppl` (#1254): the RESOLVED pointee type span of a pointer local bound from a call
+## (`slot := dq_elem(T, ptr(d), i)` at `T = u8`), read by `slot_ptr_pointee_span` alone. It is its own
+## field because an ek-0 slot's `sns`/`snl` is the local's VALUE type (`operand_type_from_slots`), so a
+## pointee there would type the pointer as its element (strict form 11). Zero everywhere else.
+pub SlotEntry := struct { ns : usize, nl : usize, off : usize, sns : usize, snl : usize, ek : u8, estride : usize, eek : u8, is_ref : bool, tmod_s : usize, tmod_l : usize, pps : usize, ppl : usize }
 
 ## `SVec` — a `SlotEntry` vector backed by a plain bump arena (the lean replacement for
 ## `alloc::SVec` fixpoint). The self-host lower cannot compile the
@@ -12569,6 +12573,9 @@ slot_ptr_pointee_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usi
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, s, n)))
   if lower_ctx::streq(src, ent.ns, ent.nl, s, n) == false { return CSpan(s = 0, n = 0) }
   if ent.ek == 0 and (ent.eek == 6 or ent.eek == 13) and ent.snl != 0 { return CSpan(s = ent.sns, n = ent.snl) }
+  ## #1254 — a call-bound pointer to a sub-word scalar (`bind_ptrscalar_slot`): `pps`/`ppl` is already
+  ## the concrete pointee, so the `deref` load and store resolvers read their width from it.
+  if ent.ek == 0 and ent.ppl != 0 { return CSpan(s = ent.pps, n = ent.ppl) }
   if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return CSpan(s = 0, n = 0) }
   lts := local_type_span(src, ent.ns, ent.nl)
   if lts.n != 0 {
@@ -13216,6 +13223,29 @@ bind_ptrview_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize
   svec_push(slots, SlotEntry(ns = s, nl = n, off = off, sns = ss, snl = sl, ek = 0, estride = 1, eek = 6, is_ref = false, tmod_s = 0, tmod_l = 0))
 }
 
+## #1254 — `p := <call returning ptr(mut <sub-word scalar>)>`, the scalar dual of `bind_ptrview_slot`:
+## `slot := dq_elem(T, ptr(d), i)` inside `Deque(u8)`'s `push_front`. `p` is the plain 1-word scalar
+## every pointer local is (ek 0, eek 0, `sns`/`snl` 0, exactly as before), plus the RESOLVED pointee
+## type span (`u8`, `i16`, `bool`, …) in `pps`/`ppl`, so `slot_ptr_pointee_span` hands it to
+## `deref_pointee_bytes` / `deref_pointee_signed` and `deref(p) = x` / `v := deref(p)` move the
+## element's own width. Without it both moves were 8 bytes, and `push_front` wrote over the seven bytes
+## after its slot.
+##
+## Why a field of its own (strict form 11): on an ek-0 slot `sns`/`snl` is the local's VALUE type —
+## `operand_type_from_slots` answers it for `x := unchecked bitcast(usize, p)` — so a pointee there
+## made `src_int + k` in `dq_grow` u8 arithmetic and the program faulted (measured). The eek-6 view
+## marker gets away with `sns` only because nothing does arithmetic on a `str`. `tmod_s`/`tmod_l` is
+## unread on an ek-0 slot too, but it is the enum-owner span; one field, one meaning. Only a SUB-WORD
+## pointee is recorded: a word-sized one already moves 8 bytes.
+## `vs`/`vl` is the value type the default scalar binding would have recorded (`infer_local_scalar_type`),
+## kept as is so the slot differs from before only in its pointee.
+bind_ptrscalar_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, vs : usize, vl : usize, ps : usize, pl : usize) {
+  existing := slot_of(ptr(slots), src, s, n)
+  if existing >= 0 { return }
+  off := svec_len(ptr(slots))
+  svec_push(slots, SlotEntry(ns = s, nl = n, off = off, sns = vs, snl = vl, ek = 0, estride = 1, eek = 0, is_ref = false, tmod_s = 0, tmod_l = 0, pps = ps, ppl = pl))
+}
+
 ## The pointee TYPE span of an arbitrary POINTER EXPRESSION, at slot-collection time (the `collect_slots`
 ## dual of `deref_dest_pointee_span`, which needs a full `LCtx`). A `Var` resolves through its slot (the
 ## eek-6/eek-13 view marker, an annotation, or the preserved `bitcast(ptr(T), …)` source) and is then
@@ -13285,6 +13315,15 @@ call_view_pointee_bind := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
   pt := call_ret_pointee_span(v, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2, sub.gps3, sub.gpl3, sub.its3, sub.itl3)
   if pt.n == 0 { return CSpan(s = 0, n = 0) }
   if is_view_type(src, pt.s, pt.n) == false { return CSpan(s = 0, n = 0) }
+  pt
+}
+
+## #1254 — `p := <call returning `ptr(<opt mut> <sub-word scalar>)>`, the pointee resolved through the
+## enclosing instance — the scalar type span, or {0,0}. Gates `bind_ptrscalar_slot`.
+call_scalar_pointee_bind := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, sub : ptr(Subst)) -> CSpan {
+  pt := call_ret_pointee_span(v, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2, sub.gps3, sub.gpl3, sub.its3, sub.itl3)
+  if pt.n == 0 { return CSpan(s = 0, n = 0) }
+  if scalar_byte_size(src, pt.s, pt.n) == 8 { return CSpan(s = 0, n = 0) }
   pt
 }
 
@@ -17539,7 +17578,7 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
           if pf.nl != 0 { lj = 0 }
         }
         if le.ek != 2 and le.ek != 3 and (le.ek != 5 or le.is_ref) { lwc += 1 }
-        svec_push(deref(cx.slots), SlotEntry(ns = le.ns, nl = le.nl, off = usize(cx.inl_tmp) - totw - lcum, sns = le.sns, snl = le.snl, ek = le.ek, estride = le.estride, eek = le.eek, is_ref = false, tmod_s = le.tmod_s, tmod_l = le.tmod_l))
+        svec_push(deref(cx.slots), SlotEntry(ns = le.ns, nl = le.nl, off = usize(cx.inl_tmp) - totw - lcum, sns = le.sns, snl = le.snl, ek = le.ek, estride = le.estride, eek = le.eek, is_ref = false, tmod_s = le.tmod_s, tmod_l = le.tmod_l, pps = le.pps, ppl = le.ppl))
         lcum += lwc
       }
       li += 1
@@ -17864,7 +17903,7 @@ emit_variadic_body := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), nfixed 
     while li < lcnt {
       le := deref(svec_at(SlotEntry, ptr(ls), li))
       if le.nl != 0 {
-        svec_push(deref(cx.slots), SlotEntry(ns = le.ns, nl = le.nl, off = usize(cx.inl_tmp) - totw - le.off, sns = le.sns, snl = le.snl, ek = le.ek, estride = le.estride, eek = le.eek, is_ref = false, tmod_s = le.tmod_s, tmod_l = le.tmod_l))
+        svec_push(deref(cx.slots), SlotEntry(ns = le.ns, nl = le.nl, off = usize(cx.inl_tmp) - totw - le.off, sns = le.sns, snl = le.snl, ek = le.ek, estride = le.estride, eek = le.eek, is_ref = false, tmod_s = le.tmod_s, tmod_l = le.tmod_l, pps = le.pps, ppl = le.ppl))
       }
       li += 1
     }
@@ -25420,7 +25459,7 @@ emit_st_comp_for_range := fn(cst : ptr(mut Stmt), rvs : usize, rvl : usize, rlo 
             aent := deref(svec_at(SlotEntry, cx.slots, aei))
             if lower_ctx::streq(cx.src, aent.ns, aent.nl, vsp.s, vsp.n) {
               asv := svec_len(cx.slots)
-              svec_push(deref(cx.slots), SlotEntry(ns = rvs, nl = rvl, off = aent.off, sns = aent.sns, snl = aent.snl, ek = aent.ek, estride = aent.estride, eek = aent.eek, is_ref = aent.is_ref, tmod_s = aent.tmod_s, tmod_l = aent.tmod_l))
+              svec_push(deref(cx.slots), SlotEntry(ns = rvs, nl = rvl, off = aent.off, sns = aent.sns, snl = aent.snl, ek = aent.ek, estride = aent.estride, eek = aent.eek, is_ref = aent.is_ref, tmod_s = aent.tmod_s, tmod_l = aent.tmod_l, pps = aent.pps, ppl = aent.ppl))
               ## the body (not the argument, a node of the caller's) is the iteration's
               lower_layout::ir_rec_enter_iter(cst, psite, pk)
               emit_stmts(rbody, sb, cx, nl)
