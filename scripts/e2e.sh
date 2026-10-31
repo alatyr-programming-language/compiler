@@ -12072,6 +12072,20 @@ run_wat trap_literal_ctx_field_u64 134
 ## by machine; hand-narrowing does not reproduce it — the shape needs the whole set of temporaries.
 run issue973_if_branch_context 2
 run issue977_struct_lit_field_ctx 2
+## #1177 — `for s in <iterable>` over two-word `str` elements: a `Slice(str)` param, a local
+## `[str; N]`, a range of one written in the loop header, and a `Slice(str)`-returning call. The
+## loop variable was bound as one word, or copied from the param's {ptr, len} block. NON-VACUOUS on
+## the parent at 2cf60b45 (x86_64): they exited 1, 12, 11, 1 and 0 where 5, 32, 35, 32 and 15 are
+## due. A range of a `Slice(str)` PARAM in the header (`xs[1..n]`) is #1180.
+run for_slice_str_param 5
+run for_str_array 32
+run for_slice_str_range 35
+run for_slice_str_call 32
+run for_slice_str_bytes 15
+## A GENERIC `-> Slice(T)` call with `T = str`: the call arm takes `slice_ret_elem`'s answer, not a
+## private copy that matched only the literal `Slice(str)` return (review of PR #1224). NON-VACUOUS: the
+## parent at 2cf60b45 (x86_64) exited 1, and so did the PR's first head 1618dd05.
+run for_slice_str_call_generic 32
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
