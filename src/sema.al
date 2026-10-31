@@ -6714,6 +6714,18 @@ sema_struct_owner_name_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(
   if (kind_is_struct(tag) or kind_is_hidden_struct(tag)) and lt.ty.nl != 0 { return VSpan(s = lt.ty.ns, n = lt.ty.nl) }
   global_struct_type_span(decls, src, s, n)
 }
+## #1268 — the struct whose field `name.f = v` writes, as the context of `v`: the owner
+## `sema_struct_owner_name_span` finds, or the struct a pointer local points to (`p.f = v` with
+## `p : ptr(mut S)` writes `S.f`; a pointer local's `Ty` names its struct pointee).
+sema_field_ctx_owner := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> VSpan {
+  bo := sema_struct_owner_name_span(decls, upto, src, locals, nloc, s, n)
+  if bo.n != 0 { return bo }
+  if nloc == 0 or not local_in(locals, nloc, src, s, n) { return VSpan(s = 0, n = 0) }
+  lt := local_lookup(locals, nloc, src, s, n)
+  tag : TyKind = lt.ty.kind
+  if kind_is_ptr(tag) and lt.ty.nl != 0 { return VSpan(s = lt.ty.ns, n = lt.ty.nl) }
+  VSpan(s = 0, n = 0)
+}
 ## Issue #693 — the direct-NAME counterpart of the enum-owner question, for a statement write place.
 ## The hidden enum tag 10 is the reliable recording an inferred `mut v := E.B(…)` binding leaves; the
 ## surfaced tag 4 is what an explicit `v : E` annotation records. Both mean the same thing here: the
@@ -8815,11 +8827,11 @@ sema_vty_struct_args := fn(ss : usize, sl : usize, fh : Option(ptr(mut Arg)), de
 }
 ## #968 — each declared payload type of the variant `E.V(…)` is the context of its argument (Types §2.3,
 ## the rule `sema_vty_call_args` applies to a call). Only a variant whose declaration sema found and whose
-## arity fits; a raw union is excluded, as in the checker's arity verdict (§6.3's byte-clear is a
-## different operation). `sema_vty_ctx` rewrites a literal-only record and nothing else.
+## arity fits. A raw union's member constructor `U.s(v)` is included (#1268): the member's declared type
+## is the context of `v` all the same; §6.3's byte-clear concerns the bytes beyond it, not `v`'s type.
+## `sema_vty_ctx` rewrites a literal-only record and nothing else.
 sema_vty_enum_args := fn(es : usize, el : usize, vs : usize, vl : usize, np : usize, gh : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) {
   if not ir::sty_on() { return }
-  if is_union_decl(decls, src, es, el) { return }
   upto := rt::vec_len(deref(decls))
   eva := sema_enum_variant_arity(decls, upto, src, es, el, vs, vl, np)
   if not eva.known or eva.amb or not eva.fits { return }
@@ -8852,6 +8864,17 @@ sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut
     return
   }
   upto := rt::vec_len(deref(decls))
+  ## #1268 — the constructor form `T(v)` refines a literal's type as an annotation does (Types §9.2), so
+  ## a scalar `T` is the context of a literal-only `v`: `i64(5 - 6)` is -1 at `i64`, never an unsigned
+  ## `5 - 6` that borrows.
+  if na == 1 and cl != 0 and callee_fn_name_count(decls, upto, src, cs, cl) == 0 {
+    cv : ir::VTy = sema_vty_scalar(src, cs, cl)
+    if ir::vty_is_int(cv) {
+      ca0 := deref(arg_at(ah, "argument list ended early"))
+      sema_vty_push(ca0.e, cv)
+      return
+    }
+  }
   ## IR slice 5a: `B(v)` of a brand or required type over `U` (no function named `B`) — the argument's
   ## context is `U` (Types §4.4 / §8.1: the source must be assignable to the immediate underlying type).
   if na == 1 and cl != 0 and callee_fn_name_count(decls, upto, src, cs, cl) == 0 {
@@ -8862,16 +8885,53 @@ sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut
       return
     }
   }
-  if cl == 0 or callee_fn_name_count(decls, upto, src, cs, cl) != 1 { return }
+  if cl == 0 { return }
+  ## #1268 — several functions share the name (`print`: `fmt::print(fmt, args : ...)` and
+  ## `io::print(s)`): the one whose parameter list accepts `na` arguments is the callee when it is the
+  ## only such one, so `print("{}", 5 - 6)` gives its hole the variadic's native signed default.
+  nc := callee_fn_name_count(decls, upto, src, cs, cl)
+  mut hit : usize = 0
+  mut found : usize = 0
   mut i : usize = 0
   while i < upto {
     d := deref(decl_get(decls, i))
-    if d.is_fn and name_matches(src, d.name_start, d.name_len, cs, cl) {
-      sema_vty_args_at(d, ah, decls, src)
-      return
+    if d.is_fn and name_matches(src, d.name_start, d.name_len, cs, cl) and (nc == 1 or (d.kind == lower_layout::DECL_KIND_FN and sema_vty_arity_fits(d, na, src))) {
+      hit += 1
+      found = i
+      if nc == 1 { break }
     }
     i += 1
   }
+  if nc != 0 and hit == 1 {
+    fd := deref(decl_get(decls, found))
+    sema_vty_args_at(fd, ah, decls, src)
+  }
+}
+## Is the parameter type span `[ts, ts+tl)` a comptime variadic rest (`args : ...`, no element type)?
+## The parser keeps that span as the `..` the dots begin with (`lower_attrs::type_is_variadic_rest`);
+## a slice variadic `...T` keeps `T` instead and is not this.
+sema_vty_rest_param := fn(ts : usize, tl : usize, src : ptr(u8)) -> bool {
+  tl == 2 and str_at((src + ts), 2) == ".."
+}
+## Does `d`'s parameter list accept `na` arguments: exactly as many parameters, or a variadic `...`
+## last parameter after at most `na` fixed ones.
+sema_vty_arity_fits := fn(d : Decl, na : usize, src : ptr(u8)) -> bool {
+  mut np : usize = 0
+  mut vari := false
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if sema_vty_rest_param(pm.ts, pm.tl, src) { vari = true }
+        np += 1
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  if vari { return na + 1 >= np }
+  np == na
 }
 ## Each argument of a call to `d` takes its parameter's declared type as its context (a literal
 ## argument's record becomes that type).
@@ -8885,7 +8945,17 @@ sema_vty_args_at := fn(d : Decl, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec)
             match pp {
               Some(pq) => {
                 pm := deref(param_p(pq))
-                sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src)
+                ## #1268 — a parameter typed by an earlier TYPE parameter (`lt := fn(T : type, a : T, …)`)
+                ## takes the type this call passes for it (`lt(i64, 0 - 1, 1)`: `i64`).
+                ta := sema_vty_type_arg(d, ah, pm.ts, pm.tl, src)
+                if ta.n != 0 { sema_vty_ctx(ga.e, ta.s, ta.n, decls, src) } else { sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src) }
+                ## #1268 — a comptime variadic `args : ...` (`fmt::print`'s holes; the parser keeps its
+                ## type span as the `..` it starts with) declares no type: each argument from here on
+                ## takes the native signed default (Types §9.1).
+                if sema_vty_rest_param(pm.ts, pm.tl, src) {
+                  sema_vty_default_args(Option(ptr(mut Arg)).Some(gq))
+                  return
+                }
                 pp = pm.next
               }
               None => { return }
@@ -8895,6 +8965,61 @@ sema_vty_args_at := fn(d : Decl, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec)
           None => { break }
         }
       }
+}
+## The type a call to `d` passes for `d`'s TYPE parameter named `[ts, ts+tl)` (a parameter declared
+## `name : type`): the span of the argument in that position when it is a plain name, `{0,0}` when no
+## type parameter has that name or the argument is not a name.
+sema_vty_type_arg := fn(d : Decl, ah : Option(ptr(mut Arg)), ts : usize, tl : usize, src : ptr(u8)) -> VSpan {
+  mut res := VSpan(s = 0, n = 0)
+  if tl == 0 { return res }
+  mut pp := d.params_head
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if streq(src, pm.ns, pm.nl, ts, tl) and pm.tl == 4 and str_at((src + pm.ts), 4) == "type" {
+              res = sema_vty_var_span(ga.e)
+              break
+            }
+            g = ga.next
+          }
+          None => { break }
+        }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  res
+}
+## The name a plain `Var` spells; `{0,0}` for any other expression.
+sema_vty_var_span := fn(e : ptr(Expr)) -> VSpan {
+  match deref(e) {
+    Expr::Var(vs, vn) => { VSpan(s = vs, n = vn) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
+  }
+}
+## Each argument with no context of its own takes the documented default, the native signed integer
+## (Types §9.1). `sema_vty_push` stamps only a literal-only record, so a typed argument keeps its type.
+sema_vty_default_args := fn(ah : Option(ptr(mut Arg))) {
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        sema_vty_push(ga.e, ir::vty_s(8))
+        g = ga.next
+      }
+      None => { break }
+    }
+  }
 }
 ## The value class a `Ty`'s kind alone decides: an aggregate (Types §3.2: never an IR value) or a
 ## pointer. A scalar kind says nothing about width or signedness, so it is left to the name and the shape.
@@ -9245,10 +9370,35 @@ sema_vty_push := fn(e : ptr(Expr), t : ir::VTy) {
   }
 }
 ## A declared type `[s, s+n)` is the context of `e` (an annotated binding, a `return`, a fn's tail).
+## An array type `[T; N]` is the context of an array literal's elements: each takes `T` (#1268).
 sema_vty_ctx := fn(e : ptr(Expr), s : usize, n : usize, decls : ptr(rt::Vec), src : ptr(u8)) {
   if not ir::sty_on() or n == 0 { return }
   t : ir::VTy = sema_vty_name(src, s, n, decls)
   if ir::vty_is_int(t) { sema_vty_push(e, t) }
+  el := lower_layout::arr_field_elem_span(src, s, n)
+  if el.n != 0 { sema_vty_elems_ctx(e, el.s, el.n, decls, src) }
+}
+## Each element of the array literal `e` takes the element type `[s, s+n)` as its context.
+sema_vty_elems_ctx := fn(e : ptr(Expr), s : usize, n : usize, decls : ptr(rt::Vec), src : ptr(u8)) {
+  match deref(e) {
+    Expr::ArrayLit(cnt, ah) => {
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            sema_vty_ctx(ga.e, s, n, decls, src)
+            g = ga.next
+          }
+          None => { break }
+        }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
 }
 ## #1248 — a declared type `[s, s+n)` is the context of a STATEMENT tail: the value each trailing
 ## `match` arm, `if` branch, `unchecked` or `@alloc` block delivers (the shapes `stmts_tail_value_end`
@@ -14975,6 +15125,14 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
           return Result(usize, CheckErr).Err(unbound_err(fns, fnl))
         }
         cv := check_expr_da(fv, decls, upto, src, a, locals, cnt, da)?
+        ## #1268 — the field's declared type is the stored value's context (Declarations §3.4: the target
+        ## place): `s.f = 5 - 6` with `f : i64` is -1, not an unsigned `-` that borrows. Through a pointer
+        ## local too (`p.f = 0 - 1`, `p : ptr(mut S)`), which the checks below leave open.
+        fco := sema_field_ctx_owner(decls, upto, src, locals, cnt, bns, bnl)
+        if fco.n != 0 {
+          fcs := sema_field_ann_span(decls, upto, src, fco.s, fco.n, fns, fnl, a)
+          if fcs.n != 0 { sema_vty_ctx(fv, fcs.s, fcs.n, decls, src) }
+        }
         ## Direct field destination/value conformance. The owner was resolved above from a direct
         ## local, parameter, or global struct root; nested paths and array-held fields remain residual.
         if bowner.n != 0 {
@@ -17025,6 +17183,11 @@ check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a 
     ## rejected where it is written, not left to trap when some run-time path reaches it.
     gcte := ct_guard_err(src, gts.s, gts.n, d.value, d.name_start, decls, upto)
     if gcte != 0 { mark_failed(ptr(none), gcte) }
+    ## docs/ir.md §3.8 — #1268: the annotation is a module binding's literal-only initializer's context,
+    ## as it is a local's (Declarations §3.4); with none, the native signed default (Types §9.1). Without
+    ## it `M : i64 = 5 - 9223372036854775807 - 6` was an unsigned `-` that borrowed and trapped.
+    if gts.n != 0 { sema_vty_ctx(d.value, gts.s, gts.n, decls, src) }
+    else if ir::sty_on() { sema_vty_push(d.value, ir::vty_s(8)) }
     ## Comptime §2.2 — module bindings use the same bounded closed-scalar whitelist as locals. This
     ## prevents a runtime call or aggregate from being treated as an erasable module constant merely
     ## because the source carries the `comptime` modifier.

@@ -5072,6 +5072,10 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           if ir::vs_signed(sg) { dsigned = true }
           if ir::vs_unsigned(sg) { dsigned = false }
         }
+        ## #1268 — `+ - *` read sema's record where it NAMES an integer type and keep the shape verdict
+        ## everywhere else: the one decision x86_64 makes (`lower_layout::ir_arith_signed_or`, #943). A
+        ## literal-only `5 - 6` whose context sema gave `i64` is a signed subtraction, never a borrow.
+        if op == 16 or op == 17 or op == 18 { dsigned = lower_layout::ir_arith_signed_or(e, dl or dr) }
         if op == 19 or op == 29 { ir::sign_row("aarch64", op, l, r, src, dsigned) }
         ## NARROW-WIDTH WRAP (§4 value model): truncate a narrow-typed (uN/iN, N<64) +/-/* result to its
         ## width — the x86_64 built-in dual. Computed BEFORE the arith so the checked overflow guard
