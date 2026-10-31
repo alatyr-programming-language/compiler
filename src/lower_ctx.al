@@ -280,7 +280,7 @@ pub expr_is_struct_lit := fn(v : ptr(Expr)) -> bool {
   r
 }
 pub expr_struct_lit_ns := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::StructLit(ss, sn, nf, ah) => { r = ss }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -291,7 +291,7 @@ pub expr_struct_lit_ns := fn(v : ptr(Expr)) -> usize {
   r
 }
 pub expr_struct_lit_nl := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::StructLit(ss, sn, nf, ah) => { r = sn }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -313,7 +313,7 @@ pub expr_field_base := fn(e : ptr(Expr)) -> ptr(Expr) {
   r
 }
 pub expr_field_name_s := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(e) {
     Expr::Field(fb, ffs, ffl) => { r = ffs }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -324,7 +324,7 @@ pub expr_field_name_s := fn(e : ptr(Expr)) -> usize {
   r
 }
 pub expr_field_name_l := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(e) {
     Expr::Field(fb, ffs, ffl) => { r = ffl }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -350,7 +350,7 @@ pub expr_is_enum_lit := fn(v : ptr(Expr)) -> bool {
   r
 }
 pub expr_enum_lit_ns := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = es }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -361,7 +361,7 @@ pub expr_enum_lit_ns := fn(v : ptr(Expr)) -> usize {
   r
 }
 pub expr_enum_lit_nl := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = en }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -372,7 +372,7 @@ pub expr_enum_lit_nl := fn(v : ptr(Expr)) -> usize {
   r
 }
 pub expr_enum_variant_ns := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = vs }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -383,7 +383,7 @@ pub expr_enum_variant_ns := fn(v : ptr(Expr)) -> usize {
   r
 }
 pub expr_enum_variant_nl := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = vn }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -409,7 +409,7 @@ pub expr_is_str_lit := fn(v : ptr(Expr)) -> bool {
   r
 }
 pub expr_str_lit_ns := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = ss }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -420,7 +420,7 @@ pub expr_str_lit_ns := fn(v : ptr(Expr)) -> usize {
   r
 }
 pub expr_str_lit_nl := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = sl }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -431,7 +431,7 @@ pub expr_str_lit_nl := fn(v : ptr(Expr)) -> usize {
   r
 }
 pub expr_str_lit_label := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = lbl }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -457,7 +457,7 @@ pub expr_is_float_lit := fn(v : ptr(Expr)) -> bool {
   r
 }
 pub expr_float_lit_ns := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::FloatLit(fs, fl) => { r = fs }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -468,7 +468,7 @@ pub expr_float_lit_ns := fn(v : ptr(Expr)) -> usize {
   r
 }
 pub expr_float_lit_nl := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::FloatLit(fs, fl) => { r = fl }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -483,7 +483,7 @@ pub expr_float_lit_nl := fn(v : ptr(Expr)) -> usize {
 ## the scalar returns separate for the frozen-seed-compatible shape used by the neighboring accessors.
 ## Group arms spelled out per the accessor-band note above (#544 stage 1).
 pub expr_call_name_ns := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::Call(cs, cl, n, ah) => { r = cs }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -494,7 +494,7 @@ pub expr_call_name_ns := fn(v : ptr(Expr)) -> usize {
   r
 }
 pub expr_call_name_nl := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::Call(cs, cl, n, ah) => { r = cl }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit

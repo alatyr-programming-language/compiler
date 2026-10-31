@@ -150,7 +150,7 @@ iface_streq := fn(src : ptr(u8), as : usize, an : usize, bs : usize, bn : usize)
   str_at((src + as), an) == str_at((src + bs), bn)
 }
 iface_overloads := fn(decls : ptr(rt::Vec), src : ptr(u8), name_s : usize, name_n : usize, arity : usize, is_fn : bool) -> usize {
-  mut n := 0
+  mut n : usize = 0
   mut i : usize = 0
   while i < vec_len(deref(decls)) {
     qp := iface_decl_get(decls, i)

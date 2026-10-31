@@ -2859,7 +2859,7 @@ sema_brand_underlying := fn(decls : ptr(rt::Vec), ncnt : usize, src : ptr(u8), s
 ## name, so a program that declares no brand of its own answers 0 and every hook below is inert.
 sema_brand_decl_count := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
   cnt := rt::vec_len(deref(decls))
-  mut k := 0
+  mut k : usize = 0
   mut pk := 0
   for i in 0..cnt {
     d := deref(decl_get(decls, i))
@@ -3903,7 +3903,7 @@ type_decl_index := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
   cnt := rt::vec_len(deref(decls))
   mut alias_ts := 0
   mut alias_tl := 0
-  mut first := 0
+  mut first : usize = 0
   mut hits := 0
   th := sema_name_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
@@ -5201,7 +5201,7 @@ value_is_scalar_lit := fn(v : ptr(Expr)) -> bool {
 ## stable discriminator. Keep this deliberately narrower than the lower's complete tuple/array net:
 ## nested expressions, arrays, aliases, wrappers and every other tuple form remain outside this slice.
 sema_num_literal_start := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(e) {
     Expr::Num(v, s, n) => { r = s }
     Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
@@ -5919,7 +5919,7 @@ s3a_addr_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
 s3a_call_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
   ah := expr_call_args_head(e)
   mut g : Option(ptr(mut Arg)) = ah
-  mut bad := 0
+  mut bad : usize = 0
   loop {
     match g {
       Some(gq) => {
@@ -6057,7 +6057,7 @@ s3a_expr_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
 ## wrapper does not receive (notably a FieldPathAssign's PLACE) and follows nested control-flow bodies.
 s3a_stmts_bad := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> usize {
   mut cur : Option(ptr(mut Stmt)) = head
-  mut bad := 0
+  mut bad : usize = 0
   loop {
     match cur {
       Some(curq) => {
@@ -12588,7 +12588,7 @@ ct_val_env := fn(e : ptr(Expr), w : str, decls : ptr(rt::Vec), upto : usize, src
 ## lands on the line the arithmetic is written on rather than on the binding's name. 0 = unknown
 ## (the caller then falls back to the binding's own name span).
 ct_span := fn(e : ptr(Expr)) -> usize {
-  mut res := 0
+  mut res : usize = 0
   match deref(e) {
     Expr::Num(v, s, n) => { res = s }
     Expr::Unchecked(inner) => { res = ct_span(inner) }
@@ -12628,7 +12628,7 @@ ct_arg_at := fn(h : Option(ptr(mut Arg)), k : usize) -> ptr(Expr) {
 ## flips it off for its subtree, which drops the overflow judgement (kind 1) but NOT the two
 ## hardware-defined ones (kinds 2 and 3), exactly as §2.6 requires.
 ct_check := fn(e : ptr(Expr), w : str, chk : bool, src : ptr(u8), decls : ptr(rt::Vec), upto : usize) -> usize {
-  mut res := 0
+  mut res : usize = 0
   match deref(e) {
     Expr::Unchecked(inner) => { res = ct_check(inner, w, false, src, decls, upto) }
     Expr::Bin(op, l, r) => {
@@ -13476,7 +13476,7 @@ lbv_stmts := fn(head : Option(ptr(mut Stmt)), c : usize, decls : ptr(rt::Vec), u
 ## anyway. No new AST field, and a real span answers exactly as before.
 s_of_arg := fn(ah : Option(ptr(mut Arg)), a : ptr(mut rt::Arena)) -> usize {
   mut g : Option(ptr(mut Arg)) = ah
-  mut r := 0
+  mut r : usize = 0
   loop {
     match g {
       Some(gq) => {
@@ -13741,7 +13741,7 @@ fixed_array_index_oob := fn(base : ptr(Expr), idx : ptr(Expr), src : ptr(u8), lo
 
 ## The source start of a numeric literal, for a located reject at the offending index token.
 expr_num_lit_start := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(e) { Expr::Num(v, s, n) => { r = s } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
@@ -14209,7 +14209,7 @@ sema_lambda_binds_name := fn(ph : Option(ptr(mut Param)), bh : Option(ptr(mut St
 ## existing conservative expression walker is intentional: it recognizes the ordinary value-bearing
 ## lambda forms without expanding closure ABI/dyn or unrelated residual expression cases.
 sema_lambda_capture_span := fn(ph : Option(ptr(mut Param)), bh : Option(ptr(mut Stmt)), val : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
-  mut bad := 0
+  mut bad : usize = 0
   mut i : usize = 0
   while i < nloc and bad == 0 {
     l := lvec_at(locals, i)
@@ -14225,7 +14225,7 @@ sema_lambda_capture_span := fn(ph : Option(ptr(mut Param)), bh : Option(ptr(mut 
 ## `fn` span so callers can use the normal semantic `type mismatch` diagnostic on every front end.
 sema_plain_fn_capture_span := fn(ts : usize, tl : usize, e : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
   if not sema_is_plain_fn_type(src, ts, tl) { return 0 }
-  mut bad := 0
+  mut bad : usize = 0
   match deref(e) {
     Expr::Lambda(pos, ph, rts, rtl, bh, val) => { bad = sema_lambda_capture_span(ph, bh, val, src, locals, nloc, a); if bad != 0 { bad = pos } }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -14240,7 +14240,7 @@ sema_plain_fn_capture_span := fn(ts : usize, tl : usize, e : ptr(Expr), src : pt
 ## conservative under the frozen seed, so the common FN-10 fence is applied by `check_expr_da` before
 ## any backend-specific lowering can see the nested lambda.
 sema_plain_fn_capture_struct := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
-  mut bad := 0
+  mut bad : usize = 0
   match deref(e) {
     Expr::StructLit(ss, sl, nf, fh) => {
       di := type_decl_index(decls, upto, src, ss, sl)
@@ -15924,7 +15924,7 @@ stmts_decl_before := fn(head : Option(ptr(mut Stmt)), upto : usize, src : ptr(u8
 stmts_same_scope_redecl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
   mut cur : Option(ptr(mut Stmt)) = head
   mut idx := 0
-  mut bad := 0
+  mut bad : usize = 0
   loop {
     match cur {
       Some(curq) => {
@@ -16289,7 +16289,7 @@ sema_compfor_is_fields := fn(src : ptr(u8), vs : usize, vl : usize) -> bool {
 ## offset, or 0. The four CT-6 members are the complete descriptor schema; a missing result means the
 ## expression is unrelated and remains on the ordinary poison-tolerant sema path.
 sema_bad_typeinfo_field_expr := fn(e : ptr(Expr), src : ptr(u8), vs : usize, vl : usize, a : ptr(mut rt::Arena)) -> usize {
-  mut bad := 0
+  mut bad : usize = 0
   match deref(e) {
     Expr::Bin(op, l, r) => { bad = sema_bad_typeinfo_field_expr(l, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(r, src, vs, vl, a) } }
     Expr::If(c, t, f) => { bad = sema_bad_typeinfo_field_expr(c, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(t, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_expr(f, src, vs, vl, a) } }
@@ -16340,7 +16340,7 @@ sema_bad_typeinfo_field_expr := fn(e : ptr(Expr), src : ptr(u8), vs : usize, vl 
 ## statement forms but does not type-check or otherwise change comptime branch selection.
 sema_bad_typeinfo_field_stmts := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), vs : usize, vl : usize, a : ptr(mut rt::Arena)) -> usize {
   mut cur : Option(ptr(mut Stmt)) = head
-  mut bad := 0
+  mut bad : usize = 0
   loop {
     match cur {
       Some(curq) => {
@@ -18951,7 +18951,7 @@ sema_attr_builtin := fn(w : str) -> bool {
 ## legal program turned away. Everything the walk cannot classify stays ACCEPTED.
 sema_unknown_prefix_attr := fn(decls : ptr(rt::Vec), cnt : usize, src : ptr(u8), ns : usize) -> usize {
   if ns == 0 { return 0 }
-  mut bad := 0
+  mut bad : usize = 0
   mut p := ns - 1
   mut go := true
   while go {
@@ -19544,7 +19544,7 @@ sema_qual_head_kinds := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl :
     if str_at((src + hs + i), 2) == "::" { lp = i + 2 ; chained = true ; i = i + 2 } else { i = i + 1 }
   }
   cnt := rt::vec_len(deref(decls))
-  mut r := 0
+  mut r : usize = 0
   ## the RHS identifier of a ROOT alias (`strbuf := rt`), followed one hop after the scan
   mut rts := 0
   mut rtn := 0
@@ -20152,7 +20152,7 @@ sema_vis_projection := fn(decls : ptr(rt::Vec), src : ptr(u8), rs : usize, rl : 
   hs := p
   hl := ende - p
   mut q := rs + 1
-  mut res := 0
+  mut res : usize = 0
   while q < e and res == 0 {
     while q < e and (str_at((src + q), 1) == " " or str_at((src + q), 1) == "," or str_at((src + q), 1) == "\n" or str_at((src + q), 1) == "\t" or str_at((src + q), 1) == "\r") { q += 1 }
     mut r := q
@@ -20604,7 +20604,7 @@ sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto
   ah0 := expr_call_args_head(e)
   if arg_any(ah0) {
     mut g : Option(ptr(mut Arg)) = ah0
-    mut bad0 := 0
+    mut bad0 : usize = 0
     loop {
       match g {
         Some(gq) => {
@@ -20686,7 +20686,7 @@ sema_enum_global_array_value_bad_stmts := fn(head : Option(ptr(mut Stmt)), decls
   saved_len := deref(locals).len
   saved_pcnt := deref(locals).pcnt
   mut cur : Option(ptr(mut Stmt)) = head
-  mut bad := 0
+  mut bad : usize = 0
   mut cnt := nloc
   loop {
     match cur {
@@ -21005,7 +21005,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
 
 sema_vis_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
   mut cur : Option(ptr(mut Stmt)) = head
-  mut r := 0
+  mut r : usize = 0
   loop {
     match cur {
       Some(curq) => {

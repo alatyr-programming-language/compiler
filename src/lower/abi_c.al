@@ -94,7 +94,7 @@ pub abi_c_param_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
   mut k : usize = 0
-  mut res := 1
+  mut res : usize = 1
   loop {
     match pp {
       Some(ppq) => {
@@ -193,7 +193,7 @@ abi_c_arg_int_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, ci
     if struct_words(decls, src, ts.s, ts.n, a) > 2 { return 0 }   ## MEMORY (> 16 bytes) → stack, no int regs
     if abi_c_is_u8_pair(decls, src, ts.s, ts.n) { return 1 }
     nw := abi_c_param_words(decls, src, a, cidx, pidx)
-    mut c := 0
+    mut c : usize = 0
     mut ei : usize = 0
     while ei < nw {
       if abi_c_eightbyte_is_sse(decls, src, a, ts.s, ts.n, ei) == false { c = c + 1 }
@@ -220,7 +220,7 @@ abi_c_arg_sse_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, ci
     if struct_words(decls, src, ts.s, ts.n, a) > 2 { return 0 }   ## MEMORY (> 16 bytes) → stack, no SSE regs
     if abi_c_is_u8_pair(decls, src, ts.s, ts.n) { return 0 }
     nw := abi_c_param_words(decls, src, a, cidx, pidx)
-    mut c := 0
+    mut c : usize = 0
     mut ei : usize = 0
     while ei < nw {
       if abi_c_eightbyte_is_sse(decls, src, a, ts.s, ts.n, ei) { c = c + 1 }

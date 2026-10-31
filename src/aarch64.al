@@ -345,7 +345,7 @@ a64_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
 ## first `:=` whose value is a StructLit; 0/0 if the local is not a struct.
 a64_local_struct_ns := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut rs := 0
+  mut rs : usize = 0
   mut done := false
   loop {
     match s {
@@ -434,7 +434,7 @@ a64_local_struct_ns := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usiz
 }
 a64_local_struct_nl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut rn := 0
+  mut rn : usize = 0
   mut done := false
   loop {
     match s {
@@ -524,7 +524,7 @@ a64_local_struct_nl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usiz
 ## by-value and is trapped).
 a64_param_struct_ns := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> usize {
   mut p := params_head
-  mut rs := 0
+  mut rs : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -551,7 +551,7 @@ a64_param_struct_ns := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), n
 }
 a64_param_struct_nl := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> usize {
   mut p := params_head
-  mut rn := 0
+  mut rn : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -1463,7 +1463,7 @@ a64_std_store_struct_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrB
 ## EnumLit; 0/0 if not an enum local.
 a64_local_enum_ns := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut rs := 0
+  mut rs : usize = 0
   mut done := false
   loop {
     match s {
@@ -1509,7 +1509,7 @@ a64_local_enum_ns := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize,
 }
 a64_local_enum_nl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut rn := 0
+  mut rn : usize = 0
   mut done := false
   loop {
     match s {
@@ -1562,7 +1562,7 @@ a64_local_enum_nl := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize,
 ## helper mis-lowers). Kept as two scalar accessors like the enum/struct span pairs around it.
 a64_param_enum_ns := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> usize {
   mut p := params_head
-  mut rs := 0
+  mut rs : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -1584,7 +1584,7 @@ a64_param_enum_ns := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns 
 }
 a64_param_enum_nl := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> usize {
   mut p := params_head
-  mut rn := 0
+  mut rn : usize = 0
   loop {
     match p {
       Some(pq) => {
