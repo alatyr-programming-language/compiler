@@ -39,7 +39,8 @@
 # the queue's own user, which can read that user's files (~/.ssh, ~/.config/gh) and write the
 # checkout's .git. What the script adds is defence in depth only: the timer runs main's copy of this
 # script and main's land.sh, never a batch's; the batch gate runs without GH_TOKEN/GITHUB_TOKEN, global
-# git config or gh config; every push is the queue's own `--no-verify` step after the gate exited.
+# git config or gh config; every push is the queue's own `--no-verify` step after the gate exited. The
+# one GitHub fact the gate checks, which issues are open (#1279), is read here and handed to it as a file.
 #
 # ## Usage
 #
@@ -98,6 +99,18 @@ queue_entry_refusal() { # base-ref is-draft labels(comma) body
 ## queue refuses a PR whose land.sh link (first match anywhere, any case) differs from this one.
 queue_relation_link() { # body -> "Closes #N" etc., or nothing
   printf '%s\n' "$1" | sed -n -E 's/^(Closes|Fixes|Resolves|Refs) #([0-9]+).*$/\1 #\2/p' | head -n 1
+}
+
+## The issue-state snapshot a batch gate reads offline (#1279; format in scripts/fixture_expect.sh,
+## `snapshot_open`): the open issue numbers, and `closing N` for each issue a batch PR closes on landing
+## (`Closes|Fixes|Resolves #N`; `Refs` closes nothing), so a fix that left its deviation rows is red.
+queue_open_snapshot() { # open-numbers link... -> the snapshot text
+  local open="$1" l; shift
+  printf '# open issues, read by queue.sh at %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '%s\n' "$open" | grep -E '^[0-9]+$'
+  for l in "$@"; do
+    case "$l" in Closes\ \#*|Fixes\ \#*|Resolves\ \#*) printf 'closing %s\n' "${l##*#}" ;; esac
+  done
 }
 
 ## Is the fetched object the reviewed one?
@@ -283,10 +296,17 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   queue_land() { log="$log land:$*;"; return 1; }
   log=""; queue_drive 1 3; [ "$log" = " try:1 3; land:1 3;" ]; _ck $? "failed-publish-did-not-end-the-pass($log)"
   unset -f queue_try queue_land queue_fail
+  ## the issue-state snapshot (#1279)
+  [ "$(queue_open_snapshot "$(printf '11\n14')" "Closes #14" "Refs #11" "" | grep -v '^#' | tr '\n' ' ')" = "11 14 closing 14 " ]
+  _ck $? snapshot-missed-a-closing-PR-or-marked-a-Refs-one
+  [ "$(queue_open_snapshot "$(printf '11\n14')" "Fixes #11" "Resolves #3" | grep -c '^closing')" = 2 ]
+  _ck $? snapshot-missed-Fixes-or-Resolves
+  [ -z "$(queue_open_snapshot "" "Refs #11" | grep -v '^#')" ]
+  _ck $? snapshot-invented-an-open-issue-from-nothing
   if [ -n "$bad" ]; then echo "*** queue self-test: FAILED —$bad ***"; return 1; fi
   echo "ok   queue self-test: $k checks — reviewed-head marker, entry rules, head check, gate verdict,"
-  echo "     push arguments, busy box and the bisection plan"
-  [ "$k" -ge 49 ] || { echo "queue self-test: $k checks, expected 49"; return 1; }
+  echo "     push arguments, busy box, the bisection plan and the issue-state snapshot"
+  [ "$k" -ge 52 ] || { echo "queue self-test: $k checks, expected 52"; return 1; }
 }
 
 # ---- GitHub ------------------------------------------------------------------------------------------
@@ -344,12 +364,19 @@ ${LINK[$pr]}"
   GATE_LOG="$QDIR/gate-$(date -u +%Y%m%dT%H%M%S)-$(git rev-parse --short HEAD).log"
   if [ "$DRY" = screen ]; then say "(dry=screen) composed $BUILT for $(prs_h "$@"); no gate"; return 0; fi
   say "gating $BUILT (base $base) for $(prs_h "$@"); log $GATE_LOG"
-  local empty_gh rc; empty_gh="$(mktemp -d "$QDIR/gh-empty.XXXXXX")"
+  ## The gate has no credentials, so the issue states it checks are read here, once, before it (#1279).
+  local open snap links=() empty_gh rc
+  open="$(gh_cmd issue list -R "$REPO" --state open --limit 5000 --json number --jq '.[].number')" &&
+    [ -n "$open" ] || { say "could not read the open issues from GitHub; this pass ends"; return 2; }
+  for pr in "$@"; do links+=("${LINK[$pr]}"); done
+  snap="$QDIR/open-issues-$(git rev-parse --short HEAD).snapshot"
+  queue_open_snapshot "$open" "${links[@]}" > "$snap" || return 2
+  empty_gh="$(mktemp -d "$QDIR/gh-empty.XXXXXX")"
   ( ulimit -c 0
-    env -u GH_TOKEN -u GITHUB_TOKEN GIT_CONFIG_GLOBAL=/dev/null GH_CONFIG_DIR="$empty_gh" \
+    env -u GH_TOKEN -u GITHUB_TOKEN GIT_CONFIG_GLOBAL=/dev/null GH_CONFIG_DIR="$empty_gh" ALATYR_OPEN_ISSUES="$snap" \
       nix develop -c bash scripts/full.sh --force-sweeps ) > "$GATE_LOG" 2>&1 9>&-
   rc=$?
-  rm -rf "$empty_gh"
+  rm -rf "$empty_gh" "$snap"
   git diff --exit-code --quiet && git diff --cached --exit-code --quiet &&
     [ "$(git rev-parse HEAD)" = "$BUILT" ] || { say "the tree moved during the gate; this pass ends"; return 2; }
   local key="" v; for pr in "$@"; do key="$key $pr=${HEAD[$pr]}"; done

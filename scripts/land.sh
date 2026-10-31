@@ -228,22 +228,33 @@ pr_xbackend_baseline_edit_check() { # changed-paths -> 0 clean, 1 REFUSE
   return 1
 }
 
-## Every issue the known deviations name is OPEN (#1126 S2). The gate holds the table's consistency
-## and runs with no GitHub credentials (queue.sh strips them), so the one fact it cannot see, an
-## issue's state, is checked here. The table is read from the PR head with `git show`, never by running
-## the PR's own scripts. A fix PR that closes an issue deletes its rows and its table line in the same
-## PR, so a closed issue still in the table is a row that outlived its fix, or a fix that never came.
-## Inputs: the table text and the open issue numbers, one per line. An empty open list is a failed query.
-pr_deviation_issues_open_check() { # table-text open-numbers -> 0 clean, 1 REFUSE, 2 no answer
+## Every issue the known deviations name is OPEN (#1126 S2, #1279). The table is read from the PR head
+## with `git show`, never by running the PR's own scripts. A fix PR that closes an issue deletes its rows
+## and its table line in the same PR, so a closed issue still in the table is a row that outlived its
+## fix, or a fix that never came. The issue THIS PR closes (`Closes #N`) is open on GitHub until the
+## landing, and counts as closed here: the PR that fixes it must already have deleted its rows.
+## Inputs: the table text, the open issue numbers one per line, and the issue this PR closes (or
+## nothing). An empty open list is a failed query. The full gate asks the same question offline, of the
+## snapshot `land_open_snapshot` writes (scripts/fixture_expect.sh `issues_open`).
+pr_deviation_issues_open_check() { # table-text open-numbers [closing-issue] -> 0 clean, 1 REFUSE, 2 no answer
   [ -n "$1" ] || return 0
   [ -n "$2" ] || { echo "  REFUSE: the open-issue list is empty, so the known-deviation issues cannot be checked (not a pass)"; return 2; }
   local closed
-  closed="$(printf '%s\n' "$1" | awk -F'\t' 'NR == FNR { O[$1] = 1; next } /^#/ || $0 == "" { next } !($1 in O) { printf " #%s", $1 }' \
+  closed="$(printf '%s\n' "$1" | awk -F'\t' -v closing="${3:-}" 'NR == FNR { O[$1] = 1; next } /^#/ || $0 == "" { next }
+    $1 == closing { printf " #%s (closed by this PR)", $1; next } !($1 in O) { printf " #%s", $1 }' \
     <(printf '%s\n' "$2") - )"
   [ -z "$closed" ] && return 0
   echo "  REFUSE: scripts/known-deviations.issues.tsv names issue(s) that are not open:$closed."
-  echo "          The fix that closed each one deletes its rows and its table line (#1126 S2)."
+  echo "          The fix that closes each one deletes its rows and its table line (#1126 S2, #1279)."
   return 1
+}
+
+## The issue-state snapshot the full gate reads offline (#1279; format in scripts/fixture_expect.sh,
+## `snapshot_open`): a comment, the open numbers, and `closing N` for the issue this PR closes.
+land_open_snapshot() { # open-numbers [closing-issue] -> the snapshot text
+  printf '# open issues, read by land.sh for #%s at %s\n' "${PR:-?}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '%s\n' "$1" | grep -E '^[0-9]+$'
+  [ -z "${2:-}" ] || printf 'closing %s\n' "$2"
 }
 
 ## A regenerated oracle owns a commit that touches nothing else.
@@ -404,7 +415,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=105  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk
+LAND_SELFTEST_EXPECTED=114  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +5 #1279
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -525,6 +536,15 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
   case "$out" in *'#14.'*) _ck 0 x ;; *) _ck 1 deviation-issues-did-not-name-the-closed-one ;; esac
   pr_deviation_issues_open_check "$_dt" "" >/dev/null 2>&1; [ "$?" = 2 ]
   _ck $? "deviation-issues-took-an-empty-answer-for-a-pass"
+  out="$(pr_deviation_issues_open_check "$_dt" "$(printf '11\n14')" 14 2>&1)"; rc=$?
+  [ "$rc" = 1 ]; _ck $? "deviation-issues-allowed-the-issue-this-PR-closes"
+  case "$out" in *'#14 (closed by this PR)'*) _ck 0 x ;; *) _ck 1 deviation-issues-did-not-say-this-PR-closes-it ;; esac
+  pr_deviation_issues_open_check "$_dt" "$(printf '11\n14')" 99 >/dev/null 2>&1
+  _ck $? "deviation-issues-refused-a-PR-closing-an-issue-the-table-lacks"
+  [ "$(land_open_snapshot "$(printf '11\n14')" 14 | grep -v '^#' | tr '\n' ' ')" = "11 14 closing 14 " ]
+  _ck $? "open-snapshot-lost-an-open-issue-or-the-closing-mark"
+  [ "$(land_open_snapshot "$(printf '11\n14')" "" | grep -v '^#' | tr '\n' ' ')" = "11 14 " ]
+  _ck $? "open-snapshot-marked-a-closing-issue-for-a-Refs-PR"
 
   # ---- 3b · the ONE mutable line: `# spec-pin:` moves, the journal does not. ----------------
   # A pin move rewrites exactly one line and `git diff` spells that as a deletion. The counter
@@ -989,9 +1009,18 @@ for _sf in seed/VERSION seed/HISTORY.md; do
   dels=$((dels + ${_n:-0}))
 done
 pr_xbackend_baseline_edit_check "$CHANGED" || shape_fail=1
+## The issue this PR closes on landing counts as closed (#1279); a `Refs` PR closes nothing.
+case "$RELATION" in closes|fixes|resolves) DEV_CLOSING="$ISSUE" ;; *) DEV_CLOSING="" ;; esac
+DEV_OPEN="$(gh issue list -R "$REPO" --state open --limit 5000 --json number --jq '.[].number' 2>/dev/null)" || DEV_OPEN=""
 if git cat-file -e "$HEAD_SHA:scripts/known-deviations.issues.tsv" 2>/dev/null; then
-  DEV_OPEN="$(gh issue list -R "$REPO" --state open --limit 5000 --json number --jq '.[].number' 2>/dev/null)" || DEV_OPEN=""
-  pr_deviation_issues_open_check "$(git show "$HEAD_SHA:scripts/known-deviations.issues.tsv")" "$DEV_OPEN" || shape_fail=1
+  pr_deviation_issues_open_check "$(git show "$HEAD_SHA:scripts/known-deviations.issues.tsv")" "$DEV_OPEN" "$DEV_CLOSING" || shape_fail=1
+fi
+## PHASE 4's full gate reads the same answer offline (#1279). It is written once, here, so the solo
+## landing the queue runs without a token still gives the gate a snapshot; no answer leaves it unset,
+## and full.sh then fails its FIXTURE EXPECT stage rather than pass unchecked.
+if [ -n "$DEV_OPEN" ]; then
+  mkdir -p "$ROOT/target" && land_open_snapshot "$DEV_OPEN" "$DEV_CLOSING" > "$ROOT/target/land-open-issues.snapshot" &&
+    export ALATYR_OPEN_ISSUES="$ROOT/target/land-open-issues.snapshot"
 fi
 pr_seed_version_append_only_check "$CHANGED" "${dels:-0}" || shape_fail=1
 for oracle in scripts/corpus.manifest scripts/idiom.baseline scripts/needle.baseline; do

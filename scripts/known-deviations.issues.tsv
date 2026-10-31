@@ -4,8 +4,9 @@
 # Columns, TAB-separated: issue number, rule not met (spec chapter and section, or decision ID),
 # observable difference, and `rows` when scripts/known-deviations.tsv names it or `none` when the
 # deviation has no fixture row (no program-visible value differs: the defect is in how the result is
-# reached). Every issue here must be open: scripts/land.sh PHASE 2 refuses a closed one, and
-# `scripts/fixture_expect.sh --issues-open` asks `gh` by hand. The gate holds the rest without network.
+# reached). Every issue here must be open, and the full gate refuses a closed one (#1279) from the
+# issue-state snapshot its caller took (queue.sh, land.sh, the hosted workflow, or full.sh itself with
+# `gh`); the issue a landing PR closes counts as closed, so the fix deletes its line and its rows.
 550	Overview §6 (code consistent with the normative lowering rules, per selected target); Memory §4.1	aarch64/riscv64: a deref store through a 1-byte pointee needs the @repr/sub-word byte image, and traps	rows
 551	Overview §6 (code consistent with the normative lowering rules, per selected target); Types §4.4	aarch64/riscv64: `bitcast` to a bare user aggregate has no lowering, and traps	rows
 577	Overview §6 (code consistent with the normative lowering rules, per selected target)	aarch64/riscv64: a statement-position `match` traps (fail-loud stub `unsupported match statement`)	rows

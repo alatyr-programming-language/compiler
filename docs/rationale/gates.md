@@ -92,3 +92,24 @@ No single check is sufficient:
 - A non-x86 emission change runs the cross-target sweeps; `--force-sweeps` overrides the change filter.
 - The detailed execution order, safety review, branch cleanup, and acceptance comment are defined by
   `alatyr-lane` and `alatyr-integrate`.
+
+## The gate's one GitHub fact (#1279)
+
+Every row of `scripts/known-deviations.tsv` names an issue, and that issue must be open: the fix that
+closes it deletes the rows in the same PR. The full gate checks this itself, although it runs with no
+network and no credentials (`queue.sh` strips them). It reads an **issue-state snapshot**, a file of
+open issue numbers plus `closing N` for each issue the object under test closes on landing. Whoever
+holds `gh` writes the snapshot just before the gate: `queue.sh` for a batch, `land.sh` PHASE 2 for a
+solo or hand landing, the hosted workflow in a token-holding step before the token-free gate step, and
+`full.sh` itself on a hand run. If no snapshot can be had, FIXTURE EXPECT fails, because an unchecked
+fact is not a pass. The format and the check live in `scripts/fixture_expect.sh`
+(`snapshot_open`, `issues_open`).
+
+Rejected alternatives:
+
+- A **committed** snapshot refreshed by the queue or metrics. It is stale from the moment an issue is
+  closed by hand, and refreshing it would mean the queue committing to `main` outside any PR.
+- A check **only at landing** (`land.sh` PHASE 2, from #1126 S2). It cannot see the issue the PR itself
+  closes, which is still open while the PR is screened, so a fix that forgot its rows landed green and
+  turned the next unrelated PR red. It also left the hosted and hand gates unchecked. That check stays,
+  as the early screen-time refusal, and it now counts the PR's own `Closes #N` as closed.
