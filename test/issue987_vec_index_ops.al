@@ -9,8 +9,14 @@
 ## Each check owns a code from 100 up; 42 means all held.
 ##
 ## Parent `7bb90a3a` (x86_64, omen): built rc 0, ran to 100 where 42 was due — `v[0]` did not read 40.
+## Codes 111-117 (#1257): a `Vec(str)` range in every spelling, then a two-word struct range.
+## Parent `19ba899e` (x86_64, omen) ran to 112 where 42 was due: `zs[1]` stepped one word and did not
+## read "f". On that parent the struct checks alone ran to 116.
 vec := alloc::vec
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
+
+## A two-word element for the #1257 range checks.
+Pair := struct { a : u64, b : u64 }
 
 ## A `Vec` reached through a parameter, read and written by index.
 bump := fn(in out v : vec::Vec(u64), i : usize) -> u64 {
@@ -51,7 +57,36 @@ main := fn() -> u64 {
   t := a[1..3]
   if t[0] + t[1] != 37 { return 110 }
 
+  ## #1257 — a `str` element: the view's element is a two-word pair, read at its own stride
+  mut z := vec::new(str, ptr(ar))
+  z0 := z.push("d")
+  z1 := z.push("e")
+  z2 := z.push("f")
+  zs := z[1..3]
+  if zs.len != 2 { return 111 }
+  mut k : u64 = 0
+  while k < 2 {
+    if k == 1 and zs[k] != "f" { return 112 }
+    k += 1
+  }
+  if zs[0] != "e" { return 113 }
+  zu := z.index_range(0, 2)
+  if zu[1] != "e" { return 114 }
+  za : Slice(str) = z[2..3]
+  if za[0] != "f" { return 115 }
+  mut y := vec::new(Pair, ptr(ar))
+  y0 := y.push(Pair(a = 1, b = 2))
+  y1 := y.push(Pair(a = 3, b = 4))
+  y2 := y.push(Pair(a = 5, b = 6))
+  ys := y[1..3]
+  e1 := ys[1]
+  if e1.a != 5 or e1.b != 6 { return 116 }
+  e0 := ys[0]
+  if e0.a != 3 or e0.b != 4 { return 117 }
+
   f := v.free()
   g := w.free()
+  h := z.free()
+  hy := y.free()
   42
 }
