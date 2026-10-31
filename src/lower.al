@@ -6134,6 +6134,27 @@ for_iter_str_elem := fn(it : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
   }
 }
 
+## #1211 — the element of `for x in f(…)` when `f` returns `Slice(T)` with a struct (`eek 2`) or enum
+## (`eek 3`) element `T`; `is_slice = false` for anything else. The ONE answer the slot binder
+## (`collect_slots` binds `x` as that aggregate) and the emitter (copies `stride` words per element out
+## of the materialized {ptr, len} temp) both take, so the loop var's width and the copy cannot disagree.
+for_call_agg_elem := fn(it : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize) -> SliceRetInfo {
+  ## bound before `.eek` is read (`scripts/seed_forms.tsv` row `call_field_subword`, #1228)
+  sri := slice_ret_elem(it, decls, src, a, gps, gpl, its, itl, gps2, gpl2, its2, itl2)
+  if sri.eek == 2 or sri.eek == 3 { return sri }
+  SliceRetInfo(is_slice = false, eek = 0, stride = 1, ess = 0, esl = 0)
+}
+
+## #1211 — is `r := f(…)` a slice VIEW binding (`bind_slice_slot`, `ek 5`) rather than the nominal
+## two-word `Slice` struct? True when `f` returns `Slice(T)` with a struct, enum or `str` element: only
+## the view keeps the element layout that `for x in r`, `r[i].f` and `r.len` read. Both bindings hold
+## the same {ptr, len} words, which the call delivers in %rax/%rdx, so the store is unchanged.
+slice_ret_view_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize) -> bool {
+  ## bound before `.eek` is read (`call_field_subword`, #1228)
+  sri := slice_ret_elem(e, decls, src, a, gps, gpl, its, itl, gps2, gpl2, its2, itl2)
+  sri.eek == 2 or sri.eek == 3 or sri.eek == 4
+}
+
 ## Is the local or param `s/n` a `str`-element array, slice view or slice param (`ek 5`, `eek 4`)?
 str_elem_slot := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> bool {
   match local_entry(slots, src, s, n) {
@@ -26185,6 +26206,12 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## a `str`-element non-var iterable (`xs[1..n]`, a `Slice(str)`-returning call): the temp now
               ## holds its {ptr, len} by value; each element is a 2-word str (#1177).
               if for_iter_str_elem(flo, cx.slots, cx.decls, cx.src, a, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l) { is_str_slice = true; b_estride = 2 }
+              ## a struct/enum-element `Slice(T)`-returning call (#1211): each element is that aggregate,
+              ## copied `stride` words from the temp's data ptr (by value: `b_is_ref` stays false). The
+              ## loop var is bound that wide by collect_slots, which reserves the index right after it
+              ## (`vslot+1`, unchanged) and the temp after that, so `islot`/`bslot` stay as they are.
+              fca := for_call_agg_elem(flo, cx.decls, cx.src, a, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l)
+              if fca.is_slice { is_agg_slice = true; agg_stride = fca.stride }
             } else if unchecked bitcast(usize, gfor_mgv) != 0 and array_lit_info(gfor_mgv).is_a {
               is_glob_arr = true
               glob_nel = array_lit_info(gfor_mgv).nel
