@@ -136,6 +136,16 @@ Two numbers that are **not** the compiler's version: the specification revision 
   when the files are not the atomic set, and `gate` pushes the exact commit to `gate/**`. `due` answers
   the cadence: a week, an open `reseed-owed` issue, or a live `seed` row in `scripts/seed_forms.tsv`.
   The weekly `scripts/metrics.sh` report asks it, in a new `seed promotion` row.
+- **`alatyr version` names its specification revision as a target, with the published deviations; the
+  gate's verdict on a fixture is its stated expectation (#1126 S3).** The line now reads `alatyr 0.2.19,
+  spec 1.6.0 (a target revision, not conformance; known deviations: <url>)`, the URL being
+  `scripts/known-deviations.issues.tsv` on `main` (Overview §6 and TOOL-21 as refined by spec `9438d00`;
+  the owner's decision on #1000; the pin does not move). In the gate, FIXTURE EXPECT judges every
+  `## expect:` fixture on every backend of the fresh walk (`target/corpus-manifest/observed.manifest`),
+  held to `scripts/known-deviations.tsv`, and fails a new fixture that states nothing. The committed
+  `scripts/corpus.manifest` keeps only the sources with no directive yet and the directive sources that
+  print; the xbackend ratchet reads the walk. A behaviour fix on a directive fixture carries no oracle
+  commit: it deletes its own deviation rows.
 
 ## 0.2.19 — 2026-10-31
 

@@ -10,8 +10,9 @@
 #   - every row names an issue of scripts/known-deviations.issues.tsv; every issue there is open
 #     (scripts/land.sh PHASE 2 asks `gh`; `fixture_expect.sh --issues-open` asks it by hand).
 # A deviation is a defect of the implementation, never a permission: the directive stays the
-# expectation. Regenerate the rows a change adds with `scripts/fixture_expect.sh --list unlisted`
-# (they come out as `#?`, and the gate refuses `#?` until an issue is named).
+# expectation. Regenerate the rows a change adds with `scripts/fixture_expect.sh --list unlisted`,
+# which reads the walk `scripts/corpus_manifest.sh --check` leaves (or `--observed F`) and refuses
+# without one (they come out as `#?`, and the gate refuses `#?` until an issue is named).
 aarch64	test/accept_ann_brand_and_generic.al	run/133	#1197
 aarch64	test/accept_ann_call_overloaded.al	assemble/1	#1206
 aarch64	test/accept_ann_global_conforming.al	run/133	#1200
