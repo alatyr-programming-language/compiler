@@ -49,6 +49,25 @@ pub ir_arith_signed_or := fn(be : ptr(Expr), keep : bool) -> bool {
   if ir::vs_unsigned(sg) { return false }
   keep
 }
+## #1272 — the NARROW integer type (`u8 u16 u32 i8 i16 i32`) sema recorded for the operation `be`;
+## `None` for a native width, a literal-only operation, or a node sema left untyped. x86 asks it where
+## neither operand's source spelling names a width: a global const operand has no slot, so
+## `unchecked (A * A)` with `A : i32` computed at 64 bits and was never wrapped (or, checked, never
+## guarded) at its type's width.
+pub ir_arith_narrow := fn(be : ptr(Expr)) -> Option(str) {
+  t : ir::VTy = ir::sty_get_cur(be)
+  if not ir::vty_is_int(t) { return Option(str).None }
+  g : ir::Sgn = t.sg
+  sg := match g { SgS => { true }; SgU | SgNone => { false } }
+  if sg and t.bytes == 1 { return Option(str).Some("i8") }
+  if sg and t.bytes == 2 { return Option(str).Some("i16") }
+  if sg and t.bytes == 4 { return Option(str).Some("i32") }
+  if sg { return Option(str).None }
+  if t.bytes == 1 { return Option(str).Some("u8") }
+  if t.bytes == 2 { return Option(str).Some("u16") }
+  if t.bytes == 4 { return Option(str).Some("u32") }
+  Option(str).None
+}
 ## #966 — the twins' comparison signedness: the same pair record x86_64's `is_unsigned_cmp` ends with,
 ## `VsNotInt` where no record answers (see `ir::pair_sg_soft`). The caller keeps its shape verdict there.
 pub ir_pair_sg_soft := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> ir::ValSg { ir::pair_sg_soft(l, r, src) }

@@ -15754,6 +15754,21 @@ conv_kind := fn(name : str) -> i64 {
 is_narrowing_conv := fn(name : str) -> bool {
   name == "u8" or name == "u16" or name == "u32" or name == "i8" or name == "i16" or name == "i32"
 }
+## The NARROW width a built-in `+ - *` (`be` = `l op r`) operates in, or `None` for a native width or
+## a non-integer: the first operand whose source spelling names a type answers (a `ptr` or a native
+## name is `None`). Where neither does, sema's record of the operation answers (#1272): a global const
+## operand has no slot and no span, so `unchecked (A * A)` with `A : i32` was computed at 64 bits and
+## never wrapped, and a checked `A + (k + 1)` was never guarded at `i32`. ONE answer for the checked
+## guard's tier and the value-model wrap below it.
+arith_narrow_name := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx)) -> Option(str) {
+  mut t := expr_type_span(l, cx)
+  if t.n == 0 { t = expr_type_span(r, cx) }
+  if t.n == 0 { return lower_layout::ir_arith_narrow(be) }
+  bn := base_type_name(cx.src, t.s, t.n)
+  nm := str_at((cx.src + bn.s), bn.n)
+  if is_narrowing_conv(nm) { return Option(str).Some(nm) }
+  Option(str).None
+}
 ## Emit the width-narrowing of the integer value in %rax for `name(x)`: ZERO-extend the low N bits for
 ## an unsigned `uN`, SIGN-extend for a signed `iN` — the wrap/truncation semantics (`u8(810)` → 42,
 ## `i8(200)` → -56 inside `unchecked`; a checked scope runs `emit_int_fit_guard` first). Native widths
@@ -18322,12 +18337,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned); lower_layout::ir_sign_rec_row(op, l, r, cx.src) }
       mut ovf_narrow := false
       if op == 16 or op == 17 or op == 18 {
-        mut owt := expr_type_span(l, cx)
-        if owt.n == 0 { owt = expr_type_span(r, cx) }
-        if owt.n != 0 {
-          obn := base_type_name(cx.src, owt.s, owt.n)
-          if is_narrowing_conv(str_at((cx.src + obn.s), obn.n)) { ovf_narrow = true }
-        }
+        onw : Option(str) = arith_narrow_name(e, l, r, cx)
+        ovf_narrow = match onw { Some(w) => { true }; None => { false } }
       }
       ## A literal-`0` LEFT operand is not a licence to skip: `0 + x` / `0 * x` have no overflow member,
       ## and `0 - x` has none only over an UNSIGNED operand (§6.5: `2^N - x` is representable). A SIGNED
@@ -18392,12 +18403,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## A ROUTED width operator (§2, e.g. num.al's `addl`) truncates itself and returns before this path,
       ## so it is unaffected. Native widths (`u64`/`usize`/`i64`/`isize`) and unknown types emit nothing.
       if op == 16 or op == 17 or op == 18 {
-        mut wt := expr_type_span(l, cx)
-        if wt.n == 0 { wt = expr_type_span(r, cx) }
-        if wt.n != 0 {
-          wbn := base_type_name(cx.src, wt.s, wt.n)
-          wnm := str_at((cx.src + wbn.s), wbn.n)
-          if is_narrowing_conv(wnm) {
+        wno : Option(str) = arith_narrow_name(e, l, r, cx)
+        match wno {
+          Some(wnm) => {
             ## CHECKED narrow-width OVERFLOW (I11 / CG-8): the 64-bit result in %rax must fit the narrow
             ## type, else TRAP — num.al's `if full > 255 { panic }`. UNSIGNED uN overflows iff any bit
             ## above bit N is set (`shr $N` nonzero); SIGNED iN overflows iff the sign-extension of the
@@ -18409,6 +18417,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             if cx.vchk and (not zskip) { emit_int_fit_guard(sb, wnm, false) }
             emit_int_narrow_reg(sb, wnm)
           }
+          None => {}
         }
       }
       ## Divide `/` (19) / modulo `%` (29): pick SIGNED (`cqto; idivq`) only when an operand is a

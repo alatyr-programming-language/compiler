@@ -6309,6 +6309,20 @@ run nested_option_literal 42
 run match_multibind_ptr 42
 run int_narrow_conv 42
 run int_narrow_conv_trap 132
+## #1272: a `+ - *` whose operands name no width in the source (a global const operand) takes its
+## narrow width from sema's record: `unchecked` wraps there and a checked one traps there (x86_64).
+run unchecked_narrow_global_div 40
+run_a64 unchecked_narrow_global_div 40
+run_rv64 unchecked_narrow_global_div 40
+run_wat unchecked_narrow_global_div 40
+run unchecked_narrow_global_wrap 40
+run_a64 unchecked_narrow_global_wrap 40
+run_rv64 unchecked_narrow_global_wrap 40
+run_wat unchecked_narrow_global_wrap 40
+run trap_checked_narrow_global_operand 132
+run_a64 trap_checked_narrow_global_operand 133
+run_rv64 trap_checked_narrow_global_operand 133
+run_wat trap_checked_narrow_global_operand 134
 run inline_call 42
 run inline_stmt_body 42
 ## Proposal #3 / Codegen §3.5 — aggregate parameters and builtin `bytes(...)` must survive direct @inline expansion.
