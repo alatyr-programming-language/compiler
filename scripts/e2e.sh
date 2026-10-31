@@ -12073,6 +12073,12 @@ run_wat trap_literal_ctx_field_u64 134
 run issue973_if_branch_context 2
 run issue977_struct_lit_field_ctx 2
 
+## #989 — an enum VALUE read through `deref(p)` was emitted as a null enum: `emit_enum_value` sent
+## `Expr::Deref` to its catch-all, which built discriminant 0 with an empty payload. So `at`/`get` on
+## a `Vec(E)` returned the first variant with zeros whatever was stored. NON-VACUOUS: on the parent
+## `55fa477` (x86_64) the fixture exits 101 — element 0, `C(40)`, read back as a zeroed variant.
+run issue989_vec_multi_payload_enum 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

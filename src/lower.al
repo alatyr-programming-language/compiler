@@ -10685,8 +10685,33 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
         }
       }
     }
+    Expr::Deref(inner) => {
+      ## An enum VALUE read through a pointer (`return deref(elem)` in `Vec(T).at` at `T = E`, #989):
+      ## deliver the pointee's `1 + payload` words into the return registers, word k from `k*8(p)`.
+      ## That is the layout an enum is stored in through a pointer: the by-reference enum param arm
+      ## above reads it the same way, and the `deref(p) = x` store writes it so. The width comes from
+      ## the POINTEE's type, resolved through the generic instance, never from the enclosing fn's
+      ## return type, because this emitter also serves non-return positions. This arm used to fall
+      ## into the null-enum fallback below, so the element came back as variant 0 with a zero payload.
+      pty := deref_dest_pointee_span(inner, cx)
+      pbn := base_type_name(cx.src, pty.s, pty.n)
+      if pty.n == 0 or enum_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 {
+        panic("selfhost: an enum value read through `deref(p)` needs `p`'s pointee type, and it could not be resolved here — bind the pointer with its type spelled (`p : ptr(E) = …`), or bind the value to an annotated local first")
+      }
+      tw := 1 + enum_type_payload_words(cx.decls, cx.src, pty.s, pty.n, deref(cx.mar))
+      if tw > 7 { panic("selfhost: an enum read through `deref(p)` wider than the 7-word return-register budget is unsupported — bind it to a local and return that") }
+      emit_gas(inner, sb, cx, a, nl)
+      push_str(sb, "  popq %r11\n")
+      for k in 0..tw {
+        push_str(sb, "  movq ")
+        push_int(sb, i64(k * 8))
+        push_str(sb, "(%r11), ")
+        emit_retreg(sb, k)
+        push_str(sb, "\n")
+      }
+    }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::Match | Expr::StructLit | Expr::AddrOf
-      | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => {
       ## any other expression in enum position is not part of the supported grammar — emit a
