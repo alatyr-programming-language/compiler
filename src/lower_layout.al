@@ -5841,20 +5841,50 @@ pub ct_range_guard := fn(op : u8, lv : i64, rv : i64, w : Option(str), chk : boo
 pub ct_range_arith := fn(op : u8, lv : i64, rv : i64, w : Option(str), chk : bool) -> Option(i64) {
   g : RangeGuard = ct_range_guard(op, lv, rv, w, chk)
   match g {
-    RgPass => { ct_range_perform(op, lv, rv) }
+    RgPass => { ct_range_perform(op, lv, rv, w) }
     RgOverflow | RgDivZero => { Option(i64).None }
   }
 }
 ## Perform a bound operation whose guard passed. Any op outside `+ - * / %` is not a bound: `None`.
-ct_range_perform := fn(op : u8, lv : i64, rv : i64) -> Option(i64) {
+## A `+ - *` result is wrapped to `w`'s width (#1271): under `unchecked` its two's-complement wrap
+## "evaluate[s] normally" (Comptime §2.6), as at run time, so a narrow bound never carries a pattern
+## its type cannot hold into the next step's guard. A checked result passed its guard, so it already
+## fits and the wrap leaves it unchanged.
+ct_range_perform := fn(op : u8, lv : i64, rv : i64, w : Option(str)) -> Option(i64) {
   mut v := 0
-  if op == 16 { v = unchecked (lv + rv) }
-  if op == 17 { v = unchecked (lv - rv) }
-  if op == 18 { v = unchecked (lv * rv) }
+  if op == 16 { v = ct_bound_wrap(w, unchecked (lv + rv)) }
+  if op == 17 { v = ct_bound_wrap(w, unchecked (lv - rv)) }
+  if op == 18 { v = ct_bound_wrap(w, unchecked (lv * rv)) }
   if op == 19 { v = unchecked (lv / rv) }
   if op == 29 { v = unchecked (lv % rv) }
   if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 { return Option(i64).Some(v) }
   Option(i64).None
+}
+## `v` wrapped to the width of a bound's recorded type; unchanged where sema recorded none (the fold
+## then works on the native `i64` word).
+ct_bound_wrap := fn(w : Option(str), v : i64) -> i64 {
+  match w { Some(t) => { ct_wrap(t, v) }; None => { v } }
+}
+## The two's-complement wrap of the pattern `v` to the type `t`: its low `ct_width(t)` bits, zero-
+## extended for an unsigned `t` and sign-extended for a signed one. A native-width `t` keeps all 64.
+ct_wrap := fn(t : str, v : i64) -> i64 {
+  wd : i64 = ct_width(t)
+  if wd >= 64 { return v }
+  ## unchecked-ok: the fold's `i64` pattern reread as `u64`, so the shifts below are logical
+  vu : u64 = unchecked bitcast(u64, v)
+  mut lo : u64 = 0
+  if wd == 8 { lo = shr(shl(vu, 56), 56) }
+  if wd == 16 { lo = shr(shl(vu, 48), 48) }
+  if wd == 32 { lo = shr(shl(vu, 32), 32) }
+  ## unchecked-ok: the low `wd` bits (`wd` <= 32) are below 2^32, so the pattern is exact as `i64`
+  r : i64 = unchecked bitcast(i64, lo)
+  if not ct_signed(t) { return r }
+  mut half : i64 = 128
+  if wd == 16 { half = 32768 }
+  if wd == 32 { half = 2147483648 }
+  if r < half { return r }
+  ## The sign bit is set: the value is `r - 2^wd` (`half + half` = 2^wd, at most 2^32, exact).
+  r - (half + half)
 }
 
 ## §8 `@niche` — is the type span `[s, s+n)` a NICHE-FOLDED `Option(ptr(T))`? The spec-flagship folded
