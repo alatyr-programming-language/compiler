@@ -759,10 +759,11 @@ fi
 
 # The CONTAINER MATRIX (#1124): element shape x container x operation, one generated program per cell
 # that stores known values in a library container and exits 42 only if every read equals what was
-# stored. On x86_64 every WRONG and REFUSED cell must have its row, under an open issue, in
+# stored. On x86_64 every WRONG, CRASH and REFUSED cell must have its row, under an open issue, in
 # scripts/container-matrix.deviations.tsv, and every row must still reproduce: the fix deletes its own
-# rows. A TRAP is a recorded outcome. The self-test runs first: a planted wrong read must come out WRONG
-# and turn the rule red, or a green matrix below would mean nothing.
+# rows. A TRAP (the checked-failure `ud2`, rc 132) is a recorded outcome; a segfault, another signal or
+# a timeout is a CRASH (#1277). The self-test runs first: a planted wrong read must come out WRONG and a
+# planted segfault CRASH, each turning the rule red, or a green matrix below would mean nothing.
 echo "### CONTAINER MATRIX (x86_64: WRONG/REFUSED held by scripts/container-matrix.deviations.tsv) ###"
 CMX_LOG="$LOGDIR/full_container_matrix.log"
 cmx_cover="NOT RUN"
