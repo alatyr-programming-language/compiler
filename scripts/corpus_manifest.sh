@@ -838,7 +838,7 @@ delta_rebase() { # delta-file new-base [out] [old-base]
 ## decider must refuse, planted, and the controls it must accept — an always-refusing decider loses
 ## the controls, an always-accepting one loses the plants. Run on every `--check`/`--self-test` and by
 ## `--delta-self-test` alone (which is also what `scripts/land.sh --self-test` drives).
-CM_DELTA_SELFTEST_EXPECTED=57
+CM_DELTA_SELFTEST_EXPECTED=60
 delta_selftest() { # work-dir
   local st="$1" bad="" k=0 out rc
   rm -rf "$st"; mkdir -p "$st" || return 1
@@ -1046,6 +1046,18 @@ delta_selftest() { # work-dir
   # 14f · spent, malformed and out-of-order inputs are refusals, never a rebase.
   delta_rebase "$st/delta" "$st/fresh" >/dev/null 2>&1; [ $? = 1 ]; _dk $? rebase-accepted-a-spent-delta
   delta_rebase "$st/d.count" "$st/b2" >/dev/null 2>&1; [ $? = 2 ]; _dk $? rebase-accepted-a-malformed-delta
+  #       Rows the emitter would never write, rebased with NO old base, so only the built-not-trusted net
+  #       (emit the result, compare the rows) stands between them and an output file: a duplicate
+  #       (backend, path) row with pairs= bumped to match, and an ADDED row relabelled NOW-RUNS.
+  awk -F'\t' '{ print } $1 == "ADDED" && $2 == "wasm" { print }' "$st/delta" | sed 's/^pairs=8$/pairs=9/' > "$st/d.dup"
+  [ "$(grep -c "^ADDED${x}wasm${x}test/e.al${x}" "$st/d.dup")" = 2 ]; _dk $? selftest-failed-to-plant-a-duplicate-row
+  rm -f "$st/d.dup2"
+  delta_rebase "$st/d.dup" "$st/b2" "$st/d.dup2" >/dev/null 2>&1; rc=$?
+  [ "$rc" = 2 ] && [ ! -e "$st/d.dup2" ]; _dk $? "rebase-carried-a-duplicate-row-without-an-old-base(rc=$rc)"
+  sed "s/^ADDED${x}wasm${x}/NOW-RUNS${x}wasm${x}/" "$st/delta" > "$st/d.lbl"
+  rm -f "$st/d.lbl2"
+  delta_rebase "$st/d.lbl" "$st/b2" "$st/d.lbl2" >/dev/null 2>&1; rc=$?
+  [ "$rc" = 2 ] && [ ! -e "$st/d.lbl2" ]; _dk $? "rebase-carried-a-mislabelled-row-without-an-old-base(rc=$rc)"
   { sed -n '1,/^columns=/p' "$st/b2"; sed '1,/^columns=/d' "$st/b2" | LC_ALL=C sort -r; } > "$st/b5"
   delta_rebase "$st/delta" "$st/b5" >/dev/null 2>&1; [ $? = 2 ]; _dk $? rebase-placed-rows-in-a-base-that-is-not-in-walk-order
   # 14g · a change that also moves a HEADER line (its result has a `scope=` line its base lacks). The
