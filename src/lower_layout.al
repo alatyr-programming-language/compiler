@@ -4015,7 +4015,7 @@ pub ex_is_foldable_word := fn(e : ptr(Expr)) -> bool {
 ## copying that is not "matching x86", it is crashing. Measured: 0 self-referential consts in the
 ## corpus, and the only `CONST := CONST` spellings are 4 type ALIASES, which the resolver below does
 ## not chase at all — so 16 is far above any real program and still turns a cycle into a decline.
-EX_VALUE_DEPTH := 16
+pub EX_VALUE_DEPTH := 16
 ## The twins' comptime value of an initializer expression — ONE leaf, the exact twin of
 ## `lower.al::global_init_value`, including its `Expr::Var` arm (#923's remaining half, #682).
 ## It used to answer 0 for `Var`, so `B := A + 1` folded to `0 + 1`: the twins laid down 1 where
@@ -5571,18 +5571,32 @@ pub base_type_name := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
 ## surfaces is a different repair (Comptime §2.6 wants a located diagnostic there, on all four).
 ## Independent guard-then-act `if`s, matching `lower/ctfold::ct_bound_fold`: a nested `if…else`
 ## inside an `if`-then is not a lowerable shape under the self-host lower.
-pub comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize) -> i64 {
-  mut r := 0
+##
+## #696 — the answer is an `Option`: `None` is "this folder cannot evaluate the bound", which the
+## emitters refuse loudly. It used to be an `i64` whose not-foldable answer was `0`, and `0` is a valid
+## bound, so every shape the arms below absorbed silently became the bound 0: `0 .. unchecked (N)` ran
+## zero times, `unchecked (1) .. 4` four times, and a call or an `if` bound zero times, each from a
+## clean compile. `unchecked e` is a verification mode that yields the inner value (Grammar §3.7), so
+## it is peeled at every level, as `wat_int_const_expr` has done since #558. A module const is read
+## through this same fold, so a const whose initializer is `unchecked (…)` folds too.
+pub comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize) -> Option(i64) {
+  comp_range_bound_at(e, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, 0)
+}
+## `hops` counts const-to-const steps, capped like `ex_value_fold`'s, so a cycle is refused, never a hang.
+comp_range_bound_at := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize, hops : i64) -> Option(i64) {
+  mut r : Option(i64) = Option(i64).None
   match deref(e) {
-    Expr::Num(x, s, n) => { r = i64(x) }
-    Expr::BoolLit(x) => { r = i64(x) }
+    Expr::Num(x, s, n) => { r = Option(i64).Some(i64(x)) }
+    Expr::BoolLit(x) => { r = Option(i64).Some(i64(x)) }
+    Expr::Unchecked(inner) => { r = comp_range_bound_at(inner, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops) }
     Expr::Var(vs, vn) => {
       cnt := rt::vec_len(deref(decls))
       mut i : usize = 0
       while i < cnt {
         d := deref(decl_get(decls, i))
-        if d.kind == 0 and d.is_fn == false and streq(src, d.name_start, d.name_len, vs, vn) {
-          if unchecked bitcast(usize, d.value) != 0 { r = ex_value_init(d.value, decls, src) }
+        if d.kind == 0 and d.is_fn == false and streq(src, d.name_start, d.name_len, vs, vn) and hops < EX_VALUE_DEPTH {
+          ## null-ok: #1069 — `Decl.value` spells "no initializer" as a null ptr(Expr); guarded, never dereferenced.
+          if unchecked bitcast(usize, d.value) != 0 { r = comp_range_bound_at(d.value, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops + 1) }
         }
         i = i + 1
       }
@@ -5602,13 +5616,13 @@ pub comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), g
           mut fc := 0
           mut f := sdd.fields_head
           loop { match f { Some(fq) => { fc = fc + 1 ; f = deref(fld_p(fq)).next }; None => { break } } }
-          r = i64(fc)
+          r = Option(i64).Some(i64(fc))
         } else if ed >= 0 {
           edd := deref(decl_get(decls, usize(ed)))
           mut vc := 0
           mut vf := edd.fields_head
           loop { match vf { Some(vfq) => { vc = vc + 1 ; vf = deref(fld_p(vfq)).next }; None => { break } } }
-          r = i64(vc)
+          r = Option(i64).Some(i64(vc))
         } else if str_at((src + rt.s), 1) == "(" {
           ## TUPLE component count = top-level commas + 1. Scanned inline over the `(…)` source span (NOT
           ## via `typearg_at`, whose LSpan return is truncated in the a64 emit context it was written for — a seed landmine).
@@ -5626,7 +5640,7 @@ pub comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), g
               tp = tp + 1
             }
           }
-          r = i64(tcnt)
+          r = Option(i64).Some(i64(tcnt))
         } else if str_at((src + rt.s), 1) == "[" {
           ## ARRAY `[E; N]` element COUNT = the length N (the `typeinfo([E;N]).n` `comptime for` bound the
           ## `Array(_)` eq/lt derive unrolls over). Scanned INLINE: find the top-level `;`, parse the digits.
@@ -5646,36 +5660,54 @@ pub comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), g
           mut nval := 0
           mut ndg := true
           while ndg { nbs := bytes(str_at((src + nlp), 1)) ; nb := nbs[0] ; if nb >= 48 and nb <= 57 { nval = nval * 10 + i64(nb - 48) ; nlp = nlp + 1 } else { ndg = false } }
-          r = nval
+          r = Option(i64).Some(nval)
         }
       }
     }
     ## CONST ARITHMETIC (#672): fold `+ - * / %` over already-folded operands, the same op set and the
     ## same recursion as `global_init_value`, so `0 .. N - 1` names the same element set on every
-    ## backend. A ZERO divisor is NOT folded — it declines, leaving today's value — because x86's
-    ## `unchecked (lv / rv)` SIGFPEs the compiler on that operand and propagating a crash to three more
-    ## surfaces is a different repair (Comptime §2.6 wants a located diagnostic there, on all four).
+    ## backend. A ZERO divisor is never divided (#684): the folder answers `None`, so the emitter
+    ## refuses it loudly instead of looping zero times (Comptime §2.6 wants a located diagnostic; x86
+    ## gives one, the twins trap).
     ## Independent guard-then-act `if`s, matching `lower/ctfold::ct_bound_fold`: a nested `if…else`
     ## inside an `if`-then is not a lowerable shape under the self-host lower.
+    ## Both operands must fold (#696); an operand that does not leaves the whole bound `None`, never `0`.
     Expr::Bin(bop, bl, brr) => {
-      lv := comp_range_bound(bl, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
-      rv := comp_range_bound(brr, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
-      mut dz := false
-      if (bop == 19 or bop == 29) and rv == 0 { dz = true }
-      if dz == false {
-        if bop == 16 { r = unchecked (lv + rv) }
-        if bop == 17 { r = unchecked (lv - rv) }
-        if bop == 18 { r = unchecked (lv * rv) }
-        if bop == 19 { r = unchecked (lv / rv) }
-        if bop == 29 { r = unchecked (lv % rv) }
+      lo := comp_range_bound_at(bl, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops)
+      ro := comp_range_bound_at(brr, decls, src, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3, hops)
+      if opt_i64_is_some(lo) and opt_i64_is_some(ro) {
+        lv := opt_i64_or(lo, 0)
+        rv := opt_i64_or(ro, 0)
+        r = ct_range_arith(bop, lv, rv)
       }
     }
     Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf
       | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
-      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => {}
   }
   r
+}
+## Does `o` hold a value? / Its value, or `d`. Flat helpers, so a caller never nests a `match` in an arm.
+pub opt_i64_is_some := fn(o : Option(i64)) -> bool { match o { Some(x) => { true }; None => { false } } }
+pub opt_i64_or := fn(o : Option(i64), d : i64) -> i64 { match o { Some(x) => { x }; None => { d } } }
+## The const arithmetic of a `comptime for` range bound, ONE place for both folders (x86
+## `ctfold::comptime_range_bound_at` and the twins' `comp_range_bound_at`, #696): `+ - * / %` over two
+## folded operands, the same op set as `global_init_value`. Any other op is not a bound: `None`.
+## A ZERO divisor is never divided: `None`, so it is refused, never the bound 0 (Comptime §2.6, #684).
+pub ct_range_arith := fn(op : u8, lv : i64, rv : i64) -> Option(i64) {
+  mut v := 0
+  mut dz := false
+  if (op == 19 or op == 29) and rv == 0 { dz = true }
+  if dz == false {
+    if op == 16 { v = unchecked (lv + rv) }
+    if op == 17 { v = unchecked (lv - rv) }
+    if op == 18 { v = unchecked (lv * rv) }
+    if op == 19 { v = unchecked (lv / rv) }
+    if op == 29 { v = unchecked (lv % rv) }
+  }
+  if dz == false and (op == 16 or op == 17 or op == 18 or op == 19 or op == 29) { return Option(i64).Some(v) }
+  Option(i64).None
 }
 
 ## §8 `@niche` — is the type span `[s, s+n)` a NICHE-FOLDED `Option(ptr(T))`? The spec-flagship folded
