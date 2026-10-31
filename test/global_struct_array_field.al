@@ -16,3 +16,4 @@ main := fn() -> u64 {
   r = r + gg.xs[2] + gg.n                               ## 38 + 1 + 3 = 42
   r
 }
+## expect: run 42

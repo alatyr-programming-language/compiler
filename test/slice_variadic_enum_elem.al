@@ -17,3 +17,4 @@ esum := fn(xs : ...Sh) -> u64 {
 main := fn() -> u64 {
   return esum(Sh.Sq(20), Sh.Tri(11))
 }
+## expect(x86_64): run 42

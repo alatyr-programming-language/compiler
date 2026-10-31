@@ -9,3 +9,4 @@
 f := fn(n : u64) -> u64 { return n }
 
 main := fn() -> u64 { return f("nope") }
+## expect: reject "at line 11"

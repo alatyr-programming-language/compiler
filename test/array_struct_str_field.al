@@ -26,3 +26,4 @@ main := fn() -> u64 {
   ## expected: 3 + 22 + 10 + 1 + 6 = 42
   a + b + c + d + 6
 }
+## expect: run 42

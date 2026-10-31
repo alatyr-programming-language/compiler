@@ -22,3 +22,4 @@ main := fn() -> u64 {
   s := classify("fn") + classify("x")           ## 10 + 1 = 11
   a + b + z + lit + s + 9                        ## 7 + 9 + 0 + 6 + 11 + 9 = 42
 }
+## expect: run 42

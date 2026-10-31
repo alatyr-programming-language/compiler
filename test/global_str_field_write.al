@@ -8,3 +8,4 @@ main := fn() -> u64 {
   STATE.name = "worldww"
   return STATE.name.len + STATE.n
 }
+## expect: run 12

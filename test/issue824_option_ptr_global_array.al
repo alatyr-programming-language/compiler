@@ -41,3 +41,4 @@ main := fn() -> u64 {
   GS[3] = Option(ptr(mut N)).Some(ptr(mut c))
   val(GS[0]) + val(GS[3])
 }
+## expect(x86_64): run 42

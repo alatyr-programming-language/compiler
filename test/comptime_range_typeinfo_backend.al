@@ -6,3 +6,4 @@ main := fn() -> u64 {
   comptime for i in 0 .. typeinfo(B).n { total = total + i }
   total + 36
 }
+## expect: run 42

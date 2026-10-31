@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if unchecked bitcast(usize, rd().ptr) != unchecked bitcast(usize, s.ptr) { return 10 }
   return 42
 }
+## expect: run 42

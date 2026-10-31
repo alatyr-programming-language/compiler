@@ -19,3 +19,4 @@ main := fn() -> u64 {
   n := sink(v)            ## value position
   return CNT + 17
 }
+## expect: run 42

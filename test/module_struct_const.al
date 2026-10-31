@@ -6,3 +6,4 @@ ORIGIN := Pt(x = 40, y = 2)
 main := fn() -> u64 {
   ORIGIN.x + ORIGIN.y
 }
+## expect: run 42

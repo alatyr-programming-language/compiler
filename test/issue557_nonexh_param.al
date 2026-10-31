@@ -8,3 +8,4 @@ f := fn(c : C) -> u64 {
   return 0
 }
 main := fn() -> u64 { return f(C.R) }
+## expect: reject "type mismatch at line 7"

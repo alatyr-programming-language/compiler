@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if speq(P, a, c) { r = r + 41 }           ## all fields equal → equal
   r
 }
+## expect: run 42

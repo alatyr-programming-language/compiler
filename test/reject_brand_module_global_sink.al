@@ -30,3 +30,4 @@ G : A = B(1)
 main := fn() -> u64 {
   return u64(G)
 }
+## expect: reject "implicit brand conversion"

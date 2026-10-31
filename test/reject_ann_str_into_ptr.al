@@ -5,3 +5,4 @@ main := fn() -> u64 {
   p : ptr(u8) = "nope"
   return 0
 }
+## expect: reject "at line 5"

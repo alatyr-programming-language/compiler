@@ -100,3 +100,4 @@ main := fn() -> u64 {
 
   99
 }
+## expect: run 99

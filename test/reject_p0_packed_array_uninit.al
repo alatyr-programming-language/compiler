@@ -10,3 +10,4 @@ main := fn() -> u64 {
   if xs[0].b != 10 { return 1 }
   return 42
 }
+## expect: reject "an array whose element is a @packed struct is not supported"

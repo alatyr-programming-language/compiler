@@ -41,3 +41,4 @@ main := fn() -> u64 {
   if N != 7 { return 13 }
   return 42
 }
+## expect: run 42

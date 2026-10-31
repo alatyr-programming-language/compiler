@@ -8,3 +8,4 @@ main := fn() -> u64 {
   bad_resolve := resolves(outer(sink(S(x = 1))))
   if bad_compile or bad_resolve { 41 } else { 42 }
 }
+## expect: run 42

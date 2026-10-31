@@ -6,3 +6,4 @@ use_ref := fn() -> u64 {
   return deref(p) + 2
 }
 main := fn() -> u64 { return use_ref() }
+## expect: run 42

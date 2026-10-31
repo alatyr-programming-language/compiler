@@ -3,3 +3,4 @@ main := fn() -> u64 {
   x : f64 = 1e2
   return u64(x)
 }
+## expect(x86_64): run 100

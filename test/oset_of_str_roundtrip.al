@@ -63,3 +63,4 @@ main := fn() -> u64 {
   if not alloc::oset::oset_contains(str, ptr(s), "wxyz", slt) { return 17 }
   return 42
 }
+## expect: run 42

@@ -13,3 +13,4 @@ find := fn(k : u64) -> Option(u64) {
 main := fn() -> u64 {
   return find(1).unwrap()
 }
+## expect: run 42

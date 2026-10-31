@@ -9,3 +9,4 @@ main := fn() -> u64 {
   s := S(value = 42)
   s.value
 }
+## expect: reject

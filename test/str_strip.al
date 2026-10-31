@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if not (d == "file.txt") { return 4 }
   return 42
 }
+## expect: run 42

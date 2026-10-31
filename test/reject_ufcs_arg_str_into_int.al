@@ -12,3 +12,4 @@ main := fn() -> u64 {
   v := V(n = 1)
   v.bump("nope")
 }
+## expect: reject

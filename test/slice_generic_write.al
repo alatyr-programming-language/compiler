@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if arr[3] != 7 { return 3 }
   return 42
 }
+## expect: run 42

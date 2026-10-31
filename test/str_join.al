@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if sj == "one, two, three" { return 42 }
   return 7
 }
+## expect: run 42

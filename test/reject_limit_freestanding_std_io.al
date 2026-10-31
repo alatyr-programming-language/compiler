@@ -6,3 +6,4 @@ touch_os := fn() -> u64 {
   42
 }
 main := fn() -> u64 { return touch_os() }
+## expect: reject "@limits(freestanding) violation" "at line 4"

@@ -10,3 +10,4 @@ main := fn() -> u64 {
   p := match o { Opt::None => { P(x = 0, y = 0) }; Opt::Some(v) => { P(x = v, y = 2) } }
   return p.x + p.y
 }
+## expect: run 42

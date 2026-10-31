@@ -16,3 +16,4 @@ bad_result_payload_direct := fn() -> u64 { return take_payload(make_result_paylo
 bad_option_payload_direct := fn() -> u64 { return take_payload(make_option_payload()) }
 
 main := fn() -> u64 { return 42 }
+## expect: reject "type mismatch"

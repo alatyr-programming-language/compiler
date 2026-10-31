@@ -16,3 +16,4 @@ main := fn() -> u64 {
   s := (r.a + r.b) + (e.a + e.b)   ## 42 + 42 = 84
   return unchecked u64(s - 42)     ## 42
 }
+## expect: run 42

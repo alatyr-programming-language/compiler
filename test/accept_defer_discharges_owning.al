@@ -11,3 +11,4 @@ main := fn() -> u64 {
   defer close_it(h)
   0
 }
+## expect: accept

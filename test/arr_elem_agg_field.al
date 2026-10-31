@@ -8,3 +8,4 @@ main := fn() -> u64 {
   arr[i].b = 27
   u64(arr[1].a + arr[1].b + arr[0].a)   ## 5 + 27 + 10 = 42 (arr[0] untouched)
 }
+## expect: run 42

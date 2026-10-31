@@ -23,3 +23,4 @@ main := fn() -> u64 {
   if s < w { return 42 }              ## 0 < 2^64-6 unsigned -> TRUE
   return 3
 }
+## expect: run 42

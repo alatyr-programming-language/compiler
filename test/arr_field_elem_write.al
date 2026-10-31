@@ -18,3 +18,4 @@ main := fn() -> u64 {
     + xs[1].arr[1]                       ## 50 (neighbour element, unchanged)
     + xs[1].pad)                         ## 8  (neighbour field, unchanged)
 }
+## expect: run 116

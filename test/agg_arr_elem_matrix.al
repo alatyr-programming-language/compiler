@@ -41,3 +41,4 @@ main := fn() -> u64 {
   if xs[2].a != 20 { return 4 }
   r
 }
+## expect: run 104

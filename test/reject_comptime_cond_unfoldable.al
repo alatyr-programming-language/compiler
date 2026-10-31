@@ -11,3 +11,4 @@ main := fn() -> u64 {
   comptime if x > n { x = 30 } else { x = 70 }
   return x
 }
+## expect: reject "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"

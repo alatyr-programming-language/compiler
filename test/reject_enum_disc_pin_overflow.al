@@ -6,3 +6,4 @@ main := fn() -> u64 {
   x := Bad.A
   0
 }
+## expect: reject "at line 3"

@@ -33,3 +33,4 @@ main := fn() -> u64 {
   if eq(E, b2, b2) { r = r + 2 }     ## B2 == B2 → true
   r
 }
+## expect: run 42

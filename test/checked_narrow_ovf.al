@@ -8,3 +8,4 @@ main := fn() -> u64 {
   x := a + b
   return x
 }
+## expect(x86_64): trap

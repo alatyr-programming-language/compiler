@@ -11,3 +11,4 @@ main := fn() -> u64 {
   xs[1] = A(pa = 1, b = B(pb = 2, c = C(cx = 3, cy = 4)), tail = 9)
   u64(xs[0].b.c.cx + xs[0].b.c.cy + xs[1].b.c.cx + xs[1].b.c.cy)
 }
+## expect: run 42

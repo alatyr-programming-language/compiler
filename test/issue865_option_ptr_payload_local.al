@@ -38,3 +38,4 @@ main := fn() -> i64 {
   if total(Shape.Empty) != 0 { got = 2 }
   got
 }
+## expect(x86_64): run 42

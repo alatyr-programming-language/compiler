@@ -7,3 +7,4 @@ main := fn() -> u64 {
   s := unchecked (a + b)
   return s
 }
+## expect: run 42

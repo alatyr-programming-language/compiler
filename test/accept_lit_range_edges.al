@@ -40,3 +40,4 @@ main := fn() -> u64 {
   if u64(g8()) != 255 { return 13 }
   return 42
 }
+## expect: run 42

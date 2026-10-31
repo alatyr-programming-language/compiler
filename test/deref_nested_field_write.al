@@ -11,3 +11,4 @@ main := fn() -> u64 {
   deref(p).b.c.cx = 3
   u64(a.b.pb + a.b.c.cx + a.pa)
 }
+## expect: run 91

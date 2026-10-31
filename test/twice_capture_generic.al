@@ -11,3 +11,4 @@ main := fn() -> u64 {
   f := fn(n : u64) -> u64 { return n + c }
   u64(twice(u64, f, 20))
 }
+## expect: run 42

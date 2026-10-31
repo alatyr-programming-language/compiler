@@ -5,3 +5,4 @@ main := fn() -> u64 {
   b := a * 3
   return b
 }
+## expect: trap

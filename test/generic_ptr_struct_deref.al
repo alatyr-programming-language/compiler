@@ -33,3 +33,4 @@ main := fn() -> i64 {
   if d3.b != 2 { return 6 }
   d1.b + d2.b + d3.a - d2.a + d3.b + 36      ## 2 + 2 + 40 - 40 + 2 + 36 = 42
 }
+## expect: run 42

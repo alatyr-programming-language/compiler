@@ -5,3 +5,4 @@ main := fn() -> u64 {
   x : NoSuchTypeQQ = 42
   return 42
 }
+## expect: reject "at line 5"

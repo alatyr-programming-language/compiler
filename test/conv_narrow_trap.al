@@ -5,3 +5,4 @@
 ## is still a sema gap on the twins, which then truncate through their legacy path (#878).
 f := fn(x : u32) -> u8 { u8(x) }
 main := fn() -> u64 { u64(f(810)) }
+## expect: trap

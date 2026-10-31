@@ -7,3 +7,4 @@ main := fn() -> u64 {
   c : f64 = 2.5E-1
   return u64(a) + u64(b) + u64(c)
 }
+## expect(x86_64): run 25

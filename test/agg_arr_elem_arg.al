@@ -42,3 +42,4 @@ main := fn() -> u64 {
   acc = acc + via_slice(sl)        ## element of a `Slice(P)` PARAM       -> 7
   return acc
 }
+## expect: run 42

@@ -6,3 +6,4 @@ main := fn() -> u64 {
   xs = [xs[1] + 3, xs[0], xs[2]]
   xs[0] * 10 + xs[1]
 }
+## expect: run 40

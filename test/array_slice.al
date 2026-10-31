@@ -19,3 +19,4 @@ main := fn() -> u64 {
   wguard := ws[1] - 42                        ## ws[1] became 2 + 40 = 42 → 0
   return acc + guard + fguard + wguard
 }
+## expect: run 42

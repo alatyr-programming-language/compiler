@@ -7,3 +7,4 @@ main := fn() -> u64 {
   acc = acc + 1
   return nonexistent_var
 }
+## expect: reject "at line 8"

@@ -7,3 +7,4 @@ main := fn() -> u64 {
   s.inner.f = "text"
   return s.inner.f
 }
+## expect: reject "type mismatch" "at line 7"

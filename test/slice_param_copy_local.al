@@ -29,3 +29,4 @@ main := fn() -> u64 {
   if b != 7 { return 2 }
   return a + b
 }
+## expect: run 11

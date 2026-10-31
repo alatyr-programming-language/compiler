@@ -10,3 +10,4 @@ main := fn() -> u64 {
   if x < 50 { return 42 }
   return 1
 }
+## expect: run 42

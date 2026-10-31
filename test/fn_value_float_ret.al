@@ -35,3 +35,4 @@ main := fn() -> u64 {
   e := appf(dblf, 1.0)             ## 2
   return a + b + c + d + e
 }
+## expect: run 42

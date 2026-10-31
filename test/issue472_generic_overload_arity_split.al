@@ -28,3 +28,4 @@ main := fn() -> u64 {
   if g(u64, A(x = 1), B(p = 7, y = 41)) != 42 { return 14 }
   42
 }
+## expect(x86_64): run 42

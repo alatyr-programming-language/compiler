@@ -18,3 +18,4 @@ main := fn() -> u64 {
     None => { return 0 }
   }
 }
+## expect: run 42

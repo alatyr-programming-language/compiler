@@ -9,3 +9,4 @@ main := fn() -> u64 {
   b : u64 = 9999999999
   return a * b + u64(z)
 }
+## expect(x86_64): trap

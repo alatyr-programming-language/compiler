@@ -11,3 +11,4 @@ pair := fn(K : type, V : type, x : u64) -> u64 when size(V) <= 8 { x }
 main := fn() -> u64 {
   pair(u64, u32, 42)
 }
+## expect(x86_64): run 42

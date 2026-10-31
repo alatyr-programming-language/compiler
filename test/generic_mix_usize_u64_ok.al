@@ -6,3 +6,4 @@
 ## reject half. 39 + 3 = 42 on every backend.
 g := fn(T : type, a : T, n : usize) -> T { a + n }
 main := fn() -> u64 { return u64(g(u64, 39, 3)) }
+## expect: run 42

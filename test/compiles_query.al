@@ -9,3 +9,4 @@ missing_var := fn() -> u64 {
   comptime if compiles(no_such_local) { return 1 } else { return 0 }
 }
 main := fn() -> u64 { pick() + missing() + missing_var() }
+## expect: run 41

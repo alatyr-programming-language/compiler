@@ -11,3 +11,4 @@ main := fn() -> u64 {
   outer.leaf.values[0] = true
   0
 }
+## expect: reject "type mismatch" "at line 11"

@@ -30,3 +30,4 @@ main := fn() -> u64 {
   if c < a { acc = acc + 100 }            ## MUST be false -> no add
   return acc
 }
+## expect(x86_64): run 42

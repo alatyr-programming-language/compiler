@@ -14,3 +14,4 @@ main := fn() -> u64 {
   s := mk()
   return s.a + s.e + s.i
 }
+## expect: run 15

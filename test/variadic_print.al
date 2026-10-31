@@ -10,3 +10,4 @@ main := fn() -> u64 {
   std::fmt::print("{} + {} = 42\n", a, b)
   42
 }
+## expect: run 42

@@ -40,3 +40,4 @@ main := fn() -> u64 {
   print("ctl_min_bin {}\n", 0 - 9223372036854775807 - 1)
   42
 }
+## expect: run 42

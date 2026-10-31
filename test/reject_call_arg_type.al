@@ -6,3 +6,4 @@ takes_bool := fn(value : bool) -> u64 {
 main := fn() -> u64 {
   return takes_bool(42)
 }
+## expect: reject

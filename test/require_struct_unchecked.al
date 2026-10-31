@@ -8,3 +8,4 @@ main := fn() -> u64 {
   x := unchecked { Checked(Pair(lo = 42, hi = 1)) }
   return x.lo
 }
+## expect(x86_64): run 42

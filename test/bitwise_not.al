@@ -22,3 +22,4 @@ main := fn() -> u64 {
 
   m + (d - five) + (y - x)
 }
+## expect: run 42

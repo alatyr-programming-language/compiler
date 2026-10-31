@@ -5,3 +5,4 @@ main := fn() -> u64 {
   r := match n { 0..=127 => 1 ; 128..=255 => 2 }
   return r
 }
+## expect: accept

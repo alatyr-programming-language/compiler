@@ -9,3 +9,4 @@ main := fn() -> u64 {
   b := fn(n : u64) -> u64 { return n + 2 }
   return app(a, 20) + app(b, 0)
 }
+## expect: run 42

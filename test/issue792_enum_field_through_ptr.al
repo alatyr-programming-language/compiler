@@ -47,3 +47,4 @@ main := fn() -> u64 {
   if size(SRec) != 32 { return 14 }
   42
 }
+## expect: run 42

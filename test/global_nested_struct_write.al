@@ -8,3 +8,4 @@ main := fn() -> u64 {
   STATE.inner = P(a = 10, b = 27)
   return STATE.inner.a + STATE.inner.b + STATE.n
 }
+## expect: run 42

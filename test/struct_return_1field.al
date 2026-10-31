@@ -11,3 +11,4 @@ main := fn() -> u64 {
   b := mk(2)                ## One{2}
   a.x + b.x + unwrap(mk(0)) ## 40 + 2 + 0 = 42
 }
+## expect: run 42

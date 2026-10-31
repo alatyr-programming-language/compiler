@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if lt(u64, 1, 0 - 1) { acc = acc + 40 }
   return acc
 }
+## expect: run 42

@@ -3,3 +3,4 @@ main := fn() -> u64 {
   x : bool = loop { break 1 }
   return 42
 }
+## expect: reject "check: type mismatch at line 3"

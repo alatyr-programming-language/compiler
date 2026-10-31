@@ -15,3 +15,4 @@ main := fn() -> u64 {
   p := ptr(SHARED)
   atomic::load(p, Ordering.acquire)
 }
+## expect: run 42

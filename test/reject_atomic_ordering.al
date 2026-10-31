@@ -4,3 +4,4 @@ main := fn() -> u64 {
   p := ptr(X)
   atomic::load(p, Ordering.release)
 }
+## expect: reject

@@ -16,3 +16,4 @@ main := fn() -> u64 {
   bumpg(u64, q)
   q.a + q.d
 }
+## expect: run 42

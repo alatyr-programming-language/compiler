@@ -12,3 +12,4 @@ main := fn() -> u64 {
   for p in a { s = s + p.x + p.y }
   s                              ## 10+1 + 20+2 + 8+1 = 42
 }
+## expect: run 42

@@ -32,3 +32,4 @@ main := fn() -> u64 {
   if a % m1 == 0 { acc = acc + 32 }
   return acc
 }
+## expect: run 63

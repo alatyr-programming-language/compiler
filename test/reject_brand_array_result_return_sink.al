@@ -28,3 +28,4 @@ ok := fn() -> [A; 2] { return [A(4), A(5)] }
 mk := fn() -> [A; 2] { return [B(1), B(2)] }
 
 main := fn() -> u64 { return 0 }
+## expect: reject "at line 28 in reject_brand_array_result_return_sink" "implicit brand conversion"

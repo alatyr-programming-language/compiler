@@ -9,3 +9,6 @@ main := fn() -> u64 {
   mut k : usize = 2
   u64(build()[k])
 }
+## expect: accept
+## expect(x86_64): run 42
+## expect(aarch64): run 42

@@ -70,3 +70,4 @@ main := fn() -> u64 {
   if good > 13 { good = 13 }
   return good * 8 + bad
 }
+## expect: run 42

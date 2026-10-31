@@ -20,3 +20,4 @@ main := fn() -> u64 {
   if got.tail != 9 { return 4 }
   42
 }
+## expect: run 42

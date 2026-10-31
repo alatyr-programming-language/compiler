@@ -8,3 +8,4 @@
 main := fn() -> u64 {
   return a() + b()
 }
+## expect: reject

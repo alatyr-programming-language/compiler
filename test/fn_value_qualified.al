@@ -7,3 +7,4 @@ apply := fn(f : fn(u64) -> u64, x : u64) -> u64 { f(x) }
 main := fn() -> u64 {
   apply(main::add1, 41)
 }
+## expect: run 42

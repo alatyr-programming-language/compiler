@@ -25,3 +25,4 @@ main := fn() -> u64 {
   if G == 21 and h == 0 - 6 and lread() == 0 - 6 { return 42 }
   1
 }
+## expect: run 42

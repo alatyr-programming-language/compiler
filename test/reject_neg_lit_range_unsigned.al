@@ -12,3 +12,4 @@ main := fn() -> u64 {
   n : u8 = -1
   u64(n)
 }
+## expect: reject "type mismatch at line 12 in reject_neg_lit_range_unsigned"

@@ -47,3 +47,4 @@ main := fn() -> u64 {
   if good == 27 and bad == 0 { return 42 }
   good * 4 + bad
 }
+## expect(x86_64): run 42

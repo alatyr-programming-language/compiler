@@ -9,3 +9,4 @@ main := fn() -> u64 {
   STATE.c = Col.G(37)
   return match STATE.c { Col::R => { 0 }; Col::G(v) => { v } } + STATE.n
 }
+## expect: run 42

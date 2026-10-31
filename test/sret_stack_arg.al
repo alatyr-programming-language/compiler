@@ -9,3 +9,4 @@ main := fn() -> u64 {
   s := mk(1, 2, 3, 4, 5, 27)
   return s.a + s.b + s.c + s.d + s.e + s.f
 }
+## expect: run 42

@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if raw_sum != plain_sum { return 0 }
   return 42
 }
+## expect: run 42

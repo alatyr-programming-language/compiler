@@ -40,3 +40,4 @@ main := fn() -> u64 {
 
   return r.lo + r.hi + s.lo + s.hi
 }
+## expect(x86_64): run 42

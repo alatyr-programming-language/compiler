@@ -20,3 +20,4 @@ main := fn() -> u64 {
   if pa::is_absolute("rel/path") { return 14 }
   return 42
 }
+## expect: run 42

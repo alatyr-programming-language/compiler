@@ -12,3 +12,4 @@ main := fn() -> u64 {
   n := get(Option(ptr(u64)).None)
   return s + n
 }
+## expect(x86_64): run 42

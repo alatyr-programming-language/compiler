@@ -12,3 +12,4 @@ main := fn() -> u64 {
   y := Ver(n = 7)
   if x < y { 42 } else { 0 }
 }
+## expect: run 42

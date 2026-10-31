@@ -10,3 +10,4 @@ main := fn() -> u64 {
   c := Box(Pair(u64))(v = Pair(u64)(a = 40, b = 2))
   c.v.a + c.v.b
 }
+## expect: run 42

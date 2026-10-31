@@ -25,3 +25,4 @@ main := fn() -> u64 {
   k := Option::unwrap_or(ptr(mut Node), none, ptr(c))
   return deref(k).v + deref(m).w
 }
+## expect(x86_64): run 42

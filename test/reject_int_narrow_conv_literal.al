@@ -11,3 +11,4 @@ main := fn() -> u64 {
   c := u64(u32(4294967338)) / 42
   a + b + c + 28
 }
+## expect: reject "type mismatch at line 9 in reject_int_narrow_conv_literal"

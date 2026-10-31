@@ -25,3 +25,5 @@ main := fn() -> u64 {
   sink()
   return d.h + n.i + g.h + 42
 }
+## expect(x86_64): run 67
+## expect(riscv64): run 67

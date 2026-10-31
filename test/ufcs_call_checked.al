@@ -30,3 +30,4 @@ main := fn() -> u64 {
   e := payload(E.B(7))       ## 7  — a REAL enum-variant ctor over the same `X.Y(z)` syntax
   a + b + c + d + e - 13     ## 42 + 3 + 1 + 2 + 7 = 55, less 13 = 42
 }
+## expect: run 42

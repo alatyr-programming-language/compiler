@@ -39,3 +39,4 @@ main := fn() -> u64 {
   if u64(local[0].b) != 32 { return 16 }
   42
 }
+## expect(x86_64): run 42

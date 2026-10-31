@@ -6,3 +6,4 @@ main := fn() -> u64 {
   p.b = 2
   return p.a + p.b
 }
+## expect(x86_64): run 42

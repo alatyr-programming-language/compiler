@@ -11,3 +11,4 @@ main := fn() -> u64 {
   table.row.flags.bits[1] = "text"
   0
 }
+## expect: reject "type mismatch" "at line 11"

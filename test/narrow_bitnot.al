@@ -7,3 +7,4 @@ main := fn() -> u64 {
   y := ~x
   if u64(y) == 42 { return 42 } else { return 7 }
 }
+## expect: run 42

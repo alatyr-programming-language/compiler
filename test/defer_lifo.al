@@ -14,3 +14,4 @@ main := fn() -> u64 {
   x := body()
   return ACC
 }
+## expect: run 57

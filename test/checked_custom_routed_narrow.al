@@ -11,3 +11,4 @@ main := fn() -> u64 {
   b : u32 = 3
   u64(a + b)
 }
+## expect(x86_64): trap

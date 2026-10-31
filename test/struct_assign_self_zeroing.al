@@ -12,3 +12,4 @@ main := fn() -> u64 {
   q = By(a = q.a + 2, b = q.b + 9)
   u64(p.a) + u64(p.b) * 2 + u64(q.a) + u64(q.b)
 }
+## expect: run 42

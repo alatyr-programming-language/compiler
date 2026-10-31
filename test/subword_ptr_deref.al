@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if i64(bs) != 0 - 1 { return 4 }
   return 42
 }
+## expect: run 42

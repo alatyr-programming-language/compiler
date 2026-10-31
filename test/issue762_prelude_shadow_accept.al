@@ -16,3 +16,4 @@ main := fn() -> u64 {
   if a.cap != 5 { return 101 }
   return 42
 }
+## expect: run 42

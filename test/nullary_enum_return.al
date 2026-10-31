@@ -29,3 +29,4 @@ main := fn() -> u64 {
   match mk_r() { Result::Ok(z) => { a = a + z } Result::Err(e) => { a = a + 100 } }
   return a
 }
+## expect: run 42

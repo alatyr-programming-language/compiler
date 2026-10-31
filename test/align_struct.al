@@ -21,3 +21,4 @@ main := fn() -> u64 {
   if u64(p.c) != 7 { return 4 }
   return 42
 }
+## expect(x86_64): run 42

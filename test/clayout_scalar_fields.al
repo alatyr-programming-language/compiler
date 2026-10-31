@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if check(Mixed, 16, 8, 8) != 0 { return 8 }
   return 42
 }
+## expect: run 42

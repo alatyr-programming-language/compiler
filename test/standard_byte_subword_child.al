@@ -42,3 +42,4 @@ main := fn() -> u64 {
   if o.data[0] != 1 { return 10 }
   42
 }
+## expect: run 42

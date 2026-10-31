@@ -9,3 +9,4 @@ main := fn() -> u64 {
   q := p
   return q.x + q.y
 }
+## expect: run 42

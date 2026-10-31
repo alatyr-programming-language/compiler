@@ -9,3 +9,4 @@ main := fn() -> u64 {
   s := S(a = [40, 2])
   return s.a
 }
+## expect: reject "at line 9"

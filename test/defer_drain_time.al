@@ -44,3 +44,4 @@ main := fn() -> u64 {
   z := g() + h() + w()
   return ACC + z
 }
+## expect: run 95

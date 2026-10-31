@@ -37,3 +37,4 @@ main := fn() -> u64 {
   match GR[2] { R::N => { return 17 } R::A(n) => { if n != 3 { return 18 } } R::B(n) => { return 19 } }
   acc                                    ## 2 + 40 = 42
 }
+## expect: run 42

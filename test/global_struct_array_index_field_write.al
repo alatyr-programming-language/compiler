@@ -8,3 +8,4 @@ main := fn() -> u64 {
   ARR[i].x = 40
   ARR[i].x + ARR[0].y + ARR[1].x
 }
+## expect: run 42

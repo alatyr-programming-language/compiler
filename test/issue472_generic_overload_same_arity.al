@@ -42,3 +42,4 @@ main := fn() -> u64 {
   if pick(u64, lb) != 42 { return 14 }
   42
 }
+## expect(x86_64): run 42

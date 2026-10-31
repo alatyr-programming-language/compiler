@@ -14,3 +14,4 @@ value := 2
 main := fn() -> u64 {
   return 0
 }
+## expect: reject "alatyr: check: duplicate name at line 12 in reject_emit_surface_duplicate_name"

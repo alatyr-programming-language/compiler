@@ -8,3 +8,4 @@ main := fn() -> u64 {
   if u32(c) == 0 { return 41 }
   42
 }
+## expect(x86_64): run 1

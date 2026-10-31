@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if s.k < 0 { ok = ok + 2 }
   ok
 }
+## expect: run 42

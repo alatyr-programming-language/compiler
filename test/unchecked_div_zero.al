@@ -5,3 +5,4 @@
 ## faults in hardware regardless), so 0 is a clean assertion only on aarch64.
 divide := fn(a : i64, b : i64) -> i64 { return unchecked (a / b) }
 main := fn() -> i64 { return divide(42, 0) }
+## expect(aarch64): run 0

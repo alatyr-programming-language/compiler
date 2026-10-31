@@ -24,3 +24,4 @@ main := fn() -> u64 {
   d := name_len(E.Anon)                           ## 0
   a + b + c + d + 5                               ## 5 + 30 + 2 + 0 + 5 = 42
 }
+## expect: run 42

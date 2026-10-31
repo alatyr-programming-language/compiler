@@ -41,3 +41,4 @@ main := fn() -> u64 {
   if r < 0 { r = r + 113 }
   return u64(r) + 1
 }
+## expect: run 2

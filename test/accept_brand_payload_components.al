@@ -6,3 +6,4 @@ main := fn() -> u64 {
   f := F.P(A(30), 12, Option(u64).None)
   return match f { F::P(p, q, o) => { u64(p) + q } F::Q => { 0 } }
 }
+## expect: run 42

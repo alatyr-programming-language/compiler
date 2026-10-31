@@ -7,3 +7,4 @@ main := fn() -> u64 {
   c := Cell(value = 42)
   c.value
 }
+## expect: run 42

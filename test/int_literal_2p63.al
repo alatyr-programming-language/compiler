@@ -23,3 +23,4 @@ main := fn() -> u64 {
   if r == 63 { return 42 }
   return r
 }
+## expect: run 42

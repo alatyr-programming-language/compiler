@@ -26,3 +26,4 @@ sum := fn(w : W) -> u64 {
 main := fn() -> u64 {
   sum(mk(1))   ## word1(1) + word5(5) + word10(10) = 16
 }
+## expect: run 16

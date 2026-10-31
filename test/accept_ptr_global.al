@@ -5,3 +5,4 @@ f := fn() -> ptr(u64) {
   ptr(g)
 }
 main := fn() -> u64 { 0 }
+## expect: accept

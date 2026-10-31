@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if tag != 9 { return 3 }
   return got
 }
+## expect(x86_64): run 42

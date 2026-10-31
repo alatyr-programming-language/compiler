@@ -13,3 +13,4 @@ main := fn() -> u64 {
   s[0] = 65
   7
 }
+## expect: reject "immutable binding" "at line 13"

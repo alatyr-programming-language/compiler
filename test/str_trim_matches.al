@@ -16,3 +16,4 @@ main := fn() -> u64 {
   if e.len != 0 { return 5 }
   return 42
 }
+## expect: run 42

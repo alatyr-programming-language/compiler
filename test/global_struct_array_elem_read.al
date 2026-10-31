@@ -9,3 +9,4 @@ main := fn() -> u64 {
   e := ARR[i]
   e.x + e.y + 1
 }
+## expect: run 42

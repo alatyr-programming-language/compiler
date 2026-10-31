@@ -11,3 +11,4 @@ main := fn() -> u64 {
   mut c := C.R
   return f(ptr(mut c))
 }
+## expect: reject "type mismatch at line 7"

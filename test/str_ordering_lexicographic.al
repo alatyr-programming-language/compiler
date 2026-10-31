@@ -52,3 +52,4 @@ main := fn() -> i64 {
 
   return 42
 }
+## expect: run 42

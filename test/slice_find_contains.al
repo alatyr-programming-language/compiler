@@ -29,3 +29,4 @@ main := fn() -> u64 {
   }
   r2
 }
+## expect: run 21

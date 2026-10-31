@@ -12,3 +12,4 @@ main := fn() -> u64 {
   y := match s.b { Col::R => { 0 }; Col::G(v) => { v }; Col::B => { 1 } }
   return x + y + s.p.x + s.p.y     ## 30 + 8 + 3 + 1 = 42
 }
+## expect: run 42

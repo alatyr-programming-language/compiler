@@ -13,3 +13,4 @@ f := fn(a : u64, b : u64) -> u64 {
   return r
 }
 main := fn() -> u64 { return f(40, 2) }
+## expect: reject "@limits(no_unchecked) violation"

@@ -23,3 +23,4 @@ main := fn() -> u64 {
   z := match hm { Option::Some(n) => n; Option::None => 0 }
   x + y + z
 }
+## expect: run 84

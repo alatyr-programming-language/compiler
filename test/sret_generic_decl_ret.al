@@ -13,3 +13,4 @@ main := fn() -> u64 {
   d := mk(u64, 1)
   return d.h + 34
 }
+## expect: run 42

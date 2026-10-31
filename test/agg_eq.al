@@ -20,3 +20,4 @@ main := fn() -> u64 {
   if r > p { acc = acc + 11 }              ## (5,8) > (5,7) → +11
   acc
 }
+## expect: run 42

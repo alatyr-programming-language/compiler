@@ -8,3 +8,4 @@ main := fn() -> u64 {
   b := true
   return f(b)
 }
+## expect: reject "at line 9"

@@ -117,3 +117,4 @@ main := fn() -> u64 {
   match o { Some(q) => { if deref(q).v != 31 { return 115 } }; None => { return 116 } }
   sum_copy(Option.Some(ptr(mut b)))
 }
+## expect(x86_64): run 42

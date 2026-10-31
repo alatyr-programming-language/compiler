@@ -12,3 +12,4 @@ main := fn() -> u64 {
   s := mk(10)
   return (s.a + s.i) + (s.e - s.b)
 }
+## expect: run 31

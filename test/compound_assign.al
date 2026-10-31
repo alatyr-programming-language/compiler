@@ -10,3 +10,4 @@ main := fn() -> u64 {
   c.n += 27
   return u64(x + c.n)
 }
+## expect: run 42

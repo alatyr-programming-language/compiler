@@ -15,3 +15,4 @@ main := fn() -> u64 {
   value |= 7
   return value
 }
+## expect: reject "check: immutable binding at line 15"

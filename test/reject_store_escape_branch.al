@@ -9,3 +9,4 @@ leak := fn(c : bool) {
   }
 }
 main := fn() -> u64 { 0 }
+## expect: reject

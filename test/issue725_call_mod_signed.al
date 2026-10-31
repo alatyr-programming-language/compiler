@@ -9,3 +9,4 @@ main := fn() -> u64 {
   if v == (0 - 5) { return 42 }
   return u64(unchecked (v + 100))
 }
+## expect: run 42

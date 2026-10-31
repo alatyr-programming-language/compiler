@@ -7,3 +7,4 @@ main := fn() -> u64 {
   b0 := arr[0].b                         ## word-1 field read of a different element (1)
   u64(x.a + x.b + b0)                    ## 20 + 21 + 1 = 42
 }
+## expect: run 42

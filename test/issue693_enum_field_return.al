@@ -6,3 +6,4 @@ main := fn() -> u64 {
   v := E.B(11, 22)
   return v.a
 }
+## expect: reject "not through a field name at line 7 in issue693_enum_field_return"

@@ -13,3 +13,4 @@ main := fn() -> u64 {
   if not takes(sm::trim("   hi   ")) { return 2 }    ## str-ret-call straight into a consumer
   return 42
 }
+## expect: run 42

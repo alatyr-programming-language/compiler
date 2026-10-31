@@ -19,3 +19,4 @@ payload := fn(T : type, v : T) -> u64 {
 main := fn() -> u64 {
   payload(E, E.A(42))
 }
+## expect: run 42

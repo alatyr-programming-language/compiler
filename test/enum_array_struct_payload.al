@@ -5,3 +5,4 @@ main := fn() -> u64 {
   es := [E.A(P(x = 40, y = 2)), E.B]
   match es[0] { E::A(p) => { return p.x + p.y }; E::B => { return 0 } }
 }
+## expect: run 42

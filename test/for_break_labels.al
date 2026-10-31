@@ -40,3 +40,4 @@ main := fn() -> u64 {
   ## a=0 b=15 c=1 d=2 e=6 f=3  ->  42 iff all match
   42 + a + (b - 15) + (c - 1) + (d - 2) + (e - 6) + (f - 3)
 }
+## expect: run 42

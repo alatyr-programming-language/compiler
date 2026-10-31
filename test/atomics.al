@@ -17,3 +17,4 @@ main := fn() -> u64 {
   z := atomic::load(p, Ordering.acquire)
   z + a + b + c - 165
 }
+## expect: run 42

@@ -9,3 +9,4 @@ main := fn() -> u64 {
   if c == (0 - 10) { return 42 }
   return 2
 }
+## expect: run 42

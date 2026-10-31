@@ -9,3 +9,5 @@
 main := fn() -> u64 {
   return answer()
 }
+## expect(x86_64): run 42
+## expect(wasm): run 42

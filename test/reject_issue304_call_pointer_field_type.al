@@ -6,3 +6,4 @@ main := fn() -> u64 {
   deref(same(ptr(s))).f = "text"
   return deref(q).f
 }
+## expect: reject "type mismatch" "at line 6"

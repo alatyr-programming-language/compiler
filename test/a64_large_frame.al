@@ -69,3 +69,4 @@ main := fn() -> u64 {
   mut dead_63 : u64 = 0
   return 42
 }
+## expect: run 42

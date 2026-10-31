@@ -10,3 +10,4 @@ main := fn() -> u64 {
   if b[0] < 0 and b[1] == 127 and c[1] == 65535 { total += 0 } else { total += 100 }
   return total
 }
+## expect: run 42

@@ -5,3 +5,4 @@
 ## number `conv_narrow` asserted, which is why that row was rewritten onto a representable literal
 ## rather than left to freeze the wrap into the oracle (#527).
 main := fn() -> u64 { return u8(810) }
+## expect: reject "type mismatch at line 7 in reject_conv_narrow_literal"

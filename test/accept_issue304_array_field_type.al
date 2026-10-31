@@ -6,3 +6,4 @@ main := fn() -> u64 {
   s.items[0].flag = true
   return s.items[0].f + if s.items[0].flag { 2 } else { 0 }
 }
+## expect: accept

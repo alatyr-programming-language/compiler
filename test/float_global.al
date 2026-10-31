@@ -6,3 +6,4 @@ main := fn() -> u64 {
   F = F + 2.0
   u64(F)
 }
+## expect: run 42

@@ -6,3 +6,4 @@ mut G := U.p(Pair(x = 10, y = 32))
 main := fn() -> u64 {
   return G.p.x + G.p.y
 }
+## expect: run 42

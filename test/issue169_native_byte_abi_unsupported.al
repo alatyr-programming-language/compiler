@@ -11,3 +11,4 @@ take_triple := fn(s : Triple) -> u64 {
 main := fn() -> u64 {
   take_triple(Triple(a = 4, b = 2, c = 1))
 }
+## expect: run 42

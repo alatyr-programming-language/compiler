@@ -14,3 +14,4 @@ main := fn() -> u64 {
     Col::B => { return 1 }
   }
 }
+## expect: run 42

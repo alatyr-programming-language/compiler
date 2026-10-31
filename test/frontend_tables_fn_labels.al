@@ -307,3 +307,4 @@ main := fn() -> u64 {
   @label(l299) loop { r = r + 1 ; break l299 }
   return r - 258
 }
+## expect: run 42

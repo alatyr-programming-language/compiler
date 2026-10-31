@@ -43,3 +43,4 @@ main := fn() -> u64 {
   if narrow_checked(2, 3) != 5 { return 5 }
   17
 }
+## expect: run 17

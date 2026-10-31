@@ -19,3 +19,5 @@ main := fn() -> u64 {
   if qh_facade::math::floor(65.9) == 65.0 { return 65 }
   return 1
 }
+## expect: accept
+## expect(x86_64): run 65

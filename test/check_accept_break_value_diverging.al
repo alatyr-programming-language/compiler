@@ -12,3 +12,4 @@ main := fn() -> u64 {
   }
   z - 40 + k                       ## 40 - 40 + 1 = 1; check only asserts acceptance
 }
+## expect: accept

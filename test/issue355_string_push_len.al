@@ -110,3 +110,4 @@ main := fn() -> u64 {
   strm::free(s)
   return 42
 }
+## expect: run 42

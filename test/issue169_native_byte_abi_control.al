@@ -24,3 +24,4 @@ main := fn() -> u64 {
   if take_word(control) != 42 { return 2 }
   42
 }
+## expect: run 42

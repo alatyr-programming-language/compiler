@@ -7,3 +7,4 @@ main := fn() -> u64 {
   if 0 < a { return 42 }
   return 7
 }
+## expect: run 42

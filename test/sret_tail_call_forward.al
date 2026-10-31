@@ -22,3 +22,4 @@ main := fn() -> u64 {
   s := fwd(1)
   return (s.a + s.e + s.i) + (s.h - s.b)
 }
+## expect: run 21

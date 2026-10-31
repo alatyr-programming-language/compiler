@@ -4,3 +4,4 @@
 ## 18446744073709551615 (the bit reinterpretation). The reinterpreting form is `unchecked u64(x)`.
 f := fn(x : i64) -> u64 { u64(x) }
 main := fn() -> u64 { f(0 - 1) }
+## expect: trap

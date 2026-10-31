@@ -15,3 +15,4 @@ kind := fn(T : type, v : T) -> u64 {
 main := fn() -> u64 {
   kind(Pt, Pt(x = 1, y = 2)) + kind(E, E.A(5)) * 10 + kind(u64, 39)
 }
+## expect: run 60

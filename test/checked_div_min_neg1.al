@@ -12,3 +12,4 @@ main := fn() -> i64 {
   neg := 0 - 1
   return divide(mn, neg)
 }
+## expect: trap

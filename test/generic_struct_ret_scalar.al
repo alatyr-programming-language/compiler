@@ -8,3 +8,4 @@ main := fn() -> u64 {
   p := id(P, P(x = 40, y = 2))
   return p.x + p.y
 }
+## expect: run 42

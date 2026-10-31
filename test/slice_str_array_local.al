@@ -22,3 +22,4 @@ main := fn() -> u64 {
   if str_eq(s2[0], "cde") { r = r + 11 }     ## non-zero `lo` base-pointer offset
   r
 }
+## expect: run 42

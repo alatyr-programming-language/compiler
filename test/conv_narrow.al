@@ -17,3 +17,4 @@ main := fn() -> u64 {
   if c != 42 { return 1 }
   m
 }
+## expect: run 42

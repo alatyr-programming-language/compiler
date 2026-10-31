@@ -19,3 +19,4 @@ main := fn() -> u64 {
   for x in Slice(u64)(ptr = bp, len = 3) { s = s + x }
   s
 }
+## expect: run 42

@@ -38,3 +38,4 @@ main := fn() -> u64 {
   }
   u64(sum)
 }
+## expect: reject "unbound name" "at line 30" "unbound name at line 30 in issue523_hof_synth_span"

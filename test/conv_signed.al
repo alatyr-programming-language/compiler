@@ -18,3 +18,4 @@ main := fn() -> u64 {
   m := unchecked i8(v)
   return u64(m + c)
 }
+## expect: run 42

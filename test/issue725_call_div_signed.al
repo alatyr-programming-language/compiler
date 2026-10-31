@@ -11,3 +11,4 @@ main := fn() -> u64 {
   if q == (0 - 28) { return 42 }
   return u64(unchecked (q + 100))
 }
+## expect: run 42

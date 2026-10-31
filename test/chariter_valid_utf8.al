@@ -12,3 +12,4 @@ main := fn() -> u64 {
   if it.pos != 10 { return 4 }
   42
 }
+## expect: run 42

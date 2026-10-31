@@ -30,3 +30,4 @@ main := fn() -> u64 {
   r = r + after                          ## 3  (the post-declaration local still has its own slot)
   u64(r)
 }
+## expect: run 98

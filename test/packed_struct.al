@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if sum != 100317 { return 6 }
   return 42
 }
+## expect(x86_64): run 42

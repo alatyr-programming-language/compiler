@@ -14,3 +14,4 @@ pick := fn() -> usize {
 }
 
 main := fn() -> u64 { return u64(pick()) }
+## expect: reject "cannot be re-declared" "at line 7"

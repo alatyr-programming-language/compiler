@@ -5,3 +5,4 @@ main := fn() -> u64 {
   lam := fn(n : u64) -> u64 { return n + 4 }
   return lam(6)
 }
+## expect: run 10

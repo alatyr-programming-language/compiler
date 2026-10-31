@@ -24,3 +24,4 @@ main := fn() -> u64 {
   if gsize2(u8, u16) != 2 { return 9 }
   42
 }
+## expect: run 42

@@ -28,3 +28,4 @@ main := fn() -> u64 {
   match e { Opt::Some(x) => { r = r + 100 } Opt::None => { r = r + 0 } }
   return r
 }
+## expect: run 42

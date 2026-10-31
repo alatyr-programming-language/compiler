@@ -15,3 +15,4 @@ main := fn() -> u64 {
   }
   acc + s.n
 }
+## expect: run 61

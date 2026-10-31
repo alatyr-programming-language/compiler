@@ -6,3 +6,4 @@ leak := fn(out r : ptr(u64)) {
   r = ptr(x)
 }
 main := fn() -> u64 { 0 }
+## expect: reject

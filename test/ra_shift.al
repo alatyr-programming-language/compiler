@@ -12,3 +12,4 @@ main := fn() -> u64 {
   r := sh(17, 1)          ## shl (op 19) + logical shr (op 20): 34 + 8 = 42
   if u64(q) == r { r } else { 0 }
 }
+## expect: run 42

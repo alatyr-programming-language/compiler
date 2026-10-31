@@ -16,3 +16,4 @@ main := fn() -> u64 {
   d := unchecked { b - a }
   s / 4 + p / 8 + d / 4
 }
+## expect: run 54

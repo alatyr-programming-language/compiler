@@ -29,3 +29,4 @@ two := fn(x : S9, y : S9) -> u64 {
 main := fn() -> u64 {
   return sumf(fwd(1)) + two(fwd(1), fwd(2))
 }
+## expect: run 37

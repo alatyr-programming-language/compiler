@@ -16,3 +16,4 @@ main := fn() -> u64 {
   q := Pair(a = 100, b = 12)
   readf(q, 10)
 }
+## expect(x86_64): run 42

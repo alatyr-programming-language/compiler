@@ -16,3 +16,4 @@ main := fn() -> u64 {
   b := Pt(x = 20, y = 7)
   return span(a, b)
 }
+## expect: run 42

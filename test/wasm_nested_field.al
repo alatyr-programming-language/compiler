@@ -4,3 +4,4 @@ main := fn() -> u64 {
   o := Outer(i = Inner(v = 40), k = 2)
   return o.i.v + o.k
 }
+## expect(wasm): run 42

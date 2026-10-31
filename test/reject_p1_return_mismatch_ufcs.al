@@ -6,3 +6,4 @@ main := fn() -> u64 {
   receiver := V(value = 1)
   return receiver.text()
 }
+## expect: reject

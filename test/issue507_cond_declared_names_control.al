@@ -63,3 +63,4 @@ main := fn() -> u64 {
 }
 
 LATER_CONST : u64 = 11
+## expect: run 42

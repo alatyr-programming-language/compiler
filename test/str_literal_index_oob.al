@@ -8,3 +8,4 @@ main := fn() -> u64 {
   n := 7
   return u64("abc"[n])
 }
+## expect(x86_64): trap

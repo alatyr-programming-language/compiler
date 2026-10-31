@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if chk != 100 { return 0 }
   return sum
 }
+## expect: run 42

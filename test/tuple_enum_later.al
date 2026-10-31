@@ -15,3 +15,4 @@ main := fn() -> u64 {
   u := (0, Color.G(4))
   return loc + pick(u)
 }
+## expect: run 42

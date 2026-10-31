@@ -10,3 +10,4 @@ sum_fields := fn(v : S) -> u64 {
 }
 
 main := fn() -> u64 { sum_fields(S(x = 40, y = 2)) }
+## expect: run 42

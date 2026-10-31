@@ -32,3 +32,4 @@ main := fn() -> u64 {
   bb := mkbox(Box(u64), in0)         ## depth 2: `Box(Box(u64))`, a 1-word aggregate field
   bx.v.a + bx.v.b + q.a + q.b + pr.v.a + pr.v.b + pr.tag + bb.v.v
 }
+## expect: run 42

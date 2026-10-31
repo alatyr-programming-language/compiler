@@ -6,3 +6,4 @@ main := fn() -> u64 {
   x : S = "nope"
   return x.a
 }
+## expect: reject "at line 6"

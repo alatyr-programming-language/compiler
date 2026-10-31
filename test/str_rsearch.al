@@ -16,3 +16,4 @@ main := fn() -> u64 {
   match rf3 { Option::Some(i) => { if i != 4 { return 5 } } Option::None => { return 5 } }
   return 42
 }
+## expect: run 42

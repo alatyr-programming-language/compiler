@@ -16,3 +16,4 @@ main := fn() -> u64 {
   a := u64(5)
   u64(30 + -a)
 }
+## expect: trap

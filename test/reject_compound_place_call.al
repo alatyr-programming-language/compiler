@@ -21,3 +21,4 @@ main := fn() -> u64 {
   a[f()] += 1
   return CALLS * 100 + a[1]
 }
+## expect: reject "compound assignment needs a re-readable place"

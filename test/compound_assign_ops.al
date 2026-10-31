@@ -12,3 +12,4 @@ main := fn() -> u64 {
   x = a.v
   x
 }
+## expect: run 42

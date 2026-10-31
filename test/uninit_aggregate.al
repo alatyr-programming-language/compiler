@@ -5,3 +5,4 @@ main := fn() -> u64 {
   p = P(x = 4, y = 5)
   return p.x + p.y
 }
+## expect(x86_64): run 9

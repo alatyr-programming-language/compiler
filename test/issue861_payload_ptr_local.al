@@ -18,3 +18,4 @@ main := fn() -> u64 {
   match f { B(q) => { return 104 }; C(k, q) => { m2 := deref(q); r2 := q; return m2.w + deref(r2).v + k + 21 }; Z => { return 105 } }
   106
 }
+## expect(x86_64): run 42

@@ -58,3 +58,4 @@ main := fn() -> u64 {
   if not str_eq(s2, "c") { return 16 }
   return 42
 }
+## expect: run 42

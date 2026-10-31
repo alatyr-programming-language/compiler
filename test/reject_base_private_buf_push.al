@@ -19,3 +19,4 @@ main := fn() -> u64 {
   base::alloc::buf_push(u64, h, ar, 42)
   return u64(deref(p)) + 2
 }
+## expect: reject "check: invalid" "at line 19"

@@ -6,3 +6,6 @@ main := fn() -> u64 {
     i = i + 1 }
   return s
 }
+## expect(aarch64): run 42
+## expect(riscv64): run 42
+## expect(wasm): run 42

@@ -12,3 +12,4 @@ main := fn() -> u64 {
   std::sync::unlock(u64, ptr(m))
   v
 }
+## expect: run 42

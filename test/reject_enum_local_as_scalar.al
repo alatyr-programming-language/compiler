@@ -5,3 +5,4 @@ Opt := enum { None, Some(u64) }
 f := fn(o : Opt) -> u64 { x : u64 = o
   return x }
 main := fn() -> u64 { return f(Opt.None) }
+## expect: reject

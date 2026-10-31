@@ -70,3 +70,4 @@ main := fn() -> u64 {
   if cc.words[0] == 42 and cc.words[1] == 0 { acc = acc + 6 }
   return acc
 }
+## expect: run 42

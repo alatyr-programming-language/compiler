@@ -6,3 +6,4 @@ bits := fn(a : u64, b : u64) -> u64 { (a & b) | (a ^ b) }
 main := fn() -> u64 {
   bits(40, 2)
 }
+## expect: run 42

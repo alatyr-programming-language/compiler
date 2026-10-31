@@ -2,3 +2,4 @@
 ## silently do nothing — an I3 (nothing-hidden) violation. check must reject (rc 1).
 @limits(totally_bogus_limit)
 main := fn() -> u64 { 42 }
+## expect: reject

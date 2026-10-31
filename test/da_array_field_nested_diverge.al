@@ -6,3 +6,4 @@ main := fn() -> u64 {
   if true { p.xs[0].w = 42 } else { return 0 }
   return p.xs[0].w
 }
+## expect(x86_64): run 42

@@ -26,3 +26,4 @@ main := fn() -> u64 {
   r2 := retform(2)
   return A * 4 + B + r1 + r2
 }
+## expect: run 44

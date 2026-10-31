@@ -6,3 +6,4 @@ main := fn() -> u64 {
   x : u64 = 18446744073709551616
   return x
 }
+## expect: reject

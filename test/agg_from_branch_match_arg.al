@@ -8,3 +8,4 @@ main := fn() -> u64 {
   n := 1
   return u64(f(match n { 1 => Rec(a = 12, b = 30) ; _ => Rec(a = 0, b = 0) }))
 }
+## expect: run 42

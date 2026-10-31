@@ -8,3 +8,4 @@ main := fn() -> u64 {
   asm("ecall")
   0
 }
+## expect(riscv64): run 42

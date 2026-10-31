@@ -32,3 +32,4 @@ main := fn() -> u64 {
   if gg.guard != 77 { return 115 }
   return 42
 }
+## expect(x86_64): run 42

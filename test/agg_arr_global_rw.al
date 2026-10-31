@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if TAB[2].x != 40 { return 3 }
   r                             ## 71
 }
+## expect: run 71

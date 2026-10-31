@@ -19,3 +19,4 @@ main := fn() -> u64 {
   x := unchecked { Checked(Pair.Good(0, 42)) }
   return consume(x)
 }
+## expect(x86_64): run 42

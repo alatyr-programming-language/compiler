@@ -22,3 +22,4 @@ main := fn() -> u64 {
   if n.tag != 200 { return 4 }
   return got
 }
+## expect(x86_64): run 42

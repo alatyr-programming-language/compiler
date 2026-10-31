@@ -35,3 +35,4 @@ cross_contract := fn(p : Positive) -> u64 { return take_nz(p) }
 raw_into_contract := fn(r : u64) -> u64 { return take_nz(r) }
 
 main := fn() -> u64 { return 42 }
+## expect: run 42

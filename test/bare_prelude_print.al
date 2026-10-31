@@ -14,3 +14,4 @@ main := fn() -> u64 {
   println(u64, 42)                        ## bare single-value renderer + newline
   42
 }
+## expect: run 42

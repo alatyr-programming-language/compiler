@@ -9,3 +9,4 @@ main := fn() -> u64 {
   syscall()
   return 0
 }
+## expect(x86_64): run 42

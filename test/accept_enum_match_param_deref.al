@@ -12,3 +12,4 @@ main := fn() -> u64 {
   mut b := C.B
   return val(ptr(mut r)) + val(ptr(mut g)) + val(ptr(mut b))
 }
+## expect: run 42

@@ -35,3 +35,4 @@ main := fn() -> u64 {
   w := mkW(1)
   sumN(n) + sumW(w)     ## 21 + 22 = 43
 }
+## expect: run 43

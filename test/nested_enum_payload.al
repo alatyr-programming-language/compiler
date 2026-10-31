@@ -19,3 +19,4 @@ main := fn() -> u64 {
   b := unwrap(Outer.Y(2))             ## 2
   a + b                               ## 42
 }
+## expect: run 42

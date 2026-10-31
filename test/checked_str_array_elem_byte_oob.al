@@ -15,3 +15,4 @@ main := fn() -> u64 {
   j : u64 = 9
   return u64(arr[0][j])
 }
+## expect(x86_64): trap

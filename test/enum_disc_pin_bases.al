@@ -16,3 +16,4 @@ main := fn() -> u64 {
   if tc == 528 { acc = acc + 14 }
   acc
 }
+## expect(x86_64): run 42

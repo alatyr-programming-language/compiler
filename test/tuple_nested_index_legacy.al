@@ -7,3 +7,4 @@ main := fn() -> u64 {
   t := (40, (1, 1))
   return t.0 + t.1.0 + t.1.1
 }
+## expect: run 42

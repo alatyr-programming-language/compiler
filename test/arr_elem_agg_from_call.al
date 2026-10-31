@@ -17,3 +17,4 @@ main := fn() -> u64 {
   if arr[1].a + arr[1].b == 42 { r = r + 21 }
   r                                                   ## 42 iff BOTH deliveries copied every word
 }
+## expect: run 42

@@ -4,3 +4,5 @@ main := fn() -> u64 {
   b := unchecked { a - 214 }
   return b
 }
+## expect(aarch64): run 42
+## expect(wasm): run 42

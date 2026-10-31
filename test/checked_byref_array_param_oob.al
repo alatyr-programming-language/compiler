@@ -7,3 +7,4 @@ main := fn() -> u64 {
   arr : [u64; 3] = [10, 20, 30]
   return sum(arr, 8)
 }
+## expect(x86_64): trap

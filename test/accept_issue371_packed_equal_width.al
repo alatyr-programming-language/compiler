@@ -15,3 +15,5 @@ main := fn() -> u64 {
   if u64(unchecked_value.rest) != 300 { return 4 }
   return 42
 }
+## expect: accept
+## expect(x86_64): run 42

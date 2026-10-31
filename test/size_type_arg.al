@@ -9,3 +9,4 @@ main := fn() -> u64 {
   ok := (s == 8) and (a == 8) and (t == 1) and (u == 1)
   if ok { 42 } else { 1 }
 }
+## expect: run 42

@@ -17,3 +17,4 @@ main := fn() -> u64 {
   k : u64 = 2
   return u64(G[k][0])
 }
+## expect(x86_64): trap

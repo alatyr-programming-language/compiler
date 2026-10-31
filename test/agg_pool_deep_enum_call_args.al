@@ -33,3 +33,4 @@ hs := fn(s : S, e : E, x : u64) -> u64 { return s.k1 + 2 * s.k2 + 3 * ev(e) + x 
 main := fn() -> u64 {
   return h3(mke(1), E.B(1, 0), mke(h3(mke(1), mke(0), mkb(0, hs(mks(1, 0), mke(0), h3(mke(0), mke(1), mke(0)))))))
 }
+## expect: run 103

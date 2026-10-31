@@ -10,3 +10,4 @@ main := fn() -> u64 {
   s := S(a = 1)
   return u64(s.a)
 }
+## expect: reject "at line 7"

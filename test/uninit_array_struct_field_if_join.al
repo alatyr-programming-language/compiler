@@ -4,3 +4,4 @@ main := fn() -> u64 {
   if true { arr[0].a = 20 } else { arr[0].a = 22 }
   return arr[0].a * 2
 }
+## expect(x86_64): run 40

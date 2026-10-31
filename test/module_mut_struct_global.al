@@ -13,3 +13,4 @@ main := fn() -> u64 {
   tick()
   CFG.a + CFG.c + 14
 }
+## expect: run 42

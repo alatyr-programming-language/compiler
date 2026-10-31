@@ -26,3 +26,4 @@ main := fn() -> u64 {
   if o.q.name != "abd" { acc += 11 }
   return acc
 }
+## expect: run 42

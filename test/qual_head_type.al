@@ -6,3 +6,5 @@ main := fn() -> u64 {
   o : Option(u64) = Option(u64).Some(63)
   Option::unwrap(u64, o)
 }
+## expect: accept
+## expect(x86_64): run 63

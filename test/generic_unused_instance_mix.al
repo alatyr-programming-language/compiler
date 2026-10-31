@@ -4,3 +4,4 @@
 ## default). The declaration alone must not refuse the program; only an instantiation does. 42.
 h := fn(T : type, a : T, n : usize) -> T { a + n }
 main := fn() -> u64 { return 42 }
+## expect: run 42

@@ -7,3 +7,4 @@ main := fn() -> u64 {
   h.values[1] = "text"
   0
 }
+## expect: reject "type mismatch" "at line 7"

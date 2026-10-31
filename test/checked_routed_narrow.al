@@ -6,3 +6,4 @@ main := fn() -> u64 {
   z := std::io::print("")
   return u64(add(200, 100)) + u64(z)
 }
+## expect(x86_64): trap

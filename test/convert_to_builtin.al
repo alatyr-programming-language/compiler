@@ -9,3 +9,4 @@ main := fn() -> u64 {
   c := Celsius(deg = 40)
   return u64(c)
 }
+## expect: run 42

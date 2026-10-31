@@ -28,3 +28,4 @@ main := fn() -> u64 {
   if u64(r.val) != 100 { return 5 }        ## scalar PAST both aggregates (byte 40)
   return u64(r.tag) + r.inner.x + r.inner.y + r.name.len
 }
+## expect(x86_64): run 42

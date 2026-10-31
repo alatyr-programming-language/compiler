@@ -9,3 +9,4 @@ bump := fn(v : V, k : u64) -> u64 { v.n + k }
 main := fn() -> u64 {
   qqq.bump(1)
 }
+## expect: reject "at line 10"

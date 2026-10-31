@@ -4,3 +4,4 @@ main := fn() -> u64 {
   s : str = S(a = 1, b = 2)
   return s.len()
 }
+## expect: reject "at line 4"

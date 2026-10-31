@@ -31,3 +31,4 @@ main := fn() -> u64 {
   if two(xs[1], two(G, val(nxt(ptr(mut b))))) != 70 { return 102 }
   pair(h.head, a.next) + pair(xs[0], b.next)
 }
+## expect(x86_64): run 42

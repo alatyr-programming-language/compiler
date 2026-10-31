@@ -10,3 +10,4 @@ main := fn() -> u64 {
     Color::Blue => { 1 }
   }
 }
+## expect: run 42

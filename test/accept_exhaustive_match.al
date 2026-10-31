@@ -6,3 +6,4 @@ f := fn(o : Opt) -> u64 {
   return 1
 }
 main := fn() -> u64 { return f(Opt.Some(42)) }
+## expect: run 42

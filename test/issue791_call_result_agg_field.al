@@ -31,3 +31,4 @@ main := fn() -> u64 {
   if is_c(mw().kind) != 42 { return 9 }
   42
 }
+## expect: run 42

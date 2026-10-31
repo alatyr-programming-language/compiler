@@ -127,3 +127,4 @@ main := fn() -> u64 {
   match GE[0] { E::P(x, y) => { acc = x + y } E::N => {} E::A(n) => {} }
   acc
 }
+## expect: run 42

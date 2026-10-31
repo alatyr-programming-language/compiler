@@ -13,3 +13,4 @@ main := fn() -> u64 {
   c : u32 = unchecked { a + b }
   u64(c)
 }
+## expect: run 2

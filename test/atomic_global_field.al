@@ -8,3 +8,4 @@ main := fn() -> u64 {
   atomic::fetch_add(p, 32, Ordering.seq_cst)
   S.x
 }
+## expect: run 42

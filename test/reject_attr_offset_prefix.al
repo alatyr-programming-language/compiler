@@ -12,3 +12,4 @@ main := fn() -> u64 {
   s := S(a = 1, b = 2)
   return u64(s.a) + u64(s.b)
 }
+## expect: reject "at line 9"

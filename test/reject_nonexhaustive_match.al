@@ -8,3 +8,4 @@ f := fn(o : Opt) -> u64 {
   return 1
 }
 main := fn() -> u64 { return f(Opt.None) }
+## expect: reject

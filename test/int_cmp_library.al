@@ -11,3 +11,4 @@ main := fn() -> u64 {
   b : u64 = 50
   if a > b { 42 } else { 0 }
 }
+## expect: run 42

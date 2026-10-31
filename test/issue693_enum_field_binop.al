@@ -9,3 +9,4 @@ main := fn() -> u64 {
   v := E.B(11, 22)
   v.a + 5
 }
+## expect: reject "not through a field name at line 10 in issue693_enum_field_binop"

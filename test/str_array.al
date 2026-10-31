@@ -23,3 +23,4 @@ main := fn() -> u64 {
   d := xs[0].len                          ## "hi".len = 2
   a + b + c + d + 32                      ## 3 + 0 + 5 + 2 + 32 = 42
 }
+## expect: run 42

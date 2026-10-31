@@ -9,3 +9,4 @@ main := fn() -> u64 {
   STATE.i.sub = P(a = 30, b = 7)
   return STATE.i.sub.a + STATE.i.sub.b + STATE.n
 }
+## expect: run 42

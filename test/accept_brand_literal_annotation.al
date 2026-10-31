@@ -11,3 +11,4 @@ main := fn() -> u64 {
   x : F = 2
   return u64(a) + u64(n) - 256 + u64(f64(x))
 }
+## expect: run 42

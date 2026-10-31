@@ -22,3 +22,4 @@ main := fn() -> u64 {
   ev := match e { Some(w) => w, None => 0 }   ## 6 — expression-match payload bind
   a + ev                             ## 36 + 6 = 42
 }
+## expect: run 42

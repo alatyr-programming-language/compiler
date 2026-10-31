@@ -13,3 +13,4 @@ f := fn(s : str) -> u64 {
 }
 
 main := fn() -> u64 { f("abc") }
+## expect: reject "str element store" "at line 11"

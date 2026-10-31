@@ -11,3 +11,4 @@ sum := fn(xs : ...u64) -> u64 {
 main := fn() -> u64 {
   return sum(2, 4, 6, 8, 10, 7, 3, 2)
 }
+## expect: run 42

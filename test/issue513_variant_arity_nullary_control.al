@@ -18,3 +18,4 @@ main := fn() -> u64 {
   one := E.A(2)
   tag(bare) + tag(par) + tag(one)
 }
+## expect: run 42

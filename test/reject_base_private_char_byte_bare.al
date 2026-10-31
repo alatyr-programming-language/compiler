@@ -22,3 +22,4 @@ main := fn() -> u64 {
   if u64(b) != 65 or n0 == 0 { return 1 }
   42
 }
+## expect: reject "check: invalid" "at line 21" "invalid at line 21 in reject_base_private_char_byte_bare"

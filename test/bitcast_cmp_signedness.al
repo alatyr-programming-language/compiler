@@ -88,3 +88,4 @@ main := fn() -> u64 {
   if cast_of_cmp(hi) != 0 { return 10 }
   99
 }
+## expect: run 99

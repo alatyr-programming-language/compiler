@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if direct_b != two_b { bad = 1 }
   return direct_a + direct_b + bad * 9     ## 7 + 99 = 106 when correct; 0 under the old silent-0 bug
 }
+## expect: run 106

@@ -8,3 +8,4 @@ main := fn() -> u64 {
   std::fmt::print("L {} G {}\n", L, G)
   L + 35
 }
+## expect: run 42

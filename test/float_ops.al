@@ -33,3 +33,4 @@ main := fn() -> u64 {
 
   return fields + elems + loopv + flags         ## 4 + 8 + 10 + 20 = 42
 }
+## expect: run 42

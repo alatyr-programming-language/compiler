@@ -6,3 +6,6 @@ main := fn() -> u64 {
     Opt::Some(x) => x
   }
 }
+## expect(aarch64): run 42
+## expect(riscv64): run 42
+## expect(wasm): run 42

@@ -15,3 +15,4 @@ psum := fn(xs : ...Pt) -> u64 {
 main := fn() -> u64 {
   return psum(Pt(a = 10, b = 11), Pt(a = 20, b = 1))
 }
+## expect(x86_64): run 42

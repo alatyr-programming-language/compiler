@@ -7,3 +7,4 @@ main := fn() -> u64 {
   if x > 0 { r = x }
   r
 }
+## expect: reject

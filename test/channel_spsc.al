@@ -36,3 +36,4 @@ main := fn() -> u64 {
   if sum == 500500 { return 42 }
   return 1
 }
+## expect: run 42

@@ -17,3 +17,4 @@ main := fn() -> u64 {
     W::Zero => 0
   }
 }
+## expect: run 30

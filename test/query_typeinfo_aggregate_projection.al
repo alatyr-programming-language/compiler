@@ -25,3 +25,4 @@ comptime for f in typeinfo(Holder).fields {
 }
 if pair_hits == 1 and str_hits == 1 and array_hits == 1 and tuple_hits == 1 and scalar_hits == 1 { 42 } else { 1 }
 }
+## expect: run 42

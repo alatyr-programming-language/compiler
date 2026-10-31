@@ -37,3 +37,4 @@ main := fn() -> u64 {
   comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 { r = arch_identity_unsupported() }
   return r + tag()
 }
+## expect: run 42

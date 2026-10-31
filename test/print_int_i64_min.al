@@ -8,3 +8,4 @@ main := fn() -> u64 {
   if wrote == 1 { return 42 }
   1
 }
+## expect(x86_64): run 42

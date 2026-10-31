@@ -7,3 +7,4 @@ main := fn() -> u64 {
   y := add(0)          ## default b (10) → 10
   x + y                ## 42
 }
+## expect: run 42

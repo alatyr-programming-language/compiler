@@ -30,3 +30,4 @@ main := fn() -> u64 {
   h := Holder(t = Tag.Green)
   use(h.t)
 }
+## expect: run 42

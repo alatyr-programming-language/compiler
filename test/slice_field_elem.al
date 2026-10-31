@@ -42,3 +42,4 @@ main := fn() -> u64 {
   if h.n != 5 { return 12 }
   return u64(a.v[0]) + u64(b.v[2]) + u64(c[1]) + u64(g.xs[0]) + h.n
 }
+## expect: run 66

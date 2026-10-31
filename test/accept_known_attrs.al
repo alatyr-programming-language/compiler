@@ -22,3 +22,4 @@ main := fn() -> i64 {
   if helper(0) != 1 { return 3 }
   return 42
 }
+## expect: run 42

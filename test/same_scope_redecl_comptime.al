@@ -10,3 +10,4 @@ seq := fn() -> u64 {
 }
 
 main := fn() -> u64 { return seq() }
+## expect: reject "cannot be re-declared" "at line 8"

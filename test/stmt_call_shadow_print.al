@@ -19,3 +19,4 @@ main := fn() -> u64 {
   n := print(0)           ## value position: already worked, stays working
   return CNT
 }
+## expect: run 42

@@ -8,3 +8,4 @@ main := fn() -> u64 {
   f := F.P(7, b)
   return match f { F::P(p, q) => { p + u64(q) } F::Q => { 0 } }
 }
+## expect: reject "implicit brand conversion"

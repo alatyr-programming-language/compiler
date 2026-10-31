@@ -6,3 +6,4 @@ mysys := @abi(syscall) fn(num : usize, code : usize) -> isize
 f := fn() -> u64 { r := mysys(60, 0)
   return 0 }
 main := fn() -> u64 { return f() }
+## expect: reject

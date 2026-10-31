@@ -4,3 +4,4 @@ main := fn() -> i64 {
   x : i64 = 9223372036854775807 + 1
   return x
 }
+## expect: reject "comptime overflow" "at line 4"

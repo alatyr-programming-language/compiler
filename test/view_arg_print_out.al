@@ -23,3 +23,4 @@ main := fn() -> u64 {
   std::io::print("done\n")       ## POSITIVE CONTROL — a str LITERAL argument
   42
 }
+## expect(x86_64): run 42

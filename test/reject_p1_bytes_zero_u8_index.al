@@ -5,3 +5,4 @@ main := fn() -> u64 {
   xs : [u8; 0] = [0; 0]
   xs[0]
 }
+## expect: reject "invalid" "at line 6" "invalid at line"

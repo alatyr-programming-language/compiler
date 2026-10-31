@@ -18,3 +18,4 @@ main := fn() -> u64 {
   s = s + h(0.5)      ## a float LITERAL argument — the shape that was accidentally right
   return u64(s)
 }
+## expect: run 22

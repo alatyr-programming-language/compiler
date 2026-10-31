@@ -12,3 +12,5 @@ read := fn(T : type, a : T) -> u64 {
 main := fn() -> u64 {
   read([u8; 16], build())
 }
+## expect: accept
+## expect(x86_64): run 42

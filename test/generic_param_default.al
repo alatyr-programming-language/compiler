@@ -7,3 +7,4 @@ main := fn() -> u64 {
   y := pick(u64, 0)
   x + y
 }
+## expect: run 42

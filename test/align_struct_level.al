@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if v.c != 12 { return 5 }
   return v.a + v.b + v.c                 ## 42
 }
+## expect(x86_64): run 42

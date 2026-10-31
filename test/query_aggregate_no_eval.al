@@ -4,3 +4,4 @@ side := fn() -> Pt { panic("aggregate query operand evaluated") }
 main := fn() -> u64 {
   comptime if compiles(takes_pt(side())) { return 42 } else { return 1 }
 }
+## expect: run 42

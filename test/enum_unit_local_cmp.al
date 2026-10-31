@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if not (b == a) { return 4 }
   42
 }
+## expect: run 42

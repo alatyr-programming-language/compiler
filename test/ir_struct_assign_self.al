@@ -9,3 +9,4 @@ main := fn() -> u64 {
   p = P(a = p.b, b = p.a)
   u64(p.a * 10 + p.b)
 }
+## expect: run 21

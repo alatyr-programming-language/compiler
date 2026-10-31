@@ -8,3 +8,4 @@ overflow := fn() -> u64 {
 main := fn() -> u64 {
   return overflow()
 }
+## expect: reject "comptime overflow" "at line 5"

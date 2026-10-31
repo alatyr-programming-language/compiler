@@ -7,3 +7,4 @@ main := fn() -> u64 {
   c : usize = 0
   (a * b) - c
 }
+## expect: run 42

@@ -3,3 +3,4 @@
 ## parameter. The parent accepted this call.
 f := fn(xs : [u8; 2]) -> u64 { return u64(xs[1]) }
 main := fn() -> u64 { return f([1, 300]) }
+## expect: reject "type mismatch at line 5"

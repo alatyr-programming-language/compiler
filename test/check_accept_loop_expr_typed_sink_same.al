@@ -3,3 +3,4 @@ main := fn() -> u64 {
   x : bool = loop { break true }
   return 42
 }
+## expect: accept

@@ -48,3 +48,5 @@ main := fn() -> u64 {
   if dynamic_read_works() { score += 21 }
   score
 }
+## expect: accept
+## expect(x86_64): run 42

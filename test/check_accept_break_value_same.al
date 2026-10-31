@@ -10,3 +10,4 @@ main := fn() -> u64 {
   }
   z - 100 + k - 1                  ## z = 100 (first break wins), k = 1 -> 0 + 0
 }
+## expect: accept

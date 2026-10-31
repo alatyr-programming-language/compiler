@@ -6,3 +6,4 @@ get := fn(b : Box) -> u64 {
   }
 }
 main := fn() -> u64 { get(Box.Full(40)) }
+## expect(wasm): run 42

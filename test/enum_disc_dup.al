@@ -10,3 +10,4 @@ main := fn() -> u64 {
     Bad.B => { 1 }
   }
 }
+## expect: reject "two enum variants resolve to the same discriminant"

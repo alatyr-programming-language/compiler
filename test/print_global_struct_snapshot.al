@@ -9,3 +9,4 @@ main := fn() -> u64 {
   std::fmt::print("S {}\n", p)
   42
 }
+## expect: run 42

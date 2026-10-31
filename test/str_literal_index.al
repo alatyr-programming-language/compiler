@@ -39,3 +39,4 @@ main := fn() -> u64 {
 same := fn(v : u64) -> u64 {
   v
 }
+## expect: run 42

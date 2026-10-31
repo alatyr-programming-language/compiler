@@ -98,3 +98,4 @@ main := fn() -> u64 {
   if bad != 0 { return bad }
   return 42
 }
+## expect: run 42

@@ -21,3 +21,4 @@ main := fn() -> u64 {
   d := gmake(S9, 1)
   return d.h + 34
 }
+## expect(x86_64): run 42

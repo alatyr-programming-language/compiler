@@ -7,3 +7,4 @@ main := fn() -> u64 {
   q := NonNull(p)
   return bitcast(u64, q)
 }
+## expect(x86_64): trap

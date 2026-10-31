@@ -10,3 +10,4 @@ main := fn() -> u64 {
   comptime if resolves(nosuchfn, 1) { r = r + 100 } else { r = r + 0 } ## no such callee → false
   return r
 }
+## expect: run 42

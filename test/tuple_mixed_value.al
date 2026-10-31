@@ -9,3 +9,4 @@ main := fn() -> u64 {
   t : (Pt, u64) = (Pt(x = 10, y = 20), 12)
   t.0.x + t.0.y + t.1
 }
+## expect: run 42

@@ -19,3 +19,4 @@ main := fn() -> u64 {
   }
   return 60
 }
+## expect: trap

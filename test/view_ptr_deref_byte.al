@@ -25,3 +25,4 @@ main := fn() -> u64 {
   if deref(w) != 104 { return 4 }
   return v - 4
 }
+## expect: run 100

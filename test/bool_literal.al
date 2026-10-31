@@ -16,3 +16,4 @@ main := fn() -> u64 {
   if keep { return a + b }        ## 40 + 2 = 42
   9
 }
+## expect: run 42

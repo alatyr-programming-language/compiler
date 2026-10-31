@@ -4,3 +4,4 @@ main := fn() -> u64 {
   t := ((30, 2), 10)
   return t[0][0] + t[0][1] + t[1]
 }
+## expect: run 42

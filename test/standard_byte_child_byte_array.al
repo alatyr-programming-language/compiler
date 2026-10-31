@@ -45,3 +45,4 @@ main := fn() -> u64 {
   if a.inner.lead != 24 { return 12 }
   42
 }
+## expect: run 42

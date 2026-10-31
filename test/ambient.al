@@ -3,3 +3,4 @@
 ## this source for `std::…::…` / `alloc::…::…` references, and ambiently injects `lib/std/probe.al`
 ## (module `std__probe`, so the call resolves to the `std__probe__answer` label). Expected exit: 42.
 main := fn() -> u64 { return std::probe::answer() }
+## expect: run 42

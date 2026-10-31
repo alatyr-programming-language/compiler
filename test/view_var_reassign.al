@@ -38,3 +38,4 @@ main := fn() -> u64 {
   if u64(y.len) != 2 { return 4 }
   return u64(z.len) + override() + u64(y.len) + 3
 }
+## expect: run 11

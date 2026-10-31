@@ -28,3 +28,4 @@ main := fn() -> u64 {
   if n == 0 { acc = acc + 1 }
   return acc
 }
+## expect(x86_64): run 42

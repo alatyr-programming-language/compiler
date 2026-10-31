@@ -7,3 +7,4 @@ main := fn() -> u64 {
   s[1] = s[1] + 40
   return xs[1]
 }
+## expect: run 42

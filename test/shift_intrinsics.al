@@ -20,3 +20,4 @@ main := fn() -> u64 {
   s := x + y + unchecked bitcast(u64, z + 4) + w + o + e   ## 8+15+0+48+33+15 = 119
   s - 77                                  ## 42
 }
+## expect: run 42

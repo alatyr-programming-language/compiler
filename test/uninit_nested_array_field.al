@@ -4,3 +4,4 @@ main := fn() -> u64 {
   p.xs[0] = 42
   return p.xs[0]
 }
+## expect(x86_64): run 42

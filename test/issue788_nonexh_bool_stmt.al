@@ -5,3 +5,4 @@ main := fn() -> u64 {
   match b { true => { return 11 } }
   return 0
 }
+## expect: reject "type mismatch at line 5"

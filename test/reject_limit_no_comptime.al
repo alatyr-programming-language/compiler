@@ -5,3 +5,4 @@ f := fn() -> u64 {
   comptime if target.arch == Arch.x86_64 { return 7 } else { return 8 }
 }
 main := fn() -> u64 { return f() }
+## expect: reject "@limits(no_comptime) violation" "at line 4"

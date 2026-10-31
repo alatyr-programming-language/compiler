@@ -5,3 +5,4 @@ S := struct { a : u64 }
 main := fn() -> u64 {
   return S(a = 1) + 1
 }
+## expect: reject

@@ -31,3 +31,4 @@ main := fn() -> u64 {
   if bytes(t)[0] != 97 { return 108 }
   57
 }
+## expect: run 57

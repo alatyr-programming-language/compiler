@@ -11,3 +11,4 @@ main := fn() -> u64 {
   }
   x.x
 }
+## expect(wasm): trap

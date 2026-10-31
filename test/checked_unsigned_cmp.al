@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if t < s { r = r + 100 }    ## 0 < -1 → false (signed)
   return r
 }
+## expect(x86_64): run 42

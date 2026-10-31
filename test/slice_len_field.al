@@ -26,3 +26,4 @@ main := fn() -> u64 {
   if n1 == 3 and n2 == 2 { return 42 }
   return 7
 }
+## expect: run 42

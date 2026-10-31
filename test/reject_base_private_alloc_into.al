@@ -26,3 +26,4 @@ main := fn() -> u64 {
   q := base::alloc::alloc_into(u64, ar, 42)
   return u64(deref(p)) + 2
 }
+## expect: reject "check: invalid" "at line 26"

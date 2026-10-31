@@ -3,3 +3,4 @@
 Box := fn(T : type) -> type { return struct { v : T } }
 f := fn(b : Box(u64), c : Box) -> u64 { b.v }
 main := fn() -> u64 { 0 }
+## expect: reject "type function `Box` is not a type until it is applied" "at line 4 in issue857_unapplied_user_generic"

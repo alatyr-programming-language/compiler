@@ -42,3 +42,4 @@ main := fn() -> u64 {
   xs : [2]A = [b, b]
   return u64(xs[0]) + u64(ok[1])
 }
+## expect: reject "at line 42 in reject_brand_array_element_sink" "implicit brand conversion"

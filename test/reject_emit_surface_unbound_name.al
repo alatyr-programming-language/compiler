@@ -11,3 +11,4 @@ main := fn() -> u64 {
   n : u64 = no_such_declaration_anywhere
   return 0
 }
+## expect: reject "alatyr: check: unbound name at line 11 in reject_emit_surface_unbound_name"

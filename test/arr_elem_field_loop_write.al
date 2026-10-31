@@ -29,3 +29,4 @@ main := fn() -> u64 {
   if xs[2].d != 53 { return 5 }          ## the literal write's last word landed
   r                                       ## 90
 }
+## expect: run 90

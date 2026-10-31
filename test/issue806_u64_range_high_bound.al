@@ -26,3 +26,4 @@ main := fn() -> u64 {
   total += signed(0 - 5)
   return total
 }
+## expect: run 42

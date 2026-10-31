@@ -11,3 +11,4 @@ main := fn() -> u64 {
     Result::Err(e) => { 99 }
   }
 }
+## expect: run 42

@@ -12,3 +12,4 @@ main := fn() -> u64 {
   if sm::common_prefix_len("same", "same") != 4 { return 7 }
   return 42
 }
+## expect: run 42

@@ -13,3 +13,4 @@ main := fn() -> u64 {
   p := ptr(CTR)
   atomic::load(p, Ordering.acquire)
 }
+## expect: run 42

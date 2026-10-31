@@ -15,3 +15,4 @@ main := fn() -> u64 {
   pr := alloc::vec::push(u64, v, 42)
   alloc::vec::at(u64, ptr(v), 0)
 }
+## expect: run 42

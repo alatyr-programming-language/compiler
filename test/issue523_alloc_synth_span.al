@@ -24,3 +24,4 @@ main := fn() -> u64 {
   u = 1
   return 0
 }
+## expect: reject "unbound name" "at line 23" "unbound name at line 23 in issue523_alloc_synth_span"

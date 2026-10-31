@@ -9,3 +9,4 @@ main := fn() -> u64 {
   f := fn(n : u64) -> u64 { return n + p.x + p.y + c }
   return f(0)
 }
+## expect: run 42

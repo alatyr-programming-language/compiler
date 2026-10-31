@@ -12,3 +12,4 @@ main := fn() -> u64 {
   outer.leaf.values[0] = 42
   return 42
 }
+## expect: reject "immutable binding" "at line 12"
