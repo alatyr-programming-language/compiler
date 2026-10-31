@@ -126,6 +126,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A `Slice` carried by an enum variant is a slice when matched (#1318).** A `match` arm binding a
+  `Slice(T)` payload of structs, enums or strings got the two-word `Slice` record instead, so `for`
+  read one word per element: wrong fields, a crash on nested enums, and `ps[1].a` refused. The
+  binding is now a slice view over the payload, like any other slice.
+
 - **A `for` loop over structs or enums visits every element (#1321).** When the loop body bound a
   local, x86_64 stored that local over the hidden loop index, and the loop stopped after the first
   element. The index now sits in the one slot reserved for it, whatever the element's width.

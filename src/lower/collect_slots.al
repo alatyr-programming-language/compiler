@@ -875,7 +875,12 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
                         match am.binds_head {
                           Some(mbh) => {
                             mpbn := base_type_name(src, mpty.s, mpty.n)
-                            if struct_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_struct_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, struct_words(decls, src, mpty.s, mpty.n, a)) }
+                            ## #1318 — a `Slice(T)` payload of struct/enum/str elements is a slice VIEW, so a
+                            ## `for x in <binding>` in the arm sizes its loop var as the element (the library's
+                            ## `Slice` is also a struct decl, which would bind the nominal two-word struct).
+                            mspl := slice_payload_layout(decls, src, mpty.s, mpty.n, a)
+                            if mspl.is_slice { bind_slice_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mspl.stride, mspl.eek, mspl.ess, mspl.esl) }
+                            else if struct_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_struct_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, struct_words(decls, src, mpty.s, mpty.n, a)) }
                             else if enum_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_enum_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, 1 + enum_inst_words(decls, src, mpty.s, mpty.n, a)) }
                             else if is_niche_folded(src, mes, mel) {
                               ## #768 — a folded `Some(p)` over `ptr(S)` / `ptr(E)`: type `p` as the pointer-to-struct /
