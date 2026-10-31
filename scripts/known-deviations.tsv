@@ -977,7 +977,6 @@ wasm	test/codec_nullary_enum_call_payload.al	run/134	#1190
 wasm	test/codec_slice_payload.al	run/134	#1188
 wasm	test/compiles_query.al	run/134	#1193
 wasm	test/compiles_type_mismatch.al	run/134	#1193
-wasm	test/compiles_value_query.al	run/134	#1190
 wasm	test/compound_assign_place_deep.al	run/134	#1188
 wasm	test/comptime_enum_eq.al	run/134	#1190
 wasm	test/comptime_if_facts.al	run/134	#1193
@@ -1192,7 +1191,6 @@ wasm	test/query_constructor_binary_negative.al	run/134	#1193
 wasm	test/query_constructor_binary_positive.al	run/134	#1191
 wasm	test/query_module_alias.al	run/134	#1193
 wasm	test/query_no_eval.al	run/134	#1193
-wasm	test/query_qualified_public.al	run/134	#1190
 wasm	test/query_typeinfo_aggregate_projection.al	run/134	#1184
 wasm	test/query_typeinfo_field_projection.al	run/134	#1200
 wasm	test/query_typeinfo_generic_instance.al	run/134	#1184
