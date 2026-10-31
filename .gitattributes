@@ -47,3 +47,8 @@ scripts/axis.baseline -merge
 # oracles' reason — two branches declaring DISJOINT rows must not merge clean into a prediction
 # neither of them made; it is not an oracle, and land.sh does not treat it as one.
 scripts/corpus.expected-delta -merge
+
+# The container matrix's deviations list (#1124): each fix deletes its own rows, so independent fixes
+# touch disjoint lines. A row that union merging restores no longer reproduces, and the gate fails it
+# as STALE on the merged object.
+scripts/container-matrix.deviations.tsv merge=union

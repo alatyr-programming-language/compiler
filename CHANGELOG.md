@@ -126,6 +126,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **The full gate runs a generated container matrix (#1124).** `scripts/container_matrix.py` writes one
+  program per element shape × container × operation (19 shapes; `vec`, `deque`, `hashmap`; 378 cells)
+  into `target/`, builds and runs each, and prints `OK`, `WRONG <check>`, `TRAP <rc>` or `REFUSED`.
+  On x86_64 every WRONG and REFUSED cell needs a row under an open issue in
+  `scripts/container-matrix.deviations.tsv` (160 rows at main `488186d7`), and a row whose cell now
+  passes fails the gate until its fix deletes it. A planted wrong read is proved to turn it red.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type
