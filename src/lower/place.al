@@ -1336,6 +1336,17 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
     push_int(sb, i64(ent.off * 8))
     push_str(sb, "(%rbp), %rax\n  jb 1f\n  ud2\n1:\n")
   }
+  ## CHECKED BOUNDS for a view LOCAL of any other element kind (#1274): a struct, enum, `str`, pointer
+  ## or float element (`eek` 2/3/4/7/9), inferred `xs := t[0..2]` or annotated `xs : Slice(P) = …`.
+  ## `bind_slice_slot` is the only binder of a non-parameter `ek 5` `is_ref` slot, and it always keeps
+  ## the runtime len in word 1 at `-(off*8)(%rbp)`, whatever `sns`/`snl` carry; the block above misses
+  ## these only because they spend `sns`/`snl` on the element type. Byte-element views took their own
+  ## checked path above; parameters (`is_param`) read len through their pointer below.
+  if cx.vchk and ent.ek == 5 and ent.is_ref and ent.is_param == false and ent.eek != 0 {
+    push_str(sb, "  cmpq -")
+    push_int(sb, i64(ent.off * 8))
+    push_str(sb, "(%rbp), %rax\n  jb 1f\n  ud2\n1:\n")
+  }
   ## CHECKED BOUNDS for a SLICE PARAM (`sns == 1`): the runtime len is word 1 of the {ptr,len} block the
   ## slot points to — load the block address, compare the index (in %rax) against `8(block)`. `%rcx` is a
   ## scratch here (the element math below reloads its own regs). `jb` skips on `idx < len`.
