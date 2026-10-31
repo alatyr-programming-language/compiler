@@ -26228,10 +26228,11 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 ## a struct/enum-element slice VIEW: element width from the slot's stride; the loop var is
                 ## that wide, so the hidden index sits at `vslot+agg_stride`; word 0 is the element ptr (by
                 ## value for a local view, or behind the caller's Slice block for a param). Length is runtime.
-                ## A local view, annotated `xs : Slice(P) = …` or not, is not a param (`is_param`, #1182).
+                ## A local view, annotated `xs : Slice(P) = …` or not, is not a param (`is_param`, #1182);
+                ## nor is a fixed-array param `xs : [P; N]`: no `Slice` annotation, so it keeps the by-value read.
                 agg_stride = bent.estride
                 islot = vslot + i64(agg_stride)
-                if bent.is_param == false { b_is_ref = false }
+                if bent.is_param == false or bent_slice_param_elem.n == 0 { b_is_ref = false }
               }
             }
             ## `s` is a Slice `{ptr, len}`. A by-VALUE local holds ptr @ slot `B`, len @ slot `B+1`. A by-REF
