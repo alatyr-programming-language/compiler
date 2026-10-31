@@ -6302,6 +6302,20 @@ slot_name_is_annotated := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   lower_ctx::slice_scan_has(src, end, p, "=") == false
 }
 
+## Does `ent` hold a POINTER to a caller's `{ptr, len}` Slice block — a by-reference `Slice(T)`
+## PARAMETER — rather than the view's own data pointer (a range-view LOCAL, whose slot IS word 0) or
+## element 0 (a fixed-array `[T; N]` parameter)? Every address path that starts from such a slot must
+## load once more (`movq (%rax), %rax`) to reach the data pointer. `bind_param` marks a scalar or `str`
+## element slice param with `sns == 1`; a struct/enum element param keeps its element type span in
+## `sns`/`snl`, so its param-ness is recovered from the declared `name : Slice(T)` text (#1182 tracks
+## an annotated range-view LOCAL that this source scan also matches). The one home for the question:
+## `emit_index_addr` asks it for an element read, and `emit_array_slice_assign` / `emit_arr_slice_pair`
+## ask it for a range slice `xs[lo..hi]` of the param (#1180).
+slot_is_slice_param := fn(ent : SlotEntry, src : ptr(u8)) -> bool {
+  if ent.ek != 5 or not ent.is_ref { return false }
+  ent.sns == 1 or ((ent.eek == 2 or ent.eek == 3) and slice_ann_elem_span(src, ent.ns, ent.nl).n != 0)
+}
+
 slice_ann_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
   mut p := s + n
   end := LOWER_SRC_N
@@ -7030,6 +7044,23 @@ emit_slice_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
   }
 }
 
+## The element-0 address of a range slice's BASE `arr` in `arr[lo..hi]` → %rax, for both deliverers
+## of a typed range view (`emit_arr_slice_pair` and `emit_array_slice_assign`), so they cannot
+## disagree. A frame-local byte array starts at its first filler word; every other base goes through
+## `emit_agg_base_addr` (the `leaq` of a local, the slot load of a by-ref param). A `Slice(T)` PARAM's
+## slot points at the caller's {ptr, len} block, so it loads that block's word 0, the data pointer;
+## without that load the view started at the block itself and read its len as element 0 (#1180).
+emit_range_base_elem0 := fn(aent : SlotEntry, in out sb : strbuf::StrBuf, cx : ptr(LCtx)) {
+  if is_byte_array_eek(aent.eek) and aent.is_ref == false {
+    push_str(sb, "  leaq -")
+    push_int(sb, i64(aent.off * 8))
+    push_str(sb, "(%rbp), %rax\n")
+  } else {
+    emit_agg_base_addr(aent, sb)
+    if slot_is_slice_param(aent, cx.src) { push_str(sb, "  movq (%rax), %rax\n") }
+  }
+}
+
 ## Emit the {ptr, len} pair for a TYPED ARRAY-SLICE `arr[lo..hi]` (`arr` a raw `[T; N]` local /
 ## by-ref array param) in the SAME stack shape `emit_slice_pair` produces (ptr deeper, len on top):
 ## the data pointer is element 0's ADDRESS advanced by `lo * stride * 8` (stride-aware, matching
@@ -7042,13 +7073,7 @@ emit_arr_slice_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LC
     Expr::Slice(arr, lo, hi) => {
       av := var_name_span(arr)
       aent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, av.s, av.n)))
-      if is_byte_array_eek(aent.eek) and aent.is_ref == false {
-        push_str(sb, "  leaq -")
-        push_int(sb, i64(aent.off * 8))
-        push_str(sb, "(%rbp), %rax\n")
-      } else {
-        emit_agg_base_addr(aent, sb)            ## &arr element-0 → %rax
-      }
+      emit_range_base_elem0(aent, sb, cx)    ## &base element-0 → %rax
       push_str(sb, "  pushq %rax\n")
       emit_gas(lo, sb, cx, a, nl)             ## lo → stack
       push_str(sb, "  popq %rcx\n  imulq $")
@@ -7085,13 +7110,7 @@ emit_array_slice_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::Str
     Expr::Slice(arr, lo, hi) => {
       av := var_name_span(arr)
       aent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, av.s, av.n)))
-      if is_byte_array_eek(aent.eek) and aent.is_ref == false {
-        push_str(sb, "  leaq -")
-        push_int(sb, i64(aent.off * 8))
-        push_str(sb, "(%rbp), %rax\n")
-      } else {
-        emit_agg_base_addr(aent, sb)            ## &arr element-0 → %rax
-      }
+      emit_range_base_elem0(aent, sb, cx)    ## &base element-0 → %rax
       push_str(sb, "  pushq %rax\n")
       emit_gas(lo, sb, cx, a, nl)             ## lo → stack
       push_str(sb, "  popq %rcx\n  imulq $")
