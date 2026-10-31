@@ -10733,6 +10733,13 @@ run comptime_for_const_arith_bound 42
 run_a64 comptime_for_const_arith_bound 42
 run_rv64 comptime_for_const_arith_bound 42
 run_wat comptime_for_const_arith_bound 42
+## #696: an `unchecked` range bound names its inner value (Grammar §3.7) on all four backends, and a
+## bound with no comptime value is a located reject, never a silent 0 (Comptime §9.1).
+run comptime_for_unchecked_bound 42
+run_a64 comptime_for_unchecked_bound 42
+run_rv64 comptime_for_unchecked_bound 42
+run_wat comptime_for_unchecked_bound 42
+build_reject_has reject_comptime_for_runtime_bound "range bound is not comptime-known"
 ## #682 — the OTHER half: the arithmetic is INSIDE the const's initializer (`B := A + 1`), so the
 ## bound expression is a plain `Expr::Var` and never reaches the `Bin` arm #672 added. The twins
 ## resolved the name and read its value with `lower_layout::ex_value_init`, which answered 0 for a
