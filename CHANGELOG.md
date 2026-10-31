@@ -126,6 +126,8 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+## 0.2.20 — 2026-10-31
+
 - **A seed promotion is a script (#1129).** `scripts/promote.sh prepare <version>` runs the
   Reproducibility procedure in a derived worktree: the bump first, Stage1 -> Stage2 -> Stage3, the
   convergence checks (normalized GAS, Stage2 == Stage3 binary), the normalized seed-to-Stage1 delta with

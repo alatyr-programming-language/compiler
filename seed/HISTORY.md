@@ -1856,4 +1856,29 @@ The original reading note, verbatim:
 #
 # VERSION 0.2.18 -> 0.2.19, PATCH: a wrong trap on x86_64 became the correct value. The specification
 # pin (1.6.0, a target revision per spec 9438d00) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.19 -> 0.2.20   promoted 2026-10-31   seed/alatyr := Stage2
+#
+# WHY: #1270 (#1268) gives a literal-only `+ - *` its position's type as context; the compiler's own
+# literal subtractions now emit the signed guard, which the seed must carry for the fixpoint.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k>): 5 hunks, 11 added, 2 removed. One sentence:
+# the compiler's own literal-only subtractions (IB_I64_MIN in ir::build::ib_lit_step, `i64(0 - 1)` in
+# lower::param_tuple_layout_collect) now carry the signed guard `jno 1f; ud2` instead of the unsigned `jnc`.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1603028 lines.
+# GAS SHA-256 (Stage2): 9bdea538cc11666df712b2be86a7fd229bfdc907b7818bd5d1f35040d498e942.
+# Stage2 == Stage3 BINARY SHA-256:
+# 094e46af061388a6b3db63ba42a071024097f1280895d45cddbf3de1251c87a0 (6105304 B).
+# All three answer `alatyr 0.2.20, spec 1.6.0`. smoke = 42.
+# Superseded seed (0.2.19) SHA-256:
+# 05071d7f9e18d3d0d4fe865aef95c7fe01d11d35382b1f8e7b6d45930cdd47fb.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1603028 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.2.19 -> 0.2.20, PATCH: a bug fix that makes valid programs run as the spec says; no surface changes.
+# The specification pin (spec 1.6.0) did not move.
 ```
