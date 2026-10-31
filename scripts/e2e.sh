@@ -12086,6 +12086,17 @@ run issue977_struct_lit_field_ctx 2
 ## `55fa477` (x86_64) the fixture exits 101 — element 0, `C(40)`, read back as a zeroed variant.
 run issue989_vec_multi_payload_enum 42
 
+## #1256 — a generic call returning its type parameter (`mk(S1, x)`, `vec::at(S1, ptr(v), i)`) passed
+## straight as an argument pushed its first returned word as the callee's by-reference block pointer, and
+## a `-> T` instance at `T = Option(u64)` returned the discriminant alone. NON-VACUOUS: on the parent
+## `c5fc685d` (x86_64) the fixture dies with SIGSEGV (139).
+run issue1256_generic_ret_arg 42
+## #1324 — a generic `-> T` call at an enum wider than seven words (`mk(Option(S9), …)`) has no hidden
+## result pointer yet; both positions are refused at the call. NON-VACUOUS: on the parent `992bd767`
+## (x86_64) the bound form built and returned 10 (a wrong value), the passed form ran to SIGSEGV (139).
+build_reject_has issue1324_wide_gen_enum_bound "generic call returning an enum wider than seven words is not supported yet"
+build_reject_has issue1324_wide_gen_enum_arg "generic call returning an enum wider than seven words is not supported yet"
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================
