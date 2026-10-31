@@ -55,6 +55,15 @@ placed in `pre-commit` installs cleanly and never fires (measured). In prose and
   and may carry only the reviewed pre-oracle mismatch as evidence; the maintainer owns the oracle
   regeneration after the local merge. Each regeneration is one commit touching that oracle alone,
   followed by a complete green gate on the resulting object.
+- Since #1127, landing runs in the merge queue (`scripts/queue.sh`, a systemd timer on omen; its header
+  is the protocol). The integrator's act is `scripts/queue.sh --enqueue N=SHA` after review, which records
+  the reviewed head. The queue composes up to four queued PRs onto `origin/main`, gates the composed
+  object once with `full.sh`, pushes exactly that object with `--force-with-lease` on its base, comments
+  on each member and deletes each member's remote branch; on red it bisects and marks the culprit
+  `queue-failed`. A PR carrying an oracle or a predicted delta is gated alone through `land.sh N`. The
+  rules below are what the queue enforces, and what a hand landing (a seed promotion, or the queue down)
+  must follow itself. The queue does not touch any lane's local worktree: that cleanup stays with whoever
+  owns it, after any landing.
 - Verification runs on the locally merged result, not the contributor branch. Re-derive the evidence,
   check that merge with the gate appropriate to its independently reviewed change class, and push exactly
   the object that passed. Never re-merge or modify it between verification and push.
@@ -67,8 +76,8 @@ placed in `pre-commit` installs cleanly and never fires (measured). In prose and
   pushed commit, read by the integrator — not the check's colour. The corpus manifest it generated is
   published as an artifact, and an oracle commit may take it byte for byte, exactly as `--write` would.
   Only independently classified inert prose may use the docs-only gate below.
-- After a successful landing, the integrator removes the accepted same-repository remote feature
-  branch and, only when its local tip exactly equals the landed PR head and its dedicated worktree is
+- After a successful landing, the remote feature branch is removed (by the queue, or by the integrator
+  after a hand landing) and, only when its local tip exactly equals the landed PR head and its dedicated worktree is
   clean, removes the matching local worktree and branch too. A dirty, diverged, or ambiguous local
   checkout is retained and reported; never force-delete it. A fork-owned branch is not deleted through
   the upstream repository, and its name is not used to clean local state.
