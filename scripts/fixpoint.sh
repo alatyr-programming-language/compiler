@@ -183,7 +183,7 @@ seed_identity_check() { # version-file package-file seed-binary
 ## invocation, BEFORE the decision it is about — and in a SUBSHELL, because a `set -u` unbound
 ## variable or an arithmetic error inside a driven function unwinds to top level and ENDS THE
 ## SCRIPT, printing nothing at all; the completion marker below is what notices instead.
-FIXPOINT_SELFTEST_EXPECTED=47  # +12 for the #1104 opt-in: 4 bump-first tree, 2 verdict line, 1 version order, 5 limits; +5 the end-of-run verdict (PR #1105 review)
+FIXPOINT_SELFTEST_EXPECTED=50  # +12 for the #1104 opt-in: 4 bump-first tree, 2 verdict line, 1 version order, 5 limits; +5 the end-of-run verdict, +3 the flag reaching it (PR #1105 reviews)
 # The verdict at the end of a run, a function so the self-test drives the REAL decision (review of
 # PR #1105): a mid-promotion run (ALATYR_RESEED=1) must end at rc 4 and never print the fixpoint
 # line, even when seed == Stage1 == Stage2.
@@ -395,6 +395,18 @@ fixpoint_seed_identity_selftest() { # work-dir
   case "$out" in *'TOOL-1 FIXPOINT'*) _ck 0 x ;; *) _ck 1 "unflagged-agreeing-run-without-the-verdict" ;; esac
   out="$(fixpoint_verdict 0 "$st/gx" "$st/g1" "$st/g2" 2>&1)"; rc=$?
   [ "$rc" = 4 ]; _ck $? "a-stale-seed-reported-a-fixpoint(rc=$rc)"
+
+  # 1105 review (2nd) · the flag reaches the verdict. The rc-4 checks above drive fixpoint_verdict with
+  #        a literal 1; these prove the two links that feed it: seed_identity_check sets the global on a
+  #        bump-first tree under the flag (and only there), and the run's one call passes that global.
+  _bumped 0.4.2 0.4.3; FP_MID_PROMOTION=x
+  ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" > "$st/o" 2>&1
+  [ "$FP_MID_PROMOTION" = 1 ]; _ck $? "flagged-bump-first-tree-did-not-set-FP_MID_PROMOTION($FP_MID_PROMOTION)"
+  _ans 0.4.3; FP_MID_PROMOTION=x
+  ALATYR_RESEED=1 seed_identity_check "$st/VERSION" "$st/package.al" "$st/seed" > "$st/o" 2>&1
+  [ "$FP_MID_PROMOTION" = 0 ]; _ck $? "a-promoted-tree-under-the-flag-set-FP_MID_PROMOTION($FP_MID_PROMOTION)"
+  grep -qx 'fixpoint_verdict "${FP_MID_PROMOTION:-0}" target/gas_seed.s target/gas1.s target/gas2.s' "$ROOT/scripts/fixpoint.sh"
+  _ck $? "the-run-does-not-pass-FP_MID_PROMOTION-to-fixpoint_verdict"
 
   printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
   if [ -n "$bad" ]; then echo "*** fixpoint seed-identity selftest: FAILED —$bad ***"; return 1; fi
