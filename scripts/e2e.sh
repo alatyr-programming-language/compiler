@@ -6943,6 +6943,10 @@ run issue790_enum_copy_through_deref 42
 # Issue #791 — an aggregate field read straight off a struct-returning call (`is_c(mk().kind)`), as an
 # argument and returned by value. The parent crashed with SIGSEGV at the first check; the twins trap.
 run issue791_call_result_agg_field 42
+## #1228 — a sub-word field read straight off a struct-returning call (`mk(1).eek`): the return registers
+## carry the byte image, and the read picked a register per field. NON-VACUOUS: on the parent `c4e20937`
+## (x86_64) it exits 10.
+run issue1228_call_field_subword 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42

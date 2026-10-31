@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A field read straight off a struct-returning call reads that field when the struct has sub-word
+  fields (#1228).** `mk(1).eek` on `struct { is_slice : bool, eek : u8, stride : usize }` returned
+  `stride`: the call returns the struct's byte image in registers (`eek` is byte 1 of the first word),
+  and the read picked one register per field. It now takes the field's byte offset, the one
+  `d := mk(1); d.eek` already used, and extracts the narrow value with its sign.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type

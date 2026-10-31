@@ -20592,11 +20592,40 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         csp := call_ret_struct_span(base, cx.decls, cx.src, deref(cx.mar))
         fi := field_word_offset(cx.decls, cx.src, csp.s, csp.n, fs, fl, deref(cx.mar))
         emit_struct_value(base, sb, cx, a, nl)
-        ## the returned struct's field k is in emit_retreg(k); move the selected field's reg → %rax
-        if fi > 0 {
+        ## #1228 — the return registers carry the struct's image word by word, and the callee picks that
+        ## image with ONE test (the struct-literal return arm): a BYTE-tier, byte-writable struct is built
+        ## at its §6.1 byte offsets (`emit_struct_assign` → `emit_standard_assign`), so in
+        ## `{ is_slice : bool, eek : u8, stride : usize }` `eek` is byte 1 of word 0 and `stride` is word
+        ## 1, not words 1 and 2 as `field_word_offset` counts. Any other struct is the word constructor's
+        ## image, one word per field, where `field_word_offset` is right; a WORD-tier struct with narrow
+        ## fields (`{ flag : bool, lo : i8, … }`) is one of those, so the test is the callee's own and
+        ## not `layout_field_offset_bytes`, which also answers byte offsets for a WORD-tier struct that
+        ## is only NESTED byte-precisely.
+        csk := layout_kind(cx.decls, cx.src, csp.s, csp.n, deref(cx.mar))
+        mut fbo : i64 = 0 - 1
+        if layout_kind_is_byte(csk) and std_struct_is_byte_writable(cx.decls, cx.src, csp.s, csp.n, deref(cx.mar)) {
+          fbo = layout_field_offset_bytes(cx.decls, cx.src, csp.s, csp.n, fs, fl, deref(cx.mar))
+        }
+        mut fword := fi
+        mut fbyte : i64 = 0
+        if fbo >= 0 { fword = fbo / 8 ; fbyte = fbo - fword * 8 }
+        ## the returned struct's word k is in emit_retreg(k); move the selected word's reg → %rax
+        if fword > 0 {
           push_str(sb, "  movq ")
-          emit_retreg(sb, usize(fi))
+          emit_retreg(sb, usize(fword))
           push_str(sb, ", %rax\n")
+        }
+        if fbo >= 0 {
+          ## a sub-word field: shift its bytes down and restore the narrow scalar from them
+          cft := field_type_span(cx.decls, cx.src, csp.s, csp.n, fs, fl, deref(cx.mar))
+          if cft.n != 0 and bitcast_target_is_narrow_scalar(cx.src, cft.s, cft.n) {
+            if fbyte > 0 {
+              push_str(sb, "  shrq $")
+              push_int(sb, fbyte * 8)
+              push_str(sb, ", %rax\n")
+            }
+            emit_bitcast_narrow_reg(sb, str_at((cx.src + cft.s), cft.n))
+          }
         }
         push_str(sb, "  pushq %rax\n")
       } else if call_chain_place(base, cx.decls, cx.src, deref(cx.mar)).found {
