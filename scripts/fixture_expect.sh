@@ -126,8 +126,11 @@
 #
 #   --rows FILE / --manifest FILE / --test-dir DIR / --deviations FILE / --issues FILE
 #                                                   read these instead (the self-test uses them)
-#   --observed FILE                                 what each backend did (default: the --manifest file;
-#                                                   required by --gate)
+#   --observed FILE                                 what each backend did. Required by --gate. Otherwise
+#                                                   the default is the walk at target/corpus-manifest/
+#                                                   observed.manifest; with no walk, --report and --list
+#                                                   stale|unlisted|changed|pending refuse, and the rest
+#                                                   read the --manifest file
 set -u
 export LC_ALL=C
 
@@ -479,6 +482,35 @@ evaluate() {
 }
 
 ## ---- driver -------------------------------------------------------------------------------------------
+## Which file says what each backend did (#1225 review). --gate takes only an explicit --observed: the
+## verdict is on what this tree DOES, never a walk left over from another tree. Every other mode takes
+## --observed, else the walk `corpus_manifest.sh --check` leaves behind, as sites_triage.sh and
+## twin_coverage.sh do. With neither, the modes that judge deviations refuse: since S3 the committed
+## manifest no longer holds the directive fixtures, so reading it skips every pair as unobserved and
+## `--list unlisted` printed nothing with exit 0 (#1128: never a silent "nothing to add"). The S1 review
+## modes keep the committed manifest: their subjects are the fixtures it still holds.
+observation_for() { # mode gate observed walk manifest -> the path on stdout, or a refusal on stderr and 2
+  local mode="$1" gate="$2" obs="$3" walk="$4" manifest="$5"
+  if [ -n "$obs" ]; then printf '%s\n' "$obs"; return 0; fi
+  if [ "$gate" = 1 ]; then
+    echo "fixture_expect.sh: --gate needs --observed <walk> (scripts/corpus_manifest.sh --check leaves it at" >&2
+    echo "  target/corpus-manifest/observed.manifest); the committed manifest is not an observation of this tree" >&2
+    return 2
+  fi
+  if [ -f "$walk" ]; then
+    echo "fixture_expect.sh: reading the observation $walk (written $(date -r "$walk" '+%Y-%m-%d %H:%M' 2>/dev/null || echo '?'))" >&2
+    printf '%s\n' "$walk"; return 0
+  fi
+  case "$mode" in
+    report|list:stale|list:unlisted|list:changed|list:pending)
+      echo "fixture_expect.sh: ${mode#list:} judges deviations and needs an observation of this tree: run" >&2
+      echo "  scripts/corpus_manifest.sh --check (it leaves target/corpus-manifest/observed.manifest), or pass" >&2
+      echo "  --observed <walk>; the committed manifest no longer holds the directive fixtures (S3)" >&2
+      return 2 ;;
+  esac
+  printf '%s\n' "$manifest"
+}
+
 run_mode() { # mode rows manifest test-dir [deviations issues [observed]]
   ## manifest: the committed corpus.manifest (which sources it holds); observed: what each backend did
   ## (the fresh walk under --gate; the committed manifest itself when absent)
@@ -683,6 +715,18 @@ EOF
   cp "$d/t/bare.al" "$d/g/newbare.al"; got="$(OB "$d/m") $(run_mode list:unstated "$d/rows" "$d/m2" "$d/g" "$d/dv" "$d/is" "$d/m" | cut -f1 | tr '\n' ' ')"
   chk "a fixture with no directive and no committed manifest row is UNSTATED and fails (a new fixture states its expectation)" "$got" "1 newbare "
   rm "$d/g/newbare.al"; got="$(OB "$d/m")"; chk "a fixture with no directive that the committed manifest holds passes (the review list)" "$got" "0"
+  ## The CLI's choice of observation (#1225 review): with no --observed, `--list unlisted` once read the
+  ## committed scope (m2), skipped `good` as unobserved and printed nothing with exit 0.
+  OF() { local o rc; o="$(observation_for "$1" "$2" "$3" "$4" "$d/m2" 2>/dev/null)"; rc=$?; echo "${o#"$d/"}:$rc"; }
+  dv "$R1" "$R2"; got="$(run_mode list:unlisted "$d/rows" "$d/m2" "$d/g" "$d/dv" "$d/is" "$(observation_for list:unlisted 0 "" "$d/m" "$d/m2" 2>/dev/null)" | cut -f1,2 | tr '\t' ':')"
+  chk "--list unlisted with no --observed reads the walk and lists the missed row" "$got" "wasm:test/good.al"
+  got=""; for md in report list:stale list:unlisted list:changed list:pending; do got="$got $(OF "$md" 0 "" "$d/nowalk")"; done
+  chk "...and with no walk, every mode that judges deviations refuses (2), never the committed scope" "$got" " :2 :2 :2 :2 :2"
+  got="$(OF list:b 0 "" "$d/nowalk") $(OF list:unstated 0 "" "$d/nowalk")"
+  chk "the S1 review modes with no walk keep the committed manifest" "$got" "m2:0 m2:0"
+  got="$(OF report 1 "" "$d/m") $(OF report 1 "$d/m2" "$d/m") $(OF list:unlisted 0 "$d/m2" "$d/m")"
+  chk "--gate never takes a leftover walk; an explicit --observed wins over the walk" "$got" ":2 m2:0 m2:0"
+  dv "$R1" "$R2" "$R3"
   dv "$R1" "$R2" "wasm${T}test/good.al${T}compile/1${T}#12"; got="$(G) $(LD unissued)"
   chk "a row naming an issue the table lacks fails" "$got" "1 wasm:test/good.al "
   dv "$R1" "$R2" "wasm${T}test/good.al${T}compile/1${T}#?"; got="$(G) $(LD unissued)"
@@ -734,14 +778,8 @@ while [ $# -gt 0 ]; do
 done
 [ "$WRITE" = 0 ] || [ "$MODE" = generate ] || { echo "fixture_expect.sh: --write goes with --generate" >&2; exit 2; }
 [ -f "$MANIFEST" ] || { echo "fixture_expect.sh: no manifest at $MANIFEST" >&2; exit 2; }
-## The verdict is on what this tree DOES: --gate reads the walk (S3), never the committed scope, which
-## no longer holds the directive fixtures' rows.
-if [ "$GATE" = 1 ] && [ -z "$OBSERVED" ]; then
-  echo "fixture_expect.sh: --gate needs --observed <walk> (scripts/corpus_manifest.sh --check leaves it at" >&2
-  echo "  target/corpus-manifest/observed.manifest); the committed manifest is not an observation of this tree" >&2
-  exit 2
-fi
-[ -z "$OBSERVED" ] || [ -f "$OBSERVED" ] || { echo "fixture_expect.sh: no observation at $OBSERVED" >&2; exit 2; }
+OBSERVED="$(observation_for "$MODE" "$GATE" "$OBSERVED" "$ROOT/target/corpus-manifest/observed.manifest" "$MANIFEST")" || exit 2
+[ -f "$OBSERVED" ] || { echo "fixture_expect.sh: no observation at $OBSERVED" >&2; exit 2; }
 [ -d "$TESTDIR" ] || { echo "fixture_expect.sh: no test directory at $TESTDIR" >&2; exit 2; }
 [ -f "$DEVIATIONS" ] || { echo "fixture_expect.sh: no known-deviations list at $DEVIATIONS" >&2; exit 2; }
 [ -f "$ISSUES" ] || { echo "fixture_expect.sh: no issue table at $ISSUES" >&2; exit 2; }
@@ -753,4 +791,4 @@ if [ -z "$ROWS" ]; then
   ROWS="$TMPROWS"
 fi
 [ -s "$ROWS" ] || { echo "fixture_expect.sh: the registration table is empty — refusing to report on nothing" >&2; exit 2; }
-WRITE="$WRITE" GATE="$GATE" run_mode "$MODE" "$ROWS" "$MANIFEST" "$TESTDIR" "$DEVIATIONS" "$ISSUES" "${OBSERVED:-$MANIFEST}"
+WRITE="$WRITE" GATE="$GATE" run_mode "$MODE" "$ROWS" "$MANIFEST" "$TESTDIR" "$DEVIATIONS" "$ISSUES" "$OBSERVED"
