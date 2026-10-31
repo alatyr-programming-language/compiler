@@ -2250,7 +2250,7 @@ d_elide_alloc_arms := fn(ah : Option(ptr(mut Arm)), amb : usize, decls : rt::Vec
       Some(armq) => {
         am := deref(arm_p(armq))
         d_elide_alloc_stmts(am.body_stmts, amb, decls, na, src)
-        ## null-ok: an arm with a statement body carries a null value expression (ast.al), as in `d_lift_arms`.
+        ## null-ok: #1069 — Arm.body — an arm with a statement body carries a null value expression (ast.al), as in `d_lift_arms`.
         if unchecked bitcast(usize, am.body) != 0 { d_elide_alloc_expr(am.body, amb, decls, na, src) }
         arm = am.next
       }
