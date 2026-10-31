@@ -625,6 +625,16 @@ def self_test(cc, d, jobs):
            any(b.startswith("CHANGED") for b in hold({"vec.at.u8": "WRONG 11"}, rows)))
     expect("a row naming no cell fails", any(b.startswith("UNKNOWN") for b in hold({}, rows)))
     expect("TRAP and OK pass unlisted", hold({"a": "TRAP 132", "b": "OK"}, {}) == [])
+    # A crash is a defect, never the specified trap (#1277): an OK cell that starts to segfault, time out
+    # or exit with no check code must turn the gate red unless a row lists it under an open issue.
+    expect("an unlisted CRASH (a segfault) fails",
+           any(b.startswith("UNLISTED") for b in hold({"vec.at.u8": "CRASH 139"}, {})))
+    expect("an unlisted CRASH (a timeout) fails",
+           any(b.startswith("UNLISTED") for b in hold({"vec.at.u8": "CRASH timeout"}, {})))
+    expect("a listed CRASH passes", hold({"vec.at.u8": "CRASH 139"}, {("x86_64", "vec.at.u8"): ("CRASH 139", "#1")}) == [])
+    expect("a listed CRASH that now traps is STALE (the fix deletes its row)",
+           any(b.startswith("STALE") for b in hold({"vec.at.u8": "TRAP 132"},
+                                                     {("x86_64", "vec.at.u8"): ("CRASH 139", "#1")})))
 
     # 2. The runner end to end: a planted program that stores a value and reads back another must come
     #    out WRONG, its healthy twin OK, and a program that does not build REFUSED.
@@ -633,6 +643,12 @@ def self_test(cc, d, jobs):
         "plant.wrong": PRELUDE + "main := fn() -> u64 {\n  x : u64 = 7\n  if x + 1 != 7 { return 10 }\n  42\n}\n",
         "plant.ok": PRELUDE + "main := fn() -> u64 {\n  x : u64 = 7\n  if x != 7 { return 10 }\n  42\n}\n",
         "plant.refused": "main := fn() -> u64 { undefined_name_1124 }\n",
+        # A healthy cell that segfaults (a load from the unmapped page 8): a crash, never a trap (#1277).
+        "plant.crash": PRELUDE + "main := fn() -> u64 {\n  p := unchecked bitcast(ptr(u64), usize(8))\n"
+                       "  if deref(p) == 7 { return 10 }\n  42\n}\n",
+        # A checked overflow on a value the compiler cannot fold: the specified trap (`ud2`).
+        "plant.trap": PRELUDE + "inc := fn(x : u8) -> u8 { x + 1 }\nmain := fn() -> u64 {\n"
+                      "  if inc(u8(255)) == 0 { return 10 }\n  42\n}\n",
     }
     got = {}
     for cid, src in plants.items():
@@ -645,6 +661,9 @@ def self_test(cc, d, jobs):
     expect(f"planted non-building program is REFUSED (got {got['plant.refused']})",
            got["plant.refused"].startswith("REFUSED"))
     expect("the planted WRONG fails the gate", hold({"plant.wrong": got["plant.wrong"]}, {}) != [])
+    expect(f"planted segfault is CRASH 139, not a trap (got {got['plant.crash']})", got["plant.crash"] == "CRASH 139")
+    expect("the planted segfault fails the gate", hold({"plant.crash": got["plant.crash"]}, {}) != [])
+    expect(f"planted checked overflow is TRAP 132 (got {got['plant.trap']})", got["plant.trap"] == "TRAP 132")
 
     # 3. The committed list parses and every row names a generated cell.
     names = {cid for cid, *_ in cells()}
