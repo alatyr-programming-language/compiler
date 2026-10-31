@@ -5,7 +5,7 @@
 seq := fn() -> u64 {
   comptime x := 5
   if x != 5 { return 1 }
-  y := 7
+  y : u64 = 7
   return y
 }
 
@@ -14,7 +14,7 @@ branch := fn(cond : bool) -> u64 {
     comptime x := 5
     return x
   } else {
-    x := 7
+    x : u64 = 7
     return x
   }
 }
@@ -24,7 +24,7 @@ block := fn() -> u64 {
     comptime x := 5
     if x != 5 { return 1 }
   }
-  x := 7
+  x : u64 = 7
   return x
 }
 

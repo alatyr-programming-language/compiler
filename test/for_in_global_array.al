@@ -4,7 +4,7 @@
 ## three scalar elements: 10 + 15 + 17 = 42.
 mut TABLE := [10, 15, 17]
 main := fn() -> u64 {
-  mut acc := 0
+  mut acc : u64 = 0
   for v in TABLE { acc = acc + v }
   acc
 }

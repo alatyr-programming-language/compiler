@@ -5,7 +5,7 @@
 mut TABLE := [10, 15, 100]
 main := fn() -> u64 {
   TABLE[2] = TABLE[0] + 7
-  mut acc := 0
+  mut acc : u64 = 0
   mut i := 0
   while i < 3 {
     acc = acc + TABLE[i]

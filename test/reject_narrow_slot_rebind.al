@@ -23,7 +23,7 @@
 P := struct { x : u64, y : u64, z : u64 }
 mk3 := fn() -> P { P(x = 10, y = 11, z = 14) }
 main := fn() -> u64 {
-  mut n := 0
+  mut n : u64 = 0
   if n == 0 {
     t := 7                ## `t` bound FIRST as a 1-word scalar
     n = n + t
