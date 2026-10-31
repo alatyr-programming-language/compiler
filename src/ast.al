@@ -1079,6 +1079,61 @@ pub bitcast_identity_has := fn(p : ptr(Expr), s : usize, n : usize) -> bool {
 ## Forget every entry. Called wherever the driver rewinds the AST arena for a re-parse.
 pub bitcast_identity_reset := fn() { BCI_LEN = 0 }
 
+## ── UNARY-NEGATION ZERO SET (#1154) ─────────────────────────────────────────────────────────────────
+## The parser builds unary `-x` as `Bin(17, Num(0, 0, 0), x)`, the same AST shape as a WRITTEN `0 - x`.
+## They are different operations (Concurrency §6.5, v1.6.0): the binary unsigned `-` is borrow-checked,
+## while the unsigned negation has no overflow member (§6.3). Telling them apart from the literal (its
+## value, its empty span) is a shape, and a zero the compiler folds or substitutes has that shape too.
+## So the parser records the address of the zero it SYNTHESIZES for a negation here, and that record
+## is the one fact `ir::zero_left_no_overflow` reads. `Expr::Bin` keeps its bootstrap arity (the same
+## reason as the FN-6 set above).
+##
+## A clone of a negation marks its cloned zero (`parser::clone_expr`). The driver forgets the set at
+## every AST-arena rewind (`neg_zero_reset`, beside `bitcast_identity_reset`), and a lookup also asks
+## that the node is still a zero `Num` with no source span. A stale or missing entry therefore makes a
+## negation look written, which gives it a guard it does not need (a trap), and never the reverse.
+## One word per entry in an `rt` word table, grown with the program (#801).
+mut NEGZ_BASE : rt::WTab = rt::WTab(0)
+mut NEGZ_CAP : rt::Words = rt::Words(0)
+mut NEGZ_N : usize = 0
+
+## Record `p` as the zero the parser synthesized for a unary negation.
+pub neg_zero_mark := fn(p : ptr(Expr)) {
+  ## unchecked-ok: a node's address is the set's key; it is compared, never dereferenced from here.
+  k := unchecked bitcast(usize, p)
+  if neg_zero_has(k) { return }
+  mut nb := NEGZ_BASE
+  mut nc := NEGZ_CAP
+  rt::wtab_reserve(nb, nc, rt::wtab_words(NEGZ_N, 1), rt::wtab_words(NEGZ_N + 1, 1))
+  NEGZ_BASE = nb
+  NEGZ_CAP = nc
+  rt::wtab_set(NEGZ_BASE, rt::wtab_at(NEGZ_N, 1, 0), k)
+  NEGZ_N = NEGZ_N + 1
+}
+neg_zero_has := fn(k : usize) -> bool {
+  mut i : usize = 0
+  while i < NEGZ_N {
+    if rt::wtab_get(NEGZ_BASE, rt::wtab_at(i, 1, 0)) == k { return true }
+    i = i + 1
+  }
+  false
+}
+## Is `p` the zero of a unary negation `-x`, as opposed to a `0` the source wrote or the compiler made?
+pub neg_zero_is := fn(p : ptr(Expr)) -> bool {
+  mut zero := false
+  match deref(p) {
+    Expr::Num(v, s, n) => { zero = v == 0 and s == 0 and n == 0 }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  ## unchecked-ok: the node's address is the set's key, as in `neg_zero_mark`.
+  zero and neg_zero_has(unchecked bitcast(usize, p))
+}
+## Forget every entry. Called wherever the driver rewinds the AST arena for a re-parse.
+pub neg_zero_reset := fn() { NEGZ_N = 0 }
+
 ## The operand of the `Bitcast` node at `p` whose target span is exactly `[s, s+n)`, else null.
 ## A standalone single-match helper: a `match deref(e)` in its own fn dispatches reliably under the
 ## seed, unlike an arm added to a big payload match.

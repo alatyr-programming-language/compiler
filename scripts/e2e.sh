@@ -9014,6 +9014,11 @@ run trap_neg_written_zero_sub 132
 run trap_neg_compound_operand 132
 run accept_neg_unsigned_and_unchecked 42
 run accept_neg_narrow_no_trap 42
+## #1154: a WRITTEN unsigned `0 - x` is a borrow-checked subtraction (§6.5), not the negation; the
+## negation the parser builds keeps no guard, also where the driver clones its body.
+run trap_written_zero_sub_unsigned 132
+run accept_written_zero_sub_no_borrow 42
+run accept_neg_unsigned_hof_clone 42
 ## regalloc commit 4: a scalar-leaf TRAILING-VALUE checked `*` overflow goes through `emit_fn_ir`
 ## (register-allocated), not the text path — it must still emit the guard and TRAP (132). Locks in
 ## that the register allocator never drops a checked-overflow guard.

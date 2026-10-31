@@ -53,13 +53,15 @@ uq := fn(one : u64, two : u64, zero : u64, umax : u64) -> u64 when target.arch !
   if p1.1 == false { return 6 }
   0
 }
+## The `-42` spellings in this helper are negations, not a written `0 - 42`: sema does not type a
+## `when`-guarded body for the twins (#1273), so a written zero-left `-` there reads unsigned and borrows.
 sq := fn(nforty : i64, ntwo : i64) -> u64 when target.arch != Arch.x86_64 {
   o3 : Option(i64) = base::num::checked_add(nforty, ntwo)
   mut v3 : i64 = 0
   match o3 { Some(v) => { v3 = v } None => { v3 = 0 } }
-  if v3 != (0 - 42) { return 7 }
+  if v3 != (-42) { return 7 }
   s3 : i64 = base::num::saturating_add(nforty, ntwo)
-  if s3 != (0 - 42) { return 8 }
+  if s3 != (-42) { return 8 }
   0
 }
 ## i64 MIN + (-1) does not fit and saturates DOWNWARD; i64 MAX + 1 saturates UPWARD.

@@ -10593,7 +10593,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       ## and the match dispatched on the raw pushed word (a silent wrong arm).
       ffcv := if nargs >= 1 { fn_field_call_slot(arg_expr_at(args_head, 0, a), cs, cl, cx) } else { 0 - 1 }
       if ffcv >= 0 {
-        cx.call_cidx = 0 - 1
+        cx.call_cidx = -1   ## the negation, as at every other call_cidx reset: sema leaves this store untyped (#1154)
         cx.ind_fn_fmask = fn_field_param_fmask(arg_expr_at(args_head, 0, a), cs, cl, cx)
         emit_call_args(args_head, 0, 0 - 1, 0 - 1, nargs - 1, sb, cx, nl)
         push_str(sb, "  movq -")
@@ -11657,7 +11657,7 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       ## still dispatched directly: the whole self-host corpus keeps the byte-identical direct path.
       fvsv := if ind_call_ret_struct_words(e, cx.decls, cx.src, a) != 0 { slot_of(cx.slots, cx.src, cs, cl) } else { 0 - 1 }
       if fvsv >= 0 {
-        cx.call_cidx = 0 - 1
+        cx.call_cidx = -1   ## the negation: sema leaves this store untyped, so `0 - 1` would borrow (#1154)
         sc_sv := if cx.sret_call >= 0 { 1 } else { 0 }
         cx.ind_fn_fmask = fnval_param_fmask(cs, cl, cx)
         emit_call_args(args_head, 0 - 1, 0 - 1, 0 - 1, nargs, sb, cx, nl)
