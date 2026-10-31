@@ -13,3 +13,6 @@ main := fn() -> u64 {
   mut j : usize = 2
   u64(build()[k]) + u64(build()[j])
 }
+## expect: accept
+## expect(x86_64): run 47
+## expect(aarch64): run 47

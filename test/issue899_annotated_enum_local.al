@@ -18,3 +18,4 @@ main := fn() -> u64 {
   match t { Some(s) => { if s.y != 0 { return 101 } }; None => { return 102 } }
   match h { Some(s) => { return s.x + s.y + g + k }; None => { return 103 } }
 }
+## expect(x86_64): run 42

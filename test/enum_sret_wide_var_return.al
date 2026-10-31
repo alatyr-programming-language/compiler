@@ -30,3 +30,4 @@ main := fn() -> u64 {
   u := match z { R::Six(a, b, c, d, e, f) => a + f, R::None => 0 }          ## 3
   s + t + u                                                                  ## 36
 }
+## expect: run 36

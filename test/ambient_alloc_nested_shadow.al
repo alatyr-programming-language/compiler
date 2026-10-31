@@ -32,3 +32,4 @@ main := fn() -> u64 {
   if inner.off != 8 { return 9 }
   return 42
 }
+## expect: run 42

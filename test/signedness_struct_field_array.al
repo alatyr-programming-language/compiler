@@ -7,3 +7,4 @@ main := fn() -> u64 {
   if r.u[0] < r.u[1] { return 42 }
   return 1
 }
+## expect: run 42

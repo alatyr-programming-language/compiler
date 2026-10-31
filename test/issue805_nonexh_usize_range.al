@@ -4,3 +4,4 @@ f := fn(n : usize) -> u64 {
   return 0
 }
 main := fn() -> u64 { return f(3) + f(1000) }
+## expect: reject "type mismatch at line 3"

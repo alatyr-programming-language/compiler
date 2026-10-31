@@ -20,3 +20,4 @@ main := fn() -> u64 {
   acc = acc + second(23, ps[1])    ## NON-FIRST argument position         -> 30
   return acc
 }
+## expect: run 42

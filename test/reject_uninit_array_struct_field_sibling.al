@@ -4,3 +4,4 @@ main := fn() -> u64 {
   arr[0].a = 42
   return arr[0].b
 }
+## expect: reject

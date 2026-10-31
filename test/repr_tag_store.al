@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if after == 3735928559 { acc = acc + 22 }
   acc
 }
+## expect(x86_64): run 42

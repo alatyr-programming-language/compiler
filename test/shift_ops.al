@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if w != 1 { return 4 }
   return x + 2           ## 42
 }
+## expect: run 42

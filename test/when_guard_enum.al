@@ -19,3 +19,4 @@ main := fn() -> u64 {
     Sh.Other => 0
   }
 }
+## expect(x86_64): run 42

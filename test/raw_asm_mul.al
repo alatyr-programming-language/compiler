@@ -12,3 +12,4 @@ compute := @abi(naked) fn(a : i64) -> i64 {
 main := fn() -> u64 {
   compute(0)
 }
+## expect(x86_64): run 42

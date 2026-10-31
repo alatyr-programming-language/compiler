@@ -4,3 +4,4 @@ Opt := enum { None, Some(u64) }
 id := fn(o : Opt) -> Opt { return o }
 main := fn() -> u64 { m := id(Opt.Some(42))
   return match m { None => { 0 }; Some(v) => { v } } }
+## expect: run 42

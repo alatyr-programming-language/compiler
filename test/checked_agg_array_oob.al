@@ -11,3 +11,4 @@ main := fn() -> u64 {
   i : u64 = 5
   return arr[i].x
 }
+## expect(x86_64): trap

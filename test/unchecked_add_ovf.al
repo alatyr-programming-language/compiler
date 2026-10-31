@@ -6,3 +6,4 @@ main := fn() -> u64 {
   b := unchecked { a + 1 }
   return b
 }
+## expect(aarch64): run 0

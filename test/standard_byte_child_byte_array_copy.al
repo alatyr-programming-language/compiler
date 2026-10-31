@@ -42,3 +42,4 @@ main := fn() -> u64 {
   if u64(ca.raw[1]) != 13 { return 13 }
   42
 }
+## expect: run 42

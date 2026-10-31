@@ -5,3 +5,4 @@ f := fn(c : char) -> u64 {
   return r
 }
 main := fn() -> u64 { return f('a') + f('z') }
+## expect: reject "type mismatch at line 4"

@@ -77,3 +77,4 @@ main := fn() -> u64 {
   if f_const(Option.None) != 1 { return 112 }
   return 42
 }
+## expect: run 42

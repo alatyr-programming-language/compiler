@@ -14,3 +14,4 @@ X : i64 = 42
 main := fn() -> i64 {
   return X
 }
+## expect: reject "at line 11"

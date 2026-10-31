@@ -33,3 +33,4 @@ main := fn() -> u64 {
   if sl[3] != 30 { return 9 }
   return 42
 }
+## expect: run 42

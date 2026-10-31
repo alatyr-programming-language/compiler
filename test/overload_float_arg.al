@@ -10,3 +10,4 @@ main := fn() -> u64 {
   b := g(2.0)        ## float literal → g(f64) → 202
   return b - a - 50  ## 202 - 110 - 50 = 42
 }
+## expect: run 42

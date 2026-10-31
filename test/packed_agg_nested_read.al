@@ -17,3 +17,4 @@ main := fn() -> u64 {
   if by != 37 { return 3 }
   u64(r.tag) + by
 }
+## expect(x86_64): run 42

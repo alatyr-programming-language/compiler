@@ -27,3 +27,4 @@ main := fn() -> u64 {
   t : u64 = match o { Some(v) => v ; None => 0 }
   r + area(0) + area(1) + area(2) - 25 + t + 15
 }
+## expect: run 42

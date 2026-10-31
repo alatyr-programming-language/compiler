@@ -8,3 +8,4 @@ main := fn() -> u64 {
   v := V(n = 1)
   v.bump(1, 2, 3)
 }
+## expect: reject "at line 9"

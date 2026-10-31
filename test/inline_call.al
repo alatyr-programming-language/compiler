@@ -8,3 +8,4 @@
 main := fn() -> u64 {
   add(dbl(19), dbl(2))
 }
+## expect: run 42

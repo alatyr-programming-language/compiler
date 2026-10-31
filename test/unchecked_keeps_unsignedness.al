@@ -36,3 +36,4 @@ main := fn() -> u64 {
   if neg < pos { acc = acc + 3 }      ## -5 < 3 signed                  -> +3
   return acc
 }
+## expect: run 42

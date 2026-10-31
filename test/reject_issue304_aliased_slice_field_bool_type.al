@@ -8,3 +8,4 @@ main := fn() -> u64 {
   h.flags[1] = "text"
   0
 }
+## expect: reject "type mismatch" "at line 8"

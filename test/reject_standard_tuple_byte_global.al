@@ -4,3 +4,4 @@ mut G : ([u8; 4], u64) = ([1, 2, 3, 4], 9)
 main := fn() -> u64 {
   G.0[1]
 }
+## expect: reject "a standard-layout byte tuple global is not supported yet"

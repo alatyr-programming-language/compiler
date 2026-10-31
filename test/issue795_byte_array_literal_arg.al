@@ -23,3 +23,4 @@ main := fn() -> u64 {
   total += first([n, n + 2])
   return total
 }
+## expect: run 42

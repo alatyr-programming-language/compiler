@@ -7,3 +7,4 @@ HEIGHT := 7
 main := fn() -> u64 {
   WIDTH * HEIGHT
 }
+## expect: run 42

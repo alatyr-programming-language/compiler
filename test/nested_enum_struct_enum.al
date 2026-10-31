@@ -6,3 +6,4 @@ main := fn() -> u64 {
   o := Outer.X(Mid(i = Inner.B(40), k = 2))
   match o { Outer::X(m) => { return match m.i { Inner::A => { 0 }; Inner::B(v) => { v } } + m.k }; Outer::Y => { return 0 } }
 }
+## expect: run 42

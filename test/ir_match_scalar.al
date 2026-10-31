@@ -16,3 +16,4 @@ main := fn() -> u64 {
   v : u64 = match s { 6 => 30 ; _ => 0 }
   v + s + r * 3
 }
+## expect: run 42

@@ -21,3 +21,4 @@ hash := fn(T : type, v : T) -> u64 {
 main := fn() -> u64 {
   hash(E, E.A(42))
 }
+## expect: run 42

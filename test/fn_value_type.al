@@ -32,3 +32,4 @@ main := fn() -> u64 {
   ## 32 + 8 + 2 = 42.
   return r1 + r2 + r3
 }
+## expect(x86_64): run 42

@@ -8,3 +8,4 @@ main := fn() -> u64 {
   y := bitcast(B, x)
   return y.p + y.q
 }
+## expect: run 42

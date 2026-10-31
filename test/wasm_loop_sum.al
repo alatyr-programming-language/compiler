@@ -6,3 +6,6 @@ sum := fn(n : u64) -> u64 {
   return acc
 }
 main := fn() -> u64 { return sum(9) }
+## expect(aarch64): run 36
+## expect(riscv64): run 36
+## expect(wasm): run 36

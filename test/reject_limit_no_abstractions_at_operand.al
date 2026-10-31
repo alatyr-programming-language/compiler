@@ -7,3 +7,4 @@ main := fn() -> u64 {
   syscall()
   return 0
 }
+## expect: reject

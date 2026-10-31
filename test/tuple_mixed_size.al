@@ -5,3 +5,4 @@ main := fn() -> u64 {
   al := align((u64, u8))
   if sz == 16 and al == 8 { 42 } else { 1 }
 }
+## expect: run 42

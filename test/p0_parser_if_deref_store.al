@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if no != 9 { return 2 }
   return 42
 }
+## expect: run 42

@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if u64(b.val) != 100 { return 6 }         ## the scalar PAST the array, at byte 32
   return 42
 }
+## expect(x86_64): run 42

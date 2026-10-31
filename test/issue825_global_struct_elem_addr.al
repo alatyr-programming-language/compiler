@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if rd(ptr(POOL[2])) != 30 { return 103 }
   u64(deref(p).ns + POOL[2].nz + deref(p).nx + 2)
 }
+## expect(x86_64): run 42

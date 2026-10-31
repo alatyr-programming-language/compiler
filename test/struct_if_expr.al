@@ -10,3 +10,4 @@ main := fn() -> u64 {
   x := if c > 0 { f() } else { g() }
   return x.v
 }
+## expect: run 42

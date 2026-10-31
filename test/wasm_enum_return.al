@@ -4,3 +4,4 @@ main := fn() -> u64 {
   o := make()
   return match o { Opt::Some(x) => x, _ => 0 }
 }
+## expect(wasm): run 42

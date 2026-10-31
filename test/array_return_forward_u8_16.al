@@ -8,3 +8,5 @@ main := fn() -> u64 {
   t[15] = 42
   u64(forward(t)[15])
 }
+## expect: accept
+## expect(x86_64): run 42

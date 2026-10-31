@@ -7,3 +7,4 @@ main := fn() -> u64 {
   z := std::io::print("")
   return divide(42, u64(z))
 }
+## expect(x86_64): trap

@@ -19,3 +19,6 @@ Cfg := struct { a : u64, b : u64, c : u64, d : u64, e : u64 } when target.arch =
 main := fn() -> u64 {
   Cfg.size() + 26
 }
+## expect(x86_64): run 42
+## expect(aarch64): run 42
+## expect(riscv64): run 42

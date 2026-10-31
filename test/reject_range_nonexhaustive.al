@@ -5,3 +5,4 @@ main := fn() -> u64 {
   r := match n { 0..=100 => 1 }
   return r
 }
+## expect: reject

@@ -4,3 +4,4 @@
 main := fn() -> u64 {
   return u64.size()
 }
+## expect: reject

@@ -8,3 +8,4 @@ apply := fn(f : fn(x : usize) -> usize, v : usize) -> usize { return f(v) }
 main := fn() -> u64 {
   u64(apply(add1, 41))
 }
+## expect: run 42

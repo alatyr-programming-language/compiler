@@ -14,3 +14,4 @@ main := fn() -> u64 {
   d : dyn fn(u64) -> u64 = mkd
   return d(41)
 }
+## expect: reject

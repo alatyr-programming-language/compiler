@@ -44,3 +44,4 @@ main := fn() -> u64 {
   if str_eq(a.name, "abd") { eq = eq + 1 }
   return (a.name.len + a.n + a.m) + (r.name.len + r.n + r.m) + c.len + (b.name.len + b.n) + eq + byref(a)
 }
+## expect: run 35

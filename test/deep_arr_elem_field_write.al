@@ -21,3 +21,4 @@ main := fn() -> u64 {
     + xs[0].pa                           ## 11 (neighbour outer field, unchanged)
     + xs[1].tail)                        ## 9  (neighbour outer field, unchanged)
 }
+## expect: run 80

@@ -20,3 +20,4 @@ main := fn() -> u64 {
   ## branch shifts x by ≥ 98 and the answer is unmistakably not 42.
   return x - 981
 }
+## expect: run 42

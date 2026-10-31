@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if arr[3].a != 50 { return 4 }          ## the literal write's word 0 landed too
   r                                        ## 119
 }
+## expect: run 119

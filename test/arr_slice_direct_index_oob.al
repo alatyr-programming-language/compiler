@@ -26,3 +26,4 @@ main := fn() -> u64 {
   if v == 0 { return 6 }
   7
 }
+## expect: trap

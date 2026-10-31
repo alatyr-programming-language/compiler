@@ -6,3 +6,4 @@ main := fn() -> u64 {
   if true { xs[0].inner.x = 1 } else { xs[0].inner.y = 2 }
   return xs[0].inner.x
 }
+## expect: reject

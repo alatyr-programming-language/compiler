@@ -31,3 +31,4 @@ main := fn() -> u64 {
   if d != 200 { return 4 }
   a + b + 25
 }
+## expect: run 42

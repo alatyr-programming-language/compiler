@@ -41,3 +41,4 @@ main := fn() -> u64 {
   if unchecked xs[2] - 51 != 42 { return 105 }
   return 42
 }
+## expect: run 42

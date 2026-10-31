@@ -43,3 +43,4 @@ main := fn() -> u64 {
   if lw.s.y != 6 or lw.c != 2 { return 118 }
   42
 }
+## expect(x86_64): run 42

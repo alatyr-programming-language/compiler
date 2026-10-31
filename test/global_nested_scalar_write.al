@@ -10,3 +10,4 @@ main := fn() -> u64 {
   STATE.inner.b = 7
   return STATE.inner.a + STATE.inner.b + STATE.n
 }
+## expect: run 42

@@ -15,3 +15,4 @@ calls_main := fn() -> Result(usize, str) {
   if main() != 42 { return Result.Err("main did not return 42") }
   return Result.Ok(0)
 }
+## expect(x86_64): run 42

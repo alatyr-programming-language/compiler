@@ -11,3 +11,4 @@ main := fn() -> u64 {
   o.mid.inner = if c { Rec(a = 12, b = 30) } else { Rec(a = 0, b = 0) }
   return u64(o.mid.inner.a + o.mid.inner.b)
 }
+## expect: run 42

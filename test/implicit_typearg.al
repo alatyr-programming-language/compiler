@@ -6,3 +6,4 @@
 id := fn(T : type, v : T) -> T { return v }
 useit := fn(k : u64) -> u64 { return id(k) }
 main := fn() -> u64 { return useit(42) }
+## expect: run 42

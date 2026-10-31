@@ -7,3 +7,4 @@ main := fn() -> u64 {
   h := mk()
   0
 }
+## expect: reject

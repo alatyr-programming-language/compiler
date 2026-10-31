@@ -22,3 +22,4 @@ main := fn() -> u64 {
   if umax - hb != imax { return 10 }
   return 42
 }
+## expect: run 42

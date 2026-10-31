@@ -10,3 +10,4 @@ main := fn() -> u64 {
   if bytes(e)[1] != 169 { return 6 }
   42
 }
+## expect(x86_64): run 42

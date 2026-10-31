@@ -16,3 +16,4 @@ main := fn() -> u64 {
   hi := max(u64, 2, 1)
   lo + hi
 }
+## expect: run 42

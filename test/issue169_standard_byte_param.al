@@ -7,3 +7,4 @@ take_second := fn(s : T) -> u64 { u64(s.b) }
 main := fn() -> u64 {
   take_second(T(a = 7, b = 5))
 }
+## expect: run 5

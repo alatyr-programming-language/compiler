@@ -11,3 +11,4 @@ main := fn() -> u64 {
   m : u64 = 10
   return g(m, W(v = 32))
 }
+## expect: run 42

@@ -110,3 +110,4 @@ main := fn() -> u64 {
   if a3.c != 23 { return 124 }
   return 42
 }
+## expect: run 42

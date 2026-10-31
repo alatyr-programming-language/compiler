@@ -25,3 +25,4 @@ main := fn() -> u64 {
   a : u64 = f(4)                ## the int overload beside it still resolves
   return b.len() + a + k(10, "xy") + k(3, 4) + 12
 }
+## expect: run 42

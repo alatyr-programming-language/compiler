@@ -45,3 +45,4 @@ main := fn() -> u64 {
   if e3 != 0 { return e3 }
   42
 }
+## expect(x86_64): run 42

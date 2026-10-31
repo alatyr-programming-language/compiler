@@ -9,3 +9,4 @@ main := fn() -> u64 {
   p := (40, 2)
   return sum2(p)
 }
+## expect: run 42

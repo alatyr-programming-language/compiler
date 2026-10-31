@@ -8,3 +8,4 @@ main := fn()->u64{
     Option::None => { return 200 }
   }
 }
+## expect: run 42

@@ -38,3 +38,4 @@ main := fn() -> u64 {
   if wc.x != 24 { return 10 }
   42
 }
+## expect: run 42

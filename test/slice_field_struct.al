@@ -32,3 +32,4 @@ main := fn() -> u64 {
   c := b.v                          ## the 2-word field bound to a local
   return (u64(a.v.len) + a.n) + (u64(b.v.len) + b.n) + u64(c.len) + byref(b)
 }
+## expect: run 30

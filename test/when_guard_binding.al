@@ -24,3 +24,4 @@ main := fn() -> u64 {
   comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 { if val != 9 { return 4 } }
   42
 }
+## expect: run 42

@@ -15,3 +15,4 @@ main := fn() -> u64 {
   }
   return 1
 }
+## expect(x86_64): run 42

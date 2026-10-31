@@ -20,3 +20,4 @@ main := fn() -> u64 {
   }
   return s.len
 }
+## expect: run 42

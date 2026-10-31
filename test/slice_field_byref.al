@@ -26,3 +26,4 @@ main := fn() -> u64 {
   if b.n != 8 { return 5 }
   return lenof(a) + lenof2(b) + elem(a, 0) + elem(a, 3)
 }
+## expect: run 56

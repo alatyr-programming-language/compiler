@@ -17,3 +17,4 @@ main := fn() -> u64 {
   i := 9
   return u64(bytes(s)[i])
 }
+## expect(x86_64): trap

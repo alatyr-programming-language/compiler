@@ -9,3 +9,4 @@ main := fn() -> u64 {
   mut o := Elem(data = [1,2,3,4,5,6,7,8], inner = Inner(a = 20, b = 42))
   return deref(bitcast(ptr(Elem), ptr(o))).inner.b
 }
+## expect(x86_64): run 42

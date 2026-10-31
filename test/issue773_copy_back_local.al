@@ -57,3 +57,4 @@ main := fn() -> u64 {
   if uninit_back() != 8 { return 6 }
   a + 41
 }
+## expect: run 42

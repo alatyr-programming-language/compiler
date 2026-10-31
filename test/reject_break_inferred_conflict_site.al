@@ -13,3 +13,4 @@ main := fn() -> u64 {
   }
   0
 }
+## expect: reject "check: type mismatch at line 11"

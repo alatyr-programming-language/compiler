@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if unchecked (b != 40) { a = 0 }
   return a
 }
+## expect: run 42

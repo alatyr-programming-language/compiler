@@ -5,3 +5,4 @@ f := fn(u : usize) -> i64 { unchecked bitcast(i64, u < 0) }
 main := fn() -> u64 {
   return u64(f(5)) + 42
 }
+## expect: reject

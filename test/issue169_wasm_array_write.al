@@ -10,3 +10,4 @@ main := fn() -> u64 {
   arr[1] = T(a = 4, b = 2)
   u64(arr[1].a) * 10 + u64(arr[1].b)
 }
+## expect: run 42

@@ -5,3 +5,4 @@ f := fn(n : i64) -> u64 {
   return r
 }
 main := fn() -> u64 { return f(-3) + f(1000) }
+## expect: reject "type mismatch at line 4"

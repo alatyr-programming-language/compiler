@@ -11,3 +11,4 @@ main := fn() -> u64 {
   if align(P) == 8 { r = r + 16 }
   r + 11
 }
+## expect: run 42

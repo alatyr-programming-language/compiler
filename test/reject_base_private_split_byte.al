@@ -13,3 +13,4 @@ main := fn() -> u64 {
   k := base::str::split_byte(s, 44)
   42
 }
+## expect: reject "check: invalid" "at line 13"

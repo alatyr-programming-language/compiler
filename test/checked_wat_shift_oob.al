@@ -4,3 +4,4 @@ main := fn() -> u64 {
   x : u64 = 1
   return shl(x, 64)
 }
+## expect(wasm): trap

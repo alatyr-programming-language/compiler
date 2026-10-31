@@ -5,3 +5,4 @@ main := fn() -> u64 {
   p.y = 2
   return p.x + p.y
 }
+## expect(wasm): run 42

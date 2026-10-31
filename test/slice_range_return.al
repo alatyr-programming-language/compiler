@@ -21,3 +21,4 @@ main := fn() -> u64 {
   if m[0] != 20 { return 5 }
   return u64(r.len) + u64(m.len) + u64(m[1])
 }
+## expect: run 36

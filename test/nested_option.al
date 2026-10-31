@@ -43,3 +43,4 @@ helper_arg := fn(v : u64) -> u64 {
 main := fn() -> u64 {
   return inner_match(21) + helper_arg(21)
 }
+## expect: run 42

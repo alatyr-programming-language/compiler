@@ -77,3 +77,4 @@ main := fn() -> u64 {
   if gv != 4 { return 8 }
   return 42
 }
+## expect: run 42

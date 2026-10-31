@@ -52,3 +52,4 @@ main := fn() -> u64 {
   if not Option::is_some(ptr(str), text_get) { return 18 }
   return 42
 }
+## expect(x86_64): run 42

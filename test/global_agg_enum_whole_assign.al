@@ -7,3 +7,4 @@ main := fn() -> u64 {
   G = E.B(42)
   match G { E.A(x) => x, E.B(y) => y }
 }
+## expect(x86_64): run 42

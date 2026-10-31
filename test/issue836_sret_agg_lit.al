@@ -36,3 +36,4 @@ main := fn() -> u64 {
   match f { F::A(k, fo) => { match fo { Some(q) => { if deref(q).v + k != 42 { return 107 } }; None => { return 108 } } }; F::B(s) => { return 109 } }
   42
 }
+## expect(x86_64): run 42

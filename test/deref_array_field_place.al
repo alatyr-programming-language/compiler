@@ -12,3 +12,5 @@ main := fn() -> u64 {
   write_arr(ptr(mut s), 1, 40)
   u64(s.pad + s.arr[1])
 }
+## expect: accept
+## expect(x86_64): run 42

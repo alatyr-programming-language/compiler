@@ -7,3 +7,4 @@ main := fn() -> u64 {
   receiver := V(value = 1)
   return receiver.take(S(value = 2))
 }
+## expect: reject

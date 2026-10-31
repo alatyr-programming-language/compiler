@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if acc != 1 { return 100 + acc }
   return (acc % 113) + 1
 }
+## expect: run 2

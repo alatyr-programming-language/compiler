@@ -15,3 +15,4 @@ main := fn() -> u64 {
   c : A = if true { a } else { b }
   return u64(c)
 }
+## expect: reject "type mismatch at line 15 in reject_brand_mut_sibling_if" "type mismatch"

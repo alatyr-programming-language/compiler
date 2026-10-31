@@ -6,3 +6,4 @@
 f := fn(xs : [u64; 2]) -> u64 { return xs[0] }
 
 main := fn() -> u64 { return f(7) }
+## expect: reject "at line 8"

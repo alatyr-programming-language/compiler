@@ -34,3 +34,4 @@ main := fn() -> u64 {
   if GS[0].x != 1 { return 4 }
   r
 }
+## expect: run 52

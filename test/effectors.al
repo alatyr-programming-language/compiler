@@ -8,3 +8,4 @@ main := fn() -> u64 {
   t := Thing(a = 30, b = 12)
   return u64(add(t.a, t.b))
 }
+## expect: run 42

@@ -30,3 +30,4 @@ main := fn() -> u64 {
   if neighbour() != 14 { return 4 }
   42
 }
+## expect: run 42

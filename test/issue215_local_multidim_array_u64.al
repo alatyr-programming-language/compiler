@@ -15,3 +15,4 @@ main := fn() -> u64 {
   if xs[1][1] != 4 { return 4 }
   42
 }
+## expect: reject "local [[u8; 2]; 2] or [[u64; 2]; 2]" "at line 6"

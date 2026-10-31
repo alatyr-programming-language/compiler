@@ -2,3 +2,4 @@
 ## `type`; it was accepted and compiled.
 f := fn() -> Option { Option(u64).None }
 main := fn() -> u64 { 0 }
+## expect: reject "type function `Option` is not a type until it is applied" "at line 3 in issue857_unapplied_ret"

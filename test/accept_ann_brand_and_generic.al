@@ -13,3 +13,4 @@ main := fn() -> u64 {
   e : E = E.A(3)
   return u64(k) + o.unwrap()
 }
+## expect: run 12

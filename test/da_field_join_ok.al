@@ -6,3 +6,4 @@ main := fn() -> u64 {
   if true { s.x = 20 } else { s.x = 18 }
   return s.x * 2
 }
+## expect: run 40

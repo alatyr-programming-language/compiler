@@ -28,3 +28,4 @@ main := fn() -> u64 {
   if elem_code(parts, 1) == 3066 and elem_code(parts, 0) == 2104 { return 42 }
   return 7
 }
+## expect: run 42

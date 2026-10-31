@@ -8,3 +8,4 @@ main := fn() -> u64 {
   c := STATE.c
   return match c { Col::R => { 0 }; Col::G(v) => { v } } + STATE.n
 }
+## expect: run 42

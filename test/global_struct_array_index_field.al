@@ -7,3 +7,4 @@ main := fn() -> u64 {
   mut i := 0
   ARR[i].x + ARR[0].y + ARR[1].x
 }
+## expect: run 42

@@ -13,3 +13,4 @@ main := fn() -> u64 {
   x := deref(o.p)
   x.a + x.b
 }
+## expect: run 42

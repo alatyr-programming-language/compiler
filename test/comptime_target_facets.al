@@ -13,3 +13,4 @@ main := fn() -> u64 {
   comptime if not (target.env == Env.musl) { x = x + 11 } else { x = x + 100 }
   return x
 }
+## expect: run 42

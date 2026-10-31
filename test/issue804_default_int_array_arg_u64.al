@@ -5,3 +5,4 @@ main := fn() -> u64 {
   a := [1, 7, 42]
   return f(a)
 }
+## expect: reject "type mismatch at line 6"

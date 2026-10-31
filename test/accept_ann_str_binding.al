@@ -7,3 +7,4 @@ main := fn() -> u64 {
   w : u64 = a
   return w + s.len()
 }
+## expect: run 9

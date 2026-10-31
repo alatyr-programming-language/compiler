@@ -8,3 +8,4 @@ main := fn() -> u64 {
   r := mk()
   u64(r.a) * 10 + u64(r.b)
 }
+## expect: run 75

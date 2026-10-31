@@ -32,3 +32,4 @@ main := fn() -> u64 {
 
   return q1.words[1] + q2.words[0] + q3.words[0] + rem.words[0]
 }
+## expect(x86_64): run 42

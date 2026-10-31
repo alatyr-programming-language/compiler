@@ -12,3 +12,4 @@ main := fn() -> u64 {
   s[0] = 65
   7
 }
+## expect: reject "str element store" "at line 12"

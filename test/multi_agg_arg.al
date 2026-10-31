@@ -10,3 +10,4 @@ f := fn(a : V2, b : V2) -> u64 {
 main := fn() -> u64 {
   return f(V2(x = 30, y = 10), V2(x = 1, y = 1))
 }
+## expect: run 42

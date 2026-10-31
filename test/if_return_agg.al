@@ -16,3 +16,4 @@ main := fn() -> u64 {
   n := nm(true)             ## "hello" (len 5)
   s.a + s.b + t.0 + t.1 + r.0 + r.1 + n.len - 5   ## 32 + 8 + 2 + 5 - 5 = 42
 }
+## expect: run 42

@@ -13,3 +13,4 @@ main := fn() -> u64 {
   n := i8(-129)
   u64(unchecked bitcast(usize, i64(n)))
 }
+## expect: reject "type mismatch at line 13 in reject_neg_lit_range_ctor"

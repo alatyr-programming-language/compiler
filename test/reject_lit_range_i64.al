@@ -8,3 +8,4 @@ main := fn() -> i64 {
   x : i64 = 9223372036854775808
   return x
 }
+## expect: reject "at line 8"

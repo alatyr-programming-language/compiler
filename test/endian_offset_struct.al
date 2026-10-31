@@ -30,3 +30,4 @@ main := fn() -> u64 {
   if u64(x.wraw) != 1144201745 { return 5 }   ## 0x44332211 — swapped, read at byte 8
   return 42
 }
+## expect: run 42

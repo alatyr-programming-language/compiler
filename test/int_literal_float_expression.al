@@ -5,3 +5,4 @@ main := fn() -> u64 {
   if u64(y) != 9007199254740992 { return 2 }
   42
 }
+## expect: run 42

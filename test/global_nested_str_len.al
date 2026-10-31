@@ -5,3 +5,4 @@ Inner := struct { name : str, k : u64 }
 Q := struct { i : Inner, n : u64 }
 mut STATE := Q(i = Inner(name = "worldww", k = 0), n = 35)
 main := fn() -> u64 { return STATE.i.name.len + STATE.n }
+## expect: run 42

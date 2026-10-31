@@ -6,3 +6,5 @@ main := fn() -> u64 {
   deref(p).flag = true
   return deref(p).f + if deref(p).flag { 2 } else { 0 }
 }
+## expect: accept
+## expect(x86_64): run 42

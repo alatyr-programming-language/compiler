@@ -17,3 +17,4 @@ main := fn() -> u64 {
   if s != 606 { return 1 }
   return 42
 }
+## expect: reject "initialized local array literal whose element is a @packed struct"

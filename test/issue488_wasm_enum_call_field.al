@@ -152,3 +152,4 @@ main := fn() -> u64 {
   if r6 != 0 { return r6 }
   42
 }
+## expect: run 42

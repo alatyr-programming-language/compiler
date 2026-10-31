@@ -11,3 +11,4 @@ main := fn() -> u64 {
   s := Slice(P)(ptr = unchecked bitcast(ptr(P), 0), len = 0)
   return read(s)
 }
+## expect: reject "whose element is a @packed struct is not supported"

@@ -11,3 +11,4 @@ main := fn() -> u64 {
   mut j := 1
   s[j].y + s[0].x + s[0].y + s[1].x      ## 6 + 3 + 4 + 5 = 18
 }
+## expect: run 18

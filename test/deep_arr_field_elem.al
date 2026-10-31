@@ -16,3 +16,4 @@ main := fn() -> u64 {
     + xs[0].cell.pad
     + xs[1].tail)
 }
+## expect: run 86

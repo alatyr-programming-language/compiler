@@ -64,3 +64,4 @@ main := fn() -> u64 {
   r10 := gs[0](10.5)
   return r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9 + r10
 }
+## expect: run 100

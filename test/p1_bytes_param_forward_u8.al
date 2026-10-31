@@ -13,3 +13,5 @@ relay := fn() -> [u8; 4] {
 main := fn() -> u64 {
   u64(relay()[2])
 }
+## expect: accept
+## expect(x86_64): run 42

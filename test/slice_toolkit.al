@@ -40,3 +40,4 @@ main := fn() -> u64 {
   if cm::clamp(u64, 4, 0, 7) != 4 { return 14 }
   return 42
 }
+## expect: run 42

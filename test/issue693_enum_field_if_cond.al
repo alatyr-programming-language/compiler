@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if v.a == 0 { return 7 }
   42
 }
+## expect: reject "not through a field name at line 14 in issue693_enum_field_if_cond"

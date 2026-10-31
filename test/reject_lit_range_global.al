@@ -6,3 +6,4 @@ G : u8 = 300
 main := fn() -> i64 {
   return i64(G)
 }
+## expect: reject "at line 4"

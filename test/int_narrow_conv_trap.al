@@ -5,3 +5,4 @@
 ## (`test/int_narrow_conv.al`).
 f := fn(x : i64) -> i8 { i8(x) }
 main := fn() -> u64 { u64(i64(f(0 - 129)) + 1) }
+## expect: trap

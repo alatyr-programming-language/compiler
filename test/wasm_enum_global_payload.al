@@ -6,3 +6,4 @@ main := fn() -> u64 {
     Box::Full(v) => v
   }
 }
+## expect(wasm): run 42

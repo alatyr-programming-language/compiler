@@ -21,3 +21,4 @@ main := fn() -> u64 {
   r = r + 2                   ## 1 + 2 = 3
   return r
 }
+## expect: run 3

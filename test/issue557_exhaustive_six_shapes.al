@@ -21,3 +21,4 @@ main := fn() -> u64 {
   match p_call_src() { R => { total += 1 }; G => { total += 2 }; B => { total += 3 } }
   return total + 22
 }
+## expect: run 42

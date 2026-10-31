@@ -55,3 +55,4 @@ main := fn() -> u64 {
   z : u64 = match n { Some(v) => v; None => 39 }
   u + z
 }
+## expect: run 42

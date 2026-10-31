@@ -3,3 +3,4 @@ main := fn() -> u64 {
   xs : [u8; 0] = [0; 0]
   if xs.len == 0 { 42 } else { 1 }
 }
+## expect(x86_64): run 42

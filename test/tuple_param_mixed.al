@@ -14,3 +14,4 @@ main := fn() -> u64 {
   p := (12, Pt(x = 20, y = 10))
   return sum(p)
 }
+## expect: run 42

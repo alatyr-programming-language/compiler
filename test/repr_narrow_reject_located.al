@@ -9,3 +9,4 @@ main := fn() -> u64 {
   n := Narrow.V0
   match n { Narrow.V0 => { return 1 } _ => { return 2 } }
 }
+## expect: reject "at line 7"

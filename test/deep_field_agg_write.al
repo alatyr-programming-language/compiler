@@ -14,3 +14,4 @@ main := fn() -> u64 {
   o.mid.inner = Rec(a = 12, b = 30)     ## multi-word struct final field — ALL words delivered
   return u64(o.mid.inner.a + o.mid.inner.b)
 }
+## expect: run 42

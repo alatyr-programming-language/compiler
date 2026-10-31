@@ -12,3 +12,4 @@ psum := fn(xs : ...Pt) -> u64 {
 main := fn() -> u64 {
   return psum(Pt(a = 3, b = 3), Pt(a = 3, b = 3), Pt(a = 3, b = 3), Pt(a = 3, b = 3), Pt(a = 3, b = 3), Pt(a = 3, b = 3), Pt(a = 3, b = 3))
 }
+## expect: run 42

@@ -12,3 +12,4 @@ main := fn() -> u64 {
   outer.leaf.values[0] = Point(x = 7, y = 9)
   0
 }
+## expect: reject "type mismatch" "at line 12"

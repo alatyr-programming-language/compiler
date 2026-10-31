@@ -22,3 +22,4 @@ main := fn() -> u64 {
   c : u64 = h()
   return a + c
 }
+## expect: run 9

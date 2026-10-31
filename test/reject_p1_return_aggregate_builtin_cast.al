@@ -8,3 +8,4 @@ main := fn() -> u64 {
   bad(42)
   return 42
 }
+## expect: reject

@@ -5,3 +5,4 @@
 main := fn() -> u64 { return 42 }
 
 foo bar
+## expect: reject "expected `:=`" "at line 7" "at line 7 in reject_parse_expected_assign"

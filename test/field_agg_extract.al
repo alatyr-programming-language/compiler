@@ -11,3 +11,4 @@ main := fn() -> u64 {
   cc := b.c                                     ## enum-field extract
   return inner.v + inner.w + match cc { Col::R => { 0 }; Col::G(x) => { x } } + b.n
 }
+## expect: run 42

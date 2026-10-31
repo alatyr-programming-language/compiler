@@ -12,3 +12,4 @@ sum := fn(args : ...) -> u64 {
 main := fn() -> u64 {
   return sum(10, 20, 12)
 }
+## expect: run 42

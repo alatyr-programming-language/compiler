@@ -17,3 +17,4 @@ main := fn() -> u64 {
   if narrow_first.wide != 701 { return 6 }
   42
 }
+## expect: run 42

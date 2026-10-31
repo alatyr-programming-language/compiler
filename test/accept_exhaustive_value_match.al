@@ -2,3 +2,4 @@
 Opt := enum { None, Some(u64) }
 f := fn(o : Opt) -> u64 { return match o { None => { 0 }; Some(v) => { v } } }
 main := fn() -> u64 { return f(Opt.Some(42)) }
+## expect: run 42

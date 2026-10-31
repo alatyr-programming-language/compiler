@@ -4,3 +4,4 @@
 ## shared IR's `fit`). Before #881, x86_64 silently answered the reinterpreted -1294967296.
 f := fn(x : u32) -> i32 { i32(x) }
 main := fn() -> u64 { u64(unchecked u32(f(3000000000))) }
+## expect: trap

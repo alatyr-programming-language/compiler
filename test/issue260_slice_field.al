@@ -34,3 +34,4 @@ main := fn() -> u64 {
   if read_wide(wide_view) != 10 { return 98 }
   return 42
 }
+## expect(x86_64): run 42

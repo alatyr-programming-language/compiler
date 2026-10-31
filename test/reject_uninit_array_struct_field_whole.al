@@ -5,3 +5,4 @@ main := fn() -> u64 {
   ps[0].y = 0
   return ps[1].x
 }
+## expect: reject

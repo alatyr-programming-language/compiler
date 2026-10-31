@@ -5,3 +5,4 @@ main := fn() -> u64 {
   q := ps[0]
   return q.x
 }
+## expect: reject

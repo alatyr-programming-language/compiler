@@ -12,3 +12,4 @@ main := fn() -> u64 {
   if ok != 42 { return 1 }
   pick(3)
 }
+## expect: trap

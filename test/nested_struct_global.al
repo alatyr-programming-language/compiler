@@ -9,3 +9,4 @@ main := fn() -> u64 {
   s := O
   s.p.a + s.p.b + s.q
 }
+## expect: run 42

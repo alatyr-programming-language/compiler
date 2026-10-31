@@ -11,3 +11,4 @@ main := fn() -> u64 {
   arr[2] = q
   u64(arr[1].a + arr[1].b + arr[2].a + arr[2].b)   ## 5+25 + 8+4 = 42
 }
+## expect: run 42

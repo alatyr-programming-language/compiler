@@ -41,3 +41,4 @@ main := fn() -> u64 {
   if not expect_some(moved, 40) { return 7 }        ## last element now sits at slot 1
   return 42
 }
+## expect: run 42

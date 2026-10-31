@@ -44,3 +44,4 @@ main := fn() -> i64 {
   if s.b != 7 { return 6 }
   42
 }
+## expect: run 42

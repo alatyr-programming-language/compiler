@@ -14,3 +14,5 @@ take := fn(T : type, xs : T) -> u64 {
 main := fn() -> u64 {
   take([u8; 4], build())
 }
+## expect: accept
+## expect(x86_64): run 42

@@ -13,3 +13,4 @@ suml := fn() -> u64 {
   s
 }
 main := fn() -> u64 { suml() }
+## expect: run 42

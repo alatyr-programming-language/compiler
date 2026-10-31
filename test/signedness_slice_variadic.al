@@ -23,3 +23,4 @@ main := fn() -> u64 {
   i5 : i64 = 5
   check_u(u0, umax) + check_i(i17, i5)
 }
+## expect(x86_64): run 42

@@ -5,3 +5,4 @@ main := fn() -> u64 {
   a : [u8; 2] = [1, 300]
   return u64(a[1])
 }
+## expect: reject "type mismatch at line 5"

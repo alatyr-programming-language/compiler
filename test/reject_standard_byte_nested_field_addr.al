@@ -21,3 +21,4 @@ main := fn() -> u64 {
   if px == py { return 7 }
   42
 }
+## expect: reject "check: invalid" "at line 19"

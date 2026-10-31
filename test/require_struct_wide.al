@@ -8,3 +8,4 @@ main := fn() -> u64 {
   if x.h != 42 { return 1 }
   return tail(Checked(Wide(a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 7, h = 42)))
 }
+## expect(x86_64): run 42

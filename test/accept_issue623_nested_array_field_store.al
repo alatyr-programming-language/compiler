@@ -26,3 +26,6 @@ main := fn() -> u64 {
   if deep.mid.leaf.arr[0] != 1 { return 10 }
   outer.leaf.arr[0]
 }
+## expect(aarch64): run 42
+## expect(riscv64): run 42
+## expect(wasm): run 42

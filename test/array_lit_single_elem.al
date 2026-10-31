@@ -9,3 +9,4 @@ main := fn() -> u64 {
   s := S(words = [42])
   s.words[0]
 }
+## expect: run 42

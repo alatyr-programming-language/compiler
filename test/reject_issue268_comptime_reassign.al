@@ -3,3 +3,4 @@ main := fn() -> u64 {
   bad = 6
   return bad
 }
+## expect: reject "immutable binding"

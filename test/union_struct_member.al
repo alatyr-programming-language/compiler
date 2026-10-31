@@ -6,3 +6,4 @@ main := fn() -> u64 {
   u := U.p(Pair(x = 40, y = 2))
   return u.p.x + u.p.y
 }
+## expect: run 42

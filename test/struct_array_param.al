@@ -9,3 +9,4 @@ main := fn() -> u64 {
   arr := [P(x = 42, y = 0), P(x = 1, y = 1)]
   return g(arr, 0)
 }
+## expect: run 42

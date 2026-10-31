@@ -90,6 +90,78 @@ oracle_explains() { # path exit
   esac
 }
 
+# ## The `## expect:` directive (#1126)
+#
+# The machine-read statement of what the SPECIFICATION requires of a fixture — not of what any backend
+# does today. One line per scope, anywhere in the file (the migration appends it at the END, because a
+# line inserted above the code moves every `at line N` a diagnostic prints):
+#
+#   ## expect: run <N>               builds, and the process ends with status N (0..255, as `$?` reads it)
+#   ## expect: trap                  builds, and dies by the language's checked trap — status 132 on
+#                                    x86_64, 133 on aarch64 and riscv64, 134 on wasm
+#   ## expect: accept                a valid program: it builds; no run result is claimed
+#   ## expect: reject "<n>" ...      refused at compile time; each quoted needle (zero or more; `\"` and
+#                                    `\\` escape) must appear in the diagnostic
+#   ## expect(<backend>): <outcome>  the same, for one of x86_64 | aarch64 | riscv64 | wasm only. It
+#                                    states a result the spec leaves to the backend (hardware-defined
+#                                    `unchecked` division, an `@target` asm body) — never a defect;
+#                                    a defect is a known deviation, not an expectation
+#   ## spec: <citation>              optional; where the requirement is written (traceability only)
+#
+# A backend takes its scoped line, else the unscoped one, else the fixture states nothing for it. At
+# most one line per scope. A line that starts like a directive and does not parse is reported as
+# malformed, never skipped: a typo must not read as "states nothing". "Starts like a directive" is
+# EXPECT_TRIGGER, matched against the lower-cased line: any run of `#`, optional blanks, then the word
+# `expect` (so `## expect run 4`, `##expect: run 4` and `# Expect: trap` are all malformed, while
+# `## Expected exit: 42` — the legacy shape `oracle` reads — is a different word and is not a trigger).
+# Every reader of "does this file carry a directive" uses this one pattern.
+EXPECT_TRIGGER='^#+[[:space:]]*expect([^a-z0-9_]|$)'
+#
+# expect_scan <file>... -> one TSV row per directive, in ONE awk process:
+#   path  scope  outcome  needles  line
+# scope is `*` or a backend; outcome is `run:N`, `trap`, `accept` or `reject`; needles are joined by
+# the unit separator \037. A malformed line is the row `path  !  <reason>  <text>  line`.
+expect_scan() { # file...
+  awk -v US="$(printf '\037')" -v TRIG="$EXPECT_TRIGGER" '
+    function bad(why) { printf "%s\t!\t%s\t%s\t%d\n", FILENAME, why, $0, FNR }
+    tolower($0) ~ TRIG {
+      line = $0
+      if (!match(line, /^## expect(\((x86_64|aarch64|riscv64|wasm)\))?: +/)) { bad("not `## expect[(backend)]: <outcome>`"); next }
+      head = substr(line, 1, RLENGTH); rest = substr(line, RLENGTH + 1); sub(/[ \t]+$/, "", rest)
+      scope = "*"
+      if (match(head, /\((x86_64|aarch64|riscv64|wasm)\)/)) scope = substr(head, RSTART + 1, RLENGTH - 2)
+      if ((FILENAME SUBSEP scope) in seen) { bad("a second directive for scope " scope); next }
+      needles = ""
+      if (rest ~ /^run [0-9]+$/) {
+        n = substr(rest, 5) + 0
+        if (n > 255) { bad("a status is 0..255"); next }
+        out = "run:" n
+      } else if (rest == "trap" || rest == "accept") {
+        out = rest
+      } else if (rest ~ /^reject( |$)/) {
+        out = "reject"; s = substr(rest, 7); ok = 1
+        while (s != "") {
+          sub(/^ +/, "", s); if (s == "") break
+          if (substr(s, 1, 1) != "\"") { ok = 0; break }
+          s = substr(s, 2); nd = ""; closed = 0
+          while (s != "") {
+            c = substr(s, 1, 1)
+            if (c == "\\") { nd = nd substr(s, 2, 1); s = substr(s, 3); continue }
+            s = substr(s, 2)
+            if (c == "\"") { closed = 1; break }
+            nd = nd c
+          }
+          if (!closed || nd == "" || (s != "" && substr(s, 1, 1) != " ")) { ok = 0; break }
+          needles = needles (needles == "" ? "" : US) nd
+        }
+        if (!ok) { bad("a needle is a non-empty \"…\" string, space separated"); next }
+      } else { bad("unknown outcome (run N | trap | accept | reject \"…\")"); next }
+      seen[FILENAME SUBSEP scope] = 1
+      printf "%s\t%s\t%s\t%s\t%d\n", FILENAME, scope, out, needles, FNR
+    }' "$@"
+  return 0
+}
+
 # fixture_oracle_selftest — planted: the two declared shapes, a prose-only header, a filename that looks
 # like a declaration, and the trap that `oracle_explains` must not answer yes for a `reject` fixture.
 fixture_oracle_selftest() {

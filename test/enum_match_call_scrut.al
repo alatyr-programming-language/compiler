@@ -41,3 +41,4 @@ three := fn(x : u64) -> u64 {
 main := fn() -> u64 {
   return two(10) + three(4)
 }
+## expect: run 50

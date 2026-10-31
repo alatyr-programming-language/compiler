@@ -5,3 +5,4 @@ B := struct { y : u64 }
 takesA := fn(p : ptr(mut A)) -> u64 { return deref(p).x }
 useB := fn(q : ptr(mut B)) -> u64 { return takesA(q) }
 main := fn() -> u64 { return useB(unchecked bitcast(ptr(mut B), 0)) }
+## expect: reject

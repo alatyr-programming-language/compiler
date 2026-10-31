@@ -10,3 +10,4 @@ f := fn(v : u8) -> i64 {
 main := fn() -> i64 {
   return f(300)
 }
+## expect: reject "at line 10"

@@ -3,3 +3,4 @@ main := fn() -> u64 {
   mut x : usize = "nope"
   return u64(x)
 }
+## expect: reject "at line 3"

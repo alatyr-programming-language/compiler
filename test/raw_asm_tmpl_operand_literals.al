@@ -10,3 +10,4 @@ main := fn() -> u64 {
   asm("syscall")
   0
 }
+## expect(x86_64): run 42

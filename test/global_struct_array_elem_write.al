@@ -9,3 +9,4 @@ main := fn() -> u64 {
   ARR[i] = Pt(x = 40, y = 1)
   ARR[i].x + ARR[i].y + ARR[1].x
 }
+## expect: run 42

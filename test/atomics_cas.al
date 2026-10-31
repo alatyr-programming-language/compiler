@@ -14,3 +14,4 @@ main := fn() -> u64 {
   z := atomic::load(p, Ordering.acquire)
   z + r.1 + s.1 - t.1
 }
+## expect: run 42

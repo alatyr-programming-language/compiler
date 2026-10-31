@@ -11,3 +11,4 @@ word := fn(n : usize) -> u64 {
   return 0
 }
 main := fn() -> u64 { return wide(3) + word(7) }
+## expect: accept

@@ -7,3 +7,4 @@ main := fn() -> u64 {
   x := Checked(Pair(lo = 0, hi = 2))
   return 42
 }
+## expect(x86_64): trap

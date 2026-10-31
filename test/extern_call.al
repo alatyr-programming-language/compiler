@@ -11,3 +11,6 @@ consumer := @extern("shared_impl") fn() -> u64
 main := fn() -> u64 {
   return consumer()
 }
+## expect(x86_64): run 42
+## expect(aarch64): run 42
+## expect(riscv64): run 42

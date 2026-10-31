@@ -33,3 +33,4 @@ main := fn() -> u64 {
   r = r + 16                                          ## 1 + 2 + 4 + 8 + 16 = 31
   return r
 }
+## expect: run 31

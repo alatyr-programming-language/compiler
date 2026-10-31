@@ -8,3 +8,4 @@ main := fn() -> u64 {
   v := Big(42)
   return v.a
 }
+## expect: run 42

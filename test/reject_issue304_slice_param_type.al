@@ -9,3 +9,4 @@ main := fn() -> u64 {
   write(s)
   0
 }
+## expect: reject "type mismatch" "at line 3"

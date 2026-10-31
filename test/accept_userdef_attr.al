@@ -13,3 +13,4 @@ X : i64 = 42
 main := fn() -> i64 {
   return X
 }
+## expect: accept

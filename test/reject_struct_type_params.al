@@ -8,3 +8,4 @@ Box := struct(T : type) { v : T }
 main := fn() -> u64 {
   return 7
 }
+## expect: reject "at line 7"

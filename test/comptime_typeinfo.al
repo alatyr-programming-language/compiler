@@ -19,3 +19,4 @@ main := fn() -> u64 {
   s : u64 = 42
   pick(u64, s) + pick(Pt, Pt(x = 1, y = 2)) - 100
 }
+## expect: run 42

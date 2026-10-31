@@ -37,3 +37,4 @@ main := fn() -> u64 {
   if param.a != 70 or param.b != 80 or param.c != 90 { return 6 }
   ps + (after.a - 39) + (after.b - 49) + (after.c - 59)
 }
+## expect: run 13

@@ -28,3 +28,4 @@ main := fn() -> u64 {
   if u64(o.val) != 100 { return 5 }         ## the scalar PAST the nested struct, at byte 24
   return 42
 }
+## expect(x86_64): run 42

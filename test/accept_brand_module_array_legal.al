@@ -30,3 +30,4 @@ main := fn() -> u64 {
   if u64(g[0]) + u64(g[1]) != 3 { return 1 }
   return 42
 }
+## expect: run 42

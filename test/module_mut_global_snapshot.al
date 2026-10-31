@@ -10,3 +10,4 @@ main := fn() -> u64 {
   STATE.x = 999
   p.x + p.y
 }
+## expect: run 42

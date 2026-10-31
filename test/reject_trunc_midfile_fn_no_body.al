@@ -17,3 +17,4 @@ BROKEN := fn() ->
 main := fn() -> u64 {
   42
 }
+## expect: reject "must be followed by a braced BODY"

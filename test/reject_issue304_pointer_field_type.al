@@ -5,3 +5,4 @@ main := fn() -> u64 {
   deref(p).f = "text"
   return deref(p).f
 }
+## expect: reject "type mismatch" "at line 5"

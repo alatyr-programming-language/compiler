@@ -13,3 +13,4 @@ sumfrom := fn(base : u64, xs : ...u64) -> u64 {
 main := fn() -> u64 {
   return sumfrom(2, 10, 20, 10)
 }
+## expect(x86_64): run 42

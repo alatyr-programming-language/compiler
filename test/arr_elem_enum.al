@@ -11,3 +11,4 @@ main := fn() -> u64 {
   match arr[2] { Option::Some(v) => { s = s + v } Option::None => { s = s + 0 } }
   u64(s)                                 ## 30 + 12 = 42
 }
+## expect: run 42

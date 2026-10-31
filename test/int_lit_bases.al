@@ -22,3 +22,4 @@ main := fn() -> u64 {
   if 0x20 != 32 { return 15 }
   return 42
 }
+## expect: run 42

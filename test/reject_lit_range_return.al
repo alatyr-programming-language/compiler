@@ -9,3 +9,4 @@ g := fn() -> u8 {
 main := fn() -> i64 {
   return i64(g())
 }
+## expect: reject "at line 5"

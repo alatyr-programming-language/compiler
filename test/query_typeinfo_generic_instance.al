@@ -23,3 +23,4 @@ main := fn() -> u64 {
   v := Mixed(scalar = 40, pair = Pair(x = 1, y = 2), text = "ignored")
   query_fields(Mixed, v)
 }
+## expect: run 42

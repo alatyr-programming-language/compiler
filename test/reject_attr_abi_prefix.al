@@ -10,3 +10,4 @@ w := fn(nr : u64, fd : u64) -> i64
 main := fn() -> u64 {
   return 3
 }
+## expect: reject

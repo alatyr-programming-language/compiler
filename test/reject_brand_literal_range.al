@@ -5,3 +5,4 @@ main := fn() -> u64 {
   n : N = 300
   return u64(n)
 }
+## expect: reject "at line 5"

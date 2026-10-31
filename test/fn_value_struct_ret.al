@@ -34,3 +34,4 @@ main := fn() -> u64 {
   w := wide_via_param(mkw, 7)
   return (p.x + p.y) + (s.a + s.e + s.g) + w
 }
+## expect: run 42

@@ -5,3 +5,4 @@ main := fn() -> u64 {
   p.xs[0].v = 42
   return p.xs[1].v
 }
+## expect: reject

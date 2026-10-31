@@ -66,3 +66,4 @@ main := fn() -> u64 {
   if acc != 1 + 2 + 3 + 9 + 5 + 6 { return 20 }
   42
 }
+## expect: run 42

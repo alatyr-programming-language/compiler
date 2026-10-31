@@ -8,3 +8,4 @@ main := fn() -> u64 {
   std::fmt::print("tag: {}\n", "X")
   42
 }
+## expect: run 42

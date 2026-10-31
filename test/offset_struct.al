@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if u64(r.tail) != 9 { return 4 }
   return u64(r.hi)
 }
+## expect(x86_64): run 42

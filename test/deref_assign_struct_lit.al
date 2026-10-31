@@ -15,3 +15,4 @@ main := fn() -> u64 {
   deref(p) = Pt(x = 30, y = 12)
   readpt(p)
 }
+## expect(x86_64): run 42

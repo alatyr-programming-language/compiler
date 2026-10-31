@@ -24,3 +24,4 @@ main := fn() -> u64 {
   y := alloc::vec::at(Rec, ptr(v), 1)
   return x.a + x.b + y.a + y.b
 }
+## expect: run 42

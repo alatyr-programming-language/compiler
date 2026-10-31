@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if rank(AllocError.SizeTooLarge) != 4 { return 102 }
   return 42
 }
+## expect: run 42

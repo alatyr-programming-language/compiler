@@ -12,3 +12,4 @@ main := fn() -> u64 {
   o := Ops(op = fn(x : u64) -> u64 { return x + k })
   return o.op(2)
 }
+## expect: reject "type mismatch" "at line 12"

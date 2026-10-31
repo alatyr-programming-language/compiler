@@ -5,3 +5,4 @@ takes_one := fn(value : u64) -> u64 {
 main := fn() -> u64 {
   return takes_one()
 }
+## expect: reject

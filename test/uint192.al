@@ -18,3 +18,4 @@ main := fn() -> u64 {
   y.words[0] = y.words[0] - 7                     ## net 0 — keeps the sum at 42
   x.words[0] + x.words[1] + y.words[0] + y.words[1]
 }
+## expect: run 42

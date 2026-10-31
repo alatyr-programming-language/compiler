@@ -20,3 +20,4 @@ main := fn() -> u64 {
   n := pass(u64, 32)
   return total + n
 }
+## expect: run 42

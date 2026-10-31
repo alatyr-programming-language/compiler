@@ -2,3 +2,4 @@ main := fn() -> u64 {
   xs : [u64; 2] = [18446744073709551615 + 1, 0]
   return xs[0]
 }
+## expect: reject "comptime overflow" "at line 2" "comptime overflow at line 2"

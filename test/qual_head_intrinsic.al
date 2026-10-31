@@ -12,3 +12,5 @@ main := fn() -> u64 {
   w := volatile::load(ptr(cell))
   v + w - 54
 }
+## expect: accept
+## expect(x86_64): run 66

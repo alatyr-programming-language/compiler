@@ -5,3 +5,4 @@ main := fn() -> u64 {
   o.i.v = 40
   return o.i.v + o.k
 }
+## expect(wasm): run 42

@@ -3,3 +3,4 @@
 ## exactly as a normal global (the section directive only changes placement). Returns X = 42.
 @section(".mydata") mut X := 42
 main := fn() -> u64 { X }
+## expect: run 42

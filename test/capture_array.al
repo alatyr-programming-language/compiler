@@ -9,3 +9,4 @@ main := fn() -> u64 {
   g := fn(v : u64) -> u64 { return v + arr[0] }
   return apply(g, 32)
 }
+## expect: run 42

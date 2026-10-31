@@ -84,3 +84,4 @@ main := fn() -> u64 {
   if rebound_sub_mul() != want { return 4 }
   return 42
 }
+## expect: run 42

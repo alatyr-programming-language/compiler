@@ -26,3 +26,4 @@ main := fn() -> u64 {
   if shadowed != 9 { return 2 }
   return carried
 }
+## expect: run 42

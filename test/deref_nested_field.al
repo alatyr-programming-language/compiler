@@ -9,3 +9,4 @@ main := fn() -> u64 {
   p := ptr(mut a)
   u64(deref(p).pa + deref(p).b.pb + deref(p).b.c.cx + deref(p).b.c.cy + deref(p).tail)
 }
+## expect: run 75

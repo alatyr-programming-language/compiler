@@ -12,3 +12,4 @@ main := fn() -> u64 {
   om := o.map(mk)
   match om { Option::Some(p) => { return p.x + p.y } Option::None => { return 7 } }
 }
+## expect: run 42

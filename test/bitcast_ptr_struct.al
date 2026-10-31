@@ -15,3 +15,4 @@ main := fn() -> u64 {
   p.y = 2
   p.x + p.y
 }
+## expect: run 42

@@ -5,3 +5,4 @@ answer := fn() -> u64 {
 main := fn() -> u64 {
   answer()
 }
+## expect: run 42

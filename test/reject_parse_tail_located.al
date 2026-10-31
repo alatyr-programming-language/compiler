@@ -19,3 +19,4 @@ main := fn() -> u64 {
   42
 }
 x := 1,
+## expect: reject "at line 21 in reject_parse_tail_located"

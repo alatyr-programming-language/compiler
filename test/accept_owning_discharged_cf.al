@@ -6,3 +6,4 @@ main := fn() -> u64 {
   if r > 0 { forget(h) } else { forget(h) }
   0
 }
+## expect: accept

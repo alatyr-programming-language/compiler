@@ -38,3 +38,4 @@ bad_option_payload_local := fn() -> u64 {
 main := fn() -> u64 {
   return 42
 }
+## expect: reject "type mismatch"

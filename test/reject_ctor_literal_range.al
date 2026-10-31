@@ -7,3 +7,4 @@ main := fn() -> u64 {
   n : u8 = u8(300)
   u64(n)
 }
+## expect: reject "type mismatch at line 7 in reject_ctor_literal_range"

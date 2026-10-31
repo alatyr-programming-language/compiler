@@ -35,3 +35,4 @@ main := fn() -> u64 {
   t = t + "ab".tack(2)          ## +4         → 42
   return t
 }
+## expect: run 42

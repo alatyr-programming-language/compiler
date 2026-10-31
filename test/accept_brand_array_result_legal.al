@@ -28,3 +28,4 @@ main := fn() -> u64 {
   xs : [A; 2] = [A(5), A(3)]
   return u64(a) + u64(xs[0]) + u64(xs[1])
 }
+## expect: run 17

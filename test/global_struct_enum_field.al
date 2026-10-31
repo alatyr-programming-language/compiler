@@ -8,3 +8,4 @@ mut STATE := S(c = Col.G(40), n = 2)
 main := fn() -> u64 {
   return match STATE.c { Col::R => { 0 }; Col::G(v) => { v }; Col::B => { 1 } } + STATE.n
 }
+## expect: run 42

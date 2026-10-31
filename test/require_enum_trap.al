@@ -13,3 +13,4 @@ main := fn() -> u64 {
   x := Checked(Pair.Bad)
   return 42
 }
+## expect(x86_64): trap

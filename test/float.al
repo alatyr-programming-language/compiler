@@ -14,3 +14,4 @@ main := fn() -> u64 {
   q : f64 = n / b
   return u64(s) + u64(q) + u64(a - b)
 }
+## expect: run 13

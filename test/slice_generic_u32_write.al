@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if readw(u32, s, 1) != 99 { return 5 }
   return 42
 }
+## expect(riscv64): run 42

@@ -57,3 +57,7 @@ main := fn() -> u64 {
   if r != 0 { return r }
   42
 }
+## expect(x86_64): run 42
+## expect(aarch64): run 42
+## expect(riscv64): trap
+## expect(wasm): trap

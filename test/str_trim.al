@@ -11,3 +11,4 @@ main := fn() -> u64 {
   if a == "hello" and b.len == 2 and c == "z" and d.len == 0 and e == "nows" { return 42 }
   return 7
 }
+## expect: run 42

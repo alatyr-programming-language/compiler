@@ -34,3 +34,4 @@ main := fn() -> u64 {
   if arena_over(6) != 7 { return 103 }
   return 42
 }
+## expect: run 42

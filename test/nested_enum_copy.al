@@ -15,3 +15,4 @@ main := fn() -> u64 {
     Outer::Empty => { return 2 }
   }
 }
+## expect: run 42

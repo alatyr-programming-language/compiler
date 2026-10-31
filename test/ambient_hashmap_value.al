@@ -20,3 +20,4 @@ main := fn() -> u64 {
     Option::None => { 1 }
   }
 }
+## expect: run 42

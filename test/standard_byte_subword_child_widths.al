@@ -61,3 +61,4 @@ main := fn() -> u64 {
   if sg.inner.c != 0 - 70000 { return 24 }
   42
 }
+## expect: run 42

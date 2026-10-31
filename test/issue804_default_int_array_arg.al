@@ -7,3 +7,4 @@ main := fn() -> u64 {
   a := [1, 7]
   return f(a)
 }
+## expect: reject "type mismatch at line 8"

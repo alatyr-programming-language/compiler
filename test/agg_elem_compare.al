@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if xs[i] == ys[0] { acc = acc + 12 }                         ## equal values, different roots -> +12
   return acc
 }
+## expect: run 42

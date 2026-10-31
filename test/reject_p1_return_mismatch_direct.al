@@ -4,3 +4,4 @@ make := fn() -> str { return "wrong" }
 main := fn() -> u64 {
   return make()
 }
+## expect: reject

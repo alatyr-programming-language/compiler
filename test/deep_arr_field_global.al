@@ -14,3 +14,4 @@ main := fn() -> u64 {
     + TAB[0].cell.pad
     + TAB[1].cell.pad)
 }
+## expect: run 85

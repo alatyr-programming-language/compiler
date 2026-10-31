@@ -44,3 +44,4 @@ main := fn() -> u64 {
   if sl_ne(a, d) { acc = acc + 3 } else { acc = acc + 100 }   ## `!=` through params    -> +3
   return acc
 }
+## expect: run 42

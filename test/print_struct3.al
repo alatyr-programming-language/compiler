@@ -10,3 +10,4 @@ main := fn() -> u64 {
   std::fmt::print("rec {}\n", r)
   42
 }
+## expect: run 42

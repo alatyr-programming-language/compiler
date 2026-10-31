@@ -28,3 +28,4 @@ main := fn() -> u64 {
   s.x = b
   return u64(s.x)
 }
+## expect: reject "implicit brand conversion"

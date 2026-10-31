@@ -45,3 +45,4 @@ main := fn() -> u64 {
   if acmp(m, n) { acc = acc + 5 }                        ## by-ref array PARAMS     -> +5
   return acc
 }
+## expect: run 42

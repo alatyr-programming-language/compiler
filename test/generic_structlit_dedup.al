@@ -19,3 +19,4 @@ main := fn() -> u64 {
   y := g(W, W(v = 2))
   return x + y
 }
+## expect: run 42

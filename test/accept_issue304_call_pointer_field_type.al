@@ -7,3 +7,5 @@ main := fn() -> u64 {
   deref(same(ptr(s))).flag = true
   return deref(q).f + if deref(q).flag { 2 } else { 0 }
 }
+## expect: accept
+## expect(x86_64): run 42

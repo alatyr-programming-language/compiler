@@ -17,3 +17,4 @@ sum_fields := fn(T : type, value : T) -> u64 {
 }
 
 main := fn() -> u64 { sum_fields(S, S(wide = 40, narrow = 2)) }
+## expect: run 42

@@ -31,3 +31,4 @@ main := fn() -> u64 {
   if (match ok_of(arg) { Result::Ok(q) => { q.k1 } Result::Err(e) => { 0 } }) != 11 { return 8 }
   42
 }
+## expect: run 42

@@ -22,3 +22,4 @@ main := fn() -> u64 {
   u = 1
   return 0
 }
+## expect: reject "unbound name" "at line 21" "unbound name at line 21 in issue523_defer_real_span"

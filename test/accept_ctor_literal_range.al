@@ -30,3 +30,4 @@ main := fn() -> u64 {
   if i64(unchecked i8(s)) != 0 - 56 { return 22 }
   42
 }
+## expect: run 42

@@ -13,3 +13,4 @@ main := fn() -> u64 {
   setit(ptr(mut o), Inner(v = 30, w = 9))     ## by-ref struct param written through a pointer
   o.i.v + o.i.w + o.t                          ## 30 + 9 + 3 = 42 (both field words + neighbour intact)
 }
+## expect(x86_64): run 42

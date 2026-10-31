@@ -15,3 +15,4 @@ sum2 := fn(a : V2, b : V2) -> u64 {
 main := fn() -> u64 {
   return sum2(V2(x = 20, y = 10), mk(V2(x = 5, y = 5)))
 }
+## expect: run 42

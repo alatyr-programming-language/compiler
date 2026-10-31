@@ -119,3 +119,4 @@ main := fn() -> u64 {
   if reordered(Tag.Blue) != 33 { return 83 }
   42
 }
+## expect(x86_64): run 42

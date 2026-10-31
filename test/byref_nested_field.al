@@ -9,3 +9,4 @@ main := fn() -> u64 {
   a := A(pa = 11, b = B(pb = 22, c = C(cx = 5, cy = 30)), tail = 7)
   u64(readsum(a))
 }
+## expect: run 75

@@ -6,3 +6,4 @@ main := fn() -> u64 {
   x := NonZeroI(0)
   return 42
 }
+## expect(x86_64): trap

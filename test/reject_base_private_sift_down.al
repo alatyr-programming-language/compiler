@@ -12,3 +12,4 @@ main := fn() -> u64 {
   base::slice::sift_down(u64, s, 3, 0)
   42
 }
+## expect: reject "check: invalid" "at line 12"

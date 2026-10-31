@@ -7,3 +7,4 @@ main := fn() -> u64 {
   if G { return N + K.len() }
   return 0
 }
+## expect: run 9

@@ -16,3 +16,4 @@ main := fn() -> u64 {
   ok : bool = 1
   return 0
 }
+## expect: reject "alatyr: check: type mismatch at line 16 in reject_emit_surface_type_mismatch"

@@ -9,3 +9,4 @@ main := fn() -> u64 {
   if not (mm::abs(mm::exp(0.0 - 2.0) - 0.1353352832366127) < eps) { return 3 }
   return 42
 }
+## expect: run 42

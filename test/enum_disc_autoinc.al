@@ -13,3 +13,4 @@ main := fn() -> u64 {
   if td == 21 { acc = acc + 21 }
   acc
 }
+## expect(x86_64): run 42

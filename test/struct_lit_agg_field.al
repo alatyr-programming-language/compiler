@@ -22,3 +22,4 @@ main := fn() -> u64 {
 
   return a + c                                    ## 15 + 27 = 42
 }
+## expect: run 42

@@ -18,3 +18,4 @@ main := fn() -> u64 {
   mut a := Node(val = 10, next = ptr(b))
   return sum(ptr(a))
 }
+## expect: run 42

@@ -10,3 +10,4 @@ main := fn() -> u64 {
   n := a.next
   return deref(n).val + a.val
 }
+## expect: run 42

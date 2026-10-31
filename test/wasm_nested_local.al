@@ -11,3 +11,6 @@ sum_step := fn(n : u64) -> u64 {
   return acc
 }
 main := fn() -> u64 { return sum_step(9) }
+## expect(aarch64): run 45
+## expect(riscv64): run 45
+## expect(wasm): run 45

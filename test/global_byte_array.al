@@ -16,3 +16,4 @@ main := fn() -> u64 {
   ok = ok and IG[0] < 0 and IG[1] == 2 and BG[1] == 6
   if ok { 42 } else { 1 }
 }
+## expect(x86_64): run 42

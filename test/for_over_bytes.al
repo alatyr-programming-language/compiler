@@ -9,3 +9,4 @@ main := fn() -> u64 {
   for c in bytes("hello") { s = s + u64(c) }
   s - 490
 }
+## expect: run 42

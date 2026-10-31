@@ -2,3 +2,4 @@
 ## list, is refused; the unapplied name is located at the `Result` itself.
 N := struct { p : ptr(Result), v : u64 }
 main := fn() -> u64 { 0 }
+## expect: reject "type function `Result` is not a type until it is applied" "at line 3 in issue857_unapplied_result"

@@ -53,3 +53,4 @@ main := fn() -> u64 {
   if r3 != 12 { return 3 }
   r1 + r2 + r3 + r4 + 17
 }
+## expect: run 42

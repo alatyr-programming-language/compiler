@@ -13,3 +13,4 @@ main := fn() -> u64 {
   }
   exact + wildcard
 }
+## expect: run 42

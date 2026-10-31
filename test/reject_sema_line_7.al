@@ -6,3 +6,4 @@ main := fn() -> u64 {
   x = x + 1
   return zzz + x
 }
+## expect: reject "check: invalid at line 7 in reject_sema_line_7"

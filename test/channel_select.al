@@ -45,3 +45,4 @@ main := fn() -> u64 {
   if sum == 42 { return 42 }
   return 1
 }
+## expect: run 42

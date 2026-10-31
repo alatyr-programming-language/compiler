@@ -9,3 +9,4 @@ main := fn() -> u64 {
   xs[1] = S(pad = 8, arr = [40, 50, 60])
   u64(xs[0].arr[0] + xs[0].arr[1] + xs[0].arr[2] + xs[1].arr[1])
 }
+## expect: run 110

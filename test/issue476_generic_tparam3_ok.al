@@ -34,3 +34,4 @@ pick3 := fn(A : type, B : type, C : type, a : A, b : B, c : C) -> u64 {
 main := fn() -> u64 {
   return pick3(u64, u64, u64, 12, 20, 10)
 }
+## expect: run 42

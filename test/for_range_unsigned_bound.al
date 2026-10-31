@@ -18,3 +18,4 @@ main := fn() -> u64 {
 
   from_for * 40 + from_while * 2
 }
+## expect: run 42

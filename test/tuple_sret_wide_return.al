@@ -30,3 +30,4 @@ main := fn() -> u64 {
   v := mk7(3)
   return u64(t.0 + t.7 + t.9) + u64(u.0 + u.8 + u.9) + u64(v.0 + v.6)
 }
+## expect: run 54

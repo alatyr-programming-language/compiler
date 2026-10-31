@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if cap_of(a) != 7 { return 100 }
   return 42
 }
+## expect: run 42

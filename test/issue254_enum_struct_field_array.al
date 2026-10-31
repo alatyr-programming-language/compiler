@@ -159,3 +159,4 @@ main := fn() -> u64 {
   if global_args() != 25 { return 7 }
   return 42
 }
+## expect(x86_64): run 42

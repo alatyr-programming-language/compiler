@@ -6,3 +6,4 @@ main := fn() -> u64 {
   b := match 9 { 1 | 2 | 3 => 99 ; _ => 2 }
   return a + b
 }
+## expect: run 42

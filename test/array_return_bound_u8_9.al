@@ -10,3 +10,5 @@ main := fn() -> u64 {
   r := build()
   u64(r[k])
 }
+## expect: accept
+## expect(x86_64): run 42

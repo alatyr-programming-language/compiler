@@ -3,3 +3,4 @@ main := fn() -> u64 {
   if u64(x) != 16777216 { return 1 }
   42
 }
+## expect: accept

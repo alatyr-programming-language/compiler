@@ -28,3 +28,4 @@ main := fn() -> u64 {
   if bad == 0 { return 42 }
   bad
 }
+## expect(x86_64): run 42

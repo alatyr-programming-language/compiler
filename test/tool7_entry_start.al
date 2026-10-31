@@ -16,3 +16,4 @@ _start := fn() {
 own_entry := fn() -> Result(usize, str) {
   return Result.Ok(0)
 }
+## expect(x86_64): run 42

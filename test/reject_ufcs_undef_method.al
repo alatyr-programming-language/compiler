@@ -8,3 +8,4 @@ main := fn() -> u64 {
   v := V(n = 1)
   v.nosuchmethod(1)
 }
+## expect: reject "at line 9"

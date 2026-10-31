@@ -35,3 +35,4 @@ main := fn() -> u64 {
   if sret9() != 15 { return 5 }
   42
 }
+## expect: run 42

@@ -83,3 +83,4 @@ main := fn() -> u64 {
   if q.x + q.y != 7 { return 11 }
   return 42
 }
+## expect: run 42

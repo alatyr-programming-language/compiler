@@ -7,3 +7,4 @@ keep_result := fn(value : Result(u64, u64)) -> u64 {
   }
 }
 main := fn() -> u64 { return keep_result(make_result()) }
+## expect: run 42

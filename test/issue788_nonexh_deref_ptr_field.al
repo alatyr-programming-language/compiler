@@ -10,3 +10,4 @@ main := fn() -> u64 {
   h := H(t = C.B)
   return f(ptr(h))
 }
+## expect: reject "type mismatch at line 6"

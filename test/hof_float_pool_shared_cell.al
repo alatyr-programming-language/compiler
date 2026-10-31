@@ -35,3 +35,4 @@ main := fn() -> u64 {
   f := fn(n : u64) -> u64 { return n + c }
   return scale(f, 10)
 }
+## expect: run 42

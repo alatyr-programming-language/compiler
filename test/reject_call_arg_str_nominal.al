@@ -7,3 +7,4 @@ S := struct { a : u64 }
 f := fn(s : S) -> u64 { return s.a }
 
 main := fn() -> u64 { return f("nope") }
+## expect: reject "at line 9"

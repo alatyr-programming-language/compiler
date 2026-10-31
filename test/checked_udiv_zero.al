@@ -7,3 +7,4 @@
 ## The divisor arrives as a runtime parameter, so no backend can constant-fold the guard away.
 divide := fn(a : u64, b : u64) -> u64 { return a / b }
 main := fn() -> u64 { return divide(42, 0) }
+## expect: trap

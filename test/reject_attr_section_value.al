@@ -7,3 +7,4 @@
 ## directive was ever emitted. `readelf -S` showed no `.mydata`; nothing said why.
 mut X := @section(".mydata") 42
 main := fn() -> u64 { X }
+## expect: reject

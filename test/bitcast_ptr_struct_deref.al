@@ -19,3 +19,4 @@ main := fn() -> u64 {
 
   if s1 == 42 and s2 == 130 { u64(42) } else { u64(0) }
 }
+## expect: run 42

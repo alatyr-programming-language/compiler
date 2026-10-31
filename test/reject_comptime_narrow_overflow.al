@@ -7,3 +7,4 @@ K : u8 = 200 + 100
 main := fn() -> i64 {
   return i64(K)
 }
+## expect: reject "comptime overflow" "at line 5"

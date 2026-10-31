@@ -8,3 +8,4 @@ main := fn() -> u64 {
   w := v
   return w.len + 37
 }
+## expect: run 42

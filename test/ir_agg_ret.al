@@ -48,3 +48,4 @@ main := fn() -> u64 {
   if r.x != 3 or r.y != 4 { return 7 }
   42
 }
+## expect: run 42

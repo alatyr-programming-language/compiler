@@ -5,3 +5,4 @@ main := fn() -> u64 {
   x86_64::movq(rax, 60)
   return 0
 }
+## expect: reject

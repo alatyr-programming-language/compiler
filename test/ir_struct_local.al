@@ -31,3 +31,4 @@ main := fn() -> u64 {
   if s == 13 and v == 31 { return 42 }
   1
 }
+## expect: run 42

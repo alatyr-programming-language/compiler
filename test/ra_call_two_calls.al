@@ -10,3 +10,4 @@ main := fn() -> u64 {
   y := add(1, 1)
   keep + x + y
 }
+## expect(x86_64): run 42

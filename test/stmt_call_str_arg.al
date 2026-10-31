@@ -33,3 +33,4 @@ main := fn() -> u64 {
   k := io::print("V\n")   ## value position: the path that already worked
   return CNT + 38
 }
+## expect: run 42

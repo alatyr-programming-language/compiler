@@ -20,3 +20,4 @@ main := fn() -> u64 {
   if read_index(s, 2) != 5 { return 1 }
   sum_u8(s, 100)
 }
+## expect: run 17

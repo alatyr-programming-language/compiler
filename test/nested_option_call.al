@@ -17,3 +17,4 @@ main := fn() -> u64 {
     Option::None => { return 7 }
   }
 }
+## expect: run 42

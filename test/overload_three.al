@@ -12,3 +12,4 @@ main := fn() -> u64 {
   b := B(v = 2)
   return h(1, a) + h(1, b) + h(2, 10)
 }
+## expect: run 42

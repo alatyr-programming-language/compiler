@@ -2,3 +2,4 @@
 ## well-formed first field keeps the diagnostic on the second one.
 N := struct { v : u64, o : Option }
 main := fn() -> u64 { 0 }
+## expect: reject "type function `Option` is not a type until it is applied" "at line 3 in issue857_unapplied_field"

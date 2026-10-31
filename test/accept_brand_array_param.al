@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if take([A(2), A(4)]) != 42 { return 3 }
   return sum([40, 2])
 }
+## expect: run 42

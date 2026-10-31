@@ -18,3 +18,4 @@ main := fn() -> u64 {
     Third(z) => { return z + 30 }
   }
 }
+## expect: run 42

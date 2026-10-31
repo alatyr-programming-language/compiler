@@ -40,3 +40,4 @@ main := fn() -> u64 {
   p := get(u64, ar, h)
   return u64(deref(ps)) + deref(p)
 }
+## expect: reject "check: invalid" "at line 39"

@@ -7,3 +7,4 @@ take := fn(v : u64) -> u64 {
 main := fn() -> u64 {
   return take(18446744073709551615 + 1)
 }
+## expect: reject "comptime overflow" "at line 8" "comptime overflow at line 8"

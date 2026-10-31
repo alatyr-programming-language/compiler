@@ -37,3 +37,4 @@ main := fn() -> u64 {
   if size(u8) != 1 { return 12 }
   return 42
 }
+## expect: run 42

@@ -14,3 +14,4 @@ outer := fn(s : Rec) -> u64 {
 main := fn() -> u64 {
   return outer(Rec(a = 12, b = 30))
 }
+## expect: run 42

@@ -7,3 +7,5 @@ main := fn() -> u64 {
   mut i : usize = 2
   u64(d[i])
 }
+## expect: accept
+## expect(x86_64): run 42

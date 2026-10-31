@@ -35,3 +35,4 @@ main := fn() -> u64 {
   match big { 9 => { total += 6 }; _ => { total += 100 } }
   return total
 }
+## expect: run 42

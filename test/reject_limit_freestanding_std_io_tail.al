@@ -6,3 +6,4 @@ main := fn() -> u64 {
   emit()
   42
 }
+## expect: reject "@limits(freestanding) violation" "at line 4"

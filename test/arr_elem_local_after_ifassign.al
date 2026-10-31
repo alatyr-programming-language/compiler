@@ -17,3 +17,4 @@ main := fn() -> u64 {
   if ps[0].x != 5 { return 2 }           ## the whole-element write landed on word 0 too
   t.x + t.y + u                          ## 3 + 40 + 6 = 49
 }
+## expect: run 49

@@ -7,3 +7,4 @@ g := fn(T : type, x : T, f : fn(y : T) -> T) -> T { return f(x) }
 main := fn() -> u64 {
   u64(g(u64, 41, add1))
 }
+## expect: run 42

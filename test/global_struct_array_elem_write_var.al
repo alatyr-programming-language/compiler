@@ -33,3 +33,4 @@ main := fn() -> u64 {
   if r.z != 12 { return 11 }
   GS[0].x + GS[0].y + GS[0].z + GS[2].x + GS[2].y + GS[2].z - 30    ## 93 + 33 - 30 = 96
 }
+## expect: run 96

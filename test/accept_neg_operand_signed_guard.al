@@ -11,3 +11,4 @@ main := fn() -> i64 {
   a := i64(5)
   i64(30 + -a)
 }
+## expect: run 25

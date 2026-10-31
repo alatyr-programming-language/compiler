@@ -33,3 +33,4 @@ main := fn() -> u64 {
 
   s.lo + t.lo
 }
+## expect(x86_64): run 42

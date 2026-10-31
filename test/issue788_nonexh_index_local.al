@@ -7,3 +7,4 @@ main := fn() -> u64 {
   match xs[0] { R => { return 11 }; G => { return 22 } }
   return 0
 }
+## expect: reject "type mismatch at line 7"

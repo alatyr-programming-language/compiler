@@ -17,3 +17,4 @@ main := fn() -> u64 {
   if a != b { r = r + 22 }     ## different variant -> not equal -> +22
   return r                     ## 42
 }
+## expect: run 42

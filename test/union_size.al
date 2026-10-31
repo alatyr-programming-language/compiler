@@ -10,3 +10,4 @@ main := fn() -> u64 {
   if size(Scalars) == 8 and size(Wide) == 16 and align(Wide) == 8 and size(Tagged) == 16 { return 42 }
   return 0
 }
+## expect: run 42

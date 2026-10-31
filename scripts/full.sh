@@ -105,6 +105,15 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/seed_forms_check.sh" --self-test
   _full_seed_forms_self_test_rc=$?
   [ "$_full_seed_forms_self_test_rc" = 0 ] || exit "$_full_seed_forms_self_test_rc"
+  # The FIXTURE EXPECT stage (#1126 S1): its (a) and malformed counts are a verdict, and the rest are
+  # what S2's known-deviations list is cut from, so a reader that cannot see a disagreement must not
+  # pass. Planted fixtures drive every class: a header/registration disagreement, the x86_64 row that
+  # differs from its registration, a conflict, a pin, each malformed shape (no colon, a status over
+  # 255), the twins' classes, every reason the generator holds a fixture back (#1178's formatter hold
+  # included), and `--gate` failing on (a) and malformed while passing beside (b), (c) and the twins.
+  bash "$ROOT/scripts/fixture_expect.sh" --self-test
+  _full_fixture_expect_self_test_rc=$?
+  [ "$_full_fixture_expect_self_test_rc" = 0 ] || exit "$_full_fixture_expect_self_test_rc"
   # The SPEC-PIN decider's gate-of-the-gate (issue #1000), for the enumeration check's reason: on a tree
   # that agrees, the pin check never reaches its own failure verdict, so a neutered decider would print
   # the same green line forever. Thirteen planted trees drive it — FOUR controls that must stay green (two
@@ -345,6 +354,23 @@ fi
 if [ "$ig_cover" != 1 ]; then
   echo "  (scripts/idiom_gate.sh printed no 'idiom gate: files=' proof-of-work line — what it walked is"
   echo "   unknown, treating as a failure)"
+  fail=1
+fi
+
+# FIXTURE EXPECT (#1126 S1). It sets each fixture's `## expect:` directive beside its e2e.sh
+# registration (the reviewed claim) and the committed manifest (what x86_64 observed). A source scan of
+# the tree and the committed manifest; it needs no compiler. Its self-test runs under `full.sh --self-test`.
+# `--gate` FAILS on (a) a header that contradicts its own registration, on a malformed directive, and on
+# unusable input (#1128: no stage prints a finding and passes). The (b), (c) and twins counts it prints
+# beside them stay a report: they are the input of S2's known-deviations list, and S3 is the step that
+# turns header-against-observed into the verdict and retires corpus.manifest.
+echo "### FIXTURE EXPECT (header vs registration vs x86_64 observation: (a) and malformed gate) ###"
+FE_LOG="$LOGDIR/full_fixture_expect.log"
+bash scripts/fixture_expect.sh --gate > "$FE_LOG" 2>&1
+fe_rc=$?
+cat "$FE_LOG"
+if [ "$fe_rc" != 0 ]; then
+  echo "  scripts/fixture_expect.sh --gate exited $fe_rc (1: (a) or a malformed directive; 2: unusable input) — see $FE_LOG"
   fail=1
 fi
 

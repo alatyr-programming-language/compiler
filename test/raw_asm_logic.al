@@ -14,3 +14,4 @@ logic := @abi(naked) fn(a : i64) -> i64 {
 main := fn() -> u64 {
   logic(42)
 }
+## expect(x86_64): run 42

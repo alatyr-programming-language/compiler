@@ -67,3 +67,4 @@ main := fn() -> u64 {
   if narrow_cond(false) != 0 { return 19 }
   return 42
 }
+## expect: run 42

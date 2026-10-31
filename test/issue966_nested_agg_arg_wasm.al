@@ -41,3 +41,4 @@ main := fn() -> u64 {
   acc = unchecked ((acc * 31) ^ u64(bf23(E2.V1, B4(255))))
   return (acc % 113) + 1
 }
+## expect: run 11

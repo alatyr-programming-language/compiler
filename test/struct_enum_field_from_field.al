@@ -9,3 +9,4 @@ main := fn() -> u64 {
   w : u64 = match p.c { Col.R(v) => v; Col.G => 0; Col.B(m, n) => m * 10 + n }
   w + 8
 }
+## expect: run 42

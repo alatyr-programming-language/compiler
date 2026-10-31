@@ -10,3 +10,4 @@ main := fn() -> u64 {
   arr[i] = Rec(a = 12, b = 30)
   u64(arr[1].a + arr[1].b)              ## 12 + 30 = 42 (both words survive; neighbours untouched)
 }
+## expect: run 42

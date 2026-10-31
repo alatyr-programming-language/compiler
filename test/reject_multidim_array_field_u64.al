@@ -11,3 +11,4 @@ main := fn() -> u64 {
   if s.data[1][1] != 4 { return 4 }
   42
 }
+## expect: reject "fixed-array field whose element is another fixed array"

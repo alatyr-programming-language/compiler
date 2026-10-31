@@ -26,3 +26,4 @@ main := fn() -> u64 {
   if u64(r.val) != 100 { return 4 }        ## the scalar PAST the str reads its own value at byte 24
   return 42
 }
+## expect(x86_64): run 42

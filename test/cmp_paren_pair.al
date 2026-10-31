@@ -10,3 +10,4 @@ main := fn() -> u64 {
   d : u64 = 3
   if (a < b) == (c > d) { 42 } else { 0 }
 }
+## expect: run 42

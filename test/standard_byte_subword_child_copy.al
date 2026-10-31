@@ -84,3 +84,4 @@ main := fn() -> u64 {
   if i64(c4.b) != 0 - 300 { return 18 }
   42
 }
+## expect: run 42

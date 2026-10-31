@@ -14,3 +14,4 @@ cnt := fn(T : type) -> u64 {
 main := fn() -> u64 {
   return cnt(S) * 14
 }
+## expect: run 42

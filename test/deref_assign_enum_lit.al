@@ -15,3 +15,4 @@ main := fn() -> u64 {
   deref(p) = E.B(30, 12)
   reade(p)
 }
+## expect(x86_64): run 42

@@ -10,3 +10,4 @@ main := fn() -> u64 {
   if f1() > big { return 1 }
   return 42
 }
+## expect: run 42
