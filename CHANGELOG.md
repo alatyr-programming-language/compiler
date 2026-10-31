@@ -126,6 +126,28 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`MIN / -1` and `MIN % -1` in a `comptime for` range bound are refused, and the compiler no longer
+  crashes on them (#1233).** The fold ran the host's `idiv` on them, and the compiler died with SIGFPE
+  on all four targets, with no message. They are now a located compile error on x86_64, under
+  `unchecked` too (Comptime §2.6: hardware-defined), and a trap on the twins until #1232. A `u64`
+  bound's `/` and `%` now divide unsigned. Before, they divided the bit patterns as signed values,
+  which crashed on `2^63 / (2^64 - 1)` and answered 0 for `(2^64 - 1) / 2^62`.
+
+- **A checked `+ - *` that overflows in a `comptime for` range bound is refused, not wrapped
+  (#1234).** `0 .. K + 2` with `K : u64 = 2^64 - 1` wrapped to 1 and unrolled once on all four
+  backends, and the `i64` shape wrapped to MIN and unrolled zero times. The fold now runs the
+  checked guard in the operation's own type and width (Comptime §2.6): a located compile error on
+  x86_64, a trap on the twins until #1232. Inside `unchecked` the wrap is defined and still folds.
+  The overflow judgement is now one function in `lower_layout`, shared by the const checker and both
+  range-bound folders.
+
+- **A `comptime for` range bound under `unchecked` keeps its value, and a bound with no comptime
+  value is refused (#696).** `0 .. unchecked (N)`, `unchecked (1) .. 4`, a const whose initializer is
+  `unchecked (5)` and `typeinfo(T).fields.len - 1` used to read as 0 on all four backends, so the
+  loop ran a different number of times from a clean compile. `unchecked e` now yields its inner value
+  (Grammar §3.7). A bound that is not comptime-known, such as a call, is a located compile error on
+  x86_64 (Comptime §9.1) and a trap on the twins, never the bound 0.
+
 ## 0.2.18 — 2026-10-31
 
 - **Unary `-` over a signed integer traps on the minimum value, at every width (#1049).** `-x` with
