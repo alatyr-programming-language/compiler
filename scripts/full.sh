@@ -113,7 +113,8 @@ if [ "${1:-}" = "--self-test" ]; then
   # included), and `--gate` failing on (a) and malformed while passing beside (b) and (c). The known
   # deviations (#1126 S2) have their own plants: a listed deviation passes, and each of an unlisted one,
   # a changed observation, a stale row, an orphan row, an unnamed or unknown issue, an issue no row
-  # names, an issue marked `none` that rows name, and an unsorted list fails.
+  # names, an issue marked `none` that rows name, and an unsorted list fails. So does a table issue the
+  # issue-state snapshot does not list as open, or marks `closing` (#1279), and an empty snapshot is 2.
   bash "$ROOT/scripts/fixture_expect.sh" --self-test
   _full_fixture_expect_self_test_rc=$?
   [ "$_full_fixture_expect_self_test_rc" = 0 ] || exit "$_full_fixture_expect_self_test_rc"
@@ -385,13 +386,31 @@ fi
 # deletes its own row), a row whose observation moved (CHANGED), a row no directive speaks for (ORPHAN),
 # a row with no issue, a pair the walk did not observe, a fixture with neither a directive nor a
 # committed manifest row (UNSTATED: a new fixture states its expectation), and unusable input (#1128: no
-# stage prints a finding and passes). Whether each issue in the table is still OPEN is the one fact this
-# stage cannot see: the gate runs with no GitHub credentials (queue.sh strips them), so
-# `scripts/land.sh` PHASE 2 asks `gh` before a landing and refuses a closed one. Its self-test runs
-# under `full.sh --self-test`.
+# stage prints a finding and passes). It also fails on a table issue that is not OPEN (#1279). The gate
+# has no network and no credentials (queue.sh strips them), so it reads an issue-state SNAPSHOT that
+# whoever holds `gh` wrote before the gate and names in ALATYR_OPEN_ISSUES: queue.sh for a batch, land.sh
+# PHASE 2 for a solo or hand landing, the hosted workflow's step before this script. Each marks the
+# issues the object closes on landing (`Closes #N`) as `closing N`, so a fix that forgets its rows is
+# refused before it lands. On a hand run with no snapshot, this stage takes one with `gh`; when it
+# cannot, the stage FAILS: an unchecked fact is not a pass. Its self-test runs under
+# `full.sh --self-test`.
 echo "### FIXTURE EXPECT (directive vs this walk and known deviations; registration) ###"
 FE_LOG="$LOGDIR/full_fixture_expect.log"
-bash scripts/fixture_expect.sh --gate --observed "$ROOT/target/corpus-manifest/observed.manifest" > "$FE_LOG" 2>&1
+FE_SNAP="${ALATYR_OPEN_ISSUES:-}"
+if [ -n "$FE_SNAP" ]; then
+  echo "  issue-state snapshot: $FE_SNAP (from the caller: $(sed -n '1s/^# //p' "$FE_SNAP" 2>/dev/null))"
+else
+  FE_SNAP="$LOGDIR/full_open_issues.snapshot"
+  if bash scripts/fixture_expect.sh --snapshot-open > "$FE_SNAP"; then
+    echo "  issue-state snapshot: taken by this run with gh ($FE_SNAP)"
+  else
+    echo "  issue-state snapshot: NONE — ALATYR_OPEN_ISSUES is unset and gh could not be read; the known-deviation"
+    echo "  issues cannot be checked, which is not a pass (#1279). Write one with \`scripts/fixture_expect.sh --snapshot-open\`"
+    echo "  where gh is logged in, and pass its path in ALATYR_OPEN_ISSUES."
+    : > "$FE_SNAP"
+  fi
+fi
+bash scripts/fixture_expect.sh --gate --observed "$ROOT/target/corpus-manifest/observed.manifest" --open-issues "$FE_SNAP" > "$FE_LOG" 2>&1
 fe_rc=$?
 cat "$FE_LOG"
 if [ "$fe_rc" != 0 ]; then

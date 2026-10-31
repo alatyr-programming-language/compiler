@@ -4,7 +4,9 @@
 # exact commit pushed to a `gate/**` branch and publishes the evidence. Merging, the oracle commit and
 # the leased push to `main` stay with the integrator (`alatyr-integrate`), who reads these artifacts.
 # The job holds no write token: the code under test is the pushed tree, so it runs with read-only
-# contents permission and never sees a secret.
+# contents permission and never sees a secret. It may also READ issues: one step before the gate, with
+# the token, writes the issue-state snapshot the gate checks the known deviations against (#1279), and
+# the gate step itself runs without the token.
 #
 # Artifacts, for every run including a red one:
 #   gate.log            the complete full.sh output (its verdict is the last `*** FULL GATE` line)
@@ -20,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
 
 concurrency:
   group: gate-${{ github.ref }}
@@ -49,6 +52,16 @@ jobs:
       - name: Build the dev shell
         run: nix develop -c true
 
+      - name: Issue-state snapshot (#1279)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # The gate refuses a known deviation whose issue is closed, offline, from this file. A failed
+        # read leaves it empty, and the FIXTURE EXPECT stage then fails: an unchecked fact is not a pass.
+        run: |
+          bash scripts/fixture_expect.sh --snapshot-open > "$RUNNER_TEMP/open-issues.snapshot" || true
+          head -n 1 "$RUNNER_TEMP/open-issues.snapshot"; grep -c '^[0-9]' "$RUNNER_TEMP/open-issues.snapshot" || true
+
       - name: Full gate
         env:
           # The e2e runtime ceiling bounds a child that does not terminate; it is not a stopwatch
@@ -56,6 +69,7 @@ jobs:
           # 12-core gate machine) past 10 s on both attempts, so the ceiling is scaled here — it still
           # kills a genuine hang, 60 s later.
           ALATYR_E2E_RUNTIME_TIMEOUT: 60s
+          ALATYR_OPEN_ISSUES: ${{ runner.temp }}/open-issues.snapshot
         run: |
           ulimit -c 0
           set -o pipefail
