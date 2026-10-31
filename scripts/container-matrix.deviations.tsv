@@ -1,14 +1,18 @@
-# The container matrix's known deviations (#1124): one row per x86_64 cell whose verdict is WRONG or
-# REFUSED, `backend<TAB>cell<TAB>verdict<TAB>#issue`, sorted. `scripts/container_matrix.py --gate` fails
-# on a WRONG or REFUSED cell with no row (UNLISTED), a row whose verdict differs (CHANGED), a row whose
-# cell now passes or traps (STALE: the fix deletes its own row), and a row naming no cell (UNKNOWN).
-# A TRAP is a recorded outcome and has no row. The verdict holds a WRONG's check code and only the kind
-# of a refusal (its message carries absolute paths). Measured at main 488186d7 on omen, native x86_64.
+# The container matrix's known deviations (#1124): one row per x86_64 cell whose verdict is WRONG,
+# CRASH or REFUSED, `backend<TAB>cell<TAB>verdict<TAB>#issue`, sorted. `scripts/container_matrix.py --gate`
+# fails on a held cell with no row (UNLISTED), a row whose verdict differs (CHANGED), a row whose cell
+# now passes or traps (STALE: the fix deletes its own row), and a row naming no cell (UNKNOWN).
+# A TRAP (the checked-failure `ud2`, rc 132) is a recorded outcome and has no row; any other signal, a
+# timeout or a stray exit code is a CRASH and is held (#1277). The verdict holds a WRONG's check code, a
+# CRASH's rc and only the kind of a refusal (its message carries absolute paths). WRONG and REFUSED rows
+# measured at main 488186d7, CRASH rows at a487d7ce, on omen, native x86_64.
 x86_64	deque.front_back.array3	REFUSED	#1250
 x86_64	deque.front_back.bool	WRONG 10	#1254
 x86_64	deque.front_back.char	REFUSED	#1244
 x86_64	deque.front_back.enumN	WRONG 10	#1212
 x86_64	deque.front_back.i8	WRONG 10	#1254
+x86_64	deque.front_back.option_ptr	CRASH 139	#1302
+x86_64	deque.front_back.option_u64	CRASH 139	#1302
 x86_64	deque.front_back.struct2	WRONG 10	#1212
 x86_64	deque.front_back.struct3	WRONG 10	#1212
 x86_64	deque.front_back.u16	WRONG 10	#1254
@@ -19,6 +23,8 @@ x86_64	deque.pop_back.bool	WRONG 10	#1254
 x86_64	deque.pop_back.char	REFUSED	#1244
 x86_64	deque.pop_back.enumN	WRONG 10	#1212
 x86_64	deque.pop_back.i8	WRONG 10	#1254
+x86_64	deque.pop_back.option_ptr	CRASH 139	#1302
+x86_64	deque.pop_back.option_u64	CRASH 139	#1302
 x86_64	deque.pop_back.struct2	WRONG 10	#1212
 x86_64	deque.pop_back.struct3	WRONG 10	#1212
 x86_64	deque.pop_back.u16	WRONG 10	#1254
@@ -29,6 +35,8 @@ x86_64	deque.pop_front.bool	WRONG 10	#1254
 x86_64	deque.pop_front.char	REFUSED	#1244
 x86_64	deque.pop_front.enumN	WRONG 10	#1212
 x86_64	deque.pop_front.i8	WRONG 10	#1254
+x86_64	deque.pop_front.option_ptr	CRASH 139	#1302
+x86_64	deque.pop_front.option_u64	CRASH 139	#1302
 x86_64	deque.pop_front.struct2	WRONG 10	#1212
 x86_64	deque.pop_front.struct3	WRONG 10	#1212
 x86_64	deque.pop_front.u16	WRONG 10	#1254
@@ -39,6 +47,8 @@ x86_64	deque.push_back_at.bool	WRONG 11	#1254
 x86_64	deque.push_back_at.char	REFUSED	#1244
 x86_64	deque.push_back_at.enumN	WRONG 11	#1212
 x86_64	deque.push_back_at.i8	WRONG 11	#1254
+x86_64	deque.push_back_at.option_ptr	CRASH 139	#1302
+x86_64	deque.push_back_at.option_u64	CRASH 139	#1302
 x86_64	deque.push_back_at.struct2	WRONG 11	#1212
 x86_64	deque.push_back_at.struct3	WRONG 11	#1212
 x86_64	deque.push_back_at.u16	WRONG 11	#1254
@@ -49,12 +59,18 @@ x86_64	deque.push_front.bool	WRONG 10	#1254
 x86_64	deque.push_front.char	REFUSED	#1244
 x86_64	deque.push_front.enumN	WRONG 10	#1212
 x86_64	deque.push_front.i8	WRONG 10	#1254
+x86_64	deque.push_front.option_ptr	CRASH 139	#1302
+x86_64	deque.push_front.option_u64	CRASH 139	#1302
 x86_64	deque.push_front.struct2	WRONG 10	#1212
 x86_64	deque.push_front.struct3	WRONG 10	#1212
 x86_64	deque.push_front.u16	WRONG 10	#1254
 x86_64	deque.push_front.u32	WRONG 10	#1254
 x86_64	deque.push_front.u8	WRONG 10	#1254
 x86_64	hashmap.key.char	REFUSED	#1244
+x86_64	hashmap.key.enum0	CRASH 139	#1303
+x86_64	hashmap.key.enumN	CRASH 139	#1303
+x86_64	hashmap.key.option_ptr	CRASH 139	#1303
+x86_64	hashmap.key.option_u64	CRASH 139	#1303
 x86_64	hashmap.key.u16	WRONG 11	#1255
 x86_64	hashmap.key.u32	WRONG 11	#1255
 x86_64	hashmap.key.u8	WRONG 11	#1255
@@ -63,6 +79,8 @@ x86_64	hashmap.value.bool	WRONG 11	#1255
 x86_64	hashmap.value.char	REFUSED	#1244
 x86_64	hashmap.value.enumN	WRONG 11	#1212
 x86_64	hashmap.value.i8	WRONG 11	#1255
+x86_64	hashmap.value.option_ptr	CRASH 139	#1302
+x86_64	hashmap.value.option_u64	CRASH 139	#1302
 x86_64	hashmap.value.u16	WRONG 11	#1255
 x86_64	hashmap.value.u32	WRONG 11	#1255
 x86_64	hashmap.value.u8	WRONG 11	#1255
@@ -72,8 +90,15 @@ x86_64	none.control.option_u64	REFUSED	#1249
 x86_64	vec.for_in.array3	REFUSED	#1250
 x86_64	vec.for_in.bool	WRONG 10	#1238
 x86_64	vec.for_in.char	REFUSED	#1244
+x86_64	vec.for_in.enum0	CRASH 139	#1211
+x86_64	vec.for_in.enumN	CRASH 139	#1211
 x86_64	vec.for_in.i8	WRONG 10	#1238
+x86_64	vec.for_in.option_ptr	CRASH 139	#1211
+x86_64	vec.for_in.option_u64	CRASH 139	#1211
 x86_64	vec.for_in.str	WRONG 10	#1177
+x86_64	vec.for_in.struct1	CRASH 139	#1211
+x86_64	vec.for_in.struct2	CRASH 139	#1211
+x86_64	vec.for_in.struct3	CRASH 139	#1211
 x86_64	vec.for_in.u16	WRONG 10	#1238
 x86_64	vec.for_in.u32	WRONG 10	#1238
 x86_64	vec.for_in.u8	WRONG 10	#1238
@@ -82,6 +107,8 @@ x86_64	vec.get.bool	WRONG 10	#988
 x86_64	vec.get.char	REFUSED	#1244
 x86_64	vec.get.enumN	WRONG 10	#1212
 x86_64	vec.get.i8	WRONG 10	#988
+x86_64	vec.get.option_ptr	CRASH 139	#1302
+x86_64	vec.get.option_u64	CRASH 139	#1302
 x86_64	vec.get.struct2	WRONG 10	#1212
 x86_64	vec.get.struct3	WRONG 10	#1212
 x86_64	vec.get.u16	WRONG 10	#988
@@ -90,7 +117,14 @@ x86_64	vec.get.u8	WRONG 10	#988
 x86_64	vec.grow.array3	REFUSED	#1250
 x86_64	vec.grow.bool	WRONG 11	#988
 x86_64	vec.grow.char	REFUSED	#1244
+x86_64	vec.grow.enum0	CRASH 139	#1256
+x86_64	vec.grow.enumN	CRASH 139	#1256
 x86_64	vec.grow.i8	WRONG 11	#988
+x86_64	vec.grow.option_ptr	CRASH 139	#1256
+x86_64	vec.grow.option_u64	CRASH 139	#1256
+x86_64	vec.grow.struct1	CRASH 139	#1256
+x86_64	vec.grow.struct2	CRASH 139	#1256
+x86_64	vec.grow.struct3	CRASH 139	#1256
 x86_64	vec.grow.u16	WRONG 11	#988
 x86_64	vec.grow.u32	WRONG 11	#988
 x86_64	vec.grow.u8	WRONG 11	#988
@@ -98,15 +132,40 @@ x86_64	vec.index_read.array3	REFUSED	#1250
 x86_64	vec.index_read.bool	WRONG 10	#987
 x86_64	vec.index_read.brand	WRONG 10	#987
 x86_64	vec.index_read.char	REFUSED	#1244
+x86_64	vec.index_read.enum0	CRASH 139	#987
+x86_64	vec.index_read.enumN	CRASH 139	#987
 x86_64	vec.index_read.f64	WRONG 10	#987
 x86_64	vec.index_read.i64	WRONG 10	#987
 x86_64	vec.index_read.i8	WRONG 10	#987
+x86_64	vec.index_read.option_ptr	CRASH 139	#987
+x86_64	vec.index_read.option_u64	CRASH 139	#987
+x86_64	vec.index_read.str	CRASH 139	#987
+x86_64	vec.index_read.struct1	CRASH 139	#987
+x86_64	vec.index_read.struct2	CRASH 139	#987
+x86_64	vec.index_read.struct3	CRASH 139	#987
 x86_64	vec.index_read.u16	WRONG 10	#987
 x86_64	vec.index_read.u32	WRONG 10	#987
 x86_64	vec.index_read.u64	WRONG 10	#987
 x86_64	vec.index_read.u8	WRONG 10	#987
 x86_64	vec.index_write.array3	REFUSED	#1250
+x86_64	vec.index_write.bool	CRASH 1	#987
+x86_64	vec.index_write.brand	CRASH 139	#987
 x86_64	vec.index_write.char	REFUSED	#1244
+x86_64	vec.index_write.enum0	CRASH 139	#987
+x86_64	vec.index_write.enumN	CRASH 139	#987
+x86_64	vec.index_write.f64	CRASH 139	#987
+x86_64	vec.index_write.i64	CRASH 139	#987
+x86_64	vec.index_write.i8	CRASH 139	#987
+x86_64	vec.index_write.option_ptr	CRASH 139	#987
+x86_64	vec.index_write.option_u64	CRASH 139	#987
+x86_64	vec.index_write.str	CRASH 139	#987
+x86_64	vec.index_write.struct1	CRASH 139	#987
+x86_64	vec.index_write.struct2	CRASH 139	#987
+x86_64	vec.index_write.struct3	CRASH 139	#987
+x86_64	vec.index_write.u16	CRASH 139	#987
+x86_64	vec.index_write.u32	CRASH 139	#987
+x86_64	vec.index_write.u64	CRASH 139	#987
+x86_64	vec.index_write.u8	CRASH 139	#987
 x86_64	vec.len.array3	REFUSED	#1250
 x86_64	vec.len.char	REFUSED	#1244
 x86_64	vec.pop.array3	REFUSED	#1250
@@ -114,6 +173,8 @@ x86_64	vec.pop.bool	WRONG 10	#988
 x86_64	vec.pop.char	REFUSED	#1244
 x86_64	vec.pop.enumN	WRONG 10	#1212
 x86_64	vec.pop.i8	WRONG 10	#988
+x86_64	vec.pop.option_ptr	CRASH 139	#1302
+x86_64	vec.pop.option_u64	CRASH 139	#1302
 x86_64	vec.pop.struct2	WRONG 10	#1212
 x86_64	vec.pop.struct3	WRONG 10	#1212
 x86_64	vec.pop.u16	WRONG 10	#988
@@ -122,16 +183,47 @@ x86_64	vec.pop.u8	WRONG 10	#988
 x86_64	vec.push_at.array3	REFUSED	#1250
 x86_64	vec.push_at.bool	WRONG 10	#988
 x86_64	vec.push_at.char	REFUSED	#1244
+x86_64	vec.push_at.enum0	CRASH 139	#1256
+x86_64	vec.push_at.enumN	CRASH 139	#1256
 x86_64	vec.push_at.i8	WRONG 10	#988
+x86_64	vec.push_at.option_ptr	CRASH 139	#1256
+x86_64	vec.push_at.option_u64	CRASH 139	#1256
+x86_64	vec.push_at.struct1	CRASH 139	#1256
+x86_64	vec.push_at.struct2	CRASH 139	#1256
+x86_64	vec.push_at.struct3	CRASH 139	#1256
 x86_64	vec.push_at.u16	WRONG 10	#988
 x86_64	vec.push_at.u32	WRONG 10	#988
 x86_64	vec.push_at.u8	WRONG 10	#988
 x86_64	vec.range.array3	REFUSED	#1250
+x86_64	vec.range.bool	CRASH 139	#987
+x86_64	vec.range.brand	CRASH 139	#987
 x86_64	vec.range.char	REFUSED	#1244
+x86_64	vec.range.enum0	CRASH 139	#987
+x86_64	vec.range.enumN	CRASH 139	#987
+x86_64	vec.range.f64	CRASH 139	#987
+x86_64	vec.range.i64	CRASH 139	#987
+x86_64	vec.range.i8	CRASH 139	#987
+x86_64	vec.range.option_ptr	CRASH 139	#987
+x86_64	vec.range.option_u64	CRASH 139	#987
+x86_64	vec.range.str	CRASH 139	#987
+x86_64	vec.range.struct1	CRASH 139	#987
+x86_64	vec.range.struct2	CRASH 139	#987
+x86_64	vec.range.struct3	CRASH 139	#987
+x86_64	vec.range.u16	CRASH 139	#987
+x86_64	vec.range.u32	CRASH 139	#987
+x86_64	vec.range.u64	CRASH 139	#987
+x86_64	vec.range.u8	CRASH 139	#987
 x86_64	vec.set.array3	REFUSED	#1250
 x86_64	vec.set.bool	WRONG 10	#988
 x86_64	vec.set.char	REFUSED	#1244
+x86_64	vec.set.enum0	CRASH 139	#1256
+x86_64	vec.set.enumN	CRASH 139	#1256
 x86_64	vec.set.i8	WRONG 10	#988
+x86_64	vec.set.option_ptr	CRASH 139	#1256
+x86_64	vec.set.option_u64	CRASH 139	#1256
+x86_64	vec.set.struct1	CRASH 139	#1256
+x86_64	vec.set.struct2	CRASH 139	#1256
+x86_64	vec.set.struct3	CRASH 139	#1256
 x86_64	vec.set.u16	WRONG 10	#988
 x86_64	vec.set.u32	WRONG 10	#988
 x86_64	vec.set.u8	WRONG 10	#988
@@ -140,6 +232,8 @@ x86_64	vec.try_at.bool	WRONG 10	#395
 x86_64	vec.try_at.char	REFUSED	#1244
 x86_64	vec.try_at.enumN	WRONG 10	#1212
 x86_64	vec.try_at.i8	WRONG 10	#395
+x86_64	vec.try_at.option_ptr	CRASH 139	#1302
+x86_64	vec.try_at.option_u64	CRASH 139	#1302
 x86_64	vec.try_at.struct2	WRONG 10	#1212
 x86_64	vec.try_at.struct3	WRONG 10	#1212
 x86_64	vec.try_at.u16	WRONG 10	#395

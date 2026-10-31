@@ -13,13 +13,17 @@ committed: this script is their only source.
                                                 list (scripts/container-matrix.deviations.tsv)
   container_matrix.py --self-test CC DIR        prove --gate can fail: a planted defect must turn it red
 
-Verdicts, one line per cell: `OK`, `WRONG <check>`, `TRAP <rc>`, `REFUSED <first error line>`.
+Verdicts, one line per cell: `OK`, `WRONG <check>`, `TRAP 132`, `CRASH <rc>`, `REFUSED <first error line>`.
   OK       the program exited 42: every read equalled what was stored
   WRONG    the program exited with a check code (10..99): a read differed from what was stored
-  TRAP     the program built and stopped any other way (a signal, a panic's exit, a timeout)
+  TRAP     the program stopped on the checked-failure instruction, the language's only trap (per-arch
+           appendix §2, CG-13: `ud2` on x86_64, which the kernel reports as SIGILL, rc 132)
+  CRASH    the program stopped any other way: another signal (a segfault is 139), a timeout, or an exit
+           code that is neither 42 nor a check code. The spec defines no such failure (I11), so it is
+           a defect, never a trap (#1277)
   REFUSED  the compiler did not build the program (a located rejection or a compiler failure)
 
-The gate (x86_64): every WRONG and every REFUSED cell needs a row in the deviations list naming an
+The gate (x86_64): every WRONG, CRASH and REFUSED cell needs a row in the deviations list naming an
 open issue, and every row must still reproduce (same cell, same verdict), so the fix that makes a cell
 pass deletes its row. A TRAP is a recorded outcome, never a failure on its own: a checked bounds
 failure is the specified answer of some cells (an out-of-range index).
@@ -32,6 +36,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEVIATIONS = os.path.join(HERE, "container-matrix.deviations.tsv")
+# The exit status of the language's trap on x86_64: `ud2` raises SIGILL (4), and the shell's and
+# subprocess's convention is 128 + the signal. Every other way to stop is a CRASH (#1277).
+TRAP_RC = 128 + 4
 N = 20  # elements stored per cell: more than every container's initial capacity, so the cells grow
 
 PRELUDE = """\
@@ -521,14 +528,16 @@ def run_cell(cc, cid, src, timeout=20):
         r = subprocess.run([exe], capture_output=True, timeout=timeout)
         rc = r.returncode
     except subprocess.TimeoutExpired:
-        return cid, "TRAP timeout"
+        return cid, "CRASH timeout"
     if rc < 0:
         rc = 128 - rc
     if rc == 42:
         return cid, "OK"
     if 10 <= rc <= 99:
         return cid, f"WRONG {rc}"
-    return cid, f"TRAP {rc}"
+    if rc == TRAP_RC:
+        return cid, f"TRAP {rc}"
+    return cid, f"CRASH {rc}"
 
 
 def run(cc, d, jobs):
@@ -542,7 +551,7 @@ def run(cc, d, jobs):
         k = v.split()[0]
         counts[k] = counts.get(k, 0) + 1
     print("container matrix: cells=%d " % len(res)
-          + " ".join(f"{k}={counts.get(k, 0)}" for k in ("OK", "WRONG", "TRAP", "REFUSED")))
+          + " ".join(f"{k}={counts.get(k, 0)}" for k in ("OK", "WRONG", "TRAP", "CRASH", "REFUSED")))
     return dict(res)
 
 
@@ -556,19 +565,27 @@ def load_deviations(path):
             if len(parts) != 4 or not parts[3].startswith("#") or not parts[3][1:].isdigit():
                 raise SystemExit(f"{path}:{ln}: want `backend<TAB>cell<TAB>verdict<TAB>#issue`, got {line!r}")
             be, cid, verdict, issue = parts
-            if not (verdict == "REFUSED" or (verdict.startswith("WRONG ") and verdict[6:].isdigit())):
-                raise SystemExit(f"{path}:{ln}: the verdict is `WRONG <code>` or `REFUSED`, got {verdict!r}")
+            if not (verdict == "REFUSED" or (verdict.startswith("WRONG ") and verdict[6:].isdigit())
+                    or (verdict.startswith("CRASH ") and (verdict[6:].isdigit() or verdict[6:] == "timeout"))):
+                raise SystemExit(f"{path}:{ln}: the verdict is `WRONG <code>`, `CRASH <rc>` or `REFUSED`, "
+                                 f"got {verdict!r}")
             if (be, cid) in rows:
                 raise SystemExit(f"{path}:{ln}: duplicate row for {be} {cid}")
             rows[(be, cid)] = (verdict, issue)
     return rows
 
 
+# The verdicts the gate holds: each needs a row under an open issue. A TRAP and an OK are not held.
+HELD = ("WRONG", "CRASH", "REFUSED")
+HELD_WITH_CODE = ("WRONG", "CRASH")
+
+
 def key(v):
-    """What a row holds of a verdict: `WRONG <code>` or `REFUSED`. A refusal's message is for the reader
-    and is not held: it carries absolute paths (the linker's) and changes with unrelated wording."""
+    """What a row holds of a verdict: `WRONG <code>`, `CRASH <rc>` or `REFUSED`. A refusal's message is
+    for the reader and is not held: it carries absolute paths (the linker's) and changes with unrelated
+    wording."""
     parts = v.split()
-    return " ".join(parts[:2]) if parts[0] == "WRONG" else parts[0]
+    return " ".join(parts[:2]) if parts[0] in HELD_WITH_CODE else parts[0]
 
 
 def hold(res, rows, backend="x86_64"):
@@ -577,7 +594,7 @@ def hold(res, rows, backend="x86_64"):
     for cid, v in sorted(res.items()):
         kind = v.split()[0]
         row = rows.get((backend, cid))
-        if kind in ("WRONG", "REFUSED"):
+        if kind in HELD:
             if row is None:
                 bad.append(f"UNLISTED {cid}: {v} (file it, then add `{backend}\t{cid}\t{key(v)}\t#N`)")
             elif row[0] != key(v):
