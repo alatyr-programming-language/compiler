@@ -78,7 +78,24 @@
 #   plus registration conflicts, pins, malformed directives, and the twins' rows against the claim
 #   (the size of S2's known-deviations list), by class.
 #
-# With --gate the exit status is 1 when (a) or the malformed count is non-zero: a header that
+# ## The known deviations (S2)
+#
+# For every backend a DIRECTIVE speaks for, the committed manifest row either meets it, or the pair is a
+# row of scripts/known-deviations.tsv (`backend path observed #issue`) whose `observed` is exactly the
+# manifest's. The rows name issues in scripts/known-deviations.issues.tsv (`issue rule difference
+# rows|none`), which is also the published list: for each issue, the rule not met and the observable
+# difference. Five ways to be wrong, each a --list name:
+#   unlisted  a missed directive with no row        changed   a row whose observation moved
+#   stale     a row whose backend now meets it      orphan    a row no directive speaks for
+#   (a row for a directive fixture that has no manifest row yet is `pending`: counted, never failed
+#   here, because the CORPUS MANIFEST stage already fails on a source with no rows)
+#   unissued  a row with `#?` or an issue the table lacks, or one the table marks `none`
+# and `issues` for the files themselves (an issue marked `rows` that no row names, an issue listed
+# twice, a malformed line, or a deviation row out of LC_ALL=C order). A fix deletes its own rows; a change that adds a deviation adds its row, under an issue.
+# `--issues-open` asks `gh` that every issue in the table is open; land.sh PHASE 2 runs that check,
+# because the gate runs without credentials.
+#
+# With --gate the exit status is 1 when (a), the malformed count or any deviation count is non-zero: a header that
 # contradicts its own registration, or a line that looks like a directive and does not parse, is a
 # defect of the tree today, not a deviation to be listed (#1128: no gate stage prints a finding and
 # passes). (b), (c) and the twins' counts stay a report until S3, which turns header-vs-observed into
@@ -87,9 +104,12 @@
 # ## Usage
 #
 #   scripts/fixture_expect.sh [--report]            the summary
-#   scripts/fixture_expect.sh --gate                the summary; exit 1 on (a) or a malformed directive
+#   scripts/fixture_expect.sh --gate                the summary; exit 1 on (a), a malformed directive or a
+#                                                   deviation problem (see "The known deviations")
+#   scripts/fixture_expect.sh --issues-open         exit 1 when an issue of the table is not open (gh)
 #   scripts/fixture_expect.sh --list <what>         one line per item: a b c conflict pin malformed
-#                                                   unmapped twins
+#                                                   unmapped twins stale unlisted changed orphan
+#                                                   unissued issues
 #   scripts/fixture_expect.sh --generate [--write]  the `## expect:` lines the registrations support, for
 #                                                   every fixture without a directive. Without --write,
 #                                                   print them; with it, APPEND them (rerunnable: a file
@@ -98,7 +118,8 @@
 #                                                   reason, as Markdown for the issue
 #   scripts/fixture_expect.sh --self-test           planted inputs for every verdict above
 #
-#   --rows FILE / --manifest FILE / --test-dir DIR  read these instead (the self-test uses them)
+#   --rows FILE / --manifest FILE / --test-dir DIR / --deviations FILE / --issues FILE
+#                                                   read these instead (the self-test uses them)
 set -u
 export LC_ALL=C
 
@@ -259,6 +280,21 @@ evaluate() {
     }
     FILENAME == ARGV[5] { ALL[$1] = 1; if ($2 == "noeol") NOEOL[$1] = 1; next }
     FILENAME == ARGV[6] { FMTND[$1] = FMTND[$1] US $2; next }
+    FILENAME == ARGV[7] {                 # known deviations: backend path observed issue (#1126 S2)
+      if ($0 ~ /^#/ || $0 == "") next
+      if (NF != 4 || $2 !~ /^test\/.*\.al$/ || $3 !~ /^[a-z]+\/[0-9]+$/ || $4 !~ /^#([0-9]+|\?)$/) { DVBAD[++n_dvbad] = "line " FNR ": not `backend<TAB>test/<path>.al<TAB>phase/exit<TAB>#<issue>`"; next }
+      if (DVPREV != "" && $0 <= DVPREV) DVBAD[++n_dvbad] = "line " FNR ": not in LC_ALL=C sort order, or a duplicate"
+      DVPREV = $0
+      n = $2; sub(/^test\//, "", n); sub(/\.al$/, "", n)
+      if ((($1, n) in DVOBS)) { DVBAD[++n_dvbad] = "line " FNR ": a second row for " $1 " " $2; next }
+      DVOBS[$1, n] = $3; DVISS[$1, n] = substr($4, 2); DVLINE[$1, n] = FNR; next
+    }
+    FILENAME == ARGV[8] {                 # the issue table: issue rule difference rows|none
+      if ($0 ~ /^#/ || $0 == "") next
+      if (NF != 4 || $1 !~ /^[0-9]+$/ || $2 == "" || $3 == "" || ($4 != "rows" && $4 != "none")) { DVBAD[++n_dvbad] = "issue table line " FNR ": not `<issue><TAB><rule><TAB><difference><TAB>rows|none`"; next }
+      if ($1 in ISS) { DVBAD[++n_dvbad] = "issue table line " FNR ": #" $1 " twice"; next }
+      ISS[$1] = $4; next
+    }
     END {
       nb = split(BACKENDS, B, " ")
       ne = split(EXCERPT, EA, /[ \t\n]+/); for (i = 1; i <= ne; i++) if (EA[i] != "") EXH[EA[i]] = 1
@@ -329,6 +365,28 @@ evaluate() {
           TW[b, cls]++; TWC[cls] = 1
           if (MODE == "list:twins") print b, f, cls, "registered " render(r, RN[f, b]), "observed " ph "/" ex
         }
+        ## the known deviations (S2): every backend a DIRECTIVE speaks for, against its manifest row. A
+        ## legacy header is not a directive and is not judged here; neither are needles (the manifest
+        ## holds a stderr hash, not the text), which (a) already holds against the registration.
+        if ((f in HASDIR) && !(f in MAL)) for (i = 1; i <= nb; i++) {
+          b = B[i]; o = ((f, b) in DIR) ? DIR[f, b] : (((f, "*") in DIR) ? DIR[f, "*"] : "")
+          if (o == "") continue
+          ## no manifest row yet: a NEW fixture before its oracle commit. A listed row is PENDING, not an
+          ## orphan, and does not fail here. The CORPUS MANIFEST stage already fails on a tracked source
+          ## with no rows, so the only failure of the feature PR stays the expected oracle mismatch (AGENTS.md
+          ## "Oracles and landing"), and the gate after the oracle commit judges the row like any other.
+          if (!((b, f) in PH)) { if ((b, f) in DVOBS) { DVSEEN[b, f] = 1; n_pend++; DVUSED[DVISS[b, f]]++; if (MODE == "list:pending") print b, "test/" f ".al", DVOBS[b, f] " #" DVISS[b, f] }; continue }
+          DVSEEN[b, f] = 1; obs = PH[b, f] "/" EX[b, f]; listed = ((b, f) in DVOBS)
+          if (sat(o, b, PH[b, f], EX[b, f])) {
+            if (listed) { n_stale++; if (MODE == "list:stale") print b, "test/" f ".al", "listed " DVOBS[b, f] " #" DVISS[b, f], "but observed " obs " meets " render(o, "") }
+            continue
+          }
+          if (!listed) { n_unl++; if (MODE == "list:unlisted") print b, "test/" f ".al", obs, "#?"; continue }
+          n_dev++; DVUSED[DVISS[b, f]]++
+          if (DVOBS[b, f] != obs) { n_chg++; if (MODE == "list:changed") print b, "test/" f ".al", "listed " DVOBS[b, f], "observed " obs }
+          if (DVISS[b, f] == "?" || !(DVISS[b, f] in ISS)) { n_noiss++; if (MODE == "list:unissued") print b, "test/" f ".al", "#" DVISS[b, f] }
+          else if (ISS[DVISS[b, f]] == "none") { n_noiss++; if (MODE == "list:unissued") print b, "test/" f ".al", "#" DVISS[b, f] " is marked none (no fixture row) in the issue table" }
+        }
         ## the generator: every fixture with no directive whose registration is clean
         if (MODE != "generate" && MODE != "review" && MODE != "report") continue
         if (f in HASDIR) continue
@@ -367,6 +425,16 @@ evaluate() {
         n_gen++
         if (MODE == "generate") { k = split(lines, la, "\n"); for (j = 1; j <= k; j++) print f, la[j] }
       }
+      for (k in DVOBS) if (!(k in DVSEEN)) {
+        split(k, kk, SUBSEP); n_orph++
+        if (MODE == "list:orphan") print kk[1], "test/" kk[2] ".al", "line " DVLINE[k] ": no directive speaks for this backend, or no manifest row"
+      }
+      for (x in ISS) {
+        if (ISS[x] == "rows" && !(x in DVUSED)) { n_issbad++; if (MODE == "list:issues") print "#" x, "marked rows, but no deviation row names it" }
+        if (MODE == "list:issue-numbers") print x
+      }
+      for (i = 1; i <= n_dvbad; i++) if (MODE == "list:issues") print "-", DVBAD[i]
+      n_issbad += n_dvbad
       if (MODE != "report") exit
       for (f in ALL) n_all++
       printf "fixture expect (S1): fixtures=%d with-directive=%d legacy-header=%d registered=%d\n", n_all, n_dir, n_leg, n_reg
@@ -382,16 +450,19 @@ evaluate() {
       printf "\n  generator: %d fixtures fillable now, %d held for review (", n_gen, n_rev
       sep = ""; for (c in REVC) { printf "%s%s=%d", sep, c, REVC[c]; sep = " " }
       printf ")\n"
+      n_iss = 0; for (x in ISS) n_iss++
+      printf "  known deviations (S2): %d rows listed and reproduced (+%d pending a manifest row), under %d issues; stale %d, unlisted %d, changed %d, orphan %d, unissued %d, file/issue-table problems %d\n", n_dev, n_pend, n_iss, n_stale, n_unl, n_chg, n_orph, n_noiss, n_issbad
       if (GATE == 1) {
-        if (n_a || n_mal) { printf "  GATE: FAIL — (a)=%d malformed=%d; both must be 0 (see --list a, --list malformed)\n", n_a, n_mal; exit 3 }
-        printf "  GATE: ok — (a)=0 malformed=0; (b), (c) and the twins are a report until S3\n"
+        bad = n_a + n_mal + n_stale + n_unl + n_chg + n_orph + n_noiss + n_issbad
+        if (bad) { printf "  GATE: FAIL — (a)=%d malformed=%d stale=%d unlisted=%d changed=%d orphan=%d unissued=%d table=%d; all must be 0 (see --list <name>)\n", n_a, n_mal, n_stale, n_unl, n_chg, n_orph, n_noiss, n_issbad; exit 3 }
+        printf "  GATE: ok — every directive is met, or its deviation is listed under an issue; (b) and (c) are a report until S3\n"
       }
-    }' "$2" "$3" "$4" "$5" "$6" "$7"
+    }' "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
 }
 
 ## ---- driver -------------------------------------------------------------------------------------------
-run_mode() { # mode rows manifest test-dir
-  local mode="$1" rows="$2" manifest="$3" dir="$4" w rc=0
+run_mode() { # mode rows manifest test-dir [deviations issues]
+  local mode="$1" rows="$2" manifest="$3" dir="$4" devs="${5:-}" issues="${6:-}" w rc=0
   mkdir -p "$ROOT/target" && w="$(mktemp -d "$ROOT/target/fixture-expect.XXXXXX")" || return 2
   claims "$rows" "$dir" > "$w/claims"
   ( cd "$dir" && corpus_files | tr '\n' '\0' | xargs -0 bash -c '. "$1"; shift; expect_scan "$@"' _ "$ROOT/scripts/fixture_oracle.sh" ) > "$w/dirs"
@@ -402,8 +473,12 @@ run_mode() { # mode rows manifest test-dir
       if [ -s "$f" ] && [ -n "$(tail -c 1 "$f")" ]; then printf '%s\tnoeol\n' "${f%.al}"; else printf '%s\n' "${f%.al}"; fi
     done ) > "$w/names"
   fmt_needles "$rows" > "$w/fmt"
+  ## an absent list is an empty one (the self-test's plants run without one); distinct files, because
+  ## awk tells its inputs apart by name
+  [ -n "$devs" ] || { : > "$w/devs.empty"; devs="$w/devs.empty"; }
+  [ -n "$issues" ] || { : > "$w/issues.empty"; issues="$w/issues.empty"; }
   local erc=0
-  evaluate "$mode" "$w/claims" "$w/dirs" "$w/legacy" "$manifest" "$w/names" "$w/fmt" > "$w/out" || erc=$?
+  evaluate "$mode" "$w/claims" "$w/dirs" "$w/legacy" "$manifest" "$w/names" "$w/fmt" "$devs" "$issues" > "$w/out" || erc=$?
   case "$erc" in 0) ;; 3) rc=1 ;; *) rc=2 ;; esac   # 3: the --gate verdict; anything else: unusable
   case "$mode" in
     generate) sort -s -t "$(printf '\t')" -k1,1 "$w/out" > "$w/gen"   # stable: a fixture keeps its line order
@@ -430,6 +505,29 @@ run_mode() { # mode rows manifest test-dir
   esac
   rm -rf "$w"
   return "$rc"
+}
+
+## issues_open TABLE [STATES] -> exit 0 when every issue the table names is OPEN, 1 when one is not, 2
+## when the answer cannot be had. A row names an open issue (#1126 design 4): the fix that closes it
+## deletes its rows in the same PR, so a closed issue still in the table is a row that outlived its fix.
+## STATES (`<number> <STATE>` per line) replaces the `gh` query; the self-test uses it. `gh` is asked
+## once, for every open issue, so the gate makes one network call, and a failed call is a 2 — never a pass.
+issues_open() { # table [states]
+  local table="$1" states="${2:-}" t
+  mkdir -p "$ROOT/target" && t="$(mktemp "$ROOT/target/fixture-expect-open.XXXXXX")" || return 2
+  if [ -n "$states" ]; then awk '$2 == "OPEN" { print $1 }' "$states" > "$t"
+  else
+    command -v gh > /dev/null || { echo "fixture_expect.sh: gh is not on PATH; the issue states cannot be read (not a pass)" >&2; rm -f "$t"; return 2; }
+    gh issue list --state open --limit 5000 --json number --jq '.[].number' > "$t" 2> "$t.err" \
+      || { echo "fixture_expect.sh: gh issue list failed: $(head -c 300 "$t.err") (not a pass)" >&2; rm -f "$t" "$t.err"; return 2; }
+    rm -f "$t.err"
+    [ -s "$t" ] || { echo "fixture_expect.sh: gh returned no open issue at all (not a pass)" >&2; rm -f "$t"; return 2; }
+  fi
+  awk -F'\t' 'FILENAME == ARGV[1] { OPEN[$1] = 1; next }
+    $0 ~ /^#/ || $0 == "" { next }
+    { n++; if (!($1 in OPEN)) { bad++; printf "  not open: #%s (%s)\n", $1, $3 } }
+    END { printf "known deviations: %d issues in the table, %d not open\n", n, bad; exit (bad ? 1 : 0) }' "$t" "$table"
+  local rc=$?; rm -f "$t"; return "$rc"
 }
 
 self_test() {
@@ -530,26 +628,62 @@ EOF
   got="$(run_mode list:a "$d/rows" "$d/m" "$d/t2" | cut -f1 | sort | tr '\n' ' ')"
   chk "after --write, every generated directive agrees with its registration" "$got" "hdrdiff legdiff ndldiff "
   got="$(tail -n 1 "$d/t2/nocolon.al")"; chk "--write never touches a file with a malformed directive" "$got" "## expect run 4"
-  ## --gate: (a) and malformed fail; (b), (c) and the twins do not (they are S3's verdict)
+  ## --gate: (a), malformed and every deviation problem fail; (b) and (c) do not (they are S3's verdict).
+  ## `good` meets its directive on x86_64 and misses it on the three twins, so those three rows are
+  ## the planted known deviations; `bare` and `wrongx86` carry no directive.
   mkdir -p "$d/g"; cp "$d/t/good.al" "$d/t/bare.al" "$d/t/wrongx86.al" "$d/g/"
-  G() { GATE=1 run_mode report "$d/rows" "$d/m" "$d/g" > /dev/null; echo "$?"; }
-  got="$(G)"; chk "--gate passes beside (b), (c) and a twin deviation" "$got" "0"
-  cp "$d/t/nocolon.al" "$d/g/"; got="$(G)"; chk "--gate fails on a malformed directive" "$got" "1"
+  T="$(printf '\t')"
+  dv() { printf '# backend\tpath\tobserved\tissue\n' > "$d/dv"; printf '%s\n' "$@" | LC_ALL=C sort | grep -v '^$' >> "$d/dv"; }
+  is() { printf '# issue\trule\tdifference\trows|none\n' > "$d/is"; printf '%s\n' "$@" >> "$d/is"; }
+  G() { GATE=1 run_mode report "$d/rows" "$d/m" "$d/g" "$d/dv" "$d/is" > /dev/null; echo "$?"; }
+  LD() { run_mode "list:$1" "$d/rows" "$d/m" "$d/g" "$d/dv" "$d/is" | cut -f1,2 | tr '\t' ':' | sort | tr '\n' ' '; }
+  R1="aarch64${T}test/good.al${T}run/133${T}#11"; R2="riscv64${T}test/good.al${T}run/41${T}#11"; R3="wasm${T}test/good.al${T}compile/1${T}#11"
+  I1="11${T}Plant §1${T}a twin answers otherwise${T}rows"
+  dv "$R1" "$R2" "$R3"; is "$I1"
+  got="$(G)"; chk "--gate passes when every missed directive is a listed deviation, beside (b) and (c)" "$got" "0"
+  dv "$R1" "$R2"; got="$(G) $(LD unlisted)"; chk "a missed directive with no row is UNLISTED and fails" "$got" "1 wasm:test/good.al "
+  dv "$R1" "$R2" "wasm${T}test/good.al${T}run/134${T}#11"; got="$(G) $(LD changed)"
+  chk "a row whose observation moved is CHANGED and fails" "$got" "1 wasm:test/good.al "
+  dv "$R1" "$R2" "$R3" "x86_64${T}test/good.al${T}run/41${T}#11"; got="$(G) $(LD stale)"
+  chk "a row for a backend that now meets its directive is STALE and fails: the fix deletes its own row" "$got" "1 x86_64:test/good.al "
+  dv "$R1" "$R2" "$R3" "aarch64${T}test/bare.al${T}run/133${T}#11"; got="$(G) $(LD orphan)"
+  chk "a row no directive speaks for is ORPHAN and fails" "$got" "1 aarch64:test/bare.al "
+  cp "$d/t/good.al" "$d/g/fresh.al"; dv "$R1" "$R2" "$R3" "aarch64${T}test/fresh.al${T}run/133${T}#11"; got="$(G) $(LD pending)"
+  chk "a row for a NEW directive fixture with no manifest row is PENDING, not a failure (the manifest stage fails on it)" "$got" "0 aarch64:test/fresh.al "
+  rm "$d/g/fresh.al"; got="$(G) $(LD orphan)"; chk "the same row once its fixture is gone is ORPHAN" "$got" "1 aarch64:test/fresh.al "
+  dv "$R1" "$R2" "wasm${T}test/good.al${T}compile/1${T}#12"; got="$(G) $(LD unissued)"
+  chk "a row naming an issue the table lacks fails" "$got" "1 wasm:test/good.al "
+  dv "$R1" "$R2" "wasm${T}test/good.al${T}compile/1${T}#?"; got="$(G) $(LD unissued)"
+  chk "a row still marked #? fails" "$got" "1 wasm:test/good.al "
+  dv "$R1" "$R2" "$R3"; is "$I1" "13${T}Plant §2${T}never seen${T}rows"; got="$(G) $(LD issues)"
+  chk "an issue marked rows that no row names fails" "$got" "1 #13:marked rows, but no deviation row names it "
+  is "11${T}Plant §1${T}a twin answers otherwise${T}none"; got="$(G) $(LD unissued | wc -w | tr -d ' ')"
+  chk "an issue marked none that rows name fails" "$got" "1 3"
+  is "$I1" "14${T}Plant §3${T}a spelling, no value differs${T}none"; got="$(G)"
+  chk "an issue marked none, with no row, is a published deviation without a fixture" "$got" "0"
+  is "$I1"; printf '%s\n%s\n' "$R2" "$R1" > "$d/dv"; printf '%s\n' "$R3" >> "$d/dv"; got="$(G)"
+  chk "an unsorted list fails (one sorted row per deviation keeps merge=union safe)" "$got" "1"
+  cp "$d/t/nocolon.al" "$d/g/"; dv "$R1" "$R2" "$R3"; got="$(G)"; chk "--gate fails on a malformed directive" "$got" "1"
   rm "$d/g/nocolon.al"; cp "$d/t/hdrdiff.al" "$d/g/"; got="$(G)"; chk "--gate fails on (a)" "$got" "1"
-  got="$(GATE=1 run_mode report "$d/rows" "$d/nomanifest" "$d/g" > /dev/null 2>&1; echo "$?")"
+  got="$(GATE=1 run_mode report "$d/rows" "$d/nomanifest" "$d/g" "$d/dv" "$d/is" > /dev/null 2>&1; echo "$?")"
   chk "--gate: unusable input is 2, never a pass" "$got" "2"
+  is "$I1" "14${T}Plant §3${T}a spelling${T}none"
+  printf '11 OPEN\n14 OPEN\n99 CLOSED\n' > "$d/st"; issues_open "$d/is" "$d/st" > /dev/null; got="$?"
+  printf '11 OPEN\n14 CLOSED\n' > "$d/st"; issues_open "$d/is" "$d/st" > /dev/null; got="$got $?"
+  chk "--issues-open: 0 when every issue is open, 1 when one is closed" "$got" "0 1"
   rm -rf "$d"
   [ "$rc" = 0 ] && echo "fixture expect self-test: $nchk checks, 0 failed" || echo "fixture expect self-test: FAILED"
   return "$rc"
 }
 
 MODE=report ROWS="" MANIFEST="$ROOT/scripts/corpus.manifest" TESTDIR="$ROOT/test" WRITE=0 GATE=0
+DEVIATIONS="$ROOT/scripts/known-deviations.tsv" ISSUES="$ROOT/scripts/known-deviations.issues.tsv"
 while [ $# -gt 0 ]; do
   case "$1" in
     --report)    MODE=report; shift ;;
     --gate)      MODE=report; GATE=1; shift ;;
-    --list)      case "${2:-}" in a|b|c|conflict|pin|malformed|unmapped|twins) MODE="list:$2" ;;
-                   *) echo "fixture_expect.sh: --list needs one of a b c conflict pin malformed unmapped twins" >&2; exit 2 ;; esac
+    --list)      case "${2:-}" in a|b|c|conflict|pin|malformed|unmapped|twins|stale|unlisted|changed|orphan|unissued|issues|pending) MODE="list:$2" ;;
+                   *) echo "fixture_expect.sh: --list needs one of a b c conflict pin malformed unmapped twins stale unlisted changed orphan unissued issues pending" >&2; exit 2 ;; esac
                  shift 2 ;;
     --generate)  MODE=generate; shift ;;
     --write)     WRITE=1; shift ;;
@@ -557,6 +691,9 @@ while [ $# -gt 0 ]; do
     --rows)      ROWS="${2:-}"; shift 2 ;;
     --manifest)  MANIFEST="${2:-}"; shift 2 ;;
     --test-dir)  TESTDIR="${2:-}"; shift 2 ;;
+    --deviations) DEVIATIONS="${2:-}"; shift 2 ;;
+    --issues)    ISSUES="${2:-}"; shift 2 ;;
+    --issues-open) MODE=issues-open; shift ;;
     --self-test) self_test; exit $? ;;
     -h|--help)   sed -n '2,/^set -u/p' "$ROOT/scripts/fixture_expect.sh" | sed '$d'; exit 0 ;;
     *) echo "fixture_expect.sh: unknown argument '$1' (try --help)" >&2; exit 2 ;;
@@ -565,6 +702,9 @@ done
 [ "$WRITE" = 0 ] || [ "$MODE" = generate ] || { echo "fixture_expect.sh: --write goes with --generate" >&2; exit 2; }
 [ -f "$MANIFEST" ] || { echo "fixture_expect.sh: no manifest at $MANIFEST" >&2; exit 2; }
 [ -d "$TESTDIR" ] || { echo "fixture_expect.sh: no test directory at $TESTDIR" >&2; exit 2; }
+[ -f "$DEVIATIONS" ] || { echo "fixture_expect.sh: no known-deviations list at $DEVIATIONS" >&2; exit 2; }
+[ -f "$ISSUES" ] || { echo "fixture_expect.sh: no issue table at $ISSUES" >&2; exit 2; }
+if [ "$MODE" = issues-open ]; then issues_open "$ISSUES"; exit $?; fi
 mkdir -p "$ROOT/target" && TMPROWS="$(mktemp "$ROOT/target/fixture-expect-rows.XXXXXX")" || exit 2
 trap 'rm -f "$TMPROWS"' EXIT
 if [ -z "$ROWS" ]; then
@@ -572,4 +712,4 @@ if [ -z "$ROWS" ]; then
   ROWS="$TMPROWS"
 fi
 [ -s "$ROWS" ] || { echo "fixture_expect.sh: the registration table is empty — refusing to report on nothing" >&2; exit 2; }
-WRITE="$WRITE" GATE="$GATE" run_mode "$MODE" "$ROWS" "$MANIFEST" "$TESTDIR"
+WRITE="$WRITE" GATE="$GATE" run_mode "$MODE" "$ROWS" "$MANIFEST" "$TESTDIR" "$DEVIATIONS" "$ISSUES"
