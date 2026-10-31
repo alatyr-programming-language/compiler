@@ -6398,6 +6398,19 @@ bind_slice_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, 
   require_reservation(ptr(slots), src, s, n, 2)
   existing := slot_of(ptr(slots), src, s, n)
   if existing >= 0 { return }
+  ## §4 UP-GROWING: the runtime-len FILLER word first (below the base), then the base (data ptr) at the
+  ## TOP — word 0 = ptr = `ent.off`, word 1 = len = `ent.off - 1`.
+  fo := svec_len(ptr(slots))
+  svec_push(slots, SlotEntry(ns = 0, nl = 0, off = fo, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+  off := svec_len(ptr(slots))
+  vsp := slice_view_span(eek, ess, esl)
+  svec_push(slots, SlotEntry(ns = s, nl = n, off = off, sns = vsp.s, snl = vsp.n, ek = 5, estride = stride, eek = eek, is_ref = true))
+}
+
+## The `sns`/`snl` a TYPED SLICE VIEW entry (`ek 5`, `is_ref`; word 0 = data pointer at `off`, word 1 =
+## runtime len at `off - 1`) carries for its element kind `eek`: `bind_slice_slot`'s own binding, and the
+## `match` alias of a `Slice(T)` payload over the payload words (#1318), which are laid out the same way.
+slice_view_span := fn(eek : u8, ess : usize, esl : usize) -> CSpan {
   ## A SCALAR/FLOAT-element slice (no nominal element type) marks its runtime len with `snl == 1` (so
   ## `.len` / emit_str_pair read the len word directly). A STRUCT/ENUM-element slice instead carries
   ## the element TYPE span in `sns`/`snl` so `s[i].field` resolves; its `.len`/str-context is not
@@ -6408,12 +6421,16 @@ bind_slice_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, 
   ## `sns`/`snl` (for eek 7 that is the POINTEE struct span) so `s[i].field` / `deref(s[i]).field`
   ## resolves; a scalar/float slice keeps the `snl == 1` runtime-len marker.
   if eek == 2 or eek == 3 or eek == 7 { sns = ess; snl = esl }
-  ## §4 UP-GROWING: the runtime-len FILLER word first (below the base), then the base (data ptr) at the
-  ## TOP — word 0 = ptr = `ent.off`, word 1 = len = `ent.off - 1`.
-  fo := svec_len(ptr(slots))
-  svec_push(slots, SlotEntry(ns = 0, nl = 0, off = fo, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
-  off := svec_len(ptr(slots))
-  svec_push(slots, SlotEntry(ns = s, nl = n, off = off, sns = sns, snl = snl, ek = 5, estride = stride, eek = eek, is_ref = true))
+  CSpan(s = sns, n = snl)
+}
+
+## #1318 — bind the single payload binding `s/n` whose payload `slice_payload_layout` answered as a slice
+## as a view over the payload words at `off` (word 0 = data ptr, word 1 = len, the view's own order),
+## resolving its element span in the enum owner's module `tmod_s/tmod_l`. Every `match` lowering
+## (statement, tail value and `lower::enum_match`) binds it through here.
+push_slice_view_alias := fn(slots : ptr(SVec), s : usize, n : usize, off : usize, sv : SliceRetInfo, tmod_s : usize, tmod_l : usize) {
+  vsp := slice_view_span(sv.eek, sv.ess, sv.esl)
+  svec_push(deref(slots), SlotEntry(ns = s, nl = n, off = off, sns = vsp.s, snl = vsp.n, ek = 5, estride = sv.stride, eek = sv.eek, is_ref = true, tmod_s = tmod_s, tmod_l = tmod_l))
 }
 
 ## Bind a POINTER-TO-STRUCT local (`ek = 7`): a single word holding the pointer, carrying the
@@ -14119,6 +14136,25 @@ slice_elem_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, en : us
   else { eek = 0; stride = 1 }
   SliceRetInfo(is_slice = true, eek = eek, stride = stride, ess = es, esl = en)
 }
+
+## #1318 — is a `match` payload of type `pty` a slice the binding must be a VIEW of (`ek 5`, `is_ref`,
+## the element's stride and kind) rather than the nominal two-word `Slice` struct the library declares?
+## True for `Slice(T)` with a struct, enum or `str` element: only the view keeps the element layout that
+## `for x in xs` and `xs[i]` read (a struct binding iterated one word per element). A scalar element is
+## one word either way and keeps the struct binding. The ONE answer both the collect-time reservation
+## (`collect_slots`, which sizes a `for` loop var from it) and the emit-time alias (`emit_match`) take.
+slice_payload_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), ps : usize, pn : usize, a : rt::Arena) -> SliceRetInfo {
+  none := SliceRetInfo(is_slice = false, eek = 0, stride = 1, ess = 0, esl = 0)
+  if pn == 0 { return none }
+  bn := base_type_name(src, ps, pn)
+  if str_at((src + bn.s), bn.n) != "Slice" { return none }
+  ta := typearg_at(src, ps, pn, 0)
+  if ta.n == 0 { return none }
+  sel := slice_elem_layout(decls, src, ta.s, ta.n, a)
+  if sel.eek == 2 or sel.eek == 3 or sel.eek == 4 { return sel }
+  none
+}
+
 slice_ret_elem := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize) -> SliceRetInfo {
   mut res := SliceRetInfo(is_slice = false, eek = 0, stride = 1, ess = 0, esl = 0)
   match deref(e) {
@@ -23792,7 +23828,10 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
             mut array_esl := 0
             mut array_estride := 1
             mut array_nel := 0
-            if nbind == 1 and pty.n != 0 {
+            ## #1318 — a `Slice(T)` payload of struct/enum/str elements binds as a slice view.
+            mut slice_pv := SliceRetInfo(is_slice = false, eek = 0, stride = 1, ess = 0, esl = 0)
+            if nbind == 1 { slice_pv = slice_payload_layout(cx.decls, cx.src, pty.s, pty.n, deref(cx.mar)) }
+            if nbind == 1 and pty.n != 0 and slice_pv.is_slice == false {
               ## Resolve the payload decl through the payload's BASE name — the third and last copy of
               ## this three-way payload classification (the statement-match copy below and the one in
               ## `lower::enum_match` already strip). A GENERIC-INSTANCE payload (`Some(v)` where `v` is a
@@ -23827,7 +23866,9 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
                 Some(bndq) => {
                   bmns := bnd_ns(bndq)
                   bmnl := bnd_nl(bndq)
-                  if agg_ek == 5 {
+                  if slice_pv.is_slice {
+                    push_slice_view_alias(cx.slots, bmns, bmnl, sbase - 1 - bi, slice_pv, tail_enum_owner_s, tail_enum_owner_l)
+                  } else if agg_ek == 5 {
                     for fi in 0..(array_nel * array_estride) {
                       svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
                     }
@@ -24551,11 +24592,14 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
         mut array_esl2 := 0
         mut array_estride2 := 1
         mut array_nel2 := 0
+        ## #1318 — a `Slice(T)` payload of struct/enum/str elements binds as a slice view.
+        mut slice_pv2 := SliceRetInfo(is_slice = false, eek = 0, stride = 1, ess = 0, esl = 0)
         if nbind2 == 1 and sise {
           pt2 := variant_payload_span(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, deref(cx.mar))
           ptys2 = pt2.s
           ptyn2 = pt2.n
-          if ptyn2 != 0 {
+          slice_pv2 = slice_payload_layout(cx.decls, cx.src, ptys2, ptyn2, deref(cx.mar))
+          if ptyn2 != 0 and slice_pv2.is_slice == false {
             if str_at((cx.src + ptys2), 1) == "(" {
               ## MULTI-component payload `V(T0, …, TN)` bound to ONE name `p` — a TUPLE (ek 5, N words at
               ## sbase+1). `display(p)`/`hash(p)` then route via `cf_pay_ty` = the `(…)` span to the tuple
@@ -24602,7 +24646,9 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
               Some(bndq) => {
                 bmns := bnd_ns(bndq)
                 bmnl := bnd_nl(bndq)
-                if agg_ek2 == 5 and array_nel2 != 0 {
+                if slice_pv2.is_slice {
+                  push_slice_view_alias(cx.slots, bmns, bmnl, sbase - 1 - bi, slice_pv2, enum_owner_s, enum_owner_l)
+                } else if agg_ek2 == 5 and array_nel2 != 0 {
                   ## The enum already owns the payload block. Add only the filler metadata needed by the
                   ## existing checked aggregate-array bounds path; these entries do not allocate frame words.
                   for fi2 in 0..(array_nel2 * array_estride2) {
