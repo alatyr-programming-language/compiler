@@ -51,19 +51,21 @@ uq := fn(a : u64, b : u64, big : u64) -> u64 when target.arch != Arch.x86_64 {
   if s2 != 0 { return 14 }
   0
 }
+## The `-42` / `-1` spellings in this helper are negations, not a written `0 - N`: sema does not type a
+## `when`-guarded body for the twins (#1273), so a written zero-left `-` there reads unsigned and borrows.
 sq := fn(na : i64, sb : i64, mn : i64) -> u64 when target.arch != Arch.x86_64 {
   o5 : Option(i64) = base::num::checked_mul(na, sb)
-  match o5 { Some(v) => { if v != (0 - 42) { return 16 } } None => { return 15 } }
+  match o5 { Some(v) => { if v != (-42) { return 16 } } None => { return 15 } }
   s3 : i64 = base::num::saturating_mul(na, sb)
-  if s3 != (0 - 42) { return 17 }
+  if s3 != (-42) { return 17 }
   p3 : (i64, bool) = base::num::overflowing_mul(na, sb)
-  if p3.0 != (0 - 42) { return 18 }
+  if p3.0 != (-42) { return 18 }
   if p3.1 { return 19 }
   ## i64 MIN * 1 fits exactly and its true high word is -1, not `a`.
   o6 : Option(i64) = base::num::checked_mul(mn, 1)
   match o6 { Some(v) => { if v != mn { return 21 } } None => { return 20 } }
   ## i64 MIN * -1 is the one product that does not fit; the fall-through must NOT divide by -1 here.
-  o7 : Option(i64) = base::num::checked_mul(mn, 0 - 1)
+  o7 : Option(i64) = base::num::checked_mul(mn, -1)
   match o7 { Some(v) => { return 22 } None => {} }
   0
 }

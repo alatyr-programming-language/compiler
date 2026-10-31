@@ -151,6 +151,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
   grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
   aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
   aarch64, riscv64 and wasm still trap on the granted form (#1157).
+- **A written unsigned `0 - x` is a subtraction again, and borrows (#1154).** `x : u64 = 1`,
+  `y := 0 - x` used to answer 2^64 - 1 on all four backends: the parser builds unary `-x` as `0 - x`,
+  and every unsigned zero-left subtraction skipped its guard as if it were that negation. The parser
+  now records the zero it synthesizes, and only a recorded negation skips the guard (Concurrency §6.3,
+  §6.5). A written `0 - 1` at an unsigned type now traps. Spell the wrap `unchecked (0 - 1)`, or the
+  value itself. Fixtures and `lib/base/num.al` code that sema does not type (a `when`-guarded twin-only
+  helper, a `comptime if` branch for another target, #1273) spell the negation `-N`.
 
 ## 0.2.21 — 2026-11-01
 
