@@ -126,6 +126,16 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`v.push(x)` on a `Vec` of a sub-word element stores what it is given (#988).** A UFCS call that
+  infers its type argument from the receiver was its own instance below two words, tagged by the
+  receiver's name, and `size(T)` in it was 8 bytes: `push` on a `Vec(u8)`, `Vec(u16)` or `Vec(u32)`
+  wrote with a word stride. It is now the same instance as `vec::push(u32, v, x)`.
+
+- **A `Vec` of a sub-word element no longer reads its neighbours into the value (#395).** Inside a
+  generic function, `deref(p)` with `p : ptr(mut T)` used 8 bytes whatever `T` was, so `at`, `try_at`,
+  `get` and `set` on a `Vec(u8)`, `Vec(u16)`, `Vec(u32)` or `Vec(i8)` read the next elements into the
+  value (or wrote over them). It now uses `T`'s width and signedness in that instance.
+
 ## 0.2.19 — 2026-10-31
 
 - **A literal-only `+ - *` in a function's trailing `match` arm takes the function's result type

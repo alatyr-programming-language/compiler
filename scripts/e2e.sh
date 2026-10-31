@@ -12031,6 +12031,19 @@ run issue966_enum_payload_literal_ctx 2
 run issue973_if_branch_context 2
 run issue977_struct_lit_field_ctx 2
 
+## #395, #988 — a `deref(p)` inside a generic instance, where `p : ptr(mut T)` and `T` is a sub-word
+## type, loaded and stored 8 bytes: `deref_pointee_bytes` read `p`'s pointee as the raw spelling `T`
+## and fell to the 8-byte default. Every `Vec(u8/u16/u32/i8)` read through `at`/`try_at`/`get` widened
+## its neighbours into the value and every `set` clobbered them. NON-VACUOUS: on the parent `55fa477`
+## (x86_64) the fixture exits 100 — the `Vec(u8)` element 0 read back as 0xD3952A, not 42.
+run issue395_vec_subword_generic_deref 42
+
+## #988 — `v.push(x)` on a `Vec(u32)` infers `T` from the receiver; below two words the instance was
+## tagged by the receiver's NAME and `size(T)` inside it fell to 8 bytes, so every UFCS push on a
+## sub-word `Vec` stored with an 8-byte stride. NON-VACUOUS: on the parent with the #395 fix (x86_64)
+## the fixture exits 100 — the `Vec(u32)` element 1 read 0.
+run issue988_vec_ufcs_subword_instance 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================
