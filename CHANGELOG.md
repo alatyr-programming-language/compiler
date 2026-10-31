@@ -166,6 +166,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   On x86_64 every WRONG and REFUSED cell needs a row under an open issue in
   `scripts/container-matrix.deviations.tsv` (117 rows at main `640b527c`), and a row whose cell now
   passes fails the gate until its fix deletes it. A planted wrong read is proved to turn it red.
+- **The container matrix tells a crash from a trap (#1277).** Only the checked-failure `ud2` (rc 132)
+  is a `TRAP`; a segfault, any other signal, a timeout or a stray exit code is now `CRASH <rc>`, held
+  like `WRONG`. The 70 crash cells this exposed are rows under #987, #1211, #1256, #1302 and #1303, and
+  a planted segfault is proved to turn the gate red.
 
 ## 0.2.21 — 2026-11-01
 
