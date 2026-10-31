@@ -12315,6 +12315,11 @@ run for_aggregate_body_local 42
 ## Each has the identical program under `take` measured green on that parent, which is the post-fix shape.
 run issue1406_declared_sub_slice_ret 42
 run issue1406_declared_sub_value 42
+## #1318 — a single `match` payload typed `Slice(T)` of struct/enum/str elements is bound as a slice
+## view, not as the nominal two-word `Slice` struct (whose `for` copied one word per element).
+## NON-VACUOUS: on the parent `cc1064e3` (x86_64) the build is refused at `ps[1].a`, and without that
+## check the fixture exits 2 (a struct-element sum read the wrong words).
+run match_slice_payload_for 42
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
