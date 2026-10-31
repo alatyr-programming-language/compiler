@@ -3231,7 +3231,11 @@ fmt_large_input_test() { # min-bytes, want-exit
   diff -q "$o1" "$o2" >/dev/null || { echo "FAIL fmt_large_input: NOT idempotent"; fail=1; return; }
   sc=$(grep -c '##' "$src"); oc=$(grep -c '##' "$o1")
   [ "$sc" = "$oc" ] || { echo "FAIL fmt_large_input: comments $oc want $sc"; fail=1; return; }
-  _e2e_exec_in "$fd" "$CC" run "$o1" >/dev/null 2>&1; got=$?
+  ## Build outside the runtime deadline and time only the program (#1251): `$CC run` put a full compile
+  ## of the generated program under the 10 s deadline, and omen's load turned that into a red gate.
+  "$CC" -o "$fd/fmt_large_bin" "$o1" >"$fd/build.log" 2>&1 ||
+    { echo "FAIL fmt_large_input: the formatted program does not build [$(head -c 120 "$fd/build.log")]"; fail=1; return; }
+  _e2e_exec_in "$fd" "$fd/fmt_large_bin" >/dev/null 2>&1; got=$?
   if _e2e_runtime_failure "fmt_large_input" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   fmt_large_input: $n B formatted, idempotent, $sc comments kept, runs $got"
   else echo "FAIL fmt_large_input: formatted runs $got want $2"; fail=1; fi
