@@ -4,8 +4,8 @@
 # the oracle. Inert once the committed manifest is no longer base_sha256. Regenerate, never hand-edit.
 #   ADDED             24 pair(s)  [ x86_64 6 aarch64 6 riscv64 6 wasm 6 ]
 format=alatyr-corpus-delta-v1
-base_sha256=2596be9af128ce6f9cac42013f13709da03bc74bad7dba8e0928fb6ddcc0c9d1
-result_sha256=196f444c001701a7c5473c760f53ed518f3c3c81c7a947f0535d5af5ebd7fa99
+base_sha256=2894989043ef62583fe0dc02ac18cfb35a9f030ec20f856251a464be8ea027fe
+result_sha256=2ce6dbb711a481de7cfa9c8f5d849b31afe5586419103717fbf187e756fa4996
 pairs=24
 columns=class<TAB>backend<TAB>path<TAB>before<TAB>after
 ADDED	aarch64	test/for_slice_str_bytes.al	-	run/133/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/eaf0528b31c430624b5c4620c9c17389b9f5e75572ddcd4411c932db63e52e76
