@@ -21,7 +21,9 @@
 # - A PR that carries an oracle file or a predicted delta is gated alone by `land.sh N` (its PHASE 6a/6c
 #   own that path), as alatyr-integrate §3 requires. A delta made stale by another landing is rebased by
 #   land.sh itself (#1264), at the screen and again in the solo landing, whose gate runs on the merge
-#   that carries the rebased copy, so the queue needs nothing of its own for it. The others are composed onto origin/main one merge
+#   that carries the rebased copy. That solo landing walks the corpus alone first (land.sh PHASE 3b),
+#   and a rebased delta the walk does not realise is `red` without a full gate; the queue needs nothing
+#   else of its own for it. The others are composed onto origin/main one merge
 #   at a time and never resolved: a PR that conflicts with main is sent back; one that conflicts only
 #   with an earlier member waits for the next pass.
 # - The composed object is gated once by `full.sh`. Green: it is pushed exactly, with
@@ -126,7 +128,8 @@ queue_solo_outcome() { # log
   if grep -q -E '^\*\*\* NOT LANDABLE — gate rc [1-9][0-9]*, post-gate assertions ok \*\*\*$' "$1" &&
      grep -q '^\*\*\* FULL GATE: FAILURES \*\*\*' "$1"; then echo red; return; fi
   if grep -q -e '^\*\*\* NOT LANDABLE — the fresh manifest does not realise' \
-             -e '^\*\*\* NOT LANDABLE — the predicted oracle failed its checks' "$1"; then echo red; return; fi
+             -e '^\*\*\* NOT LANDABLE — the predicted oracle failed its checks' \
+             -e '^\*\*\* NOT LANDABLE — the corpus pre-walk does not realise' "$1"; then echo red; return; fi
   if grep -q -e '^\*\*\* LAND REFUSED (PR shape)' -e '^\*\*\* LAND REFUSED (the merge conflicts)' \
              -e '^\*\*\* LAND REFUSED (screen)' "$1"; then echo refused; return; fi
   if grep -q '^\*\*\* LAND REFUSED (head moved)' "$1"; then echo moved; return; fi
@@ -226,6 +229,8 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   [ "$(queue_solo_outcome "$t/s-two")" = infra ]; _ck $? solo-took-two-green-objects
   printf '*** FULL GATE: FAILURES ***\n\n*** NOT LANDABLE — gate rc 1, post-gate assertions ok ***\n' > "$t/s-red"
   [ "$(queue_solo_outcome "$t/s-red")" = red ]; _ck $? solo-missed-red
+  printf '  pre-walk MISMATCH |   MISPREDICTED x\n\n*** NOT LANDABLE — the corpus pre-walk does not realise the rebased scripts/corpus.expected-delta; the full gate was not run ***\n' > "$t/s-prewalk"
+  [ "$(queue_solo_outcome "$t/s-prewalk")" = red ]; _ck $? solo-missed-a-pre-walk-refusal-of-a-rebased-delta
   printf '*** FULL GATE: GREEN (sweeps RAN) ***\n\n*** NOT LANDABLE — gate rc 0, post-gate assertions FAILED ***\n' > "$t/s-moved-tree"
   [ "$(queue_solo_outcome "$t/s-moved-tree")" = infra ]; _ck $? solo-blamed-the-PR-for-a-tree-that-moved
   printf '*** NOT LANDABLE — a second walk of the same tree did not reproduce the oracle (rc 1) ***\n' > "$t/s-walk"
@@ -281,7 +286,7 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   if [ -n "$bad" ]; then echo "*** queue self-test: FAILED —$bad ***"; return 1; fi
   echo "ok   queue self-test: $k checks — reviewed-head marker, entry rules, head check, gate verdict,"
   echo "     push arguments, busy box and the bisection plan"
-  [ "$k" -ge 48 ] || { echo "queue self-test: $k checks, expected 48"; return 1; }
+  [ "$k" -ge 49 ] || { echo "queue self-test: $k checks, expected 49"; return 1; }
 }
 
 # ---- GitHub ------------------------------------------------------------------------------------------
