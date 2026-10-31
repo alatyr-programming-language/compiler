@@ -60,8 +60,9 @@
 # refused for that alone: PHASE 2 rebases it onto BASE's manifest with `corpus_manifest.sh
 # --rebase-delta` (#1264), and refuses only when a declared pair overlaps what moved, or when its rows
 # do not rebuild its own result. PHASE 3 puts that rebased copy into the merge commit. Every delta PR
-# edits the one `-merge` file, so it is also the one conflict PHASE 3 settles. The merge message says
-# so, and the PR's branch is never rewritten. The rebased rows are a hypothesis about main's code, not
+# edits the one `-merge` file, so PHASE 3 settles a conflict there; it also settles CHANGELOG.md when
+# both sides only added `## Unreleased` bullets, or main opened a release heading there (#1312), and
+# refuses every other conflict. The merge message says so, and the PR's branch is never rewritten. The rebased rows are a hypothesis about main's code, not
 # a fact (#1215), so PHASE 3b walks the corpus alone on the merge and refuses there when the walk does
 # not realise them. The gate then reads the rebased delta as the merged tree's own file, and PHASE 6a
 # commits what it realised.
@@ -308,20 +309,122 @@ land_prewalk_report() { # walk-log
   sed -n '/^corpus delta: the fresh manifest does NOT differ/,/^corpus manifest: MISMATCH against the declared delta/p' "$1"
 }
 
+## CHANGELOG.md in PHASE 3's merge (#1312). Every PR that adds an `## Unreleased` bullet adds it at the
+## same place, so after one lands the next conflicts there, and a seed promotion that opens a release
+## heading under `## Unreleased` does the same. This settles exactly those shapes and refuses the rest:
+## each conflict hunk must be a pure addition on both sides (an empty base), sit under `## Unreleased`,
+## and have a bullet run (`- ` lines and their indented continuations) on the PR's side. Main's side is
+## either a bullet run, kept first with the PR's after it, or a release heading over bullets, in which
+## case the PR's run goes above it, still under `## Unreleased`. Input: `git merge-file --diff3` output.
+## Writes the resolved file to stdout and `<hunks> <headings>` to <summary>; a refusal names its hunk
+## on stderr and exits 1.
+land_changelog_resolve() { # diff3-merged-file summary-file
+  awk -v sum="$2" '
+    function isbul(s) { return s ~ /^- / || s ~ /^  +[^ ]/ }
+    function isrel(s) { return s ~ /^## [0-9]+\.[0-9]+\.[0-9]+([^0-9]|$)/ }
+    function fail(m)  { print "CHANGELOG.md conflict hunk " h ": " m > "/dev/stderr"; bad = 1; exit 1 }
+    function emit(s)  { print s; if (s ~ /^## /) sec = s }
+    function resolve(   p, s, i, ob, oe, tb, te, ok) { # ok: main side without its trailing blanks
+      h++
+      if (nb > 0) fail("both sides rewrite existing lines; only additions are settled")
+      p = 0; while (p < no && p < nt && o[p+1] == t[p+1]) { p++; emit(o[p]) }
+      s = 0; while (s < no - p && s < nt - p && o[no-s] == t[nt-s]) s++
+      if (sec !~ /^## Unreleased[[:space:]]*$/) fail("it sits under \"" sec "\", not ## Unreleased")
+      ob = p + 1; oe = no - s; tb = p + 1; te = nt - s
+      while (te >= tb && t[te] == "") te--
+      if (te < tb || t[tb] !~ /^- /) fail("the PR side is not a bullet run")
+      for (i = tb; i <= te; i++) if (!isbul(t[i])) fail("the PR side is not a bullet run: \"" t[i] "\"")
+      while (ob <= oe && o[ob] == "") ob++
+      if (ob > oe) fail("main side is empty")
+      if (o[ob] ~ /^- /) {
+        for (i = ob; i <= oe; i++) if (o[i] != "" && !isbul(o[i])) fail("main side is not a bullet run: \"" o[i] "\"")
+        ok = oe; while (o[ok] == "") ok--
+        for (i = p + 1; i <= ok; i++) emit(o[i])
+        for (i = tb; i <= te; i++) emit(t[i])
+        for (i = 0; i < oe - ok || i < nt - s - te; i++) emit("")
+      } else if (isrel(o[ob])) {
+        for (i = ob + 1; i <= oe; i++) if (o[i] != "" && !isbul(o[i])) fail("main side under its release heading is not bullets: \"" o[i] "\"")
+        for (i = tb; i <= te; i++) emit(t[i])
+        emit("")
+        for (i = ob; i <= oe; i++) emit(o[i])
+        heads++
+      } else fail("main side is neither a bullet run nor a release heading: \"" o[ob] "\"")
+      for (i = nt - s + 1; i <= nt; i++) emit(t[i])
+    }
+    st == 0 && /^<<<<<<< / { st = 1; no = 0; nb = 0; nt = 0; next }
+    st == 1 && /^\|\|\|\|\|\|\| / { st = 2; next }
+    st == 1 && /^=======$/ { h++; fail("no base section (not diff3 output)") }
+    st == 2 && /^=======$/ { st = 3; next }
+    st == 3 && /^>>>>>>> / { resolve(); st = 0; next }
+    st == 1 { o[++no] = $0; next }
+    st == 2 { b[++nb] = $0; next }
+    st == 3 { t[++nt] = $0; next }
+    { emit($0) }
+    END {
+      if (bad) exit 1
+      if (st != 0) { print "CHANGELOG.md: an unterminated conflict hunk" > "/dev/stderr"; exit 1 }
+      if (h == 0) { print "CHANGELOG.md: no conflict hunk to settle" > "/dev/stderr"; exit 1 }
+      print h + 0, heads + 0 > sum
+    }' "$1"
+}
+## Settles a conflicted CHANGELOG.md in the merge in progress from its three index stages, stages the
+## result, and prints the sentence the merge message and the log carry. 1 (merge left as it was): any
+## stage is missing (an add/add or a deletion), or land_changelog_resolve refused.
+land_changelog_merge() {
+  local d rc n hd
+  d="$(git rev-parse --absolute-git-dir)/land-changelog" && rm -rf "$d" && mkdir -p "$d" || return 1
+  git show :1:CHANGELOG.md > "$d/base" 2>/dev/null && git show :2:CHANGELOG.md > "$d/main" 2>/dev/null &&
+    git show :3:CHANGELOG.md > "$d/pr" 2>/dev/null ||
+    { echo "  CHANGELOG.md: not a content conflict (a side added or deleted the file)" >&2; rm -rf "$d"; return 1; }
+  git merge-file -p --diff3 -L main -L base -L pr "$d/main" "$d/base" "$d/pr" > "$d/merged"; rc=$?
+  if [ "$rc" -lt 0 ] || [ "$rc" -gt 127 ] || ! land_changelog_resolve "$d/merged" "$d/sum" > "$d/out"; then
+    rm -rf "$d"; return 1
+  fi
+  cp "$d/out" CHANGELOG.md && git add -- CHANGELOG.md || { rm -rf "$d"; return 1; }
+  read -r n hd < "$d/sum"; rm -rf "$d"
+  printf 'CHANGELOG.md: %s conflict hunk(s) under ## Unreleased settled by scripts/land.sh (#1312):\n' "$n"
+  printf "both bullet runs kept, main's first"
+  [ "$hd" -gt 0 ] && printf "; in %s, main's side opened a release heading, so the PR's run stays\nunder ## Unreleased above it" "$hd"
+  printf '.\n'
+}
+
+## Does merging <pr> into <base> conflict in CHANGELOG.md and, besides it, at most in the delta file?
+## The screen's question: such a PR is landed alone, where PHASE 3 settles those two (#1312).
+land_changelog_only_conflict() { # base pr
+  local out rc
+  out="$(git merge-tree --write-tree --name-only --no-messages "$1" "$2" 2>/dev/null)"; rc=$?
+  [ "$rc" = 1 ] || return 1
+  out="$(printf '%s\n' "$out" | sed 1d | sed '/^$/d')"
+  printf '%s\n' "$out" | grep -qx CHANGELOG.md || return 1
+  [ -z "$(printf '%s\n' "$out" | grep -vx -e CHANGELOG.md -e "$DELTA_REL")" ]
+}
+
 ## PHASE 3's merge. Every delta PR edits the ONE file scripts/corpus.expected-delta, and .gitattributes
 ## marks it `-merge`, so after any delta PR lands, every other one conflicts on it, whatever else it
 ## does. <landing-delta> is the prediction this landing gates (the PR's own when it is live, its
-## rebase when it was stale), and the merge carries it. When that file is the ONLY conflict, it resolves
-## the conflict; on a clean merge whose copy differs, it replaces that copy. Any other conflicted path
-## aborts the merge, as before. <note> goes into the merge message whenever the file was written, so
-## the merge commit says why its delta differs from the PR's.
+## rebase when it was stale), and the merge carries it: on a conflict there it takes that side, and on a
+## clean merge whose copy differs, it replaces that copy. A conflicted CHANGELOG.md is settled by
+## land_changelog_merge, or refused (#1312). Any other conflicted path aborts the merge, as before.
+## <note> goes into the merge message whenever the delta was written, so the merge commit says why its
+## delta differs from the PR's; the CHANGELOG sentence goes there whenever that file was settled.
 ##   0  merged (HEAD is the merge commit)    1  a conflict this does not resolve (merge aborted)
 land_merge_pr() { # pr-ref subject link landing-delta|'' note
-  local ref="$1" subj="$2" link="$3" ld="$4" note="$5" unmerged wrote=0 msg
+  local ref="$1" subj="$2" link="$3" ld="$4" note="$5" unmerged wrote=0 msg p clnote=''
   if ! git merge --no-ff --no-commit --no-verify "$ref" >/dev/null 2>&1; then
     unmerged="$(git diff --name-only --diff-filter=U)"
-    if [ -z "$ld" ] || [ "$unmerged" != "$DELTA_REL" ]; then
-      git merge --abort 2>/dev/null; return 1
+    [ -n "$unmerged" ] || { git merge --abort 2>/dev/null; return 1; }
+    for p in $unmerged; do
+      case "$p" in
+        "$DELTA_REL") [ -n "$ld" ] || { git merge --abort 2>/dev/null; return 1; } ;;
+        CHANGELOG.md) ;;
+        *) git merge --abort 2>/dev/null; return 1 ;;
+      esac
+    done
+    if printf '%s\n' "$unmerged" | grep -qx CHANGELOG.md; then
+      clnote="$(land_changelog_merge)" || {
+        echo "  CHANGELOG.md conflicts in a shape scripts/land.sh does not settle (above)"
+        git merge --abort 2>/dev/null; return 1; }
+      printf '%s\n' "$clnote" | sed 's/^/  /'
     fi
   fi
   if [ -n "$ld" ] && { [ -n "$(git diff --name-only --diff-filter=U)" ] || ! cmp -s "$ld" "$DELTA_REL"; }; then
@@ -332,6 +435,9 @@ land_merge_pr() { # pr-ref subject link landing-delta|'' note
   [ "$wrote" = 1 ] && [ -n "$note" ] && msg="$msg
 
 $note"
+  [ -n "$clnote" ] && msg="$msg
+
+$clnote"
   [ -n "$link" ] && msg="$msg
 
 $link"
@@ -386,7 +492,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=105  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk
+LAND_SELFTEST_EXPECTED=114  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +9 #1312
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -643,6 +749,61 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
   _ck $? delta-base-fired-on-a-PR-that-does-not-carry-a-delta
   pr_delta_base_check "$DELTA_REL" absent bbbb >/dev/null 2>&1
   _ck $? delta-base-refused-the-deletion-of-a-spent-delta
+
+  # ---- 5d · PHASE 3's merge settles CHANGELOG.md beside the delta, and refuses every other shape
+  #      (#1312). d1 and d2 are two delta PRs off one base, each with an `## Unreleased` bullet.
+  local gc="$st/gc" cb cw ct
+  ( set -e
+    git init --quiet -b b0 "$gc"; cd "$gc"
+    git config user.name t; git config user.email t@t; git config commit.gpgsign false; git config core.hooksPath /dev/null
+    mkdir scripts; printf '%s -merge\n' "$DELTA_REL" > .gitattributes
+    printf '# C\n\n## Unreleased\n\n## 0.1.0 — d\n\n- old\n' > CHANGELOG.md
+    echo spent-0 > "$DELTA_REL"; echo src-0 > src; git add -A; git commit --quiet -m base
+    unrel() { ADD="$1" awk '{ print } /^## Unreleased$/ { getline; print; printf "%s\n", ENVIRON["ADD"] }' CHANGELOG.md > c.tmp; mv c.tmp CHANGELOG.md; }
+    git switch --quiet -c d1 b0; echo d1-delta > "$DELTA_REL"; echo src-1 > src; unrel '- one
+  cont
+'; git add -A; git commit --quiet -m d1
+    git switch --quiet -c d2 b0; echo d2-delta > "$DELTA_REL"; echo two > two; unrel '- two
+'; git add -A; git commit --quiet -m d2
+    git switch --quiet -c sx b0; echo src-x > src; unrel '- six
+'; git add -A; git commit --quiet -m sx
+    git switch --quiet -c bad b0; unrel 'Some prose.
+'; git add -A; git commit --quiet -m bad
+    git switch --quiet -c rw b0; sed 's/^- old$/- old (pr)/' CHANGELOG.md > c.tmp; mv c.tmp CHANGELOG.md; git commit --quiet -am rw
+  ) >/dev/null 2>&1
+  _ck $? selftest-could-not-build-the-changelog-repository
+  echo d1-delta > "$st/ld1"; echo d2-delta > "$st/ld2"
+  ( cd "$gc" && git switch --quiet --detach b0 && land_merge_pr d1 'merge #1: d1' '' "$st/ld1" 'NOTE' &&
+    git branch t1 && git switch --quiet -c tr t1 &&
+    sed 's/^- old$/- old (main)/' CHANGELOG.md > c.tmp && mv c.tmp CHANGELOG.md && git commit --quiet -am reword &&
+    git switch --quiet -c tp t1 &&
+    awk '/^## Unreleased$/ { print; print ""; print "## 0.2.0 — e"; next } { print }' CHANGELOG.md > c.tmp &&
+    mv c.tmp CHANGELOG.md && git commit --quiet -am promote ) >/dev/null 2>&1
+  _ck $? changelog-selftest-first-delta-PR-did-not-land
+  ( cd "$gc" && git switch --quiet --detach t1 &&
+    land_merge_pr d2 'merge #2: d2' 'Closes #8' "$st/ld2" 'NOTE: d2' &&
+    [ "$(git show "HEAD:$DELTA_REL")" = d2-delta ] && [ "$(git show HEAD:two)" = two ] && [ "$(git show HEAD:src)" = src-1 ] &&
+    [ "$(git show HEAD:CHANGELOG.md | tr '\n' '|')" = '# C||## Unreleased||- one|  cont|- two||## 0.1.0 — d||- old|' ] &&
+    [ "$(git log -1 --format=%B HEAD)" = "$(printf '%s\n\n%s\n\n%s\n%s\n\n%s' 'merge #2: d2' 'NOTE: d2' \
+      'CHANGELOG.md: 1 conflict hunk(s) under ## Unreleased settled by scripts/land.sh (#1312):' \
+      "both bullet runs kept, main's first." 'Closes #8')" ] ) >/dev/null 2>&1
+  _ck $? second-delta-PR-did-not-land-after-the-first-without-a-rebase
+  ( cd "$gc" && git switch --quiet --detach tp &&
+    land_merge_pr d2 'merge #2: d2' '' "$st/ld2" 'NOTE' &&
+    [ "$(git show HEAD:CHANGELOG.md | tr '\n' '|')" = '# C||## Unreleased||- two||## 0.2.0 — e||- one|  cont||## 0.1.0 — d||- old|' ] &&
+    git log -1 --format=%B HEAD | grep -q 'opened a release heading' ) >/dev/null 2>&1
+  _ck $? changelog-run-not-kept-under-Unreleased-above-a-release-main-opened
+  for lb in 'sx source-file-conflict-beside-the-changelog t1' 'bad changelog-paragraph-that-is-no-bullet t1' \
+            'rw changelog-line-both-sides-rewrote tr'; do
+    read -r cb cw ct <<< "$lb"
+    ( cd "$gc" && git switch --quiet --detach "$ct" && b="$(git rev-parse HEAD)" &&
+      ! land_merge_pr "$cb" "merge: $cb" '' '' '' && [ "$(git rev-parse HEAD)" = "$b" ] &&
+      ! git rev-parse -q --verify MERGE_HEAD && [ -z "$(git status --porcelain --untracked-files=no)" ] ) >/dev/null 2>&1
+    _ck $? "merge-settled-a-$cw"
+  done
+  ( cd "$gc" && land_changelog_only_conflict t1 d2 ) >/dev/null 2>&1; _ck $? screen-missed-a-changelog-only-conflict
+  ( cd "$gc" && ! land_changelog_only_conflict t1 sx && ! land_changelog_only_conflict b0 d2 ) >/dev/null 2>&1
+  _ck $? screen-sent-alone-a-source-conflict-or-a-clean-merge
 
   # ---- 5c · PHASE 3b: a rebased delta is walked alone before the full gate; a live one is not. ----
   land_prewalk_needed aaaa; _ck $? prewalk-skipped-for-a-rebased-delta
@@ -983,6 +1144,11 @@ if [ "$DO_SCREEN" = 1 ]; then
   SOLO=no
   printf '%s\n' "$CHANGED" | grep -qx -e scripts/corpus.manifest -e scripts/idiom.baseline \
     -e scripts/needle.baseline -e "$DELTA_REL" && SOLO=yes
+  ## The queue composes a batch with plain merges and never resolves one, so a PR that conflicts with
+  ## main only in CHANGELOG.md lands alone, through PHASE 3, which settles it (#1312).
+  if [ "$SOLO" = no ] && land_changelog_only_conflict "$BASE" "$HEAD_SHA"; then
+    SOLO=yes; echo "  CHANGELOG.md conflicts with main and nothing else does: solo, so PHASE 3 settles it"
+  fi
   [ "$IS_FORK" = no ] || { verdict "LAND REFUSED (screen) — a fork PR is landed by hand, never by the queue"; exit 1; }
   echo "land-screen: pr=$PR head=$HEAD_SHA solo=$SOLO link=$ISSUE_LINK"
   verdict "SCREEN OK — nothing was merged"
