@@ -4649,6 +4649,62 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
     push_str(sb, "  pushq %rax\n")
     return
   }
+  ## #1256 — a GENERIC call returning its type parameter (`mk(S1, x)`, `vec::at(S1, ptr(v), i)`)
+  ## passed straight as an argument. `struct_ret_call` / `enum_ret_call_d` read the declared `-> T`
+  ## and answer no, so the call fell to the scalar default and its first returned WORD was pushed as
+  ## the callee's by-reference block pointer (SIGSEGV). Resolve the return through the call's type
+  ## argument with the same resolvers the binding `x := mk(S1, …)` uses (`gen_ret_struct_span`,
+  ## `gen_ret_sret_span`, `gen_ret_enum_span`), stage the result in an agg-temp block, and pass the
+  ## block's address like the concrete arms above and below.
+  gas1256 := gen_ret_struct_span(e, cx.decls, cx.src, a)
+  if gas1256.n != 0 and cx.agg_tmp >= 0 {
+    grw := struct_words(cx.decls, cx.src, gas1256.s, gas1256.n, a)
+    emit_struct_value(e, sb, cx, a, nl)
+    gaoff := agg_alloc(cx)
+    for k in 0..grw {
+      push_str(sb, "  movq ")
+      emit_retreg(sb, k)
+      push_str(sb, ", -")
+      push_int(sb, (i64(gaoff) - i64(k) + 1) * 8)
+      push_str(sb, "(%rbp)\n")
+    }
+    gaent := SlotEntry(ns = 0, nl = 0, off = usize(gaoff), sns = 0, snl = 0, ek = 2, estride = 1, eek = 0, is_ref = false)
+    emit_agg_base_addr(gaent, sb)
+    push_str(sb, "  pushq %rax\n")
+    return
+  }
+  if gen_ret_sret_span(e, cx.decls, cx.src, a).n != 0 and cx.agg_tmp >= 0 {
+    gwoff := agg_alloc(cx)
+    ovgwc := cx.sret_call
+    cx.sret_call = gwoff
+    emit_struct_value(e, sb, cx, a, nl)
+    cx.sret_call = ovgwc
+    gwent := SlotEntry(ns = 0, nl = 0, off = usize(gwoff), sns = 0, snl = 0, ek = 2, estride = 1, eek = 0, is_ref = false)
+    emit_agg_base_addr(gwent, sb)
+    push_str(sb, "  pushq %rax\n")
+    return
+  }
+  ges1256 := gen_ret_enum_span(e, cx.decls, cx.src, a)
+  if ges1256.n != 0 and cx.agg_tmp >= 0 {
+    gerw := 1 + enum_inst_words(cx.decls, cx.src, ges1256.s, ges1256.n, a)
+    if gerw > 7 {
+      lower_show_src_line(cx.src, ges1256.s)
+      panic("selfhost: a generic call returning an enum wider than seven words cannot be passed straight as an argument yet (#1256) - bind it to a local first")
+    }
+    emit_enum_value(e, sb, cx, a, nl)
+    geoff := agg_alloc(cx)
+    for k in 0..gerw {
+      push_str(sb, "  movq ")
+      emit_retreg(sb, k)
+      push_str(sb, ", -")
+      push_int(sb, (i64(geoff) - i64(k) + 1) * 8)
+      push_str(sb, "(%rbp)\n")
+    }
+    geent := SlotEntry(ns = 0, nl = 0, off = usize(geoff), sns = 0, snl = 0, ek = 3, estride = 1, eek = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
+    emit_agg_base_addr(geent, sb)
+    push_str(sb, "  pushq %rax\n")
+    return
+  }
   ## A WIDE (> 7-word, SRET) struct-returning call passed DIRECTLY as a by-value aggregate argument
   ## (`sumf(mk())`) — the sret dual of the register-return case just above. Such a callee delivers its
   ## result through a hidden result POINTER, so it needs a destination: allocate a fresh agg-temp block
@@ -28306,7 +28362,15 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## helper is neutral for a scalar/non-generic layout and therefore leaves existing returns intact.
   rpsub := subst_param_enum_span(d.ret_ts, d.ret_tl, p.decls, p.src, deref(p.mar), p.mar, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
   if rpsub.n != 0 { ers = rpsub.s; erl = rpsub.n }
-  renum := erl != 0 and enum_decl_of(p.decls, p.src, ers, erl) >= 0
+  ## #1256 — a `-> T` instance at a GENERIC-ENUM instance (`vec::at(Option(u64), …)`, `mk(Option(u64),
+  ## …)`) presents the full `Option(u64)` text here, which names no enum decl: the return was classified
+  ## scalar and delivered the discriminant alone, so the payload the caller staged from %rdx was stale.
+  ## Look the enum up by its base name, as the struct check below does (#473). A niche-folded
+  ## `Option(ptr(P))` is one word and keeps the scalar delivery every caller already expects.
+  tpret := gpl != 0 and d.ret_tl != 0 and lower_ctx::streq(p.src, d.ret_ts, d.ret_tl, gps, gpl)
+  ersb1256 := base_type_name(p.src, ers, erl)
+  renum := erl != 0 and (enum_decl_of(p.decls, p.src, ers, erl) >= 0
+    or (tpret and rpsub.n == 0 and is_niche_folded(p.src, ers, erl) == false and enum_decl_of(p.decls, p.src, ersb1256.s, ersb1256.n) >= 0))
   ## STRIP `(…)` type-args for the struct-decl LOOKUP of the EFFECTIVE return type. `ers`/`erl` is
   ## the SUBSTITUTED span, so a generic fn declared `-> T` instantiated at a GENERIC-STRUCT instance
   ## (`unwrap(Pair(u64, u64), o) -> Pair(u64, u64)`) presents the full text here, which streqs no decl
