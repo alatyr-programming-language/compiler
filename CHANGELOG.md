@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **An out-of-range index into a slice view local now traps on x86_64 (#1274).** For a view local
+  (`xs := t[0..2]` or `xs : Slice(P) = t[0..2]`) whose element is a struct, enum, `str`, pointer or
+  `f64`, x86_64 emitted no bounds check: `xs[5].b` read past the view and the program ran on with
+  whatever it found, `xs[5].b = 7` wrote past it, and a pointer element crashed (SIGSEGV). Each now
+  traps like a `u64`-element view does. Dropped in an `unchecked` scope, as before (CG-7).
+
 - **An annotated struct-element slice view local no longer crashes on x86_64 (#1182).** A local
   written `xs : Slice(P) = t[0..2]` over a struct array was read as a `Slice(P)` parameter, because the
   x86_64 lowering took any annotated name for one: `xs[0].b`, `xs[1]`, `xs[1..2]` and `for p in xs`
