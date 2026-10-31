@@ -19,7 +19,9 @@
 #   `main`, be ready (not draft, no `hold`), carry exactly one line-initial relation marker, and pass
 #   `land.sh N --screen` (preconditions, provenance, PR shape; forks refused) on its reviewed head.
 # - A PR that carries an oracle file or a predicted delta is gated alone by `land.sh N` (its PHASE 6a/6c
-#   own that path), as alatyr-integrate §3 requires. The others are composed onto origin/main one merge
+#   own that path), as alatyr-integrate §3 requires. A delta made stale by another landing is rebased by
+#   land.sh itself (#1264), at the screen and again in the solo landing, whose gate runs on the merge
+#   that carries the rebased copy, so the queue needs nothing of its own for it. The others are composed onto origin/main one merge
 #   at a time and never resolved: a PR that conflicts with main is sent back; one that conflicts only
 #   with an earlier member waits for the next pass.
 # - The composed object is gated once by `full.sh`. Green: it is pushed exactly, with
