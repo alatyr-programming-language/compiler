@@ -2,6 +2,7 @@
 ## themselves struct literals `Outer(a = Inner(x = 1, y = 2), b = Inner(x = 3, y = 4))`, alongside an
 ## array literal. The by-name field recovery + comma joining nest correctly. Sum of all fields +
 ## array = 1+2+3+4 + 10+20+12 = 52.
+## expect: run 52
 Inner := struct { x : u64, y : u64 }
 Outer := struct { a : Inner, b : Inner }
 main := fn() -> u64 {

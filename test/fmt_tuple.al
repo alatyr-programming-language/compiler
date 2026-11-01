@@ -7,6 +7,7 @@
 ## `p[0]` is; and `a.0[2]` mixes a `.N` step with a real `[i]` step in one chain. `S`'s `mut x` is
 ## recorded nowhere in the AST either — CT-6 `Field.mutable` re-reads it from source, so dropping the
 ## marker changes what `count_mut` returns. Returns 42 iff every value survived the reformat.
+## expect: run 42
 S := struct { mut x : u64, y : u64 }
 
 count_mut := fn(T : type) -> u64 {

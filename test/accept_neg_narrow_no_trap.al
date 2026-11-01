@@ -25,3 +25,4 @@ main := fn() -> i64 {
   if -q != 4294967289 { return 7 }         ## 2^32 - 7
   return 42
 }
+## expect: run 42

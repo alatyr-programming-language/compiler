@@ -3,3 +3,4 @@ main := fn() -> u64 {
   s := "\xff"
   s.len
 }
+## expect: reject

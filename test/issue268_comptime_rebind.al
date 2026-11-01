@@ -2,6 +2,7 @@
 ## case cannot spell its rebinding as a second `x :=` beside the first (issue #414 rejects that in
 ## `check`; the reject fixture `same_scope_redecl_comptime` now owns that shape). What #268 is about
 ## survives unchanged: the comptime binding must carry its real value, 5, not 0.
+## expect: run 26
 seq := fn() -> u64 {
   comptime x := 5
   if x != 5 { return 1 }

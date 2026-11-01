@@ -7,6 +7,7 @@
 ## the saved frame pointer). Now the parser routes it to a `FieldPathAssign` and lower stores the field
 ## at `fi*8(ptr)` (the ascending pointee layout the read uses). Writes word 0 (`a`) AND word 1 (`b`)
 ## through the pointer param, then reads them back: 40 + 2 = 42.
+## expect: run 42
 Rec := struct { a : i64, b : i64 }
 setab := fn(p : ptr(mut Rec)) {
   deref(p).a = 40

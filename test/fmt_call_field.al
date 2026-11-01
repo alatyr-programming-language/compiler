@@ -6,6 +6,7 @@
 ## `Field` base is a bare `Var` immediately followed by `(`. (A zero-arg `g().v` was never affected —
 ## `is_generic_enum_ctor` bails on empty parens.) mk(n) = P(v=n, w=n+1):
 ##   a=mk(20).v=20 ; b=mk(6).w=7 ; c=mk(arr[1]).v=mk(9).v=9 ; d=mk(2).v+mk(4).w=2+5=7 ; sum-1 = 42.
+## expect: run 42
 P := struct { v : u64, w : u64 }
 mk := fn(n : u64) -> P { return P(v = n, w = n + 1) }
 main := fn() -> u64 {

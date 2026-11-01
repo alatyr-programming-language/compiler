@@ -7,6 +7,7 @@
 ##
 ## 42 means each payload round-tripped its value. Each miss owns its own code from 100 up. The pointer
 ## payloads point at a `u64`, not a struct: a field read through a payload binding is #858.
+## expect: run 42
 
 E := enum { A(u64), B(ptr(u64)), C(Option(u64)), D(u64, ptr(u64)), Z }
 

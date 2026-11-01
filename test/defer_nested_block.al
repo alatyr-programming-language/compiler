@@ -4,6 +4,7 @@
 ## so arm-fall-through-first gives ACC = 1 then 12 — the exit code 12 PROVES the defer ran at the arm's
 ## fall-through (before the post-if bump(2)). If it had been deferred to the function end instead, ACC
 ## would be 21 (bump(2) then bump(1)); if dropped, 2.
+## expect: run 12
 mut ACC : u64 = 0
 bump := fn(n : u64) -> u64 { ACC = ACC * 10 + n ; 0 }
 f := fn() -> u64 {

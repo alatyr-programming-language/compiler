@@ -5,6 +5,7 @@
 ## Both spellings appear below so a fix cannot pass by simply ALWAYS writing `mut`: `wp` is written
 ## `ptr(mut u8)` and must come back with the marker, `rp` is written `ptr(u8)` and must come back
 ## without it. Behaviour is identical either way — the `fmt-has` needles are the real assertion.
+## expect: run 42
 main := fn() -> u64 {
   mut cell : u64 = 0
   addr := unchecked bitcast(usize, ptr(mut cell))

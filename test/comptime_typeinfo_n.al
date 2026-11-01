@@ -2,6 +2,7 @@
 ## usable as a `comptime for` length bound (derive's index folds). STRUCT → field count, TUPLE →
 ## component count (ARRAY → element count already worked). `cnt(S)` unrolls 3× (3 fields), `cnt((…×4))`
 ## unrolls 4× (4 components): 3*10 + 4 = 34.
+## expect: run 34
 S := struct { a : u64, b : u64, c : u64 }
 
 cnt := fn(T : type) -> u64 {

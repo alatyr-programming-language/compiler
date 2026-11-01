@@ -5,6 +5,7 @@
 ## file a user writes tests in (`native_test_runner_flags`). The declaration is copied verbatim from
 ## the `@` through the balanced end of its body instead, so both the anonymous and the named spelling
 ## round-trip exactly, and the body's own `##` comments come along.
+## expect: run 42
 @test("named test with a Result return")
 ok_case := fn() -> Result(usize, str) {
   ## a comment inside a verbatim-copied body

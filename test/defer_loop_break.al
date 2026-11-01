@@ -3,6 +3,7 @@
 ## iterations 1 and 2 fall through (i < 3) → bump(1) at each end → ACC 1, 11; iteration 3 `break`s →
 ## its defer bumps too → ACC 111. If the break-path defer were dropped, ACC would be 11; if it ran at
 ## the function end instead, ACC would be 11 then a late bump (1121 or similar).
+## expect: run 111
 mut ACC : u64 = 0
 bump := fn(n : u64) -> u64 { ACC = ACC * 10 + n ; 0 }
 f := fn() -> u64 {

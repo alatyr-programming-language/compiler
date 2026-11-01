@@ -18,6 +18,7 @@
 ##
 ## Each check returns its own distinct status, so a permutation of the checks cannot be mistaken for
 ## a pass; 42 is reached only when all four hold.
+## expect: run 42
 sink := fn(n : usize) -> u64 { u64(n) }
 
 main := fn() -> u64 {

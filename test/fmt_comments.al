@@ -1,5 +1,6 @@
 ## The answer helper.
 ## Returns a constant.
+## expect: run 42
 answer := fn() -> u64 {
   return 42
 }

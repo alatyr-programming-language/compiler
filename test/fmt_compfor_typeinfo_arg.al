@@ -7,6 +7,7 @@
 ## (`comptime_typeinfo_arg`). Both spellings are pinned here, over types with DIFFERENT member counts
 ## so a substitution changes the answer instead of hiding in it.
 ## `main`'s two headers use a concrete type at TOP LEVEL, where no type-param is in scope at all.
+## expect: run 42
 A := struct { a : u64, b : u64 }
 B := struct { p : u64, q : u64, r : u64 }
 E := enum { X, Y, Z, W }

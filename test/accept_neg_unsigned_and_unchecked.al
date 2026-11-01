@@ -21,3 +21,4 @@ main := fn() -> u64 {
   if n != 18446744073709551611 { return 2 }
   return 42
 }
+## expect: run 42

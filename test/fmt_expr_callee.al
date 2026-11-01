@@ -8,6 +8,7 @@
 ##   first function-value call 10 + second function-value call 10 + runtime-index call 10 +
 ##   parenthesized call 10 + add1(9) 10 + t.fs[j](3) loop 10
 ##   + ops[0](4, 6) 10 + id(ops[1](14, 4)) 10 = 80
+## expect: run 80
 add1 := fn(x : u64) -> u64 {
   return x + 1
 }

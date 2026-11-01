@@ -6,3 +6,4 @@
 main := fn() -> u64 {
   return (fn(n : u64) -> u64 { return n + 2 })(40)
 }
+## expect: reject

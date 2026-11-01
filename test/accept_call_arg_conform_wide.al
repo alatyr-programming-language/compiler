@@ -24,6 +24,7 @@
 ## returned rc=1, wrote 0 stdout bytes and 91 stderr bytes, with `selfhost: fmt — embed("…") is not
 ## modelled: the node keeps the file BYTES, not the path`. The check-only program remains a formatter-only
 ## idempotence/acceptance control because its unrelated overload set does not link.
+## expect: accept
 Meters := brand(u64)
 
 id := fn(T : type, x : T) -> T { return x }

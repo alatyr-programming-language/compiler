@@ -8,6 +8,7 @@
 ## the prefix or became a silent layout corrupter. CLAYOUT S4 now makes the un-attributed direct-scalar control Pfx
 ## naturally byte-laid out at 8 bytes; the packed declaration remains 7 bytes. This fixture locks the
 ## render, so it cannot regress silently.
+## expect: run 42
 Pfx := struct { a : u8, b : u16, c : u32 }
 
 ## a doc block sitting ABOVE the attribute line must still attach to the declaration — the attribute

@@ -2,6 +2,7 @@
 ## now round-trips (was fail-loud: "str/comptime statement-match arm not modelled"). Both the
 ## statement-match and value-match arm printers recover the `Expr::StrLit` pattern node from the
 ## arm's `lit` handle and render it `"…"`. classify("yes") = 1; 1 + 41 = 42.
+## expect: run 42
 classify := fn(s : str) -> u64 {
   match s {
     "yes" => { return 1 }
