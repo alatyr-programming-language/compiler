@@ -338,7 +338,10 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               ## #808 — `xs : [Option(ptr(T)); N] = [Option.None, …]`: the annotation decides the one-word
               ## folded element (the bare literal head names no type argument).
               fae := folded_array_elem_span(src, ns, nl)
+              ## #1181 — `t : [Slice(u8); 2] = [a[0..3], b]`: the declared view element is two words
+              ## (Types §7) whatever the first element's syntax; a str literal already answered this.
               if fae.n != 0 { aelem = AElem(eek = 3, ess = fae.s, esl = fae.n, stride = 1) }
+              else if view_array_elem_decl(src, ns, nl) { aelem = AElem(eek = 4, ess = 0, esl = 0, stride = 2) }
               else if tuple_type_has_byte_component(src, ns, nl) { aelem = AElem(eek = 12, ess = 0, esl = ai.nel, stride = tuple_standard_byte_words(decls, src, ns, nl, a)) }
               bind_array_slot(slots, src, ns, nl, ai.nel, aelem)
             } else if is_cas_call(v, src) {
