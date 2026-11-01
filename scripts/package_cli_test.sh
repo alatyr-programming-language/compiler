@@ -2695,6 +2695,11 @@ run_pkg_check_build_located issue403_bare_private_fnvalue_reject 4 main
 ## private helper (§3:80-85), and a parse-time desugar whose callee span nobody wrote.
 run_pkg_exit issue403_bare_private_legal issue403-bare-private-legal 42
 
+## #1172 — an enum payload whose type is declared in ANOTHER module (`Arr(m::S)`, `Arr(m::G(u64))`)
+## is sized and bound as that type, not as one word (the parser kept only the path head `m`).
+run_pkg_exit issue1172_foreign_struct_payload issue1172-foreign-struct-payload 42
+run_pkg_exit issue1172_foreign_generic_payload issue1172-foreign-generic-payload 42
+
 run_tool15_manifest_handle
 
 # The gate-of-the-gate. `scripts/callee_module_check.sh` is the ONLY check that can see a call bound to
