@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`Some(deref(p))` of a multi-word struct keeps every field (#1212).** `vec::get`, `vec::try_at`,
+  `vec::pop` and the deque reads built on the same shape returned the struct's first word and stale
+  values for the rest; so did `Option(S).Some(deref(p))` through a pointer parameter or into a local.
+  The payload is now read word by word through the pointer. A direct `match vec::get(S, …)` is still
+  refused, and the message now names that construct instead of `.map(f)`.
+
 - **An enum read out of a `Vec` is the one that was stored (#989).** `at`, `get` and every other
   `deref(p)` of an enum value through a pointer returned the first variant with a zero payload. The
   value is now read word by word from the pointer; a pointee type that cannot be resolved is refused
