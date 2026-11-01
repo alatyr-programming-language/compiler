@@ -155,6 +155,7 @@ aarch64	test/fn_value_qualified.al	run/133	#1189
 aarch64	test/fn_value_struct_ret.al	run/133	#1189
 aarch64	test/fold_capture_generic.al	run/133	#1196
 aarch64	test/fold_capture_multisite.al	run/133	#1196
+aarch64	test/for_aggregate_body_local.al	run/133	#1201
 aarch64	test/for_break_labels.al	run/133	#1202
 aarch64	test/for_in_global_array.al	run/133	#1201
 aarch64	test/for_in_global_struct_array.al	run/133	#1201
@@ -270,6 +271,7 @@ aarch64	test/match_binding_root_value.al	run/133	#1194
 aarch64	test/match_call_bind.al	run/133	#1200
 aarch64	test/match_comma_arms.al	run/133	#1190
 aarch64	test/match_mixed_arm.al	run/133	#577
+aarch64	test/match_slice_payload_for.al	run/133	#1191
 aarch64	test/module_global_init_expr.al	run/133	#1189
 aarch64	test/module_str_const.al	run/133	#1189
 aarch64	test/mutex_basic.al	run/133	#1189
@@ -606,6 +608,7 @@ riscv64	test/fn_value_qualified.al	run/133	#1189
 riscv64	test/fn_value_struct_ret.al	run/133	#1189
 riscv64	test/fold_capture_generic.al	run/133	#1196
 riscv64	test/fold_capture_multisite.al	run/133	#1196
+riscv64	test/for_aggregate_body_local.al	run/133	#1201
 riscv64	test/for_break_labels.al	run/133	#1202
 riscv64	test/for_in_global_array.al	run/133	#1201
 riscv64	test/for_in_global_struct_array.al	run/133	#1201
@@ -721,6 +724,7 @@ riscv64	test/match_binding_root_value.al	run/133	#1194
 riscv64	test/match_call_bind.al	run/133	#1200
 riscv64	test/match_comma_arms.al	run/133	#1190
 riscv64	test/match_mixed_arm.al	run/133	#577
+riscv64	test/match_slice_payload_for.al	run/133	#1191
 riscv64	test/match_struct_value.al	run/133	#1191
 riscv64	test/module_global_init_expr.al	run/133	#1189
 riscv64	test/module_mut_global_snapshot.al	run/133	#1189
@@ -1055,6 +1059,7 @@ wasm	test/fn_value_qualified.al	run/134	#1189
 wasm	test/fn_value_struct_ret.al	run/134	#1189
 wasm	test/fold_capture_generic.al	run/134	#1195
 wasm	test/fold_capture_multisite.al	run/134	#1195
+wasm	test/for_aggregate_body_local.al	run/134	#1201
 wasm	test/for_in_global_array.al	run/134	#1201
 wasm	test/for_in_global_struct_array.al	run/134	#1201
 wasm	test/for_over_bytes.al	run/134	#1201
@@ -1165,6 +1170,7 @@ wasm	test/match_call_bind.al	run/134	#1186
 wasm	test/match_comma_arms.al	run/134	#1190
 wasm	test/match_mixed_arm.al	run/134	#1190
 wasm	test/match_multibind_ptr.al	run/134	#1187
+wasm	test/match_slice_payload_for.al	run/134	#1190
 wasm	test/match_struct_value.al	run/134	#1187
 wasm	test/module_global_init_expr.al	run/134	#1204
 wasm	test/module_mut_global_snapshot.al	run/134	#1204

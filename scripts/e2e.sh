@@ -12123,6 +12123,17 @@ run issue1209_deref_bitcast_struct 42
 run issue1209_deref_bitcast_ptr_fields 42
 run issue1209_deref_bitcast_field_inline 42
 
+## #1321 — `for x in xs` over struct/enum elements kept its hidden index at `slot(x) + stride`, which
+## is the body's first local, so a body binding a local reset the index and the loop ran once.
+## NON-VACUOUS: on the parent `c5fc685d` (x86_64) the fixture exits 1.
+run for_aggregate_body_local 42
+
+## #1318 — a single `match` payload typed `Slice(T)` of struct/enum/str elements is bound as a slice
+## view, not as the nominal two-word `Slice` struct (whose `for` copied one word per element).
+## NON-VACUOUS: on the parent `cc1064e3` (x86_64) the build is refused at `ps[1].a`, and without that
+## check the fixture exits 2 (a struct-element sum read the wrong words).
+run match_slice_payload_for 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================
