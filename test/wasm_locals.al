@@ -1,6 +1,6 @@
 main := fn() -> u64 {
-  x := 40
-  y := 2
+  x : u64 = 40
+  y : u64 = 2
   return x + y
 }
 ## expect(aarch64): run 42

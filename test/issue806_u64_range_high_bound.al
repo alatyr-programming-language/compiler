@@ -4,11 +4,11 @@
 ## `0..9223372036854775808` did not match 7, and the high `u64` value landed in the wrong arm. The
 ## parent built this program and ran it to 17. A signed `i64` range stays signed.
 wide := fn(n : u64) -> u64 {
-  r := match n { 0..=9 => { 1 }; 10..=18446744073709551615 => { 4 } }
+  r : u64 = match n { 0..=9 => { 1 }; 10..=18446744073709551615 => { 4 } }
   return r
 }
 top := fn(n : u64) -> u64 {
-  r := match n { 0..9223372036854775808 => { 1 }; 9223372036854775808..=18446744073709551615 => { 10 } }
+  r : u64 = match n { 0..9223372036854775808 => { 1 }; 9223372036854775808..=18446744073709551615 => { 10 } }
   return r
 }
 word := fn(n : usize) -> u64 {
@@ -16,7 +16,7 @@ word := fn(n : usize) -> u64 {
   return 0
 }
 signed := fn(n : i64) -> u64 {
-  r := match n { -9223372036854775808..=-1 => { 6 }; 0..=9223372036854775807 => { 0 } }
+  r : u64 = match n { -9223372036854775808..=-1 => { 6 }; 0..=9223372036854775807 => { 0 } }
   return r
 }
 main := fn() -> u64 {

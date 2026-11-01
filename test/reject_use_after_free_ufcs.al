@@ -3,7 +3,7 @@
 ## is the form the stdlib uses (`sb.strbuf_free()` in lib/std/fmt.al).
 my_free := fn(s : u64) -> u64 { 0 }
 main := fn() -> u64 {
-  x := 5
+  x : u64 = 5
   r := x.my_free()
   y := x
   y

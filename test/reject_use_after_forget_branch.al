@@ -3,7 +3,7 @@
 main := fn() -> u64 {
   x := 5
   forget(x)
-  mut r := 0
+  mut r : u64 = 0
   if x > 0 { r = x }
   r
 }

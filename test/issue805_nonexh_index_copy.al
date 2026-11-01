@@ -4,7 +4,7 @@ C := enum { R, G, B }
 main := fn() -> u64 {
   xs : [C; 2] = [C.B, C.G]
   ys := xs
-  r := match ys[0] { R => { 11 }; G => { 22 } }
+  r : u64 = match ys[0] { R => { 11 }; G => { 22 } }
   return r
 }
 ## expect: reject "type mismatch at line 7"

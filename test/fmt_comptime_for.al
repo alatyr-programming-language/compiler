@@ -3,7 +3,7 @@ Pt := struct {
   y : u64,
 }
 sumfields := fn(T : type, v : T) -> u64 {
-  s := 0
+  s : u64 = 0
   comptime for f in typeinfo(T).fields {
     s = s + v.(f)
   }
