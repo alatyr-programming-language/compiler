@@ -453,20 +453,6 @@ is_arith_op := fn(op : u8) -> bool {
   op == 16 or op == 17 or op == 18 or op == 19 or op == 29 or op == 34 or op == 35 or op == 36 or op == 40 or op == 41
 }
 
-
-## The SOURCE GLYPH a comparison op byte was written as — the NAME a user operator-overload decl
-## (`@inline < := fn(a : Ver, b : Ver) -> u64`) carries, and hence the WASM function id it is emitted
-## under (`emit_wat_fn` uses the decl name verbatim). "" for a non-comparison op.
-wat_cmp_glyph := fn(op : u8) -> str {
-  if op == 20 { return "==" }
-  if op == 24 { return "<" }
-  if op == 25 { return ">" }
-  if op == 26 { return "<=" }
-  if op == 27 { return ">=" }
-  if op == 28 { return "!=" }
-  return ""
-}
-
 ## Is there a user OPERATOR-OVERLOAD fn decl named exactly the glyph `g` whose FIRST parameter is
 ## declared with the struct type `[ss,sn)`? (Stdlib §2 operator overloading.) The type match is what
 ## keeps an unrelated overload from capturing a comparison over a different struct.
@@ -5078,7 +5064,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## a loaded scalar for every field type EXCEPT an enum one.
         ## Bind the glyph to a local FIRST — an inline str-returning call as a push_str arg scrambles its
         ## {ptr,len} under the seed (the documented wat-emit scar).
-        gly := wat_cmp_glyph(op)
+        gly := lower::op_symbol(op)
         lsty := expr_struct_type_of(l, params_head, body_head, src, a, decls)
         ## the matched decl's name span doubles as the "is there an overload" test — one value, no flag
         mut ofn := OpFnSpan(s = 0, n = 0)
