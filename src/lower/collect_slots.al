@@ -971,15 +971,17 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
                 gmgvehi := array_lit_info(gmgv)
                 gesli := struct_lit_info(arg_expr_at(gmgvehi.ehead, 0, a))
                 if gesli.is_s { lv_agg = 2; lv_es = gesli.ss; lv_el = gesli.sl }
-              } else if fbv.n != 0 {
-                fse := deref(svec_at(SlotEntry, slots, entry_of(slots, src, fbv.s, fbv.n)))
-                if fse.ek == 5 and fse.eek == 9 { lv_float = true }
-                if fse.ek == 5 and fse.eek == 2 { lv_agg = 2; lv_es = fse.sns; lv_el = fse.snl }
-                if fse.ek == 5 and fse.eek == 3 { lv_agg = 3; lv_es = fse.sns; lv_el = fse.snl }
-                ## a str-element slice VIEW LOCAL (`for x in strs[lo..hi]`, eek 4 is_ref sns==0): the loop var
-                ## is a 2-word str. Gated exactly like the emit's `is_str_slice` so a plain `[str; N]` array
-                ## for-loop (eek 4, NOT is_ref) is unchanged.
-                if fse.ek == 5 and fse.eek == 4 and fse.is_ref and fse.sns == 0 { lv_str = true }
+              } else {
+                if fbv.n != 0 {
+                  fse := deref(svec_at(SlotEntry, slots, entry_of(slots, src, fbv.s, fbv.n)))
+                  if fse.ek == 5 and fse.eek == 9 { lv_float = true }
+                  if fse.ek == 5 and fse.eek == 2 { lv_agg = 2; lv_es = fse.sns; lv_el = fse.snl }
+                  if fse.ek == 5 and fse.eek == 3 { lv_agg = 3; lv_es = fse.sns; lv_el = fse.snl }
+                }
+                ## a `str`-element iterable (a `Slice(str)` local or param, a `[str; N]` local, a range slice
+                ## of one, or a `Slice(str)`-returning call): the loop var is a 2-word str. The emitter asks
+                ## the same `for_iter_str_elem`, so the binding and the element copy agree (#1177).
+                lv_str = for_iter_str_elem(flo, slots, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2)
               }
             }
             if lv_agg == 2 { bind_struct_slot(slots, decls, src, fns, fnl, lv_es, lv_el, struct_words(decls, src, lv_es, lv_el, a)) } else {
