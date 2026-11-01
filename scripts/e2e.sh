@@ -11471,6 +11471,11 @@ run result_map_ufcs 42
 run option_map_ufcs 42
 run option_map_ufcs_struct 42
 build_reject_has reject_map_ufcs_direct_struct "match recv.map(f)"
+## #1212 — `Option(T).Some(deref(p))` of a multi-word struct (`vec::get` / `try_at` / `pop`, a pointer
+## parameter, a local store) delivered word 0 alone. NON-VACUOUS: on the parent `992bd767` (x86_64) the
+## fixture returns 100. The direct `match vec::get(S, …)` stays refused, now naming what it refuses.
+run issue1212_option_deref_struct 42
+build_reject_has issue1212_direct_match_reject "a direct \`match\` on a generic call whose result enum carries a multi-word payload"
 run unwrap_bound_generic_call 42
 build_reject_has reject_unwrap_bound_paramladen_call "implicit-UFCS call to a multi-type-parameter"
 
