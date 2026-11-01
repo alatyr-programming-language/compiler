@@ -2538,6 +2538,25 @@ pub bitcast_narrow_is_signed := fn(name : str) -> bool {
 ##
 ## `%` deliberately has no caller here: `MIN % -1` is 0, representable at every width, and the
 ## remainder is not a member of the checked-overflow set.
+## The open interval (lo, hi) of f64 values whose truncation toward zero fits the integer `name`, as
+## f64 bit patterns. Each bound is the first value OUTSIDE: `lo` is MIN - 1 (for i64 the next f64
+## below -2^63, since -2^63 - 1 is not an f64), `hi` is MAX + 1. The patterns come from an exact f64
+## encoder; `test/accept_f2i_range_edges.al` and the `trap_f2i_*` fixtures probe both sides. One table
+## for every backend (#1374): x86_64 `emit_f2i`, aarch64 `a64_emit_f2i_guard`, riscv64
+## `rv_emit_f2i_guard`, wasm `wat_f2i_pre`.
+pub F2iBounds := struct { lo : str, hi : str }
+pub f2i_bounds := fn(name : str) -> F2iBounds {
+  if name == "i8" { return F2iBounds(lo = "0xc060200000000000", hi = "0x4060000000000000") }
+  if name == "i16" { return F2iBounds(lo = "0xc0e0002000000000", hi = "0x40e0000000000000") }
+  if name == "i32" { return F2iBounds(lo = "0xc1e0000000200000", hi = "0x41e0000000000000") }
+  if name == "u8" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x4070000000000000") }
+  if name == "u16" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x40f0000000000000") }
+  if name == "u32" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x41f0000000000000") }
+  if name == "u64" or name == "usize" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x43f0000000000000") }
+  ## i64 / isize
+  F2iBounds(lo = "0xc3e0000000000001", hi = "0x43e0000000000000")
+}
+
 pub narrow_signed_min := fn(name : str) -> i64 {
   if name == "i8" { return 0 - 128 }
   if name == "i16" { return 0 - 32768 }
