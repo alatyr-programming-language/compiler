@@ -5384,6 +5384,21 @@ parse_struct_members := fn(in out pc : PC, packed : bool) -> Option(ptr(mut Fiel
           ## classify `Some([Row; N])`. The endpoint is captured after the balanced payload scan
           ## below, when the preceding token is the matching `]` for this shape.
           first_array = pt.kind == 14
+          ## #1172 — a QUALIFIED payload type (`m::S`, `alloc::vec::Vec(T)`) names its type with the
+          ## whole path, not the head token: recording only `m` / `alloc` made every sizer miss the
+          ## struct, so the payload got ONE word and the match binding read neighbouring words. Extend
+          ## the span over `ident (:: ident)*` — the same name a same-module payload spells as one
+          ## token; type arguments stay outside the span, exactly as for `G(u64)`.
+          ## kind-literal-ok: lexer token kinds (1 ident, 7 `::`) have no named form; ~508 parser sites compare them the same way
+          if pt.kind == 1 {
+            mut pj := pc.idx + 1
+            ## kind-literal-ok: lexer token kinds (1 ident, 7 `::`), as at the qualified-path walks below
+            while tok_at(pc, pj).kind == 7 and tok_at(pc, pj + 1).kind == 1 { pj = pj + 2 }
+            if pj > pc.idx + 1 {
+              plt := tok_at(pc, pj - 1)
+              mtl = plt.start + plt.len - mts
+            }
+          }
         }
         marity += 1
         mut td := 0
