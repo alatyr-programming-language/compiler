@@ -163,6 +163,7 @@ aarch64	test/for_over_nonvar.al	run/133	#1201
 aarch64	test/for_over_slice.al	run/133	#1200
 aarch64	test/for_over_vec.al	run/133	#1200
 aarch64	test/for_range_unsigned_bound.al	run/133	#1188
+aarch64	test/for_slice_call_agg.al	run/133	#1201
 aarch64	test/for_slice_str_bytes.al	run/133	#1203
 aarch64	test/for_slice_str_call.al	run/133	#1203
 aarch64	test/for_slice_str_call_generic.al	run/133	#1203
@@ -609,6 +610,7 @@ riscv64	test/for_over_nonvar.al	run/133	#1201
 riscv64	test/for_over_slice.al	run/133	#1200
 riscv64	test/for_over_vec.al	run/133	#1200
 riscv64	test/for_range_unsigned_bound.al	run/133	#1188
+riscv64	test/for_slice_call_agg.al	run/133	#1201
 riscv64	test/for_slice_str_bytes.al	run/133	#1184
 riscv64	test/for_slice_str_call.al	run/133	#1184
 riscv64	test/for_slice_str_call_generic.al	run/133	#1184
@@ -1052,6 +1054,7 @@ wasm	test/for_over_nonvar.al	run/134	#1186
 wasm	test/for_over_slice.al	run/134	#1186
 wasm	test/for_over_vec.al	run/134	#1186
 wasm	test/for_range_unsigned_bound.al	run/134	#1188
+wasm	test/for_slice_call_agg.al	run/134	#1201
 wasm	test/for_slice_str_bytes.al	run/134	#1184
 wasm	test/for_slice_str_call.al	run/134	#1184
 wasm	test/for_slice_str_call_generic.al	run/134	#1184
