@@ -5,7 +5,7 @@
 main := fn() -> u64 {
   ## 1. bare break in a for — exits at the first iteration
   mut a : u64 = 0
-  for i in 0..10 { a = i; break }                      ## a = 0
+  for i in 0..u64(10) { a = i; break }                ## a = 0
 
   ## 2. break inside an `if` inside a for — sum 0..5 then break at 6
   mut b : u64 = 0
