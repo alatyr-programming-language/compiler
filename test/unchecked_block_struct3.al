@@ -6,3 +6,4 @@ main := fn() -> u64 {
   s := unchecked { mk(41) }
   s.a + s.b
 }
+## expect: run 42

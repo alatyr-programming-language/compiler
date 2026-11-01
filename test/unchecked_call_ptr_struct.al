@@ -8,3 +8,4 @@ main := fn() -> u64 {
   r := unchecked mk(ptr(mut buf[0]), 40)
   u64(r.n + r.k)
 }
+## expect: run 42

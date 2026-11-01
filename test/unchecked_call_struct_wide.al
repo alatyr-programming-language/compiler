@@ -6,3 +6,4 @@ main := fn() -> u64 {
   w := unchecked mk(41)
   w.a + w.i
 }
+## expect: run 42
