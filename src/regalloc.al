@@ -60,7 +60,7 @@ mut RA_O1K : [usize; 64] = [0; 64]
 mut RA_O1V : [i64; 64]   = [0; 64]
 mut RA_O2K : [usize; 64] = [0; 64]   ## third operand (the scaled-load INDEX); kind None(0) for every other op
 mut RA_O2V : [i64; 64]   = [0; 64]
-mut RA_N := 0
+mut RA_N : usize = 0
 
 ## Rewritten output stream (`RA_OUT_N` live entries) — every VReg replaced by a Phys or a spill temp
 ## (with reload/store inserted around a spilled operand). No VReg kind survives here (`ra_verify_no_vreg`).
@@ -78,8 +78,8 @@ mut RA_ALLOC  : [usize; 32] = [0; 32]   ## allocatable physical reg ids, in pref
 mut RA_NALLOC := 0
 mut RA_CALLER : [usize; 32] = [0; 32]   ## caller-saved reg ids (clobbered by a `call`)
 mut RA_NCALLER := 0
-mut RA_ST0 := 10                        ## two reserved spill reload temps (default r10, r11)
-mut RA_ST1 := 11
+mut RA_ST0 : usize = 10                        ## two reserved spill reload temps (default r10, r11)
+mut RA_ST1 : usize = 11
 
 ## COMMIT 2 emit-driver state: `RA_OVF` = the IR overflowed the 64-instruction capacity (fail-loud in
 ## the caller). Declared with the other module globals (top-of-module block).
@@ -114,7 +114,7 @@ mut RA_S1 := 0
 mut RA_SC := 0
 
 ## ra_rw_operand OUT registers (a rewritten operand + its reload/store obligations)
-mut RW_K := 0
+mut RW_K : usize = 0
 mut RW_V := 0
 mut RW_RELOAD := false
 mut RW_STORE := false
@@ -304,7 +304,7 @@ ra_liveness := fn(n : usize) {
       if o != LIVEOUT[ii] { LIVEOUT[ii] = o; changed = true }
       ## live-in = use ∪ (live-out − def), computed bit by bit over the vregs.
       mut ni : usize = 0
-      mut v := 0
+      mut v : usize = 0
       while v < 32 {
         mut b := 0
         if ra_uses_v(ii, v) { b = 1 }
@@ -350,7 +350,7 @@ ra_intervals := fn(n : usize) {
   }
   mut i : usize = 0
   while i < n {
-    mut v := 0
+    mut v : usize = 0
     while v < 32 {
       if ra_defs_v(i, v) { ra_note(v, i) }
       if ra_uses_v(i, v) { ra_note(v, i) }
@@ -440,7 +440,7 @@ ra_linscan := fn(n : usize) {
     mut at := usize(IV_FIRST[vv])
     lastc := usize(IV_LAST[vv])
     while at <= lastc {
-      mut rr := 0
+      mut rr : usize = 0
       while rr < 16 { if ra_bit(BUSY[at], rr) == 1 { RA_BLK[rr] = 1 } ; rr = rr + 1 }
       at = at + 1
     }

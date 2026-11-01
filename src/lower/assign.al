@@ -333,14 +333,14 @@ pub emit_packed_assign := fn(ss : usize, sl : usize, fhead : Option(ptr(mut Arg)
     match g {
       Some(gq) => {
         ga := deref(arg_p(gq))
-        mut sz := 8
+        mut sz : usize = 8
         mut fdnext : Option(ptr(mut FieldDecl)) = Option.None
         mut eo := -1
         mut ea := -1
         mut eb := -1
-        mut ats := 0
-        mut atl := 0
-        mut awsize := 1
+        mut ats : usize = 0
+        mut atl : usize = 0
+        mut awsize : usize = 1
         mut is_agg := false
         mut is_byte_arr := false
         match fd {
@@ -772,7 +772,7 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
             ## both as 0: the first field's wsize 0 (no off advance) + `next` 0 (fd→0) collapsed every
             ## struct-ctor arg's field 0 onto field 1. The `fdn := deref(node_ptr(…))` copy is the proven
             ## `ga := deref(node_ptr(Arg,…))` shape both compilers handle.
-            mut wsz := 1
+            mut wsz : usize = 1
             mut fdnext : Option(ptr(mut FieldDecl)) = Option.None
             mut is_str_fld := false
             mut is_folded_fld := false
@@ -2563,7 +2563,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     push_str(sb, "\n.Ldynad")
     push_int(sb, i64(k))
     push_str(sb, ":\n  movq %rdi, %r11\n")
-    mut mi := 0
+    mut mi : usize = 0
     for i in 0..nuser {
       if dyn_user_arg_is_float(cx, dftp, i) == false {
         push_str(sb, "  movq ")
@@ -2962,7 +2962,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     pv := deref_var_span(v)
     pent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, pv.s, pv.n)))
     push_str(sb, "  movq -")
-    push_int(sb, (pent.off + 1) * 8)
+    push_int(sb, i64((pent.off + 1) * 8))
     push_str(sb, "(%rbp), %rax\n")
     for k in 0..nf {
       push_str(sb, "  movq ")
@@ -3141,7 +3141,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     ## its slot with word k at `-(k*8)(ptr)` (down-growing pointee). Struct = `nf` words; enum =
     ## `1 + payload` words (disc + payload).
     va := var_agg_info(v, cx.slots, cx.src)
-    mut nfc := 0
+    mut nfc : usize = 0
     if va.ek == 2 { nfc = aggregate_words(cx.decls, cx.src, va.s, va.n, a) }
     else { nfc = 1 + enum_inst_words(cx.decls, cx.src, va.s, va.n, a) }
     dstc := slot_of(cx.slots, cx.src, ns, nl2)
@@ -3184,7 +3184,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     ## struct (word k at slot `boff + fwo + k`) into `x`'s fresh slots. The aggregate-field extract
     ## the scalar store dropped (it delivered only word 0 → a silent 0/garbage).
     fra := field_read_agg(v, cx.slots, cx.decls, cx.src, a)
-    mut nfr := 0
+    mut nfr : usize = 0
     if fra.kind == 2 { nfr = aggregate_words(cx.decls, cx.src, fra.s, fra.n, a) }
     ## kind 4 = a `str` field: exactly 2 words ({ptr, len}) — the destination is a str local
     ## (`bind_str_slot`), whose word 0/1 slots descend the same way the copy loop below writes.
@@ -3245,7 +3245,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     ## `x := STATE.f` (f a struct/enum field of a GLOBAL struct) — copy the field's words from
     ## `.data` (ASCENDING: `LABEL + (fwo+k)*8`) into x's slots.
     gfa := global_field_agg(v, cx.decls, cx.src, a)
-    mut ngf := 0
+    mut ngf : usize = 0
     if gfa.kind == 2 { ngf = aggregate_words(cx.decls, cx.src, gfa.s, gfa.n, a) }
     else { ngf = 1 + enum_inst_words(cx.decls, cx.src, gfa.s, gfa.n, a) }
     dstg := slot_of(cx.slots, cx.src, ns, nl2)
@@ -3292,11 +3292,11 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
         ## OUT-SCALAR param target `r = v`: load the slot's POINTER and store the value
         ## THROUGH it — the write is visible to the caller (the dual of the ek-8 Var read).
         push_str(sb, "  popq %rbx\n  movq -")
-        push_int(sb, (tent.off + 1) * 8)
+        push_int(sb, i64((tent.off + 1) * 8))
         push_str(sb, "(%rbp), %rax\n  movq %rbx, (%rax)\n")
       } else {
         push_str(sb, "  popq %rax\n  movq %rax, -")
-        push_int(sb, (tent.off + 1) * 8)
+        push_int(sb, i64((tent.off + 1) * 8))
         push_str(sb, "(%rbp)\n")
       }
     }

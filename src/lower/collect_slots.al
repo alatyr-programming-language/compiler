@@ -215,7 +215,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               fr := fnref_info(v)
               nu := dyn_store_nuser(head, src, ns, nl, a)
               lidx := lam_idx_by_fnpos(decls, fr.fnpos)
-              mut ncap := 1
+              mut ncap : usize = 1
               if lidx >= 0 and nu >= 0 {
                 larity := deref(lower_ctx::decl_get(decls, usize(lidx))).arity
                 if i64(larity) > nu { ncap = usize(i64(larity) - nu) }
@@ -560,10 +560,10 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               avs := deref_addr_view_ptr_local_span(v, ptr(slots), src)
               dvp := deref_view_pointee_span(v, ptr(slots), decls, src, a, sub)
               mut vb_is_slice := false
-              mut vb_stride := 1
+              mut vb_stride : usize = 1
               mut vb_eek : u8 = 0
-              mut vb_ess := 0
-              mut vb_esl := 0
+              mut vb_ess : usize = 0
+              mut vb_esl : usize = 0
               if avs.n != 0 {
                 avent := deref(svec_at(SlotEntry, ptr(slots), entry_of(ptr(slots), src, avs.s, avs.n)))
                 if avent.ek == 5 {
@@ -856,8 +856,8 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
             ## emit on every backend — it only feeds collect-time slot typing. Bound before each arm's recursion;
             ## left in the map (payload names are arm-local). Multi-binding / scalar payloads keep the scalar path.
             msc := var_name_span(sc)
-            mut mes := 0
-            mut mel := 0
+            mut mes : usize = 0
+            mut mel : usize = 0
             if msc.n != 0 {
               ment := deref(svec_at(SlotEntry, slots, entry_of(slots, src, msc.s, msc.n)))
               if lower_ctx::streq(src, ment.ns, ment.nl, msc.s, msc.n) and ment.ek == 3 { mes = ment.sns; mel = ment.snl }
@@ -958,8 +958,8 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
             mut lv_float := false
             mut lv_agg : u8 = 0        ## 2 = struct-element array, 3 = enum-element array (the loop var is that aggregate)
             mut lv_str := false        ## a str-ELEMENT slice/array (eek 4): the loop var is a 2-word str
-            mut lv_es := 0
-            mut lv_el := 0
+            mut lv_es : usize = 0
+            mut lv_el : usize = 0
             if unchecked bitcast(usize, fhi) == 0 {
               fbv := var_name_span(flo)
               ## a global ARRAY iterable (`for e in ARR`, ARR a `mut` array global) has NO frame slot — check
