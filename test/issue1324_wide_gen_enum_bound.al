@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if ow(x) != 42 { return 10 }
   42
 }
+## expect: reject "generic call returning an enum wider than seven words is not supported yet"

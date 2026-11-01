@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if ow(mk(Option(S9), Option(S9).Some(S9(a = 40, b = 0, c = 0, d = 0, e = 0, f = 0, g = 0, h = 0, i = 2)))) != 42 { return 10 }
   42
 }
+## expect: reject "generic call returning an enum wider than seven words is not supported yet"
