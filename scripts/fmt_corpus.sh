@@ -1220,7 +1220,7 @@ spaced_value := fn() -> u64 {\
   rm -rf "$PC"
   cp -r "$ROOT/test/package/fn_value_qualified" "$PC"
   sed -i \
-    -e 's/^  direct := hex::encode(40)$/  x := 41/' \
+    -e 's/^  direct := hex::encode(40)$/  x : u64 = 41/' \
     -e '/^  indirect := apply(hex::encode, 40)$/d' \
     -e '/^  if direct == 41 and indirect == 41 { 42 } else { 0 }$/c\
   ## a comment ending in a path-looking separator ::\
@@ -1269,7 +1269,7 @@ spaced_value := fn() -> u64 {\
   rm -rf "$PL"
   cp -r "$ROOT/test/package/fn_value_qualified" "$PL"
   sed -i \
-    -e 's/^  direct := hex::encode(40)$/  x := 41/' \
+    -e 's/^  direct := hex::encode(40)$/  x : u64 = 41/' \
     -e '/^  indirect := apply(hex::encode, 40)$/d' \
     -e '/^  if direct == 41 and indirect == 41 { 42 } else { 0 }$/c\
   s := "## ::"\
