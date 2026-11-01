@@ -4366,8 +4366,10 @@ DIAG_BRAND_CONVERSION_MARKER : usize = 6896000000000000000
 ## Types §4.2/§4.3 — the sema-side IMPLICIT SIGNED/UNSIGNED conversion class
 ## (`sema::SIGNEDNESS_CONVERSION_DIAG_MARKER`): two integer operands of one operator, one signed and one
 ## unsigned. It sits between the brand-conversion and same-scope-redeclaration windows, so only the
-## former's upper bound moves and every other decoded range stays byte-identical.
+## former's upper bound moves and every other decoded range stays byte-identical. #942: the low two bits
+## name the sink (`sema::SIGNEDNESS_SINK_RESULT` = 1: one value against a declared result).
 DIAG_SIGNEDNESS_CONVERSION_MARKER : usize = 6896500000000000000
+DIAG_SIGNEDNESS_SINK_RESULT : usize = 1
 ## Issue #414 / Declarations §6.2 — the sema-side same-scope redeclaration class
 ## (`sema::SAME_SCOPE_REDECL_DIAG_MARKER`). It sits between the nested-array parameter and the
 ## qualified-private-constant windows, so only the former's upper bound moves and every other
@@ -4687,6 +4689,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if multidim_array_field { wkmda := rt::fd_str(2, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
     else if nested_array_param { wknap := rt::fd_str(2, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
     else if brand_conv { wkbc := rt::fd_str(2, "implicit brand conversion: a brand has a distinct nominal identity and every brand conversion is explicit (Types §4.2/§4.3) — write the constructor form `T(v)`; two SIBLING brands do not convert into each other at all (§5.4), so route one through the block they share, as `A(u64(b))`") }
+    else if sign_conv and (code - DIAG_SIGNEDNESS_CONVERSION_MARKER) % 4 == DIAG_SIGNEDNESS_SINK_RESULT { wkscr := rt::fd_str(2, "implicit signed/unsigned conversion: the returned value is an integer of the opposite signedness to the declared result, and a signed<->unsigned conversion is a numeric conversion, always explicit (Types §4.2/§4.3) - convert the value with the constructor form `T(v)`, or declare the binding with the type it is returned as (an unannotated integer literal is an `i64`, Types §9.1)") }
     else if sign_conv { wksc := rt::fd_str(2, "implicit signed/unsigned conversion: the two operands are integers of opposite signedness, and a signed<->unsigned conversion is a numeric conversion, always explicit (Types §4.2/§4.3) - convert one operand with the constructor form `T(v)`, or declare the binding with the type it is used as (an unannotated integer literal is an `i64`, Types §9.1)") }
     else if same_scope_redecl { wkssr := rt::fd_str(2, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
     else if str_elem_write { wkstr := rt::fd_str(2, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
@@ -7662,6 +7665,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if multidim_array_field { dwkmda := rt::fd_str(2, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
     else if nested_array_param { dwknap := rt::fd_str(2, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
     else if brand_conv { dwkbc := rt::fd_str(2, "implicit brand conversion: a brand has a distinct nominal identity and every brand conversion is explicit (Types §4.2/§4.3) — write the constructor form `T(v)`; two SIBLING brands do not convert into each other at all (§5.4), so route one through the block they share, as `A(u64(b))`") }
+    else if sign_conv and (r - DIAG_SIGNEDNESS_CONVERSION_MARKER) % 4 == DIAG_SIGNEDNESS_SINK_RESULT { dwkscr := rt::fd_str(2, "implicit signed/unsigned conversion: the returned value is an integer of the opposite signedness to the declared result, and a signed<->unsigned conversion is a numeric conversion, always explicit (Types §4.2/§4.3) - convert the value with the constructor form `T(v)`, or declare the binding with the type it is returned as (an unannotated integer literal is an `i64`, Types §9.1)") }
     else if sign_conv { dwksc := rt::fd_str(2, "implicit signed/unsigned conversion: the two operands are integers of opposite signedness, and a signed<->unsigned conversion is a numeric conversion, always explicit (Types §4.2/§4.3) - convert one operand with the constructor form `T(v)`, or declare the binding with the type it is used as (an unannotated integer literal is an `i64`, Types §9.1)") }
     else if same_scope_redecl { dwkssr := rt::fd_str(2, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
     else if str_elem_write { dwkstr := rt::fd_str(2, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }

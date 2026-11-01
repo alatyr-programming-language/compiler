@@ -2,7 +2,7 @@
 ## into a comptime pack that the body walks with `comptime for` — monomorphized and expanded at the call
 ## site (no runtime fn). `sum(10, 20, 12)` unrolls to `total += 10; += 20; += 12` = 42.
 sum := fn(args : ...) -> u64 {
-  mut total := 0
+  mut total : u64 = 0
   comptime for a in args {
     total = total + a
   }

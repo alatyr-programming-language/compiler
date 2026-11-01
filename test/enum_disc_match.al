@@ -5,7 +5,7 @@ Code := enum { A = 5, B = 10, C = 100 }
 
 main := fn() -> u64 {
   x := Code.B
-  mut r := 0
+  mut r : u64 = 0
   match x {
     Code.A => { r = 1 }
     Code.B => { r = 42 }

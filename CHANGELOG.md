@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **Returning an integer of the other signedness is a compile error (#942).** `fn() -> u64` that
+  returned an `i64` local, for example `a := 0` then `return a - 1`, compiled and answered
+  `2^64 - 1` on x86_64. Signed↔unsigned is a numeric conversion, and Types §4.3 makes it explicit. An
+  early `return` and a fn's tail are now refused at the returned value with their own diagnostic.
+  Write `u64(v)`, or declare the local with the type it is returned as. A literal still takes the
+  declared result's type. Arguments, assignments and width follow in later slices of #942.
 - **An enum read out of a `Vec` is the one that was stored (#989).** `at`, `get` and every other
   `deref(p)` of an enum value through a pointer returned the first variant with a zero payload. The
   value is now read word by word from the pointer; a pointee type that cannot be resolved is refused
