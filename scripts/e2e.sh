@@ -11206,6 +11206,10 @@ run issue1302_container_elem_enum 42
 ## #1334 — `deref(p) = o` with `o` a niche-folded `Option(ptr(T))` wrote a second word past the
 ## pointee. NON-VACUOUS: on the parent `1262da5d` (x86_64) the fixture returns 100.
 run issue1334_folded_deref_store 42
+## #1364 — `Option(E).Some(deref(p))` through a pointer PARAMETER at a multi-word enum (concrete, generic
+## at `T = EN`, generic at `T = Option(u64)`) lost the payload. NON-VACUOUS: on the parent `32f0f6e8`
+## (x86_64) the fixture returns 100.
+run issue1364_deref_param_enum_payload 42
 ## alloc::oset — an ordered set (sorted array): insert keeps it sorted + duplicate-free via a caller
 ## `less` comparator (binary search + tail byte-shift, growth), contains (O(log n)), sorted as_slice.
 run oset_ops 42

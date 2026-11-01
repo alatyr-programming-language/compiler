@@ -140,6 +140,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `o` such a local or parameter wrote a second word over whatever followed the pointee, so
   `deque::push_front` of `Option(ptr(u64))` turned the previous front element into `None`. The
   folded option is one pointer-width word (Memory §4) and is now stored as one.
+- **`Option(E).Some(deref(p))` through a pointer parameter keeps the whole enum (#1364).** With `p`
+  a `ptr(E)` parameter and `E` a multi-word enum, the payload was sized from the pointer-local
+  resolver, which knows no parameter: a concrete function lost the payload, and a generic one at
+  `T = Option(u64)` returned 0 for 42. A generic `p : ptr(T)` whose instance makes `T` an enum
+  application is now bound as a pointer to that enum, and the payload is read through it.
 
 ## 0.2.21 — 2026-11-01
 

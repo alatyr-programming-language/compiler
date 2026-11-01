@@ -10238,7 +10238,7 @@ payload_enum_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize 
       ## `vec::get` at `T = Option(u64)`): its width is the POINTEE's, resolved through the instance
       ## the way `emit_enum_value`'s Deref arm resolves it (#989). Returning 0 sent it down the scalar
       ## path, which delivered the inner discriminant alone. A niche-folded pointee is one scalar word.
-      pty := deref_dest_pointee_span(inner, cx)
+      pty := deref_enum_pointee_cx(e, inner, cx)
       if pty.n == 0 or is_niche_folded(cx.src, pty.s, pty.n) { return 0 }
       pbn := base_type_name(cx.src, pty.s, pty.n)
       if enum_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 { return 0 }
@@ -10249,6 +10249,18 @@ payload_enum_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize 
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
+}
+
+## #1364 — the pointee TYPE behind `deref(p)` (`e` the Deref, `inner` its pointer) as an enum value
+## reads it, whatever binds `p`. A pointer-to-enum PARAMETER or annotated local is an ek-6 slot that
+## carries its instance-resolved pointee (`deref_enum_span`, the resolver `v := deref(p)` binds with);
+## a bitcast local or a pointer call answers through `deref_dest_pointee_span`, which knows no
+## parameter, so `first(T, p : ptr(T))` at `T = Option(u64)` sized the payload as one scalar word and
+## returned 0 for 42. The enum twin of `payload_deref_struct_words`' resolution. {0,0} when unresolved.
+deref_enum_pointee_cx := fn(e : ptr(Expr), inner : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  des := deref_enum_span(e, cx.slots, cx.src)
+  if des.n != 0 { return tparam_span_cx(des, cx) }
+  deref_dest_pointee_span(inner, cx)
 }
 
 ## The WORD count of an ENUM-VALUED CALL payload. A call has no local slot or literal node from which
@@ -10763,7 +10775,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       ## the POINTEE's type, resolved through the generic instance, never from the enclosing fn's
       ## return type, because this emitter also serves non-return positions. This arm used to fall
       ## into the null-enum fallback below, so the element came back as variant 0 with a zero payload.
-      pty := deref_dest_pointee_span(inner, cx)
+      pty := deref_enum_pointee_cx(e, inner, cx)
       pbn := base_type_name(cx.src, pty.s, pty.n)
       if pty.n == 0 or enum_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 {
         panic("selfhost: an enum value read through `deref(p)` needs `p`'s pointee type, and it could not be resolved here — bind the pointer with its type spelled (`p : ptr(E) = …`), or bind the value to an annotated local first")
@@ -27103,11 +27115,16 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
       ## down-growing layout). ONE pointer slot so the 1-param-1-register spill mapping holds.
       off := svec_len(ptr(slots))
       svec_push(slots, SlotEntry(ns = pm.ns, nl = pm.nl, off = off, sns = 0, snl = 0, ek = 4, estride = 1, eek = 0, is_ref = true))
-    } else if str_at((src + pts), ptl) == "ptr" and enum_decl_of(decls, src, ppn_s, ppn_l) >= 0 {
+    } else if str_at((src + pts), ptl) == "ptr" and (enum_decl_of(decls, src, ppn_s, ppn_l) >= 0 or ((ppn_s != pm.pps or ppn_l != pm.ppl) and multiword_enum_span(CSpan(s = ppn_s, n = ppn_l), decls, src, a).n != 0)) {
       ## POINTER-TO-ENUM param `p : ptr(E)` — the arena-AST shape (`match deref(p)`). The slot
       ## holds the POINTER value (a plain scalar, passed by value); `ek = 6` records "pointer to
       ## enum `E`" with the pointee enum's type span (`ppn`, the Subst-resolved pointee) so
       ## `scrut_enum_info` resolves a `match deref(p)` — the pointer is materialized like a by-ref enum.
+      ## #1364 — also a generic `p : ptr(T)` whose instance substitutes an enum APPLICATION
+      ## (`T = Option(u64)`): `enum_decl_of` matches a declared name only, so `p` bound as a bare scalar
+      ## and `Option(T).Some(deref(p))` sized its payload as one word (0 for 42). Only a pointee the
+      ## SUBSTITUTION rewrote into a multi-word enum joins: a concrete pointee keeps its binding, and a
+      ## niche-folded `Option(ptr(P))` stays one scalar word.
       off := svec_len(ptr(slots))
       svec_push(slots, SlotEntry(ns = pm.ns, nl = pm.nl, off = off, sns = ppn_s, snl = ppn_l, ek = 6, estride = 1, eek = 0, is_ref = true, tmod_s = 0, tmod_l = 0))
     } else if str_at((src + pts), ptl) == "ptr" and struct_decl_of(decls, src, ppn_s, ppn_l) >= 0 {
