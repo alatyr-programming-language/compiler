@@ -36,3 +36,5 @@
 1205	Overview §6 (code consistent with the normative lowering rules, per selected target)	wasm: `bitcast` in these shapes is a fail-loud stub (`unsupported bitcast`)	rows
 1206	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: overloaded functions do not assemble on aarch64, riscv64 and wasm	rows
 1207	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: two programs fail to assemble or link on aarch64 and riscv64	rows
+1351	Modules §1–§2 (a `::` path is resolved at compile time; one naming nothing is unbound)	a type named through a module that does not exist (`m::S`, no `m`) is accepted, and runs or traps instead of being refused	rows
+1352	Manifest appendix, the entry point (TOOL-12: a missing entry is a Codegen-stage diagnostic before the linker)	twins: a source with no `main` is refused at link or by wat2wasm, not by the compiler	rows

@@ -17,3 +17,4 @@ walk := fn(v : V) -> u64 {
 main := fn() -> u64 {
   walk(V.Arr(m::S(a = 3, b = 4, c = 5, d = 30)))
 }
+## expect: reject
