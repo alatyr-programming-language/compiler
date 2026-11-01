@@ -12671,8 +12671,13 @@ deref_pointee_bytes := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
       pn := ptr_pointee_name(cx.src, ps, pl)
       if pn.n != 0 { w = scalar_byte_size(cx.src, pn.s, pn.n) }
     }
+    ## The pointee is resolved THROUGH the enclosing generic instance (`deref_dest_pointee_span`, the
+    ## one resolver the store-side aggregate paths already use). Reading the raw source spelling here
+    ## answered `T` inside `Vec(T)`'s `at`/`try_at`/`set`, which is no scalar name, so a `Vec(u8)`
+    ## element moved a whole word: the read returned the element plus its 7 neighbours, and the write
+    ## clobbered them (#395, #988).
     Expr::Var(vs, vn) => {
-      pty := local_ptr_pointee_span(cx, vs, vn)
+      pty := deref_dest_pointee_span(p, cx)
       if pty.n != 0 { w = scalar_byte_size(cx.src, pty.s, pty.n) }
       else if byte_ptr_local(cx, vs, vn) { w = 1 }
     }
@@ -12882,8 +12887,9 @@ deref_pointee_signed := fn(p : ptr(Expr), cx : ptr(LCtx)) -> bool {
       pn := ptr_pointee_name(cx.src, ps, pl)
       sg = pn.n != 0 and str_at((cx.src + pn.s), 1) == "i"
     }
+    ## Through the generic instance, as `deref_pointee_bytes` resolves it, so the two always agree.
     Expr::Var(vs, vn) => {
-      pty := local_ptr_pointee_span(cx, vs, vn)
+      pty := deref_dest_pointee_span(p, cx)
       if pty.n != 0 { sg = str_at((cx.src + pty.s), 1) == "i" }
     }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit

@@ -132,6 +132,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   A global owner resolves in the module of the access, and a qualified owner (`z::cfg.x`) is left to
   the module it names. Programs that relied on the old behaviour were invalid. A local or parameter typed
   `u16`, `i16`, `i8`, `char` or a float is not decided yet (#703 stays open for it).
+- **A `Vec` of a sub-word element no longer reads its neighbours into the value (#395).** Inside a
+  generic function, `deref(p)` with `p : ptr(mut T)` used 8 bytes whatever `T` was, so `at`, `try_at`,
+  `get` and `set` on a `Vec(u8)`, `Vec(u16)`, `Vec(u32)` or `Vec(i8)` read the next elements into the
+  value (or wrote over them). It now uses `T`'s width and signedness in that instance.
 
 ## 0.2.21 — 2026-11-01
 
