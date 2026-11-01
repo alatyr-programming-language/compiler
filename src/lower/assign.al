@@ -2479,6 +2479,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
   ei := enum_lit_info(v)
   ti := str_lit_info(v)
   ai := array_lit_info(v)
+  csub := cx_subst(cx)
   if is_module_mut_global(cx.decls, cx.src, ns, nl2) {
     ## a write to a MUTABLE module GLOBAL. A multi-word AGGREGATE global (`G = S(…)` / `E.V(…)` /
     ## `"…"` / `[…]`) copies ALL its words via `emit_mut_global_whole_assign` (else a scalar store
@@ -3021,12 +3022,12 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_int(sb, i64((dst - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
-  } else if deref_enum_pointee_span(v, cx.slots, cx.decls, cx.src, a).n != 0 {
+  } else if deref_enum_pointee_span(v, cx.slots, cx.decls, cx.src, a, ptr(csub)).n != 0 {
     ## a `st := deref(node_ptr(E, …))` / `v := deref(p)` (#790): lower the pointer (a call, or the
     ## pointer variable — either leaves the pointee word-0 address on the stack), then copy each of
     ## the enum's `1 + max_arity` words from `(k*8)(%rax)` into st's slots — the enum dual of the
     ## deref-struct copy, so a following `match st` reads valid words.
-    dce := deref_enum_pointee_span(v, cx.slots, cx.decls, cx.src, a)
+    dce := deref_enum_pointee_span(v, cx.slots, cx.decls, cx.src, a, ptr(csub))
     nf := 1 + enum_inst_words(cx.decls, cx.src, dce.s, dce.n, a)
     dst := slot_of(cx.slots, cx.src, ns, nl2)
     inner := deref_inner_expr(v)
