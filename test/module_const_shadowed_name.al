@@ -63,13 +63,13 @@ K6 := 3
 
 K7 := 3
 
-K8 := 3
+K8 : u64 = 3
 
 K9 := 3
 
-K10 := 1122334455
+K10 : u64 = 1122334455
 
-K11 := 987654321
+K11 : u64 = 987654321
 
 ## `got == want` first, so a control whose correct answer IS its module constant classifies as
 ## correct rather than as the defect. Class 1 is that constant leaking past a shadowing binding — the
@@ -134,7 +134,7 @@ case6 := fn() -> i64 {
 ## 7 — a COMPTIME local: a third home for the name, kept in the side table rather than a frame slot,
 ## so the guard has to ask about that table too and not only about frame slots.
 case7 := fn() -> i64 {
-  comptime K7 := 47
+  comptime K7 : u64 = 47
   a : u64 = K7
   return i64(a)
 }

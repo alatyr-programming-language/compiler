@@ -18,12 +18,12 @@ wide := fn(v : u64) -> u64 {
 }
 
 main := fn() -> u64 {
-  alpha1 := 1
-  alpha2 := 2
-  alpha3 := 3
-  alpha4 := 4
-  alpha5 := 5
-  alpha6 := 6
+  alpha1 : u64 = 1
+  alpha2 : u64 = 2
+  alpha3 : u64 = 3
+  alpha4 : u64 = 4
+  alpha5 : u64 = 5
+  alpha6 : u64 = 6
   small_sum := alpha1 + alpha2
   every_alpha_is_itself := alpha1 == 1 and alpha2 == 2 and alpha3 == 3 and alpha4 == 4 and alpha5 == 5 and alpha6 == 6
   total_sum := wide(alpha1 * 100000 + alpha2 * 200000 + alpha3 * 300000 + alpha4 * 400000 + alpha5 * 500000)

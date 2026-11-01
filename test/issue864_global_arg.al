@@ -51,7 +51,7 @@ f_narrow := fn(h : Option(ptr(mut P))) -> usize {
 }
 f_const := fn(h : Option(ptr(mut P))) -> usize { if eq2(7, 1, KC, G2) { 1 } else { 0 } }
 f_shadow := fn(h : Option(ptr(mut P))) -> usize {
-  G1 := 3
+  G1 : usize = 3
   if eq2(3, 1, G1, G2) { 1 } else { 0 }
 }
 
