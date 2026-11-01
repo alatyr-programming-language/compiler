@@ -48,3 +48,4 @@ main := fn() -> u64 {
   f32 := vec::free(u32, v32)
   42
 }
+## expect: run 42
