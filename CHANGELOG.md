@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A field access on a scalar is a compile error (#703).** `x.a` on an annotated `u64`, `bool` or other
+  scalar local, parameter or module global compiled and read a fabricated `0`, or dropped the store.
+  A scalar has no fields (Modules §2, Types §6.1), so `check` now refuses it with a located diagnostic.
+  A global owner resolves in the module of the access, and a qualified owner (`z::cfg.x`) is left to
+  the module it names. Programs that relied on the old behaviour were invalid. A local or parameter typed
+  `u16`, `i16`, `i8`, `char` or a float is not decided yet (#703 stays open for it).
 - **An enum read out of a `Vec` is the one that was stored (#989).** `at`, `get` and every other
   `deref(p)` of an enum value through a pointer returned the first variant with a zero payload. The
   value is now read word by word from the pointer; a pointee type that cannot be resolved is refused
