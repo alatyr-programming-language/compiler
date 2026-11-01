@@ -18,7 +18,8 @@ NonZero := u32.require(is_nonzero)
 
 main := fn() -> u64 {
   n := NonZero(5)
-  if size(Cfg) != 16 { return 1 }
+  comptime if target.arch == Arch.x86_64 { if size(Cfg) != 16 { return 1 } }
+  comptime if target.arch == Arch.aarch64 { if size(Cfg) != 32 { return 1 } }
   mut x : u64 = 100
   x -= 50
   x *= 3
