@@ -25,7 +25,7 @@ mk3 := fn() -> P { P(x = 10, y = 11, z = 14) }
 main := fn() -> u64 {
   mut n : u64 = 0
   if n == 0 {
-    t := 7                ## `t` bound FIRST as a 1-word scalar
+    t : u64 = 7                ## `t` bound FIRST as a 1-word scalar
     n = n + t
   }
   if n == 7 {

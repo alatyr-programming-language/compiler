@@ -11,7 +11,7 @@ seq := fn() -> u64 {
 
 branch := fn(cond : bool) -> u64 {
   if cond {
-    comptime x := 5
+    comptime x : u64 = 5
     return x
   } else {
     x : u64 = 7
