@@ -197,6 +197,7 @@ aarch64	test/hof_float_pool_shared_cell.al	run/133	#1196
 aarch64	test/if_return_agg.al	run/133	#1184
 aarch64	test/issue1065_het_eq_declared.al	run/133	#1192
 aarch64	test/issue1065_het_eq_undeclared.al	run/133	#1065
+aarch64	test/issue1172_vec_payload.al	run/133	#1200
 aarch64	test/issue1209_deref_bitcast_field_inline.al	run/133	#1188
 aarch64	test/issue1209_deref_bitcast_ptr_fields.al	run/133	#1188
 aarch64	test/issue1209_deref_bitcast_struct.al	run/133	#1188
@@ -305,6 +306,10 @@ aarch64	test/overload_scalar_agg.al	assemble/1	#1206
 aarch64	test/overload_second_arg.al	assemble/1	#1206
 aarch64	test/overload_str_literal_arg.al	assemble/1	#1206
 aarch64	test/overload_three.al	assemble/1	#1206
+aarch64	test/package/issue1172_foreign_generic_payload/package.al	run/133	#1191
+aarch64	test/package/issue1172_foreign_generic_payload/src/m.al	link/1	#1352
+aarch64	test/package/issue1172_foreign_struct_payload/src/m.al	link/1	#1352
+aarch64	test/package/issue1172_foreign_struct_payload/src/main.al	run/133	#1351
 aarch64	test/print_array_display.al	run/133	#1191
 aarch64	test/print_global_struct_snapshot.al	run/133	#1191
 aarch64	test/print_one.al	run/133	#1200
@@ -640,6 +645,7 @@ riscv64	test/if_return_agg.al	run/133	#1191
 riscv64	test/ir_ptr_agree.al	run/133	#1187
 riscv64	test/issue1065_het_eq_declared.al	run/133	#1192
 riscv64	test/issue1065_het_eq_undeclared.al	run/133	#1065
+riscv64	test/issue1172_vec_payload.al	run/133	#1200
 riscv64	test/issue1209_deref_bitcast_field_inline.al	run/133	#1188
 riscv64	test/issue1209_deref_bitcast_ptr_fields.al	run/133	#1188
 riscv64	test/issue1209_deref_bitcast_struct.al	run/133	#1188
@@ -752,6 +758,10 @@ riscv64	test/overload_scalar_agg.al	assemble/1	#1206
 riscv64	test/overload_second_arg.al	assemble/1	#1206
 riscv64	test/overload_str_literal_arg.al	assemble/1	#1206
 riscv64	test/overload_three.al	assemble/1	#1206
+riscv64	test/package/issue1172_foreign_generic_payload/package.al	run/133	#1191
+riscv64	test/package/issue1172_foreign_generic_payload/src/m.al	link/1	#1352
+riscv64	test/package/issue1172_foreign_struct_payload/src/m.al	link/1	#1352
+riscv64	test/package/issue1172_foreign_struct_payload/src/main.al	run/133	#1351
 riscv64	test/print_array_display.al	run/133	#1191
 riscv64	test/print_global_struct_snapshot.al	run/133	#1189
 riscv64	test/print_one.al	run/133	#1200
@@ -1084,6 +1094,7 @@ wasm	test/if_return_agg.al	run/134	#1184
 wasm	test/ir_ptr_agree.al	run/134	#1187
 wasm	test/issue1065_het_eq_declared.al	run/134	#1192
 wasm	test/issue1065_het_eq_undeclared.al	run/134	#1065
+wasm	test/issue1172_vec_payload.al	run/134	#1186
 wasm	test/issue1209_deref_bitcast_field_inline.al	run/134	#1188
 wasm	test/issue1209_deref_bitcast_ptr_fields.al	run/134	#1188
 wasm	test/issue1209_deref_bitcast_struct.al	run/134	#1188
@@ -1189,6 +1200,11 @@ wasm	test/overload_scalar_agg.al	assemble/1	#1206
 wasm	test/overload_second_arg.al	assemble/1	#1206
 wasm	test/overload_str_literal_arg.al	assemble/1	#1206
 wasm	test/overload_three.al	assemble/1	#1206
+wasm	test/package/issue1172_foreign_generic_payload/package.al	run/134	#1187
+wasm	test/package/issue1172_foreign_generic_payload/src/m.al	assemble/1	#1352
+wasm	test/package/issue1172_foreign_struct_payload/package.al	run/134	#1190
+wasm	test/package/issue1172_foreign_struct_payload/src/m.al	assemble/1	#1352
+wasm	test/package/issue1172_foreign_struct_payload/src/main.al	run/134	#1351
 wasm	test/print_global_struct_snapshot.al	run/134	#1204
 wasm	test/print_one.al	run/134	#1200
 wasm	test/print_str_hole.al	run/134	#1184
@@ -1332,3 +1348,4 @@ wasm	test/word_layout_struct_by_value_control.al	run/134	#1187
 wasm	test/zst_and_empty_ctor.al	run/134	#713
 x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
+x86_64	test/package/issue1172_foreign_struct_payload/src/main.al	run/4	#1351

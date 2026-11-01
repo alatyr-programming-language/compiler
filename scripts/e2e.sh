@@ -12092,6 +12092,12 @@ run issue1209_deref_bitcast_struct 42
 run issue1209_deref_bitcast_ptr_fields 42
 run issue1209_deref_bitcast_field_inline 42
 
+## #1172 — `alloc::vec::Vec(u64)` as an enum payload, a payload struct's field and a by-value struct
+## field, and `ys.len()` on the payload binding: the layout cut a three-segment path at its FIRST `::`
+## and looked up `vec::Vec`, which names nothing, so the type got one word. NON-VACUOUS: on the parent
+## (main `d09e472b` + #1339) it exits 1.
+run issue1172_vec_payload 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================
