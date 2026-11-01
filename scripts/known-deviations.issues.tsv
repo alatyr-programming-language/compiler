@@ -11,7 +11,6 @@
 551	Overview §6 (code consistent with the normative lowering rules, per selected target); Types §4.4	aarch64/riscv64: `bitcast` to a bare user aggregate has no lowering, and traps	rows
 577	Overview §6 (code consistent with the normative lowering rules, per selected target)	aarch64/riscv64: a statement-position `match` traps (fail-loud stub `unsupported match statement`)	rows
 713	Overview §6 (code consistent with the normative lowering rules, per selected target)	`size(T)` is unlowered on aarch64, riscv64 and wasm: the program traps at run time	rows
-997	Concurrency §7.7 (a checked float-to-int conversion traps on NaN and out of range)	aarch64, riscv64 and wasm: a float-to-int conversion has no range or NaN check, so an out-of-range or NaN operand yields a value instead of a trap, and wasm traps on an in-range edge of accept_f2i_range_edges (x86_64 checks since #1222)	rows
 1065	Stdlib appendix §2.6; Memory §4.5 (MEM-10)	a comparison over two different types ignores a declared heterogeneous `eq` (a wrong value), and with none declared it compares structurally instead of refusing	rows
 1081	Stdlib appendix §2.6; Memory §4.5; Types §4.4	the derived hash/eq over a pointer reaches the address with `u64(v)`, a conversion with no class in the lattice, instead of the spelled `unchecked bitcast(usize, …)`; no program-visible value differs	none
 1123	Overview §6 (code consistent with the normative lowering rules, per selected target); Functions §7.2	aarch64, riscv64 and wasm do not implement the slice-variadic gather: the program traps or fails to assemble	rows
