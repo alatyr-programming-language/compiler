@@ -5,3 +5,4 @@ main := fn() -> u64 {
   if s[0] == "ab" and s[1] == "cde" { return 42 }
   return 1
 }
+## expect: run 42

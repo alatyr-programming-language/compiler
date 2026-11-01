@@ -8,3 +8,4 @@ main := fn() -> u64 {
   }
   return 0
 }
+## expect: run 42

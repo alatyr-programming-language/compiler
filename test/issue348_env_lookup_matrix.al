@@ -81,3 +81,6 @@ main := fn() -> u64 {
     Result::Err(e) => { return 112 }
   }
 }
+## Under the corpus walk's fixed `env -i` environment no `ALATYR_ENV_*` entry exists: the first
+## wrong answer kept is the probe's `None`, code 102.
+## expect: run 102

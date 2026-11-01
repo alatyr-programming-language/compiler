@@ -9,8 +9,8 @@
 ## aarch64 and riscv64 must still refuse loudly rather than return a number.
 ##
 ## The aarch64/riscv64 assertions want 133 — the SIGTRAP status of a fail-loud emit, not a program
-## exit code. A later lane that gives those two an aggregate-value bitcast path is expected to flip
-## exactly these two rows to 42; a change that flips them to any OTHER value below 128 is the silent
+## exit code. A later lane that gives those two an aggregate-value bitcast path is expected to delete
+## exactly these two rows of scripts/known-deviations.tsv; a change that flips them to any OTHER value below 128 is the silent
 ## miscompile this file exists to catch.
 ##
 ## 42 means the x86_64 reinterpret held; a miss owns 30, never a sum or a product.
@@ -23,3 +23,4 @@ main := fn() -> u64 {
   if b.p != 42 { return 30 }
   return 42
 }
+## expect: run 42

@@ -32,3 +32,4 @@ main := fn() -> u64 {
   if not str_eq(sl[1], "wxyz") { return 6 }
   return 42
 }
+## expect: run 42

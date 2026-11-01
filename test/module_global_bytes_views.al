@@ -10,3 +10,4 @@ main := fn() -> u64 {
   initialized := u64(ALPHA_BYTES[i])
   return immediate + u64(bound[i]) + initialized - 84
 }
+## expect: run 42

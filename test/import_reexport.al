@@ -9,3 +9,4 @@ main := fn() -> u64 {
   if facade::math::floor(7.9) == 7.0 { return 42 }
   return 1
 }
+## expect: run 42

@@ -7,3 +7,4 @@ bad_tail := fn() -> u64 {
 main := fn() -> u64 {
   return bad_tail()
 }
+## expect: reject "at line 3"
