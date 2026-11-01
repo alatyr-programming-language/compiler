@@ -1396,7 +1396,7 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
   ## before adding the element offset. A scalar slice VIEW LOCAL has `sns == 0` and `snl == 1`, so its
   ## slot already contains the data pointer. Keep the aggregate-element source-scan fallback below its
   ## existing eek gate; it is deliberately unchanged for aggregate and variadic forms.
-  if ent.ek == 5 and ent.is_ref and (ent.sns == 1 or ((ent.eek == 2 or ent.eek == 3) and ent_slice_param_elem.n != 0)) { push_str(sb, "  movq (%rbx), %rbx\n") }
+  if slot_is_slice_param(ent, cx.src) { push_str(sb, "  movq (%rbx), %rbx\n") }
   ## element address = element-0 address - index*stride*8 (the frame grows down) → %rax
   push_str(sb, "  addq %rax, %rbx\n  movq %rbx, %rax\n")
 }

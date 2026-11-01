@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
+  `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
+  bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead
+  of the data, and ran on with wrong elements and no diagnostic. Both range deliverers now load the
+  data pointer from the block, through the same `slot_is_slice_param` question an element read asks.
+
 - **An enum read out of a `Vec` is the one that was stored (#989).** `at`, `get` and every other
   `deref(p)` of an enum value through a pointer returned the first variant with a zero payload. The
   value is now read word by word from the pointer; a pointee type that cannot be resolved is refused
