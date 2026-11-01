@@ -2697,6 +2697,15 @@ run_pkg_check_build_located issue403_bare_private_fnvalue_reject 4 main
 ## private helper (§3:80-85), and a parse-time desugar whose callee span nobody wrote.
 run_pkg_exit issue403_bare_private_legal issue403-bare-private-legal 42
 
+# Issue #703 / Modules §2, §5 — the scalar-owner field refusal resolves a GLOBAL owner in the module
+# of the access, never by a program-wide last-wins walk. The accept package declares `cfg` and `lim`
+# as a struct global in one sibling and a scalar in the other, in both module orders: the previous
+# head of #1309 refused `cfg.x` in `a` (line 4) because `z` sorts later; the seed answers 42. The
+# reject package reads a field of `a`'s own scalar `cfg` while `z` declares a struct `cfg`: the seed
+# refuses it only as `unbound name`, this slice with its own located class.
+run_pkg_exit issue703_global_module_scope issue703-global-module-scope 42
+run_pkg_check_build_located issue703_global_module_scope_reject 2 a "a FIELD ACCESS on a SCALAR value: \`.\` selects a struct or union field, a tuple position \`.N\`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name"
+
 run_tool15_manifest_handle
 
 # The gate-of-the-gate. `scripts/callee_module_check.sh` is the ONLY check that can see a call bound to
