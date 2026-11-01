@@ -10914,6 +10914,11 @@ run deque_of_str_roundtrip 42
 run hashmap_str_value_roundtrip 42
 run omap_str_value_roundtrip 42
 run oset_of_str_roundtrip 42
+## #1255, #1254 — the WIDTH half of the same call-returned pointer: `deref(val_at(…))` and
+## `deref(dq_elem(…))` moved 8 bytes whatever the element was, so a sub-word value, key or deque element
+## read (and a rehash wrote) its neighbours. NON-VACUOUS: on the parent `9acadf0b` (x86_64) each exits 10.
+run issue1255_hashmap_subword_growth 42
+run issue1254_deque_subword_call_deref 42
 run deref_view_pointee 42
 ## Types §7 — a `[T]`/`str` view IS its two-word {ptr,len} pair wherever it appears. A view ARGUMENT that is
 ## not a plain local (a struct FIELD at any depth, a `sub(…)`/range sub-view, a `[str;N]` element, a str field
