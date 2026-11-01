@@ -72,3 +72,4 @@ main := fn() -> u64 {
   }
   42
 }
+## expect: run 42
