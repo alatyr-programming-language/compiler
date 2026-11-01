@@ -397,6 +397,12 @@ aarch64	test/subword_ptr_deref.al	run/133	#550
 aarch64	test/tail_enum_match.al	run/133	#1191
 aarch64	test/thread_join_many.al	run/133	#1189
 aarch64	test/thread_spawn.al	run/133	#1200
+aarch64	test/trap_f2i_i64_at_2p63.al	run/9	#997
+aarch64	test/trap_f2i_i8_below.al	run/7	#997
+aarch64	test/trap_f2i_nan.al	run/7	#997
+aarch64	test/trap_f2i_negative_unsigned.al	run/7	#997
+aarch64	test/trap_f2i_u64_overflow.al	run/7	#997
+aarch64	test/trap_f2i_u8_overflow.al	run/7	#997
 aarch64	test/tuple_array_eq.al	run/133	#1192
 aarch64	test/tuple_enum_component.al	run/133	#1190
 aarch64	test/tuple_enum_later.al	run/133	#1190
@@ -842,6 +848,12 @@ riscv64	test/subword_ptr_deref.al	run/133	#550
 riscv64	test/tail_enum_match.al	run/133	#1191
 riscv64	test/thread_join_many.al	run/133	#1189
 riscv64	test/thread_spawn.al	run/133	#1200
+riscv64	test/trap_f2i_i64_at_2p63.al	run/9	#997
+riscv64	test/trap_f2i_i8_below.al	run/7	#997
+riscv64	test/trap_f2i_nan.al	run/9	#997
+riscv64	test/trap_f2i_negative_unsigned.al	run/7	#997
+riscv64	test/trap_f2i_u64_overflow.al	run/7	#997
+riscv64	test/trap_f2i_u8_overflow.al	run/7	#997
 riscv64	test/tuple_array_eq.al	run/133	#1192
 riscv64	test/tuple_enum_component.al	run/133	#1190
 riscv64	test/tuple_enum_later.al	run/133	#1190
@@ -909,6 +921,7 @@ wasm	test/accept_call_arg_conform.al	run/134	#1184
 wasm	test/accept_comptime_unchecked_wrap.al	run/134	#1204
 wasm	test/accept_enum_match_deref_annotated_local.al	run/134	#1188
 wasm	test/accept_enum_match_param_deref.al	run/134	#1188
+wasm	test/accept_f2i_range_edges.al	run/134	#997
 wasm	test/agg_arr_elem_arg.al	run/134	#1194
 wasm	test/agg_arr_elem_matrix.al	run/134	#1194
 wasm	test/agg_cmp_not_address.al	run/134	#1192
@@ -1271,6 +1284,8 @@ wasm	test/struct_match_field.al	run/134	#1187
 wasm	test/subword_ptr_deref.al	run/134	#1186
 wasm	test/thread_join_many.al	run/134	#1189
 wasm	test/thread_spawn.al	run/134	#1200
+wasm	test/trap_f2i_i8_below.al	run/7	#997
+wasm	test/trap_f2i_u8_overflow.al	run/7	#997
 wasm	test/tuple_array_eq.al	run/134	#1192
 wasm	test/tuple_enum_component.al	run/134	#1190
 wasm	test/tuple_enum_later.al	run/134	#1190

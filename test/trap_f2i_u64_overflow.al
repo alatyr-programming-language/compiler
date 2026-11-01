@@ -13,3 +13,4 @@ main := fn() -> u64 {
   x := u64(f)                 ## outside u64 => §7.7 trap
   shr(x, 61)
 }
+## expect: trap
