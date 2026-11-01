@@ -221,6 +221,7 @@ aarch64	test/issue1307_instance_ptr_width.al	run/133	#1188
 aarch64	test/issue1334_folded_deref_store.al	run/133	#1200
 aarch64	test/issue1364_deref_param_enum_payload.al	run/139	#1367
 aarch64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
+aarch64	test/issue1303_enum_hash.al	run/133	#1189
 aarch64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 aarch64	test/issue169_wasm_nested_return.al	run/133	#1191
 aarch64	test/issue171_global_const_str.al	run/133	#1200
@@ -728,6 +729,7 @@ riscv64	test/issue1307_instance_ptr_width.al	run/133	#1188
 riscv64	test/issue1334_folded_deref_store.al	run/133	#1200
 riscv64	test/issue1364_deref_param_enum_payload.al	run/139	#1367
 riscv64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
+riscv64	test/issue1303_enum_hash.al	run/133	#1189
 riscv64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200
@@ -1236,6 +1238,7 @@ wasm	test/issue1307_instance_ptr_width.al	run/134	#1188
 wasm	test/issue1334_folded_deref_store.al	run/134	#1186
 wasm	test/issue1364_deref_param_enum_payload.al	run/134	#1188
 wasm	test/issue1406_declared_sub_slice_ret.al	run/134	#1191
+wasm	test/issue1303_enum_hash.al	run/134	#1189
 wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
 wasm	test/issue169_wasm_array_write.al	run/134	#1194
 wasm	test/issue169_wasm_nested_return.al	run/134	#1191
