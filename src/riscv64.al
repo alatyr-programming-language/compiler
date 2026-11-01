@@ -2356,7 +2356,7 @@ rv_cf_mutable_value := fn(e : ptr(Expr), src : ptr(u8)) -> i64 {
 ## supplies the one piece of state that is genuinely this emitter's — its active generic substitution
 ## table, which `typeinfo_arg_span` (lower_ctx.al:463) takes as ordinary scalar arguments. The decision
 ## of WHAT the bound is lives once; only WHERE the substitutions are recorded differs per backend.
-rv_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> i64 {
+rv_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> Option(i64) {
   lower_layout::comp_range_bound(e, decls, src, RV_SUB_GPS, RV_SUB_GPL, RV_SUB_ITS, RV_SUB_ITL, RV_SUB_GPS2, RV_SUB_GPL2, RV_SUB_ITS2, RV_SUB_ITL2, RV_SUB_GPS3, RV_SUB_GPL3, RV_SUB_ITS3, RV_SUB_ITL3)
 }
 
@@ -7619,9 +7619,13 @@ emit_rv_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, a
               ioff := rv_local_off(body_head, src, rvs, rvl, pcount, a, decls)
               if ioff < 0 { push_str(sb, "  ebreak # comptime-for loop var unresolved\n") }
               else {
-                lo := rv_comp_range_bound(rlo, decls, src)
-                hi := rv_comp_range_bound(rhi, decls, src)
-                if hi - lo > 100000 { push_str(sb, "  ebreak # comptime-for range exceeds the unroll budget\n") }
+                ## A bound the shared fold cannot evaluate is a fail-loud trap, never a silent `0` (#696).
+                lo_o := rv_comp_range_bound(rlo, decls, src)
+                hi_o := rv_comp_range_bound(rhi, decls, src)
+                lo := lower_layout::opt_i64_or(lo_o, 0)
+                hi := lower_layout::opt_i64_or(hi_o, 0)
+                if lower_layout::opt_i64_is_some(lo_o) == false or lower_layout::opt_i64_is_some(hi_o) == false { push_str(sb, "  ebreak # comptime-for range bound is not comptime-known\n") }
+                else if hi - lo > 100000 { push_str(sb, "  ebreak # comptime-for range exceeds the unroll budget\n") }
                 else {
                   ## See the note on the same unroll in `wat::emit_wat_stmts` (#602/#638/#646): `lo` is
                   ## now reachably negative, and #648's `unchecked` bypass on the increment is gone —
