@@ -202,7 +202,7 @@ ir_lower_call := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)
       regalloc::ra_ir_emit(13, 0, 0, 0, 0)                  ## ud2      (over-width shift → fault)
       regalloc::ra_ir_emit(10, 4, i64(cont), 0, 0)          ## CONT:
     }
-    mut sop := 19                                           ## shl → shlq
+    mut sop : usize = 19                                           ## shl → shlq
     if cnm == "shr" {
       lower_layout::ir_sign_row("x86_64", 0, a0, a1, cx.src, is_signed_expr(a0, cx))
       lower_layout::ir_sign_rec_row(0, a0, a1, cx.src)
@@ -359,7 +359,7 @@ ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : p
     ro := ir_lower_expr(r, cx, unch)
     t := ir_fresh_vreg()
     regalloc::ra_ir_emit(0, 3, i64(t), lo.k, lo.v)              ## mov t, L
-    mut iop := 1
+    mut iop : usize = 1
     if op == 17 { iop = 2 }
     regalloc::ra_ir_emit(iop, 3, i64(t), ro.k, ro.v)           ## t (+|-)= R  (sets OF/CF)
     ## CHECKED overflow (I11 / CG-8): trap on native-width `+`/`-` overflow — unless `unchecked` or
@@ -422,7 +422,7 @@ ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : p
     ro := ir_lower_expr(r, cx, unch)
     t := ir_fresh_vreg()
     regalloc::ra_ir_emit(0, 3, i64(t), lo.k, lo.v)             ## mov t, L
-    mut bop := 16
+    mut bop : usize = 16
     if op == 35 { bop = 17 }
     if op == 36 { bop = 18 }
     regalloc::ra_ir_emit(bop, 3, i64(t), ro.k, ro.v)          ## t (&|^)= R
@@ -574,8 +574,8 @@ ir_lower_array_for := fn(fns : usize, fnl : usize, flo : ptr(Expr), fb : Option(
 ## body lowered byte-identically to before). Reuses the IRRD read-walker (re-init here; barrier syncs
 ## re-init it independently, so the transient clobber is safe).
 ir_find_accum := fn(cx : ptr(LCtx), fns : usize, fnl : usize, fb : Option(ptr(mut Stmt))) -> i64 {
-  mut acc_s := 0
-  mut acc_l := 0
+  mut acc_s : usize = 0
+  mut acc_l : usize = 0
   mut count := 0
   mut s : Option(ptr(mut Stmt)) = fb
   loop {

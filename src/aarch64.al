@@ -825,22 +825,22 @@ a64_body := fn() -> Option(ptr(mut Stmt)) { A64_BODY }
 ## instance's substitution (`T`'s name span → the concrete type span) rides four module globals, set
 ## per-instance in `emit_a64_program`'s mono pass (the A64_PARAMS/A64_CHK pattern — one fn at a time,
 ## no re-entrancy) and read by `a64_comp_cond_fold` (`comptime if T == …`). Zero → no substitution.
-mut A64_SUB_GPS := 0    ## the generic type-param NAME span start …
+mut A64_SUB_GPS : usize = 0    ## the generic type-param NAME span start …
 mut A64_SUB_GPL : usize = 0    ## … and length (0 = no active substitution)
-mut A64_SUB_ITS := 0    ## the instance's concrete type span start …
-mut A64_SUB_ITL := 0    ## … and length (non-zero while emitting an instance = instance mode)
+mut A64_SUB_ITS : usize = 0    ## the instance's concrete type span start …
+mut A64_SUB_ITL : usize = 0    ## … and length (non-zero while emitting an instance = instance mode)
 ## 2nd/3rd type-param substitution (a leading RUN of 2..3 comptime type-params, `pick3(A, B, C, …)`):
 ## the NAME span (GPS2/GPL2, GPS3/GPL3) → the instance concrete type span (ITS2/ITL2, ITS3/ITL3). 0/0
 ## when the instance has fewer type-params. The 2nd/3rd type-args are BARE scalar names (array/tuple
 ## _2/_3 are rejected in a64_resolve_typearg → the call falls to a fail-loud stub).
-mut A64_SUB_GPS2 := 0
-mut A64_SUB_GPL2 := 0
-mut A64_SUB_ITS2 := 0
-mut A64_SUB_ITL2 := 0
-mut A64_SUB_GPS3 := 0
-mut A64_SUB_GPL3 := 0
-mut A64_SUB_ITS3 := 0
-mut A64_SUB_ITL3 := 0
+mut A64_SUB_GPS2 : usize = 0
+mut A64_SUB_GPL2 : usize = 0
+mut A64_SUB_ITS2 : usize = 0
+mut A64_SUB_ITL2 : usize = 0
+mut A64_SUB_GPS3 : usize = 0
+mut A64_SUB_GPL3 : usize = 0
+mut A64_SUB_ITS3 : usize = 0
+mut A64_SUB_ITL3 : usize = 0
 
 ## The collected monomorphization instance set for the current program: three parallel FIXED module
 ## arrays (generic-decl index / type-arg span start / type-arg span length), `A64_INST_N` live entries.
@@ -898,8 +898,8 @@ a64_flt_first := fn(off : usize) -> bool {
 ## Resolved-type-arg OUT registers (the a64 idiom avoids returning a multi-word CSpan from a helper —
 ## the frozen seed can truncate such a return in some call contexts). `a64_resolve_typearg` writes the
 ## span here; callers read it.
-mut A64_TA_S := 0
-mut A64_TA_N := 0
+mut A64_TA_S : usize = 0
+mut A64_TA_N : usize = 0
 ## resolved 2nd/3rd type-args (leading-run generics), same OUT-register idiom.
 mut A64_TA_S2 := 0
 mut A64_TA_N2 := 0
@@ -1885,8 +1885,8 @@ mut A64_RET_ENUM_NL := 0
 ## span (0/0 otherwise). Set per-fn in emit_a64_fn. The caller passes the destination ADDRESS in x8 (the
 ## AAPCS64 indirect result register); the callee spills x8 to A64_SRET_SLOT on entry and, at each Return,
 ## copies the whole struct through it. The A64_CHK per-fn-global pattern.
-mut A64_RET_SRET_NS := 0
-mut A64_RET_SRET_NL := 0
+mut A64_RET_SRET_NS : usize = 0
+mut A64_RET_SRET_NL : usize = 0
 ## Frame byte offset where an SRET fn spills the incoming x8 (indirect result pointer) on entry, so it
 ## survives nested calls / register churn to each Return point. Valid only when A64_RET_SRET_NL != 0.
 mut A64_SRET_SLOT := 0
@@ -1933,10 +1933,10 @@ mut A64_MDEPTH : i64 = 0
 ## emitted, so a `.field` / nested `match` / copy of an AGGREGATE payload BINDING can resolve the binding's
 ## type + frame offset. Set (save/restore) per arm in emit_a64_match_arms. 0 = not inside an aggregate-
 ## capable arm. The A64_CHK per-fn-global pattern (avoids threading the enum/variant through every emitter).
-mut A64_ARM_ENS := 0
-mut A64_ARM_ENL := 0
-mut A64_ARM_VS := 0
-mut A64_ARM_VL := 0
+mut A64_ARM_ENS : usize = 0
+mut A64_ARM_ENL : usize = 0
+mut A64_ARM_VS : usize = 0
+mut A64_ARM_VL : usize = 0
 ## The active arm-binding stack. emit_a64_match_arms passes only the innermost Bind list to recursive
 ## emitters, while a nested payload body can still refer to an outer binding. Keep each outer list and
 ## its frame base available for the Var resolver; direct inner bindings retain shadowing precedence.
@@ -1967,8 +1967,8 @@ a64_match_tmp_offset := fn() -> i64 {
 ## Current COMPTIME-FOR-VARIANT loop variant (the variant name span the enclosing `wild == 2` unroll is
 ## emitting): a nested/inner match's `T.(v)` comptime-variant PATTERN arm (`wild == 3`) resolves `v` to
 ## THIS variant. Set (save/restore) per generated arm in the wild==2 expansion. 0 = not inside an unroll.
-mut A64_CFVAR_S := 0
-mut A64_CFVAR_L := 0
+mut A64_CFVAR_S : usize = 0
+mut A64_CFVAR_L : usize = 0
 ## The current COMPTIME-FOR-FIELD loop context (§8 field-derive core, `comptime for f in typeinfo(T).fields`):
 ## the loop-var NAME span (A64_CF_VAR_*), the CURRENT field's NAME span (A64_CF_FLD_*), and its TYPE span
 ## (A64_CF_TY_*). Set (save/restore) per field in the `Stmt::CompFor` field-unroll. `v.(f)` (an `Expr::
@@ -1976,10 +1976,10 @@ mut A64_CFVAR_L := 0
 ## to A64_CF_TY_* in a64_resolve_typearg. `A64_CF_VAR_L == 0` = NOT inside a field unroll (all reads inert).
 mut A64_CF_VAR_S := 0
 mut A64_CF_VAR_L := 0
-mut A64_CF_FLD_S := 0
-mut A64_CF_FLD_L := 0
-mut A64_CF_TY_S := 0
-mut A64_CF_TY_L := 0
+mut A64_CF_FLD_S : usize = 0
+mut A64_CF_FLD_L : usize = 0
+mut A64_CF_TY_S : usize = 0
+mut A64_CF_TY_L : usize = 0
 ## The byte offset of `<f>.offset` for the ACTIVE comptime field descriptor. The field loop is
 ## emitted only for a concrete struct instance (`A64_SUB_*`); reuse the shared layout calculators so
 ## packed, standard byte-array, and ordinary word-granular structs report the same offsets as value code.
@@ -2045,8 +2045,8 @@ mut A64_ARM_BINDS : Option(ptr(mut Bind)) = Option.None
 ## scalar / multi-binding payload keeps the ordinary scalar bind path (0/0 here). Uses the A64_ARM_* arm
 ## context; `bind_base` (threaded) gives the frame offset.
 a64_bind_agg_span := fn(bind_head : Option(ptr(mut Bind)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if A64_ARM_ENL != 0 {
     bidx := bind_list_index(bind_head, src, ns, nl, a)
     cnt := bind_count(bind_head)
@@ -2704,8 +2704,8 @@ a64_tparam_name := fn(d : Decl, src : ptr(u8)) -> CSpan {
 a64_resolve_typearg := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, args_head : Option(ptr(mut Arg)), penv : Option(ptr(mut Param)), a : rt::Arena) {
   gd := deref(decl_get(decls, usize(gi)))
   argc := arg_list_count(args_head, a)
-  mut ts := 0
-  mut tl := 0
+  mut ts : usize = 0
+  mut tl : usize = 0
   if argc == i64(gd.arity) {
     ## EXPLICIT type-arg — at the type-param's source position (0 for a leading `T`, k for `gf(s, T, k)`).
     tpp := decl_tparam_pos(gd, src)
@@ -4067,8 +4067,8 @@ a64_param_is_float := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), id
 a64_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   cs := expr_call_name_ns(v)
   cl := expr_call_name_nl(v)
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
     mut i : usize = 0
@@ -4125,8 +4125,8 @@ a64_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
 a64_call_ret_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   cs := expr_call_name_ns(v)
   cl := expr_call_name_nl(v)
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
     mut i : usize = 0
@@ -4193,8 +4193,8 @@ a64_binding_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr
 a64_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   cs := expr_call_name_ns(v)
   cl := expr_call_name_nl(v)
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
     mut i : usize = 0
@@ -4248,8 +4248,8 @@ a64_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
 a64_call_ret_enum_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   cs := expr_call_name_ns(v)
   cl := expr_call_name_nl(v)
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
     mut i : usize = 0
@@ -7321,8 +7321,8 @@ emit_a64_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, 
             ## or a non-byte array — is still a located `brk`.
             mut stdcopy := false
             mut stdbc := false
-            mut stdbcts := 0
-            mut stdbctl := 0
+            mut stdbcts : usize = 0
+            mut stdbctl : usize = 0
             if ex_is_field(v) {
               sfp := a64_std_path_ty(v, body_head, src, a, decls)
               if a64_std_path_ok(v, body_head, src, a, decls) and sfp.n != 0 and std_ty_aggregate(sfp.s, sfp.n, decls, src) {
@@ -7330,7 +7330,7 @@ emit_a64_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, 
                 sbo := a64_std_path_bo(v, body_head, src, a, decls)
                 sroot := a64_std_path_root_off(v, body_head, src, pcount, a, decls)
                 wgok := std_struct_is_word_granular(decls, src, sfp.s, sfp.n, a)
-                mut bck := 0
+                mut bck : usize = 0
                 if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 and (not wgok) { bck = std_copy_kind(decls, src, sfp.s, sfp.n, a) }
                 if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 and sbo >= 0 and (sbo / 8) * 8 == sbo and sroot >= 0 and wgok {
                   copyw = i64(struct_words(decls, src, sfp.s, sfp.n, a))

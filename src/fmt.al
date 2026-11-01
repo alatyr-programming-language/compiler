@@ -116,7 +116,7 @@ pub scan_comments := fn(src : ptr(u8), len : usize, out : ptr(rt::Vec)) {
 emit_leading_comments := fn(src : ptr(u8), comments : ptr(rt::Vec), name_start : usize, in out sb : rt::StrBuf) {
   n := rt::vec_len(deref(comments)) / 2
   ## L = index of the comment directly above name_start (blank gap, nothing between), else none.
-  mut lastc := 0
+  mut lastc : usize = 0
   mut have := false
   mut i : usize = 0
   while i < n {
@@ -4268,8 +4268,8 @@ emit_fmt_value := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Ar
   mut go := true
   while go { if str_at((src + i), 1) == " " { i = i + 1 } else { go = false } }
   mut has_ty := false
-  mut tstart := 0
-  mut tend := 0
+  mut tstart : usize = 0
+  mut tend : usize = 0
   if str_at((src + i), 1) == ":" {
     i = i + 1
     go = true

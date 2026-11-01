@@ -39,9 +39,9 @@ read_proc_lim := fn(in out a : rt::Arena, path_cstr : usize, cap : usize, in out
   while done == false {
     ## bound each read by the remaining capacity (keep 8 bytes of slack) so a large file never
     ## overruns the buffer into the arena.
-    mut room := 0
+    mut room : usize = 0
     if sb.len + 8 < want { room = want - sb.len - 8 }
-    mut chunk := 8192
+    mut chunk : usize = 8192
     if room < chunk { chunk = room }
     if chunk == 0 {
       ## The buffer is full. That is NOT the same as end-of-file: one more read decides which
@@ -87,7 +87,7 @@ truncation_error := fn(in out a : rt::Arena, path_cstr : usize, cap : usize) {
 ## with a short read uses this; the callers that must also FAIL (the process environment, which is
 ## handed to execve) call `read_proc_lim` and act on the flag themselves.
 pub read_proc := fn(in out a : rt::Arena, path_cstr : usize, cap : usize) -> str {
-  mut tr := 0
+  mut tr : usize = 0
   s := read_proc_lim(a, path_cstr, cap, tr)
   if tr != 0 { truncation_error(a, path_cstr, cap) }
   return s
@@ -354,12 +354,12 @@ split_module_artifact_path := fn(in out a : rt::Arena, out : str, paths : str, i
 ## executable under `target_dir` for inspection. `spanbase` identifies the split case, including a
 ## partially completed link where only an initial subset of span files exists.
 cleanup_temp_artifact := fn(in out a : rt::Arena, out : str, spanbase : usize, paths : str) {
-  mut nspan := 0
+  mut nspan : usize = 0
   if spanbase != 0 {
     nspan = rt::rec_get(unchecked bitcast(ptr(mut u8), spanbase), 0)
   }
   if nspan > 1 {
-    mut i := 0
+    mut i : usize = 0
     while i < nspan {
       sp := split_module_artifact_path(a, out, paths, i, nspan, ".s")
       unlink_artifact(a, sp)
@@ -586,7 +586,7 @@ pub link_exe := fn(in out a : rt::Arena, out : str, gbase : usize, glen : usize,
   out_c := cstr(a, out)
   w := rt::write_file(outs_c, gbase, glen)
   if w != 0 { tool_error("alatyr: cannot write the emitted assembly"); return 10 }
-  mut etr := 0
+  mut etr : usize = 0
   environ := read_environ(a, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(a, environ)
@@ -628,7 +628,7 @@ assemble_object := fn(in out a : rt::Arena, out : str, gbase : usize, glen : usi
   out_c := cstr(a, out)
   w := rt::write_file(outs_c, gbase, glen)
   if w != 0 { tool_error("alatyr: cannot write the library assembly"); return 10 }
-  mut etr := 0
+  mut etr : usize = 0
   environ := read_environ(a, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(a, environ)
@@ -648,7 +648,7 @@ build_static_archive := fn(in out a : rt::Arena, out : str, gbase : usize, glen 
   obj := cat2(a, out, ".o")
   ao := assemble_object(a, obj, gbase, glen)
   if ao != 0 { return ao }
-  mut etr := 0
+  mut etr : usize = 0
   environ := read_environ(a, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(a, environ)
@@ -670,7 +670,7 @@ build_shared_library := fn(in out a : rt::Arena, out : str, gbase : usize, glen 
   obj := cat2(a, out, ".o")
   ao := assemble_object(a, obj, gbase, glen)
   if ao != 0 { return ao }
-  mut etr := 0
+  mut etr : usize = 0
   environ := read_environ(a, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(a, environ)
@@ -959,7 +959,7 @@ link_exe_split := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize
   ## ld argv, per-span `.s`/`.o` name buffers), kept off the shared `a` where the span table + GAS live.
   mut sc := rt::Arena(base = 0, off = 0, cap = 0)
   rt::arena_init(sc, 16777216)
-  mut etr := 0
+  mut etr : usize = 0
   environ := read_environ(sc, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(sc, environ)
@@ -1056,7 +1056,7 @@ pub ends_with := fn(s : str, suf : str) -> bool {
 
 ## The directory part of a `/`-path (everything before the LAST `/`); 0-len if there is no `/`.
 pub dir_of := fn(path : str) -> str {
-  mut last := 0
+  mut last : usize = 0
   mut seen := false
   mut i : usize = 0
   while i < path.len {
@@ -1073,7 +1073,7 @@ pub dir_of := fn(path : str) -> str {
 ## wins. The root is its own parent, which gives the caller a terminating comparison.
 parent_dir := fn(path : str) -> str {
   if path.len == 0 { return "." }
-  mut last := 0
+  mut last : usize = 0
   mut seen := false
   mut i : usize = 0
   while i < path.len {
@@ -2021,7 +2021,7 @@ manifest_machine_validate := fn(in out a : rt::Arena, pkg_al : str, expr : str, 
   }
   if variant == "Linux" {
     if a3.len != 0 { manifest_machine_error(a, pkg_al, "config: Machine.Linux has too many arguments", off) ; return }
-    mut env := 0
+    mut env : usize = 0
     if a1.len != 0 { env = manifest_env_code(a1) }
     if env > 1 or (arch == 5 and env != 0) {
       manifest_machine_error(a, pkg_al, "config: Machine.Linux has an unsupported Env for this Arch", off)
@@ -2237,8 +2237,8 @@ dep_config_error := fn(in out a : rt::Arena, msg : str, pkg_al : str, detail : s
 ## `Dependency ( … )` and comments/strings have the same meaning as the parser.
 dep_alias_at := fn(mtext : str, hit : usize) -> str {
   mbase := unchecked bitcast(usize, mtext.ptr)
-  mut dep_open := 0
-  mut dep_end := 0
+  mut dep_open : usize = 0
+  mut dep_end : usize = 0
   mut k : usize = 0
   while k < hit {
     c := bytes(mtext)[k]
@@ -2713,7 +2713,7 @@ manifest_target_record := fn(in out a : rt::Arena, pkg_al : str) -> str {
   blk := manifest_list_field(a, pkg_al, "targets")
   bb := unchecked bitcast(usize, blk.ptr)
   mut first_s : usize = 0
-  mut first_n := 0
+  mut first_n : usize = 0
   mut i : usize = 0
   while i + 7 <= blk.len {
     mut is_target := true
@@ -3222,7 +3222,7 @@ manifest_located_error_at := fn(in out a : rt::Arena, msg : str, pkg_al : str, o
 manifest_located_error := fn(in out a : rt::Arena, msg : str, pkg_al : str, anchor : str) {
   mc := cstr(a, pkg_al)
   mtext := read_proc(a, mc, 262144)
-  mut off := 0
+  mut off : usize = 0
   fi := mf_find_word(mtext, 0, anchor)
   if fi >= 0 { off = usize(fi) }
   manifest_located_error_at(a, msg, pkg_al, off)
@@ -3421,7 +3421,7 @@ manifest_target_command_reject := fn(in out a : rt::Arena, pkg_al : str, backend
 ## and capture to the matching `]`. The `flags` values are the per-profile FlagSet overrides (§2.6).
 manifest_profile_flags_block := fn(in out a : rt::Arena, plist : str, sel : str) -> str {
   pbase := unchecked bitcast(usize, plist.ptr)
-  mut i := 0
+  mut i : usize = 0
   mut done := false
   while not done {
     ni := mf_find_word(plist, i, "name")
@@ -3467,7 +3467,7 @@ manifest_profile_flags_block := fn(in out a : rt::Arena, plist : str, sel : str)
 ## `FlagSet(name = "<flag_name>", value = <token>)` whose name matches; "" when the profile does not
 ## override that flag (the declared default then applies, §2.6).
 profile_flag_override := fn(in out a : rt::Arena, fblk : str, flag_name : str) -> str {
-  mut i := 0
+  mut i : usize = 0
   mut done := false
   while not done {
     ni := mf_find_word(fblk, i, "name")
@@ -3560,7 +3560,7 @@ mf_value_matches_type := fn(t : str, v : str) -> bool {
 }
 
 mf_declared_flag := fn(blk : str, flag_name : str) -> bool {
-  mut i := 0
+  mut i : usize = 0
   mut done := false
   while not done {
     ni := mf_find_word(blk, i, "name")
@@ -3575,7 +3575,7 @@ mf_declared_flag := fn(blk : str, flag_name : str) -> bool {
 }
 
 mf_reject_bad_overrides := fn(in out a : rt::Arena, blk : str, fblk : str, pkg_al : str) {
-  mut i := 0
+  mut i : usize = 0
   mut done := false
   while not done {
     ni := mf_find_word(fblk, i, "name")
@@ -3602,7 +3602,7 @@ manifest_profile_flags := fn(in out a : rt::Arena, pkg_al : str, sel : str) -> s
   mf_reject_bad_overrides(a, blk, fblk, pkg_al)
   mut out := rt::strbuf(a, blk.len + 64)
   mut done := false
-  mut i := 0
+  mut i : usize = 0
   while not done {
     ni := mf_find_word(blk, i, "name")
     if ni < 0 { done = true }
@@ -4301,7 +4301,7 @@ build_and_run := fn(in out a : rt::Arena, outp : str, keep_artifacts : bool, gba
     ak += 1
   }
   wword(av + ak * 8, 0)
-  mut etr := 0
+  mut etr : usize = 0
   environ := read_environ(a, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(a, environ)
@@ -4331,7 +4331,7 @@ cross_link_exe := fn(in out a : rt::Arena, out : str, gbase : usize, glen : usiz
   out_c := cstr(a, out)
   w := rt::write_file(outs_c, gbase, glen)
   if w != 0 { tool_error("alatyr: cannot write the emitted cross-target assembly"); return 10 }
-  mut etr := 0
+  mut etr : usize = 0
   environ := read_environ(a, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(a, environ)
@@ -4353,7 +4353,7 @@ cross_link_exe := fn(in out a : rt::Arena, out : str, gbase : usize, glen : usiz
 }
 
 cross_run_exe := fn(in out a : rt::Arena, out : str, backend : usize) -> usize {
-  mut etr := 0
+  mut etr : usize = 0
   environ := read_environ(a, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(a, environ)
@@ -4456,7 +4456,7 @@ run_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, n 
     return 19
   }
   exe_c := cstr(a, exe)
-  mut etr := 0
+  mut etr : usize = 0
   environ := read_environ(a, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(a, environ)
@@ -5703,10 +5703,10 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   ## 6 = build (manifest-driven: artifact → `<target_dir>/<output>`, the spec `alatyr build`);
   ## 12 = plan (manifest configuration/resolution only, deterministic plan.tsv); 13 = ir (the shared
   ## IR dev verb, `docs/ir.md` slice 0a)
-  mut mode := 0
+  mut mode : usize = 0
   mut oi := 0
   mut fi : usize = 1
-  mut test_jobs := 1
+  mut test_jobs : usize = 1
   mut test_keep_going := false
   if n == 1 { return cli_help(a, 2, 40) }
   ## TOOL-21 — `alatyr help <command>` and `alatyr <command> … --help` answer that command's usage
@@ -5961,8 +5961,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   ## TOOL-5: `alatyr test <paths...> [substring]` treats a final non-source argument as a test
   ## description filter. The filter is forwarded as raw pointer/length facts at the cli→driver
   ## boundary, avoiding aggregate-string copyback loss in the lean lower.
-  mut test_filter_p := 0
-  mut test_filter_n := 0
+  mut test_filter_p : usize = 0
+  mut test_filter_n : usize = 0
   if mode == 5 and n - fi >= 2 {
     last := arg_at(cmd, n - 1)
     if ends_with(last, ".al") == false {
@@ -6049,7 +6049,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     if MANIFEST_CONFIG_BAD { return 1 }
   }
   mut paths := build_paths(a, cmd, fi, path_n, pkg_arg)
-  mut target_backend := 0
+  mut target_backend : usize = 0
   ## Modules §8 / Tooling §2.4 — a dependency DECLARATION the resolver cannot honour (a git source, a
   ## path dependency with no `package.al`, a record naming neither a name nor an alias) is a Config
   ## failure for EVERY command. The scanner already printed the located diagnostic; abort here rather
@@ -6352,7 +6352,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     td := rt::sb_flush(tsb, 1)
     return emit_dump_status(td, tsblen)
   }
-  mut spb := 0
+  mut spb : usize = 0
   if mode != 0 and osplit_on(a) { spb = rt::bump(a, 262144) }
   mut sb := driver::compile_files_target(paths, a, entry_sym, lim_ceiling, spb, artifact_kind == "object" or artifact_kind == "static_lib" or artifact_kind == "shared_lib")
   ## IR slice 1d: under `x86-ir`, a built function the verifier refused is a located internal error,

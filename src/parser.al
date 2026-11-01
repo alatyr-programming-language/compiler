@@ -124,12 +124,12 @@ hex_digit := fn(c : u8) -> usize {
 ## bytes, so `"\\xff"` is a compile error instead of a str carrying invalid UTF-8.
 scan_string := fn(base : usize, n : usize) -> StringScan {
   mut i : usize = 0
-  mut out := 0
+  mut out : usize = 0
   mut need := 0
-  mut lo := 128
-  mut hi := 191
+  mut lo : usize = 128
+  mut hi : usize = 191
   while i < n {
-    mut b := 0
+    mut b : usize = 0
     if bytes(str_at(base + i, 1))[0] == 92 {
       if i + 1 >= n { return StringScan(ok = false, len = 0) }
       esc := bytes(str_at(base + i + 1, 1))[0]
@@ -611,8 +611,8 @@ expr_null := fn() -> ptr(Expr) { unchecked bitcast(ptr(Expr), 0) }
 mut P_LBL_BASE : rt::WTab = rt::WTab(0)
 mut P_LBL_CAP : rt::Words = rt::Words(0)
 mut P_LOOP_SP : usize = 0
-mut P_PEND_S := 0
-mut P_PEND_L := 0
+mut P_PEND_S : usize = 0
+mut P_PEND_L : usize = 0
 ## Resolve an identifier token (span `[s, s+n)`) to a loop-nesting depth if it names an in-scope
 ## structured label; returns depth (0 = innermost enclosing loop) or -1 if it is NOT a label in scope
 ## (so the caller treats the identifier as an ordinary value expression, §7.1 disambiguation).
@@ -1045,8 +1045,8 @@ parse_pat_alt := fn(in out pc : PC) -> ptr(mut Arm) {
   mut w : u8 = 0
   mut lit : i64 = 0
   mut hi : i64 = 0
-  mut vs := 0
-  mut vl := 0
+  mut vs : usize = 0
+  mut vl : usize = 0
   mut bhead : Option(ptr(mut Bind)) = Option.None
   mut btail : Option(ptr(mut Bind)) = Option.None
   wt := cur(pc)
@@ -1829,7 +1829,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
     ## binds a frame region of N words and stores each element; element `i` at offset `i*8`.
     if cur(pc).kind == 14 {
       pc.idx = pc.idx + 1                 ## '['
-      mut nel := 0
+      mut nel : usize = 0
       mut ehead : Option(ptr(mut Arg)) = Option.None
       mut etail : Option(ptr(mut Arg)) = Option.None
       while cur(pc).kind != 15 and cur(pc).kind != 0 {
@@ -1998,10 +1998,10 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         pc.idx = pc.idx + 1               ## '('
         mut bdepth := 0
         mut sawptr := false               ## the target head is `ptr`
-        mut pps := 0                      ## pointee type-name span start (0 = none)
-        mut ppl := 0
-        mut hts := 0                      ## target HEAD type-name span (first depth-0 ident)
-        mut htl := 0
+        mut pps : usize = 0                      ## pointee type-name span start (0 = none)
+        mut ppl : usize = 0
+        mut hts : usize = 0                      ## target HEAD type-name span (first depth-0 ident)
+        mut htl : usize = 0
         mut tgt_s := cur(pc).start         ## FULL target-type span start (first target token)
         mut tgt_e := cur(pc).start         ## …and end (updated to the last token before the `,`)
         while cur(pc).kind != 0 and not (cur(pc).kind == 9 and bdepth == 0) {
@@ -2122,7 +2122,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         ## pass code writes `ast::Decl(...)`; this builds it identically to an unqualified ctor.)
         is_qstruct := cur(pc).kind == 1 and tok_at(pc, pc.idx + 1).kind == 21
         if is_qstruct {
-          mut qfnf := 0
+          mut qfnf : usize = 0
           mut qfhead : Option(ptr(mut Arg)) = Option.None
           mut qftail : Option(ptr(mut Arg)) = Option.None
           while cur(pc).kind != 11 and cur(pc).kind != 0 {
@@ -2146,7 +2146,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           pc.idx = pc.idx + 1             ## ')'
           return newnode(pc.arena, Expr.StructLit(tseg_start, tseg_len, qfnf, qfhead))
         }
-        mut qn := 0
+        mut qn : usize = 0
         mut qhead : Option(ptr(mut Arg)) = Option.None
         mut qtail : Option(ptr(mut Arg)) = Option.None
         while cur(pc).kind != 11 and cur(pc).kind != 0 {
@@ -2245,7 +2245,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           pc.idx = pc.idx + 1             ## ')'
           ## Build the value `Arg` list in DECLARATION order. `fhead`/`ftail` are the emitted list; the
           ## inline link store mirrors the historical struct-ctor idiom exactly.
-          mut fnf := 0
+          mut fnf : usize = 0
           mut fhead : Option(ptr(mut Arg)) = Option.None
           mut ftail : Option(ptr(mut Arg)) = Option.None
           rec := struct_rec_of(pc, t.start, t.len)
@@ -2328,7 +2328,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           }
           return newnode(pc.arena, Expr.StructLit(t.start, t.len, fnf, fhead))
         }
-        mut nargs := 0
+        mut nargs : usize = 0
         mut ahead : Option(ptr(mut Arg)) = Option.None
         mut atail : Option(ptr(mut Arg)) = Option.None
         while cur(pc).kind != 11 and cur(pc).kind != 0 {
@@ -2365,7 +2365,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       ## append path, ehead starts 0).
       mut ehead : Option(ptr(mut Arg)) = Option.None
       mut etail : Option(ptr(mut Arg)) = Option.None
-      mut nel := 0
+      mut nel : usize = 0
       mut cure : ptr(Expr) = e
       mut going := true
       while going {
@@ -2516,7 +2516,7 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
         en := enum_type_span(base)
         pc.idx = pc.idx + 1               ## '('
         ## N comma-separated payload args into an arena-linked `Arg` list (general arity).
-        mut pnp := 0
+        mut pnp : usize = 0
         mut phead : Option(ptr(mut Arg)) = Option.None
         mut ptail : Option(ptr(mut Arg)) = Option.None
         while cur(pc).kind != 11 and cur(pc).kind != 0 {
@@ -2667,7 +2667,7 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
 ## is exactly the one `add1(41)` produces, so nothing downstream can tell the two spellings apart.
 p_pcall := fn(in out pc : PC, nm : NSpan) -> ptr(mut Expr) {
   pc.idx = pc.idx + 1                                    ## '('
-  mut nargs := 0
+  mut nargs : usize = 0
   mut ahead : Option(ptr(mut Arg)) = Option.None
   mut atail : Option(ptr(mut Arg)) = Option.None
   while cur(pc).kind != 11 and cur(pc).kind != 0 {
@@ -3210,7 +3210,7 @@ if_is_stmt_form := fn(pc : PC) -> bool {
   mut depth := 1
   mut pdepth := 0
   mut bdepth := 0
-  mut prev := 0
+  mut prev : usize = 0
   mut closed := false
   mut had_terminal_else := false
   while j < nt {
@@ -3726,8 +3726,8 @@ p_stmt := fn(in out pc : PC) -> ptr(mut Stmt) {
       mut cmtail : Option(ptr(mut Arm)) = Option.None
       while cur(pc).kind != 13 and cur(pc).kind != 0 {
         mut cw : u8 = 0
-        mut cvs := 0
-        mut cvl := 0
+        mut cvs : usize = 0
+        mut cvl : usize = 0
         ct := cur(pc)
         if ct.kind == 1 and str_eq(str_at(pc.src + ct.start, ct.len), "_") { cw = 1; pc.idx = pc.idx + 1 }
         else { cvs = ct.start; cvl = ct.len; pc.idx = pc.idx + 1 }   ## kind name (Struct/Enum/Array)
@@ -5263,10 +5263,10 @@ parse_struct_members := fn(in out pc : PC, packed : bool) -> Option(ptr(mut Fiel
     ## source-scan discipline as local_is_mut), keeping the bootstrap AST layout stable.
     if tok_kw(pc, "mut") { pc.idx = pc.idx + 1 }
     mn := cur(pc); pc.idx = pc.idx + 1      ## member name
-    mut marity := 0
+    mut marity : usize = 0
     mut mts : usize = 0
-    mut mtl := 0
-    mut mwsize := 1                   ## field size in words (1 scalar; N for [T; N])
+    mut mtl : usize = 0
+    mut mwsize : usize = 1                   ## field size in words (1 scalar; N for [T; N])
     if cur(pc).kind == 8 {                  ## ': T'  — a struct field
       pc.idx = pc.idx + 1                   ## ':'
       ## §8 layout attributes are a PREFIX surface (`@offset(N) x : T`, consumed above before the field
@@ -5449,7 +5449,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     mut lts : usize = 0
     if cur(pc).kind == 1 { lts = cur(pc).start }           ## start of the FIRST limit name
     while cur(pc).kind != 11 and cur(pc).kind != 0 { pc.idx = pc.idx + 1 } ## consume the whole list
-    mut ltl := 0
+    mut ltl : usize = 0
     if lts != 0 { lastt := tok_at(pc, pc.idx - 1); ltl = (lastt.start + lastt.len) - lts }  ## span the WHOLE list
     if cur(pc).kind == 11 { pc.idx = pc.idx + 1 }          ## ')'
     ph := newnode(pc.arena, Expr.Num(0, 0, 0))
@@ -5583,8 +5583,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
      and str_eq(str_at(pc.src + tok_at(pc, pc.idx + 1).start, tok_at(pc, pc.idx + 1).len), "test") {
     pc.idx = pc.idx + 1                       ## '@'
     pc.idx = pc.idx + 1                       ## 'test'
-    mut ds := 0
-    mut dl := 0
+    mut ds : usize = 0
+    mut dl : usize = 0
     if cur(pc).kind == 10 {                   ## '('
       pc.idx = pc.idx + 1
       if cur(pc).kind == 4 {                  ## the description string literal (span covers quotes)
@@ -5964,7 +5964,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ## Parse the comma-separated `name : T` parameters into an arena-linked `Param` list
     ## (the `: T` annotation is skipped — types are sema's job). Up to 6 (the System V
     ## integer argument registers); a 7th+ param would need stack args (deferred).
-    mut arity := 0
+    mut arity : usize = 0
     mut phead : Option(ptr(mut Param)) = Option.None
     mut ptail : Option(ptr(mut Param)) = Option.None
     ## saw a `comptime` VALUE parameter (`comptime N : u64`, Comptime §10) anywhere in the list —
@@ -5997,13 +5997,13 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       if tok_kw(pc, "comptime") { saw_ct = true; pc.idx = pc.idx + 1 }
       pn := cur(pc); pc.idx = pc.idx + 1      ## param name
       pc.idx = pc.idx + 1                     ## ':'
-      mut pts := 0
-      mut ptl := 0
+      mut pts : usize = 0
+      mut ptl : usize = 0
       mut p_is_arr := false
-      mut p_arrlen := 0                        ## static length N of an `[T; N]` array param (0 if none)
+      mut p_arrlen : usize = 0                        ## static length N of an `[T; N]` array param (0 if none)
       mut p_slicevar := false                  ## §7.2 SLICE-variadic `name : ...T` (a rest WITH element type T)
-      mut pps := 0
-      mut ppl := 0
+      mut pps : usize = 0
+      mut ppl : usize = 0
       ## AGGREGATE-PARAM tier — an ARRAY parameter type `[T; N]` (kinds: 14 `[`, 30 `;`,
       ## 15 `]`). Capture the ELEMENT type span `T` (the token after `[`) — lower resolves the
       ## element layout/stride from it — and skip to the closing `]` (the length `N` is not
@@ -6148,7 +6148,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       ## Only an `in` value param may default (§5.1: `out`/`in out` have no default — a result place is
       ## caller-supplied); an `out`/`in out`/array/pointer param default is rejected (pps is unavailable
       ## for a pointer; the others have no value to default). `src/` uses no defaults → fixpoint-neutral.
-      mut p_defp := 0
+      mut p_defp : usize = 0
       if cur(pc).kind == 21 {
         pc.idx = pc.idx + 1                    ## '='
         dexpr := p_or(pc)
@@ -6484,8 +6484,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
   ## plain `x := f(1)` records it too; `lower_layout::alias_rhs` consults the span ONLY when the
   ## callee head resolves to a GENERIC struct type-function, so a value call's span is inert). The
   ## `=`-gate is what keeps every struct-literal-initialized global byte-identical (fixpoint).
-  mut als_ts := 0
-  mut als_tl := 0
+  mut als_ts : usize = 0
+  mut als_tl : usize = 0
   mut als_ok := false
   if tok_at(pc, rhs_idx).kind == 1 and tok_at(pc, rhs_idx + 1).kind == 10 {
     nt := ntoks(pc)
@@ -6521,8 +6521,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
   ## before following it; a plain value binding with the same syntax therefore cannot manufacture a
   ## type. This is deliberately limited to one bare token — alias chains and expression forms remain
   ## fail-loud until their identity rules are specified.
-  mut plain_ts := 0
-  mut plain_tl := 0
+  mut plain_ts : usize = 0
+  mut plain_tl : usize = 0
   if tok_at(pc, rhs_idx).kind == 1 and pc.idx == rhs_idx + 1 {
     ptok := tok_at(pc, rhs_idx)
     plain_ts = ptok.start
@@ -6618,7 +6618,7 @@ pub parse_program := fn(in out pc : PC, in out out_decls : rt::Vec, in out da : 
   ## those keep the message they have. An empty file and a comment-only file have no delimiters at all,
   ## so their present behaviour is untouched.
   mut eod := 0
-  mut eod_off := 0
+  mut eod_off : usize = 0
   mut eod_i : usize = 0
   eod_n := ntoks(pc)
   while eod_i < eod_n {

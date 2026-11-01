@@ -580,18 +580,18 @@ rv_body := fn() -> Option(ptr(mut Stmt)) { RV_BODY }
 ## The instance substitution (`T`'s name span → the concrete type span) rides module globals, set
 ## per-instance in emit_rv_program's mono pass and read by rv_comp_cond_fold (`comptime if T == …`).
 ## Zero → no substitution. _2/_3 carry the 2nd/3rd type-param of a leading run (pick3(A,B,C,…)).
-mut RV_SUB_GPS := 0    ## the generic type-param NAME span start …
+mut RV_SUB_GPS : usize = 0    ## the generic type-param NAME span start …
 mut RV_SUB_GPL : usize = 0    ## … and length (0 = no active substitution)
-mut RV_SUB_ITS := 0    ## the instance's concrete type span start …
-mut RV_SUB_ITL := 0    ## … and length (non-zero while emitting an instance = instance mode)
-mut RV_SUB_GPS2 := 0
-mut RV_SUB_GPL2 := 0
-mut RV_SUB_ITS2 := 0
-mut RV_SUB_ITL2 := 0
-mut RV_SUB_GPS3 := 0
-mut RV_SUB_GPL3 := 0
-mut RV_SUB_ITS3 := 0
-mut RV_SUB_ITL3 := 0
+mut RV_SUB_ITS : usize = 0    ## the instance's concrete type span start …
+mut RV_SUB_ITL : usize = 0    ## … and length (non-zero while emitting an instance = instance mode)
+mut RV_SUB_GPS2 : usize = 0
+mut RV_SUB_GPL2 : usize = 0
+mut RV_SUB_ITS2 : usize = 0
+mut RV_SUB_ITL2 : usize = 0
+mut RV_SUB_GPS3 : usize = 0
+mut RV_SUB_GPL3 : usize = 0
+mut RV_SUB_ITS3 : usize = 0
+mut RV_SUB_ITL3 : usize = 0
 ## Instances RECORDED DURING EMIT at each generic call site (rv_inst_add) and consumed to emit one
 ## `<fn>__<tag>` body per (generic-fn, type) pair. gi = the generic decl index; ts/tl = concrete type.
 mut RV_INST_GI : [usize; 512] = [0; 512]
@@ -641,8 +641,8 @@ rv_flt_first := fn(off : usize) -> bool {
   return true
 }
 ## Resolved type-arg of the current generic call (rv_resolve_typearg out-globals; no multi-word return).
-mut RV_TA_S := 0
-mut RV_TA_N := 0
+mut RV_TA_S : usize = 0
+mut RV_TA_N : usize = 0
 mut RV_TA_S2 := 0
 mut RV_TA_N2 := 0
 mut RV_TA_S3 := 0
@@ -650,14 +650,14 @@ mut RV_TA_N3 := 0
 ## Comptime FIELD/VARIANT unroll context (mirror A64_CF_*; inert when *_L == 0). RV_CF_VAR = the unroll
 ## loop var, RV_CF_FLD = current field name, RV_CF_TY = current field type span; RV_ARM_BINDS = the
 ## current match arm's bind list head (for payload-binding type inference in rv_resolve_typearg).
-mut RV_CFVAR_S := 0
-mut RV_CFVAR_L := 0
+mut RV_CFVAR_S : usize = 0
+mut RV_CFVAR_L : usize = 0
 mut RV_CF_VAR_S := 0
 mut RV_CF_VAR_L := 0
-mut RV_CF_FLD_S := 0
-mut RV_CF_FLD_L := 0
-mut RV_CF_TY_S := 0
-mut RV_CF_TY_L := 0
+mut RV_CF_FLD_S : usize = 0
+mut RV_CF_FLD_L : usize = 0
+mut RV_CF_TY_S : usize = 0
+mut RV_CF_TY_L : usize = 0
 mut RV_ARM_BINDS : Option(ptr(mut Bind)) = Option.None
 ## The byte offset of `<f>.offset` for the ACTIVE comptime field descriptor. The field loop is
 ## emitted only for a concrete struct instance (`RV_SUB_*`); reuse the shared layout calculators so
@@ -707,8 +707,8 @@ rv_tparam_name := fn(d : Decl, src : ptr(u8)) -> CSpan {
 rv_resolve_typearg := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, args_head : Option(ptr(mut Arg)), penv : Option(ptr(mut Param)), a : rt::Arena) {
   gd := deref(decl_get(decls, usize(gi)))
   argc := arg_list_count(args_head, a)
-  mut ts := 0
-  mut tl := 0
+  mut ts : usize = 0
+  mut tl : usize = 0
   if argc == i64(gd.arity) {
     ## EXPLICIT type-arg — at the type-param's source position.
     tpp := decl_tparam_pos(gd, src)
@@ -3302,8 +3302,8 @@ rv_emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Aren
 rv_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   cs := expr_call_name_ns(v)
   cl := expr_call_name_nl(v)
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
     mut i : usize = 0
@@ -3355,8 +3355,8 @@ rv_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
 rv_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   cs := expr_call_name_ns(v)
   cl := expr_call_name_nl(v)
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
     mut i : usize = 0
@@ -3412,8 +3412,8 @@ rv_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
 rv_call_ret_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   cs := expr_call_name_ns(v)
   cl := expr_call_name_nl(v)
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
     mut i : usize = 0
@@ -3461,8 +3461,8 @@ rv_call_ret_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
 rv_call_ret_enum_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   cs := expr_call_name_ns(v)
   cl := expr_call_name_nl(v)
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
     mut i : usize = 0
@@ -3681,8 +3681,8 @@ mut RV_RET_ENUM_NL := 0
 ## register budget, holds its type name span (0/0 otherwise). LP64 indirect result: the caller hands the
 ## destination address in a0, the prologue spills it to RV_SRET_SLOT, and each Return / the trailing value
 ## copies the struct THROUGH that pointer (emit_rv_sret_store). Mutually exclusive with RV_RET_STRUCT.
-mut RV_RET_SRET_NS := 0
-mut RV_RET_SRET_NL := 0
+mut RV_RET_SRET_NS : usize = 0
+mut RV_RET_SRET_NL : usize = 0
 ## Frame byte offset where an SRET fn spills the incoming result pointer (a0), so it survives nested calls
 ## and register churn to every Return point. Valid only while RV_RET_SRET_NL != 0.
 mut RV_SRET_SLOT := 0
@@ -3716,10 +3716,10 @@ mut RV_MTMP_STRIDE : i64 = 0
 mut RV_MDEPTH : i64 = 0
 ## Current MATCH-ARM enum context (§8 piece 3b) — set/restored per arm in emit_rv_match_arms so an
 ## aggregate payload BINDING (`pt.x`, nested `match i`) resolves its type + frame offset (bind_base + 8).
-mut RV_ARM_ENS := 0
-mut RV_ARM_ENL := 0
-mut RV_ARM_VS := 0
-mut RV_ARM_VL := 0
+mut RV_ARM_ENS : usize = 0
+mut RV_ARM_ENL : usize = 0
+mut RV_ARM_VS : usize = 0
+mut RV_ARM_VL : usize = 0
 ## The active arm-binding stack. Recursive arm emission passes only the innermost Bind list to emitters,
 ## while a nested payload body can still refer to an outer binding. Direct inner bindings retain shadowing
 ## precedence; saved outer lists provide lexical visibility after the inner lookup misses.
@@ -3750,8 +3750,8 @@ rv_match_tmp_offset := fn() -> i64 {
 ## The AGGREGATE payload-type span of binding `[ns,nl]` — non-0/0 only when it is the CURRENT arm's SINGLE
 ## payload binding AND the variant payload type is a struct / enum / str (§8 piece 3b).
 rv_bind_agg_span := fn(bind_head : Option(ptr(mut Bind)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if RV_ARM_ENL != 0 {
     bidx := bind_list_index(bind_head, src, ns, nl, a)
     cnt := bind_count(bind_head)
@@ -6422,8 +6422,8 @@ emit_rv_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, a
             ## expression emitter has no aggregate-field load and would emit an `ebreak`). Only a child
             ## OUTSIDE the copier's domain is still a located `ebreak`.
             mut stdbc := false
-            mut stdbcts := 0
-            mut stdbctl := 0
+            mut stdbcts : usize = 0
+            mut stdbctl : usize = 0
             if ex_is_field(v) {
               sfp := rv_std_path_ty(v, body_head, src, a, decls)
               if rv_std_path_ok(v, body_head, src, a, decls) and sfp.n != 0 {
@@ -6437,7 +6437,7 @@ emit_rv_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, a
                     soff = srootC + sboC
                   }
                 }
-                mut bckC := 0
+                mut bckC : usize = 0
                 if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 and (not wgokC) { bckC = std_copy_kind(decls, src, sfp.s, sfp.n, a) }
                 if bckC != 0 {
                   srootB := rv_std_path_root_off(v, body_head, src, pcount, a, decls)
@@ -7714,8 +7714,8 @@ emit_rv_export := fn(in out sb : rt::StrBuf, src : ptr(u8), name_s : usize, name
 ## (`docs/ir-slice-2.md`).
 rv_emit_call_target := fn(in out sb : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) {
   cnt := rt::vec_len(deref(decls))
-  mut es := 0
-  mut en := 0
+  mut es : usize = 0
+  mut en : usize = 0
   mut i : usize = 0
   while i < cnt {
     sd := deref(decl_get(decls, i))

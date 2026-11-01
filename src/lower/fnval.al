@@ -343,8 +343,8 @@ fnty_param_span := fn(src : ptr(u8), p0 : usize, idx : usize) -> CSpan {
   mut d := 1
   mut k : usize = 0
   mut ss := p
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   mut fin := false
   while p < lim and fin == false {
     c := str_at((src + p), 1)
@@ -374,7 +374,7 @@ fnty_slot_ty := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
   mut e := s + n
   mut p := b
   mut d := 0
-  mut cut := 0
+  mut cut : usize = 0
   while p < e {
     c := str_at((src + p), 1)
     if c == "(" { d = d + 1 }
@@ -411,7 +411,7 @@ pub fnval_param_fmask := fn(cs : usize, cl : usize, cx : ptr(LCtx)) -> usize {
   mut m : usize = 0
   mut bit : usize = 1
   if tp != 0 {
-    mut i := 0
+    mut i : usize = 0
     while i < 6 {
       ps := fnty_param_span(cx.src, tp, i)
       if ps.n != 0 and ty_is_float_sub(ps.s, ps.n, cx) { m = m + bit }
@@ -488,8 +488,8 @@ ecallee_fnty_in_text := fn(src : ptr(u8), s : usize, n : usize) -> usize {
 ## the name is not bound here or carries no annotation (then the call is rejected, not guessed).
 ecallee_localty := fn(ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> CSpan {
   mut pcur := EMIT_PARAMS
-  mut ps := 0
-  mut pn := 0
+  mut ps : usize = 0
+  mut pn : usize = 0
   loop {
     match pcur {
       Some(pcurq) => {
@@ -585,7 +585,7 @@ ecallee_ret_scalar := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ecallee_fmask := fn(p0 : usize, cx : ptr(LCtx)) -> usize {
   mut m : usize = 0
   mut bit : usize = 1
-  mut i := 0
+  mut i : usize = 0
   while i < 6 {
     ps := fnty_param_span(cx.src, p0, i)
     if ps.n != 0 and ty_is_float_sub(ps.s, ps.n, cx) { m = m + bit }
@@ -720,7 +720,7 @@ pub fn_field_param_fmask := fn(base : ptr(Expr), fs : usize, fl : usize, cx : pt
   if fts.n < 3 { return 0 }
   mut m : usize = 0
   mut bit : usize = 1
-  mut i := 0
+  mut i : usize = 0
   while i < 6 {
     ps := fnty_param_span(cx.src, fts.s, i)
     if ps.n != 0 and ty_is_float_sub(ps.s, ps.n, cx) { m = m + bit }

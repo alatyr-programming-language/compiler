@@ -439,8 +439,8 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr
     ## literal module paths), and the alias must belong to the caller module.
     if driver::d_colon_pos(cx.src, qms, qml) < 0 {
       mut i : usize = 0
-      mut as_ := 0
-      mut al := 0
+      mut as_ : usize = 0
+      mut al : usize = 0
       while i < cnt {
         d := deref(lower_ctx::decl_get(cx.decls, i))
         if d.kind == 0 and d.arity == 0 and d.ret_tl != 0 and d.name_len == qml
@@ -779,8 +779,8 @@ pub lower_show_src_line := fn(src : ptr(u8), off : usize) {
   ## it. ONE `sys_write` either way, which is also what keeps this module at its reviewed
   ## duplicate-decision count. This is the surface a located §3 refusal on a bare callee reaches
   ## (issue #403), so the guard belongs in the helper, not at its fifteen call sites.
-  mut wbase := 0
-  mut wn := 0
+  mut wbase : usize = 0
+  mut wn : usize = 0
   if ast::span_is_synthetic(off) {
     m := "<a compiler-synthesized construct: no source line>\n"
     wbase = unchecked bitcast(usize, m.ptr)
@@ -808,7 +808,7 @@ pub lower_show_src_line := fn(src : ptr(u8), off : usize) {
 ## allocates only in the failing path; successful compiler output is unchanged.
 codegen_reject := fn(src : ptr(u8), off : usize, mod_s : usize, mod_l : usize, message : str, a : rt::Arena) {
   base := unchecked bitcast(usize, src)
-  mut fbase := 0
+  mut fbase : usize = 0
   mut file_s := mod_s
   mut file_l := mod_l
   mut found := false
@@ -1296,7 +1296,7 @@ comptime_typeinfo_count := fn(ts : usize, tl : usize, cx : ptr(LCtx)) -> i64 {
     return i64(vc)
   }
   if str_at((cx.src + ts), 1) == "(" {
-    mut cc := 0
+    mut cc : usize = 0
     mut going := true
     while going {
       ca := typearg_at(cx.src, ts, 0, cc)

@@ -52,7 +52,7 @@ call_rhs_concrete_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr
         ci := ret_call_target(decls, src, cs, cl, nargs, ah, a)
         if esp.n != 0 and ci >= 0 {
           ## CONCRETE only: reject if any top-level return type-arg names a callee type-parameter.
-          mut k := 0
+          mut k : usize = 0
           mut go := true
           mut anyp := false
           while go {
@@ -82,8 +82,8 @@ pub block_decl_type := fn(head : Option(ptr(mut Stmt)), ns2 : usize, nl2 : usize
   if _bdt_active { return LocalTypeSpan(s = 0, n = 0) }
   _bdt_active = true
   mut s : Option(ptr(mut Stmt)) = head
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   loop {
     match s {
       Some(sq) => {
@@ -174,7 +174,7 @@ collect_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : Opti
   fmt := arg_expr_at(args_head, 0, a)
   fi := str_lit_info(fmt)
   if fi.is_s == false { return }
-  mut ai := 1
+  mut ai : usize = 1
   mut i : usize = 0
   while i < fi.sl {
     mut step := false
@@ -261,8 +261,8 @@ collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
   if struct_lit_info(e).is_s or enum_lit_info(e).is_e { return CSpan(s = 0, n = 0) }
   vn := var_name_span(e)
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
-  mut ts := 0
-  mut tl := 0
+  mut ts : usize = 0
+  mut tl : usize = 0
   if stmt_any(COLLECT_BODY) {
     ltp := block_decl_type(COLLECT_BODY, vn.s, vn.n, src, decls, a)
     if ltp.n != 0 { ts = ltp.s; tl = ltp.n }
@@ -309,8 +309,8 @@ collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
 pub recv_full_pre := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), penv : Option(ptr(mut Param)), a : rt::Arena) -> CSpan {
   vn := var_name_span(e)
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
-  mut ts := 0
-  mut tl := 0
+  mut ts : usize = 0
+  mut tl : usize = 0
   if stmt_any(COLLECT_BODY) {
     ltp := block_decl_type(COLLECT_BODY, vn.s, vn.n, src, decls, a)
     if ltp.n != 0 { ts = ltp.s; tl = ltp.n }
@@ -328,8 +328,8 @@ pub recv_full_pre := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), penv
 pub recv_full_emit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   vn := var_name_span(e)
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
-  mut ts := 0
-  mut tl := 0
+  mut ts : usize = 0
+  mut tl : usize = 0
   if stmt_any(EMIT_BODY) {
     ltp := block_decl_type(EMIT_BODY, vn.s, vn.n, src, decls, a)
     if ltp.n != 0 { ts = ltp.s; tl = ltp.n }
