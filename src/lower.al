@@ -10433,7 +10433,12 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
         }
         if parray == false and pw == 0 {
           dw := payload_deref_struct_words(ga0.e, cx, a)
-          if dw > 6 { panic("selfhost: a `deref(p)` struct payload wider than 6 words needs the wide enum result-pointer path (#1212)") }
+          ## located at the constructor: an instance body carries no call site, so `vec::get(S7, …)`
+          ## shows the `Option(T).Some(deref(elem))` line it reached
+          if dw > 6 {
+            lower_show_src_line(cx.src, es)
+            panic("selfhost: a `deref(p)` struct payload wider than 6 words needs the wide enum result-pointer path (#1212)")
+          }
           if dw > 1 { pw = dw; pderef = true }
         }
         ## #912/#913 — a STRUCT-LITERAL payload (`Some(W(k = K(…)))`) is delivered by the one struct-value
@@ -23316,6 +23321,7 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
             }
             psi := struct_lit_info(ga.e)
             pstr := str_lit_info(ga.e)
+            pwd := payload_deref_struct_words(ga.e, cx, a)
             ## #852 — a payload component declared `Option(ptr(T))` is one folded word, whatever its value
             ## form (a bare `Option.Some/None`, a folded local or field, a call).
             pft := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, pci, deref(cx.mar))
@@ -23406,11 +23412,10 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
                 }
               }
               i += i64(pwv)
-            } else if payload_deref_struct_words(ga.e, cx, a) > 1 {
+            } else if pwd > 1 {
               ## #1212 — a `deref(p)` STRUCT payload (`o := Option(S).Some(deref(p))`): the store dual of
               ## `emit_enum_value`'s pderef arm. Evaluate the pointer into %r11 and copy pointee word j to
               ## the payload slot `base-i-j`; `emit_gas` stored word 0 alone.
-              pwd := payload_deref_struct_words(ga.e, cx, a)
               emit_gas(deref_inner_expr(ga.e), sb, cx, a, nl)
               push_str(sb, "  popq %r11\n")
               for j in 0..pwd {
