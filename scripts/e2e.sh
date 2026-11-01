@@ -10711,6 +10711,10 @@ run comptime_enum_hash 42
 ## and of a `str` beside it. NON-VACUOUS: on the parent `da18fef2` (x86_64) the fixture stops with
 ## SIGSEGV (rc 139): the derive's `hash(p)` reached the module's `hash(s : str)` overload by arity.
 run issue1303_enum_hash 42
+## #1369 — the library's structural `eq` of an enum (tuple payload, unit variant, folded `Option(ptr)`)
+## and a `HashMap` keyed by an enum or an `Option`. NON-VACUOUS: on the parent `7cb5c053` (x86_64) the
+## fixture exits 11: `eq` compared only the first word of `B(u8, i64)`'s tuple payload.
+run issue1369_enum_eq 42
 run comptime_enum_eq 42
 run agg_compare_fields 42
 run nested_match_agg 42
