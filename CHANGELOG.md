@@ -132,6 +132,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   A global owner resolves in the module of the access, and a qualified owner (`z::cfg.x`) is left to
   the module it names. Programs that relied on the old behaviour were invalid. A local or parameter typed
   `u16`, `i16`, `i8`, `char` or a float is not decided yet (#703 stays open for it).
+- **An annotated struct-element slice view local no longer crashes on x86_64 (#1182).** A local
+  written `xs : Slice(P) = t[0..2]` over a struct array was read as a `Slice(P)` parameter, because the
+  x86_64 lowering took any annotated name for one: `xs[0].b`, `xs[1]`, `xs[1..2]` and `for p in xs`
+  dereferenced the view's data pointer once more and crashed (SIGSEGV). Parameter-ness is now recorded
+  where parameters are bound, so the annotated local reads exactly like `xs := t[0..2]`.
 
 ## 0.2.21 — 2026-11-01
 

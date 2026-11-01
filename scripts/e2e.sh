@@ -11153,6 +11153,11 @@ run enum_dot_match 42
 run slice_param 42
 run slice_struct_param 42
 run slice_struct_local_arg 42
+## #1182: an ANNOTATED struct-element view local `xs : Slice(P) = t[0..2]` reads as a local, not a param
+run issue1182_annotated_view_local 42
+## its review row: a struct-element fixed-array PARAMETER keeps the by-value read (139 on the PR's first
+## head f9a2e2d4; 132 on the parent e313f2aa and here). Due 42 once #1287 is fixed.
+run issue1182_for_array_param_agg 132
 run slice_enum_param 42
 ## the .len FIELD (vs the .len() method) on a slice PARAM: must double-deref the caller's {ptr,len}
 ## block (was reading a garbage slot word). Scalar + str element.
