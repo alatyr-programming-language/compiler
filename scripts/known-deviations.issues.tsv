@@ -6,10 +6,13 @@
 # deviation has no fixture row (no program-visible value differs: the defect is in how the result is
 # reached). Every issue here must be open: scripts/land.sh PHASE 2 refuses a closed one, and
 # `scripts/fixture_expect.sh --issues-open` asks `gh` by hand. The gate holds the rest without network.
+13	Overview §6 (code consistent with the normative lowering rules, per selected target); Types §6.4	x86_64: a field of a tuple/array element reached through a pointer-derived array-field place is refused ("tuple/array element field not resolvable")	rows
+519	Types §4.3 (a reinterpret is always explicit)	a `str` value passed to an integer parameter (`take_u64(s[0])` over a `Slice(str)`) passes `check`; aarch64, riscv64 and wasm build it, only the x86_64 lowering refuses it	rows
 550	Overview §6 (code consistent with the normative lowering rules, per selected target); Memory §4.1	aarch64/riscv64: a deref store through a 1-byte pointee needs the @repr/sub-word byte image, and traps	rows
 551	Overview §6 (code consistent with the normative lowering rules, per selected target); Types §4.4	aarch64/riscv64: `bitcast` to a bare user aggregate has no lowering, and traps	rows
 577	Overview §6 (code consistent with the normative lowering rules, per selected target)	aarch64/riscv64: a statement-position `match` traps (fail-loud stub `unsupported match statement`)	rows
 713	Overview §6 (code consistent with the normative lowering rules, per selected target)	`size(T)` is unlowered on aarch64, riscv64 and wasm: the program traps at run time	rows
+991	Overview §6 (code consistent with the normative lowering rules, per selected target); Control Flow §5	x86_64: `match` on an enum-typed field of a place (`match deref(ptr(h)).t`) is refused ("the lowering cannot see the scrutinee's enum type")	rows
 1065	Stdlib appendix §2.6; Memory §4.5 (MEM-10)	a comparison over two different types ignores a declared heterogeneous `eq` (a wrong value), and with none declared it compares structurally instead of refusing	rows
 1081	Stdlib appendix §2.6; Memory §4.5; Types §4.4	the derived hash/eq over a pointer reaches the address with `u64(v)`, a conversion with no class in the lattice, instead of the spelled `unchecked bitcast(usize, …)`; no program-visible value differs	none
 1123	Overview §6 (code consistent with the normative lowering rules, per selected target); Functions §7.2	aarch64, riscv64 and wasm do not implement the slice-variadic gather: the program traps or fails to assemble	rows
@@ -37,3 +40,6 @@
 1206	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: overloaded functions do not assemble on aarch64, riscv64 and wasm	rows
 1207	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: two programs fail to assemble or link on aarch64 and riscv64	rows
 1273	Comptime §9.2 (an entity a false `when` guard excludes is absent; referencing it at a use site is a compile error)	aarch64/riscv64/wasm: sema folds `when` guards for x86_64 only, so a reference to an entity the selected target excludes builds and traps instead of being refused	rows
+1342	Grammar §2.4 (`hex-float`)	a hexadecimal float literal (`0x1.8p+1`) reaches the assembler in its source spelling: the build fails on all four backends	rows
+1343	Overview §6 (code consistent with the normative lowering rules, per selected target); Types §6.4	x86_64: indexing an inferred copy of a fixed-array local (`ys := xs; ys[1]`) is refused as "indexing a SCALAR local"	rows
+1354	Declarations §7.1; Comptime §2.1	x86_64: a module global initialised by a call (`G := build()`) is refused instead of evaluated at compile time	rows
