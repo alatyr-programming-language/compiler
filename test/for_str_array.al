@@ -9,3 +9,4 @@ main := fn() -> u64 {
   }
   n
 }
+## expect: run 32

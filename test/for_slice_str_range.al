@@ -13,3 +13,4 @@ main := fn() -> u64 {
   }
   n + m * 10
 }
+## expect: run 35

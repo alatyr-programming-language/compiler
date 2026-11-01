@@ -14,3 +14,4 @@ main := fn() -> u64 {
   t : [str; 2] = ["abc", "de"]
   lens(t[0..2])
 }
+## expect: run 5
