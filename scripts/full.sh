@@ -125,6 +125,12 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/spec_pin_check_test.sh"
   _full_spec_pin_self_test_rc=$?
   [ "$_full_spec_pin_self_test_rc" = 0 ] || exit "$_full_spec_pin_self_test_rc"
+  # The lane's pre-gate planner (#1128, #1294) is not a gate stage, but a lane trusts its plan: planted
+  # change sets drive the planner, the fixture selection, the split of fixtures no e2e row names, and the
+  # driver in --plan mode, so a planner that turns a corpus-only fixture into a refused filter is red here.
+  bash "$ROOT/scripts/pre_gate.sh" --self-test
+  _full_pre_gate_self_test_rc=$?
+  [ "$_full_pre_gate_self_test_rc" = 0 ] || exit "$_full_pre_gate_self_test_rc"
   # AGENTS.md's line limit (#1130): a decider that never refuses would print the same green line forever.
   bash "$ROOT/scripts/agents_size_check.sh" --self-test
   _full_agents_size_self_test_rc=$?
