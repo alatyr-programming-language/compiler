@@ -3,6 +3,7 @@
 ## and `deref(p) =`. No body comments (fmt retains only LEADING-decl comments, so the `##` count
 ## round-trips exactly). Builds + runs to 42; AllocWith and the `unchecked { }` block are covered by
 ## the reused alloc_with_elision / unchecked_block fmt tests.
+## expect: run 42
 P := struct { x : u64, y : u64 }
 O := struct { p : P }
 main := fn() -> u64 {

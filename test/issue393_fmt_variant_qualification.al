@@ -27,6 +27,7 @@
 ##
 ## 42 means every check held. Each miss owns its own code from 100 up — never a sum or a product, so
 ## one wrong arm cannot alias a passing run.
+## expect: run 42
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 
 Tag := enum { Red, Green, Blue }

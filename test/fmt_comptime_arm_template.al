@@ -10,6 +10,7 @@
 ## The four `eq` calls in `main`, in order: same variant + same payload (true, +40); same variant +
 ## different payload (false); different variant (false); the SECOND variant (true, +2 — so the
 ## unroll is exercised over both variants). 42 iff every one of them answers correctly.
+## expect: run 42
 E := enum { A(u64), B(u64) }
 
 eq := fn(T : type, a : T, b : T) -> bool {

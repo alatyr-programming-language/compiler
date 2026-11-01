@@ -11,6 +11,7 @@
 ## branch, `other` the THEN branch, and the sum is 42 wherever it is compiled. A fold that took the
 ## wrong branch yields 1998 (999 + 999), and one that emitted NEITHER branch falls through the fn.
 ## (WHICH arch each backend names is pinned separately by `when_guard_arch`.)
+## expect: run 42
 pick := fn() -> u64 {
   comptime if target.arch == Arch.i386 { return 999 } else { return 40 }
 }

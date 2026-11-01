@@ -1,3 +1,4 @@
+## expect: run 42
 Pt := struct {
   x : u64,
   y : u64,

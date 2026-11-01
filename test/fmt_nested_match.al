@@ -2,6 +2,7 @@
 ## an expression, so an inner `match` renders inline inside the outer arm; enum-variant and integer-
 ## literal patterns + the `_` wildcard all survive. c=Green, d=2:
 ##   v: Green arm → match d { _ => 7 } = 7 ; w: d default arm → match c { _ => 30 } = 30 ; 7 + 30 = 37.
+## expect: run 37
 Color := enum { Red, Green, Blue }
 main := fn() -> u64 {
   c := Color.Green
