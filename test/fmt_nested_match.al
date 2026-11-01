@@ -6,12 +6,12 @@ Color := enum { Red, Green, Blue }
 main := fn() -> u64 {
   c := Color.Green
   d := 2
-  v := match c {
+  v : u64 = match c {
     Red => 1,
     Green => match d { 0 => 5, 1 => 6, _ => 7 },
     Blue => 3,
   }
-  w := match d {
+  w : u64 = match d {
     0 => 10,
     _ => match c { Red => 20, _ => 30 },
   }

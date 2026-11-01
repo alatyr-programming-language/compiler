@@ -7,7 +7,7 @@
 ## compiler and returned the wrong number for two of its three inputs. Each arm gets a distinct
 ## result so a branch taken in error cannot pass. Returns 42; a mismatch returns 60 + a bitmask of the
 ## disagreeing inputs (under 126, wasm's `proc_exit` ceiling).
-mut R := 0
+mut R : u64 = 0
 setr := fn(x : u64) -> u64 { R = x ; return x }
 nested_else := fn(n : u64) -> u64 {
   R = 0
@@ -27,7 +27,7 @@ nested_else := fn(n : u64) -> u64 {
   return R
 }
 main := fn() -> u64 {
-  mut bad := 0
+  mut bad : u64 = 0
   if nested_else(9) != 9 { bad = bad + 1 }
   if nested_else(0) != 5 { bad = bad + 2 }
   if nested_else(1) != 6 { bad = bad + 4 }

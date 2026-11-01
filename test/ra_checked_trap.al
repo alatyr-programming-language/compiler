@@ -5,7 +5,7 @@
 ## proving the register-allocated path preserves checked arithmetic (a dropped guard = a silent
 ## miscompile). 6148914691236517206 * 3 = 2^64 + 2 overflows u64. unchecked would wrap to 2.
 main := fn() -> u64 {
-  a := 6148914691236517206
+  a : u64 = 6148914691236517206
   a * 3
 }
 ## expect: trap

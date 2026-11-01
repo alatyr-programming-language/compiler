@@ -17,7 +17,7 @@ app := Package(
   ],
 )
 
-ANSWER := 42
+ANSWER : u64 = 42
 
 main := fn() -> u64 {
   return ANSWER
