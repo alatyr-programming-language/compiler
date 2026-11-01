@@ -230,6 +230,7 @@ aarch64	test/issue557_wildcard_six_shapes.al	run/133	#577
 aarch64	test/issue567_wasm_overload_pair.al	run/133	#1200
 aarch64	test/issue660_exhaustive_generic.al	run/133	#577
 aarch64	test/issue693_union_member_control.al	run/133	#1187
+aarch64	test/issue703_scalar_owner_controls.al	run/133	#1188
 aarch64	test/issue716_const_str_field_alias.al	run/133	#1187
 aarch64	test/issue716_const_str_field_local.al	run/133	#1187
 aarch64	test/issue752_try_multiword_payload.al	run/133	#1202
@@ -302,6 +303,13 @@ aarch64	test/overload_scalar_agg.al	assemble/1	#1206
 aarch64	test/overload_second_arg.al	assemble/1	#1206
 aarch64	test/overload_str_literal_arg.al	assemble/1	#1206
 aarch64	test/overload_three.al	assemble/1	#1206
+aarch64	test/package/issue703_global_module_scope/package.al	run/133	#1187
+aarch64	test/package/issue703_global_module_scope/src/a.al	link/1	#3
+aarch64	test/package/issue703_global_module_scope/src/z.al	link/1	#3
+aarch64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
+aarch64	test/package/issue703_global_module_scope_qualified/src/a.al	link/1	#3
+aarch64	test/package/issue703_global_module_scope_qualified/src/z.al	link/1	#3
+aarch64	test/package/issue703_global_module_scope_reject/src/z.al	link/1	#3
 aarch64	test/print_array_display.al	run/133	#1191
 aarch64	test/print_global_struct_snapshot.al	run/133	#1191
 aarch64	test/print_one.al	run/133	#1200
@@ -670,6 +678,7 @@ riscv64	test/issue557_wildcard_six_shapes.al	run/133	#577
 riscv64	test/issue567_wasm_overload_pair.al	run/133	#1200
 riscv64	test/issue660_exhaustive_generic.al	run/133	#577
 riscv64	test/issue693_union_member_control.al	run/133	#1187
+riscv64	test/issue703_scalar_owner_controls.al	run/133	#1188
 riscv64	test/issue716_const_str_field_alias.al	run/133	#1187
 riscv64	test/issue716_const_str_field_local.al	run/133	#1187
 riscv64	test/issue752_try_multiword_payload.al	run/133	#1202
@@ -746,6 +755,13 @@ riscv64	test/overload_scalar_agg.al	assemble/1	#1206
 riscv64	test/overload_second_arg.al	assemble/1	#1206
 riscv64	test/overload_str_literal_arg.al	assemble/1	#1206
 riscv64	test/overload_three.al	assemble/1	#1206
+riscv64	test/package/issue703_global_module_scope/package.al	run/133	#1187
+riscv64	test/package/issue703_global_module_scope/src/a.al	link/1	#3
+riscv64	test/package/issue703_global_module_scope/src/z.al	link/1	#3
+riscv64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
+riscv64	test/package/issue703_global_module_scope_qualified/src/a.al	link/1	#3
+riscv64	test/package/issue703_global_module_scope_qualified/src/z.al	link/1	#3
+riscv64	test/package/issue703_global_module_scope_reject/src/z.al	link/1	#3
 riscv64	test/print_array_display.al	run/133	#1191
 riscv64	test/print_global_struct_snapshot.al	run/133	#1189
 riscv64	test/print_one.al	run/133	#1200
@@ -1110,6 +1126,7 @@ wasm	test/issue557_exhaustive_six_shapes.al	run/134	#1188
 wasm	test/issue557_or_pattern_six_shapes.al	run/134	#1188
 wasm	test/issue557_wildcard_six_shapes.al	run/134	#1188
 wasm	test/issue693_union_member_control.al	run/134	#1187
+wasm	test/issue703_scalar_owner_controls.al	run/134	#1188
 wasm	test/issue716_const_str_field_alias.al	run/134	#1187
 wasm	test/issue716_const_str_field_local.al	run/134	#1187
 wasm	test/issue752_try_multiword_payload.al	run/134	#1202
@@ -1180,6 +1197,13 @@ wasm	test/overload_scalar_agg.al	assemble/1	#1206
 wasm	test/overload_second_arg.al	assemble/1	#1206
 wasm	test/overload_str_literal_arg.al	assemble/1	#1206
 wasm	test/overload_three.al	assemble/1	#1206
+wasm	test/package/issue703_global_module_scope/package.al	run/134	#1187
+wasm	test/package/issue703_global_module_scope/src/a.al	assemble/1	#3
+wasm	test/package/issue703_global_module_scope/src/z.al	assemble/1	#3
+wasm	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
+wasm	test/package/issue703_global_module_scope_qualified/src/a.al	assemble/1	#3
+wasm	test/package/issue703_global_module_scope_qualified/src/z.al	assemble/1	#3
+wasm	test/package/issue703_global_module_scope_reject/src/z.al	assemble/1	#3
 wasm	test/print_global_struct_snapshot.al	run/134	#1204
 wasm	test/print_one.al	run/134	#1200
 wasm	test/print_str_hole.al	run/134	#1184
@@ -1323,3 +1347,4 @@ wasm	test/word_layout_struct_by_value_control.al	run/134	#1187
 wasm	test/zst_and_empty_ctor.al	run/134	#713
 x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
+x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336

@@ -16,3 +16,4 @@ app := Package(
     ),
   ],
 )
+## expect: reject "a scalar has no field to name"

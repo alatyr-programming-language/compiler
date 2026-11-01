@@ -1,8 +1,8 @@
 ## Issue #703 / Modules §2, MOD-3 — module `a` reads `z::cfg.x`, a field of the sibling `z`'s pub
 ## struct global, while `a` declares its own scalar `cfg`. `::` names `z`'s item, so the scalar-owner
-## refusal must not answer for it: the owner is a struct. Expected today: the qualified struct-global
-## field read is still refused as bare `invalid at line 2 in a` (#1336), never with the scalar class.
-## Once #1336 is fixed the program runs to 42 (5 + 3 + 34).
+## refusal must not answer for it: the owner is a struct. The program answers 42 (5 + 3 + 34). Today
+## every backend still refuses the qualified struct-global field read as bare `invalid at line 2 in
+## a`, a known deviation under #1336, and never with the scalar class.
 app := Package(
   version = "0.1.0",
   source_dir = "src",
@@ -18,3 +18,4 @@ app := Package(
     ),
   ],
 )
+## expect: run 42
