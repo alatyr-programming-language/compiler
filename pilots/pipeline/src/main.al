@@ -40,10 +40,7 @@ chunk := fn(input : Slice(u8), k : u64) -> Slice(u8) {
 ## total.
 worker := fn(arg : usize) {
   ## blocked-by: #1210 — `std::thread::spawn` passes the worker's argument as a `usize`.
-  ## blocked-by: #1209 — `deref(unchecked bitcast(ptr(Job), arg))` copies the wrong struct, so
-  ## the pointer is bound first.
-  jp := unchecked bitcast(ptr(Job), arg)
-  job := deref(jp)
+  job := deref(unchecked bitcast(ptr(Job), arg))
   mut open := true
   while open {
     match std::channel::recv_opt(u64, job.queue) {
