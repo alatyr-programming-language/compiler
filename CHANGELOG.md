@@ -126,6 +126,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **An element of `[Slice(u8); N]`, `[str; N]` or a `Slice(Slice(u8))` parameter is its own two-word
+  view on x86_64 (#1181).** An array literal whose elements were not str literals (`[a[0..3], b[0..2]]`,
+  `[x, y]` over str or slice locals) kept one word per element, and a `Slice(Slice(u8))` parameter read
+  its elements at a one-word stride. Their lengths came out wrong with no diagnostic, or the read was
+  refused. The declared element type now decides the two-word element. A byte-slice view local stored
+  into a `Slice(u8)` field no longer loses its length. A wider `Slice(T)` element is refused where it is declared, until an index
+  into it loads a `T` (#1341).
 - **An enum read out of a `Vec` is the one that was stored (#989).** `at`, `get` and every other
   `deref(p)` of an enum value through a pointer returned the first variant with a zero payload. The
   value is now read word by word from the pointer; a pointee type that cannot be resolved is refused

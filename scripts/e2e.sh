@@ -11270,6 +11270,23 @@ run slice_field_elem 66
 run slice_field_byref 56
 ## `return xs[lo..hi]` from a `-> Slice(T)` fn: Expr::Slice had no emit_struct_value arm and delivered 0.
 run slice_range_return 36
+## #1181 — a `[str; N]` / `[Slice(u8); N]` element and a `Slice(Slice(u8))` param element are the two-word
+## view pair (Types §7), whatever the literal element's syntax. NON-VACUOUS on the parent at 1262da5d (x86_64):
+## the first, third and fourth were refused, the second exited 20, the fifth trapped (132). A wider
+## `Slice(T)` element is refused where it is declared until an index into it loads a `T` (#1341).
+run slice_array_elem_len 23
+run slice_slice_param_index 32
+run slice_array_elem_view_locals 23
+run str_array_elem_vars 23
+run slice_view_local_field 33
+build_reject_has reject_slice_wide_array_elem "supported on x86_64 only for Slice(u8)"
+build_reject_has reject_slice_wide_param_elem "supported on x86_64 only for Slice(u8)"
+## #1181 — `t[i] = <view>` stores the whole pair into a `[Slice(u8); N]` / `[str; N]` element. NON-VACUOUS on the
+## parent (main d09e472b, x86_64): the Slice store was refused, and the str store kept the old length (exit 1).
+run slice_array_elem_store 42
+run str_array_elem_store 42
+## #1349 — `.len` on an element of a `[Slice(u8); N]` struct field: the parent exited 2 (due 23); refused, located.
+build_reject_has reject_view_field_array_len "is not supported on x86_64 (#1349)"
 ## COMPILER SIGSEGV at CHECK time (139) on `t := s` where `s : Slice(T)` is a PARAM: a fresh `x := <value>`
 ## binding seeded the local's type-NAME span from the PACKED `Result(Ty, CheckErr)` carrier, which keeps only the
 ## TAG — so ns/nl were stack garbage (typically a whole ABSOLUTE address). `Slice` resolves to a NOMINAL struct

@@ -5989,6 +5989,55 @@ folded_array_elem_span := fn(src : ptr(u8), ns : usize, nl : usize) -> CSpan {
   CSpan(s = 0, n = 0)
 }
 
+## #1181 — Types §7: a view "array element holds the two-word pair itself". The x86_64 element tier
+## reads a two-word element the way it reads a `str` element: `.len`, `.ptr`, and a BYTE load for an
+## index into it. That is right for `str` and `Slice(u8)` only, so those are the view elements it
+## takes. Any other `Slice(T)` element type is refused where it is declared (`reject_wide_slice_elem`):
+## an index into it would load one byte where a `T` is due, a silent wrong value.
+byte_view_elem := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 3 and str_at((src + s), 3) == "str" { return true }
+  n == 9 and str_at((src + s), 9) == "Slice(u8)"
+}
+
+## #1181 — the whole type that starts at `s`, its parentheses balanced: `slice_ann_elem_span` stops at
+## the first `)`, so the element of `Slice(Slice(u8))` comes back as `Slice(u8`. Asked only for an
+## element that starts `Slice(`, so every other param's span is unchanged.
+balanced_type_span := fn(src : ptr(u8), s : usize) -> CSpan {
+  end := LOWER_SRC_N
+  mut p := s
+  mut depth : usize = 0
+  while p < end {
+    c := str_at((src + p), 1)
+    if c == "(" { depth += 1 }
+    else if c == ")" {
+      if depth == 0 { break }
+      depth -= 1
+    }
+    p = p + 1
+  }
+  CSpan(s = s, n = p - s)
+}
+
+## #1181 — refuse, at `at`, a `Slice(T)` element type `s..s+n` that `byte_view_elem` does not take.
+reject_wide_slice_elem := fn(src : ptr(u8), s : usize, n : usize, at : usize) {
+  if n > 7 and str_at((src + s), 6) == "Slice(" and byte_view_elem(src, s, n) == false {
+    lower_show_src_line(src, at)
+    panic("selfhost: an array or slice element of type Slice(T) is supported on x86_64 only for Slice(u8) (#1341): an index into a wider element would load one byte where a T is due; refused rather than silently miscompiled")
+  }
+}
+
+## #1181 — does the local `ns..ns+nl` declare a fixed array `[str; N]` / `[Slice(u8); N]`? The declared
+## element type, not the first literal element's syntax, decides the two-word element: without it an
+## element that is not a str literal (`a[0..3]`, a str or slice local) took one word.
+view_array_elem_decl := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
+  lt := local_type_span(src, ns, nl)
+  if lt.n == 0 { return false }
+  if parse_arr_len(src, lt.s, lt.n) == 0 { return false }
+  es := array_elem_span(src, lt.s, lt.n)
+  reject_wide_slice_elem(src, es.s, es.n, ns)
+  byte_view_elem(src, es.s, es.n)
+}
+
 ## `slots` (a `ptr(SVec)`) resolves a POINTER element `[ptr(mut b0), …]` to its pointee struct span;
 ## it may be 0 (the IR-scan caller has no frame yet) — the ptr-element branch then folds to the scalar
 ## default, byte-identical (an AddrOf element is never const, so the IR barrier rejects it anyway).
@@ -6810,7 +6859,11 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
       ## while a fixed-array PARAM's slot carries the caller's data pointer. `sns` records N for the
       ## by-ref fixed-array ABI; `snl` records N for a packed local. Keep this ahead of the generic
       ## `is_ref`/LOCAL arms so `bytes([u8; N])` cannot dereference frame metadata as a pointer/len pair.
-      if ent.ek == 5 and is_byte_array_eek(ent.eek) {
+      ## #1181 — a byte-slice VIEW local (`x := a[0..3]`, the runtime-len marker `snl == 1, sns == 0`)
+      ## is not that array: it holds its own {ptr, len} and takes the typed-view arm below. Read here,
+      ## its len came back as `sns` = 0.
+      byte_view_local := ent.is_ref and ent.snl == 1 and ent.sns == 0
+      if ent.ek == 5 and is_byte_array_eek(ent.eek) and byte_view_local == false {
         if ent.is_ref {
           push_str(sb, "  movq -")
           push_int(sb, i64((ent.off + 1) * 8))
@@ -20353,6 +20406,20 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         sfibx := field_base_index(base)
         if sfibx.is_ix {
           sfient := deref(svec_at(SlotEntry, cx.slots, index_base_entry(sfibx.arr, cx.slots, cx.src)))
+          ## #1349 — `s.v[i].len` where the struct field `v` is `[str; N]` / `[Slice(u8); N]`: the
+          ## field-array path has no two-word element read, and the generic `.len` answered a wrong
+          ## value (2 where 23 was due). Refuse it at the expression, located, until it reads the pair.
+          sffib := field_index_base(sfibx.arr, cx)
+          if sffib.is_fld {
+            sffent := deref(svec_at(SlotEntry, cx.slots, sffib.ent_idx))
+            sfafp := field_place_parts(sfibx.arr)
+            sfaft := field_type_span(cx.decls, cx.src, sffent.sns, sffent.snl, sfafp.fs, sfafp.fl, deref(cx.mar))
+            sfaet := array_elem_span(cx.src, sfaft.s, sfaft.n)
+            if sfaet.n != 0 and (byte_view_elem(cx.src, sfaet.s, sfaet.n) or (sfaet.n > 6 and str_at((cx.src + sfaet.s), 6) == "Slice(")) {
+              lower_show_src_line(cx.src, fs)
+              panic("selfhost: `.len` / `.ptr` on an element of a struct field of type `[str; N]` / `[Slice(T); N]` is not supported on x86_64 (#1349)")
+            }
+          }
           if sfient.eek == 4 {
             fnm3 := str_at((cx.src + fs), fl)
             if fnm3 == "ptr" or fnm3 == "len" {
@@ -22058,6 +22125,10 @@ emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
     emit_folded_array_elems(v, base, sb, cx, a, nl)
     return
   }
+  if view_array_slot_for_off(base, cx) {
+    emit_view_array_elems(v, base, sb, cx, a, nl)
+    return
+  }
   match deref(v) {
     Expr::ArrayLit(nel, ehead) => {
       ## Emit each element by ITS OWN type at a CUMULATIVE word offset (`cumw`), not the first
@@ -22201,6 +22272,49 @@ folded_array_elem_for_off := fn(base : i64, cx : ptr(LCtx)) -> CSpan {
     i += 1
   }
   CSpan(s = 0, n = 0)
+}
+
+## #1181 — is the local array whose base slot is `base` DECLARED with a two-word view element
+## (`view_array_elem_decl`)? Asked by the literal writer, so it agrees with the slot `collect_slots`
+## reserved: two words per element, whatever each element's syntax.
+view_array_slot_for_off := fn(base : i64, cx : ptr(LCtx)) -> bool {
+  mut i : usize = 0
+  cnt := svec_len(cx.slots)
+  while i < cnt {
+    ent := deref(svec_at(SlotEntry, cx.slots, i))
+    if i64(ent.off) == base and ent.ek == 5 and ent.is_ref == false and ent.eek == 4 and ent.nl != 0 {
+      return view_array_elem_decl(cx.src, ent.ns, ent.nl)
+    }
+    i += 1
+  }
+  false
+}
+
+## #1181 — store the elements of the array literal `v` into a declared view-element array whose
+## element 0 is the slot `base`: element k is the `{ptr, len}` pair at slots `base - 2k` (ptr) and
+## `base - 2k - 1` (len), stored by the one view-pair writer a struct field uses.
+emit_view_array_elems := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  match deref(v) {
+    Expr::ArrayLit(nel, ehead) => {
+      mut g : Option(ptr(mut Arg)) = ehead
+      mut k : i64 = 0
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            emit_pair_field_store(ga.e, base - k * 2, sb, cx, a, nl)
+            k += 1
+            g = ga.next
+          }
+          None => { break }
+        }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { panic("selfhost: a view-element array assignment requires an array literal") }
+  }
 }
 
 packed_byte_slot_for_off := fn(base : i64, cx : ptr(LCtx)) -> i64 {
@@ -26796,7 +26910,12 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
     ## word (the ptr), zeroing the len (a silent word-1 drop). Marked `snl == 1` (a runtime-len slice)
     ## like a scalar-element slice — str carries no nominal type span. src/ has no `Slice(str)` (only in
     ## comments) → dormant for the self-host build → fixpoint-neutral.
-    is_str_slice := esl0 == "str"
+    ## #1181 — a `Slice(Slice(u8))` element is the same two-word view pair (Types §7); a wider
+    ## `Slice(T)` element is refused (`reject_wide_slice_elem`).
+    mut vel := early_slice
+    if early_slice.n > 6 and str_at((src + early_slice.s), 6) == "Slice(" { vel = balanced_type_span(src, early_slice.s) }
+    reject_wide_slice_elem(src, vel.s, vel.n, pm.ns)
+    is_str_slice := esl0 == "str" or byte_view_elem(src, vel.s, vel.n)
     known_scalar_slice := esl0 == "u64" or esl0 == "usize" or esl0 == "i64" or esl0 == "isize" or esl0 == "f64"
     if is_str_slice { sstride0 = 2; seek0 = 4 }
     if seek0 == 2 or seek0 == 3 or known_scalar_slice or is_str_slice {
