@@ -3,6 +3,7 @@
 ## returns the same enum, so a success flows through and `main` matches out 42. Construction uses the
 ## dot form (`Opt.Some(42)`); the match pattern uses the `::` form with expression-body arms (the
 ## shape `alatyr fmt` models).
+## expect: run 42
 Opt := enum { Some(u64), None }
 get := fn() -> Opt { Opt.Some(42) }
 run := fn() -> Opt {

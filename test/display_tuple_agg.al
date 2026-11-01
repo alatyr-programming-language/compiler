@@ -2,6 +2,7 @@
 ## component is passed BY REFERENCE at its cumulative word offset (0) and renders `{ x = 1, y = 2 }`;
 ## the trailing scalar sits at the cumulative offset PAST the struct (word 2, not the raw index 1),
 ## rendering `9` — via `cf_member_woff`. Byte-checks "({ x = 1, y = 2 }, 9)" (21 bytes). Returns 42.
+## expect: run 42
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 
 Pt := struct { x : u64, y : u64 }

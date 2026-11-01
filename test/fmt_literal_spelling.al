@@ -2,6 +2,7 @@
 ## deliberately spell the same value differently; the e2e fmt lock checks each token survives. The
 ## high-bit tail also proves a source literal with the `-1` bit pattern is not mistaken for Num(-1)'s
 ## internal no-tail sentinel.
+## expect: run 42
 max_word := fn() -> u64 { 0xffffffffffffffff }
 main := fn() -> u64 {
   hex := 0x2A

@@ -10,6 +10,7 @@
 ##     type-argument group was dropped and `Either.L(a)` named no type. Recovered verbatim: the only thing that can
 ##     directly follow an enum-name span is that group (a payload comes after the `.V`).
 ## Returns 42.
+## expect: run 42
 Either := fn(A : type, B : type) -> type { return enum { L(A), R(B) } }
 
 pick := fn(A : type, B : type, sel : u64, a : A, b : B) -> Either(A, B) {

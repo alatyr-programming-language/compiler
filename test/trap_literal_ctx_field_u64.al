@@ -14,3 +14,4 @@ main := fn() -> i64 {
   if s.f == 18446744073709551615 { return 7 }
   1
 }
+## expect: trap

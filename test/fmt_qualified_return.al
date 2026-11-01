@@ -1,5 +1,6 @@
 ## e2e/fmt — a return type with two namespace hops must survive formatting, together with the
 ## function body that follows its signature. The trailing declaration makes truncation observable.
+## expect: run 42
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 
 make_buffer := fn(a : ptr(mut Arena)) -> alloc::strbuf::StrBuf {

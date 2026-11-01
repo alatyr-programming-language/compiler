@@ -5,6 +5,7 @@
 ## compilers: build rc 0, exit 42. Registered with `run trailing_comment_no_newline 42` in
 ## scripts/e2e.sh. A `{` and a `(` appear inside the trailing comment below on purpose: a
 ## delimiter count taken over raw BYTES rather than tokens would see this file as truncated.
+## expect: run 42
 main := fn() -> u64 {
   42
 }

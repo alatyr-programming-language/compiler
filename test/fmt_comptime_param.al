@@ -9,6 +9,7 @@
 ## recovered, so a change to one modifier's scan cannot quietly take the others with it.
 ## (A `comptime` value parameter is accepted only on a type function or a glyph-named operator in
 ## this slice, so those are the two shapes exercised.)
+## expect: run 42
 Bag := struct { a : u64, b : u64 }
 
 ## a type FUNCTION over a comptime value parameter — the width folds into the array length

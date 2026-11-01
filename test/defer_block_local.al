@@ -3,6 +3,7 @@
 ## local gets a frame slot, the literal a `.rodata` entry). `f` defers { s := "hello"; ACC = uses(s) },
 ## and `uses` returns the string's byte length (5) — so ACC = 5 proves the block's slot + rodata resolve.
 ## `main` reads ACC AFTER `f` returned (the return value is eval'ed before the drain).
+## expect: run 5
 mut ACC : u64 = 0
 uses := fn(s : str) -> u64 { u64(s.len()) }
 f := fn() -> u64 {

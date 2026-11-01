@@ -9,6 +9,7 @@
 ##
 ## — one decl where four had stood (`serialize_roundtrip` built before a reformat and not after).
 ## `compile_file_fmt` now seeds the table with the two prelude names.
+## expect: run 42
 ser := std::serialize
 
 enc := fn(in out sb : alloc::strbuf::StrBuf) -> Result(usize, ser::SerError) {

@@ -1,3 +1,4 @@
+## expect: run 42
 add := fn(a : u64, b : u64) -> u64 {
   s := a + b
   return s

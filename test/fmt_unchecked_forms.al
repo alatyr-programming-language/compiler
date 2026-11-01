@@ -10,6 +10,7 @@
 ##     unconditional `ptr(` wrapper turned into `ptr(ptr(mut Pt))`. Both grew by one level per pass:
 ##     fmt was not idempotent, and the second render was a different TYPE.
 ## Returns 42.
+## expect: run 42
 Pt := struct { a : u64, b : u64 }
 
 main := fn() -> u64 {

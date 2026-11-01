@@ -3,6 +3,7 @@
 ## above it, and the done-label still converges with exactly one value). `f`: iteration 1 (i<2) falls
 ## through and drains bump(1) → ACC 1; iteration 2 `break 5`s — its defer bumps too → ACC 11 — and
 ## yields x=5; `ACC + x` = 16. If the defer dropped on the value-break, ACC would be 1 + 5 = 6.
+## expect: run 16
 mut ACC : u64 = 0
 bump := fn(n : u64) -> u64 { ACC = ACC * 10 + n ; 0 }
 f := fn() -> u64 {

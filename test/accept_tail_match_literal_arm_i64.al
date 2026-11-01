@@ -32,3 +32,4 @@ main := fn() -> i64 {
   if f(0) != 7 { return 6 }
   return 42
 }
+## expect: run 42

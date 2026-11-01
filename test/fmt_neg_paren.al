@@ -4,6 +4,7 @@
 ## parser erases surface parens, leaving no AST node). fmt now re-inserts the parens around a low-prec
 ## neg operand and stays idempotent. Unary `-` wraps (unchecked). a=10, b=3:
 ##   p = -(a + b) = 2^64-13 ; q = -p = 13 ; r = -(a * b) = 2^64-30 ; s = -r = 30 ; q - 1 + s = 42.
+## expect: run 42
 main := fn() -> u64 {
   a := 10
   b := 3

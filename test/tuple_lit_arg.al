@@ -3,6 +3,7 @@
 ## its address by reference (the tuple dual of a struct-ctor arg); previously a tuple literal fell to
 ## the scalar arg default and pushed garbage (segfault / no output). A tuple LOCAL already worked.
 ## Byte-for-byte check against "(10, 20, 30)" (12 bytes). Returns 42 on match.
+## expect: run 42
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 
 main := fn() -> u64 {
