@@ -126,6 +126,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **An enum payload whose type is declared in another module is sized as that type (#1172, in part).**
+  `Arr(m::S)` and `Arr(m::G(u64))` kept only the path head `m` as the payload type, so the payload
+  got one word and a `match` binding read neighbouring words (4 where 42 was due). The payload type
+  is now the whole path. `Arr(alloc::vec::Vec(u64))` is still wrong and stays open on #1172.
+
 - **An enum read out of a `Vec` is the one that was stored (#989).** `at`, `get` and every other
   `deref(p)` of an enum value through a pointer returned the first variant with a zero payload. The
   value is now read word by word from the pointer; a pointee type that cannot be resolved is refused
