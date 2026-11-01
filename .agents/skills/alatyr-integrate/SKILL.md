@@ -533,6 +533,16 @@ Then run `scripts/land.sh <pr>`. Every step is a check that stops on failure:
   older `main` is rebased onto it (`corpus_manifest.sh --rebase-delta`, #1264), and PHASE 3's merge
   carries the rebased copy. It is refused at PHASE 2 when a declared pair overlaps what moved, or when
   its rows do not rebuild its own result (a header change); the author re-emits it.
+- **PHASE 3** settles two conflicts mechanically, and only those two, so a delta PR made to conflict by
+  another landing needs no rebase (#1312): `scripts/corpus.expected-delta` takes the PR's side (PHASE 2
+  decided it live or rebased), and `CHANGELOG.md` keeps both `## Unreleased` bullet runs, main's
+  first, or, when the two sides conflict there, puts the PR's run above a release heading main's side
+  opened (a clean merge over a promotion is #1319). Any other CHANGELOG shape (a rewritten line, a
+  non-bullet addition, a hunk outside `## Unreleased`, a conflict-marker-like line in the base, main
+  or the PR version) and any other conflicted path is `LAND REFUSED (the merge conflicts)`. The merge
+  message records the resolution, and the gate runs on that merge. The queue sends a PR that
+  conflicts with main only there through this solo path (`land.sh --screen` reports `solo=yes`)
+  instead of back to its author.
 - **PHASE 3b**, for a rebased delta only: the rebase is a hypothesis about `main`'s code, which can
   change what the PR's own fixtures do without moving a manifest row (#1215). land.sh builds the merge
   and walks the corpus alone (~15 min with the two self-builds); a walk that does not realise the rebased delta is

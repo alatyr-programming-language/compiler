@@ -23,9 +23,11 @@
 #   land.sh itself (#1264), at the screen and again in the solo landing, whose gate runs on the merge
 #   that carries the rebased copy. That solo landing walks the corpus alone first (land.sh PHASE 3b),
 #   and a rebased delta the walk does not realise is `red` without a full gate; the queue needs nothing
-#   else of its own for it. The others are composed onto origin/main one merge
-#   at a time and never resolved: a PR that conflicts with main is sent back; one that conflicts only
-#   with an earlier member waits for the next pass.
+#   else of its own for it. So is a PR that conflicts with main only in CHANGELOG.md (and the delta):
+#   the screen says solo=yes, and land.sh PHASE 3 settles that file (#1312). The others are composed
+#   onto origin/main one merge at a time and never resolved: a PR that conflicts with main is sent
+#   back; one that conflicts only with an earlier member waits for the next pass, where a CHANGELOG-only
+#   conflict with the member that landed takes the solo path.
 # - The composed object is gated once by `full.sh`. Green: it is pushed exactly, with
 #   `--force-with-lease` on the base it was built on, and every member gets an acceptance comment.
 #   Red: the set is bisected — its first half is gated alone, recursively — so a red PR is isolated
