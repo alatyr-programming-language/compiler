@@ -126,6 +126,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
+  `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
+  bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead
+  of the data, and ran on with wrong elements and no diagnostic. Both range deliverers now load the
+  data pointer from the block, through the same `slot_is_slice_param` question an element read asks.
 - **An annotated struct-element slice view local no longer crashes on x86_64 (#1182).** A local
   written `xs : Slice(P) = t[0..2]` over a struct array was read as a `Slice(P)` parameter, because the
   x86_64 lowering took any annotated name for one: `xs[0].b`, `xs[1]`, `xs[1..2]` and `for p in xs`
