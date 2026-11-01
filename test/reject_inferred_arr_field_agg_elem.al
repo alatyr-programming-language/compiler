@@ -17,3 +17,4 @@ main := fn() -> u64 {
   xs[i].arr[j] = p
   0
 }
+## expect: run 0

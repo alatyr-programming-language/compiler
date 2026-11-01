@@ -5,3 +5,4 @@ pick := fn(T : type, x : u64) -> u64 when size(T) <= 8 { x }
 main := fn() -> u64 {
   pick((u64, u8), 42)
 }
+## expect: reject "at line 6"

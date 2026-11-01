@@ -13,3 +13,4 @@ mk := fn() -> fn(u64) -> u64 { return add1 }
 main := fn() -> u64 {
   return mk()(41)
 }
+## expect: reject

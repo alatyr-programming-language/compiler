@@ -1,4 +1,5 @@
 ## CT-6: Field.mutable reflects the source-level mut marker during a field derive.
+## expect: run 42
 S := struct { mut x : u64, y : u64 }
 
 count_mut := fn(T : type) -> u64 {

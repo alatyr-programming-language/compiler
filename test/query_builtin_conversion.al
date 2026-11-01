@@ -6,3 +6,4 @@ main := fn() -> u64 {
   if good and not bad { return 42 }
   return 1
 }
+## expect: run 42

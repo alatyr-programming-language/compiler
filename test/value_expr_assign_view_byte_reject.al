@@ -14,3 +14,4 @@ main := fn() -> u64 {
   bytes(s)[0] = 65
   7
 }
+## expect: reject "or a pointer dereference [module value_expr_assign_view_byte_reject, at line 14"

@@ -5,6 +5,7 @@
 ## trailing comma and the `)` back at the opening indent. The eight arguments are distinct powers
 ## of two and their sum is checked, so a wrap that dropped, duplicated or reordered one cannot
 ## reach 42; a disagreement returns 100.
+## expect: run 42
 sum_of_eight_scalars := fn(a : u64, b : u64, c : u64, d : u64, e : u64, f : u64, g : u64, h : u64) -> u64 {
   return a + b + c + d + e + f + g + h
 }

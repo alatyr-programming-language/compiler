@@ -6,6 +6,7 @@
 ## the reformat and 0 after), an `in out` parameter became by-value, and a fn-value parameter lost its
 ## signature (test/fn_value_enum_ret: 42 → 211). Every piece is now recovered by source-scan off the
 ## parameter NAME. Each step contributes 6: 6 * 7 = 42.
+## expect: run 42
 E := enum {
   A(u64),
   B(u64),

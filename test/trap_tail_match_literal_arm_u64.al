@@ -12,3 +12,4 @@ main := fn() -> u64 {
   if f(3) == 0 { return 3 }
   return 42
 }
+## expect: trap

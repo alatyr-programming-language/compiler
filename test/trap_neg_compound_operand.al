@@ -15,3 +15,4 @@ main := fn() -> i64 {
   mut b : i64 = 4
   return -(a * b)                         ## 2^64: outside i64 ⇒ the multiply must trap
 }
+## expect: trap

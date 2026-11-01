@@ -5,6 +5,7 @@
 ##
 ## Expected exit: 42. Each of the eight operator families updates the same field and is checked
 ## before the next one, so a formatted program cannot hide a changed operation behind the final value.
+## expect: run 42
 Acc := struct { v : u64 }
 
 main := fn() -> u64 {

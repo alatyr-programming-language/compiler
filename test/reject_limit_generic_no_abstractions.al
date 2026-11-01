@@ -5,3 +5,4 @@ identity := fn(T : type, x : T) -> T {
   x + x
 }
 main := fn() -> u64 { return 0 }
+## expect: reject "no_abstractions" "at line 4"

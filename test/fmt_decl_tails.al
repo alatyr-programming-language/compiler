@@ -9,6 +9,7 @@
 ##     kept only the bare PATH span `u32`, so the contract silently vanished. The alias RHS is now
 ##     copied verbatim to end of line, which is exact for every alias form.
 ## Returns 42.
+## expect: run 42
 Cfg := struct { a : u64, b : u64 } when target.arch == Arch.x86_64
 Cfg := struct { a : u64, b : u64, c : u64, d : u64 } when target.arch == Arch.aarch64
 

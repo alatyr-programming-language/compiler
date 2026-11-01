@@ -6260,10 +6260,9 @@ run p0_parser_if_deref_store 42
 run_wat p0_parser_if_deref_store 42
 run_a64 p0_parser_if_deref_store 42
 run_rv64 p0_parser_if_deref_store 42
-## P0 ABI: scalar in out write-back is by-place on AArch64/RV64, and the WASM backend
-## traps on this unsupported pointer/ABI shape rather than returning a misleading value.
+## P0 ABI: scalar in out write-back is by-place on AArch64/RV64. The WASM backend traps on this
+## pointer/ABI shape rather than returning a misleading value: a known deviation (#1126 S4).
 run p0_inout_scalar_writeback 42
-run_wat p0_inout_scalar_writeback 134
 run_a64 p0_inout_scalar_writeback 42
 run_rv64 p0_inout_scalar_writeback 42
 ## P0 ABI: a final side-effecting call in a void function must not disappear.
@@ -8949,9 +8948,6 @@ run_x86 deref_assign_struct_lit 42
 ## pointer param, reads back 40 + 2 = 42. x86-only (a64/rv64/wasm trap on the FieldPathAssign fallback).
 run_x86 deref_field_write 42
 run deref_subword_field_write 42
-run_a64 deref_subword_field_write 133
-run_rv64 deref_subword_field_write 133
-run_wat deref_subword_field_write 134
 run_x86 deref_subword_field_write_raw 42
 run_ffi deref_subword_field_write 42
 ## MULTI-WORD struct FIELD write THROUGH a pointer from a struct-RETURNING CALL (`deref(p).i = mk()`) and
@@ -9362,25 +9358,15 @@ run deep_arr_field_roots 14
 check_accept deep_arr_field_roots
 run deep_arr_field_inferred_local 25
 run_a64 deep_arr_field_inferred_local 25
-run_rv64 deep_arr_field_inferred_local 133
-run_wat deep_arr_field_inferred_local 134
 check_accept deep_arr_field_inferred_local
 run reject_inferred_arr_field_agg_elem 0
-run_a64 reject_inferred_arr_field_agg_elem 133
-run_rv64 reject_inferred_arr_field_agg_elem 133
-run_wat reject_inferred_arr_field_agg_elem 134
 check_accept reject_inferred_arr_field_agg_elem
 run reject_inferred_arr_field_agg_read 42
-run_a64 reject_inferred_arr_field_agg_read 133
-run_rv64 reject_inferred_arr_field_agg_read 133
-run_wat reject_inferred_arr_field_agg_read 134
 check_accept reject_inferred_arr_field_agg_read
 ## Issue #43 bounded slice: an inferred unannotated homogeneous word-granular local array now accepts
 ## `xs[i].arr[j] = P(...)` on AArch64; aggregate reads and unsupported backends remain fail-loud.
 run deep_arr_field_inferred_local_agg_write 42
 run_a64 deep_arr_field_inferred_local_agg_write 42
-run_rv64 deep_arr_field_inferred_local_agg_write 133
-run_wat deep_arr_field_inferred_local_agg_write 134
 check_accept deep_arr_field_inferred_local_agg_write
 run deep_arr_field_global 85
 run_a64 deep_arr_field_global 85
@@ -9445,11 +9431,8 @@ build_reject_has lower_bugB_array_of_struct_field "tuple/array element field not
 run_x86 deref_array_field_place 42
 check_accept deref_array_field_place
 ## Issue #220: AArch64 pointer-derived word-tier array-element field read/write at a runtime index;
-## x86, RV64 and WAT retain their existing explicit fail-loud boundaries until their own slices land.
-build_reject_has issue220_a64_deref_array_field "tuple/array element field not resolvable"
+## x86, RV64 and WAT refuse or trap until their own slices land: known deviations (#1126 S4).
 run_a64 issue220_a64_deref_array_field 42
-run_rv64 issue220_a64_deref_array_field 133
-run_wat issue220_a64_deref_array_field 134
 check_accept issue220_a64_deref_array_field
 ## over-acceptance guard: a MULTI-WORD (struct-element) array-field leaf must fail loud, not silently read word 0.
 build_reject_has reject_arr_field_agg_elem "xs[i].arr[j]"
@@ -9877,15 +9860,9 @@ run issue484_bound_slice_elem 42
 # green — including 28, which proves probe C's two `"dup"` locals really live at different addresses, so
 # a byte compare and a pointer-word compare cannot agree there.
 run issue502_deref_inferred_str_operand 42
-# Cross-target rows, MEASURED on native x86_64 with a compiler built from this branch — the non-x86
-# backends TRAP on a whole-`str` read through a pointer, exactly as the #451/#456/#483/#484 rows do
-# (aarch64=133 SIGTRAP, riscv64=133 SIGTRAP, wasm=134 `unreachable`). They are written as ROWS rather
-# than as a comment because a row fails if one of these ever answers a NUMBER: a trap is acceptable to
-# AGENTS.md ("a trap is acceptable, a wrong value is not"), and only a recorded expectation tells the two
-# apart on the next change.
-run_a64 issue502_deref_inferred_str_operand 133
-run_rv64 issue502_deref_inferred_str_operand 133
-run_wat issue502_deref_inferred_str_operand 134
+# The non-x86 backends TRAP on a whole-`str` read through a pointer, exactly as the #451/#456/#483/#484
+# rows do (aarch64=133 SIGTRAP, riscv64=133 SIGTRAP, wasm=134 `unreachable`). Each trap is a row of
+# scripts/known-deviations.tsv (#1126 S4), which fails the gate if one of them ever answers a NUMBER.
 # Issue #506 — `deref(ptr(x)).field` where `x` is a BY-REFERENCE `in out` STRUCT PARAM answered a
 # literal ZERO: `Field(Deref(AddrOf(Var)))` matched none of the five deref span resolvers in the
 # scalar `Field` case (each peels a different inner node — Var, Deref, Call, Field, Index), so no arm
@@ -10143,7 +10120,6 @@ run_wat issue497_union_field_words 42
 ## all. One code per outcome — 51/53/55/57 read a DIFFERENT variant, 52/54/56/58 matched NO variant,
 ## 42 all four probes right. Parent 8370bd2: x86_64 42, wasmtime 52. This tree: 42 and a 134 trap.
 run issue449_enum_field_eq 42
-run_wat issue449_enum_field_eq 134
 ## The CONTROL that keeps the fix honest: the SAME `h.t` read, handed to a `fn(v : Tag)` and dispatched
 ## inside it, with no comparison anywhere. That shape already answered under wasmtime on the parent and
 ## must go on answering — a fix that touched the field read or the enum literal instead of the one
@@ -11452,10 +11428,8 @@ run_a64 issue441_bitcast_int_to_ptr_struct 42
 run_rv64 issue441_bitcast_int_to_ptr_struct 42
 ## Issue #441 (control): the third preserved non-scalar target — a bare USER TYPE name — is NOT one
 ## machine word and has no aggregate-value path on aarch64/riscv64, so it must stay fail-loud there
-## rather than become a wrong value. 133 is the SIGTRAP status of that located fence, not an exit code.
+## rather than become a wrong value. Its 133 (SIGTRAP) there is a known deviation (#1126 S4).
 run issue441_bitcast_aggregate_target_fence 42
-run_a64 issue441_bitcast_aggregate_target_fence 133
-run_rv64 issue441_bitcast_aggregate_target_fence 133
 run ptr_ret_infer 42
 run ambient_hashmap_value 42
 run option_map 42

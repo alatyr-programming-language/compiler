@@ -5,6 +5,7 @@
 ## canonical rebuild — dropping the very `@offset` attributes the verbatim path exists to keep
 ## (`endian_offset_struct` ran 42 -> 2). A member list holds no char literals, so the body scanner is
 ## now comment-aware and treats `'` as an ordinary byte. Returns 42.
+## expect: run 42
 Ov := @packed struct {
   @offset(0) w : u32,     ## the written field — it's at byte 0
   @offset(0) b0 : u8,     ## an alias reading w's lowest byte

@@ -12,3 +12,4 @@ main := fn() -> u64 {
   "abc"[0] = 65
   7
 }
+## expect: reject "not a storage location, and its bytes are read-only [module str_literal_elem_assign_reject, at line 12" "cannot assign to an element of a string literal"

@@ -1,3 +1,4 @@
+## expect: run 42
 knd := fn(T : type, v : T) -> u64 {
   comptime match typeinfo(T) {
     Struct => {

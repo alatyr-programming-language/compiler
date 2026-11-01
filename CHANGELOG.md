@@ -146,6 +146,20 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `scripts/corpus.manifest` keeps only the sources with no directive yet and the directive sources that
   print; the xbackend ratchet reads the walk. A behaviour fix on a directive fixture carries no oracle
   commit: it deletes its own deviation rows.
+- **The published deviations name six more defects; 49 more fixtures state their expectation (#1126
+  S4b).** The list that `alatyr version` links to (`scripts/known-deviations.issues.tsv`) gains six
+  defects, all present in this build and now listed by the program each one changes:
+  - a hexadecimal float literal (`0x1.8p+1`) fails to build on all four backends (#1342);
+  - a `str` passed to an integer parameter is not refused by `check` (#519);
+  - on x86_64, four valid programs are refused:
+    - an inferred copy of a fixed array cannot be indexed (#1343);
+    - a module global initialised by a call is not evaluated at compile time (#1354);
+    - a `match` on an enum field of a pointer-derived place (#991);
+    - a field of an array element reached through a pointer (#13).
+
+  The ten pins that `scripts/e2e.sh` kept for backend-specific traps are gone. Those fixtures now state
+  `run N`, and their twin results are listed deviations. A `## expect: run` or `trap` line satisfies a
+  check-only `check_accept` registration. Nothing changes in the compiler.
 
 ## 0.2.20 — 2026-10-31
 

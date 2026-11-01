@@ -18,3 +18,4 @@ main := fn() -> i64 {
   if N != 0 - 1 { return 2 }
   42
 }
+## expect: run 42

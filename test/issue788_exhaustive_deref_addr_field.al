@@ -9,3 +9,4 @@ main := fn() -> u64 {
   match deref(ptr(h)).t { R => { return 42 }; G => { return 2 }; B => { return 3 } }
   return 0
 }
+## expect: run 42

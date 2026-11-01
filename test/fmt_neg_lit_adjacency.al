@@ -14,6 +14,7 @@
 ## `fmt` is idempotent and that the formatted source still passes `check`; the `run` rows assert
 ## that every value survives on all four backends, so a rendering that reparsed to a DIFFERENT
 ## program would be caught by its value and not only by its text.
+## expect: run 42
 main := fn() -> u64 {
   a := - (5)
   b := - -4

@@ -15,3 +15,4 @@ main := fn() -> u64 {
   pp := ptr(fs)
   return deref(pp)[0](10)
 }
+## expect: reject

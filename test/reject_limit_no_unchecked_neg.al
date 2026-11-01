@@ -2,3 +2,4 @@
 @limits(no_unchecked)
 neg := fn(x : u64) -> u64 { return unchecked -x }
 main := fn() -> u64 { return neg(0) }
+## expect: reject "no_unchecked" "at line 3"

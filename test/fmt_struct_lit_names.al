@@ -10,6 +10,7 @@
 ##   D(c = 1, b = 2)   ->  D(a = 1, b = 2)
 ## The names are always spelled in the source, so fmt now scans them from the literal itself and
 ## only falls back to the decl when the field list cannot be located. Returns 42.
+## expect: run 42
 P := struct { x : u64, y : u64 }
 
 D := struct { a : u64 = 5, b : u64, c : u64 = 7 }

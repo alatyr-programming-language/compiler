@@ -1,3 +1,4 @@
+## expect: run 42
 E := enum { Zero, One }
 comptime base : u64 = 5
 comptime inferred := base + 2

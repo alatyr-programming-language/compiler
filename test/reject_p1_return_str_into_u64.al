@@ -11,3 +11,4 @@ main := fn() -> u64 {
   if v == 0 { return 42 }
   return 41
 }
+## expect: reject "at line 5"

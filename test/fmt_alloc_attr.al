@@ -7,6 +7,7 @@
 ## `ambient_alloc_scalar`, `ambient_alloc_deref_field`, `callfield_ptr_ret` all ran before a reformat
 ## and stopped building after it). There is no way to rebuild the surface form from the desugared
 ## call, so the statement is copied VERBATIM from the `@` to the end of its line.
+## expect: run 42
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 
 P := struct { x : u64, y : u64 }

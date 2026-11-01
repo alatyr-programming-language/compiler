@@ -2,6 +2,7 @@
 ## negative LITERAL (`-100`) and a negated VAR (`-a`) must re-emit with the `-` prefix and stay idempotent
 ## (fmt(fmt(x)) == fmt(x)), and the reformatted source still build+run. Unary `-` wraps (unchecked), so on
 ## u64: -100 = 2^64-100, -(-100) = 100, 100 - 58 = 42.
+## expect: run 42
 main := fn() -> u64 {
   a := -100
   b := -a

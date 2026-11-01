@@ -9,6 +9,11 @@
 ##     pass segfaulted. The body brace is the last `{…}` group of the decl, not the first.
 ##   • a value-binding tail — `bonus := 100 when target.arch == Arch.riscv64`
 ## Returns 42.
+## expect(x86_64): run 42
+## expect(aarch64): reject
+## expect(riscv64): reject
+## expect(wasm): reject
+## spec: 30-comptime §9.2 (an absent entity referenced at a use site is a compile error)
 S := struct { a : u64, b : u64 }
 
 pick := fn(T : type, x : u64) -> u64 when match typeinfo(T) { Struct(_) => true; _ => false } { x }

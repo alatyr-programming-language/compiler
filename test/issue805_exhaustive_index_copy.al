@@ -9,3 +9,4 @@ main := fn() -> u64 {
   r := match ys[0] { R => { 11 }; G => { 22 }; B => { 42 } }
   return r
 }
+## expect: run 42
