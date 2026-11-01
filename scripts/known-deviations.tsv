@@ -408,6 +408,10 @@ aarch64	test/package/ir1723_alias_deref_struct/package.al	run/133	#1739
 aarch64	test/package/ir1723_alias_deref_struct/src/m.al	link/1	#3
 aarch64	test/package/ir1723_qualified_deref_struct/package.al	run/133	#1188
 aarch64	test/package/ir1723_qualified_deref_struct/src/m.al	link/1	#3
+aarch64	test/package/issue1172_foreign_generic_payload/package.al	run/133	#1191
+aarch64	test/package/issue1172_foreign_generic_payload/src/m.al	link/1	#1352
+aarch64	test/package/issue1172_foreign_struct_payload/src/m.al	link/1	#1352
+aarch64	test/package/issue1172_foreign_struct_payload/src/main.al	run/133	#1351
 aarch64	test/package/issue1734_alias_callee_agg_result/package.al	run/133	#1740
 aarch64	test/package/issue1734_alias_callee_agg_result/src/m.al	link/1	#3
 aarch64	test/package/issue1734_alias_callee_agg_result/src/main.al	run/133	#1741
@@ -1028,6 +1032,10 @@ riscv64	test/package/ir1723_alias_deref_struct/package.al	run/133	#1739
 riscv64	test/package/ir1723_alias_deref_struct/src/m.al	link/1	#3
 riscv64	test/package/ir1723_qualified_deref_struct/package.al	run/133	#1188
 riscv64	test/package/ir1723_qualified_deref_struct/src/m.al	link/1	#3
+riscv64	test/package/issue1172_foreign_generic_payload/package.al	run/133	#1191
+riscv64	test/package/issue1172_foreign_generic_payload/src/m.al	link/1	#1352
+riscv64	test/package/issue1172_foreign_struct_payload/src/m.al	link/1	#1352
+riscv64	test/package/issue1172_foreign_struct_payload/src/main.al	run/133	#1351
 riscv64	test/package/issue1734_alias_callee_agg_result/package.al	run/133	#1740
 riscv64	test/package/issue1734_alias_callee_agg_result/src/m.al	link/1	#3
 riscv64	test/package/issue1734_alias_callee_agg_result/src/main.al	run/133	#1741
@@ -1635,6 +1643,11 @@ wasm	test/package/ir1723_alias_deref_same/src/m.al	assemble/1	#3
 wasm	test/package/ir1723_alias_deref_struct/package.al	run/134	#1739
 wasm	test/package/ir1723_alias_deref_struct/src/m.al	assemble/1	#3
 wasm	test/package/ir1723_qualified_deref_struct/src/m.al	assemble/1	#3
+wasm	test/package/issue1172_foreign_generic_payload/package.al	run/134	#1187
+wasm	test/package/issue1172_foreign_generic_payload/src/m.al	assemble/1	#1352
+wasm	test/package/issue1172_foreign_struct_payload/package.al	run/134	#1190
+wasm	test/package/issue1172_foreign_struct_payload/src/m.al	assemble/1	#1352
+wasm	test/package/issue1172_foreign_struct_payload/src/main.al	run/134	#1351
 wasm	test/package/issue1734_alias_callee_agg_result/package.al	run/134	#1740
 wasm	test/package/issue1734_alias_callee_agg_result/src/m.al	assemble/1	#3
 wasm	test/package/issue1734_alias_callee_agg_result/src/main.al	run/134	#1741
@@ -1851,5 +1864,6 @@ x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
 x86_64	test/issue926_const_qualified_same_name_ok.al	compile/139	#1567
 x86_64	test/issue987_user_generic_ufcs_not_completed.al	run/139	#1654
+x86_64	test/package/issue1172_foreign_struct_payload/src/main.al	run/4	#1351
 x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
 x86_64	test/package/issue987_user_module_alloc__vec_not_completed/package.al	run/139	#1654

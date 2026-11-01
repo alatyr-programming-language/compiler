@@ -18,3 +18,4 @@ main := fn() -> u64 {
   g := m::mk()
   walk(V.Arr(g))
 }
+## expect: reject "unbound name"
