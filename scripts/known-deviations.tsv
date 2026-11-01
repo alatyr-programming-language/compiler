@@ -211,6 +211,7 @@ aarch64	test/issue370_bitcast_scalar_arg.al	run/133	#551
 aarch64	test/issue372_generic_bitcast_target.al	run/133	#713
 aarch64	test/issue373_enum_bitcast_payload.al	run/133	#713
 aarch64	test/issue393_prelude_bare_variant.al	run/133	#1199
+aarch64	test/issue395_vec_subword_generic_deref.al	run/133	#1200
 aarch64	test/issue404_hashmap_protocol_shadow_control.al	run/133	#1200
 aarch64	test/issue404_qualified_hashmap_protocol.al	run/133	#1200
 aarch64	test/issue451_ptr_str_field.al	run/133	#1188
@@ -651,6 +652,7 @@ riscv64	test/issue370_bitcast_scalar_arg.al	run/133	#551
 riscv64	test/issue372_generic_bitcast_target.al	run/133	#713
 riscv64	test/issue373_enum_bitcast_payload.al	run/133	#713
 riscv64	test/issue393_prelude_bare_variant.al	run/133	#1199
+riscv64	test/issue395_vec_subword_generic_deref.al	run/133	#1200
 riscv64	test/issue404_hashmap_protocol_shadow_control.al	run/133	#1200
 riscv64	test/issue404_qualified_hashmap_protocol.al	run/133	#1200
 riscv64	test/issue451_ptr_str_field.al	run/133	#1188
@@ -1093,6 +1095,7 @@ wasm	test/issue370_bitcast_scalar_arg.al	run/134	#1205
 wasm	test/issue372_generic_bitcast_target.al	run/134	#713
 wasm	test/issue373_enum_bitcast_payload.al	run/134	#713
 wasm	test/issue393_prelude_bare_variant.al	run/134	#1186
+wasm	test/issue395_vec_subword_generic_deref.al	run/134	#1186
 wasm	test/issue404_hashmap_protocol_shadow_control.al	run/134	#1186
 wasm	test/issue404_qualified_hashmap_protocol.al	run/134	#1186
 wasm	test/issue441_bitcast_int_to_ptr_struct.al	run/134	#1205
