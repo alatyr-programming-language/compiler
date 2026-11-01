@@ -50,10 +50,10 @@ self-host binary is frozen and not published; `seed/HISTORY.md` records the line
 
 ```sh
 $ target/debug/alatyr --version
-alatyr 0.2.19, spec 1.6.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)
+alatyr 0.2.20, spec 1.6.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)
 ```
 
-Two axes, per Tooling §4 (TOOL-21): **`0.2.19`** is this implementation's own version, injected from
+Two axes, per Tooling §4 (TOOL-21): **`0.2.20`** is this implementation's own version, injected from
 `package.al` (TOOL-15), and it moves on a seed promotion and only on one; **`1.6.0`** is the
 specification revision this build is answerable to, pinned in `src/spec_revision.al`, and it moves with
 the pin. It is a **target revision**, not a conformance claim (Overview §6, TOOL-21 as refined by spec
