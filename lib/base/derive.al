@@ -117,10 +117,19 @@ pub hash := fn(T : type, v : T) -> u64 {
     return h
   } else {
     comptime if (match typeinfo(T) { Enum(_) => true; _ => false }) {
+      ## A payload folds in like a struct field. A unit variant binds no value, so
+      ## `comptime match var.payload` keeps `hash(p)` to the variants that carry one (#1303: the
+      ## unit arm had no payload type to infer the call's `T` from) and gives it the FNV seed —
+      ## consistent with `eq`, though two unit variants share it.
       vv := v
       match vv {
         comptime for var in typeinfo(T).variants {
-          T.(var)(p) => { return hash(p) }
+          T.(var)(p) => {
+            comptime match var.payload {
+              Some(_) => { return hash(p) }
+              None => { return 1469598103934665603 }
+            }
+          }
         }
       }
       return 0

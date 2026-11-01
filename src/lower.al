@@ -15084,6 +15084,27 @@ callee_mod_rank := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : u
   mod_anc_rank_from(src, as_, al, ms, ml)
 }
 
+## #1303 — does module `ms`/`ml` declare a GENERIC fn named `ns`/`nl` that a bare call with `nargs`
+## arguments reaches with its comptime type arguments omitted (arity == nargs + its type-param
+## count)? `derive`'s `hash(T : type, v : T)` beside the concrete `hash(s : str)` is the pair.
+bare_implicit_generic_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, ms : usize, ml : usize, nargs : usize, a : rt::Arena) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  th := name_hash(src, ns, nl)
+  mut j := dni_lo(cnt, th)
+  je := dni_hi(cnt, th)
+  while j < je {
+    i := dni_at(cnt, j)
+    j += 1
+    if dnh_skip(cnt, i, th) == false {
+      d := deref(lower_ctx::decl_get(decls, i))
+      if d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) and lower_ctx::streq(src, d.mod_start, d.mod_len, ms, ml) {
+        if d.arity == nargs + tparam_count(decls, i64(i), src, a) { return true }
+      }
+    }
+  }
+  false
+}
+
 ## Find a generic kind-1 fn `Decl` whose name matches the callee's bare fn name; -1 if none /
 ## not generic. A CROSS-MODULE qualified callee `mod::f` matches a generic `f` by its TAIL name
 ## (`callee_name_span` strips the `mod::`), so a generic stdlib fn called across modules
@@ -15122,6 +15143,12 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
         ## A BARE same-module call only short-circuits when the non-generic decl's ARITY matches — so
         ## `derive`'s recursive struct `hash(f.type, v.(f))` (2 args) is NOT captured by the concrete
         ## `hash(str)` overload (arity 1) in the same module → it stays generic (mangles `hash__u64`).
+        ## #1303 — arity alone does not decide a bare call when the SAME module also declares a
+        ## same-name GENERIC the call reaches with its type argument omitted: `derive`'s enum arm
+        ## `hash(p)` (p : u64) matched the concrete `hash(s : str)` by arity and passed a u64 as a
+        ## `{ptr, len}` view → SIGSEGV. Fall through to the generic; the call sites' first-argument
+        ## check (`nongen_type_match`) still routes a real `str` argument to the concrete overload.
+        if mm and segcmp == false and d.arity == nargs and bare_implicit_generic_in(decls, src, nm.s, nm.n, d.mod_start, d.mod_len, nargs, a) { mm = false }
         if mm and (segcmp or d.arity == nargs) { return -1 }
       }
       }
