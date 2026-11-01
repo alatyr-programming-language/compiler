@@ -328,6 +328,9 @@ aarch64	test/ra_codec_next_usize.al	run/133	#1188
 aarch64	test/ra_codec_slice_cast.al	run/133	#1188
 aarch64	test/range_int_match.al	run/133	#1190
 aarch64	test/reject_agg_compare.al	run/133	#1192
+aarch64	test/reject_slice_wide_array_elem.al	run/133	#1194
+aarch64	test/reject_slice_wide_param_elem.al	run/133	#1187
+aarch64	test/reject_view_field_array_len.al	run/133	#1187
 aarch64	test/resolves_query.al	run/133	#1193
 aarch64	test/result_and_then.al	run/133	#1200
 aarch64	test/result_map.al	run/133	#1200
@@ -340,6 +343,9 @@ aarch64	test/serialize_roundtrip.al	run/133	#1188
 aarch64	test/shift_intrinsics.al	run/133	#1191
 aarch64	test/size_array_type.al	run/133	#713
 aarch64	test/size_scalar_tparam.al	run/133	#713
+aarch64	test/slice_array_elem_len.al	run/133	#1187
+aarch64	test/slice_array_elem_store.al	run/133	#1187
+aarch64	test/slice_array_elem_view_locals.al	run/133	#1187
 aarch64	test/slice_eq.al	run/133	#1192
 aarch64	test/slice_field_byref.al	run/133	#1191
 aarch64	test/slice_field_elem.al	run/133	#1191
@@ -354,6 +360,7 @@ aarch64	test/slice_ptr_elem_deref.al	run/133	#1188
 aarch64	test/slice_ptr_elem_write.al	run/133	#1188
 aarch64	test/slice_range_return.al	run/133	#1191
 aarch64	test/slice_return_byvalue.al	run/133	#1187
+aarch64	test/slice_slice_param_index.al	run/133	#1187
 aarch64	test/slice_str_array_local.al	run/133	#1203
 aarch64	test/slice_str_read.al	run/133	#1184
 aarch64	test/slice_struct_elem_len.al	run/133	#1187
@@ -362,6 +369,7 @@ aarch64	test/slice_toolkit.al	run/133	#1200
 aarch64	test/slice_variadic_enum8.al	run/133	#1201
 aarch64	test/slice_variadic_scalar8.al	run/133	#1201
 aarch64	test/slice_variadic_struct7.al	run/133	#1201
+aarch64	test/slice_view_local_field.al	run/133	#1187
 aarch64	test/sort_conformance.al	assemble/1	#1207
 aarch64	test/sret_param_return.al	run/133	#1191
 aarch64	test/std_path.al	run/133	#1184
@@ -372,6 +380,8 @@ aarch64	test/stmt_call_view_arg.al	run/133	#1184
 aarch64	test/str_alloc.al	run/133	#1188
 aarch64	test/str_array.al	run/133	#1184
 aarch64	test/str_array_elem_byte_index.al	run/133	#1203
+aarch64	test/str_array_elem_store.al	run/133	#1187
+aarch64	test/str_array_elem_vars.al	run/133	#1187
 aarch64	test/str_byte_ops.al	run/133	#1184
 aarch64	test/str_case.al	run/133	#1184
 aarch64	test/str_elem_mutable_places.al	run/133	#1184
@@ -772,6 +782,9 @@ riscv64	test/ra_codec_next_usize.al	run/133	#1188
 riscv64	test/ra_codec_slice_cast.al	run/133	#1188
 riscv64	test/range_int_match.al	run/133	#1190
 riscv64	test/reject_agg_compare.al	run/133	#1192
+riscv64	test/reject_slice_wide_array_elem.al	run/133	#1194
+riscv64	test/reject_slice_wide_param_elem.al	run/133	#1187
+riscv64	test/reject_view_field_array_len.al	run/133	#1187
 riscv64	test/resolves_query.al	run/133	#1193
 riscv64	test/result_and_then.al	run/133	#1200
 riscv64	test/result_map.al	run/133	#1200
@@ -784,6 +797,9 @@ riscv64	test/serialize_roundtrip.al	run/133	#1188
 riscv64	test/shift_intrinsics.al	run/133	#1191
 riscv64	test/size_array_type.al	run/133	#713
 riscv64	test/size_scalar_tparam.al	run/133	#713
+riscv64	test/slice_array_elem_len.al	run/133	#1187
+riscv64	test/slice_array_elem_store.al	run/133	#1187
+riscv64	test/slice_array_elem_view_locals.al	run/133	#1187
 riscv64	test/slice_eq.al	run/133	#1192
 riscv64	test/slice_field_byref.al	run/133	#1191
 riscv64	test/slice_field_elem.al	run/133	#1191
@@ -798,6 +814,7 @@ riscv64	test/slice_ptr_elem_deref.al	run/133	#1188
 riscv64	test/slice_ptr_elem_write.al	run/133	#1188
 riscv64	test/slice_range_return.al	run/133	#1191
 riscv64	test/slice_return_byvalue.al	run/133	#1187
+riscv64	test/slice_slice_param_index.al	run/133	#1187
 riscv64	test/slice_str_array_local.al	run/133	#1184
 riscv64	test/slice_str_read.al	run/133	#1184
 riscv64	test/slice_struct_elem_len.al	run/133	#1187
@@ -806,6 +823,7 @@ riscv64	test/slice_toolkit.al	run/133	#1200
 riscv64	test/slice_variadic_enum8.al	run/133	#1201
 riscv64	test/slice_variadic_scalar8.al	run/133	#1201
 riscv64	test/slice_variadic_struct7.al	run/133	#1201
+riscv64	test/slice_view_local_field.al	run/133	#1187
 riscv64	test/sort_conformance.al	assemble/1	#1207
 riscv64	test/std_path.al	run/133	#1184
 riscv64	test/std_time.al	run/133	#1188
@@ -815,6 +833,8 @@ riscv64	test/stmt_call_view_arg.al	run/133	#1184
 riscv64	test/str_alloc.al	run/133	#1188
 riscv64	test/str_array.al	run/133	#1184
 riscv64	test/str_array_elem_byte_index.al	run/133	#1184
+riscv64	test/str_array_elem_store.al	run/133	#1187
+riscv64	test/str_array_elem_vars.al	run/133	#1187
 riscv64	test/str_byte_ops.al	run/133	#1184
 riscv64	test/str_case.al	run/133	#1184
 riscv64	test/str_elem_mutable_places.al	run/133	#1184
@@ -1202,6 +1222,9 @@ wasm	test/ra_codec_slice_cast.al	run/134	#1188
 wasm	test/random_prng.al	run/134	#1190
 wasm	test/range_int_match.al	run/134	#1190
 wasm	test/reject_agg_compare.al	run/134	#1192
+wasm	test/reject_slice_wide_array_elem.al	run/134	#1194
+wasm	test/reject_slice_wide_param_elem.al	run/134	#1187
+wasm	test/reject_view_field_array_len.al	run/134	#1187
 wasm	test/resolves_query.al	run/134	#1193
 wasm	test/result_and_then.al	run/134	#1186
 wasm	test/result_map.al	run/134	#1186
@@ -1214,6 +1237,9 @@ wasm	test/serialize_roundtrip.al	run/134	#1186
 wasm	test/shift_intrinsics.al	run/134	#1191
 wasm	test/size_array_type.al	run/134	#713
 wasm	test/size_scalar_tparam.al	run/134	#713
+wasm	test/slice_array_elem_len.al	run/134	#1187
+wasm	test/slice_array_elem_store.al	run/134	#1187
+wasm	test/slice_array_elem_view_locals.al	run/134	#1187
 wasm	test/slice_eq.al	run/134	#1192
 wasm	test/slice_field_byref.al	run/134	#1187
 wasm	test/slice_field_elem.al	run/134	#1184
@@ -1228,6 +1254,7 @@ wasm	test/slice_ptr_elem_deref.al	run/134	#1188
 wasm	test/slice_ptr_elem_write.al	run/134	#1188
 wasm	test/slice_range_return.al	run/134	#1191
 wasm	test/slice_return_byvalue.al	run/134	#1194
+wasm	test/slice_slice_param_index.al	run/134	#1187
 wasm	test/slice_str_array_local.al	run/134	#1184
 wasm	test/slice_str_read.al	run/134	#1186
 wasm	test/slice_struct_over_arena.al	run/134	#1186
@@ -1235,6 +1262,7 @@ wasm	test/slice_toolkit.al	run/134	#1200
 wasm	test/slice_variadic_enum8.al	run/134	#1201
 wasm	test/slice_variadic_scalar8.al	run/134	#1201
 wasm	test/slice_variadic_struct7.al	run/134	#1201
+wasm	test/slice_view_local_field.al	run/134	#1187
 wasm	test/sort_conformance.al	run/134	#1200
 wasm	test/std_path.al	run/134	#1184
 wasm	test/std_time.al	run/134	#1186
@@ -1245,6 +1273,8 @@ wasm	test/store_local_ptr_ok.al	run/134	#1188
 wasm	test/str_alloc.al	run/134	#1186
 wasm	test/str_array.al	run/134	#1184
 wasm	test/str_array_elem_byte_index.al	run/134	#1184
+wasm	test/str_array_elem_store.al	run/134	#1187
+wasm	test/str_array_elem_vars.al	run/134	#1187
 wasm	test/str_byte_ops.al	run/134	#1184
 wasm	test/str_case.al	run/134	#1184
 wasm	test/str_elem_mutable_places.al	run/134	#1187
