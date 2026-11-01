@@ -13,6 +13,7 @@
 1065	Stdlib appendix §2.6; Memory §4.5 (MEM-10)	a comparison over two different types ignores a declared heterogeneous `eq` (a wrong value), and with none declared it compares structurally instead of refusing	rows
 1081	Stdlib appendix §2.6; Memory §4.5; Types §4.4	the derived hash/eq over a pointer reaches the address with `u64(v)`, a conversion with no class in the lattice, instead of the spelled `unchecked bitcast(usize, …)`; no program-visible value differs	none
 1123	Overview §6 (code consistent with the normative lowering rules, per selected target); Functions §7.2	aarch64, riscv64 and wasm do not implement the slice-variadic gather: the program traps or fails to assemble	rows
+1157	Concurrency §6.2 (CG-7: `unchecked` changes only the verification mode); Overview §6	aarch64, riscv64 and wasm: a call that returns an aggregate, bound under an `unchecked` grant, traps (aarch64 crashes with SIGSEGV on a struct returned through the hidden result pointer)	rows
 1184	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: a string literal in expression position is a fail-loud stub (`unsupported expr StrLit`)	rows
 1186	Overview §6 (code consistent with the normative lowering rules, per selected target)	wasm: `sys_mmap` has no lowering, so a program that allocates on the heap traps	rows
 1187	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: field access and field stores are fail-loud stubs on aarch64, riscv64 and wasm	rows

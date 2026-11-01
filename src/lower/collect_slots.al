@@ -187,6 +187,9 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
             ## view, and the later call ABI passes `v`'s ptr word instead of its pair address. (#716: the
             ## inline `match deref(v)` this replaces never took its `Field` arm — see the helper.)
             mut v := const_field_rhs(const_rhs(v, decls, src), decls, src, a)
+            ## #1139 — size `s := unchecked mk(…)` from the peeled aggregate-returning call, exactly
+            ## as `emit_st_assign` stores it.
+            v = granted_agg_call_rhs(v, decls, src, a).e
             rqa := require_agg_parts(v, decls, src, a)
             si := struct_lit_info(v)
             ei := enum_lit_info(v)
