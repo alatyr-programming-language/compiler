@@ -11137,6 +11137,9 @@ run deque_ops 42
 ## multi-payload enum and `Option(u64)`) kept one word. NON-VACUOUS: on the parent `1262da5d` (x86_64)
 ## the fixture stops with SIGSEGV (rc 139).
 run issue1302_container_elem_enum 42
+## #1334 — `deref(p) = o` with `o` a niche-folded `Option(ptr(T))` wrote a second word past the
+## pointee. NON-VACUOUS: on the parent `1262da5d` (x86_64) the fixture returns 100.
+run issue1334_folded_deref_store 42
 ## alloc::oset — an ordered set (sorted array): insert keeps it sorted + duplicate-free via a caller
 ## `less` comparator (binary search + tail byte-shift, growth), contains (O(log n)), sorted as_slice.
 run oset_ops 42

@@ -12566,6 +12566,9 @@ deref_store_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
   if vn.n == 0 { return 1 }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
   if ent.ek == 2 { return struct_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
+  ## #1334 — a niche-folded `Option(ptr(T))` slot is `ek == 3` too, but it is ONE word (Memory §4); its
+  ## `1 + enum_inst_words` stored a second word past the pointee (deque `push_front` at that `T`)
+  if ent.ek == 3 and is_niche_folded(cx.src, ent.sns, ent.snl) { return 1 }
   if ent.ek == 3 { return 1 + enum_inst_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
   return 1
 }
