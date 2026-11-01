@@ -3,7 +3,7 @@
 C := enum { R, G, B }
 main := fn() -> u64 {
   xs : [C; 2] = [C.B, C.G]
-  r := match xs[0] { R => { 11 }; G => { 22 } }
+  r : u64 = match xs[0] { R => { 11 }; G => { 22 } }
   return r
 }
 ## expect: reject "type mismatch at line 6"
