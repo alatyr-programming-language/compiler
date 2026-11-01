@@ -534,7 +534,7 @@ slice_variadic_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize,
 ## The SURFACE SYMBOL of a binary operator opcode (`""` for a non-routable op — the boolean
 ## short-circuits 40/41 and `not` 42 are control flow, never library operators). Used to match an
 ## `@inline` operator fn whose DECL NAME is the symbol (`@inline + := fn(a, b) { … }`).
-op_symbol := fn(op : u8) -> str {
+pub op_symbol := fn(op : u8) -> str {
   if op == 16 { return "+" }
   if op == 17 { return "-" }
   if op == 18 { return "*" }
