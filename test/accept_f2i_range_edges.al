@@ -32,3 +32,4 @@ main := fn() -> u64 {
   if w == 1 { return 13 }                  ## (keeps `w` live; the hardware never answers 1)
   return 42
 }
+## expect: run 42
