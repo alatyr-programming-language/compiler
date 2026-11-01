@@ -196,6 +196,10 @@ brand_conversion_err := fn(s : usize) -> CheckErr { BRAND_CONVERSION_DIAG_MARKER
 ## markers, so only the former's upper bound moves.
 SIGNEDNESS_CONVERSION_DIAG_MARKER : usize = 6896500000000000000
 signedness_conversion_err := fn(s : usize) -> CheckErr { SIGNEDNESS_CONVERSION_DIAG_MARKER + diag_span(s) * 4 }
+## #942 — the same class at a RESULT sink (`return <v>`, a fn tail): one value, not two operands, so the
+## renderer words it apart. The sink rides in the low two bits, which every span decoder divides away.
+SIGNEDNESS_SINK_RESULT : usize = 1
+signedness_result_err := fn(s : usize) -> CheckErr { SIGNEDNESS_CONVERSION_DIAG_MARKER + diag_span(s) * 4 + SIGNEDNESS_SINK_RESULT }
 ## Issue #414 / Declarations §6.2 — re-declaring a name ALREADY BOUND IN THE SAME SCOPE is a compile
 ## error. That is a TARGET-INDEPENDENT rule about a program the specification calls ILL-FORMED, so it
 ## belongs in `check` (one refusal for all four backends), not in a backend fence. Keep this class
@@ -6887,6 +6891,8 @@ ret_sink_err := fn(head : Option(ptr(mut Stmt)), rts : usize, rtl : usize, decls
         if agg_scalar_bad(rts, rtl, rv, decls, upto, src, locals, nloc) or ann_lit_range_bad(src, rts, rtl, rv) { res = RET_SINK_AGG }
         rbe := sema_brand_ret_err(rts, rtl, rv, sema_brand_span(s_of(rv, a), rts), decls, upto, src, locals, nloc, a)
         if rbe != 0 and res == 0 { res = rbe }
+        rse := sema_result_sign_err(rts, rtl, rv, rts, decls, src, a)
+        if rse != 0 and res == 0 { res = rse }
       }
       Stmt::If(c, th, el, nx) => {
         te := ret_sink_err(th, rts, rtl, decls, upto, src, locals, nloc, a)
@@ -8604,6 +8610,23 @@ sema_mixed_signedness := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> Option(u64
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => { Option(u64).None }
   }
+}
+## #942 — Types §4.2/§4.3: a value that reaches a declared integer RESULT (an early `return <v>` or the
+## fn's tail) and that sema recorded as an integer of the OTHER signedness needs a **numeric**
+## conversion, which is always explicit. `0` when the records agree, or when either side is not an
+## integer: a literal-only value is no integer of its own and takes the result's type (Types §2.3), and
+## a brand result is #299's class. Width is #942 slice 4. Located at the value's first written offset,
+## else at `fallback` (the declared result's type name), so the refusal always points into the source.
+sema_result_sign_err := fn(rts : usize, rtl : usize, rv : ptr(Expr), fallback : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> CheckErr {
+  if not ir::sty_on() { return 0 }
+  want : ir::VTy = sema_vty_name(src, rts, rtl, decls)
+  got : ir::VTy = sema_sty_get(rv)
+  if not ir::vty_is_int(want) or not ir::vty_is_int(got) or ir::vty_same_sign(want, got) { return 0 }
+  mut at : usize = s_of(rv, a)
+  sp : Option(u64) = ir::expr_span(rv)
+  match sp { Some(x) => { at = usize(x) }; None => {} }
+  if at == 0 { at = fallback }
+  signedness_result_err(at)
 }
 ## Is `op` a boolean operator (`and`, `or`, `not`)?
 sema_vty_op_is_boolean := fn(op : u8) -> bool { op == 40 or op == 41 or op == 42 }
@@ -17055,6 +17078,9 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         if tbe != 0 { err = tbe; failed = true }
         ptrint_probe_site("RESULT-TAIL", "tailexpr", true, tail_ty.kind, rett.kind, s_of(d.value, a), src)
         if not ty_compat(tail_ty, rett, src) { err = mismatch_err(s_of(d.value, a), 0); failed = true }
+        ## #942 — the tail is a value sink of the declared result, like an early `return` (Types §4.3).
+        tse := sema_result_sign_err(d.ret_ts, d.ret_tl, d.value, d.ret_ts, decls, src, a)
+        if tse != 0 and not failed { err = tse; failed = true }
         ## The same literal fallback is needed for a tail expression: `fn() -> u64 { "x" }` has no
         ## explicit Stmt::Return for the ordinary tag check to see, while `lbv_lit_tag` knows the exact
         ## `StrLit` shape. Unknown tails stay poison-tolerant when the declared result is unresolved.
