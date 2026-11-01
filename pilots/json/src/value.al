@@ -12,8 +12,10 @@
 ## A container's elements are a slice over the arena storage its parser filled; that
 ## storage is complete once the container is parsed and is never grown again, so the
 ## slice stays valid until the arena is freed.
-## blocked-by: #1172 — an `alloc::vec::Vec(T)` payload reads back wrong fields after a
-## `match`, so the payloads are `Slice`s rather than the `Vec`s themselves.
+## blocked-by: #1172, #1347, #987 — an `alloc::vec::Vec(T)` payload reads back wrong fields
+## after a `match` (#1172); once it reads right, `for x in xs` over the bound `Vec` segfaults
+## (#1347) and `xs[i]` on it reads 0 (#987). So the payloads are `Slice`s rather than the
+## `Vec`s themselves.
 pub Value := enum {
   Null,
   Bool(bool),
