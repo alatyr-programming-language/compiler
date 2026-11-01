@@ -37,6 +37,10 @@
 #                                  reviewed head)
 #   scripts/land.sh --self-test          exercise the PR-shape, provenance and oracle-commit deciders
 #                                        without GitHub or a merge
+#   scripts/land.sh --xbackend-follow <gated-sha> <gate-log> <PR>...
+#       PHASE 6c alone (#1383): when the gate log's `xbackend diff:` line reports new-paths/new-rows,
+#       make and check the one-file baseline commit on <gated-sha> and print it; `none` otherwise.
+#       The queue's batch path and a hand landing publish that commit, never the gated object alone.
 #
 #   ALATYR_LAND_ACCEPT_BASE=<sha>  acknowledge, for this one run, that origin/main's tip <sha> did NOT
 #                                  come through a pull request (see "PHASE 1 — provenance" below)
@@ -613,11 +617,124 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
   return 1
 }
 
+## THE XBACKEND BASELINE FOLLOWS EVERY LANDING (#1383). The full gate holds the ratchet on the paths
+## that already had a test and reports what the landing newly covers, `new-paths=N new-rows=M` on its
+## one `xbackend diff: paths=` line. Once the object is on main those paths are existing, so a baseline
+## left where it was turns every next gate on main red on the ratchet alone (#1309 did that to 906/2487).
+## So every landing that adds coverage — land.sh's PHASE 6c, oracle or not, and the queue's batch path
+## through `--xbackend-follow` — publishes one more commit: the gated object's baseline with `paths`
+## and `rows` moved by exactly N and M, every other line unchanged, and nothing else. It is arithmetic
+## on the parent's file, not a re-measurement: a re-measured `--write` would also LOWER the line where
+## the gate measured less, and lowering is a reviewed follow-up of its own (alatyr-integrate §4). The
+## gate's verdict covers the parent; the commit changes one file the gate does not build from, and
+## xb_follow_commit_check proves that shape before anything publishes it. N=M=0 makes no commit.
+XB_BASELINE=scripts/xbackend_diff.baseline
+xb_follow_gate_line() { # gate-log -> prints its one `xbackend diff: paths=` line; 1 none or several
+  local n
+  n="$(grep -c '^xbackend diff: paths=' "$1" 2>/dev/null)"
+  [ "$n" = 1 ] && { grep '^xbackend diff: paths=' "$1"; return 0; }
+  echo "  REFUSE: the gate log $1 holds ${n:-no} 'xbackend diff: paths=' line(s), not one: what this"
+  echo "          landing newly covered is unknown, and an unknown is not zero."
+  return 1
+}
+xb_follow_coverage() { # gate-line -> "N M"; 1 when the line does not end in new-paths=N new-rows=M
+  local c
+  c="$(printf '%s\n' "$1" | sed -n 's/^xbackend diff: paths=[0-9][0-9]* .* new-paths=\([0-9][0-9]*\) new-rows=\([0-9][0-9]*\)$/\1 \2/p')"
+  [ -n "$c" ] || return 1
+  echo "$c"
+}
+xb_follow_baseline_text() { # parent-baseline-text N M -> that text with paths+N rows+M; 1 malformed
+  printf '%s\n' "$1" | awk -F= -v np="$2" -v nr="$3" '
+    $1 == "paths" { if ($2 !~ /^[0-9]+$/ || NF != 2) bad = 1; printf "paths=%d\n", $2 + np; p++; next }
+    $1 == "rows"  { if ($2 !~ /^[0-9]+$/ || NF != 2) bad = 1; printf "rows=%d\n", $2 + nr; r++; next }
+    { print }
+    END { if (p != 1 || r != 1 || bad) exit 1 }'
+}
+xb_follow_message() { # gate-object gate-line N M old-paths old-rows PR... -> the commit message
+  local obj="$1" line="$2" np="$3" nr="$4" op="$5" orow="$6" prs; shift 6
+  prs="$(printf '#%s, ' "$@" | sed 's/, $//')"
+  printf 'chore(gates): xbackend baseline follows the landing of %s\n\n' "$prs"
+  if [ "$#" -gt 1 ]; then
+    printf 'The batch %s was gated as one object, %s. Its full gate held the\n' "$prs" "$(git rev-parse --short "$obj")"
+  else
+    printf 'The full gate on %s (the landing of %s) held the\n' "$(git rev-parse --short "$obj")" "$prs"
+  fi
+  printf 'xbackend ratchet on the paths and rows that already had a test, and reported %s path(s)\n' "$np"
+  printf 'and %s row(s) as NEWLY COVERED: fixtures this landing adds, whose cross-backend difference was\n' "$nr"
+  printf 'already in the compiler with no test on it. After the push those paths are existing, so the\n'
+  printf 'line moves by exactly that coverage and by nothing else: paths %s -> %s, rows %s -> %s, every\n' \
+    "$op" "$((op + np))" "$orow" "$((orow + nr))"
+  printf 'other line unchanged (#1383).\n\nThe gate'"'"'s line, verbatim:\n\n  %s\n\n' "$line"
+  printf 'Checked before publishing (scripts/land.sh xb_follow_commit_check): the only file is\n'
+  printf '%s, the parent is the gated object %s, and the file is the\n' "$XB_BASELINE" "$(git rev-parse --short "$obj")"
+  printf 'parent'"'"'s baseline with paths+%s rows+%s. A PR never edits this file (land.sh PHASE 2, #1019).\n' "$np" "$nr"
+}
+## Does commit C sit on PARENT and move the baseline by exactly N/M? Prints each refusal.
+xb_follow_commit_check() { # parent commit N M -> 0 ok, 1 REFUSE
+  local parent="$1" c="$2" np="$3" nr="$4" fail=0 paths want pm cm
+  [ "$(git rev-list --parents -n 1 "$c" 2>/dev/null | wc -w | tr -d ' ')" = 2 ] &&
+    [ "$(git rev-parse "$c^" 2>/dev/null)" = "$(git rev-parse "$parent^{commit}" 2>/dev/null)" ] ||
+    { echo "  REFUSE: the baseline commit $c is not the one child of the gated object $parent"; fail=1; }
+  paths="$(git diff --name-only "$parent" "$c" 2>/dev/null)"
+  [ "$paths" = "$XB_BASELINE" ] ||
+    { echo "  REFUSE: the baseline commit changes {$(printf '%s' "$paths" | tr '\n' ' ')}, not $XB_BASELINE alone"; fail=1; }
+  pm="$(git ls-tree "$parent" -- "$XB_BASELINE" | cut -d' ' -f1)"; cm="$(git ls-tree "$c" -- "$XB_BASELINE" | cut -d' ' -f1)"
+  [ -n "$pm" ] && [ "$pm" = "$cm" ] || { echo "  REFUSE: the baseline's mode moved ($pm -> $cm)"; fail=1; }
+  if want="$(xb_follow_baseline_text "$(git show "$parent:$XB_BASELINE" 2>/dev/null)" "$np" "$nr")"; then
+    [ "$(printf '%s\n' "$want" | git hash-object --stdin)" = "$(git rev-parse "$c:$XB_BASELINE" 2>/dev/null)" ] ||
+      { echo "  REFUSE: $XB_BASELINE in $c is not the parent's moved by exactly paths+$np rows+$nr"; fail=1; }
+  else
+    echo "  REFUSE: the parent's $XB_BASELINE is malformed (one paths= and one rows= line, decimal)"; fail=1
+  fi
+  return "$fail"
+}
+## Make the baseline commit on TOP from the gate's log, by plumbing: no checkout moves, so the queue can
+## run it beside the tree it gated. Last line `xbackend-follow: none` (no coverage, no commit) or
+## `xbackend-follow: commit <sha> paths+N rows+M`; anything it refuses exits 1 with the reasons.
+xb_follow() { # top gate-log PR...
+  local top="$1" log="$2" line cov np nr text blob idx tree mode c op orow trc; shift 2
+  line="$(xb_follow_gate_line "$log")" || { printf '%s\n' "$line"; return 1; }
+  cov="$(xb_follow_coverage "$line")" ||
+    { echo "  REFUSE: the gate's line names no new-paths=/new-rows= pair: $line"; return 1; }
+  read -r np nr <<< "$cov"
+  echo "  the gate: $line"
+  if [ "$np" = 0 ] && [ "$nr" = 0 ]; then echo "xbackend-follow: none"; return 0; fi
+  text="$(git show "$top:$XB_BASELINE" 2>/dev/null)"
+  op="$(printf '%s\n' "$text" | sed -n 's/^paths=//p')"; orow="$(printf '%s\n' "$text" | sed -n 's/^rows=//p')"
+  text="$(xb_follow_baseline_text "$text" "$np" "$nr")" ||
+    { echo "  REFUSE: $XB_BASELINE in $top is malformed"; return 1; }
+  mode="$(git ls-tree "$top" -- "$XB_BASELINE" | cut -d' ' -f1)"
+  blob="$(printf '%s\n' "$text" | git hash-object -w --stdin)" || return 1
+  idx="$(git rev-parse --absolute-git-dir)/xb-follow-index.$$"
+  GIT_INDEX_FILE="$idx" git read-tree "$top" &&
+    GIT_INDEX_FILE="$idx" git update-index --cacheinfo "$mode,$blob,$XB_BASELINE" &&
+    tree="$(GIT_INDEX_FILE="$idx" git write-tree)"; trc=$?
+  rm -f "$idx"
+  [ "$trc" = 0 ] || { echo "  REFUSE: could not build the baseline commit's tree"; return 1; }
+  c="$(xb_follow_message "$top" "$line" "$np" "$nr" "$op" "$orow" "$@" | git commit-tree "$tree" -p "$top")" ||
+    { echo "  REFUSE: git commit-tree failed"; return 1; }
+  message_shape_check "baseline commit $c" "$(git log -1 --format=%b "$c")" || return 1
+  attribution_trailer_check "baseline commit $c" "$(git log -1 --format=%B "$c")" || return 1
+  xb_follow_commit_check "$top" "$c" "$np" "$nr" || return 1
+  echo "xbackend-follow: commit $c paths+$np rows+$nr"
+}
+## The publish rule the queue and PHASE 7 share: coverage means the object is the baseline commit.
+xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
+  if [ "$1" = 0 ] && [ "$2" = 0 ]; then
+    [ "$4" = "$3" ] && return 0
+    echo "  REFUSE: the gate added no coverage, yet the published object is not the gated one"; return 1
+  fi
+  [ "$4" != "$3" ] && [ "$5" = "$3" ] && return 0
+  echo "  REFUSE: the gate reported new-paths=$1 new-rows=$2, but $4 is not the baseline commit on $3:"
+  echo "          pushing it would leave every next gate on main red on the ratchet alone (#1383)"
+  return 1
+}
+
 # ------------------------------------------------------------------------------------------------
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=124  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319
+LAND_SELFTEST_EXPECTED=141  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -1064,6 +1181,53 @@ Not a bullet.
   bash "$ROOT/scripts/corpus_manifest.sh" --delta-self-test >"$st/delta.out" 2>&1
   _ck $? "corpus-manifest-predicted-delta-self-test($(tail -3 "$st/delta.out" | tr '\n' ' '))"
 
+  # ---- 9 · the xbackend baseline follows every landing that added coverage (#1383). ---------
+  #      A throwaway repository with a real baseline; the gate lines are #1309's batch gate.
+  local xr="$st/xr" here="$PWD" g0 g1 xtop xc xo
+  g0='xbackend diff: paths=906 rows=2487 sources=2383 hw-defined=8 raw-escape=0 target-na=6 quiet=0 attributed=0 unexplained=0'
+  printf '%s new-paths=2 new-rows=6\n' "$g0" > "$st/xg-cov"
+  printf 'stuff\n%s new-paths=0 new-rows=0\n*** FULL GATE: GREEN (sweeps RAN) ***\n' "$g0" > "$st/xg-zero"
+  printf '*** FULL GATE: GREEN (sweeps RAN) ***\n' > "$st/xg-none"
+  cat "$st/xg-cov" "$st/xg-zero" > "$st/xg-two"
+  export GIT_AUTHOR_NAME=st GIT_AUTHOR_EMAIL=st@example.invalid GIT_COMMITTER_NAME=st GIT_COMMITTER_EMAIL=st@example.invalid
+  mkdir -p "$xr/scripts" && cd "$xr" && git init -q . &&
+    printf 'paths=906\nrows=2487\nhw-defined=8\nraw-escape=0\ntarget-na=6\nunexplained=0\n' > "$XB_BASELINE" &&
+    printf 'x\n' > other && git add -A && git commit -q -m 'chore: base' -m 'body' && xtop="$(git rev-parse HEAD)" ||
+    { cd "$here"; echo "land self-test: cannot build the baseline fixture repository" >&2; return 1; }
+  [ "$(xb_follow_coverage "$(xb_follow_gate_line "$st/xg-cov")")" = "2 6" ]; _ck $? xb-follow-misread-the-gate-line
+  xb_follow_gate_line "$st/xg-none" >/dev/null; [ $? = 1 ]; _ck $? xb-follow-took-a-gate-log-with-no-coverage-line-as-zero
+  xb_follow_gate_line "$st/xg-two" >/dev/null; [ $? = 1 ]; _ck $? xb-follow-took-a-gate-log-with-two-coverage-lines
+  # Coverage moves the baseline by exactly N/M, alone, on the gated object; every other line holds.
+  xo="$(xb_follow "$xtop" "$st/xg-cov" 1309 1320)"
+  xc="$(printf '%s\n' "$xo" | sed -n 's/^xbackend-follow: commit \([0-9a-f]\{40\}\) paths+2 rows+6$/\1/p')"
+  [ -n "$xc" ] && [ "$(git rev-parse "$xc^")" = "$xtop" ] && [ "$(git diff --name-only "$xtop" "$xc")" = "$XB_BASELINE" ] &&
+    [ "$(git show "$xc:$XB_BASELINE" | tr '\n' ' ')" = 'paths=908 rows=2493 hw-defined=8 raw-escape=0 target-na=6 unexplained=0 ' ]
+  _ck $? "xb-follow-did-not-move-the-baseline-by-exactly-the-coverage($(printf '%s' "$xo" | tail -n 3 | tr '\n' ' '))"
+  [ -n "$xc" ] && git log -1 --format=%B "$xc" | grep -qxF "  $g0 new-paths=2 new-rows=6" &&
+    git log -1 --format=%s "$xc" | grep -qxF 'chore(gates): xbackend baseline follows the landing of #1309, #1320'
+  _ck $? xb-follow-message-lacks-the-verbatim-gate-line-or-a-batch-member
+  # Zero coverage makes no commit.
+  xo="$(xb_follow "$xtop" "$st/xg-zero" 1309)"
+  [ "$(printf '%s\n' "$xo" | tail -n 1)" = 'xbackend-follow: none' ] && [ "$(git rev-parse HEAD)" = "$xtop" ]
+  _ck $? xb-follow-made-a-commit-for-zero-coverage
+  xb_follow "$xtop" "$st/xg-none" 1309 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-landed-with-no-coverage-line
+  # A baseline commit touching any other file, moving by another number, or on another parent is refused.
+  git show "$xc:$XB_BASELINE" > "$XB_BASELINE" && printf 'y\n' > other && git add -A &&
+    git commit -q -m 'chore(gates): x' -m 'body' && xo="$(git rev-parse HEAD)" && git reset -q --hard "$xtop"
+  xb_follow_commit_check "$xtop" "$xo" 2 6 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-allowed-a-baseline-commit-touching-another-file
+  xb_follow_commit_check "$xtop" "$xc" 2 6 >/dev/null; _ck $? xb-follow-check-refused-the-exact-baseline-commit
+  xb_follow_commit_check "$xtop" "$xc" 3 6 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-allowed-a-mismatched-paths-number
+  xb_follow_commit_check "$xtop" "$xc" 2 5 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-allowed-a-mismatched-rows-number
+  xb_follow_commit_check "$xo" "$xc" 2 6 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-allowed-a-commit-on-another-parent
+  printf 'paths=x\nrows=1\n' > "$XB_BASELINE" && git commit -q -am 'chore: bad' -m 'body' &&
+    { xb_follow HEAD "$st/xg-cov" 1 >/dev/null; [ $? = 1 ]; }; _ck $? xb-follow-moved-a-malformed-baseline
+  cd "$here"; unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+  # The publish rule: a green gate with coverage, pushed without the baseline commit, is refused.
+  xb_follow_publish_ok 2 6 "$xtop" "$xtop" "" >/dev/null; [ $? = 1 ]; _ck $? xb-follow-publish-allowed-the-gated-object-without-the-baseline-commit
+  xb_follow_publish_ok 2 6 "$xtop" "$xc" "$xtop" >/dev/null; _ck $? xb-follow-publish-refused-the-baseline-commit
+  xb_follow_publish_ok 0 0 "$xtop" "$xtop" "" >/dev/null; _ck $? xb-follow-publish-refused-a-zero-coverage-gated-object
+  xb_follow_publish_ok 0 0 "$xtop" "$xc" "$xtop" >/dev/null; [ $? = 1 ]; _ck $? xb-follow-publish-allowed-a-commit-for-zero-coverage
+
   printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
   if [ -n "$bad" ]; then echo "*** land self-test: FAILED —$bad ***" >&2; return 1; fi
   if [ "$k" -ne "$LAND_SELFTEST_EXPECTED" ]; then
@@ -1074,8 +1238,8 @@ Not a bullet.
   fi
   echo "ok   land PR-shape self-test: $k checks — the oracle-mixing, seed-binary, seed/VERSION"
   echo "     append-only, one-file-oracle-commit, predicted-delta base, oracle-commit path-set and"
-  echo "     main-provenance refusals and the push-capability probe, each in both directions, and the"
-  echo "     predicted-delta decider"
+  echo "     main-provenance refusals and the push-capability probe, each in both directions, the"
+  echo "     predicted-delta decider, and the xbackend baseline commit every covering landing makes"
   return 0
 }
 
@@ -1096,6 +1260,19 @@ if [ "${1:-}" = '--self-test' ]; then
   fi
   rm -rf "$LAND_ST"
   exit "$LAND_ST_RC"
+fi
+
+## `--xbackend-follow <gated-sha> <gate-log> <PR>...`: PHASE 6c alone, for an object gated elsewhere —
+## the queue's batch (run from the base's copy of this script, never the batch's), or a hand landing
+## gated on omen or by gate.yml (its gate.log). Moves no checkout; prints xb_follow's report.
+if [ "${1:-}" = '--xbackend-follow' ]; then
+  [ "$#" -ge 4 ] || die "use --xbackend-follow <gated 40-hex sha> <gate log> <PR>..."
+  case "$2" in *[!0-9a-f]*) die "the gated object must be a full sha, got '$2'" ;; esac
+  [ "${#2}" = 40 ] && git cat-file -e "$2^{commit}" 2>/dev/null || die "the gated object '$2' is not a full commit sha here"
+  [ -f "$3" ] || die "no gate log at '$3'"
+  for a in "${@:4}"; do case "$a" in ''|0*|*[!0-9]*) die "PR numbers only, got '$a'" ;; esac; done
+  xb_follow "$2" "$3" "${@:4}"
+  exit $?
 fi
 
 PR="${1:-}"
@@ -1498,51 +1675,40 @@ if [ -f "$CM_LOG" ] && [ "$CM_LOG" -nt "$GATE_STAMP" ] && grep -q '^corpus manif
   git diff --exit-code --quiet && git diff --cached --exit-code --quiet && [ "$(git rev-parse HEAD)" = "$O" ] ||
     { verdict "NOT LANDABLE — the tree moved after the oracle commit"; exit 1; }
   PUBLISH="$O"
-
-  # --- PHASE 6c — the xbackend baseline follows the oracle, never the PR ----------------------
-  ## The gate held the line on existing paths and reported what it newly covered. Once this lands
-  ## those paths ARE existing, so a baseline that did not move would refuse the NEXT landing on rows
-  ## this one legitimately added — a permanently red gate, which is the failure xb_ratchet itself says
-  ## it exists to avoid. The landing owns the move; the PR cannot (PHASE 2 refuses it, #1019).
-  NEWP="$(printf '%s\n' "$O_RATCHET" | sed -n 's/^xbackend diff: .*new-paths=\([0-9]*\).*$/\1/p' | head -1)"
-  NEWR="$(printf '%s\n' "$O_RATCHET" | sed -n 's/^xbackend diff: .*new-rows=\([0-9]*\).*$/\1/p' | head -1)"
-  NEWP="${NEWP:-0}"; NEWR="${NEWR:-0}"
-  SEENP="$(printf '%s\n' "$O_RATCHET" | sed -n 's/^xbackend diff: paths=\([0-9]*\).*$/\1/p' | head -1)"
-  SEENR="$(printf '%s\n' "$O_RATCHET" | sed -n 's/^xbackend diff: paths=[0-9]* rows=\([0-9]*\).*$/\1/p' | head -1)"
-  SEENP="${SEENP:-?}"; SEENR="${SEENR:-?}"
-  if [ "$NEWP" -gt 0 ] || [ "$NEWR" -gt 0 ]; then
-    say "PHASE 6c — the xbackend baseline moves by the coverage this gate added"
-    B_MSG="$ROOT/target/land-baseline-commit.msg"
-    bash scripts/xbackend_diff.sh --ratchet --write "$FRESH" > "$ROOT/target/land-baseline-write.log" 2>&1
-    bw_rc=$?
-    grep -E '^xbackend ratchet:' "$ROOT/target/land-baseline-write.log" | sed 's/^/  /'
-    [ "$bw_rc" = 0 ] || { verdict "NOT LANDABLE — writing the xbackend baseline failed (rc $bw_rc)"; exit 1; }
-    {
-      printf 'chore(gates): xbackend baseline follows the oracle #%s\n\n' "$PR"
-      printf 'The gate held the ratchet on the %s paths and %s rows that already had a test, and\n' "$SEENP" "$SEENR"
-      printf 'reported %s path(s) and %s row(s) as NEWLY COVERED — fixtures this change adds, whose\n' "$NEWP" "$NEWR"
-      printf 'cross-backend difference was already in the compiler with no test on it. After this lands\n'
-      printf 'those paths are existing, so the line moves by exactly that coverage and by nothing else.\n\n'
-      printf 'scripts/xbackend_diff.sh --ratchet --write on the gated manifest, verbatim:\n\n'
-      grep -E '^xbackend (diff|ratchet):' "$ROOT/target/land-baseline-write.log" | sed 's/^/  /'
-      printf '\nThe PR itself was refused if it touched this file (scripts/land.sh PHASE 2, #1019).\n'
-      [ -n "$ISSUE" ] && printf '\nRefs #%s\n' "$ISSUE"
-    } > "$B_MSG"
-    git add scripts/xbackend_diff.baseline
-    git commit --quiet --no-verify -F "$B_MSG" || die "could not create the baseline commit"
-    B="$(git rev-parse HEAD)"
-    attribution_trailer_check "baseline commit $B" "$(git log -1 --format=%B "$B")" || o_fail=1
-    B_PATHS="$(git diff --name-only "$O" "$B")"
-    [ "$B_PATHS" = "scripts/xbackend_diff.baseline" ] ||
-      { echo "  FAIL: the baseline commit changes more than the baseline: $B_PATHS"; o_fail=1; }
-    [ "$o_fail" = 0 ] || { verdict "NOT LANDABLE — the baseline commit failed its shape checks"; exit 1; }
-    echo "  baseline commit $B: scripts/xbackend_diff.baseline alone, moved by paths+$NEWP rows+$NEWR"
-    PUBLISH="$B"
-  fi
 fi
 
+# --- PHASE 6c — the xbackend baseline follows every landing that added coverage (#1383) -----------
+## The gate held the line on existing paths and reported what it newly covered. Once this lands those
+## paths ARE existing, so a baseline that did not move would refuse the NEXT landing on rows this one
+## legitimately added: every gate on main red on the ratchet alone, which is what #1309's landing did.
+## The landing owns the move, oracle or not; the PR cannot (PHASE 2 refuses it, #1019). The numbers
+## are the gate's own line (full.sh's target/full_xbackend.log of THIS gate), and the commit sits on
+## the object the gate's verdict covers: the merge, or its one-file oracle commit.
+XB_GATE_LOG="$ROOT/target/full_xbackend.log"
+[ -f "$XB_GATE_LOG" ] && [ "$XB_GATE_LOG" -nt "$GATE_STAMP" ] ||
+  { verdict "NOT LANDABLE — the gate left no fresh $XB_GATE_LOG; what it newly covered is unknown"; exit 1; }
+XB_OUT="$(xb_follow "$PUBLISH" "$XB_GATE_LOG" "$PR")"; xb_rc=$?
+XB_C="$(printf '%s\n' "$XB_OUT" | sed -n 's/^xbackend-follow: commit \([0-9a-f]\{40\}\) .*$/\1/p')"
+if [ "$xb_rc" != 0 ] || { [ -z "$XB_C" ] && [ "$(printf '%s\n' "$XB_OUT" | tail -n 1)" != 'xbackend-follow: none' ]; }; then
+  printf '%s\n' "$XB_OUT"
+  verdict "NOT LANDABLE — the xbackend baseline commit failed its checks; $PUBLISH left detached"
+  exit 1
+fi
+if [ -n "$XB_C" ]; then
+  say "PHASE 6c — the xbackend baseline moves by the coverage this gate added"
+  printf '%s\n' "$XB_OUT"
+  git switch --quiet --detach "$XB_C" || die "could not move to the baseline commit $XB_C"
+  echo "  baseline commit $XB_C: $XB_BASELINE alone, on $PUBLISH"
+  XB_PARENT="$PUBLISH"; PUBLISH="$XB_C"
+else
+  XB_PARENT=""
+fi
+XB_COV="$(xb_follow_coverage "$(xb_follow_gate_line "$XB_GATE_LOG")")"
+xb_follow_publish_ok ${XB_COV% *} ${XB_COV#* } "${XB_PARENT:-$PUBLISH}" "$PUBLISH" "$(git rev-parse "$PUBLISH^" 2>/dev/null)" ||
+  { verdict "NOT LANDABLE — the object to publish does not carry the gate's coverage"; exit 1; }
+
 verdict "GATE GREEN on the merged tree — $PUBLISH is landable"
-[ "$PUBLISH" != "$M" ] && echo "  ($PUBLISH = gated merge $M + its predicted one-file oracle commit)"
+[ "$PUBLISH" != "$M" ] && echo "  ($PUBLISH = gated merge $M + its one-file tail: the predicted oracle and/or the xbackend baseline commit)"
 cat <<EOF
 
 Publish EXACTLY this object. The lease is the integrator token: it fails, server-side, if main moved

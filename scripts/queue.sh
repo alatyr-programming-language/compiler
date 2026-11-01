@@ -18,11 +18,11 @@
 # - A pass (`--once`) takes up to ALATYR_QUEUE_MAX (4) queued PRs in PR-number order. Each must target
 #   `main`, be ready (not draft, no `hold`), carry exactly one line-initial relation marker, and pass
 #   `land.sh N --screen` (preconditions, provenance, PR shape; forks refused) on its reviewed head.
-# - A PR that carries an oracle file or a predicted delta is gated alone by `land.sh N` (its PHASE 6a/6c
-#   own that path), as alatyr-integrate §3 requires. A delta made stale by another landing is rebased by
-#   land.sh itself (#1264), at the screen and again in the solo landing, whose gate runs on the merge
-#   that carries the rebased copy. That solo landing walks the corpus alone first (land.sh PHASE 3b),
-#   and a rebased delta the walk does not realise is `red` without a full gate; the queue needs nothing
+# - A PR that carries an oracle file or a predicted delta is gated alone by `land.sh N` (its PHASE 6a
+#   owns that path, and its PHASE 6c the baseline commit on it), as alatyr-integrate §3 requires.
+#   A delta made stale by another landing is rebased by land.sh itself (#1264), at the screen and
+#   again in the solo landing, whose gate runs on the merge that carries the rebased copy. That solo
+#   landing walks the corpus alone first (land.sh PHASE 3b), and a rebased delta the walk does not realise is `red` without a full gate; the queue needs nothing
 #   else of its own for it. So is a PR that conflicts with main only in CHANGELOG.md (and the delta):
 #   the screen says solo=yes, and land.sh PHASE 3 settles that file (#1312). So, too, is a PR whose
 #   clean merge would file a CHANGELOG.md line under a release heading: PHASE 3 moves it (#1319). The
@@ -32,8 +32,14 @@
 #   conflict with the member that landed takes the solo path.
 # - The composed object is gated once by `full.sh`. Green: it is pushed exactly, with
 #   `--force-with-lease` on the base it was built on, and every member gets an acceptance comment.
+#   When the gate's `xbackend diff:` line reports `new-paths=N new-rows=M` above zero, the pushed object
+#   is the gated one plus ONE commit moving scripts/xbackend_diff.baseline by exactly N and M, made and
+#   checked by the base's `land.sh --xbackend-follow` (its PHASE 6c, #1383) and naming every member;
+#   without it every next gate on main would be red on the ratchet alone. Zero coverage, no commit.
 #   Red: the set is bisected — its first half is gated alone, recursively — so a red PR is isolated
-#   and marked `queue-failed` with its log tail, while the PRs that are green land.
+#   and marked `queue-failed` with its log tail, while the PRs that are green land. Every refusal and
+#   `queue-failed` relabel also writes one `#N refused at <stage> on <sha8>: <reason>` line to queue.log
+#   (#1368).
 # - A failure that is not the PR's (provenance of main, a fetch, the tree moving, a busy box) ends the
 #   pass and changes no label: the PRs stay queued for the next one.
 #
@@ -70,6 +76,9 @@ DRY="${ALATYR_QUEUE_DRY:-0}"
 QDIR="$ROOT/target/queue"
 
 say() { printf '%s queue: %s\n' "$(date -u +%FT%TZ)" "$*"; }
+## Every refusal and every queue-failed relabel also leaves a queue.log line (#1368), so the log alone
+## gives each PR's verdict on its head; the PR comment carries the detail.
+refused() { say "#$1 refused at $2 on ${3:0:8}: $4"; } # pr stage head reason
 die() { printf 'queue: %s\n' "$*" >&2; exit 2; }
 prs_h() { printf '#%s ' "$@" | sed 's/ $//'; }
 
@@ -143,6 +152,20 @@ queue_solo_outcome() { # log
 ## The push of a gated object: that object, onto main, leased on the base it was composed on, hooks off.
 queue_push_args() { # object base
   printf '%s\n' "--no-verify origin $1:refs/heads/main --force-with-lease=refs/heads/main:$2"
+}
+
+## What `land.sh --xbackend-follow` (#1383) said the batch must publish. Prints the object: the gated
+## one when the gate added no coverage (`xbackend-follow: none`), the baseline commit when it did; fails
+## on anything else — a refusal, no verdict line, two, or an abbreviated sha. The queue then re-checks
+## that commit's parent and file set itself before pushing it.
+queue_follow_object() { # land-output gated-object -> object; 1 none decidable
+  local last c
+  last="$(printf '%s\n' "$1" | grep '^xbackend-follow: ')"
+  [ "$(printf '%s\n' "$last" | grep -c .)" = 1 ] || return 1
+  [ "$last" = 'xbackend-follow: none' ] && { echo "$2"; return 0; }
+  c="$(printf '%s\n' "$last" | sed -n 's/^xbackend-follow: commit \([0-9a-f]\{40\}\) paths+[0-9][0-9]* rows+[0-9][0-9]*$/\1/p')"
+  [ -n "$c" ] && [ "$c" != "$2" ] || return 1
+  echo "$c"
 }
 
 ## Is a full gate running on this box? Input: `ps -eo args=`. Only a bash running scripts/full.sh
@@ -255,6 +278,13 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   rm -rf "$t"
   [ "$(queue_push_args "$a" "$b")" = "--no-verify origin $a:refs/heads/main --force-with-lease=refs/heads/main:$b" ]
   _ck $? push-arguments-are-not-the-leased-exact-object
+  # The batch's xbackend baseline commit (#1383): coverage publishes the commit, none the gated object.
+  [ "$(queue_follow_object "$(printf '  the gate: x\nxbackend-follow: none')" "$a")" = "$a" ]; _ck $? follow-zero-coverage-did-not-publish-the-gated-object
+  [ "$(queue_follow_object "xbackend-follow: commit $b paths+2 rows+6" "$a")" = "$b" ]; _ck $? follow-coverage-did-not-publish-the-baseline-commit
+  ! queue_follow_object "$(printf '  REFUSE: the baseline commit changes {a b}\n')" "$a" >/dev/null; _ck $? follow-took-a-refusal-as-a-verdict
+  ! queue_follow_object "$(printf 'xbackend-follow: none\nxbackend-follow: commit %s paths+1 rows+1' "$b")" "$a" >/dev/null; _ck $? follow-took-two-verdicts
+  ! queue_follow_object "xbackend-follow: commit ${b:0:12} paths+1 rows+1" "$a" >/dev/null; _ck $? follow-took-an-abbreviated-commit
+  ! queue_follow_object "xbackend-follow: commit $a paths+1 rows+1" "$a" >/dev/null; _ck $? follow-took-the-gated-object-as-its-own-baseline-commit
   queue_gate_running "bash scripts/full.sh --force-sweeps"; _ck $? busy-box-missed-a-relative-gate
   queue_gate_running "$(printf 'vim x\n/run/current-system/sw/bin/bash /h/c/scripts/full.sh')"; _ck $? busy-box-missed-an-absolute-gate
   queue_gate_running "$(printf "ssh omen-wan cd c && bash scripts/full.sh\nvim scripts/full.sh\nbash -c tail scripts/full.sh")"
@@ -289,8 +319,8 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   unset -f queue_try queue_land queue_fail
   if [ -n "$bad" ]; then echo "*** queue self-test: FAILED —$bad ***"; return 1; fi
   echo "ok   queue self-test: $k checks — reviewed-head marker, entry rules, head check, gate verdict,"
-  echo "     push arguments, busy box and the bisection plan"
-  [ "$k" -ge 49 ] || { echo "queue self-test: $k checks, expected 49"; return 1; }
+  echo "     push arguments, the xbackend baseline commit, busy box and the bisection plan"
+  [ "$k" -ge 55 ] || { echo "queue self-test: $k checks, expected 55"; return 1; }
 }
 
 # ---- GitHub ------------------------------------------------------------------------------------------
@@ -381,6 +411,7 @@ queue_accept() { # how object base log PR...
 - reviewed head: \`${HEAD[$pr]}\` (the \`queue-head\` marker; the object gated)
 - members: $(prs_h "$@"), composed onto \`$base\`; \`main\` is now \`$obj\`
 - gate on omen, on that exact object: \`$(gate_line "$log")\` (log \`$(basename "$log")\` under \`target/queue/\` on omen)
+$(git diff --quiet "$obj^" "$obj" -- scripts/xbackend_diff.baseline 2>/dev/null || echo "- xbackend baseline: \`$obj\` moves it by the gate's newly covered paths and rows, alone, on the gated object (#1383)")
 - check: \`git merge-base --is-ancestor $obj origin/main\`
 ${LINK[$pr]:+- issue: ${LINK[$pr]}}"
     relabel "$pr" "" queue
@@ -401,15 +432,36 @@ queue_publish() { # object base -> 0 pushed, 1 not
   say "LANDED $1"
 }
 
-queue_land() { # PR... — publish exactly BUILT
+## The batch's xbackend baseline commit (#1383): land.sh PHASE 6c, run from the BASE's copy of
+## land.sh (the checkout moves to the base first; the batch's own scripts never run outside the gate),
+## on the gated object, from the gate's own log. Prints the object to publish.
+queue_follow() { # PR...
+  local out obj
+  [ "$DRY" = screen ] && { echo "$BUILT"; return 0; }
+  git switch --quiet --detach "$BUILT_BASE" || return 1
+  out="$(env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/land.sh --xbackend-follow "$BUILT" "$GATE_LOG" "$@" 2>&1 9>&-)"
+  printf '%s\n' "$out" | sed 's/^/  /' >&2
+  obj="$(queue_follow_object "$out" "$BUILT")" || return 1
+  if [ "$obj" != "$BUILT" ]; then
+    [ "$(git rev-parse "$obj^")" = "$BUILT" ] && [ "$(git rev-list --parents -n 1 "$obj" | wc -w | tr -d ' ')" = 2 ] &&
+      [ "$(git diff --name-only "$BUILT" "$obj")" = scripts/xbackend_diff.baseline ] || return 1
+  fi
+  echo "$obj"
+}
+
+queue_land() { # PR... — publish exactly BUILT, or BUILT plus its one-file xbackend baseline commit
   [ "$BUILT_FOR" = "$*" ] || die "internal: asked to land [$*] but built [$BUILT_FOR]"
-  queue_publish "$BUILT" "$BUILT_BASE" || return 1
-  queue_accept "batch" "$BUILT" "$BUILT_BASE" "$GATE_LOG" "$@"
+  local obj
+  obj="$(queue_follow "$@")" ||
+    { say "the xbackend baseline commit on $BUILT failed its checks (#1383); nothing pushed, this pass ends"; return 1; }
+  [ "$obj" != "$BUILT" ] && say "xbackend baseline commit $obj on the gated $BUILT"
+  queue_publish "$obj" "$BUILT_BASE" || return 1
+  queue_accept "batch" "$obj" "$BUILT_BASE" "$GATE_LOG" "$@"
 }
 
 queue_fail() { # PR
   local pr="$1"
-  say "#$pr isolated as red"
+  refused "$pr" gate "${HEAD[$pr]}" "red, isolated ($(gate_line "$GATE_LOG"))"
   comment "$pr" "**Merge queue: red** on head \`${HEAD[$pr]}\` (\`scripts/queue.sh\`, #1127).
 
 Gated alone on \`$BUILT_BASE\` as \`$BUILT\`: \`$(gate_line "$GATE_LOG")\`. Log \`$(basename "$GATE_LOG")\` under \`target/queue/\` on omen; its failing lines:
@@ -440,7 +492,8 @@ queue_compose_screen() { # PR...
     git merge-tree --write-tree "$base" "refs/remotes/pr/$pr" >/dev/null 2>&1; mt=$?
     case "$mt" in
       0) say "#$pr conflicts with an earlier member of this batch; it waits for the next pass" ;;
-      1) comment "$pr" "**Merge queue: conflicts with main** on head \`${HEAD[$pr]}\`. Rebase onto \`$base\` and re-enqueue after review."
+      1) refused "$pr" compose "${HEAD[$pr]}" "conflicts with main $base"
+         comment "$pr" "**Merge queue: conflicts with main** on head \`${HEAD[$pr]}\`. Rebase onto \`$base\` and re-enqueue after review."
          relabel "$pr" queue-failed queue ;;
       *) say "git merge-tree failed (rc $mt) on #$pr; it waits for the next pass" ;;
     esac
@@ -448,8 +501,9 @@ queue_compose_screen() { # PR...
   git switch --quiet --detach "$base"
 }
 
-## A PR with an oracle file or a predicted delta is gated alone by land.sh, whose PHASE 6a/6c own that
-## path, on exactly the reviewed head. The queue pushes the object land.sh names; land.sh never pushes.
+## A PR with an oracle file or a predicted delta is gated alone by land.sh, whose PHASE 6a owns that
+## path (and PHASE 6c the xbackend baseline commit on any landing), on exactly the reviewed head.
+## The queue pushes the object land.sh names; land.sh never pushes.
 queue_solo() { # pr -> 0 done (landed, failed or dropped), 2 the pass ends
   local pr="$1" log="$QDIR/solo-$1-$(date -u +%Y%m%dT%H%M%S).log" out obj
   if [ "$DRY" = screen ]; then say "(dry=screen) #$pr would be landed alone"; return 0; fi
@@ -472,6 +526,7 @@ queue_solo() { # pr -> 0 done (landed, failed or dropped), 2 the pass ends
       queue_accept "alone, through land.sh" "$obj" "$BUILT_BASE" "$log" "$pr" ;;
     red) queue_strike_clear "$QDIR" "$pr=${HEAD[$pr]}"; queue_fail "$pr" ;;
     refused)
+      refused "$pr" solo "${HEAD[$pr]}" "$(grep -m1 -E 'REFUSE|^\*\*\* LAND REFUSED' "$log" | sed 's/^ *//')"
       comment "$pr" "**Merge queue: refused** on head \`${HEAD[$pr]}\` before any gate ran (\`land.sh $pr\`, solo). Its verdict lines:
 
 \`\`\`
@@ -479,10 +534,12 @@ $(grep -E '^\*\*\* |REFUSE' "$log" | tail -n 15)
 \`\`\`"
       relabel "$pr" queue-failed queue ;;
     moved)
+      refused "$pr" solo "${HEAD[$pr]}" "dropped: the head moved past the reviewed one"
       comment "$pr" "**Merge queue: dropped.** The head moved past the reviewed \`${HEAD[$pr]}\` before its solo gate. Review the current head and re-enqueue."
       relabel "$pr" "" queue ;;
     *) if [ "$(queue_strike "$QDIR" "$pr=${HEAD[$pr]}")" -ge 2 ]; then
          queue_strike_clear "$QDIR" "$pr=${HEAD[$pr]}"
+         refused "$pr" solo "${HEAD[$pr]}" "stopped twice without a verdict"
          comment "$pr" "**Merge queue: stopped twice** on head \`${HEAD[$pr]}\` without a verdict that blames this PR, so it leaves the queue rather than block it. Last verdict lines (\`$(basename "$log")\` under \`target/queue/\` on omen):
 
 \`\`\`
@@ -510,6 +567,7 @@ queue_once() {
     head="$(pr_field "$pr" headRefOid .headRefOid)" && [ -n "$head" ] &&
       marker="$(pr_marker "$pr")" || { say "could not read #$pr from GitHub; this pass ends"; return 0; }
     if ! queue_head_ok "$marker" "$head"; then
+      refused "$pr" marker "$head" "dropped: the reviewed head is ${marker:-none}"
       comment "$pr" "**Merge queue: dropped.** The reviewed head is \`${marker:-none}\`; the current head is \`$head\`. A verdict covers one object: review the current head and re-enqueue (\`scripts/queue.sh --enqueue $pr=<reviewed sha>\`)."
       relabel "$pr" "" queue; continue
     fi
@@ -519,6 +577,7 @@ queue_once() {
       body="$(pr_field "$pr" body .body)" || { say "could not read #$pr from GitHub; this pass ends"; return 0; }
     why="$(queue_entry_refusal "$base" "$draft" "$labels" "$body")"
     if [ -n "$why" ]; then
+      refused "$pr" entry "$head" "$why"
       comment "$pr" "**Merge queue: refused** on head \`$head\`: $why."
       relabel "$pr" queue-failed queue; continue
     fi
@@ -526,6 +585,7 @@ queue_once() {
     shead="$(printf '%s\n' "$out" | sed -n 's/^land-screen: pr=[0-9]* head=\([0-9a-f]*\) .*$/\1/p')"
     if [ "$rc" != 0 ] || ! queue_head_ok "$head" "$shead"; then
       if printf '%s\n' "$out" | grep -q -e '^\*\*\* LAND REFUSED (PR shape)' -e '^\*\*\* LAND REFUSED (screen)'; then
+        refused "$pr" screen "$head" "$(printf '%s\n' "$out" | grep -m1 -E 'REFUSE|^\*\*\* ' | sed 's/^ *//')"
         comment "$pr" "**Merge queue: refused at the screen** on head \`$head\` (\`land.sh $pr --screen\`):
 
 \`\`\`
@@ -540,6 +600,7 @@ $(printf '%s\n' "$out" | tail -n 25)
     HEAD[$pr]="$head"
     LINK[$pr]="$(queue_relation_link "$body")"
     if [ "$(printf '%s\n' "$out" | sed -n 's/^land-screen: .* link=\(.*\)$/\1/p')" != "${LINK[$pr]}" ]; then
+      refused "$pr" link "$head" "the line-initial marker ${LINK[$pr]} is not land.sh's link"
       comment "$pr" "**Merge queue: refused** on head \`$head\`: the body's line-initial marker is \`${LINK[$pr]}\`, but land.sh reads the first relation anywhere in the title and body as another issue. Remove the other mention, or reword it, and re-enqueue."
       relabel "$pr" queue-failed queue; continue
     fi
