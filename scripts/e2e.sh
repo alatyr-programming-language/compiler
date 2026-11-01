@@ -11132,6 +11132,11 @@ run issue354_vec_reserve_overflow 42
 ## alloc::deque — a double-ended queue (ring buffer): push/pop both ends, wrap-around, growth (cap 2
 ## → forced doubling + re-linearize), front/back/dq_at reads.
 run deque_ops 42
+## #1302 — a multi-word enum or struct element read back through a generic container instance
+## (`vec::get` at `Option(u64)`, deque `pop_front`/`pop_back` and hashmap `get` at a struct, a
+## multi-payload enum and `Option(u64)`) kept one word. NON-VACUOUS: on the parent `1262da5d` (x86_64)
+## the fixture stops with SIGSEGV (rc 139).
+run issue1302_container_elem_enum 42
 ## alloc::oset — an ordered set (sorted array): insert keeps it sorted + duplicate-free via a caller
 ## `less` comparator (binary search + tail byte-shift, growth), contains (O(log n)), sorted as_slice.
 run oset_ops 42
