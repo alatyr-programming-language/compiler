@@ -62,7 +62,8 @@
 # do not rebuild its own result. PHASE 3 puts that rebased copy into the merge commit. Every delta PR
 # edits the one `-merge` file, so PHASE 3 settles a conflict there; it also settles CHANGELOG.md when
 # both sides only added `## Unreleased` bullets, or main opened a release heading there (#1312), and
-# refuses every other conflict. The merge message says so, and the PR's branch is never rewritten. The rebased rows are a hypothesis about main's code, not
+# refuses every other conflict; on a clean merge too, a line the PR added that git filed under a release
+# heading moves back to `## Unreleased` (#1319). The merge message says so, and the PR's branch is never rewritten. The rebased rows are a hypothesis about main's code, not
 # a fact (#1215), so PHASE 3b walks the corpus alone on the merge and refuses there when the walk does
 # not realise them. The gate then reads the rebased delta as the merged tree's own file, and PHASE 6a
 # commits what it realised.
@@ -412,6 +413,97 @@ land_changelog_merge() {
   printf '.\n'
 }
 
+## A CLEAN CHANGELOG.md merge can misfile too (#1319): over a seed promotion that opened a release
+## heading under `## Unreleased`, git puts a PR's added bullet where the old Unreleased content was,
+## now under the release. This compares main's file with the merged one. Every run of lines the merge
+## inserted (`diff` "a" hunks: the PR's additions) that sits under a release heading (`## X.Y.Z`) moves
+## to the end of `## Unreleased`, its leading and trailing blank lines dropped. Lines under the policy
+## headings above `## Unreleased` are the policy's own text and stay. A rewrite of a released line
+## (a "c" hunk that adds no line) stays where it is: it edits that entry. Refused (1, stderr): a hunk
+## under a release that rewrites lines and adds more, an inserted release heading, or no `## Unreleased`
+## to move to. Writes the file to stdout and `<runs moved>` then each heading moved from to <summary>.
+land_changelog_relocate() { # main-file merged-file summary-file
+  [ -f "$1" ] && [ -f "$2" ] || return 1
+  awk -v sum="$3" '
+    function isrel(s) { return s ~ /^## [0-9]+\.[0-9]+\.[0-9]+([^0-9]|$)/ }
+    function fail(m)  { print "CHANGELOG.md: " m > "/dev/stderr"; bad = 1; exit 1 }
+    FILENAME == ARGV[1] {
+      if ($0 !~ /^[0-9]+(,[0-9]+)?[acd][0-9]+(,[0-9]+)?$/) next
+      match($0, /[acd]/); op = substr($0, RSTART, 1)
+      nl = split(substr($0, 1, RSTART - 1), la, ","); nr = split(substr($0, RSTART + 1), ra, ",")
+      del = (nl == 2) ? la[2] - la[1] + 1 : 1; r1 = ra[1] + 0; r2 = (nr == 2) ? ra[2] + 0 : r1
+      if (op == "a") { run++; for (i = r1; i <= r2; i++) RUN[i] = run }
+      else if (op == "c" && r2 - r1 + 1 > del) for (i = r1; i <= r2; i++) GROW[i] = 1
+      next
+    }
+    { L[++n] = $0 }
+    END {
+      if (bad) exit 1
+      sec = ""
+      for (i = 1; i <= n; i++) {
+        s = L[i]
+        if (s ~ /^## /) { if ((i in RUN) && isrel(s)) fail("line " i ": the PR adds the release heading \"" s "\"; place it by hand"); sec = s; continue }
+        if (!isrel(sec)) continue
+        if ((i in GROW) && s != "") fail("line " i ": under \"" sec "\" the PR rewrites lines and adds more; place them by hand")
+        if (i in RUN) { DROP[i] = 1; if (s != "") { HAS[RUN[i]] = 1; if (!(sec in FROM)) { FROM[sec] = 1; from[++nf] = sec } } }
+      }
+      for (i = 1; i <= n; i++) if ((i in DROP) && !(RUN[i] in HAS)) delete DROP[i]
+      for (i = 1; i <= n; i++) if (i in DROP) {
+        r = RUN[i]; if (r != last) { nruns++; last = r; lead = 1; pend = 0 }
+        if (L[i] == "") { if (!lead) pend++; continue }
+        for (; pend > 0; pend--) mv[++m] = ""
+        lead = 0; mv[++m] = L[i]
+      }
+      st = 0
+      for (i = 1; i <= n; i++) {
+        if (i in DROP) continue
+        s = L[i]
+        if (st == 1 && s ~ /^## /) { flush(1); st = 2 }
+        if (st == 1) { if (s == "") nb++; else { for (; nb > 0; nb--) print ""; print s; content = 1 }; continue }
+        print s
+        if (st == 0 && s ~ /^## Unreleased[[:space:]]*$/) { st = 1; nb = 0; content = 0 }
+      }
+      if (st == 1) flush(0)
+      if (st == 0 && m > 0) fail("no ## Unreleased heading to move the PR'"'"'s lines under")
+      print nruns + 0 > sum
+      for (j = 1; j <= nf; j++) print from[j] > sum
+    }
+    function flush(more,   j) {
+      if (m > 0 && !content) print ""
+      for (j = 1; j <= m; j++) print mv[j]
+      if (m > 0 && more && nb == 0) nb = 1
+      for (; nb > 0; nb--) print ""
+    }' <(diff "$1" "$2") "$2"
+}
+## Applies land_changelog_relocate to the merge in progress (index against HEAD), stages the result,
+## and prints the sentence the merge message carries; prints nothing when no line moved. 1: refused.
+land_changelog_place() {
+  local d n
+  git cat-file -e HEAD:CHANGELOG.md 2>/dev/null && git cat-file -e :CHANGELOG.md 2>/dev/null || return 0
+  git diff --cached --quiet HEAD -- CHANGELOG.md && return 0
+  d="$(git rev-parse --absolute-git-dir)/land-changelog-place" && rm -rf "$d" && mkdir -p "$d" || return 1
+  git show HEAD:CHANGELOG.md > "$d/main" && git show :CHANGELOG.md > "$d/merged" &&
+    land_changelog_relocate "$d/main" "$d/merged" "$d/sum" > "$d/out" || { rm -rf "$d"; return 1; }
+  n="$(head -n 1 "$d/sum")"
+  if [ "$n" -gt 0 ]; then
+    cp "$d/out" CHANGELOG.md && git add -- CHANGELOG.md || { rm -rf "$d"; return 1; }
+    printf 'CHANGELOG.md: %s run(s) the PR added landed under a release heading, and scripts/land.sh\nmoved them to the end of ## Unreleased (#1319). Moved from: %s.\n' \
+      "$n" "$(sed 1d "$d/sum" | paste -sd ';' - | sed 's/;/; /g')"
+  fi
+  rm -rf "$d"
+}
+## Would a clean merge of <pr> into <base> file a line the PR adds under a release heading? The screen
+## sends such a PR alone, where PHASE 3 moves it or refuses (#1319); the queue's batch merges never do.
+land_changelog_misfiled() { # base pr
+  local tree d n
+  tree="$(git merge-tree --write-tree --no-messages "$1" "$2" 2>/dev/null)" || return 1
+  git cat-file -e "$1:CHANGELOG.md" 2>/dev/null && git cat-file -e "$tree:CHANGELOG.md" 2>/dev/null || return 1
+  d="$(git rev-parse --absolute-git-dir)/land-changelog-screen" && rm -rf "$d" && mkdir -p "$d" || return 1
+  git show "$1:CHANGELOG.md" > "$d/main" && git show "$tree:CHANGELOG.md" > "$d/merged" &&
+    land_changelog_relocate "$d/main" "$d/merged" "$d/sum" > /dev/null 2>&1 || { rm -rf "$d"; return 0; }
+  n="$(head -n 1 "$d/sum")"; rm -rf "$d"; [ "${n:-0}" -gt 0 ]
+}
+
 ## Does merging <pr> into <base> conflict in CHANGELOG.md and, besides it, at most in the delta file?
 ## The screen's question: such a PR is landed alone, where PHASE 3 settles those two (#1312).
 land_changelog_only_conflict() { # base pr
@@ -429,11 +521,13 @@ land_changelog_only_conflict() { # base pr
 ## rebase when it was stale), and the merge carries it: on a conflict there it takes that side, and on a
 ## clean merge whose copy differs, it replaces that copy. A conflicted CHANGELOG.md is settled by
 ## land_changelog_merge, or refused (#1312). Any other conflicted path aborts the merge, as before.
+## Then, conflict or not, land_changelog_place moves a line the PR added under a release heading to
+## `## Unreleased`, or refuses (#1319).
 ## <note> goes into the merge message whenever the delta was written, so the merge commit says why its
-## delta differs from the PR's; the CHANGELOG sentence goes there whenever that file was settled.
+## delta differs from the PR's; each CHANGELOG sentence goes there whenever that file was settled or moved.
 ##   0  merged (HEAD is the merge commit)    1  a conflict this does not resolve (merge aborted)
 land_merge_pr() { # pr-ref subject link landing-delta|'' note
-  local ref="$1" subj="$2" link="$3" ld="$4" note="$5" unmerged wrote=0 msg p clnote=''
+  local ref="$1" subj="$2" link="$3" ld="$4" note="$5" unmerged wrote=0 msg p clnote='' plnote
   if ! git merge --no-ff --no-commit --no-verify "$ref" >/dev/null 2>&1; then
     unmerged="$(git diff --name-only --diff-filter=U)"
     [ -n "$unmerged" ] || { git merge --abort 2>/dev/null; return 1; }
@@ -451,6 +545,10 @@ land_merge_pr() { # pr-ref subject link landing-delta|'' note
       printf '%s\n' "$clnote" | sed 's/^/  /'
     fi
   fi
+  plnote="$(land_changelog_place)" || {
+    echo "  CHANGELOG.md: the PR adds lines under a release heading in a shape scripts/land.sh does not move (above)"
+    git merge --abort 2>/dev/null; return 1; }
+  [ -z "$plnote" ] || printf '%s\n' "$plnote" | sed 's/^/  /'
   if [ -n "$ld" ] && { [ -n "$(git diff --name-only --diff-filter=U)" ] || ! cmp -s "$ld" "$DELTA_REL"; }; then
     cp "$ld" "$DELTA_REL" && git add -- "$DELTA_REL" || { git merge --abort 2>/dev/null; return 1; }
     wrote=1
@@ -462,6 +560,9 @@ $note"
   [ -n "$clnote" ] && msg="$msg
 
 $clnote"
+  [ -n "$plnote" ] && msg="$msg
+
+$plnote"
   [ -n "$link" ] && msg="$msg
 
 $link"
@@ -516,7 +617,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=119  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312
+LAND_SELFTEST_EXPECTED=124  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -843,6 +944,44 @@ Not a bullet.
   ( cd "$gc" && land_changelog_only_conflict t1 d2 ) >/dev/null 2>&1; _ck $? screen-missed-a-changelog-only-conflict
   ( cd "$gc" && ! land_changelog_only_conflict t1 sx && ! land_changelog_only_conflict b0 d2 ) >/dev/null 2>&1
   _ck $? screen-sent-alone-a-source-conflict-or-a-clean-merge
+
+  # ---- 5e · a CLEAN CHANGELOG.md merge over a promotion still files the PR's bullet under
+  #      `## Unreleased` (#1319). u0 has one Unreleased bullet; ua adds one below it; up promotes u0's
+  #      bullet into 0.2.0. Git merges ua over up cleanly, with `- b` under 0.2.0.
+  local gu="$st/gu"
+  ( set -e
+    git init --quiet -b u0 "$gu"; cd "$gu"
+    git config user.name t; git config user.email t@t; git config commit.gpgsign false; git config core.hooksPath /dev/null
+    printf '# C\n\n## Policy\n\ntext\n\n## Unreleased\n\n- a\n\n## 0.1.0 — d\n\n- old\n' > CHANGELOG.md
+    git add -A; git commit --quiet -m base
+    git switch --quiet -c ua u0; sed 's/^- a$/- a\
+- b/' CHANGELOG.md > c.tmp; mv c.tmp CHANGELOG.md; git commit --quiet -am ua
+    git switch --quiet -c uw u0; sed 's/^- old$/- old (fixed)/; s/^text$/text, edited/' CHANGELOG.md > c.tmp; mv c.tmp CHANGELOG.md; git commit --quiet -am uw
+    git switch --quiet -c ug u0; sed 's/^- old$/- old (fixed)\
+- more/' CHANGELOG.md > c.tmp; mv c.tmp CHANGELOG.md; git commit --quiet -am ug
+    git switch --quiet -c up u0
+    awk '/^## Unreleased$/ { print; print ""; print "## 0.2.0 — e"; next } { print }' CHANGELOG.md > c.tmp
+    mv c.tmp CHANGELOG.md; git commit --quiet -am promote
+    [ "$(git merge-tree --write-tree up ua | wc -l | tr -d ' ')" = 1 ] ) >/dev/null 2>&1
+  _ck $? selftest-could-not-build-a-clean-changelog-merge-over-a-promotion
+  ( cd "$gu" && git switch --quiet --detach up && land_merge_pr ua 'merge #5: ua' '' '' '' &&
+    [ "$(git show HEAD:CHANGELOG.md | tr '\n' '|')" = '# C||## Policy||text||## Unreleased||- b||## 0.2.0 — e||- a||## 0.1.0 — d||- old|' ] &&
+    git log -1 --format=%B HEAD | grep -q 'moved them to the end of ## Unreleased (#1319). Moved from: ## 0.2.0 — e.' ) >/dev/null 2>&1
+  _ck $? clean-merge-filed-the-PR-bullet-under-the-release-it-merged-over
+  ( cd "$gu" && git switch --quiet --detach u0 && land_merge_pr ua 'merge #6: ua' '' '' '' &&
+    [ "$(git show HEAD:CHANGELOG.md | tr '\n' '|')" = '# C||## Policy||text||## Unreleased||- a|- b||## 0.1.0 — d||- old|' ] &&
+    ! git log -1 --format=%B HEAD | grep -q '#1319' &&
+    git switch --quiet --detach up && land_merge_pr uw 'merge #7: uw' '' '' '' &&
+    [ "$(git show HEAD:CHANGELOG.md | tr '\n' '|')" = '# C||## Policy||text, edited||## Unreleased||## 0.2.0 — e||- a||## 0.1.0 — d||- old (fixed)|' ] &&
+    ! git log -1 --format=%B HEAD | grep -q '#1319' ) >/dev/null 2>&1
+  _ck $? changelog-move-touched-an-Unreleased-bullet-a-policy-edit-or-a-released-line-rewrite
+  ( cd "$gu" && git switch --quiet --detach up && b="$(git rev-parse HEAD)" && ! land_merge_pr ug 'merge #8: ug' '' '' '' &&
+    [ "$(git rev-parse HEAD)" = "$b" ] && ! git rev-parse -q --verify MERGE_HEAD &&
+    [ -z "$(git status --porcelain --untracked-files=no)" ] ) >/dev/null 2>&1
+  _ck $? merge-kept-a-rewrite-under-a-release-that-adds-a-line
+  ( cd "$gu" && land_changelog_misfiled up ua && ! land_changelog_misfiled u0 ua && ! land_changelog_misfiled up uw &&
+    land_changelog_misfiled up ug ) >/dev/null 2>&1
+  _ck $? screen-batched-a-PR-whose-clean-changelog-merge-misfiles
 
   # ---- 5c · PHASE 3b: a rebased delta is walked alone before the full gate; a live one is not. ----
   land_prewalk_needed aaaa; _ck $? prewalk-skipped-for-a-rebased-delta
@@ -1192,6 +1331,9 @@ if [ "$DO_SCREEN" = 1 ]; then
   ## main only in CHANGELOG.md lands alone, through PHASE 3, which settles it (#1312).
   if [ "$SOLO" = no ] && land_changelog_only_conflict "$BASE" "$HEAD_SHA"; then
     SOLO=yes; echo "  CHANGELOG.md conflicts with main and nothing else does: solo, so PHASE 3 settles it"
+  fi
+  if [ "$SOLO" = no ] && land_changelog_misfiled "$BASE" "$HEAD_SHA"; then
+    SOLO=yes; echo "  a clean merge files a CHANGELOG.md line under a release heading: solo, so PHASE 3 moves it (#1319)"
   fi
   [ "$IS_FORK" = no ] || { verdict "LAND REFUSED (screen) — a fork PR is landed by hand, never by the queue"; exit 1; }
   echo "land-screen: pr=$PR head=$HEAD_SHA solo=$SOLO link=$ISSUE_LINK"

@@ -537,7 +537,10 @@ Then run `scripts/land.sh <pr>`. Every step is a check that stops on failure:
   another landing needs no rebase (#1312): `scripts/corpus.expected-delta` takes the PR's side (PHASE 2
   decided it live or rebased), and `CHANGELOG.md` keeps both `## Unreleased` bullet runs, main's
   first, or, when the two sides conflict there, puts the PR's run above a release heading main's side
-  opened (a clean merge over a promotion is #1319). Any other CHANGELOG shape (a rewritten line, a
+  opened. On every merge, clean or not, a run of lines the PR added that git filed under a release
+  heading (a clean merge over a promotion does that) moves to the end of `## Unreleased` (#1319); an
+  added release heading, or a released line rewritten together with an addition, is refused, and the
+  screen sends such a PR solo. Any other CHANGELOG shape (a rewritten line, a
   non-bullet addition, a hunk outside `## Unreleased`, a conflict-marker-like line in the base, main
   or the PR version) and any other conflicted path is `LAND REFUSED (the merge conflicts)`. The merge
   message records the resolution, and the gate runs on that merge. The queue sends a PR that
