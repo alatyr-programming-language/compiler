@@ -6840,6 +6840,10 @@ sema_scalar_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::
 ## …the same question over a NAME place `[s, s+n)` — the read walkers above and the `v.a = x` store,
 ## which the parser keeps as two name spans that no expression walker sees.
 sema_name_owner_is_scalar := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> bool {
+  ## Only an UNQUALIFIED owner is decided. A qualified `z::cfg` reaches here as its last segment `cfg`
+  ## (or as the whole path), and `::` names the item of module `z` (Modules §2, MOD-3), so neither this
+  ## module's locals nor its globals answer for it. `sema_gref_split` recognises both span forms.
+  if sema_gref_split(src, s, n).qual { return false }
   mut ts : usize = 0
   mut tl : usize = 0
   if nloc != 0 and local_in(locals, nloc, src, s, n) {
