@@ -1,13 +1,15 @@
 ## e2e / issue #1302 — a container element that is a multi-word enum or struct, read back through a
 ## generic library instance, keeps every word.
 ##
-## Three gaps, one shape: the instance reads its element through a pointer whose pointee is its own
+## Four gaps, one shape: the instance reads its element through a pointer whose pointee is its own
 ## type parameter, and the lowering sized the read as one scalar word.
 ##   - `vec::get(Option(u64), …)` named a generic-instance type argument (a `Call` node), so the
 ##     binding of its `Option(Option(u64))` result was sized `Option(T)` with `T` one word;
 ##   - `Option(T).Some(deref(elem))` delivered the inner discriminant alone;
 ##   - `slot := dq_elem(T, …)` then `v := deref(slot)` (deque `pop_front` / `pop_back`) and
-##     `v := deref(val_at(K, V, …))` (hashmap `get`) bound `v` as one word of a multi-word `T`.
+##     `v := deref(val_at(K, V, …))` (hashmap `get`) bound `v` as one word of a multi-word `T`;
+##   - `deref(vd) = deref(vs)` between `bitcast(ptr(mut V), …)` locals (omap's element move) copied
+##     word 0 alone of a multi-word enum `V`.
 ## The programs segfaulted (rc 139) or read a wrong value.
 ##
 ## Each check owns a code from 100 up; 42 means every element arrived whole.
@@ -15,11 +17,13 @@
 vec := alloc::vec
 deque := alloc::deque
 hashmap := alloc::hashmap
+om := alloc::omap
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 
 S2 := struct { a : u64, b : u32 }
 EN := enum { A(u64), B(u8, i64), C }
 
+ult := fn(x : u64, y : u64) -> bool { x < y }
 optkey := fn(o : Option(u64)) -> u64 {
   match o {
     Option::Some(v) => { return v * 2 + 1 }
@@ -128,6 +132,32 @@ main := fn() -> u64 {
     match re {
       Option::Some(e) => { if enkey(e) != i64(i) * 1007 { return 120 } }
       Option::None => { return 121 }
+    }
+    i += 1
+  }
+
+  ## omap past its initial capacity: `omap_grow` and `omap_insert`'s shift move each value with
+  ## `deref(vd) = deref(vs)` between `bitcast(ptr(mut V), …)` locals, and `omap_get` reads
+  ## `v := deref(omap_val_elem(K, V, …))`
+  mut mo2 := om::omap(u64, Option(u64), ptr(ar), 2)
+  mut me2 := om::omap(u64, EN, ptr(ar), 2)
+  i = 0
+  while i < 20 {
+    w0 := om::omap_insert(u64, Option(u64), mo2, 40 - i, Option(u64).Some(i * 5), ult)
+    w1 := om::omap_insert(u64, EN, me2, 40 - i, EN.B(u8(i), i64(i) * 3), ult)
+    i += 1
+  }
+  i = 0
+  while i < 20 {
+    go := om::omap_get(u64, Option(u64), ptr(mo2), 40 - i, ult)
+    match go {
+      Option::Some(x) => { if optkey(x) != i * 10 + 1 { return 122 } }
+      Option::None => { return 123 }
+    }
+    ge := om::omap_get(u64, EN, ptr(me2), 40 - i, ult)
+    match ge {
+      Option::Some(e) => { if enkey(e) != i64(i) * 1003 { return 124 } }
+      Option::None => { return 125 }
     }
     i += 1
   }
