@@ -2358,6 +2358,23 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
       iga_done = true
     }
   }
+  ## #1181 — `t[i] = v` into a LOCAL array whose element is a two-word view (`[str; N]`,
+  ## `[Slice(u8); N]`: eek 4, stride 2). Types §7: the element holds the `{ptr, len}` pair itself, so
+  ## the store writes both words. The word-sized tail below wrote the pointer only, and the element
+  ## kept its old length: a silent wrong value. A value `emit_str_pair` cannot deliver is refused.
+  if iga_done == false and var_name_span(ib).n != 0 {
+    vwent := deref(svec_at(SlotEntry, cx.slots, index_base_entry(ib, cx.slots, cx.src)))
+    if vwent.ek == 5 and vwent.eek == 4 and not vwent.is_ref {
+      if not pair_value_expr(iv, cx) {
+        lower_show_src_line(cx.src, var_name_span(ib).s)
+        panic("selfhost: `t[i] = <view>` into a `[str; N]` / `[Slice(u8); N]` element is supported for a str literal, a range slice or a view local; bind any other value to a local first (`v := <rhs>; t[i] = v`)")
+      }
+      emit_str_pair(iv, sb, cx, a, nl)                                ## stack: [ptr (deep), len (top)]
+      emit_index_addr(ib, ii, sb, cx, a, nl)                          ## element word-0 address → %rax
+      push_str(sb, "  popq %rcx\n  movq %rcx, 8(%rax)\n  popq %rcx\n  movq %rcx, (%rax)\n")
+      iga_done = true
+    }
+  }
   if iga_done == false and slice_base_is_byte(ib, cx) {
     ## BYTE Slice LOCAL/PARAM element write — pair the byte-granular address with a byte-width
     ## store. The generic tail is word-sized and would clobber the seven adjacent bytes.
