@@ -4935,7 +4935,7 @@ app := Package(version = "0.1.0", source_dir = "src", target_dir = "target",
 EOF
   cat > "$pd/src/main.al" <<'EOF'
 main := fn() -> u64 {
-  mut r := 0
+  mut r : u64 = 0
   comptime if build.debug { r = r + 1 } else { r = r + 100 }
   comptime if build.verbose { r = r + 2 } else { r = r + 200 }
   d := build.max_depth
@@ -4956,7 +4956,7 @@ app := Package(version = "0.1.0", source_dir = "src", target_dir = "target",
 EOF
   cat > "$pr/src/main.al" <<'EOF'
 main := fn() -> u64 {
-  mut r := 0
+  mut r : u64 = 0
   comptime if build.debug { r = r + 1 } else { r = r + 40 }
   comptime if build.opt { r = r + 100 } else { r = r + 2 }
   return r
@@ -7481,6 +7481,14 @@ build_reject_has signedness_mixed_compare "implicit signed/unsigned conversion"
 build_reject_has signedness_mixed_literal_default "implicit signed/unsigned conversion"
 run signedness_spelled_ok 42
 run signedness_shadow_records 42
+## #942 -- the same rule at a RESULT sink: an early `return` and a fn tail whose recorded integer type
+## differs in signedness from the declared result are refused at the returned value, worded for one
+## value. The check half pins the location; the accept half keeps `u64(v)`, a literal and a widen.
+build_reject_has issue942_return_signedness_reject "the returned value is an integer of the opposite signedness"
+check_reject_has issue942_return_signedness_reject "at line 8 in issue942_return_signedness_reject"
+build_reject_has issue942_tail_signedness_reject "the returned value is an integer of the opposite signedness"
+check_reject_has issue942_tail_signedness_reject "at line 5 in issue942_tail_signedness_reject"
+run issue942_result_signedness_ok 42
 ## docs/ir-slice-1.md §8.5 (prerequisite e, option A) -- the PER-INSTANCE half of the same rule. The
 ## generic pass cannot see a `T`-vs-concrete-int mix (`a : T` is `VcUnknown` there, and §3.8 forbids
 ## defaulting it), so the refusal only exists once each generic body is re-checked per monomorphization
