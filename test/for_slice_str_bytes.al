@@ -15,3 +15,4 @@ main := fn() -> u64 {
   t : [str; 2] = ["abc", "de"]
   sum(t[0..2])
 }
+## expect: run 15
