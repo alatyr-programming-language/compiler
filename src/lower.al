@@ -12523,6 +12523,13 @@ ptr_var_agg_words := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
   if ent.ek == 7 { return struct_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
   if ent.ek == 6 and ent.snl != 0 and not is_niche_folded(cx.src, ent.sns, ent.snl) { return 1 + enum_inst_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
+  ## #1302 — a `vd := bitcast(ptr(mut V), …)` local in an instance at a multi-word ENUM `V`
+  ## (`omap_grow`'s and `omap_insert`'s element move `deref(vd) = deref(vs)`): the pointee through
+  ## the instance, the enum twin of the ek-7 struct pointer above. It moved word 0 alone.
+  if ent.ek == 0 {
+    mwe := multiword_enum_span(deref_dest_pointee_span(p, cx), cx.decls, cx.src, deref(cx.mar))
+    if mwe.n != 0 { return 1 + enum_inst_words(cx.decls, cx.src, mwe.s, mwe.n, deref(cx.mar)) }
+  }
   0
 }
 
