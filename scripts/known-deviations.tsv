@@ -361,6 +361,10 @@ aarch64	test/slice_len_field.al	run/133	#1184
 aarch64	test/slice_local_arg.al	run/133	#1184
 aarch64	test/slice_mutate.al	run/133	#1200
 aarch64	test/slice_param_copy_local.al	run/133	#1187
+aarch64	test/slice_param_range_for.al	run/133	#1201
+aarch64	test/slice_param_range_str.al	run/133	#1203
+aarch64	test/slice_param_range_struct.al	run/133	#1288
+aarch64	test/slice_param_range_u64.al	run/133	#1288
 aarch64	test/slice_ptr_elem_bound_local.al	run/133	#1188
 aarch64	test/slice_ptr_elem_deref.al	run/133	#1188
 aarch64	test/slice_ptr_elem_write.al	run/133	#1188
@@ -374,6 +378,7 @@ aarch64	test/slice_toolkit.al	run/133	#1200
 aarch64	test/slice_variadic_enum8.al	run/133	#1201
 aarch64	test/slice_variadic_scalar8.al	run/133	#1201
 aarch64	test/slice_variadic_struct7.al	run/133	#1201
+aarch64	test/slice_view_local_annotated_range.al	run/133	#1288
 aarch64	test/sort_conformance.al	assemble/1	#1207
 aarch64	test/sret_param_return.al	run/133	#1191
 aarch64	test/std_path.al	run/133	#1184
@@ -817,6 +822,10 @@ riscv64	test/slice_len_field.al	run/133	#1184
 riscv64	test/slice_local_arg.al	run/133	#1184
 riscv64	test/slice_mutate.al	run/133	#1200
 riscv64	test/slice_param_copy_local.al	run/133	#1187
+riscv64	test/slice_param_range_for.al	run/133	#1201
+riscv64	test/slice_param_range_str.al	run/133	#1184
+riscv64	test/slice_param_range_struct.al	run/133	#1288
+riscv64	test/slice_param_range_u64.al	run/133	#1288
 riscv64	test/slice_ptr_elem_bound_local.al	run/133	#1188
 riscv64	test/slice_ptr_elem_deref.al	run/133	#1188
 riscv64	test/slice_ptr_elem_write.al	run/133	#1188
@@ -830,6 +839,7 @@ riscv64	test/slice_toolkit.al	run/133	#1200
 riscv64	test/slice_variadic_enum8.al	run/133	#1201
 riscv64	test/slice_variadic_scalar8.al	run/133	#1201
 riscv64	test/slice_variadic_struct7.al	run/133	#1201
+riscv64	test/slice_view_local_annotated_range.al	run/133	#1288
 riscv64	test/sort_conformance.al	assemble/1	#1207
 riscv64	test/std_path.al	run/133	#1184
 riscv64	test/std_time.al	run/133	#1188
@@ -1259,6 +1269,10 @@ wasm	test/slice_generic_write.al	run/134	#1194
 wasm	test/slice_len_field.al	run/134	#1186
 wasm	test/slice_local_arg.al	run/134	#1186
 wasm	test/slice_mutate.al	run/134	#1200
+wasm	test/slice_param_range_for.al	run/134	#1201
+wasm	test/slice_param_range_str.al	run/134	#1184
+wasm	test/slice_param_range_struct.al	run/134	#1288
+wasm	test/slice_param_range_u64.al	run/134	#1288
 wasm	test/slice_ptr_elem_bound_local.al	run/134	#1188
 wasm	test/slice_ptr_elem_deref.al	run/134	#1188
 wasm	test/slice_ptr_elem_write.al	run/134	#1188
@@ -1271,6 +1285,7 @@ wasm	test/slice_toolkit.al	run/134	#1200
 wasm	test/slice_variadic_enum8.al	run/134	#1201
 wasm	test/slice_variadic_scalar8.al	run/134	#1201
 wasm	test/slice_variadic_struct7.al	run/134	#1201
+wasm	test/slice_view_local_annotated_range.al	run/134	#1288
 wasm	test/sort_conformance.al	run/134	#1200
 wasm	test/std_path.al	run/134	#1184
 wasm	test/std_time.al	run/134	#1186

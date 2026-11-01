@@ -126,6 +126,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
+  `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
+  bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead
+  of the data, and ran on with wrong elements and no diagnostic. Both range deliverers now load the
+  data pointer from the block, through the same `slot_is_slice_param` question an element read asks.
 - **A field access on a scalar is a compile error (#703).** `x.a` on an annotated `u64`, `bool` or other
   scalar local, parameter or module global compiled and read a fabricated `0`, or dropped the store.
   A scalar has no fields (Modules §2, Types §6.1), so `check` now refuses it with a located diagnostic.
