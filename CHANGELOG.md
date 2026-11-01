@@ -128,9 +128,9 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 - **A container element that is an `Option`, a multi-payload enum or a two-word struct is read back
   whole (#1302).** `vec::get(Option(u64), …)` then a `match` arm passing its payload on segfaulted;
-  `deque::pop_front` / `pop_back` and `hashmap::get` returned one word of such an element, so the rest
-  read stale. The element pointer a generic instance takes for its own type parameter is now resolved
-  through the instance, and the value is copied word by word.
+  `deque::pop_front` / `pop_back`, `hashmap::get` and `omap::omap_get` returned one word of such an
+  element, so the rest read stale. The element pointer a generic instance takes for its own type
+  parameter is now resolved through the instance, and the value is copied word by word.
 - **A store through a pointer to an `Option(ptr(T))` writes one word (#1334).** `deref(p) = o` with
   `o` such a local or parameter wrote a second word over whatever followed the pointee, so
   `deque::push_front` of `Option(ptr(u64))` turned the previous front element into `None`. The
