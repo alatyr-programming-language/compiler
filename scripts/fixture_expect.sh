@@ -69,7 +69,9 @@
 # claim (`check_accept` + `build_reject` is the documented "check passes, the build refuses" pair). Two
 # different results are a CONFLICT. A backend-scoped claim that differs from the `*` claim is a PIN: it
 # freezes today's result on that backend beside a four-backend claim, which is a deviation, not an
-# expectation — S2 decides it, the generator never writes it.
+# expectation — S2 decides it, the generator never writes it. Against the header, a registration that
+# folds to a bare `accept` (only `check_accept`: the checker passes it) is met by a `run` or `trap`
+# directive, which implies it; a `reject` directive contradicts it (S4).
 #
 # ## Output (S1 — the counts are a report; only a self-contradiction is a verdict)
 #
@@ -348,6 +350,7 @@ evaluate() {
           if (HB[f, b] == "" || RB[f, b] == "") continue
           h = HB[f, b]; r = RB[f, b]
           if (HSRC[f, b] == "legacy" && h == "reject" && r == "reject") continue
+          if (r == "accept" && h ~ /^run:|^trap$/) continue    # `check_accept` claims only the check, which a run or a trap implies
           if (h != r || (h == "reject" && HSRC[f, b] == "directive" && !sameset(HN[f, b], RN[f, b])))
             why = why (why == "" ? "" : "; ") b ": header " render(h, HN[f, b]) " (" HSRC[f, b] "), registered " render(r, RN[f, b])
         }
@@ -628,6 +631,8 @@ self_test() {
   p crej      'main := fn() -> u64 { return x }\n'
   p twrun     'main := fn() -> u64 { return x }\n'
   p noeol     'main := fn() -> u64 { return 42 }'
+  p accrun    'main := fn() -> u64 { return 7 }\n## expect: run 7\n'
+  p accrej    'main := fn() -> u64 { return 7 }\n## expect: reject\n'
   cat > "$d/rows" <<'EOF'
 run good 42 
 run hdrdiff 42 
@@ -658,6 +663,8 @@ run fmtcount 42
 run noeol 42 
 fmt_check fmtrej 
 check_reject fmtrej 
+check_accept accrun 
+check_accept accrej 
 EOF
   for n in good hdrdiff legdiff bare fmtd fmtcount noeol prose typo twice; do m x86_64 "$n" run 42; done
   m x86_64 needles compile 1; m x86_64 ndldiff compile 1; m x86_64 wrongx86 run 41
@@ -666,7 +673,7 @@ EOF
   m x86_64 pinned run 42; m aarch64 pinned run 133; m aarch64 good run 133; m riscv64 good run 41
   m wasm good compile 1; m riscv64 needles run 0
   L() { run_mode "list:$1" "$d/rows" "$d/m" "$d/t" | cut -f1 | sort | tr '\n' ' '; }
-  got="$(L a)";         chk "(a) a directive, a legacy header and a needle set that disagree" "$got" "hdrdiff legdiff ndldiff "
+  got="$(L a)";         chk "(a) a directive, a legacy header and a needle set that disagree; a run refines a check-only accept, a refusal does not" "$got" "accrej hdrdiff legdiff ndldiff "
   got="$(L b)";         chk "(b) no stated expectation: registered, unregistered, prose-only, formatter-only" "$got" "bare bonly clash crej fmtcount fmtd fmtrej noeol perback pinned prose refine trapper twrun unreg wrongx86 "
   got="$(L c)";         chk "(c) the x86_64 row that differs from its registration"          "$got" "wrongx86 "
   got="$(L conflict)";  chk "a registration that contradicts itself"                         "$got" "clash "
@@ -694,7 +701,7 @@ EOF
   cp -R "$d/t2" "$d/t3"; WRITE=1 run_mode generate "$d/rows" "$d/m" "$d/t3" > /dev/null
   got="$(diff -r "$d/t2" "$d/t3" >/dev/null && echo same)"; chk "--write is rerunnable: a second run changes nothing" "$got" "same"
   got="$(run_mode list:a "$d/rows" "$d/m" "$d/t2" | cut -f1 | sort | tr '\n' ' ')"
-  chk "after --write, every generated directive agrees with its registration" "$got" "hdrdiff legdiff ndldiff "
+  chk "after --write, every generated directive agrees with its registration" "$got" "accrej hdrdiff legdiff ndldiff "
   got="$(tail -n 1 "$d/t2/nocolon.al")"; chk "--write never touches a file with a malformed directive" "$got" "## expect run 4"
   ## --gate: (a), malformed and every deviation problem fail; (b) and (c) do not (they are S3's verdict).
   ## `good` meets its directive on x86_64 and misses it on the three twins, so those three rows are
