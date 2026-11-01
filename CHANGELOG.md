@@ -126,6 +126,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A field access on a scalar is a compile error (#703).** `x.a` on an annotated `u64`, `bool` or other
+  scalar local, parameter or module global compiled and read a fabricated `0`, or dropped the store.
+  A scalar has no fields (Modules §2, Types §6.1), so `check` now refuses it with a located diagnostic.
+  A global owner resolves in the module of the access, and a qualified owner (`z::cfg.x`) is left to
+  the module it names. Programs that relied on the old behaviour were invalid. A local or parameter typed
+  `u16`, `i16`, `i8`, `char` or a float is not decided yet (#703 stays open for it).
+
 ## 0.2.21 — 2026-11-01
 
 - **A struct read through `deref(unchecked bitcast(ptr(S), x))` is the whole `S` (#1209).** Binding it
