@@ -3197,6 +3197,21 @@ rv_emit_bitcast_narrow := fn(name : str, in out sb : rt::StrBuf) {
   else if w == 2 { push_str(sb, "  slli a0, a0, 48\n  srli a0, a0, 48\n") }
   else if w == 4 { push_str(sb, "  slli a0, a0, 32\n  srli a0, a0, 32\n") }
 }
+## CHECKED float→integer conversion guard (Concurrency §7.7, Types §4.2 numeric row; #1374) — the
+## riscv64 dual of the x86_64 `emit_f2i` guard. The operand is the f64 in ft0; it must lie strictly
+## inside `lower_layout::f2i_bounds(name)`, the exact f64 values just outside `name`'s range, else
+## `ebreak`. `flt.d` answers 0 when either side is a NaN, so a NaN traps at the first test. Without it
+## `fcvt.l.d`/`fcvt.lu.d` saturate and map a NaN to the maximum: a quiet wrong value. Emitted only
+## under `RV_CHK`; inside `unchecked` the saturating result is the hardware-defined one (§7.7).
+rv_emit_f2i_guard := fn(name : str, in out sb : rt::StrBuf) {
+  b := lower_layout::f2i_bounds(name)
+  push_str(sb, "  li a1, ")
+  push_str(sb, b.lo)
+  push_str(sb, "\n  fmv.d.x ft1, a1\n  flt.d a1, ft1, ft0\n  bnez a1, 1f\n  ebreak # f2i\n1:\n")
+  push_str(sb, "  li a1, ")
+  push_str(sb, b.hi)
+  push_str(sb, "\n  fmv.d.x ft1, a1\n  flt.d a1, ft0, ft1\n  bnez a1, 1f\n  ebreak # f2i\n1:\n")
+}
 ## CHECKED narrow-width OVERFLOW trap (I11 / CG-6/CG-8) — the RV64 dual of `emit_int_narrow_reg`: the
 ## 64-bit result in a0 must fit the narrow type, else `ebreak`. UNSIGNED `uN` overflows iff any bit above
 ## bit N is set (`srli` nonzero); SIGNED `iN` overflows iff the sign-extension of the low N bits differs
@@ -4366,7 +4381,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       } else if (isconv or isfconv) and arg_any(args_head) {
         ## CONVERSION `uN(x)`/`iN(x)`/`fN(x)` — value bits in a0; FP conversions round-trip via an f-reg.
         ## int→float `fcvt.d.l` (signed, matching x86 cvtsi2sd); float→int `fcvt.lu.d`/`fcvt.l.d` (rtz,
-        ## truncating) + the width narrow; int→int the plain narrow.
+        ## truncating; range/NaN-guarded when checked, #1374) + the width narrow; int→int the plain narrow.
         gc0 := deref(arg_at(args_head, "argument list ended early"))
         argisf := rv_is_float_expr(gc0.e, body_head, src, a, params_head, decls, 0)
         emit_rv_expr(gc0.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -4375,6 +4390,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         } else {
           if argisf {
             push_str(sb, "  fmv.d.x ft0, a0\n")
+            if RV_CHK { rv_emit_f2i_guard(nm, sb) }
             if str_at((src + cs), 1) == "u" { push_str(sb, "  fcvt.lu.d a0, ft0, rtz\n") } else { push_str(sb, "  fcvt.l.d a0, ft0, rtz\n") }
             rv_emit_narrow(nm, sb)
           } else {
