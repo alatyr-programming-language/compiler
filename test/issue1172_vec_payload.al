@@ -1,7 +1,7 @@
 ## #1172 — a library generic struct named by its whole path, `alloc::vec::Vec(u64)`, is sized as that
 ## struct: as an enum payload (`Arr(alloc::vec::Vec(u64))`), as the field of a payload struct, and as a
 ## struct field passed by value (Types §6; Modules §2: a qualified type names its module's declaration).
-## Expected exit 42; a failing check exits its own number. NON-VACUOUS: on the parent (main `2ae5d8d9`
+## Expected exit 42; a failing check exits its own number. NON-VACUOUS: on the parent (main `d09e472b`
 ## plus #1339's `48f4b584`, x86_64) the fixture exits 1, because `name_tail` kept `vec::Vec` as the type
 ## name, so the payload got one word and its length read back wrong.
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
@@ -30,6 +30,14 @@ payload_len := fn(v : V) -> u64 {
   match v {
     V.Null => { 0 }
     V.Arr(xs) => { u64(alloc::vec::len(u64, ptr(xs))) }
+  }
+}
+
+## The review's form: a method call on the payload binding (`ys.len()` read 83 on the parent).
+payload_method_len := fn(v : V) -> u64 {
+  match v {
+    V.Null => { 0 }
+    V.Arr(ys) => { u64(ys.len()) + 39 }
   }
 }
 
@@ -68,6 +76,7 @@ main := fn() -> u64 {
   if payload_iter(V.Arr(xs)) != 789 { return 2 }
   if boxed_iter(W.Box(Items(k = 1, v = xs))) != 790 { return 3 }
   if field_iter(Items(k = 2, v = xs)) != 791 { return 4 }
+  if payload_method_len(V.Arr(xs)) != 42 { return 5 }
   42
 }
 ## expect: run 42
