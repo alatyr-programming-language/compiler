@@ -11028,8 +11028,14 @@ tryable_field_recv := fn(base : ptr(Expr), src : ptr(u8), a : rt::Arena) -> TryF
 call_ret_ty_span := fn(recv : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   match deref(recv) {
     Expr::Call(cs, cl, nargs, ah) => {
-      mut idx := generic_decl_of(decls, src, cs, cl, 0, 0, nargs, ah, a)
-      if idx < 0 { idx = resolve_callee_idx(decls, src, cs, cl, 0, 0) }
+      ## #1305 — a QUALIFIED callee's head may be a module alias of the calling module (`amap::get`),
+      ## which only that module can resolve: name the module being lowered (published before slot
+      ## collection, `set_global_ref_module`). A bare callee keeps the module-free resolution it had.
+      mut qms := 0
+      mut qml := 0
+      if GLOBAL_REF_MOD_SET and driver::d_colon_pos(src, cs, cl) >= 0 { qms = GLOBAL_REF_MOD_S; qml = GLOBAL_REF_MOD_L }
+      mut idx := generic_decl_of(decls, src, cs, cl, qms, qml, nargs, ah, a)
+      if idx < 0 { idx = resolve_callee_idx(decls, src, cs, cl, qms, qml) }
       ## `T(v)` user CONVERSION-CONSTRUCTOR (Types §4.6): resolve the @convert fn so its declared
       ## RETURN type `T` types the call result (field-type recovery, scalar bindings). Neutral — see
       ## `convert_callee_idx` (filters builtin/brand, so src/lib's `char(n)` never resolves here).
@@ -15106,6 +15112,16 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   mut pml := ml
   mut segcmp := false
   if cpq >= 0 { pms = cs; pml = usize(cpq); segcmp = true }
+  ## #1305 — a qualified head that is a MODULE ALIAS of the calling module (`amap := alloc::map`, then
+  ## `amap::get(m, 5)`) names the aliased path (Modules §4.1), so compare candidates against that path.
+  ## Unresolved, `amap` matched no module, the non-generic `alloc::map::get` was not found here, and the
+  ## tail-name search returned `base::option::get(T, self) -> Option(ptr(T))` by arity: the binding of
+  ## the call's two-word `Option(u64)` took the niche-folded one-word shape and read the tag as the
+  ## payload. The alias is the calling module's (`ms`/`ml`); a caller that passes none resolves none.
+  if segcmp and ml != 0 {
+    arhs := binding_rhs_span(decls, src, cs, usize(cpq), ms, ml)
+    if arhs.n != 0 { pms = arhs.s; pml = arhs.n }
+  }
   th := name_hash(src, nm.s, nm.n)
   if pml != 0 {
     mut j0 := dni_lo(cnt, th)

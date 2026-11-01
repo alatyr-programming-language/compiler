@@ -9467,6 +9467,10 @@ run ambient_io_result 42
 run stdlib_surface_aliases 84
 run enum_agg_payload 42
 run map_container 42
+## #1305 — `alloc::map::get` called through a module alias (`amap::get`) returns a two-word
+## `Option(u64)`. NON-VACUOUS: on the parent `da18fef2` (x86_64) the fixture returns 10: the binding
+## took the one-word shape of `base::option::get`'s `Option(ptr(T))` and read the tag as the payload.
+run issue1305_alias_callee_option 42
 run vec_container 42
 run fn_value 42
 ## FN-VALUE residual: a second wrapper forwards the same function value and two Slice views.
