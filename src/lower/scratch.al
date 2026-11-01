@@ -23,7 +23,7 @@ stmt_p := ast::stmt_p
 ## Count the str-LITERAL arguments of ONE call's arena-linked `Arg` list head `head`.
 scan_call_str_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(mut Arg)), a : rt::Arena) -> usize {
   mut g : Option(ptr(mut Arg)) = head
-  mut cnt := 0
+  mut cnt : usize = 0
   loop {
     match g {
       Some(gq) => {
@@ -41,7 +41,7 @@ scan_call_str_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(
 ## The max str-literal-argument count of any single call within expression `e` (including `e`
 ## itself if it is a `Call`, and recursing into every sub-expression / argument).
 pub scan_str_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), a : rt::Arena) -> usize {
-  mut m := 0
+  mut m : usize = 0
   match deref(e) {
     Expr::Bin(op, l, r) => { m = imax(scan_str_arg_expr(src, decls, l, a), scan_str_arg_expr(src, decls, r, a)) }
     Expr::If(c, t, f) => { m = imax(scan_str_arg_expr(src, decls, c, a), imax(scan_str_arg_expr(src, decls, t, a), scan_str_arg_expr(src, decls, f, a))) }
@@ -129,7 +129,7 @@ pub scan_str_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
 ## The max str-literal-argument count of any single call within a statement list `head`.
 pub scan_str_arg_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(mut Stmt)), a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut m := 0
+  mut m : usize = 0
   loop {
     match s {
       Some(sq) => {
@@ -297,7 +297,7 @@ agg_value_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
 ## is intentionally invisible here. Mutable-global Vars are counted only at argument sites through
 ## `agg_value_words`, so merely reading a global does not tax the frame.
 pub scan_agg_width_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
-  mut m := 0
+  mut m : usize = 0
   if arg_is_agg_value(e, decls, src, a) or str_ret_call(e, decls, src, a) { m = agg_value_words(e, decls, src, a) }
   match deref(e) {
     Expr::Bin(op, l, r) => { m = imax(m, imax(scan_agg_width_expr(l, decls, src, a), scan_agg_width_expr(r, decls, src, a))) }
@@ -326,7 +326,7 @@ pub scan_agg_width_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
 
 pub scan_agg_width_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut m := 0
+  mut m : usize = 0
   loop {
     match s {
       Some(sq) => {
@@ -386,7 +386,7 @@ scan_call_agg_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(
 ## holds them. Changing this count moves the frame of every function it touches, so it is left as the
 ## layout the tree was built with; deleting it for the measured size alone is a reseed (#801).
 pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), a : rt::Arena) -> usize {
-  mut m := 0
+  mut m : usize = 0
   match deref(e) {
     Expr::Bin(op, l, r) => {
       deepest := imax(scan_agg_arg_expr(src, decls, l, a), scan_agg_arg_expr(src, decls, r, a))
@@ -488,7 +488,7 @@ pub agg_unbound_sret_block := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Ex
 ## The max aggregate-value-argument count of any single call within a statement list `head`.
 pub scan_agg_arg_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(mut Stmt)), a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut m := 0
+  mut m : usize = 0
   loop {
     match s {
       Some(sq) => {

@@ -1975,7 +1975,7 @@ wat_is_agg_index := fn(e : ptr(Expr), body_head : Option(ptr(mut Stmt)), src : p
 }
 
 array_lit_nel := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) {
     Expr::ArrayLit(al_n, al_e) => { r = al_n }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -2766,7 +2766,7 @@ is_array_local := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize,
 ## as `is_array_local`.
 array_local_nel := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   mut s : Option(ptr(mut Stmt)) = fn_head
-  mut r := 0
+  mut r : usize = 0
   mut done := false
   loop {
     match s {
@@ -3476,7 +3476,7 @@ wat_loop_value_between := fn(target : usize) -> bool {
 ##     unreachable by the enum's own text and is removed rather than rewritten.
 ## See the census note above `lower_layout::local_ann_signed`.
 wat_expr_start := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(e) {
     Expr::Num(_v, s, _n) => { r = s }
     Expr::Var(s, _n) => { r = s }

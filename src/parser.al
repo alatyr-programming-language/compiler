@@ -3511,7 +3511,7 @@ local_uninit_end := fn(pc : PC, ns : usize, nl : usize) -> usize {
 qual_path_head_toks := fn(pc : PC) -> usize {
   if cur(pc).kind != 1 { return 0 }
   mut i := pc.idx
-  mut h := 0
+  mut h : usize = 0
   while tok_at(pc, i + 1).kind == 7 and tok_at(pc, i + 2).kind == 1 { i = i + 2 ; h = h + 2 }
   h
 }
