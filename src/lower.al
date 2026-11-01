@@ -10184,6 +10184,31 @@ payload_agg_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
   0
 }
 
+## #1212 — the WORD count of a `deref(p)` payload whose pointee is a STRUCT (`Option(T).Some(deref(elem))`
+## in `vec::get` / `try_at` / `pop` at a multi-word `T`), resolved through the instance like every other
+## pointee read (`deref_dest_pointee_span`). A Deref is neither a literal nor a local, so
+## `payload_agg_words` answered 0 and the payload rode the scalar path: word 0 only, every later field
+## stale (`S3`'s `c` read 48). 0 when the pointee is not a struct or cannot be resolved.
+payload_deref_struct_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
+  match deref(e) {
+    Expr::Deref(inner) => {
+      ## a pointer-to-struct PARAMETER or `p := ptr(s)` local is an ek-7 slot carrying its pointee
+      ## (`deref_struct_span`, the resolver `s := deref(p)` binds with); a bitcast local or a pointer
+      ## call answers through `deref_dest_pointee_span`
+      mut pty := deref_struct_span(e, cx.slots, cx.src)
+      if pty.n != 0 { pty = tparam_span_cx(pty, cx) } else { pty = deref_dest_pointee_span(inner, cx) }
+      if pty.n == 0 { return 0 }
+      pbn := base_type_name(cx.src, pty.s, pty.n)
+      if struct_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 { return 0 }
+      struct_words(cx.decls, cx.src, pty.s, pty.n, deref(cx.mar))
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
+  }
+}
+
 ## The WORD count of an ENUM-VALUED payload expression — an `EnumLit` ctor (`Err.Bad(x)`) or an
 ## enum `Var` local — as `1 + enum_inst_words` of its enum type; 0 if the payload is not an enum
 ## value. The enum dual of `payload_agg_words`: lets a nested-enum variant payload (`R.Fail(Err.Bad(x))`)
@@ -10380,6 +10405,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       mut pw := 0
       mut pcall := false
       mut parray := false
+      mut pderef := false
       ## #852 — a payload declared `Option(ptr(T))` is one folded word: it takes the scalar register
       ## path with `emit_store_value`, never the multi-word enum shift.
       pf0 := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, 0, deref(cx.mar))
@@ -10404,6 +10430,11 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
           parray = true
         } else {
           pw = payload_agg_words(ga0.e, cx, a)
+        }
+        if parray == false and pw == 0 {
+          dw := payload_deref_struct_words(ga0.e, cx, a)
+          if dw > 6 { panic("selfhost: a `deref(p)` struct payload wider than 6 words needs the wide enum result-pointer path (#1212)") }
+          if dw > 1 { pw = dw; pderef = true }
         }
         ## #912/#913 — a STRUCT-LITERAL payload (`Some(W(k = K(…)))`) is delivered by the one struct-value
         ## emitter, `emit_struct_value`, which knows every field kind (nested struct, enum, str, byte
@@ -10436,6 +10467,21 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       }
       if parray {
         ## The array literal was materialized above; its words already occupy payload return registers.
+      } else if pderef {
+        ## #1212 — a `deref(p)` struct payload: evaluate the pointer into %r11 (free for the ≤6 payload
+        ## words riding %rdx..%r10), then deliver pointee word k from `k*8(%r11)` into payload register
+        ## k+1, the layout `emit_struct_value`'s Deref arm and the by-ref param payload below read.
+        ga := deref(arg_at(phead, "argument list ended early"))
+        ## `payload_deref_struct_words` answered non-zero only for a Deref, so its inner pointer exists
+        emit_gas(deref_inner_expr(ga.e), sb, cx, a, nl)
+        push_str(sb, "  popq %r11\n")
+        for k in 0..pw {
+          push_str(sb, "  movq ")
+          push_int(sb, i64(k * 8))
+          push_str(sb, "(%r11), ")
+          emit_retreg(sb, k + 1)
+          push_str(sb, "\n")
+        }
       } else if pcall {
         ## Multi-word aggregate/enum CALL payload (`Some(f(v))`, `Some(inner())`): emit the call (its
         ## whole return lands in retreg(0..pw-1) = %rax:%rdx:%rcx:…), then SHIFT each word up one
@@ -12639,6 +12685,12 @@ deref_dest_pointee_span := fn(p : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   }
   pt := local_ptr_pointee_span(cx, vn.s, vn.n)
   if pt.n == 0 { return CSpan(s = 0, n = 0) }
+  return tparam_span_cx(pt, cx)
+}
+
+## A type span that IS one of the current instance's type parameters (`T`), mapped to its type
+## argument; any other span unchanged.
+tparam_span_cx := fn(pt : CSpan, cx : ptr(LCtx)) -> CSpan {
   if cx.gp_l != 0 and lower_ctx::streq(cx.src, pt.s, pt.n, cx.gp_s, cx.gp_l) { return CSpan(s = cx.it_s, n = cx.it_l) }
   if cx.gp2_l != 0 and lower_ctx::streq(cx.src, pt.s, pt.n, cx.gp2_s, cx.gp2_l) { return CSpan(s = cx.it2_s, n = cx.it2_l) }
   if cx.gp3_l != 0 and lower_ctx::streq(cx.src, pt.s, pt.n, cx.gp3_s, cx.gp3_l) { return CSpan(s = cx.it3_s, n = cx.it3_l) }
@@ -13612,7 +13664,18 @@ direct_match_multiword_reject := fn(scrut : ptr(Expr), cx : ptr(LCtx)) {
   if sub.n == 0 { return }
   rw := enum_inst_words(cx.decls, cx.src, raw.s, raw.n, deref(cx.mar))
   sw := enum_inst_words(cx.decls, cx.src, sub.s, sub.n, deref(cx.mar))
-  if sw > rw { panic("selfhost: a direct `match recv.map(f)` / `.and_then(f)` / `.map_err(g)` whose payload is a MULTI-WORD type truncates the scrutinee to its first word — bind the result to a local first: `m := recv.map(f); match m { … }`") }
+  ## #1212 — the message names the construct it refuses: any generic call, `vec::get(S, …)` as much
+  ## as `recv.map(f)`, located at the call
+  if sw > rw {
+    match deref(scrut) {
+      Expr::Call(cs, cl, nargs, ah) => { lower_show_src_line(cx.src, cs) }
+      Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+        | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+        | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+        | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+    }
+    panic("selfhost: a direct `match` on a generic call whose result enum carries a multi-word payload (`match vec::get(S, …)`, `match recv.map(f)`) truncates the scrutinee to its first word — bind the result to a local first: `m := <the call>; match m { … }`")
+  }
 }
 
 ## Is the fn decl whose name is `[name_s, name_s+name_l)` marked `@convert` (Types §4.6 / TYP-6)? The
@@ -23351,6 +23414,21 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
                 }
               }
               i += i64(pwv)
+            } else if payload_deref_struct_words(ga.e, cx, a) > 1 {
+              ## #1212 — a `deref(p)` STRUCT payload (`o := Option(S).Some(deref(p))`): the store dual of
+              ## `emit_enum_value`'s pderef arm. Evaluate the pointer into %r11 and copy pointee word j to
+              ## the payload slot `base-i-j`; `emit_gas` stored word 0 alone.
+              pwd := payload_deref_struct_words(ga.e, cx, a)
+              emit_gas(deref_inner_expr(ga.e), sb, cx, a, nl)
+              push_str(sb, "  popq %r11\n")
+              for j in 0..pwd {
+                push_str(sb, "  movq ")
+                push_int(sb, i64(j * 8))
+                push_str(sb, "(%r11), %rax\n  movq %rax, -")
+                push_int(sb, (base - i - i64(j)) * 8)
+                push_str(sb, "(%rbp)\n")
+              }
+              i += i64(pwd)
             } else if var_agg_info(ga.e, cx.slots, cx.src).ek == 3 and (1 + enum_inst_words(cx.decls, cx.src, var_agg_info(ga.e, cx.slots, cx.src).s, var_agg_info(ga.e, cx.slots, cx.src).n, deref(cx.mar))) > 1 {
               ## A MULTI-WORD ENUM VAR payload (`Some(r)` with r an enum LOCAL/PARAM) — copy the complete
               ## inner `[disc, payload…]` block into the outer payload. This is the storage dual of the
