@@ -6,6 +6,7 @@
 ##
 ## The pointer probes use one word with high bits set. A lost `ptr(bitsN)` preservation would read the
 ## whole word instead of the 1/2/4-byte low part, while fmt would also erase the cast on reformat.
+## expect: run 42
 NarrowBrand := brand(u8)
 Aggregate := struct { value : u8 }
 

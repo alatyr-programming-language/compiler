@@ -13,6 +13,7 @@
 ## The `total_sum` chain sits inside a CALL argument, which is the outermost-first rule at work: the
 ## call's argument list wraps first, and only then does the element's chain break — at the element's
 ## own (deeper) continuation indent.
+## expect: run 42
 wide := fn(v : u64) -> u64 {
   v
 }

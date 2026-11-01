@@ -15,3 +15,4 @@ main := fn() -> u64 {
   print("v=[{}]\n", -x)
   42
 }
+## expect: run 42

@@ -5,6 +5,7 @@
 ## subtraction on a `u64` where a literal had stood, so the reformatted program died on the checked-
 ## arithmetic trap (SIGILL 132) instead of running. fmt now renders a negative `Num` payload
 ## unsigned; a source `-x` never reaches that arm, so the test is exact. Returns 42.
+## expect: run 42
 main := fn() -> u64 {
   m : u64 = 18446744073709551615
   h : u64 = 9223372036854775808

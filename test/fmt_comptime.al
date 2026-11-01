@@ -1,3 +1,4 @@
+## expect: run 42
 main := fn() -> u64 {
   s := 0
   comptime for i in 0 .. 3 {

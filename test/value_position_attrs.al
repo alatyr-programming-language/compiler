@@ -2,6 +2,7 @@
 ## `@export` and `@inline` decorate the fn value after `:=`, not the binding prefix.
 ## The export is checked by the native/WAT symbol probes; the inline helper must be
 ## substituted at its direct call site rather than emitted as a call.
+## expect: run 42
 exported := @export("value_export") fn() -> u64 {
   return add(20, 22)
 }

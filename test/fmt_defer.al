@@ -5,6 +5,7 @@
 ## because the lower re-intercepts the marker NAMES — idempotence and the exit code alone cannot catch
 ## it, hence the `fmt_test_has` needles). LIFO order is locked by the digit trace: the block registers
 ## LAST, so it drains FIRST — mark(1), mark(2), then mark(3) → ACC = 123.
+## expect: run 123
 mut ACC : u64 = 0
 
 mark := fn(n : u64) -> u64 {

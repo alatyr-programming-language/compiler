@@ -57,6 +57,7 @@
 ## followed it refused the valid file outright.
 ##
 ## Expected exit: 42. A failure exits 100 + the failing group's index (max 125 < 126).
+## expect: run 42
 Acc := struct { v : u64 }
 Row := struct { a : u64, b : u64 }
 mut GMOD343 : u64 = 1

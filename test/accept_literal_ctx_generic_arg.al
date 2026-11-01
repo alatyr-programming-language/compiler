@@ -11,3 +11,4 @@ main := fn() -> i64 {
   if lt(i64, 5 - 6, 1) { return 42 }
   1
 }
+## expect: run 42

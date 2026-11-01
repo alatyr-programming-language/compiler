@@ -11,6 +11,7 @@
 ## being forwarded through a second call: forwarding a `ptr(mut T)` parameter into a further call
 ## loses the store on aarch64 and riscv64, which would have made this fixture disagree across
 ## backends for a reason that has nothing to do with formatting.
+## expect: run 42
 selector := fn(x : u64) -> u64 {
   return x
 }

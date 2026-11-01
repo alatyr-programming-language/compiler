@@ -16,3 +16,4 @@ main := fn() -> u64 {
 }
 
 x :=
+## expect: reject "input ends where a VALUE was required"

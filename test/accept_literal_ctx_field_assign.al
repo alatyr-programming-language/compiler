@@ -20,3 +20,4 @@ main := fn() -> i64 {
   if s.f != 0 - 2 { return 3 }
   42
 }
+## expect: run 42

@@ -4,6 +4,7 @@
 ## stdlib `Option`/`Result` construction lands there). Rendered literally that is a DIFFERENT
 ## program: the dot-call on `r` came back as `unwrap(r)` (check: unbound name) and `Option.Some(40)` as
 ## `Some(Option, 40)` (the enum TYPE passed as a value argument). Returns 42.
+## expect: run 42
 Pair := struct { a : u64, b : u64 }
 
 ## A UFCS-callable method over a local struct — `p.total()`.

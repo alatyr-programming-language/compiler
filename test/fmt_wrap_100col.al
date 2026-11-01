@@ -11,6 +11,7 @@
 ## must NOT gain a trailing comma — "a construct that fits at its indent is written on one line".
 ## The `fmt-has` needles are the assertion; the exit status only proves the wrap is semantics-
 ## preserving (a re-parse of the wrapped text must rebuild the same tree, trailing comma included).
+## expect: run 42
 Wide := struct { alpha : u64, beta : u64, gamma : u64, delta : u64, epsilon : u64 }
 
 ## A parameter list wide enough to overflow: five parameters plus the name and the result type.

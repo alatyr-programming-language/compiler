@@ -49,19 +49,20 @@
 # case), so the generator holds every build-only refusal for review, as it holds every refusal some
 # twin builds and runs.
 #
-# The line goes at the END of the file, because diagnostics print "at line N" (asserted by e2e rows and
-# hashed into the manifest's stderr): a line at the top would move every one. The end is not free either.
-# A diagnostic quotes the 24 bytes from its token (`near `…``), so a fixture refused in its last 24 bytes
-# would quote the new line too. EXCERPT_HOLD below lists the fixtures for which a native x86_64
-# `corpus_manifest.sh --check` after `--write` measured exactly that (16, at 55fa477: same phase and
-# exit, different stderr hash, on all four backends). The generator holds them until S3 retires that
-# hash, and it never touches a file whose last byte is not a newline, so the edit only appends.
+# The line goes at the END of the file, because diagnostics print "at line N" (asserted by e2e rows): a
+# line at the top would move every one. A diagnostic also quotes the 24 bytes from its token (`near
+# `…``), so a fixture refused in its last 24 bytes quotes the new line too; until S3 that changed its
+# hashed stderr, and 16 such fixtures were held. Since S3 a directive source's stderr is not hashed
+# (only its phase, exit and needles are judged), so they are placed like the rest (S4).
 #
-# The end has a second cost. `alatyr fmt` deletes every comment after the last declaration (#1178,
-# against Tooling §4.3.4), and the formatter rows (FMT_TRAILING_HOLD) count the `##` lines before and
-# after `fmt`. That count is right — the line is a comment and the formatter must keep it — so the
-# generator holds every fixture a formatter row counts (measured: 99 rows went red at 0330b70, gate run
-# 41021299879) until #1178 is fixed, rather than exempting the directive from the count.
+# Two kinds of file take the line at the HEAD instead, directly below their leading `#` comment block:
+# a file whose last byte is not a newline (`trailing_no_final_newline` exists to test that byte, and
+# an append would change it), and a file a formatter row counts the `##` lines of (FMT_TRAILING_HOLD):
+# `alatyr fmt` deletes every comment after the last declaration (#1178, against Tooling §4.3.4), so a
+# line at the end would be counted before `fmt` and missing after it (measured: 99 rows went red at
+# 0330b70, gate run 41021299879). The count itself is right, and is not relaxed for the directive. The
+# head moves every line by one, so only a run, trap or accept claim goes there; a refusal of either
+# kind stays held (its "at line N" would move).
 #
 # On one backend, the registration's expectation is the fold of its `*` claims when it has any (the
 # four-backend claim), else of that backend's own claims. `accept` is absorbed by a run/trap/reject
@@ -139,12 +140,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/scripts/fixture_oracle.sh"
 US="$(printf '\037')"
 BACKENDS="x86_64 aarch64 riscv64 wasm"
-## measured, not predicted: see "The line goes at the END" above
-EXCERPT_HOLD="reject_call_call_callee reject_call_index_callee reject_float_exponent
-  reject_float_exponent_missing_digit reject_iife reject_int_lit_bad_digit reject_int_lit_lead_sep
-  reject_int_lit_line_after_ambient reject_int_lit_upper_prefix reject_trunc_arrow_no_ret_type
-  reject_trunc_bind_no_value reject_trunc_fn_params_body string_xhh_invalid
-  str_literal_elem_assign_reject value_expr_assign_call_reject value_expr_assign_view_byte_reject"
 ## the formatter verbs that count `##` lines (scripts/e2e.sh fmt_test, fmt_check): held for #1178
 FMT_TRAILING_HOLD="fmt_test fmt_test_has fmt_test_has_all fmt_check"
 
@@ -225,7 +220,7 @@ fmt_needles() { # rows-file
 ## MODE is report | list:<what> | generate | review. One awk program holds every rule, so the report,
 ## the lists, the generator and the review list cannot answer the same question two ways.
 evaluate() {
-  awk -F'\t' -v OFS='\t' -v MODE="$1" -v US="$US" -v BACKENDS="$BACKENDS" -v EXCERPT="$(printf '%s' "$EXCERPT_HOLD" | tr '\n' ' ')" -v FMTHOLD=" $FMT_TRAILING_HOLD " -v GATE="${GATE:-0}" '
+  awk -F'\t' -v OFS='\t' -v MODE="$1" -v US="$US" -v BACKENDS="$BACKENDS" -v FMTHOLD=" $FMT_TRAILING_HOLD " -v GATE="${GATE:-0}" '
     function trapst(b) { return b == "x86_64" ? 132 : (b == "wasm" ? 134 : 133) }
     ## a registration status on backend b (or on * , read as x86_64: the table is x86_64-native)
     function norm(o, b,   n) {
@@ -312,7 +307,6 @@ evaluate() {
     }
     END {
       nb = split(BACKENDS, B, " ")
-      ne = split(EXCERPT, EA, /[ \t\n]+/); for (i = 1; i <= ne; i++) if (EA[i] != "") EXH[EA[i]] = 1
       for (f in ALL) {
         ## the registration, per backend
         for (i = 1; i <= nb; i++) {
@@ -413,9 +407,11 @@ evaluate() {
         else if (f in DISC)    reason = "x86_64 observes something other than the registration (c)"
         else if (f in TWRUN)   reason = "registered as refused, but " TWRUN[f] " build and run it: a spec rejection, or a lowering limit on a valid program?"
         else if (RB[f, "x86_64"] == "reject" && !(f in CHKREJ)) reason = "refused only by the build (no check-level row): a spec rejection, or a lowering limit on a valid program?"
-        else if (f in NOEOL)   reason = "the file does not end in a newline, and the migration only appends: placing the line changes its last line"
-        else if (f in EXH)     reason = "its diagnostic quotes the last bytes of the file, so an appended line changes its stderr hash (measured): placed when S3 retires that hash"
-        else if (f in FMTR)    reason = "a formatter row counts its ## lines, and alatyr fmt deletes a comment after the last declaration (#1178): placed when that is fixed"
+        ## A file with no final newline, or one a formatter row counts the `##` lines of (#1178: `alatyr fmt`
+        ## deletes a comment after the last declaration), takes its line at the HEAD instead, below its
+        ## leading comment block (S4). That moves every line by one, so only a run/trap/accept claim goes
+        ## there: the "at line N" of a refusal would move. A refusal of either kind stays held.
+        place = ((f in NOEOL) || (f in FMTR)) ? "head" : "tail"
         lines = ""
         if (reason == "") {
           ## one unscoped line when every backend agrees; else the * claim, plus a scoped line for each
@@ -431,6 +427,9 @@ evaluate() {
           }
           k = split(FMTND[f], fa, US)
           for (j = 2; j <= k; j++) if (index(lines, fa[j])) reason = "a formatter row searches its comments for [" fa[j] "], which the generated line would contain"
+          if (reason == "" && place == "head" && index(lines, ": reject"))
+            reason = (f in NOEOL) ? "the file does not end in a newline, and a refusal cannot take its line at the head (it would move \"at line N\")" \
+                                  : "a formatter row counts its ## lines, and alatyr fmt deletes a comment after the last declaration (#1178); a refusal cannot take its line at the head"
         }
         if (reason != "") {
           n_rev++; REVC[reason ~ /^not registered/ ? "unregistered" : (reason ~ /^registered only/ ? "unmapped" : (reason ~ /^the registration/ ? "conflict" : (reason ~ /^a backend/ ? "pin" : (reason ~ /^header/ ? "a" : (reason ~ /^x86_64/ ? "c" : (reason ~ /^registered as refused/ ? "twins-build-a-refusal" : (reason ~ /^refused only/ ? "build-only-refusal" : (reason ~ /^the file does not end/ ? "no-final-newline" : (reason ~ /^its diagnostic quotes/ ? "excerpt-reaches-eof" : (reason ~ /^a formatter row counts/ ? "fmt-drops-trailing-comment" : "fmt-needle"))))))))))]++
@@ -438,7 +437,7 @@ evaluate() {
           continue
         }
         n_gen++
-        if (MODE == "generate") { k = split(lines, la, "\n"); for (j = 1; j <= k; j++) print f, la[j] }
+        if (MODE == "generate") { k = split(lines, la, "\n"); for (j = 1; j <= k; j++) print f, la[j], place }
       }
       for (k in DVOBS) if (!(k in DVSEEN)) {
         split(k, kk, SUBSEP); n_orph++
@@ -539,20 +538,29 @@ run_mode() { # mode rows manifest test-dir [deviations issues [observed]]
   case "$mode" in
     generate) sort -s -t "$(printf '\t')" -k1,1 "$w/out" > "$w/gen"   # stable: a fixture keeps its line order
               if [ "${WRITE:-0}" = 1 ]; then
-                local f line prev="" skip=0 n=0
-                while IFS="$(printf '\t')" read -r f line; do
+                local f line place prev="" skip=0 n=0 hd
+                while IFS="$(printf '\t')" read -r f line place; do
                   if [ "$f" != "$prev" ]; then
                     prev="$f"; skip=1
-                    ## never touch a file that already carries a directive: the generator is rerunnable
-                    ## and never one whose last byte is not a newline: the edit only appends
+                    ## never touch a file that already carries a directive: the generator is rerunnable.
+                    ## A `tail` line is appended, so it needs a final newline; a `head` line is inserted
+                    ## below the leading comment block and leaves the last byte as it is.
                     if [ -f "$dir/$f.al" ] && ! grep -qiE "$EXPECT_TRIGGER" "$dir/$f.al" \
-                       && [ -z "$(tail -c 1 "$dir/$f.al")" ]; then
+                       && { [ "$place" = head ] || [ -z "$(tail -c 1 "$dir/$f.al")" ]; }; then
                       skip=0; n=$((n + 1))
                     fi
                   fi
-                  [ "$skip" = 1 ] || printf '%s\n' "$line" >> "$dir/$f.al"
+                  [ "$skip" = 0 ] || continue
+                  if [ "$place" = head ]; then
+                    ## below the last directive already placed there, else below the leading `#` block
+                    hd="$(awk 'done == 0 && /^#/ { n = NR; next } { done = 1 } END { print n + 0 }' "$dir/$f.al")"
+                    ## head/tail copy bytes, so the file's last byte stays what it was
+                    { [ "$hd" = 0 ] || head -n "$hd" "$dir/$f.al"; printf '%s\n' "$line"; tail -n +"$((hd + 1))" "$dir/$f.al"; } \
+                      > "$dir/$f.al.tmp" && mv "$dir/$f.al.tmp" "$dir/$f.al"
+                  else printf '%s\n' "$line" >> "$dir/$f.al"
+                  fi
                 done < "$w/gen"
-                echo "fixture expect: appended directives to $n fixtures"
+                echo "fixture expect: placed directives in $n fixtures"
               else
                 cat "$w/gen"
               fi ;;
@@ -611,7 +619,8 @@ self_test() {
   p nocolon   'main := fn() -> u64 { return 42 }\n## expect run 4\n'
   p capital   'main := fn() -> u64 { return 42 }\n# Expect: run 42\n'
   p range     'main := fn() -> u64 { return 42 }\n## expect: run 256\n'
-  p fmtcount  'main := fn() -> u64 { return 42 }\n'
+  p fmtcount  '## the header\n##\nmain := fn() -> u64 { return 42 }\n## trailing\n'
+  p fmtrej    'main := fn() -> u64 { return x }\n'
   p fmtd      'main := fn() -> u64 { return 42 }\n'
   p prose     '## Expected: a value, nothing else\nmain := fn() -> u64 { return 42 }\n'
   p refine    'main := fn() -> u64 { return 7 }\n'
@@ -647,16 +656,18 @@ run fmtd 42
 fmt_test fmtcount 42 
 run fmtcount 42 
 run noeol 42 
+fmt_check fmtrej 
+check_reject fmtrej 
 EOF
   for n in good hdrdiff legdiff bare fmtd fmtcount noeol prose typo twice; do m x86_64 "$n" run 42; done
   m x86_64 needles compile 1; m x86_64 ndldiff compile 1; m x86_64 wrongx86 run 41
   m aarch64 wrongx86 run 41; m x86_64 trapper run 132; m aarch64 trapper run 133; m wasm trapper run 0
-  m x86_64 perback run 136; m x86_64 refine run 7; m x86_64 bonly compile 1; m x86_64 crej compile 1; m x86_64 twrun compile 1; m aarch64 twrun run 133; m aarch64 perback run 41; m riscv64 perback run 41
+  m x86_64 perback run 136; m x86_64 refine run 7; m x86_64 bonly compile 1; m x86_64 crej compile 1; m x86_64 twrun compile 1; m x86_64 fmtrej compile 1; m aarch64 twrun run 133; m aarch64 perback run 41; m riscv64 perback run 41
   m x86_64 pinned run 42; m aarch64 pinned run 133; m aarch64 good run 133; m riscv64 good run 41
   m wasm good compile 1; m riscv64 needles run 0
   L() { run_mode "list:$1" "$d/rows" "$d/m" "$d/t" | cut -f1 | sort | tr '\n' ' '; }
   got="$(L a)";         chk "(a) a directive, a legacy header and a needle set that disagree" "$got" "hdrdiff legdiff ndldiff "
-  got="$(L b)";         chk "(b) no stated expectation: registered, unregistered, prose-only, formatter-only" "$got" "bare bonly clash crej fmtcount fmtd noeol perback pinned prose refine trapper twrun unreg wrongx86 "
+  got="$(L b)";         chk "(b) no stated expectation: registered, unregistered, prose-only, formatter-only" "$got" "bare bonly clash crej fmtcount fmtd fmtrej noeol perback pinned prose refine trapper twrun unreg wrongx86 "
   got="$(L c)";         chk "(c) the x86_64 row that differs from its registration"          "$got" "wrongx86 "
   got="$(L conflict)";  chk "a registration that contradicts itself"                         "$got" "clash "
   got="$(L pin)";       chk "a backend row pinning a trap beside a four-backend value"       "$got" "pinned "
@@ -668,17 +679,18 @@ EOF
       "aarch64:good:trap-for-value aarch64:pinned:trap-for-value aarch64:twrun:ACCEPTS-INVALID aarch64:wrongx86:WRONG-VALUE riscv64:good:WRONG-VALUE riscv64:needles:ACCEPTS-INVALID wasm:good:build-fails-compile wasm:trapper:WRONG-VALUE "
   got="$(run_mode generate "$d/rows" "$d/m" "$d/t" | tr '\t' '|' | tr '\n' '~')"
   chk "generate: one line from a * claim, a trap, and per-backend lines with no * claim" "$got" \
-      'bare|## expect: run 42~crej|## expect: reject "type mismatch"~perback|## expect(x86_64): run 136~perback|## expect(aarch64): run 41~perback|## expect(riscv64): run 41~refine|## expect: accept~refine|## expect(x86_64): run 7~trapper|## expect: trap~'
+      'bare|## expect: run 42|tail~crej|## expect: reject "type mismatch"|tail~fmtcount|## expect: run 42|head~noeol|## expect: run 42|head~perback|## expect(x86_64): run 136|tail~perback|## expect(aarch64): run 41|tail~perback|## expect(riscv64): run 41|tail~refine|## expect: accept|tail~refine|## expect(x86_64): run 7|tail~trapper|## expect: trap|tail~'
   got="$(run_mode review "$d/rows" "$d/m" "$d/t" | cut -f1 | tr '\n' ' ')"
-  chk "review: every disagreement is held back — a build-only refusal, a refusal a twin runs, a file with no final newline, the unregistered, a fmt-needle collision, a comment-counting formatter row" "$got" "bonly clash fmtcount fmtd legdiff noeol pinned prose twrun unreg wrongx86 "
-  got="$(run_mode review "$d/rows" "$d/m" "$d/t" | awk -F'\t' '$1 == "fmtcount" || $1 == "fmtd" { print $1 ":" substr($2, 1, 22) }' | tr '\n' '|')"
-  chk "review: the formatter hold names #1178's row, and a needle collision stays its own reason" "$got" "fmtcount:a formatter row counts|fmtd:a formatter row search|"
+  chk "review: every disagreement is held back — a build-only refusal, a refusal a twin runs, the unregistered, a fmt-needle collision, a refusal a formatter row counts" "$got" "bonly clash fmtd fmtrej legdiff pinned prose twrun unreg wrongx86 "
+  got="$(run_mode review "$d/rows" "$d/m" "$d/t" | awk -F'\t' '$1 == "fmtrej" || $1 == "fmtd" { print $1 ":" substr($2, 1, 22) }' | tr '\n' '|')"
+  chk "review: a refusal a formatter row counts names #1178's row, and a needle collision stays its own reason" "$got" "fmtd:a formatter row search|fmtrej:a formatter row counts|"
   cp -R "$d/t" "$d/t2"
   WRITE=1 run_mode generate "$d/rows" "$d/m" "$d/t2" > /dev/null
   got="$(tail -n 3 "$d/t2/perback.al" | tr '\n' '|')"
   chk "--write appends the lines at the end, below the code"  "$got" "## expect(x86_64): run 136|## expect(aarch64): run 41|## expect(riscv64): run 41|"
   got="$(head -n 1 "$d/t2/bare.al")";  chk "--write moves no existing line"  "$got" "main := fn() -> u64 { return 42 }"
-  got="$(cmp -s "$d/t/noeol.al" "$d/t2/noeol.al" && echo same)"; chk "--write leaves a file with no final newline byte-identical" "$got" "same"
+  got="$(tr '\n' '|' < "$d/t2/noeol.al")"; chk "--write puts a no-final-newline file's line at the head and keeps its last byte" "$got" "## expect: run 42|main := fn() -> u64 { return 42 }"
+  got="$(tr '\n' '|' < "$d/t2/fmtcount.al")"; chk "--write puts a counted formatter fixture's line below its leading comment block" "$got" "## the header|##|## expect: run 42|main := fn() -> u64 { return 42 }|## trailing|"
   cp -R "$d/t2" "$d/t3"; WRITE=1 run_mode generate "$d/rows" "$d/m" "$d/t3" > /dev/null
   got="$(diff -r "$d/t2" "$d/t3" >/dev/null && echo same)"; chk "--write is rerunnable: a second run changes nothing" "$got" "same"
   got="$(run_mode list:a "$d/rows" "$d/m" "$d/t2" | cut -f1 | sort | tr '\n' ' ')"

@@ -1,3 +1,4 @@
+## expect: run 7
 E := enum { A(u64), B(u64) }
 
 sum := fn(T : type, v : T) -> u64 {

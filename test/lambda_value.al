@@ -3,6 +3,7 @@
 ## synthetic top-level fn `<mod>__lam<fnpos>` and rewrites the expression to a code-pointer `FnRef`;
 ## calling it goes through the existing indirect-call path. `inc(41) = 42`. Also exercises a lambda
 ## passed to a higher-order fn (`apply`).
+## expect: run 42
 apply := fn(g : u64, x : u64) -> u64 { return g(x) }
 main := fn() -> u64 {
   inc := fn(n : u64) -> u64 { return n + 1 }

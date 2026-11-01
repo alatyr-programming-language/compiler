@@ -18,3 +18,4 @@ main := fn() -> i64 {
   if w == v { return 0 }
   return 1
 }
+## expect: trap

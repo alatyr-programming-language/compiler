@@ -12,6 +12,7 @@
 ## The byte probes below are kept as standalone documentation so the formatter's comment-preservation
 ## check covers them without depending on unsupported inline-comment placement inside a block.
 ## NUL — a bare .ascii would truncate here; high byte; 'A'; newline.
+## expect: run 42
 main := fn() -> u64 {
   e := embed("test/embed_fixture.bin")
   if e.len != 4 { return 1 }

@@ -36,3 +36,4 @@
 1205	Overview §6 (code consistent with the normative lowering rules, per selected target)	wasm: `bitcast` in these shapes is a fail-loud stub (`unsupported bitcast`)	rows
 1206	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: overloaded functions do not assemble on aarch64, riscv64 and wasm	rows
 1207	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: two programs fail to assemble or link on aarch64 and riscv64	rows
+1273	Comptime §9.2 (an entity a false `when` guard excludes is absent; referencing it at a use site is a compile error)	aarch64/riscv64/wasm: sema folds `when` guards for x86_64 only, so a reference to an entity the selected target excludes builds and traps instead of being refused	rows

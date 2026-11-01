@@ -14,6 +14,7 @@
 ## no `unchecked` marker; `sp` is a POINTER-to-user-type target whose whole `ptr(mut S)` is the span
 ## and must come back verbatim; `bp` is a SUB-WORD pointer target whose complete `ptr(u8)` span also
 ## comes back verbatim.
+## expect: run 42
 A := struct { a : u64, b : u64 }
 B := struct { p : u64, q : u64 }
 S := struct { m : u64 }

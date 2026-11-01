@@ -6,6 +6,7 @@
 ## NOT cover: a call-then-METHOD-with-args `mk(7).bump(3)` (UFCS on a call receiver), alongside the
 ## call-then-field `mk(20).v`. Formats idempotently + runs 42:
 ##   a = mk(20).v = 20 ; b = mk(7).bump(3) = 7+3 = 10 ; c = mk(4).v + mk(6).bump(2) = 4+8 = 12 ; 20+10+12 = 42.
+## expect: run 42
 P := struct { v : u64 }
 mk := fn(n : u64) -> P { return P(v = n) }
 bump := fn(in p : P, k : u64) -> u64 { return p.v + k }

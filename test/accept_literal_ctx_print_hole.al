@@ -9,3 +9,4 @@ main := fn() -> i64 {
   print("{} {}\n", 5 - 6, 3 - 10)
   42
 }
+## expect: run 42

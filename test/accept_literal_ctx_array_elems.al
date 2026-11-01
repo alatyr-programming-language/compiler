@@ -15,3 +15,4 @@ main := fn() -> i64 {
   if G[1] != 0 - 1 { return 4 }
   42
 }
+## expect: run 42
