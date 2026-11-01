@@ -142,14 +142,14 @@ retype_ptr_copy := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize, 
   if k < 0 { return }
   ue := deref(svec_at(SlotEntry, slots, usize(k)))
   if not lower_ctx::streq(src, ue.ns, ue.nl, ns, nl) or ue.ek != 0 or ue.snl != 0 or ue.is_ref { return }
-  deref(svec_at(SlotEntry, slots, usize(k))) = SlotEntry(ns = ue.ns, nl = ue.nl, off = ue.off, sns = ps, snl = pn, ek = ek, estride = ue.estride, eek = ue.eek, is_ref = false, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l)
+  deref(svec_at(SlotEntry, slots, usize(k))) = SlotEntry(ns = ue.ns, nl = ue.nl, off = ue.off, sns = ps, snl = pn, ek = ek, estride = ue.estride, eek = ue.eek, is_ref = false, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l, pps = ue.pps, ppl = ue.ppl)
 }
 
 ## Drop the name of slot entry `k`, keeping its frame word (an arm-local binding's collect-time type
 ## must not leak to the rest of the function).
 unname_slot := fn(slots : ptr(SVec), k : usize) {
   ue := deref(svec_at(SlotEntry, slots, k))
-  deref(svec_at(SlotEntry, slots, k)) = SlotEntry(ns = 0, nl = 0, off = ue.off, sns = ue.sns, snl = ue.snl, ek = ue.ek, estride = ue.estride, eek = ue.eek, is_ref = ue.is_ref, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l)
+  deref(svec_at(SlotEntry, slots, k)) = SlotEntry(ns = 0, nl = 0, off = ue.off, sns = ue.sns, snl = ue.snl, ek = ue.ek, estride = ue.estride, eek = ue.eek, is_ref = ue.is_ref, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l, pps = ue.pps, ppl = ue.ppl)
 }
 
 pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), sub : ptr(Subst), ctslots : ptr(SVec)) {
@@ -620,6 +620,18 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               ## AFTER every pointer-to-STRUCT branch, so a struct pointee keeps its ek-7 binding.
               cvp := call_view_pointee_bind(v, decls, src, a, sub)
               bind_ptrview_slot(slots, src, ns, nl, cvp.s, cvp.n)
+            } else if call_scalar_pointee_bind(v, decls, src, a, sub).n != 0 {
+              ## #1254 — `slot := dq_elem(T, ptr(d), i)` at a SUB-WORD `T` (`u8`, `i16`, `bool`, …): the
+              ## scalar dual of the eek-6 branch above. Bind the plain scalar with the resolved pointee
+              ## in `pps`/`ppl`, so `deref(slot) = x` and `v := deref(slot)` move the element's width.
+              ## The value type is what the default scalar binding below records (the annotation, else
+              ## the inferred type), so the slot changes only in its pointee.
+              cpb := call_scalar_pointee_bind(v, decls, src, a, sub)
+              clt := local_type_span(src, ns, nl)
+              cit := infer_local_scalar_type(v, ptr(slots), decls, src, a)
+              cvs := if clt.n != 0 { clt.s } else { cit.s }
+              cvl := if clt.n != 0 { clt.n } else { cit.n }
+              bind_ptrscalar_slot(slots, src, ns, nl, cvs, cvl, cpb.s, cpb.n)
             } else if field_ptrstruct_span(v, ptr(slots), decls, src, a).n != 0 {
               ## a `n := node.next` binding where field `next` is `ptr(Struct)` — record `n` as a
               ## pointer-to-struct (ek 7) carrying the pointee span, so `deref(n).field` resolves through
