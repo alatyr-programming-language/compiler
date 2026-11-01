@@ -109,18 +109,37 @@ pub lt := fn(T : type, a : T, b : T) -> bool {
 ## hashes; a scalar leaf hashes its own value. Recurses, so padding never enters the
 ## hash. Equal values (same variant / elements) hash equally — consistent with `eq`.
 pub hash := fn(T : type, v : T) -> u64 {
+  hash_of(T, v)
+}
+
+## The structural hash's body, recursing through its own name (#1303). `hash` has a concrete
+## one-parameter overload, `hash(s : str)` below, and a bare one-argument `hash(p)` in this module
+## is captured by it for any argument type (#1376), so an enum payload or an array element was
+## hashed as a `{ptr, len}` view. `hash_of` has no concrete overload, so its implicit calls reach
+## the generic, as `eq`'s and `lt`'s do. The spelled form `Some(pt) => hash(pt, p)` would need the
+## type bound from `var.payload`, which is not substituted yet (#1379).
+hash_of := fn(T : type, v : T) -> u64 {
   comptime if (match typeinfo(T) { Struct(_) => true; _ => false }) {
     mut h : u64 = 1469598103934665603
     comptime for f in typeinfo(T).fields {
-      h = unchecked (h * 1099511628211 + hash(f.type, v.(f)))
+      h = unchecked (h * 1099511628211 + hash_of(f.type, v.(f)))
     }
     return h
   } else {
     comptime if (match typeinfo(T) { Enum(_) => true; _ => false }) {
+      ## A payload folds in like a struct field. A unit variant binds no value, so
+      ## `comptime match var.payload` keeps `hash_of(p)` to the variants that carry one (the unit
+      ## arm has no payload type to infer the call's `T` from) and gives it the FNV seed —
+      ## consistent with `eq`, though two unit variants share it.
       vv := v
       match vv {
         comptime for var in typeinfo(T).variants {
-          T.(var)(p) => { return hash(p) }
+          T.(var)(p) => {
+            comptime match var.payload {
+              Some(_) => { return hash_of(p) }
+              None => { return 1469598103934665603 }
+            }
+          }
         }
       }
       return 0
@@ -128,7 +147,7 @@ pub hash := fn(T : type, v : T) -> u64 {
       comptime if (match typeinfo(T) { Array(_) => true; _ => false }) {
         mut h : u64 = 1469598103934665603
         comptime for i in 0 .. typeinfo(T).n {
-          h = unchecked (h * 1099511628211 + hash(v[i]))
+          h = unchecked (h * 1099511628211 + hash_of(v[i]))
         }
         return h
       } else {
