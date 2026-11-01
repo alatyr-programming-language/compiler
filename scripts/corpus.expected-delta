@@ -2,10 +2,12 @@
 # The feature PR declares the transitions it causes; the gate requires the fresh manifest to differ
 # from the committed one by EXACTLY these rows, and scripts/land.sh then commits that fresh manifest as
 # the oracle. Inert once the committed manifest is no longer base_sha256. Regenerate, never hand-edit.
-#   DETAIL-CHANGED     1 pair(s)  [ x86_64 1 ]
+#   DETAIL-CHANGED     3 pair(s)  [ x86_64 1 aarch64 1 riscv64 1 ]
 format=alatyr-corpus-delta-v1
 base_sha256=fb172adb56a6a2d44a9c8070e5eb669db47d407fa0ee7031aa4c89ddd868de45
-result_sha256=b154877bc121199f19743e40771f728e6cfaaf097e06449c824bae3ae0945fc0
-pairs=1
+result_sha256=c6494d0efa384250d4e542e04e8b3dc89c6a06c501a2c3e0ccf514cb25c6a6eb
+pairs=3
 columns=class<TAB>backend<TAB>path<TAB>before<TAB>after
+DETAIL-CHANGED	aarch64	test/ffi/struct_float_arg.al	link/1/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/4dab42b9467a569bd3b516cbd46b632e66c2f74c802cbc3d30986be530f8355f	link/1/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/5c86bea1e22391c0a3448e455e4b0d2e4746a2facf8427b3f1da4f041dfe9834
+DETAIL-CHANGED	riscv64	test/ffi/struct_float_arg.al	link/1/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/26845d82e70d86d0a858705935e979ab1600b6f60bf0c3ac9affc51cf499360f	link/1/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/e737b8a2826e4859322a2e6fbb428861ae1b6c2f229f89f6110ef52b7e1f963d
 DETAIL-CHANGED	x86_64	test/ffi/struct_float_arg.al	compile/14/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/25c8f83d07158f14b4c249151ab77ce44c09497ffcd4e8fd535f27c6d7d93bde	compile/14/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/b1d729fc79a472d524819a59449a32c2a08462bd9c835f4ab0b21c10cf7a0739
