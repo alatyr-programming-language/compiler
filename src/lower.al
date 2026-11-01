@@ -9059,6 +9059,14 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
                   ## position means the call OMITTED its type-args (implicit UFCS) and the fn rode into a
                   ## type-param slot — NOT the type; fall through to the receiver/fn-return recovery below.
                   if vn.n != 0 and is_fn_name(decls, src, vn.s, vn.n) == false { rs = vn.s; rn = vn.n; resolved = true }
+                  ## #1302 — a GENERIC-INSTANCE type argument (`vec::get(Option(u64), …)`) parses as a
+                  ## `Call`, not a `Var`, so the return stayed `Option(T)` with `T` a one-word scalar: the
+                  ## binding took disc + one word of a three-word `Option(Option(u64))`, and a `match` arm
+                  ## bound its payload as a scalar. Read the full application, as `gen_ret_enum_span` does.
+                  if resolved == false and vn.n == 0 {
+                    tfa := type_arg_full_at(ah, usize(pp), decls, src, a)
+                    if tfa.n != 0 { rs = tfa.s; rn = tfa.n; resolved = true }
+                  }
                 }
                 if resolved == false and rcv.n != 0 {
                   ## IMPLICIT UFCS: this return type-arg's type-param has no positional TYPE arg. Resolve it
@@ -10184,6 +10192,31 @@ payload_agg_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
   0
 }
 
+## #1212 — the WORD count of a `deref(p)` payload whose pointee is a STRUCT (`Option(T).Some(deref(elem))`
+## in `vec::get` / `try_at` / `pop` at a multi-word `T`), resolved through the instance like every other
+## pointee read (`deref_dest_pointee_span`). A Deref is neither a literal nor a local, so
+## `payload_agg_words` answered 0 and the payload rode the scalar path: word 0 only, every later field
+## stale (`S3`'s `c` read 48). 0 when the pointee is not a struct or cannot be resolved.
+payload_deref_struct_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
+  match deref(e) {
+    Expr::Deref(inner) => {
+      ## a pointer-to-struct PARAMETER or `p := ptr(s)` local is an ek-7 slot carrying its pointee
+      ## (`deref_struct_span`, the resolver `s := deref(p)` binds with); a bitcast local or a pointer
+      ## call answers through `deref_dest_pointee_span`
+      mut pty := deref_struct_span(e, cx.slots, cx.src)
+      if pty.n != 0 { pty = tparam_span_cx(pty, cx) } else { pty = deref_dest_pointee_span(inner, cx) }
+      if pty.n == 0 { return 0 }
+      pbn := base_type_name(cx.src, pty.s, pty.n)
+      if struct_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 { return 0 }
+      struct_words(cx.decls, cx.src, pty.s, pty.n, deref(cx.mar))
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
+  }
+}
+
 ## The WORD count of an ENUM-VALUED payload expression — an `EnumLit` ctor (`Err.Bad(x)`) or an
 ## enum `Var` local — as `1 + enum_inst_words` of its enum type; 0 if the payload is not an enum
 ## value. The enum dual of `payload_agg_words`: lets a nested-enum variant payload (`R.Fail(Err.Bad(x))`)
@@ -10200,11 +10233,34 @@ payload_enum_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize 
       if va.ek == 3 { return 1 + enum_inst_words(cx.decls, cx.src, va.s, va.n, a) }
       0
     }
+    Expr::Deref(inner) => {
+      ## #1302 — an enum read through a pointer as the payload (`Option(T).Some(deref(elem))` in
+      ## `vec::get` at `T = Option(u64)`): its width is the POINTEE's, resolved through the instance
+      ## the way `emit_enum_value`'s Deref arm resolves it (#989). Returning 0 sent it down the scalar
+      ## path, which delivered the inner discriminant alone. A niche-folded pointee is one scalar word.
+      pty := deref_enum_pointee_cx(e, inner, cx)
+      if pty.n == 0 or is_niche_folded(cx.src, pty.s, pty.n) { return 0 }
+      pbn := base_type_name(cx.src, pty.s, pty.n)
+      if enum_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 { return 0 }
+      1 + enum_type_payload_words(cx.decls, cx.src, pty.s, pty.n, a)
+    }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-      | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Field | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
+}
+
+## #1364 — the pointee TYPE behind `deref(p)` (`e` the Deref, `inner` its pointer) as an enum value
+## reads it, whatever binds `p`. A pointer-to-enum PARAMETER or annotated local is an ek-6 slot that
+## carries its instance-resolved pointee (`deref_enum_span`, the resolver `v := deref(p)` binds with);
+## a bitcast local or a pointer call answers through `deref_dest_pointee_span`, which knows no
+## parameter, so `first(T, p : ptr(T))` at `T = Option(u64)` sized the payload as one scalar word and
+## returned 0 for 42. The enum twin of `payload_deref_struct_words`' resolution. {0,0} when unresolved.
+deref_enum_pointee_cx := fn(e : ptr(Expr), inner : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  des := deref_enum_span(e, cx.slots, cx.src)
+  if des.n != 0 { return tparam_span_cx(des, cx) }
+  deref_dest_pointee_span(inner, cx)
 }
 
 ## The WORD count of an ENUM-VALUED CALL payload. A call has no local slot or literal node from which
@@ -10380,6 +10436,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       mut pw := 0
       mut pcall := false
       mut parray := false
+      mut pderef := false
       ## #852 — a payload declared `Option(ptr(T))` is one folded word: it takes the scalar register
       ## path with `emit_store_value`, never the multi-word enum shift.
       pf0 := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, 0, deref(cx.mar))
@@ -10404,6 +10461,16 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
           parray = true
         } else {
           pw = payload_agg_words(ga0.e, cx, a)
+        }
+        if parray == false and pw == 0 {
+          dw := payload_deref_struct_words(ga0.e, cx, a)
+          ## located at the constructor: an instance body carries no call site, so `vec::get(S7, …)`
+          ## shows the `Option(T).Some(deref(elem))` line it reached
+          if dw > 6 {
+            lower_show_src_line(cx.src, es)
+            panic("selfhost: a `deref(p)` struct payload wider than 6 words needs the wide enum result-pointer path (#1212)")
+          }
+          if dw > 1 { pw = dw; pderef = true }
         }
         ## #912/#913 — a STRUCT-LITERAL payload (`Some(W(k = K(…)))`) is delivered by the one struct-value
         ## emitter, `emit_struct_value`, which knows every field kind (nested struct, enum, str, byte
@@ -10436,6 +10503,21 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       }
       if parray {
         ## The array literal was materialized above; its words already occupy payload return registers.
+      } else if pderef {
+        ## #1212 — a `deref(p)` struct payload: evaluate the pointer into %r11 (free for the ≤6 payload
+        ## words riding %rdx..%r10), then deliver pointee word k from `k*8(%r11)` into payload register
+        ## k+1, the layout `emit_struct_value`'s Deref arm and the by-ref param payload below read.
+        ga := deref(arg_at(phead, "argument list ended early"))
+        ## `payload_deref_struct_words` answered non-zero only for a Deref, so its inner pointer exists
+        emit_gas(deref_inner_expr(ga.e), sb, cx, a, nl)
+        push_str(sb, "  popq %r11\n")
+        for k in 0..pw {
+          push_str(sb, "  movq ")
+          push_int(sb, i64(k * 8))
+          push_str(sb, "(%r11), ")
+          emit_retreg(sb, k + 1)
+          push_str(sb, "\n")
+        }
       } else if pcall {
         ## Multi-word aggregate/enum CALL payload (`Some(f(v))`, `Some(inner())`): emit the call (its
         ## whole return lands in retreg(0..pw-1) = %rax:%rdx:%rcx:…), then SHIFT each word up one
@@ -10693,7 +10775,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       ## the POINTEE's type, resolved through the generic instance, never from the enclosing fn's
       ## return type, because this emitter also serves non-return positions. This arm used to fall
       ## into the null-enum fallback below, so the element came back as variant 0 with a zero payload.
-      pty := deref_dest_pointee_span(inner, cx)
+      pty := deref_enum_pointee_cx(e, inner, cx)
       pbn := base_type_name(cx.src, pty.s, pty.n)
       if pty.n == 0 or enum_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 {
         panic("selfhost: an enum value read through `deref(p)` needs `p`'s pointee type, and it could not be resolved here — bind the pointer with its type spelled (`p : ptr(E) = …`), or bind the value to an annotated local first")
@@ -12453,6 +12535,13 @@ ptr_var_agg_words := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
   if ent.ek == 7 { return struct_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
   if ent.ek == 6 and ent.snl != 0 and not is_niche_folded(cx.src, ent.sns, ent.snl) { return 1 + enum_inst_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
+  ## #1302 — a `vd := bitcast(ptr(mut V), …)` local in an instance at a multi-word ENUM `V`
+  ## (`omap_grow`'s and `omap_insert`'s element move `deref(vd) = deref(vs)`): the pointee through
+  ## the instance, the enum twin of the ek-7 struct pointer above. It moved word 0 alone.
+  if ent.ek == 0 {
+    mwe := multiword_enum_span(deref_dest_pointee_span(p, cx), cx.decls, cx.src, deref(cx.mar))
+    if mwe.n != 0 { return 1 + enum_inst_words(cx.decls, cx.src, mwe.s, mwe.n, deref(cx.mar)) }
+  }
   0
 }
 
@@ -12547,6 +12636,9 @@ deref_store_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
   if vn.n == 0 { return 1 }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
   if ent.ek == 2 { return struct_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
+  ## #1334 — a niche-folded `Option(ptr(T))` slot is `ek == 3` too, but it is ONE word (Memory §4); its
+  ## `1 + enum_inst_words` stored a second word past the pointee (deque `push_front` at that `T`)
+  if ent.ek == 3 and is_niche_folded(cx.src, ent.sns, ent.snl) { return 1 }
   if ent.ek == 3 { return 1 + enum_inst_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
   return 1
 }
@@ -12639,6 +12731,12 @@ deref_dest_pointee_span := fn(p : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   }
   pt := local_ptr_pointee_span(cx, vn.s, vn.n)
   if pt.n == 0 { return CSpan(s = 0, n = 0) }
+  return tparam_span_cx(pt, cx)
+}
+
+## A type span that IS one of the current instance's type parameters (`T`), mapped to its type
+## argument; any other span unchanged.
+tparam_span_cx := fn(pt : CSpan, cx : ptr(LCtx)) -> CSpan {
   if cx.gp_l != 0 and lower_ctx::streq(cx.src, pt.s, pt.n, cx.gp_s, cx.gp_l) { return CSpan(s = cx.it_s, n = cx.it_l) }
   if cx.gp2_l != 0 and lower_ctx::streq(cx.src, pt.s, pt.n, cx.gp2_s, cx.gp2_l) { return CSpan(s = cx.it2_s, n = cx.it2_l) }
   if cx.gp3_l != 0 and lower_ctx::streq(cx.src, pt.s, pt.n, cx.gp3_s, cx.gp3_l) { return CSpan(s = cx.it3_s, n = cx.it3_l) }
@@ -13288,6 +13386,33 @@ call_view_pointee_bind := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
   pt
 }
 
+## #1302 — `p := <call returning `ptr(<opt mut> <callee type parameter>)`>` whose argument at that position
+## resolves, through the enclosing instance, to a STRUCT (a bare declared name, the form
+## `deref_call_ret_struct_span` accepts) or a multi-word ENUM (`E`, `Option(u64)`): that pointee span, or
+## {0,0}. A niche-folded `Option(ptr(T))` is one scalar word and stays on the scalar path; a §7 view is
+## `call_view_pointee_bind`'s. Gates the ek-7 / ek-6 binding of a call-derived element pointer.
+## Only a pointee the enclosing SUBSTITUTION rewrote answers: a concrete pointee (`newnode(…)` ->
+## `ptr(mut Expr)`, `dq_elem(S2, …)` outside an instance) keeps the binding it had, which the
+## compiler's own code depends on (the TYP-6 operand gate reads an ek-6 slot as its enum).
+call_agg_pointee_bind := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, sub : ptr(Subst)) -> CSpan {
+  pt := call_ret_pointee_span(v, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2, sub.gps3, sub.gpl3, sub.its3, sub.itl3)
+  if pt.n == 0 { return CSpan(s = 0, n = 0) }
+  raw := call_ret_pointee_span(v, decls, src, a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+  if raw.s == pt.s and raw.n == pt.n { return CSpan(s = 0, n = 0) }
+  if struct_decl_of(decls, src, pt.s, pt.n) >= 0 { return pt }
+  multiword_enum_span(pt, decls, src, a)
+}
+
+## `pt` when it names a MULTI-WORD enum (`E`, `Option(u64)`: a discriminant plus payload words), else
+## {0,0}. A niche-folded `Option(ptr(T))` and a payload-free enum are one scalar word.
+multiword_enum_span := fn(pt : CSpan, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  if pt.n == 0 or is_niche_folded(src, pt.s, pt.n) { return CSpan(s = 0, n = 0) }
+  pbn := base_type_name(src, pt.s, pt.n)
+  if enum_decl_of(decls, src, pbn.s, pbn.n) < 0 { return CSpan(s = 0, n = 0) }
+  if enum_inst_words(decls, src, pt.s, pt.n, a) == 0 { return CSpan(s = 0, n = 0) }
+  pt
+}
+
 ## `x := deref(<pointer to a §7 VIEW>)` — the view TYPE span, or {0,0} when `x` is not that. Drives the
 ## `bind_str_slot` binding of a container's element read (`v := deref(val_at(K, V, m, a, i))` at
 ## `V = str`), which before this bound ONE scalar word and read a garbage length.
@@ -13490,10 +13615,31 @@ deref_enum_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan 
 ## pointer-to-enum local or param, or a pointer-returning call. The one question the binding of
 ## `v := deref(p)` and its word copy both ask; the call form alone was answered before, so a `deref`
 ## of a pointer VARIABLE bound one scalar word and copied only the tag.
-deref_enum_pointee_span := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+## #1302 — and a pointer whose pointee is the ENCLOSING instance's type parameter: a call returning
+## `ptr(<its type parameter>)` (`v := deref(val_at(K, V, m, a, i))` at `V = Option(u64)`) or a local
+## bound `bitcast(ptr(mut V), …)` (`hashmap::rehash`'s `v := deref(ovp)`), resolved through `sub` by
+## `ptr_expr_pointee_span` — the enum twin of `deref_call_ret_struct_span` and
+## `bitcast_ptrstruct_span_sub`. Asked last, so every shape answered before keeps it.
+deref_enum_pointee_span := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, sub : ptr(Subst)) -> CSpan {
   dvs := deref_enum_span(e, slots, src)
   if dvs.n != 0 { return dvs }
-  deref_call_enum_span(e, decls, src, a)
+  dce := deref_call_enum_span(e, decls, src, a)
+  if dce.n != 0 { return dce }
+  match deref(e) {
+    Expr::Deref(inner) => {
+      return multiword_enum_span(ptr_expr_pointee_span(inner, slots, decls, src, a, sub), decls, src, a)
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  CSpan(s = 0, n = 0)
+}
+
+## The enclosing instance's substitution as a `Subst`, for a resolver shared with `collect_slots`.
+cx_subst := fn(cx : ptr(LCtx)) -> Subst {
+  Subst(gps = cx.gp_s, gpl = cx.gp_l, its = cx.it_s, itl = cx.it_l, gps2 = cx.gp2_s, gpl2 = cx.gp2_l, its2 = cx.it2_s, itl2 = cx.it2_l, gps3 = cx.gp3_s, gpl3 = cx.gp3_l, its3 = cx.it3_s, itl3 = cx.it3_l)
 }
 deref_call_enum_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   inner := deref_inner_expr(e)
@@ -13612,7 +13758,18 @@ direct_match_multiword_reject := fn(scrut : ptr(Expr), cx : ptr(LCtx)) {
   if sub.n == 0 { return }
   rw := enum_inst_words(cx.decls, cx.src, raw.s, raw.n, deref(cx.mar))
   sw := enum_inst_words(cx.decls, cx.src, sub.s, sub.n, deref(cx.mar))
-  if sw > rw { panic("selfhost: a direct `match recv.map(f)` / `.and_then(f)` / `.map_err(g)` whose payload is a MULTI-WORD type truncates the scrutinee to its first word — bind the result to a local first: `m := recv.map(f); match m { … }`") }
+  ## #1212 — the message names the construct it refuses: any generic call, `vec::get(S, …)` as much
+  ## as `recv.map(f)`, located at the call
+  if sw > rw {
+    match deref(scrut) {
+      Expr::Call(cs, cl, nargs, ah) => { lower_show_src_line(cx.src, cs) }
+      Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+        | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+        | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+        | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+    }
+    panic("selfhost: a direct `match` on a generic call whose result enum carries a multi-word payload (`match vec::get(S, …)`, `match recv.map(f)`) truncates the scrutinee to its first word — bind the result to a local first: `m := <the call>; match m { … }`")
+  }
 }
 
 ## Is the fn decl whose name is `[name_s, name_s+name_l)` marked `@convert` (Types §4.6 / TYP-6)? The
@@ -23261,6 +23418,7 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
             }
             psi := struct_lit_info(ga.e)
             pstr := str_lit_info(ga.e)
+            pwd := payload_deref_struct_words(ga.e, cx, a)
             ## #852 — a payload component declared `Option(ptr(T))` is one folded word, whatever its value
             ## form (a bare `Option.Some/None`, a folded local or field, a call).
             pft := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, pci, deref(cx.mar))
@@ -23351,6 +23509,20 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
                 }
               }
               i += i64(pwv)
+            } else if pwd > 1 {
+              ## #1212 — a `deref(p)` STRUCT payload (`o := Option(S).Some(deref(p))`): the store dual of
+              ## `emit_enum_value`'s pderef arm. Evaluate the pointer into %r11 and copy pointee word j to
+              ## the payload slot `base-i-j`; `emit_gas` stored word 0 alone.
+              emit_gas(deref_inner_expr(ga.e), sb, cx, a, nl)
+              push_str(sb, "  popq %r11\n")
+              for j in 0..pwd {
+                push_str(sb, "  movq ")
+                push_int(sb, i64(j * 8))
+                push_str(sb, "(%r11), %rax\n  movq %rax, -")
+                push_int(sb, (base - i - i64(j)) * 8)
+                push_str(sb, "(%rbp)\n")
+              }
+              i += i64(pwd)
             } else if var_agg_info(ga.e, cx.slots, cx.src).ek == 3 and (1 + enum_inst_words(cx.decls, cx.src, var_agg_info(ga.e, cx.slots, cx.src).s, var_agg_info(ga.e, cx.slots, cx.src).n, deref(cx.mar))) > 1 {
               ## A MULTI-WORD ENUM VAR payload (`Some(r)` with r an enum LOCAL/PARAM) — copy the complete
               ## inner `[disc, payload…]` block into the outer payload. This is the storage dual of the
@@ -26943,11 +27115,16 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
       ## down-growing layout). ONE pointer slot so the 1-param-1-register spill mapping holds.
       off := svec_len(ptr(slots))
       svec_push(slots, SlotEntry(ns = pm.ns, nl = pm.nl, off = off, sns = 0, snl = 0, ek = 4, estride = 1, eek = 0, is_ref = true))
-    } else if str_at((src + pts), ptl) == "ptr" and enum_decl_of(decls, src, ppn_s, ppn_l) >= 0 {
+    } else if str_at((src + pts), ptl) == "ptr" and (enum_decl_of(decls, src, ppn_s, ppn_l) >= 0 or ((ppn_s != pm.pps or ppn_l != pm.ppl) and multiword_enum_span(CSpan(s = ppn_s, n = ppn_l), decls, src, a).n != 0)) {
       ## POINTER-TO-ENUM param `p : ptr(E)` — the arena-AST shape (`match deref(p)`). The slot
       ## holds the POINTER value (a plain scalar, passed by value); `ek = 6` records "pointer to
       ## enum `E`" with the pointee enum's type span (`ppn`, the Subst-resolved pointee) so
       ## `scrut_enum_info` resolves a `match deref(p)` — the pointer is materialized like a by-ref enum.
+      ## #1364 — also a generic `p : ptr(T)` whose instance substitutes an enum APPLICATION
+      ## (`T = Option(u64)`): `enum_decl_of` matches a declared name only, so `p` bound as a bare scalar
+      ## and `Option(T).Some(deref(p))` sized its payload as one word (0 for 42). Only a pointee the
+      ## SUBSTITUTION rewrote into a multi-word enum joins: a concrete pointee keeps its binding, and a
+      ## niche-folded `Option(ptr(P))` stays one scalar word.
       off := svec_len(ptr(slots))
       svec_push(slots, SlotEntry(ns = pm.ns, nl = pm.nl, off = off, sns = ppn_s, snl = ppn_l, ek = 6, estride = 1, eek = 0, is_ref = true, tmod_s = 0, tmod_l = 0))
     } else if str_at((src + pts), ptl) == "ptr" and struct_decl_of(decls, src, ppn_s, ppn_l) >= 0 {

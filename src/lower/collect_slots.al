@@ -586,11 +586,11 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               }
               if vb_is_slice { bind_slice_slot(slots, src, ns, nl, vb_stride, vb_eek, vb_ess, vb_esl) }
               else { bind_str_slot(slots, src, ns, nl) }
-            } else if deref_enum_pointee_span(v, ptr(slots), decls, src, a).n != 0 {
+            } else if deref_enum_pointee_span(v, ptr(slots), decls, src, a, sub).n != 0 {
               ## a `st := deref(node_ptr(E, …))` / `v := deref(p)` binding (p a pointer-to-enum, #790) —
               ## reserve it as enum E (disc + max-payload words) so a following `match` is recognized as an
               ## enum match (ek 3); the words are copied in from the pointee on the emit side.
-              dce := deref_enum_pointee_span(v, ptr(slots), decls, src, a)
+              dce := deref_enum_pointee_span(v, ptr(slots), decls, src, a, sub)
               mx := enum_inst_words(decls, src, dce.s, dce.n, a)
               bind_enum_slot(slots, decls, src, ns, nl, dce.s, dce.n, 1 + mx)
             } else if call_ret_ptrstruct_span(v, decls, src, a).n != 0 {
@@ -613,6 +613,17 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               ## through the pointer. The generic dual of the `call_ret_ptrstruct_ret_span` branch above.
               grp := gen_ret_ptrstruct_span(v, decls, src, a)
               bind_ptrstruct_slot(slots, src, ns, nl, grp.s, grp.n)
+            } else if call_agg_pointee_bind(v, decls, src, a, sub).n != 0 {
+              ## #1302 — `slot := dq_elem(T, ptr(d), i)` INSIDE an instance: the callee returns
+              ## `ptr(mut <its type parameter>)` and the call names the ENCLOSING instance's `T`, so
+              ## `gen_ret_ptrstruct_span` (a concrete argument only) missed it and `slot` bound as a bare
+              ## scalar; a later `v := deref(slot)` then took ONE word of a multi-word struct or enum
+              ## (`deque::pop_front` at `T = S2` / `Option(u64)`). Resolve the pointee by position through
+              ## the instance (`call_ret_pointee_span`) and bind `slot` as the pointer kind the pointee
+              ## asks for: ek 7 for a struct, ek 6 for a multi-word enum.
+              cap := call_agg_pointee_bind(v, decls, src, a, sub)
+              if struct_decl_of(decls, src, cap.s, cap.n) >= 0 { bind_ptrstruct_slot(slots, src, ns, nl, cap.s, cap.n) }
+              else { bind_ptrenum_slot(slots, src, ns, nl, cap.s, cap.n) }
             } else if call_view_pointee_bind(v, decls, src, a, sub).n != 0 {
               ## CLAYOUT S3(b) — `slot := dq_elem(T, ptr(d), i)` at `T = str`: a pointer LOCAL whose
               ## pointee is a §7 VIEW. Bind it as the eek-6 marked scalar carrying the RESOLVED pointee

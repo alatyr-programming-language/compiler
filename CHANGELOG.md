@@ -126,6 +126,26 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`Some(deref(p))` of a multi-word struct keeps every field (#1212).** `vec::get`, `vec::try_at`,
+  `vec::pop` and the deque reads built on the same shape returned the struct's first word and stale
+  values for the rest; so did `Option(S).Some(deref(p))` through a pointer parameter or into a local.
+  The payload is now read word by word through the pointer. A direct `match vec::get(S, …)` is still
+  refused, and the message now names that construct instead of `.map(f)`.
+- **A container element that is an `Option`, a multi-payload enum or a two-word struct is read back
+  whole (#1302).** `vec::get(Option(u64), …)` then a `match` arm passing its payload on segfaulted;
+  `deque::pop_front` / `pop_back`, `hashmap::get` and `omap::omap_get` returned one word of such an
+  element, so the rest read stale. The element pointer a generic instance takes for its own type
+  parameter is now resolved through the instance, and the value is copied word by word.
+- **A store through a pointer to an `Option(ptr(T))` writes one word (#1334).** `deref(p) = o` with
+  `o` such a local or parameter wrote a second word over whatever followed the pointee, so
+  `deque::push_front` of `Option(ptr(u64))` turned the previous front element into `None`. The
+  folded option is one pointer-width word (Memory §4) and is now stored as one.
+- **`Option(E).Some(deref(p))` through a pointer parameter keeps the whole enum (#1364).** With `p`
+  a `ptr(E)` parameter and `E` a multi-word enum, the payload was sized from the pointer-local
+  resolver, which knows no parameter: a concrete function lost the payload, and a generic one at
+  `T = Option(u64)` returned 0 for 42. A generic `p : ptr(T)` whose instance makes `T` an enum
+  application is now bound as a pointer to that enum, and the payload is read through it.
+
 ## 0.2.21 — 2026-11-01
 
 - **A struct read through `deref(unchecked bitcast(ptr(S), x))` is the whole `S` (#1209).** Binding it
