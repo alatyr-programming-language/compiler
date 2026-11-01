@@ -16,3 +16,4 @@ main := fn() -> u64 {
   j := J(q = 42, t = 7)
   w(unchecked bitcast(usize, ptr(j)))
 }
+## expect: run 42

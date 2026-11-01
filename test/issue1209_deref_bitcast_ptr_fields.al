@@ -14,3 +14,4 @@ main := fn() -> u64 {
   j := J(q = ptr(mut a), t = ptr(mut b))
   w(unchecked bitcast(usize, ptr(j)))
 }
+## expect: run 42
