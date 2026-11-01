@@ -71,7 +71,7 @@ mut OUT_O1K : [usize; 64] = [0; 64]
 mut OUT_O1V : [i64; 64]   = [0; 64]
 mut OUT_O2K : [usize; 64] = [0; 64]   ## third output operand (the scaled-load INDEX); None(0) for every other op
 mut OUT_O2V : [i64; 64]   = [0; 64]
-mut RA_OUT_N := 0
+mut RA_OUT_N : usize = 0
 
 ## ===== Allocator config (per run) ====================================================================
 mut RA_ALLOC  : [usize; 32] = [0; 32]   ## allocatable physical reg ids, in preference order
@@ -102,7 +102,7 @@ mut IV_LAST    : [i64; 32]   = [0; 32]
 
 mut ASSIGN : [i64; 32] = [0; 32]          ## vreg -> phys reg id (-1 = spilled / unassigned)
 mut SPILL  : [i64; 32] = [0; 32]          ## vreg -> spill slot index (-1 = not spilled)
-mut RA_SPILL_SLOTS := 0
+mut RA_SPILL_SLOTS : usize = 0
 
 mut ORDER   : [usize; 32] = [0; 32]       ## vregs in linear-scan order (by interval start)
 mut ORDER_N := 0
@@ -544,7 +544,7 @@ ra_rewrite := fn(n : usize) {
 
 ## Hard guard (the "no VReg reaches render" invariant): a leaked vreg in the rewritten stream is fatal.
 ra_verify_no_vreg := fn() {
-  mut i := 0
+  mut i : usize = 0
   while i < RA_OUT_N {
     if OUT_O0K[i] == 3 { panic("regalloc: leaked vreg in rewritten output") }
     if OUT_O1K[i] == 3 { panic("regalloc: leaked vreg in rewritten output") }
@@ -555,7 +555,7 @@ ra_verify_no_vreg := fn() {
 
 ## Is there a reload (a `mov temp, [disp]`) from spill slot at frame disp `disp` in the output?
 ra_has_reload_disp := fn(disp : i64) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i < RA_OUT_N {
     if OUT_OP[i] == 0 and OUT_O1K[i] == 5 and OUT_O1V[i] == disp { return true }
     i = i + 1
@@ -661,8 +661,8 @@ ra_ir_restore := fn(n : usize) {
 ## allocation used (its prologue save + epilogue restore). This is the exact size the emitter produces, so a
 ## merge that trades a removed `mov` for a spill reload/store or a callee-save pair shows up as NO net win.
 ra_out_cost := fn() -> usize {
-  mut c := 0
-  mut i := 0
+  mut c : usize = 0
+  mut i : usize = 0
   while i < RA_OUT_N {
     selfmv := OUT_OP[i] == 0 and OUT_O0K[i] == 2 and OUT_O1K[i] == 2 and OUT_O0V[i] == OUT_O1V[i]
     if selfmv == false { c = c + 1 }
@@ -735,7 +735,7 @@ ra_coalesce := fn(n : usize) {
 ra_fold_const_scalar := fn(n : usize) -> usize {
   mut i : usize = 0
   mut left := n
-  mut folded := 0
+  mut folded : usize = 0
   while i + 1 < left {
     first := RA_OP[i] == 0 and RA_O0K[i] == 3 and RA_O1K[i] == 1
     second := RA_O0K[i + 1] == 3 and RA_O1K[i + 1] == 1 and RA_O0V[i + 1] == RA_O0V[i]
@@ -784,7 +784,7 @@ ra_fold_const_scalar := fn(n : usize) -> usize {
 ra_fold_const_shift := fn(n : usize) -> usize {
   mut i : usize = 0
   mut left := n
-  mut folded := 0
+  mut folded : usize = 0
   while i + 2 < left {
     first := RA_OP[i] == 0 and RA_O0K[i] == 3 and RA_O1K[i] == 1
     count_mov := RA_OP[i + 1] == 0 and RA_O0K[i + 1] == 2 and RA_O0V[i + 1] == 2 and RA_O1K[i + 1] == 1
@@ -853,7 +853,7 @@ ra_widen_imm64 := fn(n : usize) -> usize {
     if RA_O2K[s] == 3 and RA_O2V[s] >= next_vreg { next_vreg = RA_O2V[s] + 1 }
     s = s + 1
   }
-  mut widened := 0
+  mut widened : usize = 0
   mut i : usize = 0
   while i < left {
     op := RA_OP[i]
@@ -1128,7 +1128,7 @@ ra_op_is_splice := fn(op : usize) -> bool { op == 14 or op == 23 or op == 24 }
 ## After allocation, does the output stream splice any text-emitter code? Such a function clobbers
 ## callee-saved registers the allocator never assigned (#794), so its prologue saves the whole set.
 pub ra_out_has_splice := fn() -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i < RA_OUT_N {
     if ra_op_is_splice(OUT_OP[i]) { return true }
     i = i + 1
@@ -1139,7 +1139,7 @@ pub ra_out_has_splice := fn() -> bool {
 ## this over the callee-saved set {rbx=1, r12..r15} to decide which registers to save/restore.) Scans the
 ## VReg-free output stream for a Phys operand naming `r`.
 pub ra_out_uses_reg := fn(r : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i < RA_OUT_N {
     if OUT_O0K[i] == 2 and OUT_O0V[i] == i64(r) { return true }
     if OUT_O1K[i] == 2 and OUT_O1V[i] == i64(r) { return true }

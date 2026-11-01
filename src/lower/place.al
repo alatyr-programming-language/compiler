@@ -120,7 +120,7 @@ pub emit_ptr_root_addr := fn(ent : SlotEntry, in out sb : strbuf::StrBuf) {
 ## LITERAL-bound AGGREGATE array (whose `snl` holds the element type span, not the count).
 pub agg_arr_fill_count := fn(slots : ptr(SVec), bslot : usize) -> usize {
   mut i := bslot
-  mut fills := 0
+  mut fills : usize = 0
   mut scanning := true
   while i > 0 and scanning {
     e := deref(svec_at(SlotEntry, slots, i - 1))

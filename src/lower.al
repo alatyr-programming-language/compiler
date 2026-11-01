@@ -1367,7 +1367,7 @@ tuple_param_components := fn(src : ptr(u8), ts : usize) -> usize {
   mut depth := 1
   mut comps := 1
   mut guard := 0
-  mut res := 0
+  mut res : usize = 0
   mut scanning := true
   while scanning and guard < 4096 {
     c := str_at((src + i), 1)
@@ -3312,7 +3312,7 @@ entry_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> usize 
 ## reporting is possible only for `bind_dyn_store_slot` (its fillers sit ABOVE its base), which
 ## costs a MISSED diagnostic, never a false one.
 slot_reserved_words := fn(slots : ptr(SVec), i : usize) -> usize {
-  mut w := 1
+  mut w : usize = 1
   mut k := i
   while k > 0 {
     e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), deref(slots).base + (k - 1) * svec_stride())
@@ -8120,7 +8120,7 @@ imax := fn(x : usize, y : usize) -> usize { if x > y { x } else { y } }
 ## A COMPTIME `CompMatch` folds to one arm at compile time (no runtime scrutinee) → NOT a level.
 ## Structural twin of `scan_str_arg_expr`/`scan_str_arg_stmts`; the `Match` arm returns `1 + inner`.
 match_depth_expr := fn(e : ptr(Expr), a : rt::Arena, decls : ptr(rt::Vec), src : ptr(u8), in out cw : usize) -> usize {
-  mut m := 0
+  mut m : usize = 0
   match deref(e) {
     Expr::Bin(op, l, r) => { m = imax(match_depth_expr(l, a, decls, src, cw), match_depth_expr(r, a, decls, src, cw)) }
     Expr::If(c, t, f) => { m = imax(match_depth_expr(c, a, decls, src, cw), imax(match_depth_expr(t, a, decls, src, cw), match_depth_expr(f, a, decls, src, cw))) }
@@ -8160,7 +8160,7 @@ match_depth_expr := fn(e : ptr(Expr), a : rt::Arena, decls : ptr(rt::Vec), src :
 
 match_depth_stmts := fn(head : Option(ptr(mut Stmt)), a : rt::Arena, decls : ptr(rt::Vec), src : ptr(u8), in out cw : usize) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut m := 0
+  mut m : usize = 0
   loop {
     match s {
       Some(sq) => {
@@ -8217,7 +8217,7 @@ match_depth_stmts := fn(head : Option(ptr(mut Stmt)), a : rt::Arena, decls : ptr
 ## statement-body inliner lands; for now a tail-expression `@inline` body uses only params.)
 inline_callee_pcount := fn(decls : ptr(rt::Vec), ci : i64, a : rt::Arena) -> usize {
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
-  mut c := 0
+  mut c : usize = 0
   mut p := d.params_head
   loop { match p { Some(pq) => { pm := deref(param_p(pq)); c = c + 1; p = pm.next }; None => { break } } }
   c
@@ -8256,7 +8256,7 @@ inline_callee_pwords := fn(decls : ptr(rt::Vec), src : ptr(u8), ci : i64, a : rt
 ## aggregate local, so the seeds change no binding decision (offsets are rebased away).
 seed_inline_params := fn(in out slots : SVec, decls : ptr(rt::Vec), src : ptr(u8), ci : i64, a : rt::Arena) -> usize {
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
-  mut cnt := 0
+  mut cnt : usize = 0
   mut p := d.params_head
   loop {
     match p {
@@ -8528,7 +8528,7 @@ bin_operator_ret_struct := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
 ## `match_depth_expr`). `>0` also means "this fn expands an @inline body" (so a fn without one reserves
 ## nothing → byte-identical → fixpoint-neutral). `slots` resolves an operator Bin's operand type.
 inline_frame_need_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, slots : ptr(SVec), a : rt::Arena, mar : ptr(mut rt::Arena)) -> usize {
-  mut m := 0
+  mut m : usize = 0
   match deref(e) {
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := inline_callee_idx(decls, src, cs, cl, ms, ml)
@@ -8591,7 +8591,7 @@ inline_frame_need_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
 }
 inline_frame_need_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, slots : ptr(SVec), a : rt::Arena, mar : ptr(mut rt::Arena)) -> usize {
   mut s : Option(ptr(mut Stmt)) = head
-  mut m := 0
+  mut m : usize = 0
   loop {
     match s {
       Some(sq) => {
@@ -9524,7 +9524,7 @@ dyn_type_nuser := fn(src : ptr(u8), s : usize, n : usize) -> usize {
   if i >= n { return 0 }
   i = i + 1
   mut depth := 1
-  mut commas := 0
+  mut commas : usize = 0
   mut sawany := false
   while i < n and depth > 0 {
     c := str_at((src + s + i), 1)
@@ -10773,7 +10773,7 @@ pub fn_returns_tuple := fn(d : Decl, src : ptr(u8)) -> bool {
 ## count the top-level (paren-depth 1) commas + 1. A single-component `(T)` has 0 commas → 1 word.
 pub tuple_words := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
   mut depth := 0
-  mut commas := 0
+  mut commas : usize = 0
   mut i : usize = 0
   while i < tl {
     c := str_at((src + ts + i), 1)
@@ -12664,7 +12664,7 @@ deref_view_span_cx := fn(v : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
 ## scalar bitcast is not a pointer and therefore keeps the 8-byte fallback here. Isolated pointer-PARAM
 ## helper — a nested `match deref(x)` in another arm does not lower, hence this stands alone.
 deref_pointee_bytes := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
-  mut w := 8
+  mut w : usize = 8
   match deref(p) {
     Expr::Unchecked(inner) => { w = deref_pointee_bytes(inner, cx) }
     Expr::Bitcast(inner, ps, pl) => {
@@ -14436,7 +14436,7 @@ is_cas_call := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
 ## The COMPONENT (word) count of a `Call` to a tuple-returning fn — so `t := mk()` reserves `t` as
 ## an N-word tuple local. 0 if not such a call.
 call_ret_tuple_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
-  mut res := 0
+  mut res : usize = 0
   match deref(e) {
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
@@ -15050,7 +15050,7 @@ is_type_name := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::A
 ## (`result::map`/ntpc 3 vs `vec::map`/ntpc 2) resolves to the one whose `tparam_count` matches.
 leading_type_arg_count := fn(args_head : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
   mut g : Option(ptr(mut Arg)) = args_head
-  mut c := 0
+  mut c : usize = 0
   mut go := true
   loop {
     match g {
@@ -15416,7 +15416,7 @@ tparam_idx := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
   mut i := 0
-  mut res := 0
+  mut res : usize = 0
   mut found := false
   loop {
     match p {
@@ -15439,7 +15439,7 @@ tparam_count := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena)
   if gi < 0 { return 0 }
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
-  mut c := 0
+  mut c : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -15461,7 +15461,7 @@ tparam_idx2 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) 
   mut p := d.params_head
   mut i := 0
   mut seen := 0
-  mut res := 0
+  mut res : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -15486,7 +15486,7 @@ tparam_idx3 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) 
   mut p := d.params_head
   mut i := 0
   mut seen := 0
-  mut res := 0
+  mut res : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -16358,7 +16358,7 @@ range_bound_is_unsigned := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
 ## Count NON-generic fn (kind 1) / syscall-fn (kind 4) decls named (ns,nl) in module (ms,ml).
 overload_set_count := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, ms : usize, ml : usize) -> usize {
   cnt := rt::vec_len(deref(decls))
-  mut c := 0
+  mut c : usize = 0
   th := name_hash(src, ns, nl)
   mut j := dni_lo(cnt, th)
   je := dni_hi(cnt, th)
@@ -22138,7 +22138,7 @@ index_base_slot := fn(base : ptr(Expr), cx : ptr(LCtx)) -> i64 {
 ## local). Returns the index — NOT the `SlotEntry` by value (9-word return truncates; see
 ## `svec_at`/`entry_of`). Callers recover the entry with `deref(svec_at(SlotEntry, slots, …))`.
 index_base_entry := fn(base : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> usize {
-  mut res := 0
+  mut res : usize = 0
   match deref(base) {
     Expr::Var(s, n) => { res = entry_of(slots, src, s, n) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
@@ -23464,7 +23464,7 @@ match_is_str := fn(head : Option(ptr(mut Arm)), a : rt::Arena) -> bool {
 ## land at the same values the old `lbody := nl; nl += 1` interleave produced).
 arm_count := fn(head : Option(ptr(mut Arm)), a : rt::Arena) -> usize {
   mut arm : Option(ptr(mut Arm)) = head
-  mut n := 0
+  mut n : usize = 0
   loop {
     match arm {
       Some(armq) => {
@@ -27101,7 +27101,7 @@ modtab_base := fn(m : usize, w : usize) -> usize {
 ## module that actually owns it. Injectivity is untouched: `m` still determines `base[m]`, so
 ## `k == base[m] + n` is recoverable. 19 modules → the linear scan is free.
 modtab_of := fn(k : usize, w : usize) -> usize {
-  mut m := 0
+  mut m : usize = 0
   mut i : usize = 1
   while i < MODTAB_N {
     if modtab_base(i, w) <= k { m = i }
@@ -27203,8 +27203,8 @@ mut IRV_S : [usize; 64] = [0; 64]
 mut IRV_L : [usize; 64] = [0; 64]
 mut IRV_V : [usize; 64] = [0; 64]
 mut IRV_N := 0        ## recorded named vregs
-mut IRV_NEXT := 0     ## next fresh vreg id (named + temps)
-mut IRL_N := 0        ## next fresh IR-internal label id (< 16)
+mut IRV_NEXT : usize = 0    ## next fresh vreg id (named + temps)
+mut IRL_N : usize = 0      ## next fresh IR-internal label id (< 16)
 
 ## COMMIT 5 — per-fn CALL side-table. A `call` IR inst (op 6) carries a Sym operand whose value is an
 ## INDEX into this table (a name span can't fit an i64). Each entry records the callee-name span + the
@@ -28785,7 +28785,7 @@ arg_type_name_pre := fn(args_head : Option(ptr(mut Arg)), penv : Option(ptr(mut 
 ## `ptr(Expr)` as usize); else 0. The parser desugars `defer <expr>` to `__defer(<expr>)` (kept in the
 ## body so every other pass sees it as an ordinary call); the x86 lower is the sole consumer of the marker.
 defer_marker_inner_h := fn(h : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> usize {
-  mut res := 0
+  mut res : usize = 0
   st := deref(stmt_p(Stmt, h))
   match st {
     Stmt::ExprStmt(e, nx) => {
