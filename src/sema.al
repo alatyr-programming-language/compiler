@@ -6675,12 +6675,27 @@ da_assign_path := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : p
 ## global-reassign sink (`G = <agg>`). Recovers the `: T` from source (globals carry no dedicated type
 ## field), mirroring `local_type_span` for a local.
 global_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> VSpan {
+  global_type_span_scoped(decls, src, s, n, 0, 0, true)
+}
+## Issue #703 / Modules §2, §5 — the same span, but only for a global declared in the MODULE of the
+## declaration `upto` (the one being checked). An unqualified name resolves in its own module's scope,
+## and Modules §5 forbids a duplicate only within one scope, so sibling modules may each declare `cfg`
+## with different types; the program-wide last-wins walk above would answer for whichever module sorts
+## last. {0,0} when that module declares no such global, or `upto` names no declaration.
+global_type_span_in_mod := fn(decls : ptr(rt::Vec), src : ptr(u8), upto : usize, s : usize, n : usize) -> VSpan {
+  if upto >= rt::vec_len(deref(decls)) { return VSpan(s = 0, n = 0) }
+  cur := deref(decl_get(decls, upto))
+  global_type_span_scoped(decls, src, s, n, cur.mod_start, cur.mod_len, false)
+}
+## The walk behind both: `any_mod` admits a global of any module, otherwise only `[ms, ms+ml)`'s.
+global_type_span_scoped := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, ms : usize, ml : usize, any_mod : bool) -> VSpan {
   cnt := rt::vec_len(deref(decls))
   mut r := VSpan(s = 0, n = 0)
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
-    if d.is_fn == false and d.kind == 0 and streq(src, d.name_start, d.name_len, s, n) {
+    in_mod := any_mod or streq(src, d.mod_start, d.mod_len, ms, ml)
+    if d.is_fn == false and d.kind == 0 and in_mod and streq(src, d.name_start, d.name_len, s, n) {
       lts := local_type_span(src, d.name_start, d.name_len)
       r = VSpan(s = lts.s, n = lts.n)
     }
@@ -6819,12 +6834,12 @@ sema_enum_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::Ve
 sema_scalar_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
   if is_prelude_ns_var(base, src) { return 0 }
   bv := expr_var_span(base)
-  if bv.n == 0 or not sema_name_owner_is_scalar(decls, src, locals, nloc, bv.s, bv.n) { return 0 }
+  if bv.n == 0 or not sema_name_owner_is_scalar(decls, upto, src, locals, nloc, bv.s, bv.n) { return 0 }
   scalar_field_access_err(fs)
 }
 ## …the same question over a NAME place `[s, s+n)` — the read walkers above and the `v.a = x` store,
 ## which the parser keeps as two name spans that no expression walker sees.
-sema_name_owner_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> bool {
+sema_name_owner_is_scalar := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> bool {
   mut ts : usize = 0
   mut tl : usize = 0
   if nloc != 0 and local_in(locals, nloc, src, s, n) {
@@ -6835,7 +6850,8 @@ sema_name_owner_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : pt
     ts = lt.ty.ns
     tl = lt.ty.nl
   } else {
-    gt := global_type_span(decls, src, s, n)
+    ## Only the global this module's scope resolves the name to (Modules §2), never a sibling's.
+    gt := global_type_span_in_mod(decls, src, upto, s, n)
     ts = gt.s
     tl = gt.n
   }
@@ -15165,7 +15181,7 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
           return Result(usize, CheckErr).Err(enum_field_access_err(fns))
         }
         ## Issue #703 — the same write path for a SCALAR owner (`x.a = 4` on `x : u64`).
-        if sema_name_owner_is_scalar(decls, src, locals, cnt, bns, bnl) {
+        if sema_name_owner_is_scalar(decls, upto, src, locals, cnt, bns, bnl) {
           return Result(usize, CheckErr).Err(scalar_field_access_err(fns))
         }
         ## A known struct write must name one of that struct's declared fields. The parser stores this
