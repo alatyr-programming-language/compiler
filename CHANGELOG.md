@@ -136,6 +136,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `deque::pop_front` / `pop_back` and `hashmap::get` returned one word of such an element, so the rest
   read stale. The element pointer a generic instance takes for its own type parameter is now resolved
   through the instance, and the value is copied word by word.
+- **A store through a pointer to an `Option(ptr(T))` writes one word (#1334).** `deref(p) = o` with
+  `o` such a local or parameter wrote a second word over whatever followed the pointee, so
+  `deque::push_front` of `Option(ptr(u64))` turned the previous front element into `None`. The
+  folded option is one pointer-width word (Memory §4) and is now stored as one.
 
 ## 0.2.21 — 2026-11-01
 
