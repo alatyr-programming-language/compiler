@@ -92,3 +92,4 @@ main := fn() -> u64 {
   if total(V.Arr(nest[0..3])) != 42 { return 5 }
   42
 }
+## expect: run 42
