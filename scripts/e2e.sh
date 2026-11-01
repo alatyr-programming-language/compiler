@@ -12079,6 +12079,12 @@ run issue977_struct_lit_field_ctx 2
 ## `55fa477` (x86_64) the fixture exits 101 — element 0, `C(40)`, read back as a zeroed variant.
 run issue989_vec_multi_payload_enum 42
 
+## #1209 — a struct copied or read through `deref(unchecked bitcast(ptr(J), arg))` is the whole `J`
+## (Memory, `deref`; CG-7). NON-VACUOUS: on the parent 9b9fea98 (x86_64) they exit 132 (a garbage `j.t` underflows `- 7`), 139 and 139.
+run issue1209_deref_bitcast_struct 42
+run issue1209_deref_bitcast_ptr_fields 42
+run issue1209_deref_bitcast_field_inline 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

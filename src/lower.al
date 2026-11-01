@@ -13425,7 +13425,8 @@ call_first_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
 }
 
 ## If `e` is `deref(<call>(T, …))` whose first argument is a struct type — the arena read shape
-## `deref(get(T, arena, handle))` the passes use — return that struct's TYPE span; else 0/0.
+## `deref(get(T, arena, handle))` the passes use — return that struct's TYPE span; else the pointee
+## of the callee's `ptr(S)` return, else the pointee of a `bitcast(ptr(S), x)` inner; else 0/0.
 ## Composed from `deref_inner_expr` + `call_first_struct_span` (two flat matches, no nesting).
 deref_call_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   inner := deref_inner_expr(e)
@@ -13435,7 +13436,14 @@ deref_call_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
   ## for a plain user fn `get(ptr(b)) -> ptr(Struct)`; resolve the pointee from the callee's declared
   ## RETURN type instead, so `deref(get(…)).f` reads the field inline (and `s := deref(get(…))` copies).
   if fs.n != 0 { return fs }
-  call_ret_ptrstruct_ret_span(inner, decls, src, a)
+  crs := call_ret_ptrstruct_ret_span(inner, decls, src, a)
+  if crs.n != 0 { return crs }
+  ## #1209 — the pointer may also be a bitcast to `ptr(S)` (`deref(unchecked bitcast(ptr(J), arg))`).
+  ## Every caller lowers `inner` for the pointee address, which the bitcast yields as well; `deref(p)`
+  ## of a `ptr(S)` is the `S` wherever `p` comes from (Memory, `deref`), and `unchecked` changes only
+  ## the verification mode (CG-7). Without this the binding `j := deref(…)` took one scalar word, so
+  ## `j.q` read a neighbouring slot, and `deref(…).q` pushed zero.
+  bitcast_ptrstruct_span(inner, decls, src, a)
 }
 
 ## The ENUM dual of `call_first_struct_span`: if `e` is a `Call` whose first argument is an ENUM

@@ -126,6 +126,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A struct read through `deref(unchecked bitcast(ptr(S), x))` is the whole `S` (#1209).** Binding it
+  (`j := deref(…)`) or reading a field off it gave the wrong contents on x86_64: 0 where 42 was due, or
+  a crash with pointer fields. The pointee is now copied or read as for any other pointer to `S`.
+
 - **An enum read out of a `Vec` is the one that was stored (#989).** `at`, `get` and every other
   `deref(p)` of an enum value through a pointer returned the first variant with a zero payload. The
   value is now read word by word from the pointer; a pointee type that cannot be resolved is refused
