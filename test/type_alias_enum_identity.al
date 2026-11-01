@@ -9,3 +9,4 @@ main := fn() -> u64 {
     Green => { return 42 }
   }
 }
+## expect: run 42

@@ -26,3 +26,4 @@ main := fn() -> u64 {
   )
   touch(ptr(mut b), 1)
 }
+## expect: run 42

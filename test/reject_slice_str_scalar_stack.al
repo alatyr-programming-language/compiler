@@ -8,3 +8,4 @@ bad := fn(s : Slice(str)) -> u64 {
 main := fn() -> u64 {
   bad(Slice(str)(ptr = unchecked bitcast(ptr(str), 0), len = 0))
 }
+## expect: reject

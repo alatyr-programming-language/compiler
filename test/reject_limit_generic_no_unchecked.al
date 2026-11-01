@@ -5,3 +5,4 @@ identity := fn(T : type, x : T) -> T {
   unchecked x
 }
 main := fn() -> u64 { return 0 }
+## expect: reject "no_unchecked" "at line 4"

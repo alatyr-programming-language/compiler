@@ -74,3 +74,4 @@ main := fn() -> u64 {
   if word_roundtrip() { score += 2 }
   score
 }
+## expect: run 42

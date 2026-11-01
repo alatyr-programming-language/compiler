@@ -15,3 +15,4 @@ CG := build()
 main := fn() -> u64 {
   u64(MG[2]) + u64(CG[2])
 }
+## expect: run 84

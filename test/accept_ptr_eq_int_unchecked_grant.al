@@ -17,3 +17,4 @@ main := fn() -> u64 {
   }
   return 42 + hit
 }
+## expect: run 42
