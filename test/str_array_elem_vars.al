@@ -7,3 +7,4 @@ main := fn() -> u64 {
   t : [str; 2] = [x, y]
   u64(t[1].len) * 10 + u64(t[0].len)
 }
+## expect: run 23

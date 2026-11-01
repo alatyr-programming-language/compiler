@@ -20406,9 +20406,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         sfibx := field_base_index(base)
         if sfibx.is_ix {
           sfient := deref(svec_at(SlotEntry, cx.slots, index_base_entry(sfibx.arr, cx.slots, cx.src)))
-          ## #1181 — `s.v[i].len` where the struct field `v` is `[str; N]` / `[Slice(u8); N]`: the
+          ## #1349 — `s.v[i].len` where the struct field `v` is `[str; N]` / `[Slice(u8); N]`: the
           ## field-array path has no two-word element read, and the generic `.len` answered a wrong
-          ## value. Refuse it at the expression, located, until the field-array tier reads the pair.
+          ## value (2 where 23 was due). Refuse it at the expression, located, until it reads the pair.
           sffib := field_index_base(sfibx.arr, cx)
           if sffib.is_fld {
             sffent := deref(svec_at(SlotEntry, cx.slots, sffib.ent_idx))
@@ -20417,7 +20417,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             sfaet := array_elem_span(cx.src, sfaft.s, sfaft.n)
             if sfaet.n != 0 and (byte_view_elem(cx.src, sfaet.s, sfaet.n) or (sfaet.n > 6 and str_at((cx.src + sfaet.s), 6) == "Slice(")) {
               lower_show_src_line(cx.src, fs)
-              panic("selfhost: `.len` / `.ptr` on an element of a struct field of type `[str; N]` / `[Slice(T); N]` is not supported on x86_64 (#1181); bind the element to a local first")
+              panic("selfhost: `.len` / `.ptr` on an element of a struct field of type `[str; N]` / `[Slice(T); N]` is not supported on x86_64 (#1349)")
             }
           }
           if sfient.eek == 4 {

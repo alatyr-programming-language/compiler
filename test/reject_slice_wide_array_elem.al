@@ -6,3 +6,4 @@ main := fn() -> u64 {
   t : [Slice(u64); 2] = [a[0..3], b[0..2]]
   t[1][0] * 10 + t[0][1]
 }
+## expect: reject "supported on x86_64 only for Slice(u8)"

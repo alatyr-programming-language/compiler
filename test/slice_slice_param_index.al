@@ -17,3 +17,4 @@ main := fn() -> u64 {
   t : [Slice(u8); 2] = [a[0..3], b[0..2]]
   lens(t[0..2])
 }
+## expect: run 32

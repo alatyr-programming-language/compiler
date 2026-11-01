@@ -7,3 +7,4 @@ main := fn() -> u64 {
   t : [Slice(u8); 2] = [a[0..3], b[0..2]]
   u64(t[1].len) * 10 + u64(t[0].len)
 }
+## expect: run 23

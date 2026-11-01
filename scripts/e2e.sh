@@ -11281,6 +11281,12 @@ run str_array_elem_vars 23
 run slice_view_local_field 33
 build_reject_has reject_slice_wide_array_elem "supported on x86_64 only for Slice(u8)"
 build_reject_has reject_slice_wide_param_elem "supported on x86_64 only for Slice(u8)"
+## #1181 — `t[i] = <view>` stores the whole pair into a `[Slice(u8); N]` / `[str; N]` element. NON-VACUOUS on the
+## parent (main d09e472b, x86_64): the Slice store was refused, and the str store kept the old length (exit 1).
+run slice_array_elem_store 42
+run str_array_elem_store 42
+## #1349 — `.len` on an element of a `[Slice(u8); N]` struct field: the parent exited 2 (due 23); refused, located.
+build_reject_has reject_view_field_array_len "is not supported on x86_64 (#1349)"
 ## COMPILER SIGSEGV at CHECK time (139) on `t := s` where `s : Slice(T)` is a PARAM: a fresh `x := <value>`
 ## binding seeded the local's type-NAME span from the PACKED `Result(Ty, CheckErr)` carrier, which keeps only the
 ## TAG — so ns/nl were stack garbage (typically a whole ABSOLUTE address). `Slice` resolves to a NOMINAL struct

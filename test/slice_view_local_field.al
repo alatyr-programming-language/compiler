@@ -9,3 +9,4 @@ main := fn() -> u64 {
   s := S(v = x)
   u64(s.v.len) * 10 + u64(s.v[2])
 }
+## expect: run 33
