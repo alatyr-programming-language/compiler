@@ -446,6 +446,36 @@ wat_narrow_trap_check := fn(name : str) -> str {
   ""
 }
 
+## FLOAT→INTEGER conversion (Concurrency §7.7, Types §4.2 numeric row; #1374), around the operand's
+## f64 bits: `wat_f2i_open`, the operand, then `wat_f2i_close`. CHECKED (`WAT_CHK`) the bits are
+## captured in `$__ovo` and the f64 must lie strictly inside `lower_layout::f2i_bounds(name)`, the exact
+## f64 values just outside `name`'s range, else `(unreachable)` — the x86_64 `emit_f2i` guard. `f64.gt`
+## and `f64.lt` answer 0 on a NaN, so a NaN traps too. The guard is what makes a NARROW target trap:
+## the 64-bit truncation alone accepts `u8(300.0)`. The truncation is then in range and exact
+## (`trunc_f64_u` covers a `u64` at or above 2^63). Inside `unchecked` the result is hardware-defined
+## (§7.7): the ISA's non-trapping `trunc_sat`, so an unchecked NaN or out-of-range operand gives a
+## value, as on the register targets, rather than a trap.
+wat_f2i_open := fn(in out sb : rt::StrBuf, unsigned : bool) {
+  if WAT_CHK {
+    if unsigned { push_str(sb, "(i64.trunc_f64_u ") } else { push_str(sb, "(i64.trunc_f64_s ") }
+    push_str(sb, "(f64.reinterpret_i64 (block (result i64) ")
+  } else {
+    if unsigned { push_str(sb, "(i64.trunc_sat_f64_u ") } else { push_str(sb, "(i64.trunc_sat_f64_s ") }
+    push_str(sb, "(f64.reinterpret_i64 ")
+  }
+}
+wat_f2i_close := fn(in out sb : rt::StrBuf, name : str) {
+  if WAT_CHK {
+    b := lower_layout::f2i_bounds(name)
+    push_str(sb, " global.set $__ovo (if (i32.eqz (i32.and (f64.gt (f64.reinterpret_i64 (global.get $__ovo)) (f64.reinterpret_i64 (i64.const ")
+    push_str(sb, b.lo)
+    push_str(sb, "))) (f64.lt (f64.reinterpret_i64 (global.get $__ovo)) (f64.reinterpret_i64 (i64.const ")
+    push_str(sb, b.hi)
+    push_str(sb, "))))) (then (unreachable))) (global.get $__ovo))")
+  }
+  push_str(sb, "))")
+}
+
 ## Does `op` have a WASM stack-op in `wat_binop`? Guards the Bin arm so an UNHANDLED op traps
 ## (fail-loud) instead of silently defaulting to i64.add (the language has no shifts; the bindable
 ## operator set is otherwise arithmetic/bitwise/boolean, all listed here).
@@ -5289,13 +5319,14 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
             }
           } else if argisf {
             ## float → int: reinterpret the bits to f64, TRUNCATE toward zero (u → `trunc_f64_u`, i →
-            ## `trunc_f64_s`), then apply the width narrow (native widths pass through).
+            ## `trunc_f64_s`), range/NaN-checked (`wat_f2i_open`/`_close`, #1374), then apply the width
+            ## narrow (native widths pass through).
             pre := wat_narrow_pre(cvn)
             post := wat_narrow_post(cvn)
             push_str(sb, pre)
-            if str_at((src + cs), 1) == "u" { push_str(sb, "(i64.trunc_f64_u (f64.reinterpret_i64 ") } else { push_str(sb, "(i64.trunc_f64_s (f64.reinterpret_i64 ") }
+            wat_f2i_open(sb, str_at((src + cs), 1) == "u")
             emit_wat_expr(gcv.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-            push_str(sb, "))")
+            wat_f2i_close(sb, cvn)
             push_str(sb, post)
           } else {
             ## integer CONVERSION `uN(x)`/`iN(x)` (§8): mask (uN) / sign-extend (iN); native = passthrough.

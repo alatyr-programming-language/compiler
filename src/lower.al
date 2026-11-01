@@ -15833,8 +15833,9 @@ emit_int_fit_guard := fn(in out sb : strbuf::StrBuf, name : str, src_unsigned : 
 ## the integer in `%rax` (Concurrency §7.7, Types §4.2 numeric row). It rounds toward zero (`cvttsd2si`).
 ## CHECKED (`checked`, a checked scope) it first traps (`ud2`) on a NaN and on a value whose truncation
 ## lies outside `name`'s range: the operand must lie strictly between the two bounds of
-## `f2i_bounds`, which are exact f64 values, so one compare per side decides it. Inside `unchecked`
-## the out-of-range result is hardware-defined (§7.7) and no guard is emitted.
+## `lower_layout::f2i_bounds`, which are exact f64 values, so one compare per side decides it (the
+## same table guards the twins, #1374). Inside `unchecked` the out-of-range result is
+## hardware-defined (§7.7) and no guard is emitted.
 ## `u64`/`usize` in range at or above 2^63 does not fit the SIGNED `cvttsd2si`, which returns the
 ## integer-indefinite value 2^63 there. It is converted in both modes as `cvttsd2si(f - 2^63)` with
 ## bit 63 set back, the exact value (#997: `u64(0.75 * 2^64)` answered 1, `u64(1.0e30)` answered
@@ -15842,7 +15843,7 @@ emit_int_fit_guard := fn(in out sb : strbuf::StrBuf, name : str, src_unsigned : 
 emit_f2i := fn(in out sb : strbuf::StrBuf, name : str, checked : bool) {
   push_str(sb, "  movq %rax, %xmm0\n")
   if checked {
-    b := f2i_bounds(name)
+    b := lower_layout::f2i_bounds(name)
     ## NaN: unordered sets PF.
     push_str(sb, "  ucomisd %xmm0, %xmm0\n  jnp 1f\n  ud2\n1:\n")
     ## f > lo, else trap.
@@ -15861,22 +15862,6 @@ emit_f2i := fn(in out sb : strbuf::StrBuf, name : str, checked : bool) {
     push_str(sb, "  cvttsd2si %xmm0, %rax\n")
   }
   emit_int_narrow_reg(sb, name)
-}
-## The open interval (lo, hi) of f64 values whose truncation toward zero fits the integer `name`, as
-## f64 bit patterns. Each bound is the first value OUTSIDE: `lo` is MIN - 1 (for i64 the next f64
-## below -2^63, since -2^63 - 1 is not an f64), `hi` is MAX + 1. The patterns come from an exact f64
-## encoder; `test/accept_f2i_range_edges.al` and the `trap_f2i_*` fixtures probe both sides.
-F2iBounds := struct { lo : str, hi : str }
-f2i_bounds := fn(name : str) -> F2iBounds {
-  if name == "i8" { return F2iBounds(lo = "0xc060200000000000", hi = "0x4060000000000000") }
-  if name == "i16" { return F2iBounds(lo = "0xc0e0002000000000", hi = "0x40e0000000000000") }
-  if name == "i32" { return F2iBounds(lo = "0xc1e0000000200000", hi = "0x41e0000000000000") }
-  if name == "u8" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x4070000000000000") }
-  if name == "u16" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x40f0000000000000") }
-  if name == "u32" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x41f0000000000000") }
-  if name == "u64" or name == "usize" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x43f0000000000000") }
-  ## i64 / isize
-  F2iBounds(lo = "0xc3e0000000000001", hi = "0x43e0000000000000")
 }
 
 ## The DECLARED signedness of an integer conversion's operand (strict form 5): from its recorded type,
