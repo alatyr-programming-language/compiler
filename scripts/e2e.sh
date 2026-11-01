@@ -5782,6 +5782,72 @@ issue324_nested_array_param_test() {
   run_x86 issue324_array_1d_control 42
 }
 
+## Issue #1212 — two refusals of a VALID program, each located. Both are implementation limits, not
+## spec claims: the direct `match` on a generic call is #1246, the result wider than seven words is
+## #1324. So the programs are generated here and add no corpus fixture. A fixture would have to state
+## `## expect: run N`, and the `build_reject_has` row that asserts the refusal would contradict it
+## (#1126 S3 has no outcome-free refusal verb yet: #1358). Each case needs two needles: the reason,
+## which is not in the generated source, and the source line the refusal prints to locate itself.
+issue1212_located_refusals_test() {
+  local d="$T/issue1212_located_refusals" n src out err got
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue1212_located_refusals: scratch"; fail=1; return; }
+  ## (1) the direct `match` on `vec::get(S3, …)`: located under the call's line, and the message names
+  ## the construct it refuses (it used to name `.map(f)`, which this program does not contain)
+  printf '%s\n' \
+    'S := struct { a : u64, b : u64, c : u64 }' \
+    'main := fn() -> u64 {' \
+    '  match std::os::arena(65536) {' \
+    '    Ok(osa) => {' \
+    '      mut ar := std::os::region(ptr(osa))' \
+    '      mut v := alloc::vec::with_capacity(S, ptr(mut ar), 4)' \
+    '      r := alloc::vec::push(S, v, S(a = 1, b = 2, c = 3))' \
+    '      match alloc::vec::get(S, ptr(v), 0) {' \
+    '        Some(s) => { s.c }' \
+    '        None => { 0 }' \
+    '      }' \
+    '    }' \
+    '    Err(_) => { 1 }' \
+    '  }' \
+    '}' > "$d/direct_match.al"
+  ## (2) `vec::get(S7, …)`: the payload of `Option(T).Some(deref(elem))` is seven words, past the six
+  ## payload registers. NON-VACUOUS: at `bf21bc6c` the reason came alone, with no line; on main
+  ## `d09e472b` the program builds and returns 18 for 42.
+  printf '%s\n' \
+    'S7 := struct { a : u64, b : u64, c : u64, d : u64, e : u64, f : u64, g : u64 }' \
+    'main := fn() -> u64 {' \
+    '  match std::os::arena(65536) {' \
+    '    Ok(osa) => {' \
+    '      mut ar := std::os::region(ptr(osa))' \
+    '      mut v := alloc::vec::with_capacity(S7, ptr(mut ar), 4)' \
+    '      r := alloc::vec::push(S7, v, S7(a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 42))' \
+    '      o := alloc::vec::get(S7, ptr(v), 0)' \
+    '      match o {' \
+    '        Some(s) => { s.g }' \
+    '        None => { 0 }' \
+    '      }' \
+    '    }' \
+    '    Err(_) => { 1 }' \
+    '  }' \
+    '}' > "$d/wide_payload.al"
+  for n in direct_match wide_payload; do
+    src="$d/$n.al"; out="$d/$n.out"; err="$d/$n.err"
+    "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
+    if [ "$got" = 0 ]; then echo "FAIL issue1212_located_refusals($n): build succeeded, want a located reject"; fail=1; continue; fi
+    if [ -e "$out" ]; then echo "FAIL issue1212_located_refusals($n): rejected but left an output artifact"; fail=1; continue; fi
+    case "$n" in
+      direct_match)
+        grep -qF 'a direct `match` on a generic call whose result enum carries a multi-word payload' "$err" &&
+          grep -qF 'match alloc::vec::get(S, ptr(v), 0) {' "$err" ;;
+      wide_payload)
+        grep -qF 'struct payload wider than 6 words' "$err" &&
+          grep -qF 'Option(T).Some(deref(elem))' "$err" ;;
+    esac
+    if [ $? = 0 ]; then echo "ok   issue1212_located_refusals($n): refused, located"
+    else echo "FAIL issue1212_located_refusals($n): rc=$got but the reason or its source line is missing"; fail=1; fi
+  done
+}
+
 _e2e_arm() {
   local f body n=0
   while read -r _ _ f; do
@@ -11473,12 +11539,10 @@ run option_map_ufcs_struct 42
 build_reject_has reject_map_ufcs_direct_struct "match recv.map(f)"
 ## #1212 — `Option(T).Some(deref(p))` of a multi-word struct (`vec::get` / `try_at` / `pop`, a pointer
 ## parameter, a local store) delivered word 0 alone. NON-VACUOUS: on the parent `992bd767` (x86_64) the
-## fixture returns 100. The direct `match vec::get(S, …)` stays refused, now naming what it refuses.
+## fixture returns 100. The direct `match vec::get(S, …)` stays refused, now naming what it refuses, and
+## a payload wider than six words is refused at its constructor; both located (generated programs).
 run issue1212_option_deref_struct 42
-build_reject_has issue1212_direct_match_reject "a direct \`match\` on a generic call whose result enum carries a multi-word payload"
-## The > 6-word refusal is located: the needle is the constructor line inside `alloc::vec::get`, which
-## the refusal prints before its reason. NON-VACUOUS: at `bf21bc6c` the reason came alone.
-build_reject_has issue1212_wide_deref_payload_reject "Option(T).Some(deref(elem))"
+issue1212_located_refusals_test
 run unwrap_bound_generic_call 42
 build_reject_has reject_unwrap_bound_paramladen_call "implicit-UFCS call to a multi-type-parameter"
 
