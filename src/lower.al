@@ -15815,6 +15815,56 @@ emit_int_fit_guard := fn(in out sb : strbuf::StrBuf, name : str, src_unsigned : 
   if src_unsigned and (name == "i64" or name == "isize") { push_str(sb, "  testq %rax, %rax\n  jns 1f\n  ud2\n1:\n") }
 }
 
+## Float→integer conversion `name(f)` of the f64 bit pattern in `%rax` into the integer `name`, leaving
+## the integer in `%rax` (Concurrency §7.7, Types §4.2 numeric row). It rounds toward zero (`cvttsd2si`).
+## CHECKED (`checked`, a checked scope) it first traps (`ud2`) on a NaN and on a value whose truncation
+## lies outside `name`'s range: the operand must lie strictly between the two bounds of
+## `f2i_bounds`, which are exact f64 values, so one compare per side decides it. Inside `unchecked`
+## the out-of-range result is hardware-defined (§7.7) and no guard is emitted.
+## `u64`/`usize` in range at or above 2^63 does not fit the SIGNED `cvttsd2si`, which returns the
+## integer-indefinite value 2^63 there. It is converted in both modes as `cvttsd2si(f - 2^63)` with
+## bit 63 set back, the exact value (#997: `u64(0.75 * 2^64)` answered 1, `u64(1.0e30)` answered
+## 2^63 instead of trapping).
+emit_f2i := fn(in out sb : strbuf::StrBuf, name : str, checked : bool) {
+  push_str(sb, "  movq %rax, %xmm0\n")
+  if checked {
+    b := f2i_bounds(name)
+    ## NaN: unordered sets PF.
+    push_str(sb, "  ucomisd %xmm0, %xmm0\n  jnp 1f\n  ud2\n1:\n")
+    ## f > lo, else trap.
+    push_str(sb, "  movabsq $")
+    push_str(sb, b.lo)
+    push_str(sb, ", %rcx\n  movq %rcx, %xmm1\n  ucomisd %xmm1, %xmm0\n  ja 1f\n  ud2\n1:\n")
+    ## f < hi, else trap.
+    push_str(sb, "  movabsq $")
+    push_str(sb, b.hi)
+    push_str(sb, ", %rcx\n  movq %rcx, %xmm1\n  ucomisd %xmm1, %xmm0\n  jb 1f\n  ud2\n1:\n")
+  }
+  if name == "u64" or name == "usize" {
+    push_str(sb, "  movabsq $0x43e0000000000000, %rcx\n  movq %rcx, %xmm1\n  ucomisd %xmm1, %xmm0\n  jae 2f\n")
+    push_str(sb, "  cvttsd2si %xmm0, %rax\n  jmp 3f\n2:\n  subsd %xmm1, %xmm0\n  cvttsd2si %xmm0, %rax\n  btsq $63, %rax\n3:\n")
+  } else {
+    push_str(sb, "  cvttsd2si %xmm0, %rax\n")
+  }
+  emit_int_narrow_reg(sb, name)
+}
+## The open interval (lo, hi) of f64 values whose truncation toward zero fits the integer `name`, as
+## f64 bit patterns. Each bound is the first value OUTSIDE: `lo` is MIN - 1 (for i64 the next f64
+## below -2^63, since -2^63 - 1 is not an f64), `hi` is MAX + 1. The patterns come from an exact f64
+## encoder; `test/accept_f2i_range_edges.al` and the `trap_f2i_*` fixtures probe both sides.
+F2iBounds := struct { lo : str, hi : str }
+f2i_bounds := fn(name : str) -> F2iBounds {
+  if name == "i8" { return F2iBounds(lo = "0xc060200000000000", hi = "0x4060000000000000") }
+  if name == "i16" { return F2iBounds(lo = "0xc0e0002000000000", hi = "0x40e0000000000000") }
+  if name == "i32" { return F2iBounds(lo = "0xc1e0000000200000", hi = "0x41e0000000000000") }
+  if name == "u8" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x4070000000000000") }
+  if name == "u16" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x40f0000000000000") }
+  if name == "u32" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x41f0000000000000") }
+  if name == "u64" or name == "usize" { return F2iBounds(lo = "0xbff0000000000000", hi = "0x43f0000000000000") }
+  ## i64 / isize
+  F2iBounds(lo = "0xc3e0000000000001", hi = "0x43e0000000000000")
+}
+
 ## The DECLARED signedness of an integer conversion's operand (strict form 5): from its recorded type,
 ## a brand read through its underlying, else the positive signed/unsigned tests. Unknown — no recorded
 ## integer type — is its own answer: it never claims a signedness change.
@@ -18905,6 +18955,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## then: int→float (`cvtsi2sd`), float→int (`cvttsd2si`, truncating), else IDENTITY (the bits
       ## already live in a 64-bit word — byte-identical to the former parse-time swallow).
       mut ck := conv_kind(callee)
+      ## The scalar type the conversion produces: `callee`, or a brand's underlying (resolved below).
+      ## The float→int range check (#997) needs the type's NAME, not only its kind.
+      mut conv_target := callee
       ## A NOMINAL BRAND construction `Id(v)` (`Id := brand(U)`) — reinterpret `v` to the underlying
       ## `U`, i.e. the SAME conversion `U(v)` performs (identity for a bits/int underlying, the SSE
       ## path for a float underlying). Resolve the brand's underlying, then reuse the scalar-conversion
@@ -18913,7 +18966,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       if ck < 0 {
         bu := brand_underlying(cx.decls, cx.src, cs, cl)
         if bu.n != 0 {
-          uk := conv_kind(str_at((cx.src + bu.s), bu.n))
+          conv_target = str_at((cx.src + bu.s), bu.n)
+          uk := conv_kind(conv_target)
           ck = if uk >= 0 { uk } else { 0 }
         }
       }
@@ -18978,9 +19032,10 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if ck == 1 and not srcf {
           push_str(sb, "  popq %rax\n  cvtsi2sd %rax, %xmm0\n  movq %xmm0, %rax\n  pushq %rax\n")
         } else if ck == 0 and srcf {
-          ## float→int (`cvttsd2si`, truncating toward zero), then narrow to a sub-native target width.
-          push_str(sb, "  popq %rax\n  movq %rax, %xmm0\n  cvttsd2si %xmm0, %rax\n")
-          emit_int_narrow_reg(sb, callee)
+          ## float→int: toward zero, NaN- and range-checked in a checked scope (`emit_f2i`, #997). A
+          ## brand over an integer converts as its underlying (`conv_target`, resolved with `ck` above).
+          push_str(sb, "  popq %rax\n")
+          emit_f2i(sb, conv_target, cx.vchk)
           push_str(sb, "  pushq %rax\n")
         } else if ck == 0 {
           ## int→int. CHECKED by default (Types §4.4 "preserves the value", I11): trap when the value
