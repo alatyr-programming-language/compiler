@@ -42,3 +42,4 @@ main := fn() -> u64 {
   g := h.free()
   42
 }
+## expect: run 42
