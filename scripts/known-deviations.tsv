@@ -201,6 +201,7 @@ aarch64	test/issue1209_deref_bitcast_field_inline.al	run/133	#1188
 aarch64	test/issue1209_deref_bitcast_ptr_fields.al	run/133	#1188
 aarch64	test/issue1209_deref_bitcast_struct.al	run/133	#1188
 aarch64	test/issue1303_enum_hash.al	run/133	#1189
+aarch64	test/issue1369_enum_eq.al	link/1	#1380
 aarch64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 aarch64	test/issue169_wasm_nested_return.al	run/133	#1191
 aarch64	test/issue171_global_const_str.al	run/133	#1200
@@ -645,6 +646,7 @@ riscv64	test/issue1209_deref_bitcast_field_inline.al	run/133	#1188
 riscv64	test/issue1209_deref_bitcast_ptr_fields.al	run/133	#1188
 riscv64	test/issue1209_deref_bitcast_struct.al	run/133	#1188
 riscv64	test/issue1303_enum_hash.al	run/133	#1189
+riscv64	test/issue1369_enum_eq.al	link/1	#1380
 riscv64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200
@@ -1090,6 +1092,7 @@ wasm	test/issue1209_deref_bitcast_field_inline.al	run/134	#1188
 wasm	test/issue1209_deref_bitcast_ptr_fields.al	run/134	#1188
 wasm	test/issue1209_deref_bitcast_struct.al	run/134	#1188
 wasm	test/issue1303_enum_hash.al	run/134	#1189
+wasm	test/issue1369_enum_eq.al	run/134	#1200
 wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
 wasm	test/issue169_wasm_array_write.al	run/134	#1194
 wasm	test/issue169_wasm_nested_return.al	run/134	#1191
