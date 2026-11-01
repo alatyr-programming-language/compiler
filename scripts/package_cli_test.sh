@@ -2697,6 +2697,7 @@ run_pkg_check_build_located issue403_bare_private_fnvalue_reject 4 main
 ## private helper (§3:80-85), and a parse-time desugar whose callee span nobody wrote.
 run_pkg_exit issue403_bare_private_legal issue403-bare-private-legal 42
 
+<<<<<<< HEAD
 # Issue #703 / Modules §2, §5 — the scalar-owner field refusal resolves a GLOBAL owner in the module
 # of the access, never by a program-wide last-wins walk. The accept package declares `cfg` and `lim`
 # as a struct global in one sibling and a scalar in the other, in both module orders: the previous
@@ -2746,6 +2747,10 @@ run_pkg_exit issue1753_method_recv_scoped issue1753-method-recv-scoped 42
 # module: `pick(mk())` is judged against the root's own `pick(u64)` and refused. #1755's first head
 # (e43bebee) counted `zed::pick` into an overload set, skipped the check and answered 206.
 run_pkg_check_build_located issue1746_bare_call_foreign_module_reject 4 main "type mismatch"
+## #1172 — an enum payload whose type is declared in ANOTHER module (`Arr(m::S)`, `Arr(m::G(u64))`)
+## is sized and bound as that type, not as one word (the parser kept only the path head `m`).
+run_pkg_exit issue1172_foreign_struct_payload issue1172-foreign-struct-payload 42
+run_pkg_exit issue1172_foreign_generic_payload issue1172-foreign-generic-payload 42
 
 run_tool15_manifest_handle
 
