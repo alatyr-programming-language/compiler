@@ -320,8 +320,8 @@ pub try_index_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
         ## in its `tcomps` entry (keyed by the base slot's `off`). Either way `emit_index_addr` computes
         ## the element's word-0 address (its `tcomps`/is_ref branches handle a mixed tuple + by-ref param).
         mut isenum := false
-        mut ees := 0
-        mut eel := 0
+        mut ees : usize = 0
+        mut eel : usize = 0
         if bent.ek == 5 and bent.eek == 3 and bent.snl != 0 { isenum = true ; ees = bent.sns ; eel = bent.snl }
         if not isenum {
           tc := tcomp_find(cx, bent.off, usize(num_lit_value(idx)))
@@ -724,10 +724,10 @@ pub emit_enum_match := fn(head_in : Option(ptr(mut Arm)), si : ScrutInfo, in out
         nbind := bind_count(am2.binds_head)
         pty := variant_payload_type(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, deref(cx.mar))
         mut agg_ek : u8 = 0
-        mut agg_ess := 0
-        mut agg_esl := 0
-        mut agg_estride := 1
-        mut agg_nel := 0
+        mut agg_ess : usize = 0
+        mut agg_esl : usize = 0
+        mut agg_estride : usize = 1
+        mut agg_nel : usize = 0
         if nbind == 1 and pty.n != 0 {
           if struct_decl_of(cx.decls, cx.src, base_type_name(cx.src, pty.s, pty.n).s, base_type_name(cx.src, pty.s, pty.n).n) >= 0 { agg_ek = 2 }
           else if enum_decl_of(cx.decls, cx.src, base_type_name(cx.src, pty.s, pty.n).s, base_type_name(cx.src, pty.s, pty.n).n) >= 0 { agg_ek = 3 }   ## nested generic-instance payload resolves via BASE name; FULL span kept in the slot
@@ -779,8 +779,8 @@ pub emit_enum_match := fn(head_in : Option(ptr(mut Arm)), si : ScrutInfo, in out
                 ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
                 ## still lowers as the two-word str view. eek 13 identifies this niche provenance; eek 6 is
                 ## reserved for the pre-existing call-derived pointer-to-view binding.
-                mut pview_s := 0
-                mut pview_l := 0
+                mut pview_s : usize = 0
+                mut pview_l : usize = 0
                 mut pview_eek : u8 = 0
                 pview := niche_str_ptr_span(cx.src, pty.s, pty.n)
                 if pview.n != 0 {
@@ -806,8 +806,8 @@ pub emit_enum_match := fn(head_in : Option(ptr(mut Arm)), si : ScrutInfo, in out
                 mpf := payload_folded_ty(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, usize(bi), deref(cx.mar))
                 bpt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
                 mut bkind : u8 = 0
-                mut bks := 0
-                mut bkl := 0
+                mut bks : usize = 0
+                mut bkl : usize = 0
                 if mpf.n != 0 { bkind = 3; bks = mpf.s; bkl = mpf.n }
                 else {
                   bkind = pointee_agg_kind(cx.decls, cx.src, bpt.s, bpt.n)

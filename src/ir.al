@@ -2560,7 +2560,8 @@ pub sty_len := fn() -> usize { STY_N }
 
 ## A fresh zeroed anonymous mapping of `bytes` bytes (`mmap` answers zero-filled pages).
 sty_map := fn(bytes : usize) -> usize {
-  fdm1 := 0 - 1
+  neg1 : isize = 0 - 1               ## mmap fd -1 (MAP_ANONYMOUS): the bits of -1 in the usize argument
+  fdm1 := bitcast(usize, neg1)
   r := rt::sys_mmap(9, 0, bytes, 3, 34, fdm1, 0)
   if r < 0 { panic("selfhost: ir — sema type table mapping failed (mmap)") }
   ## unchecked-ok: `mmap` answered a non-negative address; it is the mapping's base.

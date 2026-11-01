@@ -27,7 +27,8 @@ pub Arena := struct { base : ptr(mut u8), off : usize, cap : usize }
 ## fail-loud contract (message on stderr, exit 1), so check that result before constructing a
 ## pointer; no caller can safely use an arena whose mapping was not published.
 pub arena_init := fn(in out a : Arena, size : usize) {
-  fdm1 := 0 - 1
+  neg1 : isize = 0 - 1               ## mmap fd -1 (MAP_ANONYMOUS): the bits of -1 in the usize argument
+  fdm1 := bitcast(usize, neg1)
   r := sys_mmap(9, 0, size, 3, 34, fdm1, 0)
   if r < 0 { panic("rt: arena initialization failed (mmap)") }
   a.base = unchecked bitcast(ptr(mut u8), r)
@@ -128,7 +129,8 @@ pub wtab_reserve := fn(in out base : WTab, in out cap : Words, used : Words, nee
   mut nc : usize = 512
   if have > nc { nc = have }
   while nc < want { nc = nc * 2 }
-  fdm1 := 0 - 1
+  neg1 : isize = 0 - 1               ## mmap fd -1 (MAP_ANONYMOUS): the bits of -1 in the usize argument
+  fdm1 := bitcast(usize, neg1)
   r := sys_mmap(9, 0, nc * 8, 3, 34, fdm1, 0)
   if r < 0 { panic("rt: word table growth failed (mmap)") }
   ## unchecked-ok: a successful anonymous mmap returns the mapping's address (r >= 0 checked above).

@@ -398,7 +398,7 @@ iface_emit_fn := fn(in out b : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), 
   mut variadic := false
   mut slice_variadic := false
   mut p := deref(dp).params_head
-  mut pi := 0
+  mut pi : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -551,7 +551,7 @@ pub emit_interface_summary := fn(decls : ptr(rt::Vec), src : ptr(u8), b : ptr(rt
   SUMMARY_N = 0
   mut out := deref(b)
   push_str(out, "format=alatyr-interface-summary\nversion=1\nhash=fnv1a64\n")
-  mut count := 0
+  mut count : usize = 0
   mut i : usize = 0
   while i < vec_len(deref(decls)) {
     dp := iface_decl_get(decls, i)
@@ -561,7 +561,7 @@ pub emit_interface_summary := fn(decls : ptr(rt::Vec), src : ptr(u8), b : ptr(rt
   push_str(out, "decl_count=")
   iface_push_uint(out, count)
   push_byte(out, 10)
-  mut module_count := 0
+  mut module_count : usize = 0
   i = 0
   while i < vec_len(deref(decls)) {
     j := iface_module_end(decls, i)

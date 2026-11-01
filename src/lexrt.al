@@ -377,7 +377,7 @@ pub lex_rt := fn(src : str, base_off : usize, in out toks : rt::Vec, in out ar :
       ## (a `..` range — the second char is `.`) and NOT a trailing `1.` (no fractional digit).
       ## A malformed exponent is still one kind-39 token; parser::float_lit_err rejects it located.
       ## The source span stays verbatim so decimal exponent spelling reaches `.double` unchanged.
-      mut tkind := 3                       ## integer
+      mut tkind : usize = 3                       ## integer
       ## A tuple index (`prev_dot`, computed above) is NOT the integer part of a float — do NOT
       ## extend it across a following `.digit` (else `t.0.0` greedily lexes `0.0` as one float token
       ## and the tuple double-index mis-parses). A genuine float `1.5` is never preceded by `.`, so
@@ -415,7 +415,7 @@ pub lex_rt := fn(src : str, base_off : usize, in out toks : rt::Vec, in out ar :
       ## two compilers disagree on); the width `w` is derived from the two-char kinds afterwards.
       c1 := peek(src, i + 1, n)
       c2 := peek(src, i + 2, n)
-      mut kind := 23                  ## 23 = other (unrecognized single byte)
+      mut kind : usize = 23                  ## 23 = other (unrecognized single byte)
       if b == 58 and c1 == 61 { kind = 5 }               ## `:=`
       else if b == 58 and c1 == 58 { kind = 7 }          ## `::`
       else if b == 58 { kind = 8 }                       ## `:`

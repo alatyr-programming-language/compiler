@@ -585,7 +585,7 @@ pub emit_abi_c_call_args := fn(args_head : Option(ptr(mut Arg)), nvals : usize, 
   sc := cx.sret_call
   cx.sret_call = -1
   retmem := callee_abi_c_ret_mem(cx.decls, cx.src, a, cidx)
-  sret_shift := if retmem { 1 } else { 0 }
+  sret_shift : usize = if retmem { 1 } else { 0 }
   if retmem and sc < 0 { panic("selfhost: @abi(c) MEMORY-struct return (sret) needs a destination local binding (q := f(…))") }
   ## C-VARIADIC (spec 50 §7.3): a callee whose LAST param is a bare `...` rest under `@abi(c)`. Its FIXED
   ## params are 0..nfixed-1; the trailing args (nfixed..nvals-1) have no declared param type and are classed
@@ -760,7 +760,7 @@ pub emit_abi_c_ret_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena,
     ei += 1
   }
   ## SSE eightbytes: the k-th SSE eightbyte arrives in %xmm k; move it into retreg(ei).
-  mut sc := 0
+  mut sc : usize = 0
   mut ej : usize = 0
   while ej < nw {
     if abi_c_eightbyte_is_sse(decls, src, a, d.ret_ts, d.ret_tl, ej) {
@@ -793,7 +793,7 @@ pub emit_abi_c_ret_agg_def := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
   nw := struct_words(decls, src, ret_ts, ret_tl, a)
   if nw > 2 { return }
   ## SSE eightbytes FIRST: eightbyte `ei` sits in retreg(ei) → move it into %xmm(sc) (class order).
-  mut sc := 0
+  mut sc : usize = 0
   mut ei : usize = 0
   while ei < nw {
     if abi_c_eightbyte_is_sse(decls, src, a, ret_ts, ret_tl, ei) {

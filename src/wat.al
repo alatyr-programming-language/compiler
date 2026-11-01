@@ -919,8 +919,8 @@ agg_globals_end := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64
 ## The enum-type name of an enum GLOBAL named `[ns, ns+nl)` (from its EnumLit init), else {0,0}.
 global_enum_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
   cnt := rt::vec_len(deref(decls))
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -936,8 +936,8 @@ global_enum_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
 ## The struct-type name of a struct GLOBAL named `[ns, ns+nl)` (from its StructLit init), else {0,0}.
 global_struct_type := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
   cnt := rt::vec_len(deref(decls))
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -1147,8 +1147,8 @@ callee_is_void := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize
 callee_ret_struct := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena) -> CSpan {
   cnt := rt::vec_len(deref(decls))
   mut i : usize = 0
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and streq(src, d.name_start, d.name_len, cs, cl) and d.ret_tl != 0 {
@@ -1207,8 +1207,8 @@ enum_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize,
 callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena, allow_union : bool) -> CSpan {
   cnt := rt::vec_len(deref(decls))
   mut i : usize = 0
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and streq(src, d.name_start, d.name_len, cs, cl) and d.ret_tl != 0 {
@@ -1319,8 +1319,8 @@ wat_try_enum_type := fn(inner : ptr(Expr), params_head : Option(ptr(mut Param)),
 ## returns its own input unchanged for a non-`Field` node, which is the identity a normalizer owes.
 ## See the census note above `lower_layout::local_ann_signed`.
 expr_call_name := fn(v : ptr(Expr)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   match deref(v) {
     Expr::Call(cs, cl, nn, ah) => { rs = cs ; rn = cl }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
@@ -1348,8 +1348,8 @@ expr_field_base := fn(v : ptr(Expr)) -> ptr(Expr) {
 
 ## The FIELD-name span of a `Field` expression (`v` in `o.i.v`), else {0,0}.
 expr_field_span := fn(v : ptr(Expr)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   match deref(v) {
     Expr::Field(base, fs, fl) => { rs = fs ; rn = fl }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -1599,8 +1599,8 @@ is_toplevel_local := fn(fn_head : Option(ptr(mut Stmt)), ns : usize, nl : usize,
 ## The struct-type name of an expression IF it is a `StructLit` (`Pt(x=…, y=…)`), else {0,0}.
 ## Single-level match in its own fn — a nested match inside another arm mis-lowers under the seed.
 expr_struct_name := fn(v : ptr(Expr)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   match deref(v) {
     Expr::StructLit(ss, sn, nf, ah) => { rs = ss ; rn = sn }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -1614,8 +1614,8 @@ expr_struct_name := fn(v : ptr(Expr)) -> CSpan {
 
 ## The ENUM TYPE name of an expression IF it is an `EnumLit` (`E.V(…)`), else {0,0}.
 expr_enum_name := fn(v : ptr(Expr)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   match deref(v) {
     Expr::EnumLit(es, en, vs, vn, nf, ah) => { rs = es ; rn = en }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -1628,8 +1628,8 @@ expr_enum_name := fn(v : ptr(Expr)) -> CSpan {
 
 ## The VARIANT name of an `EnumLit`, else {0,0}.
 expr_enum_variant := fn(v : ptr(Expr)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   match deref(v) {
     Expr::EnumLit(es, en, vs, vn, nf, ah) => { rs = vs ; rn = vn }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -1645,8 +1645,8 @@ expr_enum_variant := fn(v : ptr(Expr)) -> CSpan {
 ## {0,0}. Lets a `match e { … }` resolve the scrutinee's variant discriminants.
 local_enum_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> CSpan {
   mut s : Option(ptr(mut Stmt)) = fn_head
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   mut done := false
   loop {
     match s {
@@ -1701,8 +1701,8 @@ local_enum_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize
 ## The name span of an expression IF it is a bare `Var`, else {0,0} (the struct-base place must be a
 ## simple local for now — `p.field`, not `expr.field`).
 expr_var_name := fn(v : ptr(Expr)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   match deref(v) {
     Expr::Var(vs, vn) => { rs = vs ; rn = vn }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
@@ -1888,8 +1888,8 @@ wat_operand_is_aggregate := fn(e : ptr(Expr), params_head : Option(ptr(mut Param
 ## `h.t` to a `fn(v : Tag)` and dispatching there already answers on wasm); it is this one operand
 ## classification that was wrong, which is why the fix is here and not in the field or literal emit.
 wat_field_enum_type := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   if ex_is_field(e) {
     bt := expr_struct_type_of(expr_field_base(e), params_head, body_head, src, a, decls)
     if bt.n != 0 {
@@ -2148,21 +2148,21 @@ mut WAT_RET_TUPLE := 0
 ## Zero → no substitution. (The A64_* dual; WAT labels are function-local, so each emitted function
 ## gets its own deterministic monotonic namespace. The allocator is reset at emit_wat_body entry so
 ## repeated generic instances and repeated program emissions are independent of prior backend state.)
-mut WAT_SUB_GPS := 0    ## the generic type-param NAME span start …
+mut WAT_SUB_GPS : usize = 0    ## the generic type-param NAME span start …
 mut WAT_SUB_GPL : usize = 0    ## … and length (0 = no active substitution)
-mut WAT_SUB_ITS := 0    ## the instance's concrete type span start …
-mut WAT_SUB_ITL := 0    ## … and length (non-zero while emitting an instance = instance mode)
+mut WAT_SUB_ITS : usize = 0    ## the instance's concrete type span start …
+mut WAT_SUB_ITL : usize = 0    ## … and length (non-zero while emitting an instance = instance mode)
 ## 2nd/3rd LEADING type-param of a 2/3-type-param generic (`pick3(A, B, C, …)`): NAME → instance-type
 ## substitution for the 2nd (GPS2/GPL2 → ITS2/ITL2) and 3rd (GPS3/GPL3 → ITS3/ITL3). 0 = absent. The
 ## A64_SUB_*2/*3 dual.
-mut WAT_SUB_GPS2 := 0
+mut WAT_SUB_GPS2 : usize = 0
 mut WAT_SUB_GPL2 : usize = 0
-mut WAT_SUB_ITS2 := 0
-mut WAT_SUB_ITL2 := 0
-mut WAT_SUB_GPS3 := 0
+mut WAT_SUB_ITS2 : usize = 0
+mut WAT_SUB_ITL2 : usize = 0
+mut WAT_SUB_GPS3 : usize = 0
 mut WAT_SUB_GPL3 : usize = 0
-mut WAT_SUB_ITS3 := 0
-mut WAT_SUB_ITL3 := 0
+mut WAT_SUB_ITS3 : usize = 0
+mut WAT_SUB_ITL3 : usize = 0
 ## Check the EFFECTIVE value parameters of the current function. Generic instances substitute the
 ## active type-parameter spans before asking the shared ABI-fence predicate; comptime `type` params
 ## have no runtime boundary and are skipped.
@@ -2261,8 +2261,8 @@ wat_ovl_decl_at_span := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl :
 ## Resolved-type-arg OUT registers (avoid returning a multi-word span from a helper — the frozen seed
 ## can truncate such a return in some call contexts). wat_resolve_typearg writes here; callers read it.
 ## S2/N2, S3/N3 = the 2nd/3rd leading type-arg of a multi-type-param call.
-mut WAT_TA_S := 0
-mut WAT_TA_N := 0
+mut WAT_TA_S : usize = 0
+mut WAT_TA_N : usize = 0
 mut WAT_TA_S2 := 0
 mut WAT_TA_N2 := 0
 mut WAT_TA_S3 := 0
@@ -2272,10 +2272,10 @@ mut WAT_TA_N3 := 0
 ## (Expr::CompField) reads the CURRENT field (WAT_CF_FLD_*) of `v`; `f.type` (a type-arg) → WAT_CF_TY_*.
 mut WAT_CF_VAR_S := 0
 mut WAT_CF_VAR_L := 0
-mut WAT_CF_FLD_S := 0
-mut WAT_CF_FLD_L := 0
-mut WAT_CF_TY_S := 0
-mut WAT_CF_TY_L := 0
+mut WAT_CF_FLD_S : usize = 0
+mut WAT_CF_FLD_L : usize = 0
+mut WAT_CF_TY_S : usize = 0
+mut WAT_CF_TY_L : usize = 0
 ## The byte offset of `<f>.offset` for the ACTIVE comptime field descriptor. The field loop is
 ## emitted only for a concrete struct instance (`WAT_SUB_*`); reuse the shared layout calculators so
 ## packed, standard byte-array, and ordinary word-granular structs report the same offsets as value code.
@@ -2398,10 +2398,10 @@ wat_param_gen_arr_stride := fn(params_head : Option(ptr(mut Param)), src : ptr(u
 ## (WAT_ARM_VS/VL), and the arm's payload binding-list head (WAT_ARM_BINDS, pointer bits). An IMPLICIT
 ## generic call `hash(p)` in the body infers its type-arg from `p`'s variant-payload type via these.
 ## WAT_ARM_ENL == 0 = not inside such an arm. WAT_CFVAR = the unroll's current variant name (`T.(v)`).
-mut WAT_ARM_ENS := 0
-mut WAT_ARM_ENL := 0
-mut WAT_ARM_VS := 0
-mut WAT_ARM_VL := 0
+mut WAT_ARM_ENS : usize = 0
+mut WAT_ARM_ENL : usize = 0
+mut WAT_ARM_VS : usize = 0
+mut WAT_ARM_VL : usize = 0
 mut WAT_ARM_BINDS : Option(ptr(mut Bind)) = Option.None
 mut WAT_CFVAR_S := 0
 mut WAT_CFVAR_L := 0
@@ -2573,8 +2573,8 @@ wat_tparam_name := fn(d : Decl, src : ptr(u8)) -> CSpan {
 wat_resolve_typearg := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, args_head : Option(ptr(mut Arg)), penv : Option(ptr(mut Param)), a : rt::Arena) {
   gd := deref(decl_get(decls, usize(gi)))
   argc := arg_list_count(args_head, a)
-  mut ts := 0
-  mut tl := 0
+  mut ts : usize = 0
+  mut tl : usize = 0
   if argc == i64(gd.arity) {
     tpp := decl_tparam_pos(gd, src)
     ea := arg_expr_at(args_head, usize(tpp), a)
@@ -3752,8 +3752,8 @@ mut WAT_LSD := 0
 ## fn's top-level body (`p := Pt(…)`), else {0,0}. Lets a `p.field` read resolve the field offset.
 local_struct_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut s : Option(ptr(mut Stmt)) = fn_head
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   mut done := false
   loop {
     match s {
@@ -3846,8 +3846,8 @@ local_struct_type := fn(fn_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usi
 ## A struct param is passed as its i64 base address, so `p.field` in the callee loads from it.
 param_struct_type := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
   mut p := params_head
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -3902,8 +3902,8 @@ struct_field_type := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
 ## inner base address), so `o.i` as a value already yields the inner base — the Field arm then loads
 ## the sub-field from it. Value-returning recursion (no ptr(mut)); `match deref(e)` inline (seed-safe).
 expr_struct_type_of := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   match deref(e) {
     Expr::Var(vs, vl) => {
       st := base_struct_type(params_head, body_head, src, vs, vl, a, decls)
@@ -3987,8 +3987,8 @@ wat_rhs_agg_span := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), fn_h
 ## enum decl), else {0,0}. An enum param is passed as its i64 base address (like a struct).
 param_enum_type := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut p := params_head
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -5149,7 +5149,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## A `0` on the left omits the guard only where the operation has no overflow member — the one
         ## decision `ir::zero_left_no_overflow` (#1049). Asked with `dsigned`, the signedness the guard
         ## blocks below test, so a skipped guard and an emitted one never disagree on the operation.
-        zskip := zero_left_guard_skip(i64(op), l, dsigned)
+        zskip := zero_left_guard_skip(op, l, dsigned)
         if (op == 16 or op == 17 or op == 18) and WAT_CHK and nw == "" and (not zskip) {
           push_str(sb, "(block (result i64) ")
           emit_wat_expr(l, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -5540,8 +5540,8 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       cbnl := ex_var_nl(cfbase0)
       cfactive := WAT_CF_VAR_L != 0 and cvnl != 0 and streq(src, cvns, cvnl, WAT_CF_VAR_S, WAT_CF_VAR_L)
       cpidx := param_find(params_head, src, cbns, cbnl, a)
-      mut cstys := 0
-      mut cstyn := 0
+      mut cstys : usize = 0
+      mut cstyn : usize = 0
       if cpidx >= 0 {
         psp := wat_param_struct_span(params_head, src, cbns, cbnl, a, decls)
         cstys = psp.s ; cstyn = psp.n
@@ -6315,7 +6315,7 @@ wat_defer_push_block := fn(head : Option(ptr(mut Stmt))) {
 ## Replay the pending defer actions with stack index in [base, top), LIFO (highest index first) — the
 ## cleanup emission shared by every exit path. Emission ONLY: the caller decides whether the entries
 ## are popped (a scope end) or kept (a jump — the fall-through path still owes them).
-wat_defer_drain := fn(top : i64, base : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, fn_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+wat_defer_drain := fn(top : usize, base : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, fn_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   if WAT_DEF_OVF { push_str(sb, "    (unreachable) (; defer stack overflow (wasm: >64 live defers) ;)\n") }
   mut k := top
   while k > base {
@@ -6819,7 +6819,7 @@ emit_wat_stmts := fn(list_head : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut
               ## offset (`wat_std_path_root_idx` + `wat_std_path_bo`) rather than `emit_wat_expr`, which has
               ## no aggregate-field load at all and would emit an `(unreachable)`. A child OUTSIDE the
               ## copier's domain keeps the located trap below.
-              mut cpbc := 0
+              mut cpbc : usize = 0
               mut cpsidx := i64(0) - 1
               mut cpsbo := i64(0) - 1
               if (not cpwg) {
