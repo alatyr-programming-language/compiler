@@ -917,7 +917,7 @@ pub struct_nfields := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   if di < 0 { return 0 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut cnt := 0
+  mut cnt : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -3672,7 +3672,7 @@ pub generic_gi := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize
 ## `iter`) and `src/` never calls it, so every self-host call answers < 2.
 pub generic_overload_set_count := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, ms : usize, ml : usize) -> usize {
   cnt := rt::vec_len(deref(decls))
-  mut c := 0
+  mut c : usize = 0
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -3788,7 +3788,7 @@ pub arrty_semi := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
   mut p := ts + 1
   lim := ts + tl
   mut depth := 0
-  mut res := 0
+  mut res : usize = 0
   while p < lim and res == 0 {
     c := str_at((src + p), 1)
     if c == "(" or c == "[" { depth = depth + 1 }
@@ -3859,12 +3859,12 @@ pub zero_left_guard_skip := fn(op : i64, l : ptr(Expr), signed : bool) -> bool {
 ## does not match (0 / a null pointer / false) rather than a trap: every caller tests the default.
 
 pub ex_var_ns := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(e) { Expr::Var(vs, vn) => { r = vs } Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
 pub ex_var_nl := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(e) { Expr::Var(vs, vn) => { r = vn } Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
@@ -3878,12 +3878,12 @@ pub ex_struct_lit_args := fn(v : ptr(Expr)) -> Option(ptr(mut Arg)) {
 ## one struct-returning matcher: that is this module's idiom everywhere, and the frozen seed's
 ## documented struct-return scar makes a multi-assignment match arm the wrong thing to introduce here.
 pub ex_struct_lit_ns := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = ss } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
 pub ex_struct_lit_nl := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+  mut r : usize = 0
   match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = sn } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }

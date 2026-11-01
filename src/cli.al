@@ -116,7 +116,7 @@ pub read_cmdline := fn(in out a : rt::Arena) -> str {
 ## The number of NUL-separated arguments in a cmdline `str`. /proc/self/cmdline ends in a trailing
 ## NUL after the last arg, so the count is the number of NUL terminators.
 pub arg_count := fn(cmd : str) -> usize {
-  mut n := 0
+  mut n : usize = 0
   mut i : usize = 0
   while i < cmd.len {
     if bytes(cmd)[i] == 0 { n = n + 1 }
@@ -174,7 +174,7 @@ pub resolve_in_path := fn(in out a : rt::Arena, env : str, name : str) -> usize 
   }
   if found == false { return 0 }
   mut ds := pvs
-  mut res := 0
+  mut res : usize = 0
   while ds < pve and res == 0 {
     mut de := ds
     while de < pve and bytes(env)[de] != 58 { de = de + 1 }
@@ -1003,7 +1003,7 @@ link_exe_split := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize
   ## inside the loop — the lean self-host lower mis-lowers an in-loop return into a layout-dependent stack
   ## corruption (documented at `lower::ra_env_init`; here it surfaced as a heisen "rt: StrBuf overflow").
   ## Accumulate an error code and return AFTER the loop instead.
-  mut err := 0
+  mut err : usize = 0
   mut j : usize = 0
   while j < nspan and err == 0 {
     st := rt::rec_get(unchecked bitcast(ptr(mut u8), spanbase), 1 + j * 2)
@@ -3793,7 +3793,7 @@ manifest_artifact_basename := fn(in out a : rt::Arena, pkg_al : str) -> str {
 ## the manifest checker and the future TOOL-18 target resolver.
 manifest_target_count := fn(in out a : rt::Arena, pkg_al : str) -> usize {
   blk := manifest_list_field(a, pkg_al, "targets")
-  mut n := 0
+  mut n : usize = 0
   mut i : usize = 0
   while i + 7 <= blk.len {
     if bytes(blk)[i] == 84 and bytes(blk)[i + 1] == 97 and bytes(blk)[i + 2] == 114
@@ -5379,7 +5379,7 @@ bare_file_paths := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize) ->
 ## multi-file bare list only; the single-file case is recorded residual scope on #516. Counted here
 ## the same way `cli_first_input` finds the first one, so the two can never disagree.
 cli_input_n := fn(cmd : str, fi : usize, n : usize) -> usize {
-  mut c := 0
+  mut c : usize = 0
   mut i := fi
   while i < n {
     x := arg_at(cmd, i)
@@ -6280,7 +6280,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       test_out = manifest_target_artifact(a, tep, ".test", selected_profile)
       keep_test_artifact = true
     }
-    mut rc := 0
+    mut rc : usize = 0
     if cross_test {
       rc = build_and_run_cross(a, test_out, keep_test_artifact, tsb.data, tsb.len, target_backend)
     } else {
@@ -6406,7 +6406,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       anyd = manifest_any_dynamic(a, mpath)
       lflags = manifest_linker_flags(a, mpath)
     }
-    mut build_rc := 0
+    mut build_rc : usize = 0
     if artifact_kind == "object" or artifact_kind == "static_lib" or artifact_kind == "shared_lib" {
       build_rc = emit_library_artifact(a, artifact_kind, outp, sb.data, sb.len, libnames, anyd, lflags)
     } else {

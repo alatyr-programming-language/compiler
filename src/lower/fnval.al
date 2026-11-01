@@ -67,7 +67,7 @@ fnty_params_end := fn(src : ptr(u8), p0 : usize) -> usize {
   mut p := fnty_skip_ws(src, p0 + 2, lim)
   if str_at((src + p), 1) != "(" { return 0 }
   mut d := 0
-  mut r := 0
+  mut r : usize = 0
   while p < lim {
     c := str_at((src + p), 1)
     if c == "(" { d = d + 1 }
@@ -160,7 +160,7 @@ fn_decl_by_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usiz
 ## `h : fn(…) -> R` annotation (a leading `dyn` is skipped: `d : dyn fn(…) -> R`). 0 = no annotation.
 pub fnval_ty_pos := fn(cs : usize, cl : usize, src : ptr(u8), a : rt::Arena) -> usize {
   mut pc := EMIT_PARAMS
-  mut pr := 0
+  mut pr : usize = 0
   loop {
     match pc {
       Some(pcq) => {
@@ -408,8 +408,8 @@ fnty_slot_ty := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
 pub fnval_param_fmask := fn(cs : usize, cl : usize, cx : ptr(LCtx)) -> usize {
   a := arena_of(cx)
   tp := fnval_ty_pos(cs, cl, cx.src, a)
-  mut m := 0
-  mut bit := 1
+  mut m : usize = 0
+  mut bit : usize = 1
   if tp != 0 {
     mut i := 0
     while i < 6 {
@@ -465,7 +465,7 @@ ecallee_fnty_in_text := fn(src : ptr(u8), s : usize, n : usize) -> usize {
   if n < 2 { return 0 }
   e := s + n
   mut p := s
-  mut r := 0
+  mut r : usize = 0
   while p + 2 <= e and r == 0 {
     if str_at((src + p), 2) == "fn" {
       mut ok := true
@@ -583,8 +583,8 @@ ecallee_ret_scalar := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ## The float-ARGUMENT mask of the fn-value type at `p0` — the `fnval_param_fmask` twin for a callee with
 ## no name to resolve. Bit `k` set = parameter `k` is an `f64`/`f32` and so takes an SSE register.
 ecallee_fmask := fn(p0 : usize, cx : ptr(LCtx)) -> usize {
-  mut m := 0
-  mut bit := 1
+  mut m : usize = 0
+  mut bit : usize = 1
   mut i := 0
   while i < 6 {
     ps := fnty_param_span(cx.src, p0, i)
@@ -718,8 +718,8 @@ pub lam_cap_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), lidx : usize, la
 pub fn_field_param_fmask := fn(base : ptr(Expr), fs : usize, fl : usize, cx : ptr(LCtx)) -> usize {
   fts := fn_field_ty_span(base, fs, fl, cx)
   if fts.n < 3 { return 0 }
-  mut m := 0
-  mut bit := 1
+  mut m : usize = 0
+  mut bit : usize = 1
   mut i := 0
   while i < 6 {
     ps := fnty_param_span(cx.src, fts.s, i)
