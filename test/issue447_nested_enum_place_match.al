@@ -63,7 +63,7 @@ no_wild := fn(v : Tag) -> u64 {
 
 value_form := fn(v : Tag) -> u64 {
   o := Outer(lead = 7, inner = Inner(t = v))
-  y := match o.inner.t { Red => 11, Green => 22, Blue => 33, Amber => 44, Violet => 55, _ => 91 }
+  y : u64 = match o.inner.t { Red => 11, Green => 22, Blue => 33, Amber => 44, Violet => 55, _ => 91 }
   y
 }
 

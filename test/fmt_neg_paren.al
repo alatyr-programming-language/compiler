@@ -11,5 +11,5 @@ main := fn() -> u64 {
   q := -p
   r := -(a * b)
   s := -r
-  return q - 1 + s
+  return u64(q - 1 + s)
 }
