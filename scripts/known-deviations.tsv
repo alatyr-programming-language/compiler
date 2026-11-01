@@ -155,6 +155,7 @@ aarch64	test/fn_value_qualified.al	run/133	#1189
 aarch64	test/fn_value_struct_ret.al	run/133	#1189
 aarch64	test/fold_capture_generic.al	run/133	#1196
 aarch64	test/fold_capture_multisite.al	run/133	#1196
+aarch64	test/for_aggregate_body_local.al	run/133	#1201
 aarch64	test/for_break_labels.al	run/133	#1202
 aarch64	test/for_in_global_array.al	run/133	#1201
 aarch64	test/for_in_global_struct_array.al	run/133	#1201
@@ -606,6 +607,7 @@ riscv64	test/fn_value_qualified.al	run/133	#1189
 riscv64	test/fn_value_struct_ret.al	run/133	#1189
 riscv64	test/fold_capture_generic.al	run/133	#1196
 riscv64	test/fold_capture_multisite.al	run/133	#1196
+riscv64	test/for_aggregate_body_local.al	run/133	#1201
 riscv64	test/for_break_labels.al	run/133	#1202
 riscv64	test/for_in_global_array.al	run/133	#1201
 riscv64	test/for_in_global_struct_array.al	run/133	#1201
@@ -1055,6 +1057,7 @@ wasm	test/fn_value_qualified.al	run/134	#1189
 wasm	test/fn_value_struct_ret.al	run/134	#1189
 wasm	test/fold_capture_generic.al	run/134	#1195
 wasm	test/fold_capture_multisite.al	run/134	#1195
+wasm	test/for_aggregate_body_local.al	run/134	#1201
 wasm	test/for_in_global_array.al	run/134	#1201
 wasm	test/for_in_global_struct_array.al	run/134	#1201
 wasm	test/for_over_bytes.al	run/134	#1201

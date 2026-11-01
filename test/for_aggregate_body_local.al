@@ -42,3 +42,4 @@ main := fn() -> u64 {
   if g != 11 { return 4 }
   42
 }
+## expect: run 42
