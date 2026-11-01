@@ -1881,4 +1881,27 @@ The original reading note, verbatim:
 #
 # VERSION 0.2.19 -> 0.2.20, PATCH: a bug fix that makes valid programs run as the spec says; no surface changes.
 # The specification pin (spec 1.6.0) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.20 -> 0.2.21   promoted 2026-11-01   seed/alatyr := Stage2
+#
+# WHY: #1209 (PR #1338): `deref(unchecked bitcast(ptr(S), x))` of a multi-word struct read only its first word on x86_64. The compiler binds `mar := deref(unchecked bitcast(ptr(rt::Arena), IRP_MARP))` at src/lower/ir.al:1355 and :1612, so its own emission changes and the frozen seed must carry it; PR #1338's gate (run 41278486294) was red only at the fixpoint.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k>): 50 hunks, 93 added, 85 removed. One sentence:
+# both `mar` bindings (lower::ir::ir_field_barrier_ok and lower::ir::ir_check_stmts) now copy all three words of rt::Arena (`movq 0/8/16(%rax)`) instead of one, and every other hunk in those two functions is the frame-offset shift the larger frame causes; no other function moves.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1604399 lines.
+# GAS SHA-256 (Stage2): 31b8695bb305462525b1e75cb9aab6794342ad0e7e61fea4a67fc2eeb0c13d2b.
+# Stage2 == Stage3 BINARY SHA-256:
+# c0570cd5e964768588f6e54a67de50a533576801c1cc47b452acacc381d171e2 (6113016 B).
+# All three answer `alatyr 0.2.21, spec 1.6.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.2.20) SHA-256:
+# 094e46af061388a6b3db63ba42a071024097f1280895d45cddbf3de1251c87a0.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1604399 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.2.20 -> 0.2.21, PATCH: a wrong value on x86_64 became the correct one; no surface changes.
+# The specification pin (spec 1.6.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```

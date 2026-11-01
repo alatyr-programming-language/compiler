@@ -74,7 +74,7 @@ run_help_version() {
   # cheap pre-build stage instead of going red here with a diagnostic that never names a version.
   # The revision is a TARGET, not conformance (compiler#1000; spec 9438d00, Overview §6 and TOOL-21):
   # the line says so and names where the known deviations are published (#1126 S3).
-  printf 'alatyr 0.2.20, spec 1.6.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)\n' >"$want"
+  printf 'alatyr 0.2.21, spec 1.6.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)\n' >"$want"
   version_ok=1
   for arg in --version -V version; do
     (cd "$tmp" && "$CC" "$arg") >"$out" 2>"$err"

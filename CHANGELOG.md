@@ -126,6 +126,8 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+## 0.2.21 — 2026-11-01
+
 - **A struct read through `deref(unchecked bitcast(ptr(S), x))` is the whole `S` (#1209).** Binding it
   (`j := deref(…)`) or reading a field off it gave the wrong contents on x86_64: 0 where 42 was due, or
   a crash with pointer fields. The pointee is now copied or read as for any other pointer to `S`.
