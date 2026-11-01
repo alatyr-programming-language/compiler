@@ -11140,6 +11140,10 @@ run omap_ops 42
 ## overwrite, then read every field back through the `omap_values` slice. Guards the generic-aggregate
 ## `deref(ptr(V))` element store/shift (`deref(vd) = deref(vs)` / `deref(vslot) = value` with V a struct).
 run omap_struct_value 42
+## #1307 — a load/store through a `ptr(mut K)` local inside an instance at `K = i8` / `u16` moves the
+## instance's width and sign, not a word: the shape of the `omap_insert` / `omap_grow` key moves
+## (the parent overwrote the slots after the store and exits 10).
+run issue1307_instance_ptr_width 42
 ## A generic enum-INSTANCE whose type-param monomorphizes to a MULTI-WORD STRUCT delivers the WHOLE
 ## payload through construction + return-register + match-binding: `Option(V)`/`Result(V, _)` with V a
 ## 2-word struct (from a by-ref struct param). Formerly truncated word 1 (same-fn bind) / crashed the

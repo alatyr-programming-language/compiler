@@ -12671,8 +12671,12 @@ deref_pointee_bytes := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
       pn := ptr_pointee_name(cx.src, ps, pl)
       if pn.n != 0 { w = scalar_byte_size(cx.src, pn.s, pn.n) }
     }
+    ## #1307 — the pointee through the enclosing INSTANCE (`kd := bitcast(ptr(mut K), …)` in
+    ## `omap_insert` at `K = i8`): the bare `K` sized as a word, so `deref(kd) = key` stored eight bytes
+    ## and overwrote the seven keys after it. `deref_dest_pointee_span` maps a type parameter to its
+    ## argument and leaves every other pointee as `local_ptr_pointee_span` answers it.
     Expr::Var(vs, vn) => {
-      pty := local_ptr_pointee_span(cx, vs, vn)
+      pty := deref_dest_pointee_span(p, cx)
       if pty.n != 0 { w = scalar_byte_size(cx.src, pty.s, pty.n) }
       else if byte_ptr_local(cx, vs, vn) { w = 1 }
     }
@@ -12882,8 +12886,10 @@ deref_pointee_signed := fn(p : ptr(Expr), cx : ptr(LCtx)) -> bool {
       pn := ptr_pointee_name(cx.src, ps, pl)
       sg = pn.n != 0 and str_at((cx.src + pn.s), 1) == "i"
     }
-    Expr::Var(vs, vn) => {
-      pty := local_ptr_pointee_span(cx, vs, vn)
+    ## #1307 — through the instance, as `deref_pointee_bytes` resolves it: an `i8` key read through
+    ## `ks := bitcast(ptr(mut K), …)` sign-extends.
+    Expr::Var(_vs, _vn) => {
+      pty := deref_dest_pointee_span(p, cx)
       if pty.n != 0 { sg = str_at((cx.src + pty.s), 1) == "i" }
     }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
