@@ -21,3 +21,4 @@ main := fn() -> u64 {
   f := v.free()
   e.a + e.b
 }
+## expect: reject "a value, not a place"

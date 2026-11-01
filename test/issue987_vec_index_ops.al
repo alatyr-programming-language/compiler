@@ -90,3 +90,4 @@ main := fn() -> u64 {
   hy := y.free()
   42
 }
+## expect: run 42
