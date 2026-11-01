@@ -9,7 +9,7 @@ main := fn() -> u64 {
   ta := unchecked deref(unchecked bitcast(ptr(mut u64), unchecked bitcast(usize, ptr(a))))
   mut b := Code.B
   tb := unchecked deref(unchecked bitcast(ptr(mut u64), unchecked bitcast(usize, ptr(b))))
-  mut acc := 0
+  mut acc : u64 = 0
   if ta == 5 { acc = acc + 20 }
   if tb == 10 { acc = acc + 22 }
   acc

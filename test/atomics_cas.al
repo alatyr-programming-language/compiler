@@ -6,7 +6,7 @@
 ##   t = cas_strong(expect 41 -> 42): matches, x=42, t=(41, 1)
 ## z (load) = 42. Returns z + r.1 + s.1 - t.1 = 42 + 1 + 0 - 1 = 42.
 main := fn() -> u64 {
-  mut x := 40
+  mut x : u64 = 40
   p := ptr(x)
   r := atomic::cas_strong(p, 40, 41, Ordering.seq_cst, Ordering.acquire)
   s := atomic::cas_weak(p, 40, 99, Ordering.seq_cst, Ordering.relaxed)

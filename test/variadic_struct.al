@@ -4,7 +4,7 @@
 Pt := struct { x : u64, y : u64 }
 
 span := fn(args : ...) -> u64 {
-  mut t := 0
+  mut t : u64 = 0
   comptime for p in args {
     t = t + p.x + p.y
   }
