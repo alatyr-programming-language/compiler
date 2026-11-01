@@ -16,3 +16,5 @@ main := fn() -> u64 {
   }
   return ok
 }
+## Run with no arguments, as the corpus walk runs it, `av` holds argv[0] only, so `ok` stays 0.
+## expect: run 0

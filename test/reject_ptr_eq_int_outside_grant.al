@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if p == 0 { return 1 }
   return 42
 }
+## expect: reject "at line 18"

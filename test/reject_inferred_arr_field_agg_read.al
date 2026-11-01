@@ -16,3 +16,4 @@ main := fn() -> u64 {
   if q.a != 30 or q.b != 4 { return 1 }
   42
 }
+## expect: run 42
