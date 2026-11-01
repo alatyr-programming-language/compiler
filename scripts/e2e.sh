@@ -10707,6 +10707,10 @@ run typeinfo_kinds 42
 run comptime_for 42
 run comptime_variants 42
 run comptime_enum_hash 42
+## #1303 — the library's structural `hash` of an enum value (unit, payload and library-instance variants)
+## and of a `str` beside it. NON-VACUOUS: on the parent `da18fef2` (x86_64) the fixture stops with
+## SIGSEGV (rc 139): the derive's `hash(p)` reached the module's `hash(s : str)` overload by arity.
+run issue1303_enum_hash 42
 run comptime_enum_eq 42
 run agg_compare_fields 42
 run nested_match_agg 42
