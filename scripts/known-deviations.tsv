@@ -7,8 +7,9 @@
 # The rules, held by `scripts/fixture_expect.sh --gate` in full.sh (#1126 S2):
 #   - every missed directive has a row here, and every row reproduces exactly (same observation);
 #   - a row whose backend now meets its directive is STALE: the fix that makes it pass deletes its row;
-#   - every row names an issue of scripts/known-deviations.issues.tsv; every issue there is open
-#     (scripts/land.sh PHASE 2 asks `gh`; `fixture_expect.sh --issues-open` asks it by hand).
+#   - every row names an issue of scripts/known-deviations.issues.tsv; every issue there is open: the
+#     gate reads an issue-state snapshot its caller took with `gh` (#1279), land.sh PHASE 2 asks `gh`
+#     at the screen, and an issue the landing PR closes (`Closes #N`) already counts as closed.
 # A deviation is a defect of the implementation, never a permission: the directive stays the
 # expectation. Regenerate the rows a change adds with `scripts/fixture_expect.sh --list unlisted`,
 # which reads the walk `scripts/corpus_manifest.sh --check` leaves (or `--observed F`) and refuses
