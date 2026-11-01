@@ -16,3 +16,4 @@ app := Package(
     ),
   ],
 )
+## expect: run 42

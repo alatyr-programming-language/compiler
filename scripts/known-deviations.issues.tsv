@@ -6,6 +6,7 @@
 # deviation has no fixture row (no program-visible value differs: the defect is in how the result is
 # reached). Every issue here must be open: scripts/land.sh PHASE 2 refuses a closed one, and
 # `scripts/fixture_expect.sh --issues-open` asks `gh` by hand. The gate holds the rest without network.
+3	Manifest appendix §3.2 (TOOL-12): a path naming no declaration is a Codegen-stage diagnostic raised before the linker	aarch64/riscv64: a program with no entry declaration is emitted and fails at link on the undefined entry symbol; wasm fails at assemble (x86_64 reaches `ld` too, inside the compiler)	rows
 550	Overview §6 (code consistent with the normative lowering rules, per selected target); Memory §4.1	aarch64/riscv64: a deref store through a 1-byte pointee needs the @repr/sub-word byte image, and traps	rows
 551	Overview §6 (code consistent with the normative lowering rules, per selected target); Types §4.4	aarch64/riscv64: `bitcast` to a bare user aggregate has no lowering, and traps	rows
 577	Overview §6 (code consistent with the normative lowering rules, per selected target)	aarch64/riscv64: a statement-position `match` traps (fail-loud stub `unsupported match statement`)	rows
@@ -36,3 +37,4 @@
 1205	Overview §6 (code consistent with the normative lowering rules, per selected target)	wasm: `bitcast` in these shapes is a fail-loud stub (`unsupported bitcast`)	rows
 1206	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: overloaded functions do not assemble on aarch64, riscv64 and wasm	rows
 1207	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: two programs fail to assemble or link on aarch64 and riscv64	rows
+1336	Modules §2, §4 (MOD-3): `::` names a sibling module's `pub` item and `.` reads a field of that value	a qualified field read of a sibling's `pub` struct global (`z::cfg.x`) is refused at compile time with a bare `invalid`, on every backend	rows
