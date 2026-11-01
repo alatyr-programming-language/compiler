@@ -219,6 +219,7 @@ aarch64	test/issue1247_vec_set_str_binop_arg.al	run/133	#1184
 aarch64	test/issue1254_deque_subword_call_deref.al	run/133	#1200
 aarch64	test/issue1254_deque_subword_slot.al	run/133	#1200
 aarch64	test/issue1255_hashmap_subword_growth.al	run/133	#1200
+aarch64	test/issue1274_view_in_range.al	run/133	#1187
 aarch64	test/issue1302_container_elem_enum.al	run/133	#1200
 aarch64	test/issue1303_enum_hash.al	run/133	#1189
 aarch64	test/issue1305_alias_callee_option.al	run/133	#1188
@@ -739,6 +740,7 @@ riscv64	test/issue1247_vec_set_str_binop_arg.al	run/133	#1184
 riscv64	test/issue1254_deque_subword_call_deref.al	run/133	#1200
 riscv64	test/issue1254_deque_subword_slot.al	run/133	#1200
 riscv64	test/issue1255_hashmap_subword_growth.al	run/133	#1200
+riscv64	test/issue1274_view_in_range.al	run/133	#1187
 riscv64	test/issue1302_container_elem_enum.al	run/133	#1200
 riscv64	test/issue1303_enum_hash.al	run/133	#1189
 riscv64	test/issue1305_alias_callee_option.al	run/133	#1188
@@ -1260,6 +1262,7 @@ wasm	test/issue1247_vec_set_str_binop_arg.al	run/134	#1184
 wasm	test/issue1254_deque_subword_call_deref.al	run/134	#1186
 wasm	test/issue1254_deque_subword_slot.al	run/134	#1186
 wasm	test/issue1255_hashmap_subword_growth.al	run/134	#1186
+wasm	test/issue1274_view_in_range.al	run/134	#1190
 wasm	test/issue1302_container_elem_enum.al	run/134	#1186
 wasm	test/issue1303_enum_hash.al	run/134	#1189
 wasm	test/issue1305_alias_callee_option.al	run/134	#1186
