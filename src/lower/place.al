@@ -631,7 +631,7 @@ pub field_read_agg := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
     ## `s3fra` here — rather than carrying a word number that would be wrong if anyone used it.
     ## A child in NEITHER set (one carrying a `str`, an enum, a union, a tuple or a non-byte array)
     ## keeps the located fence, per I11.
-    mut s3cck := 0
+    mut s3cck : usize = 0
     if s3fkind == 2 and struct_decl_of(decls, src, s3ftb.s, s3ftb.n) >= 0 and not is_union_decl(decls, src, s3ftb.s, s3ftb.n) and not std_struct_is_word_granular(decls, src, s3fra.ts, s3fra.tl, a) {
       s3cck = std_copy_kind(decls, src, s3fra.ts, s3fra.tl, a)
       if s3cck == 0 {
@@ -786,7 +786,7 @@ pub emit_elem_copy_in := fn(arr : ptr(Expr), idx : ptr(Expr), dst : i64, in out 
     ## an ENUM-element array global's stride is `1 + enum_inst_words` (disc + widest payload), NOT the
     ## scalar `1` — with `1` the copy read one word at `LABEL + i*8`, i.e. the middle of an element.
     gaen := global_arr_enum(cx.decls, cx.src, gvn.s, gvn.n, gmv, a)
-    mut gstride := 1
+    mut gstride : usize = 1
     if ge.is_s { gstride = struct_words(cx.decls, cx.src, ge.ss, ge.sl, a) }
     else if gaen.is_e { gstride = gaen.stride }
     emit_gas(idx, sb, cx, a, nl)                 ## index → stack

@@ -534,7 +534,7 @@ slice_variadic_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize,
 ## The SURFACE SYMBOL of a binary operator opcode (`""` for a non-routable op — the boolean
 ## short-circuits 40/41 and `not` 42 are control flow, never library operators). Used to match an
 ## `@inline` operator fn whose DECL NAME is the symbol (`@inline + := fn(a, b) { … }`).
-op_symbol := fn(op : i64) -> str {
+op_symbol := fn(op : u8) -> str {
   if op == 16 { return "+" }
   if op == 17 { return "-" }
   if op == 18 { return "*" }
@@ -554,12 +554,12 @@ op_symbol := fn(op : i64) -> str {
 ## The exact scalar binary-operator set whose result keeps an operand's integer signedness/width
 ## through the type-inference and `unchecked` proof paths. Keep this set separate from comparisons and
 ## logical control operators: it is the OP-2 glyph set that those consumers are allowed to propagate.
-is_scalar_bin_op := fn(op : i64) -> bool {
+is_scalar_bin_op := fn(op : u8) -> bool {
   op == 16 or op == 17 or op == 18 or op == 19 or op == 29 or op == 34 or op == 35 or op == 36
 }
 ## The exact arithmetic subset that can produce an f32/f64 value. Bitwise operators and `%` are integer
 ## paths here; callers use this helper only for the float detector/emitter seam.
-is_float_bin_op := fn(op : i64) -> bool {
+is_float_bin_op := fn(op : u8) -> bool {
   op == 16 or op == 17 or op == 18 or op == 19
 }
 ## Whether a type-name text is a BUILT-IN scalar/brand — an operand of such a type keeps the direct
@@ -638,8 +638,8 @@ named_op_decl_idx_noinline := fn(decls : ptr(rt::Vec), src : ptr(u8), name : str
 ## (`rs`/`rn`) at return, never a struct local reassigned in the loop (the lean-lower landmine —
 ## see `typearg_at`). 0/0 when the decl has no value parameter.
 first_value_param_type_span := fn(d : Decl, src : ptr(u8), a : rt::Arena) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   mut p := d.params_head
   loop {
     match p {
@@ -710,7 +710,7 @@ generic_op_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), name : str, ts : 
   if nfound > 1 { panic("selfhost: ambiguous generic operator — two generic operator fns share the glyph and the operand base head") }
   found
 }
-operator_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), op : i64, ts : usize, tn : usize, a : rt::Arena) -> i64 {
+operator_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), op : u8, ts : usize, tn : usize, a : rt::Arena) -> i64 {
   sym := op_symbol(op)
   if sym == "" { return -1 }
   mut ii := named_op_decl_idx(decls, src, sym, ts, tn, a)
@@ -735,8 +735,8 @@ operator_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), op : i64, ts : usiz
 op_ct_bind := fn(decls : ptr(rt::Vec), src : ptr(u8), opci : i64, ts : usize, tn : usize, a : rt::Arena) -> bool {
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(opci))))
   mut nct := 0
-  mut cns := 0
-  mut cnl := 0
+  mut cns : usize = 0
+  mut cnl : usize = 0
   mut p := d.params_head
   loop {
     match p {
@@ -762,7 +762,7 @@ op_ct_bind := fn(decls : ptr(rt::Vec), src : ptr(u8), opci : i64, ts : usize, tn
 }
 ## The cmp.al FUNCTION NAME a comparison opcode desugars to: `==`/`!=` → `eq`, the four orderings →
 ## `lt` (with a swap/negate applied by the caller). `""` for a non-comparison op.
-cmp_route_name := fn(op : i64) -> str {
+cmp_route_name := fn(op : u8) -> str {
   if op == 20 or op == 28 { return "eq" }
   if op == 24 or op == 25 or op == 26 or op == 27 { return "lt" }
   return ""
@@ -773,7 +773,7 @@ cmp_route_name := fn(op : i64) -> str {
 ## The cmp.al `lt`/`eq` decl a built-in-INTEGER comparison `a <cmp> b` desugars to, else -1. Only
 ## built-in integer operands route (float/str/bool/user keep their own paths); the caller applies the
 ## operand swap (`>`/`<=`) and result negate (`!=`/`<=`/`>=`).
-cmp_route_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), op : i64, ts : usize, tn : usize, a : rt::Arena) -> i64 {
+cmp_route_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), op : u8, ts : usize, tn : usize, a : rt::Arena) -> i64 {
   cn := cmp_route_name(op)
   if cn == "" { return -1 }
   if tn == 0 { return -1 }
@@ -944,10 +944,10 @@ binding_head_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : us
   if nl == 0 { return z }
   if cl == 0 { return z }
   cnt := rt::vec_len(deref(decls))
-  mut hs := 0
-  mut hl := 0
-  mut ts := 0
-  mut tl := 0
+  mut hs : usize = 0
+  mut hl : usize = 0
+  mut ts : usize = 0
+  mut tl : usize = 0
   mut i : usize = 0
   while i < cnt {
     d := deref(lower_ctx::decl_get(decls, i))
@@ -1365,7 +1365,7 @@ tuple_param_components := fn(src : ptr(u8), ts : usize) -> usize {
   if str_at((src + ts - 1), 1) != "(" { return 0 }
   mut i := ts
   mut depth := 1
-  mut comps := 1
+  mut comps : usize = 1
   mut guard := 0
   mut res : usize = 0
   mut scanning := true
@@ -1793,7 +1793,7 @@ emit_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : Option(
   ## via `emit_arg` here, but this desugar is NOT an `emit_call_args` (which would save/restore), so
   ## RESTORE it at the end — else the bump leaks into the next statement's call and overflows the pool.
   aggsave := cx.agg_next
-  mut ai := 1
+  mut ai : usize = 1
   mut runstart := fi.ss
   mut i : usize = 0
   while i < fi.sl {
@@ -2403,7 +2403,7 @@ module_const_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
      and lower_ctx::streq(src, _mcv_ms[h], _mcv_ml[h], GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
      and lower_ctx::streq(src, _mcv_s[h], _mcv_n[h], s, n) { return unchecked bitcast(ptr(Expr), _mcv_r[h]) }
   cnt := rt::vec_len(deref(decls))
-  mut res := 0
+  mut res : usize = 0
   gr := gref_split(src, s, n)
   th := name_hash(src, gr.ns, gr.nl)
   mut j := dni_lo(cnt, th)
@@ -2439,7 +2439,7 @@ mut_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
      and lower_ctx::streq(src, _mgv_ms[h], _mgv_ml[h], GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
      and lower_ctx::streq(src, _mgv_s[h], _mgv_n[h], s, n) { return unchecked bitcast(ptr(Expr), _mgv_r[h]) }
   cnt := rt::vec_len(deref(decls))
-  mut res := 0
+  mut res : usize = 0
   gr := gref_split(src, s, n)
   th := name_hash(src, gr.ns, gr.nl)
   mut j := dni_lo(cnt, th)
@@ -2468,7 +2468,7 @@ mut_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
 ## in use — a write is rejected upstream). Isolated `Decl`-copy frame, like `mut_global_value`.
 const_array_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ptr(Expr) {
   cnt := rt::vec_len(deref(decls))
-  mut res := 0
+  mut res : usize = 0
   gr := gref_split(src, s, n)
   th := name_hash(src, gr.ns, gr.nl)
   mut j := dni_lo(cnt, th)
@@ -3061,7 +3061,7 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
   ## route through here, so the two agree and `(u64, u64)` stays a valid GAS symbol distinct from a struct.
   if str_at((src + tag_s), 1) == "(" {
     push_str(sb, "Tuple")
-    mut jt := 0
+    mut jt : usize = 0
     mut got := true
     while got {
       ct := typearg_at(src, tag_s, 0, jt)
@@ -3089,7 +3089,7 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
   ## initializer (`p := Pt(x = 40, …)`): those are not type-args, and mangling them yielded an invalid
   ## symbol `Pt_x = 40_y = 2` that didn't match the `print_one__Pt` definition.
   if paren_is_struct_lit(src, tag_s + tag_l) == false {
-    mut j := 0
+    mut j : usize = 0
     mut going := true
     while going {
       ta := typearg_at(src, tag_s, tag_l, j)
@@ -4506,7 +4506,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
       push_str(sb, "(%rbp)\n")
     }
     if byte_ret_n > 8 {
-      for k in 0..2 {
+      for k in 0..usize(2) {
         push_str(sb, "  movq ")
         emit_retreg(sb, k)
         push_str(sb, ", -")
@@ -4723,7 +4723,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   if (str_ret_call(e, cx.decls, cx.src, deref(cx.mar)) or generic_inferred_str_ret(e, cx, a)) and cx.agg_tmp >= 0 {
     emit_struct_value(e, sb, cx, a)
     saoff := agg_alloc(cx)
-    for k in 0..2 {
+    for k in 0..usize(2) {
       push_str(sb, "  movq ")
       emit_retreg(sb, k)
       push_str(sb, ", -")
@@ -4795,7 +4795,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
       bii := if_info(e)
       emit_val_if_to_local(bii.cond, bii.then_e, bii.else_e, boff, sb, cx, a, nl)
     }
-    mut bek := 2
+    mut bek : u8 = 2
     if mak.kind == 4 { bek = 4 }
     if mak.kind == 3 { bek = 3 }
     bent := SlotEntry(ns = 0, nl = 0, off = usize(boff), sns = 0, snl = 0, ek = bek, estride = 1, eek = 0, is_ref = false)
@@ -5295,7 +5295,7 @@ emit_call_args := fn(args_head : Option(ptr(mut Arg)), skip : i64, skip2 : i64, 
     while j != 0 {
       j = j - 1
       if call_param_is_float(cx, cidx, ift, arg_src_idx(j, skip, skip2, skip3), j) {
-        mut si := 0
+        mut si : usize = 0
         mut t : usize = 0
         while t < j {
           if call_param_is_float(cx, cidx, ift, arg_src_idx(t, skip, skip2, skip3), t) { si = si + 1 }
@@ -6402,8 +6402,8 @@ bind_slice_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, 
   ## `.len` / emit_str_pair read the len word directly). A STRUCT/ENUM-element slice instead carries
   ## the element TYPE span in `sns`/`snl` so `s[i].field` resolves; its `.len`/str-context is not
   ## exercised (structs aren't strings) so the marker isn't needed there.
-  mut sns := 0
-  mut snl := 1
+  mut sns : usize = 0
+  mut snl : usize = 1
   ## eek 2/3 (struct/enum element) AND eek 7 (POINTER-to-struct element) carry the element TYPE span in
   ## `sns`/`snl` (for eek 7 that is the POINTEE struct span) so `s[i].field` / `deref(s[i]).field`
   ## resolves; a scalar/float slice keeps the `snl == 1` runtime-len marker.
@@ -6473,8 +6473,8 @@ is_cf_name_ref := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
 ## in .rodata; source offsets are unique per occurrence, so field + variant names share the label
 ## scheme without collision. Purely a cx-aware refinement of `is_cf_name_ref`.
 cf_name_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   match deref(e) {
     Expr::Field(base, fs, fl) => {
       if str_at((cx.src + fs), fl) == "name" {
@@ -6841,23 +6841,23 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
         ## A slice PARAM (`sns == 1`, a POINTER to the caller's {ptr,len} block) is NOT this — it falls to the
         ## by-ref branch below, which derefs the slot (ptr @ `(%rax)`, len @ `8(%rax)`) exactly as needed.
         push_str(sb, "  movq -")
-        push_int(sb, (ent.off + 1) * 8)
+        push_int(sb, i64((ent.off + 1) * 8))
         push_str(sb, "(%rbp), %rax\n  pushq %rax\n  movq -")
-        push_int(sb, ent.off * 8)
+        push_int(sb, i64(ent.off * 8))
         push_str(sb, "(%rbp), %rax\n  pushq %rax\n")
       } else if ent.is_ref {
         ## a str BY-REF PARAM: the slot holds a POINTER to the caller's str word 0 (its ptr
         ## word). Load that pointer, then deref: ptr = `(%rax)`, len = `-8(%rax)` (the
         ## down-growing {ptr, len} layout — len lives one word past the ptr, at a LOWER addr).
         push_str(sb, "  movq -")
-        push_int(sb, (ent.off + 1) * 8)
+        push_int(sb, i64((ent.off + 1) * 8))
         push_str(sb, "(%rbp), %rax\n  movq (%rax), %rbx\n  pushq %rbx\n  movq 8(%rax), %rbx\n  pushq %rbx\n")
       } else {
         ## a str LOCAL: ptr word (slot off), then len word (slot off+1), read directly.
         push_str(sb, "  movq -")
-        push_int(sb, (ent.off + 1) * 8)
+        push_int(sb, i64((ent.off + 1) * 8))
         push_str(sb, "(%rbp), %rax\n  pushq %rax\n  movq -")
-        push_int(sb, ent.off * 8)
+        push_int(sb, i64(ent.off * 8))
         push_str(sb, "(%rbp), %rax\n  pushq %rax\n")
       }
     }
@@ -8979,8 +8979,8 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
       ## `vec::map`/5), else last — so the substituted return span is read off the RIGHT decl.
       cpq := driver::d_colon_pos(src, cs, cl)
       mut segcmp := false
-      mut pms := 0
-      mut pml := 0
+      mut pms : usize = 0
+      mut pml : usize = 0
       if cpq >= 0 { pms = cs; pml = usize(cpq); segcmp = true }
       mut ci := 0 - 1
       mut ci_arity := 0 - 1
@@ -9025,7 +9025,7 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
         if enum_decl_of(decls, src, hs, hl) >= 0 {
           ## PASS 1 (no allocation): does any top-level return type-arg name a callee type-param?
           mut anyp := false
-          mut k := 0
+          mut k : usize = 0
           mut go := true
           while go {
             ta := typearg_at(src, hs, hl, k)
@@ -9041,7 +9041,7 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
             hstr := str_at((src + hs), hl)
             push_str(msb, hstr)
             push_str(msb, "(")
-            mut k2 := 0
+            mut k2 : usize = 0
             mut go2 := true
             while go2 {
               ta := typearg_at(src, hs, hl, k2)
@@ -9249,7 +9249,7 @@ subst_inst_struct_span := fn(s : usize, n : usize, decls : ptr(rt::Vec), src : p
   ## PASS 1 (no allocation): does any top-level type-arg MAP to an AGGREGATE? Only then does the
   ## instantiated layout differ from the raw span's, so only then is a synthesized span warranted.
   mut anyp := false
-  mut k := 0
+  mut k : usize = 0
   mut go := true
   while go {
     ta := typearg_at(src, bn.s, bn.n, k)
@@ -9266,7 +9266,7 @@ subst_inst_struct_span := fn(s : usize, n : usize, decls : ptr(rt::Vec), src : p
   mut msb := rt::strbuf(deref(synth), 192)
   push_str(msb, str_at((src + bn.s), bn.n))
   push_str(msb, "(")
-  mut k2 := 0
+  mut k2 : usize = 0
   mut go2 := true
   while go2 {
     ta := typearg_at(src, bn.s, bn.n, k2)
@@ -9310,7 +9310,7 @@ subst_gen_struct_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
               ## PASS 1 (no allocation): does any return type-arg name a callee type-param whose CALL
               ## argument is an aggregate type? Only then does the instantiated layout differ.
               mut anyp := false
-              mut k := 0
+              mut k : usize = 0
               mut go := true
               while go {
                 ta := typearg_at(src, bn.s, bn.n, k)
@@ -9328,7 +9328,7 @@ subst_gen_struct_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
                 mut msb := rt::strbuf(deref(synth), 192)
                 push_str(msb, str_at((src + bn.s), bn.n))
                 push_str(msb, "(")
-                mut k2 := 0
+                mut k2 : usize = 0
                 mut go2 := true
                 while go2 {
                   ta := typearg_at(src, bn.s, bn.n, k2)
@@ -9396,7 +9396,7 @@ subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src 
   ## does this Option instance resolve its payload to a pointer (the pointer's null niche folds the enum)?
   mut anywide := false
   mut anyfolded := false
-  mut k := 0
+  mut k : usize = 0
   mut go := true
   while go {
     ta := typearg_at(src, bn.s, bn.n, k)
@@ -9428,7 +9428,7 @@ subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src 
   mut msb := rt::strbuf(deref(synth), 128)
   push_str(msb, str_at((src + bn.s), bn.n))
   push_str(msb, "(")
-  mut k2 := 0
+  mut k2 : usize = 0
   mut go2 := true
   while go2 {
     ta := typearg_at(src, bn.s, bn.n, k2)
@@ -9776,8 +9776,8 @@ append_lit_type := fn(in out msb : strbuf::StrBuf, v : ptr(Expr), decls : ptr(rt
   if d.is_generic == false { return }
   ## Locate this variant's (single-component) payload FIELD to learn which type-PARAM the payload binds.
   mut vf := d.fields_head
-  mut vfts := 0
-  mut vftl := 0
+  mut vfts : usize = 0
+  mut vftl : usize = 0
   loop {
     match vf {
       Some(vfq) => {
@@ -10377,7 +10377,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       ## word 0. Computed only for a single-arg payload; a scalar / 1-word payload keeps the exact
       ## former single-register (%rdx) emission (byte-identical). The discriminant → %rax LAST (the
       ## payload lowering clobbers %rax).
-      mut pw := 0
+      mut pw : usize = 0
       mut pcall := false
       mut parray := false
       ## #852 — a payload declared `Option(ptr(T))` is one folded word: it takes the scalar register
@@ -10395,7 +10395,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
           emit_array_assign(ga0.e, i64(aoff), sb, cx, nl)
           for k in 0..apw {
             push_str(sb, "  movq -")
-            push_frame_word(sb, aoff, k)
+            push_frame_word(sb, usize(aoff), k)
             push_str(sb, "(%rbp), ")
             emit_retreg(sb, k + 1)
             push_str(sb, "\n")
@@ -10652,7 +10652,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       fbt := agg_base_struct_span(fbase, cx)
       fft := field_type_span(cx.decls, cx.src, fbt.s, fbt.n, ffs, ffl, deref(cx.mar))
       ffbn := base_type_name(cx.src, fft.s, fft.n)
-      mut ffw := 0
+      mut ffw : usize = 0
       if fbt.n != 0 and fft.n != 0 and enum_decl_of(cx.decls, cx.src, ffbn.s, ffbn.n) >= 0 { ffw = 1 + enum_inst_words(cx.decls, cx.src, fft.s, fft.n, deref(cx.mar)) }
       if ffw == 0 {
         push_str(sb, "  movq $0, %rax\n  movq $0, %rdx\n")
@@ -10812,7 +10812,7 @@ fn_returns_str := fn(d : Decl, src : ptr(u8)) -> bool {
 generic_str_return_instance := fn(d : Decl, args_head : Option(ptr(mut Arg)), src : ptr(u8), a : rt::Arena) -> bool {
   if not d.is_generic or d.ret_tl == 0 { return false }
   mut p := d.params_head
-  mut pi := 0
+  mut pi : usize = 0
   loop {
     match p {
       Some(pq) => {
@@ -11111,7 +11111,7 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
   if cvi0 >= 0 {
     cvd := deref(lower_ctx::decl_get(cx.decls, usize(cvi0)))
     cx.call_cidx = cvi0
-    sc_shift0 := if cx.sret_call >= 0 { 1 } else { 0 }
+    sc_shift0 : usize = if cx.sret_call >= 0 { 1 } else { 0 }
     emit_call_args(args_head, -1, -1, -1, nargs, sb, cx, nl)
     push_str(sb, "  call ")
     emit_mangled_call(sb, cx.src, cvd.name_start, cvd.name_len, cvd.mod_start, cvd.mod_len, cx.decls)
@@ -11271,7 +11271,7 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
     eff_tpi2 := if did_impl { 0 - 1 } else { tpi2 }
     eff_tpi3 := if did_impl { 0 - 1 } else { tpi3 }
     cx.call_cidx = gi
-    sc_shift := if cx.sret_call >= 0 { 1 } else { 0 }
+    sc_shift : usize = if cx.sret_call >= 0 { 1 } else { 0 }
     emit_call_args(args_head, eff_tpi, eff_tpi2, eff_tpi3, nvals, sb, cx, nl)
     push_str(sb, "  call ")
     gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
@@ -11304,7 +11304,7 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
       emit_abi_c_ret_agg(cx.decls, cx.src, a, cx.call_cidx, sb)
       return
     }
-    sc_shift := if cx.sret_call >= 0 { 1 } else { 0 }
+    sc_shift : usize = if cx.sret_call >= 0 { 1 } else { 0 }
     emit_call_args(args_head, -1, -1, -1, nargs, sb, cx, nl)
     push_str(sb, "  call ")
     emit_mangled_call(sb, cx.src, cs, cl, cx.mod_s, cx.mod_l, cx.decls)
@@ -11392,16 +11392,16 @@ emit_byte_array_return_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx
       if ent.is_ref { nel = i64(ent.sns) }
       if ent.is_ref {
         push_str(sb, "  movq -")
-        push_int(sb, (ent.off + 1) * 8)
+        push_int(sb, i64((ent.off + 1) * 8))
         push_str(sb, "(%rbp), %rcx\n  movq (%rcx), %rax\n")
         if nel > 8 { push_str(sb, "  movq 8(%rcx), %rdx\n") }
       } else {
         push_str(sb, "  movq -")
-        push_int(sb, ent.off * 8)
+        push_int(sb, i64(ent.off * 8))
         push_str(sb, "(%rbp), %rax\n")
         if nel > 8 {
           push_str(sb, "  movq -")
-          push_int(sb, (ent.off - 1) * 8)
+          push_int(sb, i64((ent.off - 1) * 8))
           push_str(sb, "(%rbp), %rdx\n")
         }
       }
@@ -11609,7 +11609,7 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
         ddd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(di))))
         fd = ddd.fields_head
       }
-      mut sw := 0
+      mut sw : usize = 0
       for k in 0..nf {
         fk := arg_expr_at(fhead, k, a)
         mut is_str := false
@@ -11683,7 +11683,7 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       fvsv := if ind_call_ret_struct_words(e, cx.decls, cx.src, a) != 0 { slot_of(cx.slots, cx.src, cs, cl) } else { 0 - 1 }
       if fvsv >= 0 {
         cx.call_cidx = 0 - 1
-        sc_sv := if cx.sret_call >= 0 { 1 } else { 0 }
+        sc_sv : usize = if cx.sret_call >= 0 { 1 } else { 0 }
         cx.ind_fn_fmask = fnval_param_fmask(cs, cl, cx)
         emit_call_args(args_head, 0 - 1, 0 - 1, 0 - 1, nargs, sb, cx, nl)
         push_str(sb, "  movq -")
@@ -11753,7 +11753,7 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       fbt := agg_base_struct_span(fbase, cx)
       fft := field_type_span(cx.decls, cx.src, fbt.s, fbt.n, ffs, ffl, deref(cx.mar))
       ffbn := base_type_name(cx.src, fft.s, fft.n)
-      mut ffw := 0
+      mut ffw : usize = 0
       if fbt.n != 0 and fft.n != 0 and struct_decl_of(cx.decls, cx.src, ffbn.s, ffbn.n) >= 0 { ffw = struct_words(cx.decls, cx.src, fft.s, fft.n, deref(cx.mar)) }
       if ffw == 0 {
         push_str(sb, "  movq $0, %rax\n  movq $0, %rdx\n")
@@ -13817,8 +13817,8 @@ ret_call_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   ## over the same-arity `vec::map`/2); then arity; then last-match.
   cpq := driver::d_colon_pos(src, cs, cl)
   mut segcmp := false
-  mut pms := 0
-  mut pml := 0
+  mut pms : usize = 0
+  mut pml : usize = 0
   if cpq >= 0 { pms = cs; pml = usize(cpq); segcmp = true }
   ltac := leading_type_arg_count(args_head, decls, src, a)
   mut res := 0 - 1
@@ -14099,7 +14099,7 @@ SliceRetInfo := struct { is_slice : bool, eek : u8, stride : usize, ess : usize,
 ## span IS a slice element; this answers only the layout.
 slice_elem_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, en : usize, a : rt::Arena) -> SliceRetInfo {
   mut eek : u8 = 0
-  mut stride := 1
+  mut stride : usize = 1
   mut esdi : i64 = 0 - 1
   mut eedi : i64 = 0 - 1
   if en < 64 { esdi = struct_decl_of(decls, src, es, en); eedi = enum_decl_of(decls, src, es, en) }
@@ -14165,14 +14165,14 @@ gen_ret_targ_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
       th := name_hash(src, nm.s, nm.n)
       mut jc := dni_lo(cnt, th)
       jce := dni_hi(cnt, th)
-      mut i := 0
+      mut i : usize = 0
       while jc < jce {
         i = dni_at(cnt, jc)
         jc = jc + 1
         d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-          mut tps := 0
-          mut tpl := 0
+          mut tps : usize = 0
+          mut tpl : usize = 0
           mut pp := d.params_head
           loop {
             match pp {
@@ -14260,14 +14260,14 @@ ufcs_ret_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec
       th := name_hash(src, nm.s, nm.n)
       mut jc := dni_lo(cnt, th)
       jce := dni_hi(cnt, th)
-      mut i := 0
+      mut i : usize = 0
       while jc < jce {
         i = dni_at(cnt, jc)
         jc = jc + 1
         d := deref(lower_ctx::decl_get(decls, i))
         if res.n == 0 and d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-          mut tps := 0
-          mut tpl := 0
+          mut tps : usize = 0
+          mut tpl : usize = 0
           mut ntpc := 0
           mut pp := d.params_head
           loop {
@@ -14351,14 +14351,14 @@ gen_ret_enum_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : 
       th := name_hash(src, nm.s, nm.n)
       mut jc := dni_lo(cnt, th)
       jce := dni_hi(cnt, th)
-      mut i := 0
+      mut i : usize = 0
       while jc < jce {
         i = dni_at(cnt, jc)
         jc = jc + 1
         d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-          mut tps := 0
-          mut tpl := 0
+          mut tps : usize = 0
+          mut tpl : usize = 0
           mut pp := d.params_head
           loop {
             match pp {
@@ -14544,8 +14544,8 @@ generic_inferred_str_ret := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> 
       gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
       if gd.is_generic == false { return false }
       if gd.ret_tl == 0 { return false }
-      mut tpn_s := 0
-      mut tpn_l := 0
+      mut tpn_s : usize = 0
+      mut tpn_l : usize = 0
       mut ntp := 0
       mut pc := gd.params_head
       loop {
@@ -14902,14 +14902,14 @@ gen_ret_ptrstruct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
       th := name_hash(src, nm.s, nm.n)
       mut jc := dni_lo(cnt, th)
       jce := dni_hi(cnt, th)
-      mut i := 0
+      mut i : usize = 0
       while jc < jce {
         i = dni_at(cnt, jc)
         jc = jc + 1
         d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-          mut tps := 0
-          mut tpl := 0
+          mut tps : usize = 0
+          mut tpl : usize = 0
           mut pp := d.params_head
           loop {
             match pp {
@@ -15154,8 +15154,8 @@ generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   }
   ## §4.1.1 — nothing on the ancestor chain, so honour what the calling module SAID it means
   ## (`(… node_ptr …) := lower_ctx`, `f := M::g`). Only consulted on the path that used to guess.
-  mut bms := 0
-  mut bml := 0
+  mut bms : usize = 0
+  mut bml : usize = 0
   if segcmp == false and bestr < 0 {
     bh := binding_head_span(decls, src, nm.s, nm.n, ms, ml)
     bms = bh.s
@@ -15222,8 +15222,8 @@ implicit_targ_from_recv := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, rec
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
   mut tpi : usize = 0
-  mut tpn_s := 0
-  mut tpn_l := 0
+  mut tpn_s : usize = 0
+  mut tpn_l : usize = 0
   mut found_tp := false
   loop {
     match p {
@@ -15285,8 +15285,8 @@ infer_map_targ3 := fn(decls : ptr(rt::Vec), src : ptr(u8), args_head : Option(pt
   if fv.n == 0 { return CSpan(s = 0, n = 0) }
   nm := last_seg(src, fv.s, fv.n)
   cnt := rt::vec_len(deref(decls))
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   for i in 0..cnt {
     d := deref(lower_ctx::decl_get(decls, i))
     if d.is_fn and d.ret_tl != 0 and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) { rs = d.ret_ts; rn = d.ret_tl }
@@ -15415,7 +15415,7 @@ tparam_idx := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -
   if gi < 0 { return 0 }
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
-  mut i := 0
+  mut i : usize = 0
   mut res : usize = 0
   mut found := false
   loop {
@@ -15459,7 +15459,7 @@ tparam_idx2 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) 
   if gi < 0 { return 0 }
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
-  mut i := 0
+  mut i : usize = 0
   mut seen := 0
   mut res : usize = 0
   loop {
@@ -15484,7 +15484,7 @@ tparam_idx3 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) 
   if gi < 0 { return 0 }
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
-  mut i := 0
+  mut i : usize = 0
   mut seen := 0
   mut res : usize = 0
   loop {
@@ -15567,7 +15567,7 @@ generic_inst_typearg_span := fn(e : ptr(Expr), src : ptr(u8)) -> CSpan {
       if cl == 0 { return CSpan(s = 0, n = 0) }
       ## the head's `(` — only whitespace may sit between the callee lexeme and it.
       mut i := cs + cl
-      mut op := 0
+      mut op : usize = 0
       mut lim := cs + cl + 8
       while op == 0 and i < lim {
         c := str_at((src + i), 1)
@@ -15727,7 +15727,7 @@ type_arg_full_at := fn(args_head : Option(ptr(mut Arg)), ti : usize, decls : ptr
   if iv.n != 0 {
     mut scan := iv.s
     mut steps := 0
-    mut open := 0
+    mut open : usize = 0
     while scan > 0 and steps < 64 and open == 0 {
       scan = scan - 1
       if str_at(src + scan, 1) == "(" { open = scan }
@@ -16085,8 +16085,8 @@ comptime_local_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       mut found := false
       mut found_off : usize = 0
       mut found_kind : u8 = 0
-      mut decl_s := 0
-      mut decl_n := 0
+      mut decl_s : usize = 0
+      mut decl_n : usize = 0
       while i < cnt {
         ent := svec_at(SlotEntry, cts, i)
         if deref(ent).off <= s and deref(ent).nl == n and lower_ctx::streq(cx.src, deref(ent).ns, deref(ent).nl, s, n) {
@@ -16606,14 +16606,14 @@ gen_ret_str_infer := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
       th := name_hash(src, nm.s, nm.n)
       mut jc := dni_lo(cnt, th)
       jce := dni_hi(cnt, th)
-      mut i := 0
+      mut i : usize = 0
       while jc < jce {
         i = dni_at(cnt, jc)
         jc = jc + 1
         d := deref(lower_ctx::decl_get(decls, i))
         if d.kind == 1 and d.is_generic and lower_ctx::streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-          mut tps := 0
-          mut tpl := 0
+          mut tps : usize = 0
+          mut tpl : usize = 0
           mut ntp := 0
           mut pp := d.params_head
           loop {
@@ -16632,7 +16632,7 @@ gen_ret_str_infer := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
           if ntp == 1 and tpl != 0 and d.ret_tl != 0 and lower_ctx::streq(src, d.ret_ts, d.ret_tl, tps, tpl) and d.arity != 0 and nargs == d.arity - 1 {
             ## the type argument is OMITTED — find the value argument declared `T` and ask whether it
             ## is a `str` VIEW binding (the same rule the emit side's inference applies).
-            mut vj := 0
+            mut vj : usize = 0
             mut pv := d.params_head
             loop {
               match pv {
@@ -16664,8 +16664,8 @@ gen_ret_str_infer := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
 
 infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
   gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
-  mut tpn_s := 0
-  mut tpn_l := 0
+  mut tpn_s : usize = 0
+  mut tpn_l : usize = 0
   mut pc := gd.params_head
   loop {
     match pc {
@@ -16678,7 +16678,7 @@ infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(L
     }
   }
   if tpn_l == 0 { return CSpan(s = 0, n = 0) }
-  mut j := 0
+  mut j : usize = 0
   pc = gd.params_head
   loop {
     match pc {
@@ -16721,7 +16721,7 @@ infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(L
   ## non-zero return flips the caller's `impl_pay` so NOTHING is erased and the receiver reaches the
   ## `self` param. Reached only when PASS 1 found no direct-`T` param, so every currently-inferring
   ## call is byte-identical; `src/` spells its type-args → infer never runs for it → fixpoint-safe.
-  mut j2 := 0
+  mut j2 : usize = 0
   pc = gd.params_head
   loop {
     match pc {
@@ -16842,7 +16842,7 @@ emit_overload_suffix := fn(in out sb : strbuf::StrBuf, cs : usize, cl : usize, a
   ## Resolve the TARGET overload by the complete argument signature (§1 item 3), then emit ITS full
   ## parameter-type suffix — matching the definition side. When resolution is ambiguous (too many
   ## arguments untyped) no suffix is emitted, matching the pre-existing "cannot infer" behavior.
-  mut nargs := 0
+  mut nargs : usize = 0
   mut ga : Option(ptr(mut Arg)) = args_head
   loop { match ga { Some(gaq) => { an := deref(arg_p(gaq)); nargs = nargs + 1; ga = an.next }; None => { break } } }
   ridx := overload_resolve_idx(cx.decls, cx.src, cd.name_start, cd.name_len, cd.mod_start, cd.mod_len, nargs, args_head, cx, a)
@@ -17244,7 +17244,7 @@ emit_inline_call := fn(inl_ci : i64, args_head : Option(ptr(mut Arg)), in out sb
   ## param slots in REVERSE — so a nested `@inline` in a LATER arg, which transiently reuses the
   ## same scratch, cannot clobber an earlier arg's value (it is still on the stack).
   mut pp := icd.params_head
-  mut pi := 0
+  mut pi : usize = 0
   loop {
     match pp {
       Some(ppq) => {
@@ -17295,7 +17295,7 @@ routed_int_name := fn(l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx)) -> str {
 ## +/−/* so the actual routed body still receives the untouched operands. Division and remainder only
 ## need the pre-operation zero / MIN÷-1 tests. Every failure is the direct inline trap (CG-13), never the
 ## routed body's library logic.
-emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)) {
+emit_routed_int_guard := fn(op : u8, typ : str, be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)) {
   ## e3 (in parts): `/ %` read sema's record of the operator. `+ - *` now ask the record FIRST and keep
   ## the shape verdict only where sema still answers `VsNotInt` (#943). What is gone is the negation
   ## override that used to sit below: an operand spelled `-x` no longer forces `jno`, because at `u64`
@@ -17382,7 +17382,7 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
 ## then hand off to `emit_inline_body`. This is the operator-overloading path: `a <op> b` over a user
 ## type routes through the user's `@inline` `op` function (`operator_decl_idx`) instead of the built-in
 ## scalar/float lowering. The caller guarantees `inl_ci >= 0 and cx.inl_tmp >= 0` and 2 params.
-emit_inline_binop := fn(op : i64, inl_ci : i64, be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_inline_binop := fn(op : u8, inl_ci : i64, be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   emit_operand_words(l, sb, cx, a, nl)
   emit_operand_words(r, sb, cx, a, nl)
   ## A routed native integer operation still owns the compiler's checked guard. Preserve the two
@@ -17998,7 +17998,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## Before this, those payloads carried the parameter's ADDRESS and the caller read a stack
         ## address as `s.k1`. Multi-word struct values never come here; they take the word-copy paths.
         push_str(sb, "  movq -")
-        push_int(sb, (ent.off + 1) * 8)
+        push_int(sb, i64((ent.off + 1) * 8))
         if ent.ek == 8 or ((ent.ek == 2 or ent.ek == 3) and ent.is_ref) {
           push_str(sb, "(%rbp), %rax\n  movq (%rax), %rax\n  pushq %rax\n")
         } else {
@@ -18359,7 +18359,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## negation keeps its guard and traps on MIN (§6.1). The one decision is
       ## `ir::zero_left_no_overflow` (#1049); before it this line skipped every zero-left operation,
       ## and the parser wrapped every `-x` in an `unchecked` the source never wrote, so `-MIN` wrapped.
-      zskip := lower_layout::zero_left_guard_skip(i64(op), l, dsigned)
+      zskip := lower_layout::zero_left_guard_skip(op, l, dsigned)
       if zskip { ovf_narrow = true }
       ## POINTER arithmetic (`ptr + int` / `ptr - ptr`) is ADDRESS arithmetic — unchecked BY TYPE (CG-8 /
       ## Memory §4.5), never an I11 integer overflow. When an operand is a pointer, skip the overflow guard,
@@ -18624,8 +18624,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         old_ton := lower_layout::type_ref_mod_on()
         old_tos := lower_layout::type_ref_mod_s()
         old_tol := lower_layout::type_ref_mod_l()
-        mut call_owner_s := 0
-        mut call_owner_l := 0
+        mut call_owner_s : usize = 0
+        mut call_owner_l : usize = 0
         if owner_ci >= 0 {
           owner_d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(owner_ci))))
           call_owner_s = owner_d.mod_start
@@ -18962,7 +18962,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             ## `convert_callee_idx` would refuse here because the target name `u64` is a builtin conv.
             acvd := deref(lower_ctx::decl_get(cx.decls, usize(acvi)))
             cx.call_cidx = acvi
-            sc_sh := if cx.sret_call >= 0 { 1 } else { 0 }
+            sc_sh : usize = if cx.sret_call >= 0 { 1 } else { 0 }
             emit_call_args(args_head, 0 - 1, 0 - 1, 0 - 1, nargs, sb, cx, nl)
             push_str(sb, "  call ")
             emit_mangled_call(sb, cx.src, acvd.name_start, acvd.name_len, acvd.mod_start, acvd.mod_len, cx.decls)
@@ -19164,7 +19164,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           return
         }
         sw := struct_words(cx.decls, cx.src, ts, tl, deref(cx.mar))
-        mut bytes := 8
+        mut bytes : usize = 8
         if sw > 0 {
           ## THE ORACLE picks the tier. §8: a `@packed` struct's size is the sum of its field byte sizes
           ## (no padding), not words*8; the standard byte tier is the §6.1 calculator. `struct_words`
@@ -19264,7 +19264,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## default word-model alignment is 8 (every value laid out at 8-byte offsets). §8 levers RAISE it:
         ## a struct-level `@align(N)` pins it to N; a `@packed` struct's alignment is the max of its fields'
         ## `@align(N)` (1 for a plain packed struct). Gated → a non-attributed type still emits 8.
-        mut al := 8
+        mut al : usize = 8
         sa := struct_align_attr(cx.decls, cx.src, ats, atl)
         ## THE ORACLE picks the tier here too, so `align(T)` and `size(T)` cannot disagree about which
         ## representation `T` has. The struct-level `@align(N)` override stays ABOVE the packed tier
@@ -20285,7 +20285,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## `(%rax)`, len at `-8(%rax)`). `var_name_span` isolates the deref-match (no nested match).
       sfv := var_name_span(base)
       mut sf := 0                       ## 0 not a str field, 1 .ptr, 2 .len
-      mut sfoff := 0
+      mut sfoff : usize = 0
       mut sfref := false
       if sfv.n != 0 {
         se := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, sfv.s, sfv.n)))
@@ -21759,8 +21759,8 @@ param_tuple_layout_collect := fn(params_head : Option(ptr(mut Param)), slots : p
                 cs := typearg_at(src, usize(open), 0, usize(k))
                 if cs.n == 0 { go2 = false } else {
                   cek := tuple_comp_eek(decls, src, cs.s, cs.n)
-                  mut tsn := 0
-                  mut tnl := 0
+                  mut tsn : usize = 0
+                  mut tnl : usize = 0
                   if cek != 0 { tsn = cs.s ; tnl = cs.n }
                   svec_push(tcomps, SlotEntry(ns = usize(slot), nl = usize(k), off = usize(cum), sns = tsn, snl = tnl, ek = 5, estride = 1, eek = cek, is_ref = false))
                   cum += i64(tuple_comp_width(decls, src, cs.s, cs.n, a))
@@ -21857,7 +21857,7 @@ emit_embed_byte_assign := fn(v : ptr(Expr), base : i64, n : usize, in out sb : s
     push_str(sb, "  movb $")
     push_int(sb, i64(usize(eb)))
     push_str(sb, ", ")
-    push_int(sb, i)
+    push_int(sb, i64(i))
     push_str(sb, "(%r13)\n")
     i += 1
   }
@@ -22247,8 +22247,8 @@ arr_field_agg_type := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8), decls 
       if unchecked bitcast(usize, fp.base) != 0 {
         ibx := field_base_index(fp.base)
         if ibx.is_ix {
-          mut ess := 0
-          mut esl := 0
+          mut ess : usize = 0
+          mut esl : usize = 0
           gmv := global_arr_value(slots, decls, src, var_name_span(ibx.arr).s, var_name_span(ibx.arr).n)
           if unchecked bitcast(usize, gmv) != 0 {
             ali := array_lit_info(gmv)
@@ -22930,8 +22930,8 @@ field_place_type_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Ve
   fp := field_place_parts(v)
   ## null-ok: field_place_parts answers a null base (fl 0) for an expression that is not a field place
   if fp.fl == 0 or unchecked bitcast(usize, fp.base) == 0 { return z }
-  mut bs := 0
-  mut bl := 0
+  mut bs : usize = 0
+  mut bl : usize = 0
   bvn := var_name_span(fp.base)
   fivl := index_value_layout(fp.base, slots, src, decls, a)
   if bvn.n != 0 {
@@ -23660,10 +23660,10 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
       mut sel := si.el
       mut tail_enum_owner_ctx := false
       mut tail_enum_owner_old_on := false
-      mut tail_enum_owner_old_s := 0
-      mut tail_enum_owner_old_l := 0
-      mut tail_enum_owner_s := 0
-      mut tail_enum_owner_l := 0
+      mut tail_enum_owner_old_s : usize = 0
+      mut tail_enum_owner_old_l : usize = 0
+      mut tail_enum_owner_s : usize = 0
+      mut tail_enum_owner_l : usize = 0
       if (si.is_e == false) and enum_ret_call(mi.scrut, cx) {
         ## scrutinee is a CALL returning an enum (`main := fn() -> u64 { match mkn(10) { … } }` — a tail
         ## value-match with NO intervening binding): stage its result into this match's scratch temp, then
@@ -23780,10 +23780,10 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
             nbind := bind_count(am2.binds_head)
             pty := variant_payload_type(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, deref(cx.mar))
             mut agg_ek : u8 = 0
-            mut array_ess := 0
-            mut array_esl := 0
-            mut array_estride := 1
-            mut array_nel := 0
+            mut array_ess : usize = 0
+            mut array_esl : usize = 0
+            mut array_estride : usize = 1
+            mut array_nel : usize = 0
             if nbind == 1 and pty.n != 0 {
               ## Resolve the payload decl through the payload's BASE name — the third and last copy of
               ## this three-way payload classification (the statement-match copy below and the one in
@@ -23831,8 +23831,8 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
                     ## payload slot at `sbase-1`. #768 — over `ptr(S)` / `ptr(E)` it carries the pointee kind.
                     rpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
                     rpk := pointee_agg_kind(cx.decls, cx.src, rpt.s, rpt.n)
-                    mut rps := 0
-                    mut rpl := 0
+                    mut rps : usize = 0
+                    mut rpl : usize = 0
                     if rpk != 0 { rps = rpt.s; rpl = rpt.n }
                     svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = rps, snl = rpl, ek = rpk, estride = 1, eek = 0, is_ref = false))
                   } else {
@@ -23841,8 +23841,8 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
                     bpf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
                     tbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
                     mut tbk : u8 = 0
-                    mut tbs := 0
-                    mut tbl := 0
+                    mut tbs : usize = 0
+                    mut tbl : usize = 0
                     if bpf.n != 0 { tbk = 3; tbs = bpf.s; tbl = bpf.n }
                     else {
                       tbk = pointee_agg_kind(cx.decls, cx.src, tbpt.s, tbpt.n)
@@ -24305,10 +24305,10 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
   a := arena_of(cx)
   mut enum_owner_ctx := false
   mut enum_owner_old_on := false
-  mut enum_owner_old_s := 0
-  mut enum_owner_old_l := 0
-  mut enum_owner_s := 0
-  mut enum_owner_l := 0
+  mut enum_owner_old_s : usize = 0
+  mut enum_owner_old_l : usize = 0
+  mut enum_owner_s : usize = 0
+  mut enum_owner_l : usize = 0
   mut si0 := scrut_enum_info(scrut, cx)
   ## A payload alias carries the returned enum's declaration module even when this nested match is
   ## lexically in the caller. Install that identity before template expansion and keep the caller's
@@ -24536,13 +24536,13 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
         ## by-ref `Ty` param. A multi-binding / scalar payload keeps one-word-per-binding scalars.
         nbind2 := bind_count(am2.binds_head)
         mut agg_ek2 : u8 = 0
-        mut ptys2 := 0
-        mut ptyn2 := 0
-        mut ptup2 := 0                       ## component count when the payload is a TUPLE (0 = not)
-        mut array_ess2 := 0
-        mut array_esl2 := 0
-        mut array_estride2 := 1
-        mut array_nel2 := 0
+        mut ptys2 : usize = 0
+        mut ptyn2 : usize = 0
+        mut ptup2 : usize = 0                       ## component count when the payload is a TUPLE (0 = not)
+        mut array_ess2 : usize = 0
+        mut array_esl2 : usize = 0
+        mut array_estride2 : usize = 1
+        mut array_nel2 : usize = 0
         if nbind2 == 1 and sise {
           pt2 := variant_payload_span(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, deref(cx.mar))
           ptys2 = pt2.s
@@ -24553,7 +24553,7 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
               ## sbase+1). `display(p)`/`hash(p)` then route via `cf_pay_ty` = the `(…)` span to the tuple
               ## instance, and `p` is passed by reference (like any aggregate arg). Count the components.
               agg_ek2 = 5
-              mut cj := 0
+              mut cj : usize = 0
               mut cg := true
               while cg { ca := typearg_at(cx.src, ptys2, 0, cj); if ca.n == 0 { cg = false } else { ptup2 = ptup2 + 1; cj = cj + 1 } }
             }
@@ -24611,8 +24611,8 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
                   ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
                   ## still lowers as the two-word str view; eek 13 records this niche provenance.
                   pview2 := niche_str_ptr_span(cx.src, ptys2, ptyn2)
-                  mut pview_s2 := 0
-                  mut pview_l2 := 0
+                  mut pview_s2 : usize = 0
+                  mut pview_l2 : usize = 0
                   mut pview_eek2 : u8 = 0
                   if pview2.n != 0 {
                     pview_s2 = pview2.s
@@ -24633,8 +24633,8 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
                   spf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
                   sbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
                   mut sbk : u8 = 0
-                  mut sbs := 0
-                  mut sbl := 0
+                  mut sbs : usize = 0
+                  mut sbl : usize = 0
                   if spf.n != 0 { sbk = 3; sbs = spf.s; sbl = spf.n }
                   else {
                     sbk = pointee_agg_kind(cx.decls, cx.src, sbpt.s, sbpt.n)
@@ -25010,20 +25010,20 @@ guard_field_count := fn(e : ptr(Expr), tp : ptr(GuardTP), decls : ptr(rt::Vec), 
 ## lean lower's aggregate-local frame-home limit; mirror `emit_program`'s top-level-local `gtp`). Up to three
 ## type-params (extra ones ignored). `src/`+`lib/` carry no generic `when` → never built → fixpoint-neutral.
 guard_pred_call_fold := fn(be : ptr(Expr), ph : Option(ptr(mut Param)), ah : Option(ptr(mut Arg)), tp : ptr(GuardTP), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64 {
-  mut i1s := 0
-  mut i1l := 0
-  mut t1s := 0
-  mut t1l := 0
-  mut i2s := 0
-  mut i2l := 0
-  mut t2s := 0
-  mut t2l := 0
-  mut i3s := 0
-  mut i3l := 0
-  mut t3s := 0
-  mut t3l := 0
+  mut i1s : usize = 0
+  mut i1l : usize = 0
+  mut t1s : usize = 0
+  mut t1l : usize = 0
+  mut i2s : usize = 0
+  mut i2l : usize = 0
+  mut t2s : usize = 0
+  mut t2l : usize = 0
+  mut i3s : usize = 0
+  mut i3l : usize = 0
+  mut t3s : usize = 0
+  mut t3l : usize = 0
   mut pp := ph
-  mut pidx := 0
+  mut pidx : usize = 0
   mut slot := 0
   loop {
     match pp {
@@ -25484,7 +25484,7 @@ emit_st_comp_for := fn(cst : ptr(mut Stmt), cvs : usize, cvl : usize, cisvar : u
     ov_vs := cx.cf_var_s; ov_vl := cx.cf_var_l
     ov_fs := cx.cf_fld_s; ov_fl := cx.cf_fld_l
     ov_ts := cx.cf_ty_s; ov_tl := cx.cf_ty_l
-    mut jt := 0
+    mut jt : usize = 0
     mut got := true
     while got {
       comp := typearg_at(cx.src, cfts, 0, jt)
@@ -25861,7 +25861,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             ## value (emitted first), so the done-label still converges with exactly one value. Gated on a
             ## nested defer frame (`cx.defer_sp > 0`) so a defer-free fn emits nothing here.
             if cx.defer_sp > 0 {
-              mut bdb := 0
+              mut bdb : usize = 0
               if depth != 0 {
                 bdb = loop_dframe_at(cx, (cx.loop_sp - 1) - depth)
               } else if cx.loop_sp > 0 {
@@ -25889,7 +25889,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             ## defers (the target loop body-frame boundary) before jumping — SAVE & RESTORE the ledger (an
             ## alternate runtime path). Gated on a nested defer frame so a defer-free fn emits nothing here.
             if cx.defer_sp > 0 {
-              mut cdb := 0
+              mut cdb : usize = 0
               if depth != 0 {
                 cdb = loop_dframe_at(cx, (cx.loop_sp - 1) - depth)
               } else if cx.loop_sp > 0 {
@@ -26105,20 +26105,20 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             mut is_agg_slice := false ## a struct/enum-ELEMENT slice VIEW (eek 2/3, is_ref): copy via the ptr
             mut is_str_slice := false ## a str-ELEMENT slice VIEW (eek 4, is_ref): loop var is a 2-word str
             mut is_glob_arr := false  ## a MUTABLE ARRAY GLOBAL iterable (`for v in TABLE`): `.data` base
-            mut glob_nel := 0        ## the global array's element count (from its ArrayLit)
+            mut glob_nel : usize = 0        ## the global array's element count (from its ArrayLit)
             mut glob_is_agg := false  ## a STRUCT-element global array: copy `glob_stride` words per element
-            mut glob_stride := 1     ## the global array's element width in words
-            mut agg_n := 0           ## element count (parsed from the `[T; N]` annotation)
+            mut glob_stride : usize = 1     ## the global array's element width in words
+            mut agg_n : usize = 0           ## element count (parsed from the `[T; N]` annotation)
             mut agg_stride : usize = 0      ## element width in words
-            mut b_snl := 0           ## the var array's static scalar/float count (bent.snl)
-            mut b_estride := 1       ## the var array's element stride in words (bent.estride)
+            mut b_snl : usize = 0           ## the var array's static scalar/float count (bent.snl)
+            mut b_estride : usize = 1       ## the var array's element stride in words (bent.estride)
             mut b_is_ref := false
-            mut bslot := 0
+            mut bslot : usize = 0
             ## a `for x in v` over an arena-backed `Vec(T)` (`@owning struct { idx, len, cap, arena }`, 4
             ## words): word 0 = the arena HANDLE index (NOT a pointer), so the slice path would deref a raw
             ## index and trap. Resolve the element base as `arena.base + idx` per iteration setup instead.
             mut is_vec := false
-            mut vec_bslot := 0    ## the Vec struct local's base slot (word 0 = idx)
+            mut vec_bslot : usize = 0    ## the Vec struct local's base slot (word 0 = idx)
             ## a `for v in <mutable array GLOBAL>` — the iterable is a module global (no frame slot), so it
             ## is neither the non-var nor the slot path: read the count from its ArrayLit and each element
             ## from `LABEL + i*8`. Scalar-word elements. Detected before the slot read (which would garbage).
@@ -26134,7 +26134,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## clobber __i, so the loop bound read 0 and never ran). `emit_arm_val_store` handles a
               ## `Slice(…)` StructLit (emit_struct_assign) AND a `bytes(s)`/`sub(…)` str-view (emit_str_pair
               ## pair pop) — both write ptr @ base, len @ base-1 (the up-growing 2-word layout).
-              bslot = vslot + 3
+              bslot = usize(vslot + 3)
               emit_arm_val_store(flo, i64(bslot), sb, cx, a, nl)
             } else if unchecked bitcast(usize, gfor_mgv) != 0 and array_lit_info(gfor_mgv).is_a {
               is_glob_arr = true
@@ -26151,7 +26151,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 ## hidden index to `vslot + glob_stride` (matching collect_slots, which bound the struct var).
                 glob_is_agg = true
                 glob_stride = struct_words(cx.decls, cx.src, gesli.ss, gesli.sl, a)
-                islot = vslot + glob_stride
+                islot = vslot + i64(glob_stride)
               }
             } else {
               bent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fv.s, fv.n)))
@@ -26298,7 +26298,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                   push_str(sb, "  movq ")
                   push_int(sb, i64(k * 8))
                   push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
-                  push_int(sb, i64((vslot - k + 1) * 8))
+                  push_int(sb, i64((vslot - i64(k) + 1) * 8))
                   push_str(sb, "(%rbp)\n")
                 }
               } else {
@@ -26741,7 +26741,7 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
     ve_sdi := struct_decl_of(decls, src, vebn.s, vebn.n)
     ve_edi := enum_decl_of(decls, src, vebn.s, vebn.n)
     if ve_sdi >= 0 or ve_edi >= 0 {
-      mut vestride := 1
+      mut vestride : usize = 1
       mut veek2 : u8 = 2
       if ve_sdi >= 0 { vestride = struct_words(decls, src, vebn.s, vebn.n, a) }
       else { vestride = 1 + enum_inst_words(decls, src, vebn.s, vebn.n, a); veek2 = 3 }
@@ -26776,10 +26776,10 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
   }
   early_slice := CSpan(s = ess0, n = esn0)
   if early_slice.n != 0 {
-    mut sstride0 := 1
+    mut sstride0 : usize = 1
     mut seek0 : u8 = 0
-    mut ssns0 := 0
-    mut ssnl0 := 0
+    mut ssns0 : usize = 0
+    mut ssnl0 : usize = 0
     mut esdi0 : i64 = -1
     mut eedi0 : i64 = -1
     if early_slice.n < 64 { esdi0 = struct_decl_of(decls, src, early_slice.s, early_slice.n); eedi0 = enum_decl_of(decls, src, early_slice.s, early_slice.n) }
@@ -26822,10 +26822,10 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
   bl := bn.n
   if pm.pmode == 1 {
     ## ARRAY param `a : [T; N]` — element layout from the element type span `T`.
-    mut estride := 1
+    mut estride : usize = 1
     mut eek : u8 = 0
-    mut ess := 0
-    mut esl := 0
+    mut ess : usize = 0
+    mut esl : usize = 0
     sdi := struct_decl_of(decls, src, bs, bl)
     edi := enum_decl_of(decls, src, bs, bl)
     if sdi >= 0 {
@@ -26861,10 +26861,10 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
     ## Bind it as an ARRAY (ek 5, by-ref) with the element layout from `[E; N]`'s element span, so
     ## `a[i]` indexes with the right stride (else it fell to the scalar fallthrough → mis-read).
     aes := array_elem_span(src, pts, ptl)
-    mut gestride := 1
+    mut gestride : usize = 1
     mut geek : u8 = 0
-    mut gess := 0
-    mut gesl := 0
+    mut gess : usize = 0
+    mut gesl : usize = 0
     gsdi := struct_decl_of(decls, src, aes.s, aes.n)
     gedi := enum_decl_of(decls, src, aes.s, aes.n)
     if gsdi >= 0 {
@@ -27342,7 +27342,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
       ir_inl_tmp = i64(ib) + i64(inl_reserve) - 1
     }
   }
-  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
+  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = i64(ir_agg_w), tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
   cxv.fn_id = di
   cxv.ctslots = ptr(ir_cts)
   cx := ptr(cxv)
@@ -27396,7 +27396,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   ## reads route through the barrier. `pidx` still counts EVERY param (a by-ref struct = one arg register,
   ## so the param-index → arg-register mapping stays 1:1 across the mixed signature).
   mut pp := d.params_head
-  mut pidx := 0
+  mut pidx : usize = 0
   loop {
     match pp {
       Some(ppq) => {
@@ -27426,7 +27426,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   ## splice writes %rbx/%r12/%r13 the allocator never assigned, and a caller may hold a value there.
   splice := regalloc::ra_out_has_splice()
   mut nsave : usize = 0
-  mut ci := 0
+  mut ci : usize = 0
   while ci < 5 {
     if splice or regalloc::ra_out_uses_reg(ir_csreg_id(ci)) { nsave = nsave + 1 }
     ci = ci + 1
@@ -27461,7 +27461,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   ## the param index IS the slot index. Only runs for a barrier fn (wbase > 0).
   if wbase > 0 {
     mut xp := d.params_head
-    mut xi := 0
+    mut xi : usize = 0
     loop {
       match xp {
         Some(xpq) => {
@@ -27483,7 +27483,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   }
   ## save each used callee-saved reg into its frame slot (below all spill slots), so a value the allocator
   ## parked in it survives across the fn (the ABI requires the callee preserve rbx/r12..r15).
-  mut si := 0
+  mut si : usize = 0
   mut sk : usize = 0
   while si < 5 {
     r := ir_csreg_id(si)
@@ -27502,7 +27502,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   emit_label(sb, lepi)
   push_str(sb, ":\n")
   ## restore the callee-saved regs (all return paths jump here) before tearing down the frame.
-  mut ri := 0
+  mut ri : usize = 0
   mut rk : usize = 0
   while ri < 5 {
     r := ir_csreg_id(ri)
@@ -27548,8 +27548,8 @@ mut IRP_NGBAR : usize = 0                  ## general statement barriers (Vec-bu
 mut IRP_NSYNC : usize = 0                  ## modeled-scalar → frame-slot syncs emitted before barriers (inst budget)
 mut IRP_SAWMODEL : bool = false     ## a MODELED (register-allocated) statement has been seen — general barriers
                                     ## must all PRECEDE modeled statements (so a barrier never reads a vreg local)
-mut IRP_MS := 0                     ## enclosing module span (for callee resolution in ir_check_call)
-mut IRP_ML := 0
+mut IRP_MS : usize = 0                     ## enclosing module span (for callee resolution in ir_check_call)
+mut IRP_ML : usize = 0
 ## BARRIER (COMMIT 6): the by-ref STRUCT params admitted this fn (name span + type-name span), and the
 ## count of barriered field reads. A struct param is admitted ONLY when every field is native-scalar (so
 ## any field read `p.f` yields a scalar the barrier's single-word `popq` delivers correctly). `IRP_MARP`
@@ -27596,7 +27596,7 @@ mut IRFR_N := 0
 ## order) to or from the text frame's save slots `base .. base+4`. All return paths of a text fn reach
 ## the one epilogue, so one restore covers every exit.
 emit_csreg_moves := fn(in out sb : strbuf::StrBuf, base : usize, save : bool) {
-  for k in 0..5 {
+  for k in 0..usize(5) {
     pn := ir_phys_name(ir_csreg_id(k))
     push_str(sb, "  movq ")
     if save {
@@ -27807,12 +27807,12 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
       }
     }
   }
-  mut gps := 0
-  mut gpl := 0
-  mut gps2 := 0
-  mut gpl2 := 0
-  mut gps3 := 0
-  mut gpl3 := 0
+  mut gps : usize = 0
+  mut gpl : usize = 0
+  mut gps2 : usize = 0
+  mut gpl2 : usize = 0
+  mut gps3 : usize = 0
+  mut gpl3 : usize = 0
   if d.is_generic and param_any(d.params_head) {
     mut tpp := d.params_head
     mut ti := 0
@@ -27830,12 +27830,12 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
       }
     }
   }
-  mut its := 0
-  mut itl := 0
-  mut its2 := 0
-  mut itl2 := 0
-  mut its3 := 0
-  mut itl3 := 0
+  mut its : usize = 0
+  mut itl : usize = 0
+  mut its2 : usize = 0
+  mut itl2 : usize = 0
+  mut its3 : usize = 0
+  mut itl3 : usize = 0
   if p.inst { its = p.its; itl = p.itl; its2 = p.its2; itl2 = p.itl2; its3 = p.its3; itl3 = p.itl3 }
   mut pp := d.params_head
   mut pidx := 0
@@ -27988,7 +27988,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   if fn_abi_c {
     mut acw : usize = 0
     mut acp := d.params_head
-    mut aci := 0
+    mut aci : usize = 0
     loop {
       match acp {
         Some(acpq) => {
@@ -28151,7 +28151,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## SRET shift: %rdi holds the hidden result-pointer, so real GPR params start at %rsi (index 1).
   ## (Supported for ≤5 real integer params — the common wide-struct-returning shape; a 6th+ GPR param
   ## under sret would overflow the arg registers, unhandled for now.) 0 for every non-sret fn.
-  sret_shift := if d_is_sret { 1 } else { 0 }
+  sret_shift : usize = if d_is_sret { 1 } else { 0 }
   reg_cap : usize = if d_is_sret { 5 } else { 6 }
   ## RECEIVING side — the SysV-CONFORMING param prologue for an `@abi(c)` fn (called FROM C). This is
   ## the MIRROR of `emit_abi_c_call_args`: each param's SysV placement (`abi_c_arg_disp`, seeded past
@@ -28250,7 +28250,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
     if i < reg_cap {
       if selffloat and callee_param_is_float(p.decls, p.src, deref(p.mar), i64(di), arg_src_idx(i, sk, sk2, sk3)) {
         ## SSE source index = number of float value-params before `i`.
-        mut si := 0
+        mut si : usize = 0
         mut t : usize = 0
         while t < i {
           if callee_param_is_float(p.decls, p.src, deref(p.mar), i64(di), arg_src_idx(t, sk, sk2, sk3)) { si = si + 1 }
@@ -28263,7 +28263,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
         push_str(sb, "(%rbp)\n")
       } else {
         ## GPR source index = number of NON-float value-params before `i` (== `i` when no floats).
-        mut gj := 0
+        mut gj : usize = 0
         mut u : usize = 0
         while u < i {
           if not (selffloat and callee_param_is_float(p.decls, p.src, deref(p.mar), i64(di), arg_src_idx(u, sk, sk2, sk3))) { gj = gj + 1 }
@@ -28509,7 +28509,7 @@ ivec_push := fn(in out v : IVec, x : Inst) {
 ## to the head `streq` — byte-identical dedup to before (fixpoint-neutral for `src/`).
 inst_targ_eq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
   if lower_ctx::streq(src, a_s, a_n, b_s, b_n) == false { return false }
-  mut j := 0
+  mut j : usize = 0
   mut eq := true
   mut going := true
   while going {
@@ -28580,8 +28580,8 @@ fixed_array_param_len := fn(ns : usize, nl : usize, params : Option(ptr(mut Para
 ## type-args (never implicit) → never fires → fixpoint-neutral.
 infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   gd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
-  mut tpn_s := 0
-  mut tpn_l := 0
+  mut tpn_s : usize = 0
+  mut tpn_l : usize = 0
   mut pc := gd.params_head
   loop {
     match pc {
@@ -28594,7 +28594,7 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
     }
   }
   if tpn_l == 0 { return CSpan(s = 0, n = 0) }
-  mut j := 0
+  mut j : usize = 0
   pc = gd.params_head
   loop {
     match pc {
@@ -28666,7 +28666,7 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
     }
   }
   if stmt_any(COLLECT_BODY) and recv_is_container {
-    mut j2 := 0
+    mut j2 : usize = 0
     mut pc2 := gd.params_head
     loop {
       match pc2 {
@@ -28701,7 +28701,7 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
   ## and — gated to `>= 2` words, matching the emit gate byte-for-byte — return it. A scalar / 1-word
   ## payload returns 0/0 here (→ the caller keeps the receiver-name tag, byte-identical to before) →
   ## fixpoint-neutral.
-  mut jm := 0
+  mut jm : usize = 0
   mut pcm := gd.params_head
   loop {
     match pcm {
@@ -29183,7 +29183,7 @@ mark_lit := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), nm : str) {
 ## (u64/i64/f64/…) → excluded → the self-build's reachable set is byte-identical (fixpoint-neutral);
 ## only user-type operators (u128 in an ambient single-file compile) are walked.
 mut _op_walk_active : bool = false
-mark_op_body_helpers := fn(op : i64, rb : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
+mark_op_body_helpers := fn(op : u8, rb : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
   sym := op_symbol(op)
   if sym == "" { return }
   ## RE-ENTRANCY GUARD: an operator body routes to further operators on its own fields (u128 `<`'s body
@@ -29206,8 +29206,8 @@ mark_op_body_helpers := fn(op : i64, rb : usize, decls : ptr(rt::Vec), src : ptr
     ## former `is_generic == false` gate is relaxed for it. Its first-param discriminator is the
     ## first VALUE param (`uint` in `uint(N)`), not the comptime `N : u64`. The span rides SCALARS
     ## (`fps`/`fpn`) — a struct local reassigned in a loop is a lean-lower miscompile landmine.
-    mut fps := 0
-    mut fpn := 0
+    mut fps : usize = 0
+    mut fpn : usize = 0
     if d.is_fn and d.is_generic == false and d.arity == 2 and str_at((src + d.name_start), d.name_len) == sym {
       fp0 := first_param_type_span(d, a, src)
       fps = fp0.s
@@ -30038,8 +30038,8 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
       tp := deref(param_p(param_at(gd.params_head, "selfhost: generic instance has no type parameter")))
       ## the enclosing fn's SECOND type-param name (`map`'s `U`), 0/0 for a single-param generic —
       ## computed ONCE before the loop (a read-only param scan; no struct-local reassignment).
-      mut tp2ns := 0
-      mut tp2nl := 0
+      mut tp2ns : usize = 0
+      mut tp2nl : usize = 0
       if tparam_count(decls, i64(ie.gi), src, a) >= 2 {
         i2 := tparam_idx2(decls, i64(ie.gi), src, a)
         mut pq := gd.params_head
@@ -30057,8 +30057,8 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
         }
       }
       ## the enclosing fn's THIRD type-param name (`Result::map`'s `U`), 0/0 for a <3-param generic.
-      mut tp3ns := 0
-      mut tp3nl := 0
+      mut tp3ns : usize = 0
+      mut tp3nl : usize = 0
       if tparam_count(decls, i64(ie.gi), src, a) >= 3 {
         i3 := tparam_idx3(decls, i64(ie.gi), src, a)
         mut pq3 := gd.params_head
@@ -30134,7 +30134,7 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
         ## TUPLE `ie.ts` — the `comptime for c in typeinfo(T).components` unroll recurses `<gi>(c.type,
         ## …)` per component, so instantiate `gi` for each component type (read off the `(…)` span).
         if str_at((src + ie.ts), 1) == "(" {
-          mut jc := 0
+          mut jc : usize = 0
           mut goc := true
           while goc {
             cc := typearg_at(src, ie.ts, 0, jc)
@@ -30446,7 +30446,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   ## slice 1c-β span-table cursors: `sp_n` = spans recorded so far, `sp_prev` = the byte offset at which
   ## the CURRENT (not-yet-closed) span began. Each boundary closes the previous span (writes its len) and
   ## opens a new one; the tail is finalized after the instances block. Inert when `spanbase == 0`.
-  mut sp_n := 0
+  mut sp_n : usize = 0
   mut sp_prev : usize = 0
   for tm in 0..tnr {
     ## open this module's span (and close the previous one) at the current GAS offset. Span 0 starts at
@@ -30771,12 +30771,12 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
       ## collect up to the FIRST THREE type-PARAMETERS (params whose type spelling is `type`), each bound
       ## to the instance's concrete type slot (`e.ts/tl`, `e.ts2/tl2`, `e.ts3/tl3`) — so a guard over the
       ## 2nd/3rd type-param (`when size(V) <= 8`) folds against the correct instance type.
-      mut gtn_s := 0
-      mut gtn_l := 0
-      mut gtn2_s := 0
-      mut gtn2_l := 0
-      mut gtn3_s := 0
-      mut gtn3_l := 0
+      mut gtn_s : usize = 0
+      mut gtn_l : usize = 0
+      mut gtn2_s : usize = 0
+      mut gtn2_l : usize = 0
+      mut gtn3_s : usize = 0
+      mut gtn3_l : usize = 0
       mut gdpp := gd.params_head
       loop {
         match gdpp {

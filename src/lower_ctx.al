@@ -748,7 +748,7 @@ pub num_lit_value := fn(e : ptr(Expr)) -> i64 {
 pub arg_expr_at := fn(head : Option(ptr(mut Arg)), i : usize, a : rt::Arena) -> ptr(Expr) {
   mut g : Option(ptr(mut Arg)) = head
   mut k : usize = 0
-  mut res := 0
+  mut res : usize = 0
   loop {
     match g {
       Some(gq) => {

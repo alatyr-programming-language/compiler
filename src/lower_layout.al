@@ -329,8 +329,8 @@ ll_show_src_line := fn(src : ptr(u8), off : usize) {
   ## line to show. This helper is a DELIBERATE duplicate of lower's (this base module cannot import
   ## `lower` back), so the fact it recovers has to be guarded in both copies; both keep exactly one
   ## `sys_write`, so neither module's reviewed duplicate-decision count moves.
-  mut wbase := 0
-  mut wn := 0
+  mut wbase : usize = 0
+  mut wn : usize = 0
   if ast::span_is_synthetic(off) {
     m := "<a compiler-synthesized construct: no source line>\n"
     wbase = unchecked bitcast(usize, m.ptr)
@@ -381,8 +381,8 @@ reject_type_ambiguous := fn(src : ptr(u8), s : usize, n : usize, what : str) {
 qualified_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hn : usize) -> LSpan {
   if type_path_head(src, hs, hn).n != 0 { return LSpan(s = 0, n = 0) }
   cnt := rt::vec_len(deref(decls))
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   mut ambiguous := false
   mut i : usize = 0
   while i < cnt {
@@ -585,7 +585,7 @@ type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   th := _fnv_name(src, nm.s, nm.n)
   mut jc := lni_lo(decls, cnt, th)
   jce := lni_hi(decls, cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = lni_at(decls, cnt, jc)
     jc = jc + 1
@@ -640,7 +640,7 @@ type_decl_in_module := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : 
   mut res := 0 - 1
   mut jc := lni_lo(decls, cnt, th)
   jce := lni_hi(decls, cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = lni_at(decls, cnt, jc)
     jc = jc + 1
@@ -710,8 +710,8 @@ binding_type_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
   if TRM_SET == false { return 0 - 1 }
   if TRM_L == 0 { return 0 - 1 }
   cnt := rt::vec_len(deref(decls))
-  mut hs := 0
-  mut hl := 0
+  mut hs : usize = 0
+  mut hl : usize = 0
   mut ts := ns
   mut tl := nl
   mut i : usize = 0
@@ -785,13 +785,13 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
      and streq(src, _sdc_s[h], _sdc_n[h], s, n) { return _sdc_i[h] }
   nm := name_tail(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 2, "struct")
-  mut alias_ts := 0
-  mut alias_tl := 0
+  mut alias_ts : usize = 0
+  mut alias_tl : usize = 0
   mut a_best := 0 - 1
   th := _fnv_name(src, nm.s, nm.n)
   mut jc := lni_lo(decls, cnt, th)
   jce := lni_hi(decls, cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = lni_at(decls, cnt, jc)
     jc = jc + 1
@@ -846,7 +846,7 @@ pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
   th := _fnv_name(src, nm.s, nm.n)
   mut jc := lni_lo(decls, cnt, th)
   jce := lni_hi(decls, cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = lni_at(decls, cnt, jc)
     jc = jc + 1
@@ -886,12 +886,12 @@ pub brand_underlying := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
   nm := name_tail(src, s, n)
   mut best := 0 - 1
   mut found := false
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   th := _fnv_name(src, nm.s, nm.n)
   mut jc := lni_lo(decls, cnt, th)
   jce := lni_hi(decls, cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = lni_at(decls, cnt, jc)
     jc = jc + 1
@@ -2348,7 +2348,7 @@ unary_type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl
   th := _fnv_name(src, ns, nl)
   mut jc := lni_lo(decls, cnt, th)
   jce := lni_hi(decls, cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = lni_at(decls, cnt, jc)
     jc = jc + 1
@@ -2372,7 +2372,7 @@ pub require_pred := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   th := _fnv_name(src, nm.s, nm.n)
   mut jc := lni_lo(decls, cnt, th)
   jce := lni_hi(decls, cnt, th)
-  mut i := 0
+  mut i : usize = 0
   while jc < jce {
     i = lni_at(decls, cnt, jc)
     jc = jc + 1
@@ -3839,7 +3839,7 @@ pub ex_is_zero_lit := fn(e : ptr(Expr)) -> bool {
 }
 ## May a checked `op` with this LEFT operand omit its overflow guard? The emitters' entry point to the
 ## one decision, `ir::zero_left_no_overflow` (#1049) — read its comment; this keeps no copy.
-pub zero_left_guard_skip := fn(op : i64, l : ptr(Expr), signed : bool) -> bool {
+pub zero_left_guard_skip := fn(op : u8, l : ptr(Expr), signed : bool) -> bool {
   if op == 16 { return ir::zero_left_no_overflow(ir::ZeroLeftOp.ZlAdd, l, signed) }
   if op == 17 { return ir::zero_left_no_overflow(ir::ZeroLeftOp.ZlSub, l, signed) }
   if op == 18 { return ir::zero_left_no_overflow(ir::ZeroLeftOp.ZlMul, l, signed) }
@@ -4365,8 +4365,8 @@ pub type_name_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
     ## Follow one ordinary alias hop to a direct aggregate declaration. The bounded follow is
     ## intentional: alias chains are outside this slice and must not be guessed here.
     if d.kind == 0 and streq(src, d.name_start, d.name_len, s, n) {
-      mut ats := 0
-      mut atl := 0
+      mut ats : usize = 0
+      mut atl : usize = 0
       if d.ret_tl != 0 { ats = d.ret_ts; atl = d.ret_tl }
       else if d.alias_tl != 0 {
         abh := base_type_name(src, d.alias_ts, d.alias_tl)
@@ -4626,8 +4626,8 @@ _field_attr_arg := fn(src : ptr(u8), ns : usize, want : str) -> LSpan {
   if ns == 0 { return LSpan(s = 0, n = 0) }
   mut p := ns - 1
   mut go := true
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   while go {
     while p > 0 and _ws1(src, p) { p = p - 1 }
     ## a chain link closes with ')'; anything else ends the chain (no more attributes)
@@ -4711,13 +4711,13 @@ _decl_prefix_attr := fn(src : ptr(u8), ns : usize, want : str) -> LSpan {
     }
   }
   mut go := true
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   while go {
     while p > 0 and _ws1(src, p) { p = p - 1 }
     mut e := p
-    mut astart := 0
-    mut alen := 0
+    mut astart : usize = 0
+    mut alen : usize = 0
     ## an optional argument list `( … )` — walk back to its `(`
     if str_at((src + e), 1) == ")" {
       close := e
@@ -5067,8 +5067,8 @@ pub enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
      and streq(src, _edc_s[h], _edc_n[h], s, n) { return _edc_i[h] }
   nm := name_tail(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 3, "enum or union")
-  mut alias_ts := 0
-  mut alias_tl := 0
+  mut alias_ts : usize = 0
+  mut alias_tl : usize = 0
   mut a_best := 0 - 1
   th := _fnv_name(src, nm.s, nm.n)
   mut jc := lni_lo(decls, cnt, th)
@@ -5244,8 +5244,8 @@ pub union_member_ty := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
   if di < 0 { return LSpan(s = 0, n = 0) }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -5480,8 +5480,8 @@ pub typearg_at := fn(src : ptr(u8), hs : usize, hn : usize, idx : usize) -> LSpa
   ## the loop — a struct-local reassigned in a loop is a known lean-lower miscompile (the P1a `Token`
   ## landmine: the write silently doesn't take), which made a ≥2-char type-arg span read back wrong
   ## and mis-bound the match payload as a scalar (the check/sema crash). Build the `LSpan` at return.
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   mut go := true
   while go {
     c := str_at((src + p), 1)
@@ -6056,8 +6056,8 @@ pub variant_payload_type := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, 
   mut f := d.fields_head
   ## SCALAR accumulators (not a `mut res : LSpan` reassigned in the loop — the lean-lower
   ## struct-local-in-loop miscompile; see `typearg_at`). Build the `LSpan` once at return.
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -6094,8 +6094,8 @@ pub variant_payload_span := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, 
   if di < 0 { return LSpan(s = 0, n = 0) }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut rs := 0
-  mut rn := 0
+  mut rs : usize = 0
+  mut rn : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -6317,12 +6317,12 @@ eff_disc_at := fn(src : ptr(u8), fields_head : Option(ptr(mut FieldDecl)), targe
 ## distinct) → `-1` → no rejection → fixpoint-neutral.
 pub enum_dup_disc := fn(src : ptr(u8), fields_head : Option(ptr(mut FieldDecl))) -> i64 {
   mut fi := fields_head
-  mut i := 0
+  mut i : usize = 0
   loop {
     match fi {
       Some(fiq) => {
         di := eff_disc_at(src, fields_head, i)
-        mut j := 0
+        mut j : usize = 0
         while j < i {
           if eff_disc_at(src, fields_head, j) == di { return di }
           j = j + 1

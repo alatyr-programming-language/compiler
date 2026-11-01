@@ -239,8 +239,8 @@ DSpan := struct { s : usize, n : usize }
 ## (`Result(u64, E)`). This helper deliberately strips only the first `(` and the path prefix —
 ## it does not follow alias chains.
 d_alias_type_head := fn(src : ptr(u8), d : Decl) -> DSpan {
-  mut s := 0
-  mut n := 0
+  mut s : usize = 0
+  mut n : usize = 0
   if d.ret_tl != 0 { s = d.ret_ts; n = d.ret_tl }
   else if d.alias_tl != 0 { s = d.alias_ts; n = d.alias_tl }
   d_type_base_span(src, s, n)
@@ -1470,11 +1470,11 @@ d_hof_specialize := fn(nf : usize, nt : usize, hs : usize, hl : usize, ap : usiz
   mut ok := true
   if nf != 1 { ok = false }        ## exactly one HOF call carries f
   if nt != 1 { ok = false }        ## f is used ONLY as that one argument
-  mut di1 := 0
+  mut di1 : usize = 0
   if ok { di1 = d_find_fn_decl(hs, hl, decls, src) }
   if di1 == 0 { ok = false }
-  mut gs := 0
-  mut gl := 0
+  mut gs : usize = 0
+  mut gl : usize = 0
   if ok {
     gsp := d_param_name_at(decls, di1 - 1, ap, na)
     gs = gsp.s
@@ -1506,7 +1506,7 @@ d_hof_specialize := fn(nf : usize, nt : usize, hs : usize, hl : usize, ap : usiz
       d_stmts_rw_calls(cbody, gs, gl, caps, na, src)
       if unchecked bitcast(usize, cval) != 0 { d_expr_rw_calls(cval, gs, gl, caps, na, src) }
       ## 3) a unique clone name shared by the new decl AND the rewritten call site.
-      mut clen := 0
+      mut clen : usize = 0
       cns := parser::synth_hof_name(na, unchecked bitcast(usize, src), fnpos, ptr(clen))
       nd := Decl(name_start = cns, name_len = clen, value = cval, is_fn = true, kind = hd.kind, arity = hd.arity + ncaps, is_generic = hd.is_generic, params_head = newph, body_stmts = cbody, fields_head = hd.fields_head, ret_ts = hd.ret_ts, ret_tl = hd.ret_tl, mod_start = hd.mod_start, mod_len = hd.mod_len, when_cond = hd.when_cond, alias_ts = hd.alias_ts, alias_tl = hd.alias_tl)
       s := rt::bump(deref(na), size(Decl))
@@ -1687,11 +1687,11 @@ d_try_capture := fn(fs : usize, fl : usize, v : ptr(Expr), body : Option(ptr(mut
             ## The closure escapes as a VALUE. §6.2: if it flows into a specializable HOF call, MONOMORPHIZE
             ## that HOF over this concrete closure (append + thread the captures) instead of rejecting; only
             ## a shape outside the first increment falls through to the fail-loud reject.
-            mut hnt := 0
-            mut hnf := 0
-            mut hhs := 0
-            mut hhl := 0
-            mut hap := 0
+            mut hnt : usize = 0
+            mut hnf : usize = 0
+            mut hhs : usize = 0
+            mut hhl : usize = 0
+            mut hap : usize = 0
             d_scan_hof_stmts(body, fs, fl, na, src, ptr(hnt), ptr(hnf), ptr(hhs), ptr(hhl), ptr(hap))
             if unchecked bitcast(usize, fn_val) != 0 { d_scan_hof_expr(fn_val, fs, fl, na, src, ptr(hnt), ptr(hnf), ptr(hhs), ptr(hhl), ptr(hap)) }
             if d_hof_specialize(hnf, hnt, hhs, hhl, hap, fs, fl, fnpos, body, fn_val, ptr(caps), decls, na, eph, src) == false { panic("selfhost: FN-6 — a capturing lambda used as a VALUE (escaping its defining scope) is unsupported; call it directly") }
@@ -2388,7 +2388,7 @@ d_convert_stmts := fn(head : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)),
 ## slice cannot call (a GENERIC `next(K : type, V : type, in out self)` such as `HashMapIter`'s, or a
 ## `next` returning something other than the prelude `Option(T)`) is REJECTED fail-loud rather than
 ## silently walked as a slice — a trap is acceptable, a wrong value is not.
-mut D_ITERFOR_N := 0
+mut D_ITERFOR_N : usize = 0
 
 ## The BASE type NAME of a type-reference span: the head up to the first top-level `(` with any `::`
 ## path prefix stripped (`base::str::CharIter` → `CharIter`, `Option(char)` → `Option`). One spelling
@@ -2583,7 +2583,7 @@ d_callee_name_matches := fn(src : ptr(u8), d : Decl, cs : usize, cl : usize) -> 
 ## `{0, 0}` means "not resolvable here", and every caller then leaves the statement alone.
 d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)), decls : rt::Vec, src : ptr(u8), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
   mut cnt := 0
-  mut hit := 0
+  mut hit : usize = 0
   mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -2599,7 +2599,7 @@ d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut
     ab := d_expr_type_base(deref(arg_at(ah, "argument list ended early")).e, decls, src, body, ph, na, depth + 1)
     if ab.n == 0 { return DSpan(s = 0, n = 0) }
     mut c2 := 0
-    mut h2 := 0
+    mut h2 : usize = 0
     mut j : usize = 0
     while j < rt::vec_len(decls) {
       d2 := deref(decl_at(Decl, rt::vec_get(decls, j)))
@@ -2613,7 +2613,7 @@ d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut
     d3 := deref(decl_at(Decl, rt::vec_get(decls, h2 - 1)))
     return d_type_base_span(src, d3.ret_ts, d3.ret_tl)
   }
-  mut tk := 0
+  mut tk : usize = 0
   mut k : usize = 0
   while k < rt::vec_len(decls) {
     dk := deref(decl_at(Decl, rt::vec_get(decls, k)))
@@ -2695,19 +2695,19 @@ d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(E
   src_int := unchecked bitcast(usize, src)
   n := D_ITERFOR_N
   D_ITERFOR_N = D_ITERFOR_N + 1
-  mut itl := 0
+  mut itl : usize = 0
   its := d_iterfor_name(na, src_int, "mut ", "__forit", n, ptr(itl))
-  mut opl := 0
+  mut opl : usize = 0
   ops := d_iterfor_name(na, src_int, "", "__foropt", n, ptr(opl))
-  mut pyl := 0
+  mut pyl : usize = 0
   pys := d_iterfor_name(na, src_int, "", "__forpay", n, ptr(pyl))
-  mut nxl := 0
+  mut nxl : usize = 0
   nxs := d_iterfor_lit(na, src_int, "next", ptr(nxl))
-  mut uwl := 0
+  mut uwl : usize = 0
   uws := d_iterfor_lit(na, src_int, "unwrap", ptr(uwl))
-  mut sml := 0
+  mut sml : usize = 0
   sms := d_iterfor_lit(na, src_int, "Some", ptr(sml))
-  mut nol := 0
+  mut nol : usize = 0
   nos := d_iterfor_lit(na, src_int, "None", ptr(nol))
   ## `x := unwrap(<T>, __foropt<N>)` in front of the author's body
   uwa1 := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(ops, opl)), next = Option.None))
@@ -2911,7 +2911,7 @@ pub compile := fn(src : str, in out a : Arena) -> strbuf::StrBuf {
   if d_has_start(decls, base) == false {
     strbuf::push_str(sb, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
   }
-  mut nl := 0
+  mut nl : usize = 0
   zdiag := lower::set_codegen_files(0, 0, 0, 0, 0)
   lower::collect_program(ptr(decls), base, ptr(na), na)
   lower::emit_program(ptr(decls), sb, base, src.len, ptr(na), na, nl, 0, false)
@@ -3006,7 +3006,7 @@ pub compile_pair := fn(sa : str, sb_src : str, in out a : Arena) -> strbuf::StrB
   ## --- emit the runnable program ---
   mut gas := strbuf::strbuf(tar, 4194304)
   strbuf::push_str(gas, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
-  mut nl := 0
+  mut nl : usize = 0
   zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), 2)
   lower::collect_program(ptr(decls), base, ptr(na), na)
   lower::emit_program(ptr(decls), gas, base, strbuf::buf_len(bld), ptr(na), na, nl, 0, false)
@@ -3070,7 +3070,7 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
   ## buffer bytes; per-module tokens ≤ that module's `slen`. (+16 = EOF token + slack.)
   dcap := strbuf::buf_len(bld) + 16
   mut decls := rt::Vec(data = rt::bump(tar, dcap * 8), len = 0, cap = dcap)
-  mut nstr := 0
+  mut nstr : usize = 0
   k = 0
   while k < n {
     soff := rt::vec_get(src_off, k)
@@ -3093,7 +3093,7 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
   ## --- emit the runnable program (bld stays alive: emit reads spans off its base) ---
   mut gas := strbuf::strbuf(tar, 16777216)
   strbuf::push_str(gas, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
-  mut nl := 0
+  mut nl : usize = 0
   zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), n)
   lower::collect_program(ptr(decls), base, ptr(na), na)
   lower::emit_program(ptr(decls), gas, base, strbuf::buf_len(bld), ptr(na), na, nl, 0, false)
@@ -3264,7 +3264,7 @@ d_publish_lib_modules := fn(pv : rt::Vec, mod_start : rt::Vec, mod_len : rt::Vec
   n := rt::vec_len(pv)
   base := rt::bump(tar, n * 2 * 8 + 8)
   tbl := unchecked bitcast(ptr(mut u8), base)
-  mut c := 0
+  mut c : usize = 0
   mut k : usize = 0
   while k < n {
     if d_path_is_trusted_lib(rt::svec_str_get(pv, k)) {
@@ -3471,7 +3471,7 @@ d_manifest_path := fn(in out a : rt::Arena) -> str {
   }
   cand := str_at(b.data, b.len)
   if d_manifest_exists(a, cand) { return cand }
-  mut last := 0
+  mut last : usize = 0
   mut seen := false
   mut i : usize = 0
   while i < root.len { if bytes(root)[i] == 47 { last = i ; seen = true } ; i += 1 }
@@ -3726,7 +3726,7 @@ d_manifest_module_decls := fn(pv : rt::Vec, name_start : rt::Vec, name_len : rt:
 ## with the same name remains in the Vec and is correctly rejected as a same-scope duplicate.
 d_manifest_drop_root_decl := fn(in out decls : rt::Vec, root_ms : usize, root_ml : usize) {
   if MANIFEST_HAS == false or MANIFEST_BIND_N == 0 { return }
-  mut kept := 0
+  mut kept : usize = 0
   mut i : usize = 0
   cnt := rt::vec_len(decls)
   while i < cnt {
@@ -4500,7 +4500,7 @@ d_limit_reject := fn(code : usize, what : str, base : usize, ft : ptr(DFileTab),
   if span > 0 or (limit and lkind == DIAG_LINKER_SYMBOL_KIND) {
     ## Map the GLOBAL concatenated-buffer offset back to the owning file (`so[k] <= span < so[k]+sl[k]`)
     ## so the line is FILE-relative and the module is named — never a line counted across earlier files.
-    mut fk := 0
+    mut fk : usize = 0
     mut fbase : usize = 0
     mut fi : usize = 0
     while fi < ft.n {
@@ -4570,7 +4570,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_AGG_SCALAR_CONVERSION_MARKER
   ambig := code >= DIAG_AMBIG_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := code
-  mut kind := 0
+  mut kind : usize = 0
   mut span : usize = 0
   if limit {
     raw = code - DIAG_LIMIT_MARKER
@@ -4731,7 +4731,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if kind == 2 { wk := rt::fd_str(2, "type mismatch") }
     else if kind == 3 { wk := rt::fd_str(2, "duplicate name") }
     else { wk := rt::fd_str(2, "invalid") }
-    mut fk := 0
+    mut fk : usize = 0
     mut fbase : usize = 0
     mut fi : usize = 0
     while fi < ft.n {
@@ -5128,7 +5128,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## by the private synthetic declarations below.  Recover the manifest's source region from the
   ## root entry in `pv`; its real spans keep diagnostics and the field rewrite source-located.
   mut manifest_off : usize = 0
-  mut manifest_len := 0
+  mut manifest_len : usize = 0
   if manifest.len != 0 and root_k < n {
     manifest_off = rt::vec_get(src_off, root_k)
     manifest_len = rt::vec_get(src_len, root_k)
@@ -5180,7 +5180,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## are sound). PASS 1 runs with a NULL table (→ the parser's old always-fire behavior; enum DECLS
   ## parse fine regardless, and only enum-ctor USES are affected, which don't change collection).
   parser::set_structs_tbl(0)
-  mut nstr := 0
+  mut nstr : usize = 0
   ## --- PASS 1: parse to discover enum-type names (results otherwise discarded) ---
   k = 0
   while k < n {
@@ -5340,7 +5340,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## under `test`; and `test_mode` is never the self-host build path → the TOOL-1 fixpoint is unaffected.
   if test_mode {
     dcnt_e := rt::vec_len(decls)
-    mut kept := 0
+    mut kept : usize = 0
     mut ei : usize = 0
     while ei < dcnt_e {
       dh := rt::vec_get(decls, ei)
@@ -5598,7 +5598,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## whole emit recursion (lower::emit_program → emit_fn → emit_gas/…), so labels never collide
   ## across functions. (Idiomatic form, exercising the scalar out-param ABI; was a `StrBuf.lbl`
   ## field workaround while scalar `in out` write-back was unimplemented.)
-  mut nl := 0
+  mut nl : usize = 0
   zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), n)
   ## IR slice 1d: the `x86-ir` verb's selector locates each trap it emits (`docs/ir.md` §3.6); inert otherwise.
   ir::set_source_map(ptr(pv), ptr(src_off), ptr(src_len))
@@ -5934,8 +5934,8 @@ d_qual_target := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
   tl := cl - hl - 2
   if tl == 0 { return 0 }
   cnt := rt::vec_len(decls)
-  mut ehs := 0
-  mut ehn := 0
+  mut ehs : usize = 0
+  mut ehn : usize = 0
   mut i : usize = 0
   if d_colon_pos(src, cs, hl) >= 0 {
     ## Exactly one facade re-export: `facade::math::floor` → RHS `std::math`.
@@ -5957,7 +5957,7 @@ d_qual_target := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
     }
   }
   if ehn == 0 { return 0 }
-  mut r := 0
+  mut r : usize = 0
   i = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -6321,7 +6321,7 @@ d_resolve_and_prune := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
-    mut seed := 0
+    mut seed : usize = 0
     if d_mod_seg_eq(src, d.mod_start, d.mod_len, ems, eml) { seed = 1 }
     ## a decl that emits no label of its own (struct / enum / alias / type decl) only informs layout,
     ## so the whole injected set is kept. (Dropping the GENERIC ones was tried and is WRONG: PASS 1
@@ -6618,7 +6618,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   dcap := strbuf::buf_len(bld) + 16
   mut decls := rt::Vec(data = rt::bump(tar, dcap * 8), len = 0, cap = dcap)
   parser::set_structs_tbl(0)
-  mut nstr := 0
+  mut nstr : usize = 0
   ## --- PASS 1: parse with a NULL enum table to discover enum-type names (results discarded) ---
   k = 0
   while k < n {
@@ -6766,7 +6766,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
       cross_entry = str_at(unchecked bitcast(ptr(u8), D_TEST_ENTRY_P), D_TEST_ENTRY_N)
     }
     ecnt := rt::vec_len(ed)
-    mut ekept := 0
+    mut ekept : usize = 0
     mut ei : usize = 0
     while ei < ecnt {
       eh := rt::vec_get(ed, ei)
@@ -7213,8 +7213,8 @@ d_perr_kind := fn(e : parser::ParseErr) -> i64 {
 ## module — which maps into that module at its final line — exactly as `check_files` does.
 d_parse_diag_pc := fn(pc : PC, ekind : i64, modbase : usize, modlen : usize, mns : usize, mnl : usize, in out a : rt::Arena) -> usize {
   ft := parser::cur(pc)
-  mut span := 0
-  mut tlen := 0
+  mut span : usize = 0
+  mut tlen : usize = 0
   if ft.kind != 0 {
     span = ft.start
     tlen = ft.len
@@ -7336,7 +7336,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   }
   ## TOOL-15: recover the package handle from the anonymous root entry now present in `pv`.
   mut manifest_off : usize = 0
-  mut manifest_len := 0
+  mut manifest_len : usize = 0
   if manifest.len != 0 and root_k < n {
     manifest_off = rt::vec_get(src_off, root_k)
     manifest_len = rt::vec_get(src_len, root_k)
@@ -7379,14 +7379,14 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## `check_files` must publish it before PASS 2; otherwise `check` accepts unknown named fields and
   ## disagrees with build, which already rejects them in its equivalent two-pass path.
   parser::set_structs_tbl(0)
-  mut nstr := 0
+  mut nstr : usize = 0
   mut perr := false
-  mut perr_span := 0
-  mut perr_tlen := 0   ## byte length of the offending token (0 = EOF / no lexeme to quote)
+  mut perr_span : usize = 0
+  mut perr_tlen : usize = 0   ## byte length of the offending token (0 = EOF / no lexeme to quote)
   mut perr_kind : i64 = 0   ## the EXPECTED token kind from `ParseErr.Expected(k)` (0 = EOF / none)
-  mut perr_mb := 0     ## the failing module's START offset — the line is counted from HERE
-  mut perr_mns := 0    ## and its NAME's span, so the diagnostic can say `in <module>`
-  mut perr_mnl := 0
+  mut perr_mb : usize = 0     ## the failing module's START offset — the line is counted from HERE
+  mut perr_mns : usize = 0    ## and its NAME's span, so the diagnostic can say `in <module>`
+  mut perr_mnl : usize = 0
   ## The enum-type-NAME table (packed (name_start, name_len) pairs into `base`) — filled by PASS 1,
   ## consulted by PASS 2. WITHOUT it `enums_known(pc) == false` makes the parser assume the CTOR shape
   ## for EVERY `recv.method(args)` (parser.al `is_ctor`), so a UFCS method call over a simple-`Var`
@@ -7709,7 +7709,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     ## Map the GLOBAL concatenated-buffer offset back to the OWNING file (`src_off[k] <= span <
     ## src_off[k]+src_len[k]`), so a multi-file check reports a FILE-RELATIVE line + names the module
     ## — not a line counted across every earlier file's source (§1 item 6: stable locations per file).
-    mut fk := 0
+    mut fk : usize = 0
     mut fbase : usize = 0
     mut fi : usize = 0
     while fi < n {
