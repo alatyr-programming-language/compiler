@@ -13,3 +13,4 @@ sum := fn(s : S) -> u64 { return s.a + s.b }
 main := fn() -> u64 {
   return sum(mk().expect("s"))
 }
+## expect: reject "only one word would arrive (#986)"

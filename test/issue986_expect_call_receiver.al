@@ -60,3 +60,4 @@ main := fn() -> u64 {
   if c != 65536 { return 109 }
   42
 }
+## expect: run 42
