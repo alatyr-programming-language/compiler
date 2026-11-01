@@ -2703,7 +2703,7 @@ p_pcall := fn(in out pc : PC, nm : NSpan) -> ptr(mut Expr) {
 ## HAS a slot of its own (the array's base).
 p_ecallee := fn(in out pc : PC, callee : ptr(mut Expr), rn : NSpan) -> ptr(mut Expr) {
   pc.idx = pc.idx + 1                                    ## '('
-  mut nargs := 0
+  mut nargs : usize = 0
   chead := gnode(pc.arena, Arg(e = callee, next = Option.None))
   mut atail := chead
   while cur(pc).kind != 11 and cur(pc).kind != 0 {
@@ -5308,7 +5308,7 @@ parse_struct_members := fn(in out pc : PC, packed : bool) -> Option(ptr(mut Fiel
         ## field by its component count lets a following field land past it, and `display` recurse in.
         otk := cur(pc)
         mut tdp := 0
-        mut cmn := 0
+        mut cmn : usize = 0
         mut go2 := true
         while go2 and cur(pc).kind != 0 {
           k := cur(pc).kind

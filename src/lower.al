@@ -4506,7 +4506,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
       push_str(sb, "(%rbp)\n")
     }
     if byte_ret_n > 8 {
-      for k in 0..2 {
+      for k in 0..usize(2) {
         push_str(sb, "  movq ")
         emit_retreg(sb, k)
         push_str(sb, ", -")
@@ -10395,7 +10395,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
           emit_array_assign(ga0.e, i64(aoff), sb, cx, nl)
           for k in 0..apw {
             push_str(sb, "  movq -")
-            push_frame_word(sb, aoff, k)
+            push_frame_word(sb, usize(aoff), k)
             push_str(sb, "(%rbp), ")
             emit_retreg(sb, k + 1)
             push_str(sb, "\n")
@@ -26134,7 +26134,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## clobber __i, so the loop bound read 0 and never ran). `emit_arm_val_store` handles a
               ## `Slice(…)` StructLit (emit_struct_assign) AND a `bytes(s)`/`sub(…)` str-view (emit_str_pair
               ## pair pop) — both write ptr @ base, len @ base-1 (the up-growing 2-word layout).
-              bslot = vslot + 3
+              bslot = usize(vslot + 3)
               emit_arm_val_store(flo, i64(bslot), sb, cx, a, nl)
             } else if unchecked bitcast(usize, gfor_mgv) != 0 and array_lit_info(gfor_mgv).is_a {
               is_glob_arr = true
@@ -26151,7 +26151,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 ## hidden index to `vslot + glob_stride` (matching collect_slots, which bound the struct var).
                 glob_is_agg = true
                 glob_stride = struct_words(cx.decls, cx.src, gesli.ss, gesli.sl, a)
-                islot = vslot + glob_stride
+                islot = vslot + i64(glob_stride)
               }
             } else {
               bent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fv.s, fv.n)))
@@ -26298,7 +26298,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                   push_str(sb, "  movq ")
                   push_int(sb, i64(k * 8))
                   push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
-                  push_int(sb, i64((vslot - k + 1) * 8))
+                  push_int(sb, i64((vslot - i64(k) + 1) * 8))
                   push_str(sb, "(%rbp)\n")
                 }
               } else {
@@ -27548,8 +27548,8 @@ mut IRP_NGBAR : usize = 0                  ## general statement barriers (Vec-bu
 mut IRP_NSYNC : usize = 0                  ## modeled-scalar → frame-slot syncs emitted before barriers (inst budget)
 mut IRP_SAWMODEL : bool = false     ## a MODELED (register-allocated) statement has been seen — general barriers
                                     ## must all PRECEDE modeled statements (so a barrier never reads a vreg local)
-mut IRP_MS := 0                     ## enclosing module span (for callee resolution in ir_check_call)
-mut IRP_ML := 0
+mut IRP_MS : usize = 0                     ## enclosing module span (for callee resolution in ir_check_call)
+mut IRP_ML : usize = 0
 ## BARRIER (COMMIT 6): the by-ref STRUCT params admitted this fn (name span + type-name span), and the
 ## count of barriered field reads. A struct param is admitted ONLY when every field is native-scalar (so
 ## any field read `p.f` yields a scalar the barrier's single-word `popq` delivers correctly). `IRP_MARP`
@@ -27596,7 +27596,7 @@ mut IRFR_N := 0
 ## order) to or from the text frame's save slots `base .. base+4`. All return paths of a text fn reach
 ## the one epilogue, so one restore covers every exit.
 emit_csreg_moves := fn(in out sb : strbuf::StrBuf, base : usize, save : bool) {
-  for k in 0..5 {
+  for k in 0..usize(5) {
     pn := ir_phys_name(ir_csreg_id(k))
     push_str(sb, "  movq ")
     if save {
@@ -28263,7 +28263,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
         push_str(sb, "(%rbp)\n")
       } else {
         ## GPR source index = number of NON-float value-params before `i` (== `i` when no floats).
-        mut gj := 0
+        mut gj : usize = 0
         mut u : usize = 0
         while u < i {
           if not (selffloat and callee_param_is_float(p.decls, p.src, deref(p.mar), i64(di), arg_src_idx(u, sk, sk2, sk3))) { gj = gj + 1 }

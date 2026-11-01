@@ -3656,7 +3656,7 @@ slim_at := fn(cnt : usize, j : usize) -> usize {
 build_sema_dnh := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena) {
   cnt := rt::vec_len(deref(decls))
   base := rt::bump(a, cnt * 8 + 8)
-  mut nlim := 0
+  mut nlim : usize = 0
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))

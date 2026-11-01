@@ -88,7 +88,7 @@ pub build_decl_name_hash := fn(decls : ptr(rt::Vec), src : ptr(u8), in out mar :
   cnt := rt::vec_len(deref(decls))
   base := rt::bump(mar, cnt * 8 + 8)
   dbase := rt::bump(mar, cnt * 8 + 8)
-  mut nconv := 0
+  mut nconv : usize = 0
   mut i : usize = 0
   while i < cnt {
     d := deref(lower_ctx::decl_get(decls, i))
