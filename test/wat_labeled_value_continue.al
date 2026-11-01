@@ -5,7 +5,7 @@
 ## unchanged and this lane makes no cross-target claim.
 main := fn() -> u64 {
   mut once : u64 = 0
-  x := @label(v) loop {
+  x : u64 = @label(v) loop {
     once = once + 1
     if once == 1 { continue v }
     break 7
