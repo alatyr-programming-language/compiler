@@ -17,8 +17,8 @@
 
 # top-level single-hash comment
 main := fn() -> u64 {
-  a := 40 + 2                    # trailing single-hash comment
-  b := 1                         # another trailing
+  a : u64 = 40 + 2                    # trailing single-hash comment
+  b : u64 = 1                         # another trailing
   # full-line inside the body
   comptime if target.arch != Arch.i386 {
     # comment inside a comptime block

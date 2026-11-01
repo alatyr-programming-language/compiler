@@ -5,7 +5,7 @@
 ## carrying its real value rather than 0 — is unaffected and stays measured by that fixture.
 seq := fn() -> u64 {
   comptime x := 5
-  x := 7
+  x : u64 = 7
   return x
 }
 

@@ -2,7 +2,7 @@
 ## -= *= /= are added (lexer kinds 41/44/45 + the compound_op desugar). Field form too (a.v -= n).
 Acc := struct { v : u64 }
 main := fn() -> u64 {
-  mut x := 100
+  mut x : u64 = 100
   x -= 50
   x *= 3
   x /= 2

@@ -8,7 +8,7 @@ main := fn() -> u64 {
   tb := unchecked deref(unchecked bitcast(ptr(mut u64), unchecked bitcast(usize, ptr(b))))
   mut d := E.D
   td := unchecked deref(unchecked bitcast(ptr(mut u64), unchecked bitcast(usize, ptr(d))))
-  mut acc := 0
+  mut acc : u64 = 0
   if tb == 6 { acc = acc + 21 }
   if td == 21 { acc = acc + 21 }
   acc

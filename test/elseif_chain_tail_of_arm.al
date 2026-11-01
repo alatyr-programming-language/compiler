@@ -7,7 +7,7 @@
 ## Every arm of both chains is exercised with a DISTINCT result, so taking the wrong branch cannot
 ## pass: pick(0..4, 9) must give 1, 2, 3, 4, 7, 5 in that order. Returns 42; a mismatch returns
 ## 60 + a bitmask naming which inputs disagreed (all values < 126, so wasm's proc_exit accepts them).
-mut R := 0
+mut R : u64 = 0
 setr := fn(x : u64) -> u64 { R = x ; return x }
 pick := fn(n : u64) -> u64 {
   R = 0
@@ -33,7 +33,7 @@ pick := fn(n : u64) -> u64 {
   return R
 }
 main := fn() -> u64 {
-  mut bad := 0
+  mut bad : u64 = 0
   if pick(0) != 1 { bad = bad + 1 }
   if pick(1) != 2 { bad = bad + 2 }
   if pick(2) != 3 { bad = bad + 4 }
