@@ -12079,6 +12079,11 @@ run issue977_struct_lit_field_ctx 2
 ## `55fa477` (x86_64) the fixture exits 101 — element 0, `C(40)`, read back as a zeroed variant.
 run issue989_vec_multi_payload_enum 42
 
+## #1172 — `alloc::vec::Vec(u64)` as an enum payload, a payload struct's field and a by-value struct
+## field: `name_tail` cut a three-segment path at its FIRST `::` and looked up `vec::Vec`, which names
+## nothing, so the type got one word. NON-VACUOUS: on the parent (main `2ae5d8d9` + #1339) it exits 1.
+run issue1172_vec_payload 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

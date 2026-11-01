@@ -185,6 +185,24 @@ pub name_tail := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
   LSpan(s = s, n = n)
 }
 
+## #1172 — the declared NAME a type spelling looks up: the segment after the LAST `::` that comes
+## before a type-argument list `(` (`alloc::vec::Vec(u64)` -> `Vec(u64)`). A declaration is named by
+## that one segment; `name_tail` cuts at the FIRST `::` and so answers `vec::Vec` for a path of three
+## segments, which names nothing. With fewer than two `::` before the arguments the answer is
+## `name_tail`'s, unchanged. Asked only by the ranked layout lookup (`type_decl_ranked`,
+## `struct_decl_of`), whose module identity comes from `type_path_head`; the checker's qualified
+## resolver keeps `name_tail`.
+type_decl_name := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut cut : usize = 0
+  mut seps : usize = 0
+  mut i : usize = 0
+  while i + 1 < n and str_at(((src + s) + i), 1) != "(" {
+    if str_at(((src + s) + i), 2) == "::" { cut = i + 2; seps += 1; i = i + 2 } else { i = i + 1 }
+  }
+  if seps < 2 { return name_tail(src, s, n) }
+  LSpan(s = s + cut, n = n - cut)
+}
+
 ## The module head of a qualified TYPE path (`a::b::T` -> `a::b`), or 0/0 for a bare type.
 ## Kept separate from `name_tail` so declaration lookup can enforce nominal module identity instead
 ## of using a same-tail declaration from whichever module happened to be scanned last. `p_factor`
@@ -574,7 +592,7 @@ LNI_D = unchecked bitcast(usize, deref(decls).data)
 ##   (6) otherwise the reference is genuinely unanswerable -> LOCATED REJECT, never "pick one".
 type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, k : usize, what : str) -> i64 {
   cnt := rt::vec_len(deref(decls))
-  nm := name_tail(src, s, n)
+  nm := type_decl_name(src, s, n)
   qh := type_path_head(src, s, n)
   mut res := 0 - 1
   mut hits := 0
@@ -783,7 +801,7 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   if _sdc_n[h] == n and _sdc_src[h] == src and _sdc_ctx[h] == TRM_SET
      and _sdc_ml[h] == TRM_L and streq(src, _sdc_ms[h], _sdc_ml[h], TRM_S, TRM_L)
      and streq(src, _sdc_s[h], _sdc_n[h], s, n) { return _sdc_i[h] }
-  nm := name_tail(src, s, n)
+  nm := type_decl_name(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 2, "struct")
   mut alias_ts := 0
   mut alias_tl := 0
