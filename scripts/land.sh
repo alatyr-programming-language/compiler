@@ -394,6 +394,12 @@ land_changelog_merge() {
   git show :1:CHANGELOG.md > "$d/base" 2>/dev/null && git show :2:CHANGELOG.md > "$d/main" 2>/dev/null &&
     git show :3:CHANGELOG.md > "$d/pr" 2>/dev/null ||
     { echo "  CHANGELOG.md: not a content conflict (a side added or deleted the file)" >&2; rm -rf "$d"; return 1; }
+  ## git merge-file writes 7-character markers, and land_changelog_resolve reads them; a version that
+  ## already holds such a line would end a hunk early and pass the rest unchecked into the merge (#1312).
+  if grep -Eq '^(<{7}|[|]{7}|={7}|>{7})' "$d/base" "$d/main" "$d/pr"; then
+    echo "  CHANGELOG.md: a line in base, main or the PR looks like a conflict marker; settle it by hand" >&2
+    rm -rf "$d"; return 1
+  fi
   git merge-file -p --diff3 -L main -L base -L pr "$d/main" "$d/base" "$d/pr" > "$d/merged"; rc=$?
   if [ "$rc" -lt 0 ] || [ "$rc" -gt 127 ] || ! land_changelog_resolve "$d/merged" "$d/sum" > "$d/out"; then
     rm -rf "$d"; return 1
@@ -431,13 +437,13 @@ land_merge_pr() { # pr-ref subject link landing-delta|'' note
   if ! git merge --no-ff --no-commit --no-verify "$ref" >/dev/null 2>&1; then
     unmerged="$(git diff --name-only --diff-filter=U)"
     [ -n "$unmerged" ] || { git merge --abort 2>/dev/null; return 1; }
-    for p in $unmerged; do
+    while IFS= read -r -d '' p; do  # NUL-separated and unexpanded: the case is the only guard
       case "$p" in
         "$DELTA_REL") [ -n "$ld" ] || { git merge --abort 2>/dev/null; return 1; } ;;
         CHANGELOG.md) ;;
         *) git merge --abort 2>/dev/null; return 1 ;;
       esac
-    done
+    done < <(git diff -z --name-only --diff-filter=U)
     if printf '%s\n' "$unmerged" | grep -qx CHANGELOG.md; then
       clnote="$(land_changelog_merge)" || {
         echo "  CHANGELOG.md conflicts in a shape scripts/land.sh does not settle (above)"
@@ -510,7 +516,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=114  # the exact count run; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +9 #1312
+LAND_SELFTEST_EXPECTED=115  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +10 #1312
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -796,6 +802,12 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
 '; git add -A; git commit --quiet -m sx
     git switch --quiet -c bad b0; unrel 'Some prose.
 '; git add -A; git commit --quiet -m bad
+    mk7='>>>>>>''>'  # split so that the file itself holds no marker line for git diff --check
+    git switch --quiet -c mk b0; unrel "- pr one
+$mk7 pr
+Not a bullet.
+## 9.9.9 fake
+"; git add -A; git commit --quiet -m mk
     git switch --quiet -c rw b0; sed 's/^- old$/- old (pr)/' CHANGELOG.md > c.tmp; mv c.tmp CHANGELOG.md; git commit --quiet -am rw
   ) >/dev/null 2>&1
   _ck $? selftest-could-not-build-the-changelog-repository
@@ -821,7 +833,7 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
     git log -1 --format=%B HEAD | grep -q 'opened a release heading' ) >/dev/null 2>&1
   _ck $? changelog-run-not-kept-under-Unreleased-above-a-release-main-opened
   for lb in 'sx source-file-conflict-beside-the-changelog t1' 'bad changelog-paragraph-that-is-no-bullet t1' \
-            'rw changelog-line-both-sides-rewrote tr'; do
+            'rw changelog-line-both-sides-rewrote tr' 'mk changelog-whose-PR-side-holds-a-conflict-marker-line t1'; do
     read -r cb cw ct <<< "$lb"
     ( cd "$gc" && git switch --quiet --detach "$ct" && b="$(git rev-parse HEAD)" &&
       ! land_merge_pr "$cb" "merge: $cb" '' '' '' && [ "$(git rev-parse HEAD)" = "$b" ] &&
@@ -915,9 +927,10 @@ docs/xbackend_diff.baseline-notes.md" >/dev/null 2>&1
 
   printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
   if [ -n "$bad" ]; then echo "*** land self-test: FAILED —$bad ***" >&2; return 1; fi
-  if [ "$k" -lt "$LAND_SELFTEST_EXPECTED" ]; then
-    echo "*** land self-test: ran $k checks, expected at least $LAND_SELFTEST_EXPECTED — a self-test" >&2
-    echo "    that reports fewer checks than it owes is a failure, not a shortcut to green ***" >&2
+  if [ "$k" -ne "$LAND_SELFTEST_EXPECTED" ]; then
+    echo "*** land self-test: ran $k checks, expected exactly $LAND_SELFTEST_EXPECTED — a self-test" >&2
+    echo "    that reports fewer checks than it owes is a failure, not a shortcut to green, and more" >&2
+    echo "    means the count was not updated (or a merge kept a stale one) ***" >&2
     return 1
   fi
   echo "ok   land PR-shape self-test: $k checks — the oracle-mixing, seed-binary, seed/VERSION"
@@ -938,8 +951,8 @@ if [ "${1:-}" = '--self-test' ]; then
   if [ -s "$LAND_ST/bad" ]; then
     echo "land self-test: recorded failures — $(cat "$LAND_ST/bad")" >&2; rm -rf "$LAND_ST"; exit 1
   fi
-  if [ "$(cat "$LAND_ST/checks")" -lt "$LAND_SELFTEST_EXPECTED" ]; then
-    echo "land self-test: recorded $(cat "$LAND_ST/checks") checks, expected at least $LAND_SELFTEST_EXPECTED" >&2
+  if [ "$(cat "$LAND_ST/checks")" -ne "$LAND_SELFTEST_EXPECTED" ]; then
+    echo "land self-test: recorded $(cat "$LAND_ST/checks") checks, expected exactly $LAND_SELFTEST_EXPECTED" >&2
     rm -rf "$LAND_ST"; exit 1
   fi
   rm -rf "$LAND_ST"
