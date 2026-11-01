@@ -132,6 +132,9 @@ Two numbers that are **not** the compiler's version: the specification revision 
   A global owner resolves in the module of the access, and a qualified owner (`z::cfg.x`) is left to
   the module it names. Programs that relied on the old behaviour were invalid. A local or parameter typed
   `u16`, `i16`, `i8`, `char` or a float is not decided yet (#703 stays open for it).
+- **A `for` loop over structs or enums visits every element (#1321).** When the loop body bound a
+  local, x86_64 stored that local over the hidden loop index, and the loop stopped after the first
+  element. The index now sits in the one slot reserved for it, whatever the element's width.
 
 ## 0.2.21 — 2026-11-01
 

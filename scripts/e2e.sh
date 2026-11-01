@@ -12123,6 +12123,11 @@ run issue1209_deref_bitcast_struct 42
 run issue1209_deref_bitcast_ptr_fields 42
 run issue1209_deref_bitcast_field_inline 42
 
+## #1321 — `for x in xs` over struct/enum elements kept its hidden index at `slot(x) + stride`, which
+## is the body's first local, so a body binding a local reset the index and the loop ran once.
+## NON-VACUOUS: on the parent `c5fc685d` (x86_64) the fixture exits 1.
+run for_aggregate_body_local 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

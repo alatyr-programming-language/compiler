@@ -26098,7 +26098,11 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             ## with `movzbq` at stride 1, not a word load at stride 8. (Detected on the `bytes(…)` call.)
             mut byte_elem := is_nonvar and is_bytes_call(flo, cx.src)
             vslot := slot_of(cx.slots, cx.src, fns, fnl)
-            mut islot := vslot + 1   ## hidden loop index; moved to vslot+agg_stride for an aggregate loop var
+            ## The hidden loop index: `collect_slots` reserves it as the ONE entry pushed right after the loop
+            ## var, whatever the var's width. An aggregate var's base is the TOP of its block (its fillers
+            ## sit below it, §4 up-growing), so the index is `vslot + 1` for every element kind — a
+            ## `vslot + stride` index landed on the body's first local (#1321).
+            islot := vslot + 1
             ## scalar-word (eek 0) and FLOAT (eek 9) element arrays: both keep the element COUNT in `snl`
             ## and read the element as an inline word (a float rides its slot as bits; the loop var is
             ## tagged `ek==9` by collect_slots so body float ops dispatch the xmm path). Aggregate/str
@@ -26155,11 +26159,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 panic("selfhost: `for x in <ENUM-element ARRAY GLOBAL>` is not lowered (the loop var would be a single word, not the enum's `1 + max-payload`) — index it instead (`for i in 0..N { match GE[i] { … } }`). [fail-loud guard: never a silent mid-element read]")
               }
               if gesli.is_s {
-                ## STRUCT-element global array — the loop var is that struct; its `glob_stride` slots push the
-                ## hidden index to `vslot + glob_stride` (matching collect_slots, which bound the struct var).
+                ## STRUCT-element global array — the loop var is that struct, `glob_stride` words wide.
                 glob_is_agg = true
                 glob_stride = struct_words(cx.decls, cx.src, gesli.ss, gesli.sl, a)
-                islot = vslot + glob_stride
               }
             } else {
               bent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fv.s, fv.n)))
@@ -26214,16 +26216,12 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 ## `parse_arr_len` yields 0 — recover the count from the reserved element filler slots
                 ## (else `for e in arr` iterated zero times: a silent empty loop).
                 if agg_n == 0 and agg_stride > 0 { agg_n = agg_arr_fill_count(cx.slots, bslot) / agg_stride }
-                ## the loop var is `agg_stride` words wide, so the hidden index sits at `vslot+agg_stride`
-                ## (where collect_slots reserved it), not `vslot+1` — avoid clobbering the aggregate var.
-                islot = vslot + i64(agg_stride)
               }
               if is_agg_slice {
                 ## a struct/enum-element slice VIEW: element width from the slot's stride; the loop var is
-                ## that wide, so the hidden index sits at `vslot+agg_stride`; word 0 is the element ptr (by
-                ## value for a local view, or behind the caller's Slice block for a param). Length is runtime.
+                ## that wide; word 0 is the element ptr (by value for a local view, or behind the caller's
+                ## Slice block for a param). Length is runtime.
                 agg_stride = bent.estride
-                islot = vslot + i64(agg_stride)
                 if bent_slice_param_elem.n == 0 { b_is_ref = false }
               }
             }
