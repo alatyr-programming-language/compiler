@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if b == 44 { return 7 }
   return 42
 }
+## expect: trap
