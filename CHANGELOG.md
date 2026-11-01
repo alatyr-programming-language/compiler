@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`Some(deref(p))` of a multi-word struct keeps every field (#1212).** `vec::get`, `vec::try_at`,
+  `vec::pop` and the deque reads built on the same shape returned the struct's first word and stale
+  values for the rest; so did `Option(S).Some(deref(p))` through a pointer parameter or into a local.
+  The payload is now read word by word through the pointer. A direct `match vec::get(S, …)` is still
+  refused, and the message now names that construct instead of `.map(f)`.
+
 ## 0.2.21 — 2026-11-01
 
 - **A struct read through `deref(unchecked bitcast(ptr(S), x))` is the whole `S` (#1209).** Binding it
