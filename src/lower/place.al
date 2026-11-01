@@ -1397,7 +1397,8 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
   ## before adding the element offset. A scalar slice VIEW LOCAL has `sns == 0` and `snl == 1`, so its
   ## slot already contains the data pointer. An aggregate-element slice PARAMETER (`is_param`, #1182)
   ## derefs too; an aggregate-element view LOCAL, annotated or not, already holds the data pointer.
-  if ent.ek == 5 and ent.is_ref and (ent.sns == 1 or (ent.is_param and (ent.eek == 2 or ent.eek == 3) and ent_slice_param_elem.n != 0)) { push_str(sb, "  movq (%rbx), %rbx\n") }
+  ## `slot_is_slice_param` is the one answer, shared with the range deliverers (#1180).
+  if slot_is_slice_param(ent, cx.src) { push_str(sb, "  movq (%rbx), %rbx\n") }
   ## element address = element-0 address - index*stride*8 (the frame grows down) → %rax
   push_str(sb, "  addq %rax, %rbx\n  movq %rbx, %rax\n")
 }
