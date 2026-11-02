@@ -13237,25 +13237,165 @@ ufcs_autoref_targ := fn(e : ptr(Expr), ps : usize, pl : usize, ts : usize, tl : 
 }
 
 ## #988 — the type argument at `tpos` of a UFCS receiver Var `e`, for a callee parameter typed `[ps, pl)`
-## (`in out v : Vec(T)`). Read from EVERY binding of the receiver's name in the WHOLE fn: a parameter's
-## type, a local's annotation, or the GENERIC call that initialises it (`v := vec::new(u32, ar)` →
-## `new`'s `-> Vec(T)` → `u32`), nested blocks included. Inner scopes may shadow (Declarations §6), so
-## every binding must give the same answer, and a binding this cannot read (a `for` variable, a match
-## binding, a reassignment from another local) leaves it unresolved: 0/0, the existing tagging, never
-## a guess. That fallback still stores a sub-word element at the 8-byte stride: #1230, open. Both mono passes call it with the fn's whole body and params — never a narrowed block — so
-## the instance one collects is the one the other calls, whichever emit path reaches the call (the IR
-## path emits a barrier call after it has left the block). The type must have the parameter's head.
+## (`in out v : Vec(T)`). Both mono passes call it with the fn's whole body and params — never a
+## narrowed block — so the instance one collects is the one the other calls, whichever emit path
+## reaches the call (the IR path emits a barrier call after it has left the block). The type must have
+## the parameter's head. `Unread` when the receiver's type cannot be read; the emit side then refuses
+## with a located diagnostic (#1230), never the 8-byte default.
+##
+## #1230 — the answer is the binding the receiver OCCURRENCE sees (Declarations §5–§6: scope is
+## lexical and block-structured, an inner declaration shadows the outer name only inside its block):
+## `ufcs_scope_stmts` walks the body in source order to the occurrence `e` and hands back that one
+## binding. Its type is the parameter's, a local's annotation, the GENERIC call that initialises it
+## (`v := vec::new(u32, ar)` → `new`'s `-> Vec(T)` → `u32`), or — for a copy `v := w` — the type of the
+## occurrence `w`, read the same way. A `for` variable or a match binding stays unread.
 UfcsBindAcc := struct { s : usize, n : usize, unread : bool }
-ufcs_recv_targ := fn(e : ptr(Expr), tpos : usize, body : Option(ptr(mut Stmt)), params : Option(ptr(mut Param)), ps : usize, pl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+ufcs_recv_targ := fn(e : ptr(Expr), tpos : usize, body : Option(ptr(mut Stmt)), tail : Option(ptr(Expr)), params : Option(ptr(mut Param)), ps : usize, pl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> UfcsTarg {
   pbn := base_type_name(src, ps, pl)
+  ufcs_recv_targ_at(e, tpos, body, tail, params, pbn.s, pbn.n, decls, src, a, 0)
+}
+
+## #1230 — the binding a name occurrence sees: not bound in the body (a parameter, or a module-level
+## name), a type span (a local's annotation, a lambda parameter's type), an unannotated local's
+## initialiser, or a binding whose type this does not read (a `for` variable, a match payload).
+UfcsBind := enum { Outer, Typed(usize, usize), Init(ptr(Expr)), Unread }
+
+## #1230 — what the receiver lookup learned: the type argument's span; a receiver type read with ANOTHER
+## head than the parameter's (`ok : Result(u64, u64)` against `option::unwrap`'s `self : Option(T)` — the
+## call dispatches on the receiver, FN-7, so this generic is not the one it reaches); or a receiver type
+## not read at all, which the emit side refuses.
+UfcsTarg := enum { Read(usize, usize), OtherHead, Unread }
+
+## #1230 — `ufcs_head_targ` with a head mismatch told apart from a missing type argument.
+ufcs_type_targ := fn(ts : usize, tn : usize, tpos : usize, hs : usize, hn : usize, src : ptr(u8)) -> UfcsTarg {
+  rbn := base_type_name(src, ts, tn)
+  if not lower_ctx::streq(src, rbn.s, rbn.n, hs, hn) { return UfcsTarg.OtherHead }
+  ta := typearg_at(src, rbn.s, rbn.n, tpos)
+  if ta.n == 0 { return UfcsTarg.Unread }
+  UfcsTarg.Read(ta.s, ta.n)
+}
+
+## #1230 — `ufcs_recv_targ` for the receiver `e` with the parameter head `[hs, hn)`, `depth` copies deep.
+ufcs_recv_targ_at := fn(e : ptr(Expr), tpos : usize, body : Option(ptr(mut Stmt)), tail : Option(ptr(Expr)), params : Option(ptr(mut Param)), hs : usize, hn : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, depth : usize) -> UfcsTarg {
   vn := var_name_span(e)
-  if vn.n == 0 { return CSpan(s = 0, n = 0) }
+  if vn.n == 0 or depth > 8 { return UfcsTarg.Unread }
+  if not ast::span_is_synthetic(vn.s) {
+    fb : Option(UfcsBind) = ufcs_scope_body(body, tail, vn.s, vn.n, src)
+    match fb {
+      Some(b) => {
+        match b {
+          UfcsBind::Outer => {
+            prt0 := recv_full_in(e, Option(ptr(mut Stmt)).None, params, decls, src, a)
+            if prt0.n == 0 { return UfcsTarg.Unread }
+            return ufcs_type_targ(prt0.s, prt0.n, tpos, hs, hn, src)
+          }
+          UfcsBind::Typed(ts, tn) => { return ufcs_type_targ(ts, tn, tpos, hs, hn, src) }
+          UfcsBind::Init(v) => {
+            gr := generic_call_ret_targ(v, tpos, hs, hn, decls, src, a)
+            if gr.n != 0 { return UfcsTarg.Read(gr.s, gr.n) }
+            cr := ufcs_call_ret_type(v, decls, src, a)
+            if cr.n != 0 { return ufcs_type_targ(cr.s, cr.n, tpos, hs, hn, src) }
+            mr : Option(UfcsTarg) = ufcs_method_ret_targ(v, tpos, body, tail, params, hs, hn, decls, src, a, depth)
+            match mr { Some(m) => { return m }; None => {} }
+            return ufcs_recv_targ_at(v, tpos, body, tail, params, hs, hn, decls, src, a, depth + 1)
+          }
+          UfcsBind::Unread => { return UfcsTarg.Unread }
+        }
+      }
+      None => {}
+    }
+  }
+  ## the occurrence is not in the body's own tree (a node the compiler made): every binding of the
+  ## name in the whole fn must agree
+  pbn := CSpan(s = hs, n = hn)
   mut acc := UfcsBindAcc(s = 0, n = 0, unread = false)
   prt := recv_full_in(e, Option(ptr(mut Stmt)).None, params, decls, src, a)
   if prt.n != 0 { ufcs_bind_note(ufcs_head_targ(prt.s, prt.n, tpos, pbn.s, pbn.n, src), acc, src) }
   ufcs_bind_stmts(body, vn.s, vn.n, tpos, pbn.s, pbn.n, acc, decls, src, a)
-  if acc.unread { return CSpan(s = 0, n = 0) }
-  CSpan(s = acc.s, n = acc.n)
+  if acc.unread or acc.n == 0 { return UfcsTarg.Unread }
+  UfcsTarg.Read(acc.s, acc.n)
+}
+
+## #1230 — for an initialiser `v` that is a UFCS call to a GENERIC method with its type arguments
+## omitted (`a := r1.ok()`, `ok := fn(T : type, E : type, self : Result(T, E)) -> Option(T)`), the type
+## argument at `tpos` of the method's declared result: a concrete one as written, or the method's own
+## type parameter (`T`) read from the receiver `r1` at that parameter's position in the receiver
+## parameter's type (`Result(T, E)` → 0). None when `v` is not that shape.
+ufcs_method_ret_targ := fn(v : ptr(Expr), tpos : usize, body : Option(ptr(mut Stmt)), tail : Option(ptr(Expr)), params : Option(ptr(mut Param)), hs : usize, hn : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, depth : usize) -> Option(UfcsTarg) {
+  match deref(v) {
+    Expr::Call(cs, cl, nargs, ah) => {
+      if nargs == 0 { return Option(UfcsTarg).None }
+      ci := ret_call_target(decls, src, cs, cl, nargs, ah, a)
+      if ci < 0 { return Option(UfcsTarg).None }
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      if d.is_generic == false or d.ret_tl == 0 { return Option(UfcsTarg).None }
+      ## the omitted-type-argument form: one argument per value parameter, the receiver first
+      mut nval : usize = 0
+      mut recv : Option(ptr(mut Param)) = Option(ptr(mut Param)).None
+      mut q : Option(ptr(mut Param)) = d.params_head
+      loop {
+        match q {
+          Some(qq) => {
+            qm := deref(param_p(qq))
+            if str_at((src + qm.ts), qm.tl) != "type" {
+              if nval == 0 { recv = Option(ptr(mut Param)).Some(qq) }
+              nval += 1
+            }
+            q = qm.next
+          }
+          None => { break }
+        }
+      }
+      if nval != nargs { return Option(UfcsTarg).None }
+      match recv {
+        Some(rq) => { Option(UfcsTarg).Some(ufcs_method_recv_targ(d.ret_ts, d.ret_tl, d.params_head, rq, arg_expr_at(ah, 0, a), tpos, body, tail, params, hs, hn, decls, src, a, depth)) }
+        None => { Option(UfcsTarg).None }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Option(UfcsTarg).None }
+  }
+}
+
+## #1230 — `ufcs_method_ret_targ` once the callee (declared result `[dts, dts+dtl)`, parameters `dph`) and
+## its receiver parameter `rq` are known: the type argument at `tpos` of that result, the callee's own
+## type parameter read from the receiver `re`.
+ufcs_method_recv_targ := fn(dts : usize, dtl : usize, dph : Option(ptr(mut Param)), rq : ptr(mut Param), re : ptr(Expr), tpos : usize, body : Option(ptr(mut Stmt)), tail : Option(ptr(Expr)), params : Option(ptr(mut Param)), hs : usize, hn : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, depth : usize) -> UfcsTarg {
+  rp := deref(param_p(rq))
+  rt0 := ufcs_type_targ(dts, dtl, tpos, hs, hn, src)
+  match rt0 {
+    UfcsTarg::Read(ra, rn) => {
+      if not ufcs_is_tparam(dph, ra, rn, src) { return rt0 }
+      kp := ufcs_param_tpos(src, rp.ts, rp.tl, ra, rn)
+      match kp {
+        Some(k) => {
+          rbn := base_type_name(src, rp.ts, rp.tl)
+          ufcs_recv_targ_at(re, k, body, tail, params, rbn.s, rbn.n, decls, src, a, depth + 1)
+        }
+        None => { UfcsTarg.Unread }
+      }
+    }
+    UfcsTarg::OtherHead => { rt0 }
+    UfcsTarg::Unread => { rt0 }
+  }
+}
+
+## #1230 — is `[ns, ns+nl)` one of the type parameters (`T : type`) in the list `ph`?
+ufcs_is_tparam := fn(ph : Option(ptr(mut Param)), ns : usize, nl : usize, src : ptr(u8)) -> bool {
+  mut q : Option(ptr(mut Param)) = ph
+  loop {
+    match q {
+      Some(qq) => {
+        qm := deref(param_p(qq))
+        if str_at((src + qm.ts), qm.tl) == "type" and lower_ctx::streq(src, qm.ns, qm.nl, ns, nl) { return true }
+        q = qm.next
+      }
+      None => { break }
+    }
+  }
+  false
 }
 
 ## #988 — the type argument at `tpos` of the type `[ts, tn)` when its head is `[hs, hn)`, else 0/0.
@@ -13376,6 +13516,283 @@ ufcs_bind_expr := fn(e : ptr(Expr), ns : usize, nl : usize, tpos : usize, hs : u
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast => {}
+  }
+}
+
+## #1230 — the binding after the statement `ans := v` (or `ans = v`): its annotation or its initialiser
+## when it declares the name `[ts, ts+tn)`, else `cur` unchanged.
+ufcs_scope_decl := fn(ans : usize, anl : usize, v : ptr(Expr), ts : usize, tn : usize, cur : UfcsBind, src : ptr(u8)) -> UfcsBind {
+  if not (lower_ctx::streq(src, ans, anl, ts, tn) and assign_is_decl(src, ans, anl)) { return cur }
+  lt := local_type_span(src, ans, anl)
+  if lt.n != 0 { return UfcsBind.Typed(lt.s, lt.n) }
+  UfcsBind.Init(v)
+}
+
+## #1230 — the binding the occurrence `[ts, ts+tn)` sees in a fn body: its statement list `head`, then
+## its tail expression `tail` (`Decl.value`, the trailing value of `main := fn() -> u64 { …; o.unwrap() }`),
+## which sees every declaration of the top-level list. None when the occurrence is in neither.
+ufcs_scope_body := fn(head : Option(ptr(mut Stmt)), tail : Option(ptr(Expr)), ts : usize, tn : usize, src : ptr(u8)) -> Option(UfcsBind) {
+  r := ufcs_scope_stmts(head, ts, tn, UfcsBind.Outer, src)
+  if ufcs_found(r) { return r }
+  match tail {
+    Some(t) => {
+      mut cur : UfcsBind = UfcsBind.Outer
+      mut s : Option(ptr(mut Stmt)) = head
+      loop {
+        match s {
+          Some(sq) => {
+            st := deref(stmt_p(Stmt, sq))
+            match st {
+              Stmt::Assign(ans, anl, v, _nx) => { cur = ufcs_scope_decl(ans, anl, v, ts, tn, cur, src) }
+              Stmt::While | Stmt::If | Stmt::Match | Stmt::For | Stmt::Loop | Stmt::Unchecked | Stmt::AllocWith
+                | Stmt::CompIf | Stmt::CompFor | Stmt::CompForRange | Stmt::CompMatch | Stmt::ExprStmt
+                | Stmt::Return | Stmt::Break | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
+                | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Continue => {}
+            }
+            s = stmt_next(sq)
+          }
+          None => { break }
+        }
+      }
+      ufcs_scope_expr(t, ts, tn, cur, src)
+    }
+    None => { Option(UfcsBind).None }
+  }
+}
+
+## #1230 — the binding the occurrence `[ts, ts+tn)` of a name sees, walking the statement list `head`
+## (one block scope) in source order with `cur` the binding visible on entry; None when the occurrence
+## is not in it. A declaration updates the binding only after its own initialiser (which still sees the
+## outer one); a nested block starts from the binding its parent sees and keeps its own declarations.
+ufcs_scope_stmts := fn(head : Option(ptr(mut Stmt)), ts : usize, tn : usize, cur0 : UfcsBind, src : ptr(u8)) -> Option(UfcsBind) {
+  mut cur : UfcsBind = cur0
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        mut r : Option(UfcsBind) = Option(UfcsBind).None
+        match st {
+          Stmt::Assign(ans, anl, v, _nx) => {
+            r = ufcs_scope_expr(v, ts, tn, cur, src)
+            cur = ufcs_scope_decl(ans, anl, v, ts, tn, cur, src)
+          }
+          Stmt::While(wc, wb, _nx) => { r = ufcs_scope_or(ufcs_scope_expr(wc, ts, tn, cur, src), wb, ts, tn, cur, src) }
+          Stmt::If(ic, th, el, _nx) => {
+            r = ufcs_scope_or(ufcs_scope_or(ufcs_scope_expr(ic, ts, tn, cur, src), th, ts, tn, cur, src), el, ts, tn, cur, src)
+          }
+          Stmt::Match(sc, mah, _nx) => {
+            r = ufcs_scope_expr(sc, ts, tn, cur, src)
+            if not ufcs_found(r) { r = ufcs_scope_arms(mah, ts, tn, cur, src) }
+          }
+          Stmt::For(fns, fnl, lo, hi, fb, _nx) => {
+            r = ufcs_scope_expr(lo, ts, tn, cur, src)
+            if not ufcs_found(r) { r = ufcs_scope_expr(hi, ts, tn, cur, src) }
+            if not ufcs_found(r) { r = ufcs_scope_stmts(fb, ts, tn, ufcs_scope_hide(fns, fnl, ts, tn, cur, src), src) }
+          }
+          Stmt::Loop(lb, _nx) => { r = ufcs_scope_stmts(lb, ts, tn, cur, src) }
+          Stmt::Unchecked(ub, _nx) => { r = ufcs_scope_stmts(ub, ts, tn, cur, src) }
+          Stmt::AllocWith(ae, ab, _nx) => { r = ufcs_scope_or(ufcs_scope_expr(ae, ts, tn, cur, src), ab, ts, tn, cur, src) }
+          Stmt::CompIf(cc, cth, cel, _nx) => {
+            r = ufcs_scope_or(ufcs_scope_or(ufcs_scope_expr(cc, ts, tn, cur, src), cth, ts, tn, cur, src), cel, ts, tn, cur, src)
+          }
+          Stmt::CompFor(cvs, cvl, _civ, cfb, _nx) => { r = ufcs_scope_stmts(cfb, ts, tn, ufcs_scope_hide(cvs, cvl, ts, tn, cur, src), src) }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, _nx) => {
+            r = ufcs_scope_expr(rlo, ts, tn, cur, src)
+            if not ufcs_found(r) { r = ufcs_scope_expr(rhi, ts, tn, cur, src) }
+            if not ufcs_found(r) { r = ufcs_scope_stmts(rb, ts, tn, ufcs_scope_hide(rvs, rvl, ts, tn, cur, src), src) }
+          }
+          Stmt::CompMatch(csc, cah, _nx) => {
+            r = ufcs_scope_expr(csc, ts, tn, cur, src)
+            if not ufcs_found(r) { r = ufcs_scope_arms(cah, ts, tn, cur, src) }
+          }
+          Stmt::ExprStmt(ee, _nx) => { r = ufcs_scope_expr(ee, ts, tn, cur, src) }
+          Stmt::Return(re, _nx) => { r = ufcs_scope_expr(re, ts, tn, cur, src) }
+          Stmt::Break(be, _bd, _nx) => { r = ufcs_scope_expr(be, ts, tn, cur, src) }
+          Stmt::FieldAssign(_fa, _fb, _fc, _fd, fv, _nx) => { r = ufcs_scope_expr(fv, ts, tn, cur, src) }
+          Stmt::DerefAssign(dp, dv, _nx) => {
+            r = ufcs_scope_expr(dp, ts, tn, cur, src)
+            if not ufcs_found(r) { r = ufcs_scope_expr(dv, ts, tn, cur, src) }
+          }
+          Stmt::IndexAssign(ib, ii, iv, _nx) => {
+            r = ufcs_scope_expr(ib, ts, tn, cur, src)
+            if not ufcs_found(r) { r = ufcs_scope_expr(ii, ts, tn, cur, src) }
+            if not ufcs_found(r) { r = ufcs_scope_expr(iv, ts, tn, cur, src) }
+          }
+          Stmt::IndexFieldAssign(jb, ji, _jfs, _jfl, jv, _nx) => {
+            r = ufcs_scope_expr(jb, ts, tn, cur, src)
+            if not ufcs_found(r) { r = ufcs_scope_expr(ji, ts, tn, cur, src) }
+            if not ufcs_found(r) { r = ufcs_scope_expr(jv, ts, tn, cur, src) }
+          }
+          Stmt::FieldPathAssign(pp, pv, _nx) => {
+            r = ufcs_scope_expr(pp, ts, tn, cur, src)
+            if not ufcs_found(r) { r = ufcs_scope_expr(pv, ts, tn, cur, src) }
+          }
+          Stmt::Continue => {}
+        }
+        if ufcs_found(r) { return r }
+        s = stmt_next(sq)
+      }
+      None => { break }
+    }
+  }
+  Option(UfcsBind).None
+}
+
+## #1230 — the declared result type of a call `v` to a NON-generic fn (`o := find(1)`, `find` declared
+## `-> Option(u64)`), else 0/0. A generic callee's result is `generic_call_ret_targ`'s.
+ufcs_call_ret_type := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  match deref(v) {
+    Expr::Call(cs, cl, nargs, ah) => {
+      ci := ret_call_target(decls, src, cs, cl, nargs, ah, a)
+      if ci < 0 { return CSpan(s = 0, n = 0) }
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      if d.is_generic { return CSpan(s = 0, n = 0) }
+      CSpan(s = d.ret_ts, n = d.ret_tl)
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CSpan(s = 0, n = 0) }
+  }
+}
+
+## #1230 — did the walk reach the occurrence?
+ufcs_found := fn(r : Option(UfcsBind)) -> bool { match r { Some(_b) => { true }; None => { false } } }
+
+## #1230 — `r` when it found the occurrence, else the search of the nested block `blk`.
+ufcs_scope_or := fn(r : Option(UfcsBind), blk : Option(ptr(mut Stmt)), ts : usize, tn : usize, cur : UfcsBind, src : ptr(u8)) -> Option(UfcsBind) {
+  if ufcs_found(r) { return r }
+  ufcs_scope_stmts(blk, ts, tn, cur, src)
+}
+
+## #1230 — the binding inside a scope that binds `[bs, bs+bl)` with a type this does not read (a `for`
+## or `comptime for` variable): unread when it is the name looked for, else `cur`.
+ufcs_scope_hide := fn(bs : usize, bl : usize, ts : usize, tn : usize, cur : UfcsBind, src : ptr(u8)) -> UfcsBind {
+  if lower_ctx::streq(src, bs, bl, ts, tn) { return UfcsBind.Unread }
+  cur
+}
+
+## #1230 — the occurrence's binding inside a match arm list: an arm whose payload binds the name hides it.
+ufcs_scope_arms := fn(ah : Option(ptr(mut Arm)), ts : usize, tn : usize, cur : UfcsBind, src : ptr(u8)) -> Option(UfcsBind) {
+  mut m : Option(ptr(mut Arm)) = ah
+  loop {
+    match m {
+      Some(mq) => {
+        am := deref(arm_p(mq))
+        mut acur : UfcsBind = cur
+        mut bd : Option(ptr(mut Bind)) = am.binds_head
+        loop {
+          match bd {
+            Some(bq) => {
+              acur = ufcs_scope_hide(ast::bnd_ns(bq), ast::bnd_nl(bq), ts, tn, acur, src)
+              bd = ast::bnd_next(bq)
+            }
+            None => { break }
+          }
+        }
+        r := ufcs_scope_stmts(am.body_stmts, ts, tn, acur, src)
+        if ufcs_found(r) { return r }
+        r2 := ufcs_scope_expr(am.body, ts, tn, acur, src)
+        if ufcs_found(r2) { return r2 }
+        m = am.next
+      }
+      None => { break }
+    }
+  }
+  Option(UfcsBind).None
+}
+
+## #1230 — the occurrence's binding inside an argument list.
+ufcs_scope_args := fn(ah : Option(ptr(mut Arg)), ts : usize, tn : usize, cur : UfcsBind, src : ptr(u8)) -> Option(UfcsBind) {
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        r := ufcs_scope_expr(ga.e, ts, tn, cur, src)
+        if ufcs_found(r) { return r }
+        g = ga.next
+      }
+      None => { break }
+    }
+  }
+  Option(UfcsBind).None
+}
+
+## #1230 — the occurrence's binding inside the expression `e`: `cur` at the occurrence itself, the
+## block rules inside an expression's own blocks, and a lambda's parameter hides an outer binding.
+ufcs_scope_expr := fn(e : ptr(Expr), ts : usize, tn : usize, cur : UfcsBind, src : ptr(u8)) -> Option(UfcsBind) {
+  ## null-ok: #1069 — Arm.body — an arm with a statement body carries a null value expression (ast.al); so do a bare `return`, a value-less `break`, an `if` without `else` and an open slice bound.
+  if unchecked bitcast(usize, e) == 0 { return Option(UfcsBind).None }
+  match deref(e) {
+    Expr::Var(vs, vl) => {
+      if vs == ts and vl == tn { return Option(UfcsBind).Some(cur) }
+      Option(UfcsBind).None
+    }
+    Expr::Bin(_op, bl, br) => {
+      r := ufcs_scope_expr(bl, ts, tn, cur, src)
+      if ufcs_found(r) { return r }
+      ufcs_scope_expr(br, ts, tn, cur, src)
+    }
+    Expr::If(c, th, el) => {
+      r := ufcs_scope_expr(c, ts, tn, cur, src)
+      if ufcs_found(r) { return r }
+      r2 := ufcs_scope_expr(th, ts, tn, cur, src)
+      if ufcs_found(r2) { return r2 }
+      ufcs_scope_expr(el, ts, tn, cur, src)
+    }
+    Expr::Match(sc, mh) => {
+      r := ufcs_scope_expr(sc, ts, tn, cur, src)
+      if ufcs_found(r) { return r }
+      ufcs_scope_arms(mh, ts, tn, cur, src)
+    }
+    Expr::Call(_cs, _cl, _na, ah) => { ufcs_scope_args(ah, ts, tn, cur, src) }
+    Expr::StructLit(_ss, _sl, _sn, sh) => { ufcs_scope_args(sh, ts, tn, cur, src) }
+    Expr::EnumLit(_e1, _e2, _e3, _e4, _e5, eh) => { ufcs_scope_args(eh, ts, tn, cur, src) }
+    Expr::ArrayLit(_an, xh) => { ufcs_scope_args(xh, ts, tn, cur, src) }
+    Expr::Field(fb, _fs, _fl) => { ufcs_scope_expr(fb, ts, tn, cur, src) }
+    Expr::AddrOf(ax) => { ufcs_scope_expr(ax, ts, tn, cur, src) }
+    Expr::Deref(dx) => { ufcs_scope_expr(dx, ts, tn, cur, src) }
+    Expr::Try(tx) => { ufcs_scope_expr(tx, ts, tn, cur, src) }
+    Expr::Unchecked(ux) => { ufcs_scope_expr(ux, ts, tn, cur, src) }
+    Expr::Bitcast(bx, _bs, _bn) => { ufcs_scope_expr(bx, ts, tn, cur, src) }
+    Expr::Index(ib, ii) => {
+      r := ufcs_scope_expr(ib, ts, tn, cur, src)
+      if ufcs_found(r) { return r }
+      ufcs_scope_expr(ii, ts, tn, cur, src)
+    }
+    Expr::CompField(cb, cf) => {
+      r := ufcs_scope_expr(cb, ts, tn, cur, src)
+      if ufcs_found(r) { return r }
+      ufcs_scope_expr(cf, ts, tn, cur, src)
+    }
+    Expr::Slice(sb, slo, shi) => {
+      r := ufcs_scope_expr(sb, ts, tn, cur, src)
+      if ufcs_found(r) { return r }
+      r2 := ufcs_scope_expr(slo, ts, tn, cur, src)
+      if ufcs_found(r2) { return r2 }
+      ufcs_scope_expr(shi, ts, tn, cur, src)
+    }
+    Expr::Loop(lb) => { ufcs_scope_stmts(lb, ts, tn, cur, src) }
+    Expr::Lambda(_ls, lps, _lr1, _lr2, lb, lbe) => {
+      mut lcur : UfcsBind = cur
+      mut q : Option(ptr(mut Param)) = lps
+      loop {
+        match q {
+          Some(qq) => {
+            qm := deref(param_p(qq))
+            if lower_ctx::streq(src, qm.ns, qm.nl, ts, tn) { lcur = UfcsBind.Typed(qm.ts, qm.tl) }
+            q = qm.next
+          }
+          None => { break }
+        }
+      }
+      r := ufcs_scope_stmts(lb, ts, tn, lcur, src)
+      if ufcs_found(r) { return r }
+      ufcs_scope_expr(lbe, ts, tn, lcur, src)
+    }
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::FnRef => { Option(UfcsBind).None }
   }
 }
 
@@ -17754,8 +18171,21 @@ infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(L
               utp := ufcs_param_tpos(cx.src, pm.ts, pm.tl, tpn_s, tpn_l)
               match utp {
                 Some(tp) => {
-                  ut := ufcs_recv_targ(rae, tp, EMIT_BODY, EMIT_PARAMS, pm.ts, pm.tl, cx.decls, cx.src, deref(cx.mar))
-                  if ut.n != 0 { return inst_tparam_cx(ut.s, ut.n, cx) }
+                  ut : UfcsTarg = ufcs_recv_targ(rae, tp, EMIT_BODY, EMIT_TAIL, EMIT_PARAMS, pm.ts, pm.tl, cx.decls, cx.src, deref(cx.mar))
+                  match ut {
+                    UfcsTarg::Read(us, un) => { return inst_tparam_cx(us, un, cx) }
+                    ## the receiver's type has another head: the call dispatches to another generic
+                    ## (FN-7), and this one keeps the name tag it had before #1230
+                    UfcsTarg::OtherHead => {}
+                    UfcsTarg::Unread => {
+                      ## #1230 — tagging the instance by the receiver's name would size `T` as the
+                      ## 8-byte default, a silent wrong stride below 64 bits. Types §4.5 infers `T` from
+                      ## the receiver's type; where that type is not read here, refuse at the call (the
+                      ## explicit `push(u32, v, x)` stays expressible).
+                      lower_show_src_line(cx.src, vn.s)
+                      panic("selfhost: the type argument of this method call cannot be inferred from its receiver (bound by a `for` or a match arm, or copied from an expression whose type is not read); write the type argument explicitly")
+                    }
+                  }
                 }
                 None => {}
               }
@@ -26432,6 +26862,8 @@ mut COLLECT_BODY : Option(ptr(mut Stmt)) = Option.None
 ## #988 — the WHOLE body of the fn the pre-pass is walking. Unlike `COLLECT_BODY` it is never narrowed to
 ## an `alloc::with` block, so `ufcs_recv_targ` reads the same list the emit side reads (`EMIT_BODY`).
 mut COLLECT_FN_BODY : Option(ptr(mut Stmt)) = Option.None
+## #1230 — that fn's tail expression (`Decl.value`), which `ufcs_recv_targ` searches after the body.
+mut COLLECT_FN_TAIL : Option(ptr(Expr)) = Option.None
 
 ## The MODULE of the declaration whose body the mono pre-pass is collecting — the `COLLECT_BODY`
 ## twin, and for the same reason. `generic_decl_of` resolves a BARE generic call by the §3 ancestor
@@ -26450,6 +26882,9 @@ mut COLLECT_MOD_L : usize = 0
 ## the two passes agree on the implicit-UFCS instance label. 0 = not inside a fn body emit.
 mut EMIT_BODY : Option(ptr(mut Stmt)) = Option.None
 mut EMIT_PARAMS : Option(ptr(mut Param)) = Option.None
+## #1230 — the tail expression (`Decl.value`) of the fn being emitted; the `COLLECT_FN_TAIL` twin.
+## A fn with no tail carries a null `value` (#1069); `ufcs_scope_expr`'s guard reads it as no tail.
+mut EMIT_TAIL : Option(ptr(Expr)) = Option.None
 
 
 
@@ -29003,6 +29438,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## (with type-args) from the source — the slot keeps only the base name. Reset per fn; no nested
   ## `emit_fn` (inline expands in place), so a plain set/leave is safe.
   EMIT_BODY = d.body_stmts
+  EMIT_TAIL = Option(ptr(Expr)).Some(d.value)
   EMIT_PARAMS = d.params_head
   ## COMMIT 2 (--ra): a scalar-leaf / `unchecked` fn takes the register-allocated IR path. Default OFF →
   ## the `and` short-circuits before the predicate is evaluated, so the flag-OFF build reaches the text
@@ -30069,8 +30505,12 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
             utp := ufcs_param_tpos(src, pmm.ts, pmm.tl, tpn_s, tpn_l)
             match utp {
               Some(tp) => {
-                ut := ufcs_recv_targ(arg_expr_at(args_head, jm, a), tp, COLLECT_FN_BODY, penv, pmm.ts, pmm.tl, decls, src, a)
-                if ut.n != 0 { return ut }
+                ut : UfcsTarg = ufcs_recv_targ(arg_expr_at(args_head, jm, a), tp, COLLECT_FN_BODY, COLLECT_FN_TAIL, penv, pmm.ts, pmm.tl, decls, src, a)
+                match ut {
+                  UfcsTarg::Read(us, un) => { return CSpan(s = us, n = un) }
+                  UfcsTarg::OtherHead => {}
+                  UfcsTarg::Unread => {}
+                }
               }
               None => {}
             }
@@ -31352,12 +31792,14 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
     if (d.kind == 1 and d.is_generic == false) or d.kind == 5 {
       COLLECT_BODY = d.body_stmts
       COLLECT_FN_BODY = d.body_stmts
+      COLLECT_FN_TAIL = Option(ptr(Expr)).Some(d.value)
       COLLECT_MOD_S = d.mod_start
       COLLECT_MOD_L = d.mod_len
       collect_insts_stmts(d.body_stmts, insts, decls, src, a, d.params_head)
       collect_insts_expr(d.value, insts, decls, src, a, d.params_head)
       COLLECT_BODY = Option.None
       COLLECT_FN_BODY = Option.None
+      COLLECT_FN_TAIL = Option.None
       COLLECT_MOD_S = 0
       COLLECT_MOD_L = 0
     }
@@ -31425,12 +31867,14 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
       ivec_new(tmp, mar, 8)
       COLLECT_BODY = gd.body_stmts
       COLLECT_FN_BODY = gd.body_stmts
+      COLLECT_FN_TAIL = Option(ptr(Expr)).Some(gd.value)
       COLLECT_MOD_S = gd.mod_start
       COLLECT_MOD_L = gd.mod_len
       collect_insts_stmts(gd.body_stmts, tmp, decls, src, a, gd.params_head)
       collect_insts_expr(gd.value, tmp, decls, src, a, gd.params_head)
       COLLECT_BODY = Option.None
       COLLECT_FN_BODY = Option.None
+      COLLECT_FN_TAIL = Option.None
       COLLECT_MOD_S = 0
       COLLECT_MOD_L = 0
       tn := ivec_len(ptr(tmp))
