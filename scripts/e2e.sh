@@ -12027,6 +12027,41 @@ emit_reject_has riscv64 issue703_scalar_field_store "a scalar has no field to na
 ## str's length keep compiling and answer 21 on the parent and after.
 run issue703_scalar_owner_controls 21
 check_accept issue703_scalar_owner_controls
+## Issue #703 residual — the owners the first slice left open, refused with the same located class: a
+## `u16`/`char`/`f64`/`i16` local or parameter, an unannotated local (an integer literal, a `u64` call)
+## and an unannotated module global, judged by their recorded value type where no declared span exists;
+## and a tuple position `.N` on a scalar, which `check` accepted while `build` stopped in the lower.
+## Parent verdicts (main e77d025e, native x86_64): check 0 on every row; the field rows answered the
+## fabricated zero (exit 0, or 7 where it chose a branch), the stores dropped the write (exit 3), and the
+## tuple rows built only up to a non-located lower panic.
+build_reject_has issue703_scalar_field_subword_local "a scalar has no field to name at line 6 in issue703_scalar_field_subword_local"
+build_reject_has issue703_scalar_field_char_if "a scalar has no field to name at line 6 in issue703_scalar_field_char_if"
+build_reject_has issue703_scalar_field_float_param "a scalar has no field to name at line 4 in issue703_scalar_field_float_param"
+build_reject_has issue703_scalar_field_subword_store "a scalar has no field to name at line 6 in issue703_scalar_field_subword_store"
+build_reject_has issue703_scalar_field_unannotated "a scalar has no field to name at line 5 in issue703_scalar_field_unannotated"
+build_reject_has issue703_scalar_field_unannotated_call "a scalar has no field to name at line 6 in issue703_scalar_field_unannotated_call"
+build_reject_has issue703_scalar_field_global_unannotated "a scalar has no field to name at line 5 in issue703_scalar_field_global_unannotated"
+build_reject_has issue703_scalar_tuple_pos "a scalar has no field to name at line 6 in issue703_scalar_tuple_pos"
+build_reject_has issue703_scalar_tuple_pos_store "a scalar has no field to name at line 6 in issue703_scalar_tuple_pos_store"
+check_reject_has issue703_scalar_field_subword_local "a scalar has no field to name at line 6 in issue703_scalar_field_subword_local"
+check_reject_has issue703_scalar_field_char_if "a scalar has no field to name at line 6 in issue703_scalar_field_char_if"
+check_reject_has issue703_scalar_field_float_param "a scalar has no field to name at line 4 in issue703_scalar_field_float_param"
+check_reject_has issue703_scalar_field_subword_store "a scalar has no field to name at line 6 in issue703_scalar_field_subword_store"
+check_reject_has issue703_scalar_field_unannotated "a scalar has no field to name at line 5 in issue703_scalar_field_unannotated"
+check_reject_has issue703_scalar_field_unannotated_call "a scalar has no field to name at line 6 in issue703_scalar_field_unannotated_call"
+check_reject_has issue703_scalar_field_global_unannotated "a scalar has no field to name at line 5 in issue703_scalar_field_global_unannotated"
+check_reject_has issue703_scalar_tuple_pos "a scalar has no field to name at line 6 in issue703_scalar_tuple_pos"
+check_reject_has issue703_scalar_tuple_pos_store "a scalar has no field to name at line 6 in issue703_scalar_tuple_pos_store"
+emit_reject_has wat issue703_scalar_field_subword_local "a scalar has no field to name at line 6 in issue703_scalar_field_subword_local"
+emit_reject_has aarch64 issue703_scalar_field_subword_local "a scalar has no field to name at line 6 in issue703_scalar_field_subword_local"
+emit_reject_has riscv64 issue703_scalar_field_subword_local "a scalar has no field to name at line 6 in issue703_scalar_field_subword_local"
+emit_reject_has wat issue703_scalar_tuple_pos "a scalar has no field to name at line 6 in issue703_scalar_tuple_pos"
+emit_reject_has aarch64 issue703_scalar_tuple_pos "a scalar has no field to name at line 6 in issue703_scalar_tuple_pos"
+emit_reject_has riscv64 issue703_scalar_tuple_pos "a scalar has no field to name at line 6 in issue703_scalar_tuple_pos"
+## The control: legal member reads on span-less owners (an unannotated struct, tuple, str, struct global
+## and str global, and a field through a `ptr(P)` parameter) keep compiling and answer 18.
+run issue703_vty_owner_controls 18
+check_accept issue703_vty_owner_controls
 ## The over-reach fence for the predicate's other direction is the four fixtures whose desugared callee
 ## span IS synthesized and which must keep COMPILING and answering their own values —
 ## `ambient_alloc_scalar` and `ambient_alloc_attr` (42, four backends), `map_capture` (42, `run_x86`

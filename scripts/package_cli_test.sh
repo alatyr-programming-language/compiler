@@ -2711,6 +2711,11 @@ run_pkg_check_build_located issue703_global_module_scope_reject 2 a "a FIELD ACC
 # #1336 is fixed this row becomes `run_pkg_exit issue703_global_module_scope_qualified
 # issue703-global-module-scope-qualified 42`.
 run_pkg_check_build_located issue703_global_module_scope_qualified 2 a
+# Issue #703 residual / Modules §2, MOD-3 — a QUALIFIED scalar owner: `z::n` names the sibling `z`'s
+# pub scalar global, which has no field. The parent (main e77d025e) checked both at rc 0: the read
+# answered 0 (exit 34) and the store landed nowhere (exit 39).
+run_pkg_check_build_located issue703_qualified_scalar_read_reject 1 a "a FIELD ACCESS on a SCALAR value: \`.\` selects a struct or union field, a tuple position \`.N\`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name"
+run_pkg_check_build_located issue703_qualified_scalar_store_reject 2 a "a FIELD ACCESS on a SCALAR value: \`.\` selects a struct or union field, a tuple position \`.N\`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name"
 
 run_tool15_manifest_handle
 
