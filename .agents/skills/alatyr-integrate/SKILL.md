@@ -491,6 +491,13 @@ if [ "$DOCS_RC" -eq 1 ]; then
 fi
 ```
 
+The gate checks one GitHub fact, that every known-deviation issue is still open (#1279), from an
+issue-state snapshot, because it runs with no network or credentials. The queue, `land.sh` and the
+hosted workflow write that snapshot and pass it in `ALATYR_OPEN_ISSUES`. A hand run with `gh` logged in
+takes its own. Otherwise, write one with `scripts/fixture_expect.sh --snapshot-open > target/open.snap`
+and add `ALATYR_OPEN_ISSUES="$PWD/target/open.snap"`. With no snapshot, FIXTURE EXPECT is red. For a
+merge that closes an issue, append `closing N` to the snapshot, as the queue and `land.sh` do.
+
 The same gate may run remotely: push the merged object (and later the object with its oracle commit)
 to a `gate/<name>` branch and `.github/workflows/gate.yml` runs `scripts/full.sh --force-sweeps` on a
 GitHub-hosted x86_64 runner. Read its `gate.log` artifact — the verdict is the `*** FULL GATE` line

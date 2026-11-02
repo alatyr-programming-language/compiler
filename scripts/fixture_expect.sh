@@ -93,8 +93,11 @@
 #   unissued  a row with `#?` or an issue the table lacks, or one the table marks `none`
 # and `issues` for the files themselves (an issue marked `rows` that no row names, an issue listed
 # twice, a malformed line, or a deviation row out of LC_ALL=C order). A fix deletes its own rows; a change that adds a deviation adds its row, under an issue.
-# `--issues-open` asks `gh` that every issue in the table is open; land.sh PHASE 2 runs that check,
-# because the gate runs without credentials.
+# Every issue in the table is OPEN (#1279). The gate has no network, so it reads an issue-state snapshot
+# (`--open-issues FILE`, written by whoever holds `gh`: queue.sh, land.sh, the hosted workflow, or
+# full.sh itself on a hand run), and refuses an issue the snapshot does not list as open, or marks
+# `closing N` because the object under test closes it on landing. land.sh PHASE 2 asks `gh` the same
+# question at the screen; `--issues-open` asks it by hand.
 #
 # ## The verdict (S3)
 #
@@ -112,6 +115,10 @@
 #
 #   scripts/fixture_expect.sh [--report]            the summary
 #   scripts/fixture_expect.sh --gate --observed F   the verdict (see "The verdict (S3)"); exit 1 on a finding
+#   scripts/fixture_expect.sh --gate --observed F --open-issues SNAPSHOT
+#                                                   the same, and exit 1 when an issue of the table is
+#                                                   not open in SNAPSHOT (see snapshot_open below)
+#   scripts/fixture_expect.sh --snapshot-open       print a snapshot of the open issues (gh)
 #   scripts/fixture_expect.sh --issues-open         exit 1 when an issue of the table is not open (gh)
 #   scripts/fixture_expect.sh --list <what>         one line per item: a b c conflict pin malformed
 #                                                   unmapped twins stale unlisted changed orphan
@@ -559,31 +566,59 @@ run_mode() { # mode rows manifest test-dir [deviations issues [observed]]
     review)   sort "$w/out" ;;
     *)        cat "$w/out" ;;
   esac
+  ## the closed-issue check (#1279) joins the --gate verdict when a snapshot is given; full.sh always
+  ## gives one, or fails the stage itself. Without one, say so: an unchecked fact is never a pass.
+  if [ "$mode" = report ] && [ "${GATE:-0}" = 1 ]; then
+    if [ -n "${OPEN_ISSUES:-}" ]; then
+      local orc=0; issues_open "$issues" "$OPEN_ISSUES" || orc=$?
+      case "$orc" in
+        0) ;;
+        1) echo "  GATE: FAIL — a known-deviation issue is not open (#1279)"; [ "$rc" = 2 ] || rc=1 ;;
+        *) echo "  GATE: the issue-state snapshot is unusable (exit 2, not a pass)"; rc=2 ;;
+      esac
+    else
+      echo "  known-deviation issues: NOT CHECKED here (no --open-issues snapshot); full.sh checks them"
+    fi
+  fi
   rm -rf "$w"
   return "$rc"
 }
 
-## issues_open TABLE [STATES] -> exit 0 when every issue the table names is OPEN, 1 when one is not, 2
-## when the answer cannot be had. A row names an open issue (#1126 design 4): the fix that closes it
-## deletes its rows in the same PR, so a closed issue still in the table is a row that outlived its fix.
-## STATES (`<number> <STATE>` per line) replaces the `gh` query; the self-test uses it. `gh` is asked
-## once, for every open issue, so the gate makes one network call, and a failed call is a 2 — never a pass.
-issues_open() { # table [states]
-  local table="$1" states="${2:-}" t
+## The issue-state SNAPSHOT (#1279): the one input of the closed-issue check, so the gate itself can
+## refuse a deviation whose issue is closed while it runs with no network and no credentials. A line is
+## an OPEN issue number, `closing <N>` for an issue the object under test closes on landing (its PR's
+## `Closes #N`: open on GitHub now, closed the moment the gate's object lands, so its rows must already
+## be gone), or a `#` comment. Whoever holds credentials writes it before the gate: scripts/queue.sh for a
+## batch, scripts/land.sh for a solo or hand landing, the hosted workflow before `full.sh`, and full.sh
+## itself (`--snapshot-open`) on a hand run with `gh` logged in. A snapshot naming no open issue is a
+## failed query, never a pass.
+snapshot_open() { # -> the snapshot on stdout (gh); 2 when GitHub cannot be read
+  local t
+  command -v gh > /dev/null || { echo "fixture_expect.sh: gh is not on PATH; the issue states cannot be read (not a pass)" >&2; return 2; }
   mkdir -p "$ROOT/target" && t="$(mktemp "$ROOT/target/fixture-expect-open.XXXXXX")" || return 2
-  if [ -n "$states" ]; then awk '$2 == "OPEN" { print $1 }' "$states" > "$t"
-  else
-    command -v gh > /dev/null || { echo "fixture_expect.sh: gh is not on PATH; the issue states cannot be read (not a pass)" >&2; rm -f "$t"; return 2; }
-    gh issue list --state open --limit 5000 --json number --jq '.[].number' > "$t" 2> "$t.err" \
-      || { echo "fixture_expect.sh: gh issue list failed: $(head -c 300 "$t.err") (not a pass)" >&2; rm -f "$t" "$t.err"; return 2; }
-    rm -f "$t.err"
-    [ -s "$t" ] || { echo "fixture_expect.sh: gh returned no open issue at all (not a pass)" >&2; rm -f "$t"; return 2; }
-  fi
-  awk -F'\t' 'FILENAME == ARGV[1] { OPEN[$1] = 1; next }
+  gh issue list --state open --limit 5000 --json number --jq '.[].number' > "$t" 2> "$t.err" \
+    || { echo "fixture_expect.sh: gh issue list failed: $(head -c 300 "$t.err") (not a pass)" >&2; rm -f "$t" "$t.err"; return 2; }
+  grep -q '^[0-9][0-9]*$' "$t" || { echo "fixture_expect.sh: gh returned no open issue at all (not a pass)" >&2; rm -f "$t" "$t.err"; return 2; }
+  printf '# open issues, read by gh at %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; cat "$t"; rm -f "$t" "$t.err"
+}
+
+## issues_open TABLE SNAPSHOT -> exit 0 when every issue the table names is OPEN in the snapshot and not
+## closed by the object under test, 1 when one is not, 2 when the snapshot is unusable. A row names an
+## open issue (#1126 design 4): the fix that closes it deletes its rows in the same PR, so a closed issue
+## still in the table is a row that outlived its fix, or a fix that never came.
+issues_open() { # table snapshot
+  [ -f "$2" ] || { echo "fixture_expect.sh: no issue-state snapshot at $2 (not a pass)" >&2; return 2; }
+  grep -q '^[0-9][0-9]*$' "$2" || { echo "fixture_expect.sh: the snapshot $2 names no open issue: a failed query (not a pass)" >&2; return 2; }
+  awk -F'\t' 'FILENAME == ARGV[1] {
+      if ($0 ~ /^[0-9]+$/) OPEN[$0] = 1; else if ($0 ~ /^closing [0-9]+$/) { split($0, c, " "); CLOSING[c[2]] = 1 }
+      else if ($0 !~ /^#/ && $0 != "") { printf "fixture_expect.sh: snapshot line %d is not `N`, `closing N` or a comment\n", FNR > "/dev/stderr"; unusable = 1 }
+      next }
     $0 ~ /^#/ || $0 == "" { next }
-    { n++; if (!($1 in OPEN)) { bad++; printf "  not open: #%s (%s)\n", $1, $3 } }
-    END { printf "known deviations: %d issues in the table, %d not open\n", n, bad; exit (bad ? 1 : 0) }' "$t" "$table"
-  local rc=$?; rm -f "$t"; return "$rc"
+    { n++
+      if ($1 in CLOSING) { bad++; printf "  closed by this landing: #%s (%s): the fix deletes its rows and its table line\n", $1, $3 }
+      else if (!($1 in OPEN)) { bad++; printf "  not open: #%s (%s): delete its rows, or reopen it if the deviation stands\n", $1, $3 } }
+    END { if (unusable) exit 2
+      printf "  known-deviation issues (#1279): %d in the table, %d not open\n", n, bad; exit (bad ? 1 : 0) }' "$2" "$1"
 }
 
 self_test() {
@@ -754,15 +789,27 @@ EOF
   got="$(GATE=1 run_mode report "$d/rows" "$d/nomanifest" "$d/g" "$d/dv" "$d/is" > /dev/null 2>&1; echo "$?")"
   chk "--gate: unusable input is 2, never a pass" "$got" "2"
   is "$I1" "14${T}Plant §3${T}a spelling${T}none"
-  printf '11 OPEN\n14 OPEN\n99 CLOSED\n' > "$d/st"; issues_open "$d/is" "$d/st" > /dev/null; got="$?"
-  printf '11 OPEN\n14 CLOSED\n' > "$d/st"; issues_open "$d/is" "$d/st" > /dev/null; got="$got $?"
-  chk "--issues-open: 0 when every issue is open, 1 when one is closed" "$got" "0 1"
+  ## the closed-issue check (#1279), on the same planted table (#11 rows, #14 none)
+  printf '# snap\n11\n14\n99\n' > "$d/st"; issues_open "$d/is" "$d/st" > /dev/null; got="$?"
+  printf '11\n99\n' > "$d/st"; issues_open "$d/is" "$d/st" > /dev/null; got="$got $?"
+  printf '11\n14\nclosing 14\n' > "$d/st"; issues_open "$d/is" "$d/st" > /dev/null; got="$got $?"
+  printf '# no numbers\n' > "$d/st"; issues_open "$d/is" "$d/st" > /dev/null 2>&1; got="$got $?"
+  printf '11\n14\nCLOSED 3\n' > "$d/st"; issues_open "$d/is" "$d/st" > /dev/null 2>&1; got="$got $?"
+  chk "issue states: open passes; closed, or closed by this landing, fails; an empty or malformed snapshot is 2" "$got" "0 1 1 2 2"
+  ## and through --gate: a planted CLOSED issue (#11, named by three rows) turns the gate red
+  rm -f "$d/g/hdrdiff.al"; is "$I1"; dv "$R1" "$R2" "$R3"
+  GO() { GATE=1 OPEN_ISSUES="$d/st" run_mode report "$d/rows" "$d/m" "$d/g" "$d/dv" "$d/is" > "$d/go" 2>&1; echo "$?"; }
+  printf '11\n' > "$d/st"; got="$(GO)"
+  printf '12\n' > "$d/st"; got="$got $(GO) $(grep -c 'not open: #11' "$d/go")"
+  printf '11\nclosing 11\n' > "$d/st"; got="$got $(GO)"
+  printf '# none\n' > "$d/st"; got="$got $(GO)"
+  chk "--gate with a snapshot: a row under a closed issue fails, an unusable snapshot is 2" "$got" "0 1 1 1 2"
   rm -rf "$d"
   [ "$rc" = 0 ] && echo "fixture expect self-test: $nchk checks, 0 failed" || echo "fixture expect self-test: FAILED"
   return "$rc"
 }
 
-MODE=report ROWS="" MANIFEST="$ROOT/scripts/corpus.manifest" OBSERVED="" TESTDIR="$ROOT/test" WRITE=0 GATE=0
+OPEN_ISSUES="" MODE=report ROWS="" MANIFEST="$ROOT/scripts/corpus.manifest" OBSERVED="" TESTDIR="$ROOT/test" WRITE=0 GATE=0
 DEVIATIONS="$ROOT/scripts/known-deviations.tsv" ISSUES="$ROOT/scripts/known-deviations.issues.tsv"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -781,6 +828,8 @@ while [ $# -gt 0 ]; do
     --deviations) DEVIATIONS="${2:-}"; shift 2 ;;
     --issues)    ISSUES="${2:-}"; shift 2 ;;
     --issues-open) MODE=issues-open; shift ;;
+    --open-issues) OPEN_ISSUES="${2:-}"; [ -n "$OPEN_ISSUES" ] || { echo "fixture_expect.sh: --open-issues needs a snapshot file" >&2; exit 2; }; shift 2 ;;
+    --snapshot-open) snapshot_open; exit $? ;;
     --self-test) self_test; exit $? ;;
     -h|--help)   sed -n '2,/^set -u/p' "$ROOT/scripts/fixture_expect.sh" | sed '$d'; exit 0 ;;
     *) echo "fixture_expect.sh: unknown argument '$1' (try --help)" >&2; exit 2 ;;
@@ -793,7 +842,11 @@ OBSERVED="$(observation_for "$MODE" "$GATE" "$OBSERVED" "$ROOT/target/corpus-man
 [ -d "$TESTDIR" ] || { echo "fixture_expect.sh: no test directory at $TESTDIR" >&2; exit 2; }
 [ -f "$DEVIATIONS" ] || { echo "fixture_expect.sh: no known-deviations list at $DEVIATIONS" >&2; exit 2; }
 [ -f "$ISSUES" ] || { echo "fixture_expect.sh: no issue table at $ISSUES" >&2; exit 2; }
-if [ "$MODE" = issues-open ]; then issues_open "$ISSUES"; exit $?; fi
+if [ "$MODE" = issues-open ]; then
+  mkdir -p "$ROOT/target" && SNAP="$(mktemp "$ROOT/target/fixture-expect-snap.XXXXXX")" || exit 2
+  snapshot_open > "$SNAP" || { rm -f "$SNAP"; exit 2; }
+  rc=0; issues_open "$ISSUES" "$SNAP" || rc=$?; rm -f "$SNAP"; exit "$rc"
+fi
 mkdir -p "$ROOT/target" && TMPROWS="$(mktemp "$ROOT/target/fixture-expect-rows.XXXXXX")" || exit 2
 trap 'rm -f "$TMPROWS"' EXIT
 if [ -z "$ROWS" ]; then
@@ -801,4 +854,4 @@ if [ -z "$ROWS" ]; then
   ROWS="$TMPROWS"
 fi
 [ -s "$ROWS" ] || { echo "fixture_expect.sh: the registration table is empty — refusing to report on nothing" >&2; exit 2; }
-WRITE="$WRITE" GATE="$GATE" run_mode "$MODE" "$ROWS" "$MANIFEST" "$TESTDIR" "$DEVIATIONS" "$ISSUES" "$OBSERVED"
+WRITE="$WRITE" GATE="$GATE" OPEN_ISSUES="$OPEN_ISSUES" run_mode "$MODE" "$ROWS" "$MANIFEST" "$TESTDIR" "$DEVIATIONS" "$ISSUES" "$OBSERVED"
