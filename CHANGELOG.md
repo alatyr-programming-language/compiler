@@ -165,6 +165,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   returning `Slice(str)` bound each element as one word, or copied it from the parameter's own
   `{ptr, len}` block. The program then ran on with wrong strings and no diagnostic. Iterating a
   range of a `Slice(str)` parameter (`for s in xs[1..n]`) is still wrong, tracked by #1180.
+- **A `HashMap` of a sub-word value or key returns what was inserted (#1255), and so do `dq_at`,
+  `front` and `back` on a sub-word `Deque` (part of #1254).** A `deref` through a pointer a call
+  returns (`deref(val_at(…))`, `deref(dq_elem(…))`) moved 8 bytes whatever the element was, so a `u8`,
+  `u16`, `u32`, `i8` or `bool` element read the bytes after it, and a rehash overwrote them. It now
+  moves the callee's declared pointee, resolved through the generic instance.
 
 ## 0.2.21 — 2026-11-01
 
