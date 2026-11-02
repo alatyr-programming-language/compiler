@@ -11160,6 +11160,8 @@ run issue1182_annotated_view_local 42
 run issue1182_for_array_param_agg 42
 ## #1287: `for` over a fixed-array PARAMETER of every element kind (str, word, struct, enum, u8, i8, f64)
 run issue1287_for_array_param 42
+## #1388: `for` over a packed byte-array LOCAL (`[u8; N]`, `[i8; N]`); 139 on the parent 01609666
+run issue1388_for_byte_array_local 42
 run slice_enum_param 42
 ## the .len FIELD (vs the .len() method) on a slice PARAM: must double-deref the caller's {ptr,len}
 ## block (was reading a garbage slot word). Scalar + str element.

@@ -161,6 +161,9 @@ Two numbers that are **not** the compiler's version: the specification revision 
   trapped, and a `str` element read one word, so `[str; 2]` gave wrong lengths. The loop now reads the
   element pointer by value, bounds itself by the static `N`, reads a `str` element as its two-word view
   and a `u8`/`i8` element as a byte (`i8` sign-extended).
+- **`for x in t` over a byte-array local no longer crashes on x86_64 (#1388).** A local `t : [u8; N]`
+  (or `[i8; N]`) is a packed byte run in the frame, and the loop read its first word as a data pointer
+  (SIGSEGV). It now reads the run's own bytes, bounded by `N`, with an `i8` element sign-extended.
 
 ## 0.2.21 — 2026-11-01
 
