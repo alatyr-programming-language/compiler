@@ -315,7 +315,7 @@ The screening is where the safety lives, and all of it happens before anything i
 
 The merge queue does this screening and gating mechanically: after the §2 review, run
 `scripts/queue.sh --enqueue N=<the reviewed head sha>`, and the timer on omen composes, gates, bisects and publishes (#1127;
-the rules are in the script's header). Only the integrator enqueues. A batch built by hand instead
+the rules are in the script's header), with the PHASE 6c baseline commit (§4) when the gate added coverage. Only the integrator enqueues. A batch built by hand instead
 uses the manual merge above and the §4 gate, and keeps the push its own leased statement.
 
 Three boundaries bound this, and each of them was measured rather than imagined:
@@ -567,6 +567,24 @@ Then run `scripts/land.sh <pr>`. Every step is a check that stops on failure:
 The published object is merge + oracle commit, after ONE full gate. Without `--push`, land.sh
 prints the push command for that exact object. If the ratchet shows the baseline can go down, lower
 `scripts/xbackend_diff.baseline` in a follow-up commit; the feature PR never lowers it.
+
+**PHASE 6c, on every landing path** (#1383). When the full gate's `xbackend diff:` line reports
+`new-paths=N new-rows=M` above zero, the landing has added fixtures whose cross-backend difference was
+already in the compiler, and after the push those paths are existing: a baseline left in place makes
+every next gate on `main` red on the ratchet alone (#1309 did). So land.sh, oracle or not, commits
+`chore(gates): xbackend baseline follows the landing of #PR` on the object the gate's verdict covers
+(the merge, or its oracle commit), with the gate line verbatim in the body. It is arithmetic on the
+parent's file: `paths` and `rows` move by exactly N and M, every other line holds, and a lower
+measurement is never folded in. `xb_follow_commit_check` refuses it unless the only file is the
+baseline, the parent is the gated object and the numbers are the gate line's; a publish that carries
+coverage without it is refused. N = M = 0 makes no commit. The queue's batch path runs the same step
+through the base's `scripts/land.sh --xbackend-follow <gated sha> <gate log> <PR>...`, one commit for
+the batch's total naming each member, and re-checks its one parent and its one file before the push.
+When that commit is refused after a green batch gate, nothing is pushed and every member is labelled
+`queue-failed` with a comment and a `refused at follow` queue.log line (#1386): the same inputs would
+refuse again, so the batch is not re-gated every pass. A hand
+landing gated elsewhere (omen, or `gate.yml`'s `gate.log`) runs that same command on the gated
+object, or on its oracle commit after a hand PHASE 6a, and publishes the commit it prints.
 
 When the gate ran on `.github/workflows/gate.yml` rather than locally, do PHASE 6a by hand on the
 detached merge. Run `--check-delta "$BASE_MANIFEST" corpus.manifest scripts/corpus.expected-delta`
