@@ -258,6 +258,15 @@ Two numbers that are **not** the compiler's version: the specification revision 
   resolver, which knows no parameter: a concrete function lost the payload, and a generic one at
   `T = Option(u64)` returned 0 for 42. A generic `p : ptr(T)` whose instance makes `T` an enum
   application is now bound as a pointer to that enum, and the payload is read through it.
+- **A `Slice(T)` view indexes by `T`'s width, not by the word (#1238).** A view from
+  `alloc::vec::index_range(T, …)` or `alloc::vec::iter(T, …)` — and any other `Slice(T)` local or
+  parameter — stepped 8 bytes and moved 8 bytes for every element wider than a byte: `t[0]` of a
+  `Slice(u16)` answered `5 + (7 << 16)`, a `Slice(bool)` read a whole word, and `v[i] = x` through
+  such a view overwrote the neighbours. Types §6.4 makes element access `base + i × stride` with the
+  stride `T`'s size rounded up to its alignment, and Types §7 makes `[T]` a pair over a contiguous run
+  of `T`, so the view now carries its element's byte width and signedness: a `u16` element is a
+  2-byte zero-extended load at stride 2, an `i16` one sign-extends, a `bool` is one byte. A word or
+  byte element emits the same instructions as before.
 
 ## 0.2.21 — 2026-11-01
 

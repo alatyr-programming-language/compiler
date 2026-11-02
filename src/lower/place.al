@@ -1151,7 +1151,7 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
   ## Narrow by measurement, not by taste. The gate is `slice_arr_stride != 0` (a `Slice` whose base is
   ## a name-matched ARRAY local/param, `ek == 5`) AND a SCALAR WORD element (`slice_arr_eek == 0`),
   ## because the element WIDTH is chosen by this function's CALLERS from queries that all key on a
-  ## `Var` base: `packed_byte_base_entry` (a byte element), `slice_base_is_byte`, the float/xmm path
+  ## `Var` base: `packed_byte_base_entry` (a byte element), `slice_base_elem_width`, the float/xmm path
   ## (eek 9) and the by-reference aggregate paths (eek 2/3/4/7) every answer "no" for an `Expr::Slice`
   ## base, so widening this arm to those element kinds would pair a correct address with a WORD load
   ## and trade a loud refusal for a wrong value. Those element kinds keep the refusal below and stay
