@@ -259,11 +259,16 @@ collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
   lt := collect_agg_lit_type(e, decls, src, a)
   if lt.n != 0 { return lt }
   if struct_lit_info(e).is_s or enum_lit_info(e).is_e { return CSpan(s = 0, n = 0) }
-  vn := var_name_span(e)
-  if vn.n == 0 { return CSpan(s = 0, n = 0) }
   mut ts := 0
   mut tl := 0
-  if stmt_any(COLLECT_BODY) {
+  ## #1394 — a CALL operand returning a multi-word struct/enum by value is routed by the emit gate
+  ## (`agg_cmp_operand_words`) through the same classifier; its declared return is the type, and the
+  ## canonicalization below tags it exactly as a local of that type.
+  cr := agg_call_ret_span(e, decls, src, a)
+  if cr.n != 0 { ts = cr.s; tl = cr.n }
+  vn := var_name_span(e)
+  if vn.n == 0 and tl == 0 { return CSpan(s = 0, n = 0) }
+  if tl == 0 and stmt_any(COLLECT_BODY) {
     ltp := block_decl_type(COLLECT_BODY, vn.s, vn.n, src, decls, a)
     if ltp.n != 0 { ts = ltp.s; tl = ltp.n }
   }

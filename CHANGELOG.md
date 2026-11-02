@@ -200,6 +200,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   declaration now traps there (a fail-loud stub) until a block-local declaration gets a slot of its own;
   a program that relied on it must rename the local. This includes a typed constant whose reads were
   folded and so happened to answer correctly. x86_64 is unchanged.
+- **Comparing a function's struct or enum result with `==` or `!=` gives the right answer on x86_64
+  (#1394).** `mk(2) == E.A(7)` compared the returned variant tag with 0 and ignored the payload, so it
+  answered false for two equal values (and `!=` answered true). A call that returns a struct or an enum
+  of more than one word now compares the whole value, like a local does. When the callee is generic,
+  the compiler reports the comparison with its source line and asks to bind the result to a local
+  first, instead of answering wrongly.
 
 ## 0.2.24 — 2026-11-07
 
