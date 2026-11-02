@@ -12715,6 +12715,13 @@ run for_slice_str_call_generic 32
 ## direct call iterable knew only a `str` element, so the loop var was one word. NON-VACUOUS on the parent
 ## 869eeb34 (x86_64): the fixture is refused at build (`r[1].a`); without that row it exits 1, not 42.
 run for_slice_call_agg 42
+## #1211's review row: the same call-bound views INDEXED. #1211 binds `r := pass(…)` as a slice
+## view, so the read goes through the view path — which is bounds-checked by #1293, the PR this one
+## stacks on. Stacked alone, `r[2]` past a two-element view read the next element and answered its
+## field: 3 over `Slice(str)` (main trapped) and 6 over `Slice(P)` (main refused it at build). Each
+## fixture runs its in-bounds control first, so the row is non-vacuous on #1211's own fix too.
+run_x86_trap issue1211_call_slice_str_index_oob 132
+run_x86_trap issue1211_call_slice_struct_index_oob 132
 
 ## #989 — an enum VALUE read through `deref(p)` was emitted as a null enum: `emit_enum_value` sent
 ## `Expr::Deref` to its catch-all, which built discriminant 0 with an empty payload. So `at`/`get` on
