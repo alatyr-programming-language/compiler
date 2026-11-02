@@ -28,9 +28,11 @@
 ##     `StdIdxOne`/`StdIdxPath`, and the mutable global `EMIT_PARAMS`.
 ##   * from SIBLING children, as EXPLICIT listed projections off a qualified path, because a bare
 ##     child-to-child call would bind through the unique-declaration leniency and
-##     `scripts/callee_module_check.sh` is SILENT on that: `index_plain_scalar_struct` from
-##     `lower::ir` and `lower_show_src_line` from `lower::ctfold`. (`lower::ctfold` in turn borrows
-##     `field_place_parts` from here — a mutual sibling import, probed to resolve and run.)
+##     `scripts/callee_module_check.sh` is SILENT on that: `lower_show_src_line` from
+##     `lower::ctfold`. (`lower::ctfold` in turn borrows `field_place_parts` from here — a mutual
+##     sibling import, probed to resolve and run.) `lower::ir`'s `index_plain_scalar_struct` was a
+##     borrower until #1287's review widened the fixed-array-parameter bounds block to every element
+##     kind, which no longer needs it.
 ##   * from the top-level modules `rt`, `ast`, `lower_ctx`, `lower_layout`, as the other children do.
 ## Spelling constraint, measured twice now: a ONE-ELEMENT listed projection immediately after a bare
 ## module alias is a PARSE ERROR (`strbuf := rt` then `(Expr) := ast` -> "unexpected token `:=`"), so
@@ -42,7 +44,6 @@ Expr := ast::Expr
 (LCtx, SVec, arg_expr_at, num_lit_value, var_name_span) := lower_ctx
 (enum_decl_of, field_word_offset, field_words, is_packed, is_union_decl, layout_elem_stride_bytes, layout_field_offset_bytes, layout_kind, layout_kind_is_byte, layout_kind_is_packed, standard_field_byte_offset, std_array_elem_byte_tier, std_copy_image_bytes, std_copy_kind, std_struct_has_byte_layout, std_struct_is_word_granular, struct_decl_of, struct_words) := lower_layout
 ## SIBLING children, reached by an explicit qualified path (Modules §4) — never by a bare name.
-(index_plain_scalar_struct) := lower::ir
 (lower_show_src_line) := lower::ctfold
 
 ## Shared core of `agg_field_arg_parts`: is `base.<[fs,fl)>` an aggregate field, and how to address it?
@@ -1363,13 +1364,20 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
     push_int(sb, i64(ent.sns))
     push_str(sb, ", %rax\n  jb 1f\n  ud2\n1:\n")
   }
-  ## CHECKED BOUNDS for a plain-struct element of a concrete fixed-array PARAM. The parser keeps the
-  ## aggregate element type in `ent.sns`/`ent.snl`, while the array's static N lives in Param.pps;
-  ## recover that N before the shared address math. Tuple/generic/slice and non-scalar-field structs
-  ## remain on their existing loud/unsupported paths.
-  if cx.vchk and ent.ek == 5 and ent.is_ref and ent.eek == 2 and fixed_array_param_len(ent.ns, ent.nl, EMIT_PARAMS, cx.src) > 0 {
+  ## CHECKED BOUNDS for a concrete fixed-array PARAMETER of ANY element kind (`a : [T; N]`: ek 5,
+  ## is_ref, is_param — #1287's review). Its slot is the caller's element-0 pointer and it owns no
+  ## length word, so the only bound it has is the static N of its type, kept by the parser in
+  ## `Param.pps` and recovered here by name (`fixed_array_param_len`). This covers the aggregate and
+  ## float elements — struct (eek 2), enum (eek 3, #1404), the `str` two-word view (eek 4, the kind
+  ## #1287 gives a `[str; N]` parameter) and float (eek 9); a word element (`eek == 0`) is bounded by
+  ## the block above through `sns`, and a byte element takes its own strided path earlier. Before this
+  ## block an out-of-range index into any of these read past the caller's array and returned a wrong
+  ## value (measured on 01609666: `str` 0, enum 0, float 0, a struct with a `str` field 5) where the
+  ## word, byte and plain-struct kinds already trapped. Same `cmpq`/`jb`/`ud2` as every other checked
+  ## index; `jb` is unsigned, so a negative index traps too. Dropped in an `unchecked` scope (CG-7).
+  if cx.vchk and ent.ek == 5 and ent.is_ref and ent.is_param and (ent.eek == 2 or ent.eek == 3 or ent.eek == 4 or ent.eek == 9) {
     pn := fixed_array_param_len(ent.ns, ent.nl, EMIT_PARAMS, cx.src)
-    if index_plain_scalar_struct(cx.src, cx.decls, ent.sns, ent.snl, a) {
+    if pn > 0 {
       push_str(sb, "  cmpq $")
       push_int(sb, i64(pn))
       push_str(sb, ", %rax\n  jb 1f\n  ud2\n1:\n")
