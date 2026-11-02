@@ -26164,6 +26164,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             mut byte_elem := is_nonvar and is_bytes_call(flo, cx.src)
             mut byte_signed := false  ## an `[i8; N]` parameter's element: sign-extended (`movsbq`)
             mut arr_param_n : usize = 0 ## #1287 — a fixed-array parameter's static N (0: not one)
+            mut byte_local_n : usize = 0 ## #1388 — a packed byte-array LOCAL's static N (0: not one)
             vslot := slot_of(cx.slots, cx.src, fns, fnl)
             mut islot := vslot + 1   ## hidden loop index; moved to vslot+agg_stride for an aggregate loop var
             ## scalar-word (eek 0) and FLOAT (eek 9) element arrays: both keep the element COUNT in `snl`
@@ -26309,6 +26310,16 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                   if is_byte_array_eek(bent.eek) { byte_elem = true; byte_signed = bent.eek == 10 }
                 }
               }
+              ## #1388 — a byte-array LOCAL `t : [u8; N]` (`[i8; N]`, `[bits8; N]`) is a packed byte run in
+              ## the frame whose first byte is at `-(off*8)(%rbp)`, with N in `snl` — the same view
+              ## `bytes(t)` materializes. Read as a slice local, the loop took frame word 0 for a data
+              ## pointer and segfaulted. So: the run's address as the data pointer, N as the bound, a byte read.
+              if bent.ek == 5 and is_byte_array_eek(bent.eek) and bent.is_ref == false and bent.is_param == false and bent.snl > 0 {
+                byte_local_n = bent.snl
+                b_is_ref = false
+                byte_elem = true
+                byte_signed = bent.eek == 10
+              }
             }
             ## `s` is a Slice `{ptr, len}`. A by-VALUE local holds ptr @ slot `B`, len @ slot `B+1`. A by-REF
             ## struct PARAM (`is_ref`) holds a POINTER `P` @ slot `B` to the caller's Slice, whose fields ride
@@ -26338,6 +26349,11 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## #1287 — a fixed-array parameter: the static N of its `[T; N]` type
               push_str(sb, "  movq $")
               push_int(sb, i64(arr_param_n))
+              push_str(sb, ", %rbx\n")
+            } else if byte_local_n > 0 {
+              ## #1388 — a packed byte-array local: the static N of its `[u8; N]` type
+              push_str(sb, "  movq $")
+              push_int(sb, i64(byte_local_n))
               push_str(sb, ", %rbx\n")
             } else if is_agg_slice {
               ## struct/enum-element slice: local VIEW stores len in frame word 1; PARAM stores a pointer to
@@ -26490,7 +26506,12 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               push_str(sb, "(%rbp)\n")
             } else {
             ## data pointer → %rax
-            if b_is_ref {
+            if byte_local_n > 0 {
+              ## #1388 — the packed byte run's own address
+              push_str(sb, "  leaq -")
+              push_int(sb, i64(bslot * 8))
+              push_str(sb, "(%rbp), %rax\n")
+            } else if b_is_ref {
               push_str(sb, "  movq -")
               push_int(sb, i64((bslot + 1) * 8))
               push_str(sb, "(%rbp), %rax\n  movq (%rax), %rax\n")

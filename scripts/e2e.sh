@@ -11170,6 +11170,8 @@ run_x86_trap issue1287_param_str_index_oob 132
 run_x86_trap issue1287_param_enum_index_oob 132
 run_x86_trap issue1287_param_struct_index_oob 132
 run_x86_trap issue1287_param_f64_index_oob 132
+## #1388: `for` over a packed byte-array LOCAL (`[u8; N]`, `[i8; N]`); 139 on the parent 01609666
+run issue1388_for_byte_array_local 42
 run slice_enum_param 42
 ## the .len FIELD (vs the .len() method) on a slice PARAM: must double-deref the caller's {ptr,len}
 ## block (was reading a garbage slot word). Scalar + str element.

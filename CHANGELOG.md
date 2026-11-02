@@ -170,6 +170,9 @@ Two numbers that are **not** the compiler's version: the specification revision 
   kind of a `[T; N]` parameter is now compared against `N` and traps out of range (SIGILL, 132). A
   program that read past the end and used the value now stops; it was invalid (I11, Types §4.5/§6.4).
   Inside `unchecked` the check stays off (CG-7).
+- **`for x in t` over a byte-array local no longer crashes on x86_64 (#1388).** A local `t : [u8; N]`
+  (or `[i8; N]`) is a packed byte run in the frame, and the loop read its first word as a data pointer
+  (SIGSEGV). It now reads the run's own bytes, bounded by `N`, with an `i8` element sign-extended.
 
 ## 0.2.21 — 2026-11-01
 
