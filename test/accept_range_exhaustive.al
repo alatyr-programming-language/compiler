@@ -2,7 +2,7 @@
 ## and MUST be accepted (no `_` needed). `check` returns 0.
 main := fn() -> u64 {
   n : u8 = 200
-  r := match n { 0..=127 => 1 ; 128..=255 => 2 }
+  r : u64 = match n { 0..=127 => 1 ; 128..=255 => 2 }
   return r
 }
 ## expect: accept

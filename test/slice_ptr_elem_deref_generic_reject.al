@@ -4,7 +4,7 @@
 ## `[ptr(mut b0), …]` case IS supported; see slice_ptr_elem_deref.al). Asserted via `build_reject`.
 Box := struct { v : u64, w : u64 }
 sumv := fn(T : type, s : Slice(ptr(mut T)), n : usize) -> u64 {
-  mut acc := 0
+  mut acc : u64 = 0
   for i in 0..n { acc = acc + deref(s[i]).v }
   return acc
 }

@@ -9,7 +9,7 @@ G := bitcast( ## target )
 )
 
 main := fn() -> u64 {
-  x := @label(outer) loop {
+  x : u64 = @label(outer) loop {
     loop {
       break outer (G + 0)
     }

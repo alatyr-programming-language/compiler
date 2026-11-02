@@ -2,9 +2,9 @@
 ## frame slot), so it is neither the non-var nor the slot iteration path: the count comes from its
 ## ArrayLit and each element is read from `LABEL + i*8` (`leaq LABEL(%rip)` + indexed load). Sums the
 ## three scalar elements: 10 + 15 + 17 = 42.
-mut TABLE := [10, 15, 17]
+mut TABLE : [u64; 3] = [10, 15, 17]
 main := fn() -> u64 {
-  mut acc := 0
+  mut acc : u64 = 0
   for v in TABLE { acc = acc + v }
   acc
 }

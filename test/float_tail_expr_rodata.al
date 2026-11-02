@@ -22,7 +22,7 @@ both := fn(x : f64) -> f64 {
 
 main := fn() -> u64 {
   eps := 0.0000001
-  mut r := 0
+  mut r : u64 = 0
 
   if pick(0.0 - 4.0) - 4.0 < eps { r = r + 1 }        ## trailing-`if` literal reached  -> +1
   if scale(4.0) - 10.0 < eps { r = r + 2 }            ## bare trailing-expr literal     -> +2

@@ -17,7 +17,7 @@ main := fn() -> u64 {
   ## reassign — a NARROW (movl) i32 tag store to bytes [0..4); MUST NOT touch bytes [4..8)
   c = Color.Blue
   after := unchecked deref(hi)
-  mut tag := 0
+  mut tag : u64 = 0
   match c {
     Color.Red => { tag = 100 }
     Color.Green => { tag = 100 }

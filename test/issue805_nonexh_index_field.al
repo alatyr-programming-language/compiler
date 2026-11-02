@@ -5,7 +5,7 @@ C := enum { R, G, B }
 H := struct { arr : [C; 2] }
 main := fn() -> u64 {
   h := H(arr = [C.B, C.G])
-  r := match h.arr[0] { R => { 11 }; G => { 22 } }
+  r : u64 = match h.arr[0] { R => { 11 }; G => { 22 } }
   return r
 }
 ## expect: reject "type mismatch at line 8"

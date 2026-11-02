@@ -12,7 +12,7 @@ main := fn() -> u64 {
   o2 := Option.Some(20)
   a := E.A(1)
   b := E.B(1)
-  mut r := 0
+  mut r : u64 = 0
   if o1 == o2 { r = r + 20 }   ## same variant + equal payload -> equal -> +20
   if a != b { r = r + 22 }     ## different variant -> not equal -> +22
   return r                     ## 42

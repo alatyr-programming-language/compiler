@@ -5,12 +5,12 @@
 ##   swap(p,50)  -> old 100, x=50 ;  fetch_sub(p,8) -> old 50, x=42 ;  load -> 42 ;
 ##   volatile store 15 then load -> 15.  z(42) + a(100) + b(50) + c(15) - 165 = 42.
 main := fn() -> u64 {
-  mut x := 100
+  mut x : u64 = 100
   p := ptr(x)
   a := atomic::swap(p, 50, Ordering.seq_cst)
   b := atomic::fetch_sub(p, 8, Ordering.acq_rel)
   fence(Ordering.seq_cst)
-  mut y := 0
+  mut y : u64 = 0
   q := ptr(y)
   volatile::store(q, 15, Ordering.relaxed)
   c := volatile::load(q, Ordering.relaxed)

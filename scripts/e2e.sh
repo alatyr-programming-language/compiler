@@ -7347,7 +7347,7 @@ run_x86 issue268_comptime_if_u64_high 42
 fmt_test_has_all issue268_comptime_binding 42 "comptime base : u64 = 5" "comptime inferred := base + 2" "comptime local : u64 = inferred + 1" "comptime flag := true"
 check_accept issue268_comptime_rebind
 run issue268_comptime_rebind 26
-fmt_test_has_all issue268_comptime_rebind 26 "comptime x := 5" "x := 7"
+fmt_test_has_all issue268_comptime_rebind 26 "comptime x := 5" "x : u64 = 7"
 ## Issue #414 / Declarations §6.2 — "Re-declaring a name already bound in the same scope is a compile
 ## error". That is a rule about a program the SPECIFICATION calls ill-formed, so the refusal lives in
 ## `check` and every build/emit surface inherits it from there — unlike `lower::require_agg_type`

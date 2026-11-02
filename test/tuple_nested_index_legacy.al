@@ -4,7 +4,7 @@
 ## uniform-stride read on `(40, (1, 1))` mis-addressed the wider component → 81). A uniform array-of-arrays
 ## `m[i][j]` (no tcomps) uses the eek-5 array-of-tuples path; `t.1.x` (a struct component field) the Field path.
 main := fn() -> u64 {
-  t := (40, (1, 1))
+  t : (u64, (u64, u64)) = (40, (1, 1))
   return t.0 + t.1.0 + t.1.1
 }
 ## expect: run 42
