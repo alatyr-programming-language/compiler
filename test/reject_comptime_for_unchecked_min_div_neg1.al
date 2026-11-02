@@ -16,3 +16,4 @@ main := fn() -> u64 {
   comptime for i in 0 .. unchecked ((0 - 9223372036854775807 - 1) / (0 - 1)) { c = c + 1 }
   return c + 40
 }
+## expect: reject "under `unchecked` too. at line 16 in "

@@ -14,3 +14,4 @@ main := fn() -> u64 {
   comptime for i in 0 .. 3 + K % D { c = c + 1 }
   return c + 40
 }
+## expect: reject "under `unchecked` too. at line 14 in "

@@ -14,3 +14,4 @@ main := fn() -> u64 {
   comptime for i in 0 .. K / D { c = c + 1 }
   return c + 40
 }
+## expect: reject "this range bound divides the minimum of a signed type by -1" "under `unchecked` too. at line 14 in "
