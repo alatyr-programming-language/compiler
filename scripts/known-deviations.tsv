@@ -1050,6 +1050,7 @@ wasm	test/enum_str_payload.al	run/134	#1184
 wasm	test/enum_struct_payload.al	run/134	#1190
 wasm	test/enum_unit_local_cmp.al	run/134	#1192
 wasm	test/fixed_array_len.al	run/134	#1187
+wasm	test/fmt_comptime_var_arm_stmt.al	run/134	#1191
 wasm	test/fn_value_bound_callee.al	run/134	#1189
 wasm	test/fn_value_enum_ret.al	run/134	#1189
 wasm	test/fn_value_expr_callee.al	run/134	#1189
