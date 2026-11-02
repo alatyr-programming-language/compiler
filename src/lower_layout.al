@@ -5836,12 +5836,22 @@ ct_bound_min := fn(w : Option(str)) -> i64 {
 }
 ## The CT-12 guard of one `comptime for` range-bound operation (Comptime §2.6), ONE place for both
 ## folders. `w` is the operation's type (`ct_bound_w`), `chk` false inside `unchecked`. A zero divisor
-## (#684) and a signed `MIN / -1`, `MIN % -1` (#1233) are hardware-defined, so they fail in both modes;
-## the compiler's own `idiv` never runs on them (x86 died with SIGFPE). A checked `+ - *` fails when
-## the exact result does not fit `w` (#1234) — never a wrapped bound.
+## (#684) and a signed `MIN / -1` (#1233) fail in both modes — the first is hardware-defined, the
+## second is in the checked-overflow set and hardware-defined under `unchecked`; the compiler's own
+## `idiv` never runs on them (x86 died with SIGFPE). A checked `%` by -1 does NOT fail: `MIN % -1`
+## yields 0 (Concurrency §6.1), see below. A checked `+ - *` fails when the exact result does not fit
+## `w` (#1234) — never a wrapped bound.
 pub ct_range_guard := fn(op : u8, lv : i64, rv : i64, w : Option(str), chk : bool) -> RangeGuard {
   if (op == 19 or op == 29) and rv == 0 { return RangeGuard.RgDivZero }
-  if (op == 19 or op == 29) and rv == (0 - 1) and ct_bound_div_signed(w) and lv == ct_bound_min(w) { return RangeGuard.RgMinDivNeg1 }
+  ## `MIN / -1` is in the checked-overflow set (Concurrency §6.1) and hardware-defined inside
+  ## `unchecked` (§6.2), so it fails the guard in BOTH modes (Comptime §2.6, first paragraph).
+  ## `MIN % -1` is NOT in that set: Concurrency §6.1 states its mathematical result 0 is
+  ## representable, so a CHECKED `%` yields 0 and does not trap; only inside `unchecked` is it
+  ## hardware-defined, and there it is the diagnostic (Comptime §2.6, second paragraph; Concurrency
+  ## §11; design/decisions/codegen.md: "`MIN % -1` is not in the set"). #1233, as the review of
+  ## PR #1263 settled it.
+  if op == 19 and rv == (0 - 1) and ct_bound_div_signed(w) and lv == ct_bound_min(w) { return RangeGuard.RgMinDivNeg1 }
+  if op == 29 and chk == false and rv == (0 - 1) and ct_bound_div_signed(w) and lv == ct_bound_min(w) { return RangeGuard.RgMinDivNeg1 }
   if chk and (op == 16 or op == 17 or op == 18) and ct_bound_ovf(op, lv, rv, w) { return RangeGuard.RgOverflow }
   RangeGuard.RgPass
 }
@@ -5869,11 +5879,22 @@ ct_range_perform := fn(op : u8, lv : i64, rv : i64, w : Option(str)) -> Option(i
   if op == 17 { v = ct_bound_wrap(w, unchecked (lv - rv)) }
   if op == 18 { v = ct_bound_wrap(w, unchecked (lv * rv)) }
   if op == 19 and sg { v = unchecked (lv / rv) }
-  if op == 29 and sg { v = unchecked (lv % rv) }
+  ## A signed `%` by -1 is 0, and it is COMPUTED, never divided: the host's own `idiv` faults on
+  ## exactly this pattern (Concurrency §6.1 — the remainder of the minimum by -1 is representable,
+  ## so it yields 0; #1233 was the compiler dying with SIGFPE on it).
+  if op == 29 and sg { v = ct_bound_mod(lv, rv) }
   if (op == 19 or op == 29) and not sg { v = ct_range_udiv(op, lv, rv) }
   if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 { return Option(i64).Some(v) }
   Option(i64).None
 }
+## The signed remainder of a range-bound `%`, ONE place for the -1 rule: `MIN % -1` is 0 (Concurrency
+## §6.1), and the fold must not ask the host's `idiv`, which faults on it (#1233). Any other divisor
+## is the ordinary remainder.
+ct_bound_mod := fn(lv : i64, rv : i64) -> i64 {
+  if rv == (0 - 1) { return 0 }
+  unchecked (lv % rv)
+}
+
 ## `v` wrapped to the width of a bound's recorded type; unchanged where sema recorded none (the fold
 ## then works on the native `i64` word).
 ct_bound_wrap := fn(w : Option(str), v : i64) -> i64 {

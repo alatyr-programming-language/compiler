@@ -1411,7 +1411,7 @@ ct_bound_guarded := fn(e : ptr(Expr), rr : ptr(Expr), cx : ptr(LCtx), op : u8, l
       Option(i64).Some(0)
     }
     RgMinDivNeg1 => {
-      codegen_reject(cx.src, ct_bound_site_off(e), cx.mod_s, cx.mod_l, "`comptime for` — this range bound divides the minimum of a signed type by -1. Comptime §2.6: `MIN / -1` and `MIN % -1` are a compile-time diagnostic, under `unchecked` too.", deref(cx.mar))
+      codegen_reject(cx.src, ct_bound_site_off(e), cx.mod_s, cx.mod_l, "`comptime for` — this range bound divides the minimum of a signed type by -1. Comptime §2.6: `MIN / -1`, and `MIN % -1` inside `unchecked`, are a compile-time diagnostic, under `unchecked` too.", deref(cx.mar))
       Option(i64).Some(0)
     }
     RgOverflow => {
