@@ -261,7 +261,6 @@ aarch64	test/issue800_onewords_struct_param_scalar.al	run/133	#1192
 aarch64	test/issue803_array_lit_range_ok.al	run/133	#1191
 aarch64	test/issue804_default_int_array_ok.al	run/133	#1194
 aarch64	test/issue805_exhaustive_controls.al	run/133	#577
-aarch64	test/issue806_u64_range_high_bound.al	run/133	#1190
 aarch64	test/issue913_struct_lit_nested_field.al	run/133	#577
 aarch64	test/issue986_expect_call_receiver.al	run/133	#1200
 aarch64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
@@ -285,7 +284,6 @@ aarch64	test/match_binding_root.al	run/133	#1194
 aarch64	test/match_binding_root_value.al	run/133	#1194
 aarch64	test/match_call_bind.al	run/133	#1200
 aarch64	test/match_comma_arms.al	run/133	#1190
-aarch64	test/match_mixed_arm.al	run/133	#577
 aarch64	test/module_global_init_expr.al	run/133	#1189
 aarch64	test/module_str_const.al	run/133	#1189
 aarch64	test/mutex_basic.al	run/133	#1189
@@ -486,7 +484,6 @@ aarch64	test/wat_hof_note_wellformed.al	run/133	#1196
 aarch64	test/wat_labeled_break.al	run/133	#1198
 aarch64	test/wat_labeled_continue.al	run/133	#1198
 aarch64	test/wat_labeled_value_break.al	run/133	#1202
-aarch64	test/wat_labeled_value_continue.al	run/133	#1202
 aarch64	test/wat_labeled_value_continue_defer.al	run/133	#1202
 aarch64	test/word_layout_struct_by_value_control.al	run/133	#1187
 aarch64	test/zst_and_empty_ctor.al	run/133	#713
@@ -741,7 +738,6 @@ riscv64	test/issue800_onewords_struct_param_scalar.al	run/133	#1192
 riscv64	test/issue803_array_lit_range_ok.al	run/133	#1191
 riscv64	test/issue804_default_int_array_ok.al	run/133	#1194
 riscv64	test/issue805_exhaustive_controls.al	run/133	#577
-riscv64	test/issue806_u64_range_high_bound.al	run/133	#1190
 riscv64	test/issue913_struct_lit_nested_field.al	run/133	#577
 riscv64	test/issue986_expect_call_receiver.al	run/133	#1200
 riscv64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
@@ -765,7 +761,6 @@ riscv64	test/match_binding_root.al	run/133	#1194
 riscv64	test/match_binding_root_value.al	run/133	#1194
 riscv64	test/match_call_bind.al	run/133	#1200
 riscv64	test/match_comma_arms.al	run/133	#1190
-riscv64	test/match_mixed_arm.al	run/133	#577
 riscv64	test/match_struct_value.al	run/133	#1191
 riscv64	test/module_global_init_expr.al	run/133	#1189
 riscv64	test/module_mut_global_snapshot.al	run/133	#1189
@@ -971,7 +966,6 @@ riscv64	test/wat_hof_note_wellformed.al	run/133	#1196
 riscv64	test/wat_labeled_break.al	run/133	#1198
 riscv64	test/wat_labeled_continue.al	run/133	#1198
 riscv64	test/wat_labeled_value_break.al	run/133	#1202
-riscv64	test/wat_labeled_value_continue.al	run/133	#1202
 riscv64	test/wat_labeled_value_continue_defer.al	run/133	#1202
 riscv64	test/word_layout_struct_by_value_control.al	run/133	#1187
 riscv64	test/zst_and_empty_ctor.al	run/133	#713
@@ -1221,7 +1215,6 @@ wasm	test/issue800_onewords_struct_param_scalar.al	run/134	#1192
 wasm	test/issue803_array_lit_range_ok.al	run/134	#1191
 wasm	test/issue804_default_int_array_ok.al	run/134	#1194
 wasm	test/issue805_exhaustive_controls.al	run/134	#1190
-wasm	test/issue806_u64_range_high_bound.al	run/134	#1190
 wasm	test/issue913_struct_lit_nested_field.al	run/134	#1190
 wasm	test/issue986_expect_call_receiver.al	run/134	#1200
 wasm	test/issue986_expect_multiword_value_reject.al	run/134	#1200
@@ -1237,7 +1230,6 @@ wasm	test/match_binding_root.al	run/134	#1191
 wasm	test/match_binding_root_value.al	run/134	#1191
 wasm	test/match_call_bind.al	run/134	#1186
 wasm	test/match_comma_arms.al	run/134	#1190
-wasm	test/match_mixed_arm.al	run/134	#1190
 wasm	test/match_multibind_ptr.al	run/134	#1187
 wasm	test/match_struct_value.al	run/134	#1187
 wasm	test/module_global_init_expr.al	run/134	#1204
@@ -1354,7 +1346,6 @@ wasm	test/std_time.al	run/134	#1186
 wasm	test/stdlib_surface_aliases.al	run/134	#1186
 wasm	test/stmt_call_str_arg.al	run/134	#1184
 wasm	test/stmt_call_view_arg.al	run/134	#1184
-wasm	test/store_local_ptr_ok.al	run/134	#1188
 wasm	test/str_alloc.al	run/134	#1186
 wasm	test/str_array.al	run/134	#1184
 wasm	test/str_array_elem_byte_index.al	run/134	#1184

@@ -2,7 +2,7 @@
 ## takes the address of the `.data` global (`leaq LABEL(%rip)`), and `atomic::fetch_add` on it updates
 ## the SAME cell from a separate function. Two bumps (30 + 12) accumulate to 42 (single-threaded here,
 ## but the codegen is the real atomic RMW). Exercises address-of-a-mutable-global through `ptr(...)`.
-mut CTR := 0
+mut CTR : u64 = 0
 bump := fn(n : u64) {
   p := ptr(CTR)
   atomic::fetch_add(p, n, Ordering.seq_cst)

@@ -3,7 +3,7 @@
 ## x=60: fetch_and(46)->old 60, x=44 ; fetch_or(3)->old 44, x=47 ; fetch_xor(5)->old 47, x=42.
 ## z (load) = 42; a+b+c = 60+44+47 = 151. Returns z + a + b + c - 151 = 42.
 main := fn() -> u64 {
-  mut x := 60
+  mut x : u64 = 60
   p := ptr(x)
   a := atomic::fetch_and(p, 46, Ordering.seq_cst)
   b := atomic::fetch_or(p, 3, Ordering.relaxed)

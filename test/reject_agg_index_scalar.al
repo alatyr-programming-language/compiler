@@ -5,7 +5,7 @@
 ## valid binary with a wrong result is the forbidden silent miscompile. Registered via `build_reject`.
 S := struct { a : u64, b : u64 }
 main := fn() -> u64 {
-  xs := [0; 4]
+  xs : [u64; 4] = [0; 4]
   s := S(a = 41, b = 99)
   xs[0] = s
   return xs[0]
