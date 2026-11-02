@@ -230,11 +230,11 @@ pub std_idx_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), s
       ## A Slice(P) local and parameter are both represented by an `is_ref` slot, but their element
       ## address is still the same byte-strided view that the standard-layout resolver must inspect.
       ## Keep ordinary fixed-array parameters out: they have no `Slice(T)` annotation and retain the
-      ## established word-granular ABI path. Inferred `s := a[lo..hi]` locals are distinguished by the
-      ## absence of an annotation; annotated `s : Slice(P)` parameters are recovered from their type.
+      ## established word-granular ABI path. View locals (inferred or annotated) are told apart by
+      ## `is_param` (#1182); `s : Slice(P)` parameters are recovered from their type.
       mut is_slice_view := not ent.is_ref
       if ent.is_ref {
-        is_slice_view = slot_name_is_annotated(src, ent.ns, ent.nl) == false or slice_ann_elem_span(src, ent.ns, ent.nl).n != 0
+        is_slice_view = ent.is_param == false or slice_ann_elem_span(src, ent.ns, ent.nl).n != 0
       }
       if ent.ek == 5 and ent.eek == 2 and is_slice_view and ent.snl != 0 and std_array_elem_byte_tier(decls, src, ent.sns, ent.snl, a) {
         StdIdxPath(ok = true, arr = arr, idx = idx, bo = 0, ts = ent.sns, tl = ent.snl)
@@ -307,12 +307,12 @@ pub std_idx_one := fn(arr : ptr(Expr), fs : usize, fl : usize, cx : ptr(LCtx)) -
   if var_name_span(arr).n == 0 { return r }
   ent := deref(svec_at(SlotEntry, cx.slots, index_base_entry(arr, cx.slots, cx.src)))
   ## CLAYOUT S3(d) — the direct `a[i].f` store has the same two supported roots as `std_idx_path`:
-  ## an inline fixed-array local, or an inferred `s := a[lo..hi]` Slice(P) local. A Slice local is
-  ## represented by an `is_ref` slot because its words are a {data,len} view; an annotated array
-  ## parameter is deliberately excluded so this bounded slice does not widen the by-reference array
+  ## an inline fixed-array local, or an `s := a[lo..hi]` Slice(P) local (inferred or annotated). A Slice
+  ## local is represented by an `is_ref` slot because its words are a {data,len} view; a parameter
+  ## (`is_param`, #1182) is deliberately excluded so this bounded slice does not widen the by-reference array
   ## ABI or the generic aggregate-indexing surface.
   mut is_byte_index_root := not ent.is_ref
-  if ent.is_ref { is_byte_index_root = slot_name_is_annotated(cx.src, ent.ns, ent.nl) == false }
+  if ent.is_ref { is_byte_index_root = ent.is_param == false }
   if ent.ek != 5 or ent.eek != 2 or not is_byte_index_root or ent.snl == 0 { return r }
   if not std_array_elem_byte_tier(cx.decls, cx.src, ent.sns, ent.snl, a) { return r }
   bo := layout_field_offset_bytes(cx.decls, cx.src, ent.sns, ent.snl, fs, fl, a)
@@ -1336,6 +1336,17 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
     push_int(sb, i64(ent.off * 8))
     push_str(sb, "(%rbp), %rax\n  jb 1f\n  ud2\n1:\n")
   }
+  ## CHECKED BOUNDS for a view LOCAL of any other element kind (#1274): a struct, enum, `str`, pointer
+  ## or float element (`eek` 2/3/4/7/9), inferred `xs := t[0..2]` or annotated `xs : Slice(P) = …`.
+  ## `bind_slice_slot` is the only binder of a non-parameter `ek 5` `is_ref` slot, and it always keeps
+  ## the runtime len in word 1 at `-(off*8)(%rbp)`, whatever `sns`/`snl` carry; the block above misses
+  ## these only because they spend `sns`/`snl` on the element type. Byte-element views took their own
+  ## checked path above; parameters (`is_param`) read len through their pointer below.
+  if cx.vchk and ent.ek == 5 and ent.is_ref and ent.is_param == false and ent.eek != 0 {
+    push_str(sb, "  cmpq -")
+    push_int(sb, i64(ent.off * 8))
+    push_str(sb, "(%rbp), %rax\n  jb 1f\n  ud2\n1:\n")
+  }
   ## CHECKED BOUNDS for a SLICE PARAM (`sns == 1`): the runtime len is word 1 of the {ptr,len} block the
   ## slot points to — load the block address, compare the index (in %rax) against `8(block)`. `%rcx` is a
   ## scratch here (the element math below reloads its own regs). `jb` skips on `idx < len`.
@@ -1345,9 +1356,10 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
     push_str(sb, "(%rbp), %rcx\n  cmpq 8(%rcx), %rax\n  jb 1f\n  ud2\n1:\n")
   }
   ## CHECKED BOUNDS for a STRUCT/ENUM-element SLICE PARAM. Its slot keeps the element type span for
-  ## `s[i].field`, so it cannot use the scalar slice-param `sns == 1` marker; recover param-ness from
-  ## the declared `s : Slice(T)` type and read len from the caller's {ptr,len} block.
-  if cx.vchk and ent.ek == 5 and ent.is_ref and (ent.eek == 2 or ent.eek == 3) and ent_slice_param_elem.n != 0 {
+  ## `s[i].field`, so it cannot use the scalar slice-param `sns == 1` marker; param-ness is
+  ## `is_param` (#1182), the element from the declared `s : Slice(T)`, and len is read from the
+  ## caller's {ptr,len} block. A view local of the same type is not a parameter and never reaches here.
+  if cx.vchk and ent.ek == 5 and ent.is_ref and ent.is_param and (ent.eek == 2 or ent.eek == 3) and ent_slice_param_elem.n != 0 {
     push_str(sb, "  movq -")
     push_int(sb, i64((ent.off + 1) * 8))
     push_str(sb, "(%rbp), %rcx\n  cmpq 8(%rcx), %rax\n  jb 1f\n  ud2\n1:\n")
@@ -1394,9 +1406,9 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
   ## SCALAR SLICE PARAM (`ek 5`, `is_ref`, `sns == 1`): the slot holds a POINTER to the caller's
   ## `{ptr,len}` block, so %rbx is that block address — deref ONCE MORE to the DATA pointer (block word 0)
   ## before adding the element offset. A scalar slice VIEW LOCAL has `sns == 0` and `snl == 1`, so its
-  ## slot already contains the data pointer. Keep the aggregate-element source-scan fallback below its
-  ## existing eek gate; it is deliberately unchanged for aggregate and variadic forms.
-  if ent.ek == 5 and ent.is_ref and (ent.sns == 1 or ((ent.eek == 2 or ent.eek == 3) and ent_slice_param_elem.n != 0)) { push_str(sb, "  movq (%rbx), %rbx\n") }
+  ## slot already contains the data pointer. An aggregate-element slice PARAMETER (`is_param`, #1182)
+  ## derefs too; an aggregate-element view LOCAL, annotated or not, already holds the data pointer.
+  if ent.ek == 5 and ent.is_ref and (ent.sns == 1 or (ent.is_param and (ent.eek == 2 or ent.eek == 3) and ent_slice_param_elem.n != 0)) { push_str(sb, "  movq (%rbx), %rbx\n") }
   ## element address = element-0 address - index*stride*8 (the frame grows down) → %rax
   push_str(sb, "  addq %rax, %rbx\n  movq %rbx, %rax\n")
 }
