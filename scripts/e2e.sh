@@ -12155,6 +12155,13 @@ build_reject_has issue986_expect_multiword_value_reject "only one word would arr
 ## sub-word `Vec` stored with an 8-byte stride. NON-VACUOUS: on the parent with the #395 fix (x86_64)
 ## the fixture exits 100 — the `Vec(u32)` element 1 read 0.
 run issue988_vec_ufcs_subword_instance 42
+## #1230 — the receiver's type comes from the binding the occurrence sees (Declarations §5–§6): a copy
+## of another local, a name rebound in an inner block, a fn's tail expression, a method call's result.
+## NON-VACUOUS: on the parent 19b25a58 (x86_64) the fixture exits 100.
+run issue1230_ufcs_receiver_binding 42
+## …and a receiver whose type is not read (copied out of a struct field) is refused at its line; the
+## parent built it and ran to 100.
+build_reject_has issue1230_ufcs_receiver_unread_reject "cannot be inferred from its receiver"
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.

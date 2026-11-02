@@ -155,6 +155,14 @@ Two numbers that are **not** the compiler's version: the specification revision 
   infers its type argument from the receiver was its own instance below two words, tagged by the
   receiver's name, and `size(T)` in it was 8 bytes: `push` on a `Vec(u8)`, `Vec(u16)` or `Vec(u32)`
   wrote with a word stride. It is now the same instance as `vec::push(u32, v, x)`.
+- **A UFCS call reads its receiver's type from the binding that occurrence sees (#1230).** `v.push(x)`
+  on a sub-word `Vec` still stored with an 8-byte stride on x86_64 when the receiver was copied from
+  another local (`mut v := w`) or its name was also bound in another block: the #988 lookup answered
+  only when every binding of the name agreed. Scope is lexical (Declarations §5–§6), so the binding the
+  occurrence sees now decides, including in a fn's tail expression and for a receiver initialised by a
+  method call (`a := r1.ok()`). A receiver whose type is still not read (copied out of a struct field,
+  a `for` or match binding) is refused at its line instead of guessing; `push(u32, v, x)` stays
+  expressible.
 
 ## 0.2.21 — 2026-11-01
 
