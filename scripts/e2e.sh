@@ -12184,6 +12184,8 @@ run issue988_vec_ufcs_subword_instance 42
 ## (Types §4.5, Stdlib appendix §6); they were the built-in index over the handle's own words.
 ## NON-VACUOUS: on the parent `7bb90a3a` (x86_64) the fixture exits 100 — `v[0]` did not read 40.
 run issue987_vec_index_ops 42
+## PLANTED (#1127 bisection proof) — DO NOT MERGE: states 42, the program returns 7.
+run planted_red_bisect 42
 
 ## #987 — `v.at(i)` / `v.index_set(i, x)` / `v.index_range(lo, hi)` infer `T` through the auto-ref
 ## `ptr(Vec(T))` parameter. NON-VACUOUS: on the parent `7bb90a3a` (x86_64) the build is refused —
