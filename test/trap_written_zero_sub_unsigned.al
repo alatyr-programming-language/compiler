@@ -16,3 +16,4 @@ main := fn() -> i64 {
   if y == 0 { return 7 }
   return 9
 }
+## expect: trap

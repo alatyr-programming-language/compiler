@@ -22,3 +22,4 @@ main := fn() -> u64 {
   if a - b != 10 { return 3 }
   return 42
 }
+## expect: run 42
