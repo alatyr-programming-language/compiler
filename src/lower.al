@@ -13386,6 +13386,24 @@ emit_deref_load := fn(in out sb : strbuf::StrBuf, w : usize, sg : bool) {
   if w != 1 and w != 2 and w != 4 { push_str(sb, "  movq (%rax), %rax\n") }
 }
 
+## #1238 — the ELEMENT LOAD of a `Slice(T)` view index: the element's own width, at the element's own
+## stride. The view's base pointer is in %rax and the index in %r8 (the shape both `Expr::Index`'s
+## slice arm and `emit_slice_index_addr` leave), so the scale IS the width — x86_64 scales by 1, 2,
+## 4 and 8, which are exactly the sub-word and word element sizes. The byte tier keeps the historical
+## `(%rax,%r8)` spelling and the word tier the historical `movq`, so an element that was right before
+## emits byte-identical GAS; only a 2- or 4-byte element changes, which was wrong before. Standalone
+## emit fn with FLAT `if`s, the `emit_deref_load` idiom (an else-if chain inline in the huge emit arm
+## mis-lowers).
+emit_slice_elem_load := fn(in out sb : strbuf::StrBuf, w : usize, sg : bool) {
+  if w == 1 and sg { push_str(sb, "  movsbq (%rax,%r8), %rax\n") }
+  if w == 1 and not sg { push_str(sb, "  movzbq (%rax,%r8), %rax\n") }
+  if w == 2 and sg { push_str(sb, "  movswq (%rax,%r8,2), %rax\n") }
+  if w == 2 and not sg { push_str(sb, "  movzwq (%rax,%r8,2), %rax\n") }
+  if w == 4 and sg { push_str(sb, "  movslq (%rax,%r8,4), %rax\n") }
+  if w == 4 and not sg { push_str(sb, "  movl (%rax,%r8,4), %eax\n") }
+  if w != 1 and w != 2 and w != 4 { push_str(sb, "  movq (%rax,%r8,8), %rax\n") }
+}
+
 ## Emit the `deref` STORE move (%rbx through the %rax pointer), narrowed to a KNOWN sub-word width
 ## (`movb`/`movw`/`movl`) or the full `movq`. Standalone emit fn (see `emit_deref_load`).
 emit_deref_store := fn(in out sb : strbuf::StrBuf, w : usize) {
@@ -21656,9 +21674,16 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           ## BYTE element (`Slice(u8)` — e.g. `strmap`/`hash_bytes` byte keys): load one byte at
           ## `ptr + i` (stride 1), zero-extended — NOT a word at `ptr + i*8` (which read 8 bytes per
           ## element, past the buffer, garbaging the hash + running off the end).
-          push_str(sb, "  popq %rax\n  movzbq (%rax,%r8), %rax\n  pushq %rax\n")
+          push_str(sb, "  popq %rax\n")
+          emit_slice_elem_load(sb, 1, slr.sg)
+          push_str(sb, "  pushq %rax\n")
         } else {
-          push_str(sb, "  popq %rax\n  movq (%rax,%r8,8), %rax\n  pushq %rax\n")
+          ## #1238 — the element's OWN width, not always the word: a `Slice(u16)` element is 2 bytes
+          ## at stride 2, a `Slice(u32)` 4 at stride 4, a `Slice(bool)` 1 at stride 1. The word load
+          ## this replaced read the next elements' bytes into the local's high bits (Types §6.4).
+          push_str(sb, "  popq %rax\n")
+          emit_slice_elem_load(sb, slr.ew, slr.sg)
+          push_str(sb, "  pushq %rax\n")
         }
         return
       }
@@ -23043,9 +23068,33 @@ standard_byte_field_eek := fn(base : ptr(Expr), cx : ptr(LCtx)) -> u8 {
 ## Indexing one derefs its `ptr` field (element `k` at `ptr + k*8`, the arena's UPWARD element
 ## layout that `push` writes) — NOT the struct's own frame words. `ok`/`off`/`is_ref` drive the
 ## `Expr::Index` slice arm; a non-Slice base yields `ok = false` (falls to the array-index path).
-SlRef := struct { ok : bool, off : usize, is_ref : bool, is_byte : bool }
+## #1238 — `ew` is the element's own BYTE WIDTH (1 / 2 / 4, else the 8-byte word) and `sg` says
+## whether the element's interpretation is signed. Types §6.4: element access is `base + i × stride`
+## with the stride being `T`'s size rounded up to its alignment, and Types §7 makes `[T]` a pair over
+## a contiguous run of `T` — so a `Slice(u16)` steps 2 bytes and its read is a 2-byte load. Before
+## this the view carried only "is it a byte", and every other element kind stepped and loaded a full
+## word: `t[0]` of a `Slice(u16)` answered 5 + (7 << 16) (issue #1238, the container matrix's
+## `vec.range.*` and `vec.for_in.*` cells). `sg` follows Types §3.2 — signedness lives in the
+## interpretation, so an `i16` element SIGN-extends and a `u16` one ZERO-extends.
+## Does this element text name a type whose byte width this backend KNOWS? A type PARAMETER (`T`, `V`)
+## does not, and that is what the slot span of a local bound from a generic call carries: the span
+## points at the callee's declared `Slice(T)`, so its type-arg is `T` and the width is invisible there
+## (#1238). The binding's own annotation is the concrete text, and `slice_ann_elem_span` reads it;
+## this is the test that decides which of the two to believe, so a slot span that already names a
+## known type keeps its answer untouched.
+slice_elem_w_known := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 0 { return false }
+  t := str_at((src + s), n)
+  if t == "u8" or t == "i8" or t == "bits8" or t == "bool" { return true }
+  if t == "u16" or t == "i16" or t == "bits16" { return true }
+  if t == "u32" or t == "i32" or t == "bits32" or t == "char" or t == "f32" { return true }
+  if t == "u64" or t == "i64" or t == "usize" or t == "isize" or t == "f64" or t == "bits64" { return true }
+  false
+}
+
+SlRef := struct { ok : bool, off : usize, is_ref : bool, is_byte : bool, ew : usize, sg : bool }
 slice_var_ref := fn(base : ptr(Expr), cx : ptr(LCtx)) -> SlRef {
-  mut res := SlRef(ok = false, off = 0, is_ref = false, is_byte = false)
+  mut res := SlRef(ok = false, off = 0, is_ref = false, is_byte = false, ew = 8, sg = false)
   vn := var_name_span(base)
   if vn.n != 0 {
     ei := entry_of(cx.slots, cx.src, vn.s, vn.n)
@@ -23062,12 +23111,35 @@ slice_var_ref := fn(base : ptr(Expr), cx : ptr(LCtx)) -> SlRef {
         ## word-stride path. Keep the full span in the slot for layout, but strip only for
         ## type-argument recovery here.
         eta := typearg_at(cx.src, bn.s, bn.n, 0)
-        mut isb := false
-        if eta.n != 0 {
-          etx := str_at((cx.src + eta.s), eta.n)
-          if etx == "u8" or etx == "i8" or etx == "bits8" { isb = true }
+        mut es : usize = eta.s
+        mut en : usize = eta.n
+        ## #1238 — the slot span is often only the HEAD name `Slice`, with no `(T)` after it: that is
+        ## how an annotated local bound from a generic call (`t : Slice(u16) = vec::index_range(u16, …)`)
+        ## is recorded, and it is why the element width was invisible here and the word stride was
+        ## chosen for every element kind. Recovered from the DECLARATION the same way the param and
+        ## field paths do — `slice_ann_elem_span`, x86_64's one home for "the element text of the
+        ## declared `name : Slice(<…>)`" (used at :6435, :7881, :13656) — so the annotation, which is
+        ## what the programmer wrote, stays the arbiter of the element's width.
+        if slice_elem_w_known(cx.src, es, en) == false {
+          aes := slice_ann_elem_span(cx.src, ent.ns, ent.nl)
+          if slice_elem_w_known(cx.src, aes.s, aes.n) { es = aes.s ; en = aes.n }
         }
-        res = SlRef(ok = true, off = ent.off, is_ref = ent.is_ref, is_byte = isb)
+        mut isb := false
+        mut ew : usize = 8
+        mut sg := false
+        if en != 0 {
+          etx := str_at((cx.src + es), en)
+          if etx == "u8" or etx == "i8" or etx == "bits8" { isb = true }
+          ## #1238 — the element's own width and interpretation, from the SAME one-home width query
+          ## the deref and field paths use (`lower_layout::scalar_byte_size`, which answers 8 for a
+          ## word-sized or unresolved name, so a `Slice(u64)`/`Slice(str)` element steps and loads a
+          ## word exactly as before). A `f32` element keeps the word: its bits live in the low half of
+          ## an 8-byte container on this backend, and narrowing the load would drop them.
+          ew = scalar_byte_size(cx.src, es, en)
+          if etx == "f32" { ew = 8 }
+          sg = str_at((cx.src + es), 1) == "i"
+        }
+        res = SlRef(ok = true, off = ent.off, is_ref = ent.is_ref, is_byte = isb, ew = ew, sg = sg)
       }
     }
     ## A `str` / str-VIEW local (`ek == 4` — a `{ptr, len}` binding from a literal, `bytes(x)`,
@@ -23079,7 +23151,7 @@ slice_var_ref := fn(base : ptr(Expr), cx : ptr(LCtx)) -> SlRef {
     ## `bytes(x)[i]` form (handled by the `Index` arm's `bytes_view_arg` case), never a str LOCAL, so
     ## this is fixpoint-neutral.
     else if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 4 {
-      res = SlRef(ok = true, off = ent.off, is_ref = ent.is_ref, is_byte = true)
+      res = SlRef(ok = true, off = ent.off, is_ref = ent.is_ref, is_byte = true, ew = 1, sg = false)
     }
   }
   res
@@ -23128,6 +23200,11 @@ emit_slice_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbu
     push_str(sb, "  addq %r8, %rax\n")
   } else if slice_var_is_str_elem(base, cx) {
     push_str(sb, "  imulq $16, %r8\n  addq %r8, %rax\n")
+  } else if slr.ew != 8 {
+    ## #1238 — a 2- or 4-byte element steps by its own width, not by the word (Types §6.4).
+    push_str(sb, "  imulq $")
+    push_int(sb, i64(slr.ew))
+    push_str(sb, ", %r8\n  addq %r8, %rax\n")
   } else {
     push_str(sb, "  imulq $8, %r8\n  addq %r8, %rax\n")
   }
@@ -23137,6 +23214,19 @@ emit_slice_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbu
 slice_base_is_byte := fn(base : ptr(Expr), cx : ptr(LCtx)) -> bool {
   slr := slice_var_ref(base, cx)
   slr.ok and slr.is_byte
+}
+
+## #1238 — the element BYTE WIDTH a `Slice(T)` view index store must use (0 = `base` is not such a
+## view). The generic tail of the element write is word-sized and would clobber the seven adjacent
+## bytes of a `Slice(u16)` element; the byte tier already had its own predicate, and this is that
+## question generalised to the element's own width (Types §6.4), so the store pairs with the stride
+## `emit_slice_index_addr` computed. A `str` element is the two-word `{ptr, len}` pair and keeps the
+## word store.
+slice_base_elem_width := fn(base : ptr(Expr), cx : ptr(LCtx)) -> usize {
+  slr := slice_var_ref(base, cx)
+  if slr.ok == false { return 0 }
+  if slice_var_is_str_elem(base, cx) { return 8 }
+  slr.ew
 }
 
 ## Does the local/param variable `[s,n)` carry a mixed-kind tuple `tcomps` layout (i.e. it is a
@@ -26570,6 +26660,12 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             ## a `for c in bytes(s)` iterable is a BYTE slice (u8 elements, stride 1) — read each element
             ## with `movzbq` at stride 1, not a word load at stride 8. (Detected on the `bytes(…)` call.)
             mut byte_elem := is_nonvar and is_bytes_call(flo, cx.src)
+            ## #1238 — the iterable element's OWN width and signedness, the same rule `slice_var_ref`
+            ## applies to `s[i]`: a `for x in v.iter()` over a `Slice(u16)` steps 2 bytes and loads 2
+            ## bytes, not a word at stride 8 (Types §6.4). 8 = the word, unchanged for every element the
+            ## branch already read correctly.
+            mut elem_w : usize = 8
+            mut elem_sg := false
             vslot := slot_of(cx.slots, cx.src, fns, fnl)
             mut islot := vslot + 1   ## hidden loop index; moved to vslot+agg_stride for an aggregate loop var
             ## scalar-word (eek 0) and FLOAT (eek 9) element arrays: both keep the element COUNT in `snl`
@@ -26687,6 +26783,13 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## Slice element span here and remain on their existing word/aggregate branches.
               if bent.is_ref and bent_slice_param_elem.n != 0 and str_at((cx.src + bent_slice_param_elem.s), bent_slice_param_elem.n) == "u8" {
                 byte_elem = true
+              }
+              ## #1238 — the element's width and interpretation, from the same annotation span, when it names
+              ## a type this backend knows the width of (a type PARAMETER keeps the word, as before).
+              if bent_slice_param_elem.n != 0 and slice_elem_w_known(cx.src, bent_slice_param_elem.s, bent_slice_param_elem.n) {
+                elem_w = scalar_byte_size(cx.src, bent_slice_param_elem.s, bent_slice_param_elem.n)
+                elem_sg = str_at((cx.src + bent_slice_param_elem.s), 1) == "i"
+                if str_at((cx.src + bent_slice_param_elem.s), bent_slice_param_elem.n) == "f32" { elem_w = 8 }
               }
               if is_agg_arr {
                 ## a `[Pt; N]` array of structs/enums: N is not in the slot (`snl` holds the element type
@@ -26927,6 +27030,15 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             if byte_elem {
               ## x = *(u8*)(dataptr + __i)  — byte element, stride 1, zero-extended
               push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,1), %rax\n  movzbq (%rax), %rax\n  movq %rax, -")
+            } else if elem_w != 8 {
+              ## #1238 — x = *(T*)(dataptr + __i * sizeof(T)): the element's OWN stride and load width
+              ## (`movzwq`/`movswq`/`movl`/`movslq` through the one `emit_deref_load` home). A word
+              ## element keeps the branch below, byte-identical.
+              push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,")
+              push_int(sb, i64(elem_w))
+              push_str(sb, "), %rax\n")
+              emit_deref_load(sb, elem_w, elem_sg)
+              push_str(sb, "  movq %rax, -")
             } else {
               ## x = *(dataptr + __i * 8)  — scalar/word element, stride 8
               push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,8), %rax\n  movq (%rax), %rax\n  movq %rax, -")

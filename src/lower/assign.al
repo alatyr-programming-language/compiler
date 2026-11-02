@@ -2358,13 +2358,14 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
       iga_done = true
     }
   }
-  if iga_done == false and slice_base_is_byte(ib, cx) {
-    ## BYTE Slice LOCAL/PARAM element write — pair the byte-granular address with a byte-width
-    ## store. The generic tail is word-sized and would clobber the seven adjacent bytes.
+  if iga_done == false and slice_base_elem_width(ib, cx) != 0 {
+    ## #1238 — a `Slice(T)` view element write pairs the address `emit_index_addr` just computed with
+    ## a store of the ELEMENT's own width. The generic tail is word-sized and would clobber the seven
+    ## adjacent bytes of a `Slice(u16)` element (the byte tier had this pairing already; Types §6.4).
     emit_store_value(iv, fidt, sb, cx, a, nl)
     emit_index_addr(ib, ii, sb, cx, a, nl)
     push_str(sb, "  popq %rbx\n")
-    emit_deref_store(sb, 1)
+    emit_deref_store(sb, slice_base_elem_width(ib, cx))
     iga_done = true
   }
   if iga_done == false {
