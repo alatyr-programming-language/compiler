@@ -276,6 +276,7 @@ aarch64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
 aarch64	test/issue987_vec_index_ops.al	run/133	#1200
 aarch64	test/issue987_vec_ufcs_autoref.al	run/133	#1200
 aarch64	test/issue988_vec_ufcs_subword_instance.al	run/133	#1200
+aarch64	test/issue992_alloc_with_match_arm.al	run/133	#577
 aarch64	test/iter_for_chars.al	run/133	#1184
 aarch64	test/iter_for_split.al	run/133	#1184
 aarch64	test/lambda_capture.al	run/133	#1195
@@ -773,6 +774,7 @@ riscv64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
 riscv64	test/issue987_vec_index_ops.al	run/133	#1200
 riscv64	test/issue987_vec_ufcs_autoref.al	run/133	#1200
 riscv64	test/issue988_vec_ufcs_subword_instance.al	run/133	#1200
+riscv64	test/issue992_alloc_with_match_arm.al	run/133	#577
 riscv64	test/iter_for_chars.al	run/133	#1184
 riscv64	test/iter_for_split.al	run/133	#1184
 riscv64	test/lambda_capture.al	run/133	#1195
@@ -1270,6 +1272,7 @@ wasm	test/issue986_expect_multiword_value_reject.al	run/134	#1200
 wasm	test/issue987_vec_index_ops.al	run/134	#1186
 wasm	test/issue987_vec_ufcs_autoref.al	run/134	#1186
 wasm	test/issue988_vec_ufcs_subword_instance.al	run/134	#1186
+wasm	test/issue992_alloc_with_match_arm.al	run/134	#1190
 wasm	test/iter_for_chars.al	run/134	#1184
 wasm	test/iter_for_split.al	run/134	#1184
 wasm	test/linked_deref.al	run/134	#1205
