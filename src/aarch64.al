@@ -3916,7 +3916,9 @@ emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out
       ## iff x0 == -x2; all three magnitudes (128, 32768, 2147483648) are single `mov` wide
       ## immediates (`imm16 << 0` / `<< 16`). The zero case keeps the previous bytes exactly, so
       ## every native-width divide is unchanged. `%` (29) never sets `dvmin`: `MIN % -1` is 0.
-      if dsigned {
+      ## `%` owes no arm at all (§6.1, #1398): `sdiv` + `msub` of `MIN` by `-1` is `MIN - MIN * -1`,
+      ## which wraps to 0 without a fault.
+      if dsigned and op == 19 {
         if dvmin == 0 { push_str(sb, "  cmn x1, #1\n  b.ne 1f\n  negs x2, x0\n  b.vc 1f\n  brk #0 // div_overflow\n1:\n") }
         else {
           push_str(sb, "  cmn x1, #1\n  b.ne 1f\n  mov x2, #")

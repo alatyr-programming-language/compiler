@@ -106,11 +106,20 @@ ib_bin_kind := fn(b : AstBin) -> AstBinK {
     BBand | BBor | BBxor => { AstBinK.BkBits }
   }
 }
-## Does the operator divide (and so owe the zero and `MIN / -1` checks, §4)?
+## Does the operator divide (and so owe the zero check, §4)?
 ib_bin_divides := fn(b : AstBin) -> bool {
   match b {
     BDiv | BRem => { true }
     BAdd | BSub | BMul | BBand | BBor | BBxor | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { false }
+  }
+}
+## Does the operator owe the signed `MIN / -1` check? Only the quotient: `MIN % -1` is `0`, which is
+## representable, so it is not in the checked-overflow set (Concurrency §6.1, #1398). `rem·s·chk` itself
+## yields `0` for a `-1` divisor without dividing (docs/ir.md §3.4).
+ib_bin_div_overflows := fn(b : AstBin) -> bool {
+  match b {
+    BDiv => { true }
+    BRem | BAdd | BSub | BMul | BBand | BBor | BBxor | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { false }
   }
 }
 
@@ -966,8 +975,9 @@ ib_int_ty := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> Option(IbKS) {
 
 ## Integer arithmetic. The result type is sema's record of `e`. A 64-bit op is emitted at its type; a
 ## narrow one widens its operands, operates at 64 bits, and narrows back (`fit` checked / `ext`
-## wrapping, V3). Checked `+ - *` trap `overflow`; `/` and `%` trap `div_zero`, and `div_overflow` for a
-## signed `MIN / -1` (§4). Inside `unchecked`, `+ - *` wrap and `/ %` are the hardware op (D1, CG-7).
+## wrapping, V3). Checked `+ - *` trap `overflow`; `/` and `%` trap `div_zero`, and `/` traps `div_overflow`
+## for a signed `MIN / -1` (§4); a checked `MIN % -1` is `0` (Concurrency §6.1). Inside `unchecked`,
+## `+ - *` wrap and `/ %` are the hardware op (D1, CG-7).
 ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
   ## A literal-only `+ - *` is a comptime number (Types §2.3): its exact value takes the type the
   ## context gave the expression, never each literal's. `a : i8 = 0 - 128` is -128, although sema types
@@ -1000,7 +1010,7 @@ ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : As
     oz := o_imm(0)
     i1 := e_cmp(f, a, Cc.CcEq, Sgn.SgNone, Kty.KI64, z, orv, oz)
     i2 := e_trap_if(f, a, z, TrapKind.TkDivZero, sp, true)
-    if sgn_eq(k.sg, Sgn.SgS) and kty_eq(k.ty, Kty.KI64) {
+    if sgn_eq(k.sg, Sgn.SgS) and kty_eq(k.ty, Kty.KI64) and ib_bin_div_overflows(b) {
       ## `MIN / -1` overflows only at the full width: a narrow quotient is narrowed (and checked) below.
       m1 := ib_fresh(bp, a, ib_bool_ks())
       m2 := ib_fresh(bp, a, ib_bool_ks())
