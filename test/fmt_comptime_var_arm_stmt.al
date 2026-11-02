@@ -3,7 +3,9 @@
 ## #1369; `alatyr fmt` refused it with a panic, so the source formatting walk failed on derive.al.
 ## The four `eq` calls in `main`, in order: same variant + same payload (true, +40); same variant +
 ## different payload (false); different variant (false); the SECOND variant (true, +2). 42 iff every
-## one of them answers correctly.
+## one of them answers correctly. The directive sits in this header: fmt deletes a comment after the
+## last declaration (#1178).
+## expect: run 42
 E := enum { A(u64), B(u64) }
 
 eq := fn(T : type, a : T, b : T) -> bool {
@@ -36,4 +38,3 @@ main := fn() -> u64 {
   if eq(E, b5, b5) { r = r + 2 }
   return r
 }
-## expect: run 42
