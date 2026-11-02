@@ -131,7 +131,7 @@ Two numbers that are **not** the compiler's version: the specification revision 
   A scalar has no fields (Modules §2, Types §6.1), so `check` now refuses it with a located diagnostic.
   A global owner resolves in the module of the access, and a qualified owner (`z::cfg.x`) is left to
   the module it names. Programs that relied on the old behaviour were invalid. A local or parameter typed
-  `u16`, `i16`, `i8`, `char` or a float is not decided yet (#703 stays open for it).
+  `u16`, `i16`, `i8`, `char` or a float is covered by the later #703 entry below.
 - **A `Vec` of a sub-word element no longer reads its neighbours into the value (#395).** Inside a
   generic function, `deref(p)` with `p : ptr(mut T)` used 8 bytes whatever `T` was, so `at`, `try_at`,
   `get` and `set` on a `Vec(u8)`, `Vec(u16)`, `Vec(u32)` or `Vec(i8)` read the next elements into the
@@ -165,6 +165,14 @@ Two numbers that are **not** the compiler's version: the specification revision 
   returning `Slice(str)` bound each element as one word, or copied it from the parameter's own
   `{ptr, len}` block. The program then ran on with wrong strings and no diagnostic. Iterating a
   range of a `Slice(str)` parameter (`for s in xs[1..n]`) is still wrong, tracked by #1180.
+- **More scalar owners of `.` are compile errors (#703).** A field access on a local or parameter typed
+  `u16`, `i16`, `i8`, `char`, `f32` or `f64`, on an unannotated local bound to an integer or to a call
+  returning one, on an unannotated module global such as `G := 5`, and on a qualified scalar global
+  (`z::n.x`, read or store) compiled and read a fabricated `0` or dropped the store. A tuple position
+  `x.0` on a scalar passed `check` while `build` stopped with an internal message. All are now refused
+  at `check` with the located "a scalar has no field to name" diagnostic (Modules §2, Types §6.1), which
+  also replaces the misleading `unbound name` that `if b.a {` used to report. An unannotated local bound
+  to a float literal (`x := 2.5`) is still accepted (#703).
 
 ## 0.2.21 — 2026-11-01
 
