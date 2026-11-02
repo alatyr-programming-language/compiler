@@ -11,3 +11,4 @@ pick := fn(c : bool) -> u64 {
 main := fn() -> u64 {
   pick(true)
 }
+## expect: reject "the returned value is an integer of the opposite signedness" "at line 8 in issue942_return_signedness_reject"

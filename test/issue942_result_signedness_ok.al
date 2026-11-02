@@ -19,3 +19,4 @@ main := fn() -> u64 {
   if neg(0 - 5) != 0 - 5 { return 1 }
   r
 }
+## expect: run 42
