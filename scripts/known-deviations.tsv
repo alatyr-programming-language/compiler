@@ -255,6 +255,7 @@ aarch64	test/issue806_u64_range_high_bound.al	run/133	#1190
 aarch64	test/issue913_struct_lit_nested_field.al	run/133	#577
 aarch64	test/issue986_expect_call_receiver.al	run/133	#1200
 aarch64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
+aarch64	test/issue992_alloc_with_match_arm.al	run/133	#577
 aarch64	test/iter_for_chars.al	run/133	#1184
 aarch64	test/iter_for_split.al	run/133	#1184
 aarch64	test/lambda_capture.al	run/133	#1195
@@ -716,6 +717,7 @@ riscv64	test/issue806_u64_range_high_bound.al	run/133	#1190
 riscv64	test/issue913_struct_lit_nested_field.al	run/133	#577
 riscv64	test/issue986_expect_call_receiver.al	run/133	#1200
 riscv64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
+riscv64	test/issue992_alloc_with_match_arm.al	run/133	#577
 riscv64	test/iter_for_chars.al	run/133	#1184
 riscv64	test/iter_for_split.al	run/133	#1184
 riscv64	test/lambda_capture.al	run/133	#1195
@@ -1177,6 +1179,7 @@ wasm	test/issue806_u64_range_high_bound.al	run/134	#1190
 wasm	test/issue913_struct_lit_nested_field.al	run/134	#1190
 wasm	test/issue986_expect_call_receiver.al	run/134	#1200
 wasm	test/issue986_expect_multiword_value_reject.al	run/134	#1200
+wasm	test/issue992_alloc_with_match_arm.al	run/134	#1190
 wasm	test/iter_for_chars.al	run/134	#1184
 wasm	test/iter_for_split.al	run/134	#1184
 wasm	test/linked_deref.al	run/134	#1205
