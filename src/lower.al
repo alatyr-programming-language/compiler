@@ -172,7 +172,15 @@ ecallee_is := ast::ecallee_is
 ## aggregate's word 0 — `leaq` its frame address). The pointer word is one slot; the caller
 ## passes the address (a local's word-0 frame address via `leaq`, or another by-ref param's
 ## pointer threaded through). See `emit_agg_base_addr` / `emit_fn`'s param binding.
-pub SlotEntry := struct { ns : usize, nl : usize, off : usize, sns : usize, snl : usize, ek : u8, estride : usize, eek : u8, is_ref : bool, tmod_s : usize, tmod_l : usize }
+## `is_param` marks an entry `bind_param` created: a PARAMETER of the function being lowered. A
+## `Slice(T)` parameter's slot holds a POINTER to the caller's `{ptr, len}` block, while a view LOCAL
+## (`xs := t[0..2]` or `xs : Slice(P) = t[0..2]`) holds the pair itself; for an aggregate element both
+## carry the element type span in `sns`/`snl`, so only this field tells them apart (#1182). It used
+## to be guessed from the source text (an annotated name was taken for a parameter), which read an
+## annotated view local as a parameter. Every other binder leaves it at its declared default.
+## `tmod_s`/`tmod_l` declare the 0 that the many constructions omitting them rely on (Types §9.4: an
+## omitted field takes its declared default).
+pub SlotEntry := struct { ns : usize, nl : usize, off : usize, sns : usize, snl : usize, ek : u8, estride : usize, eek : u8, is_ref : bool, tmod_s : usize = 0, tmod_l : usize = 0, is_param : bool = false }
 
 ## `SVec` — a `SlotEntry` vector backed by a plain bump arena (the lean replacement for
 ## `alloc::SVec` fixpoint). The self-host lower cannot compile the
@@ -1650,12 +1658,12 @@ slice_view_cmp_kind := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize
   ## A STRUCT / ENUM / `str` / pointer-element slice carries the ELEMENT TYPE SPAN in `sns`/`snl`
   ## instead of that marker, so it is told apart from a by-reference fixed-ARRAY param (`snl == 0`,
   ## whose by-value block the tuple/array route owns) exactly the way `emit_str_pair` does: either a
-  ## declared `s : Slice(T)` PARAM, or an INFERRED `s := arr[lo..hi]` LOCAL. Its elements are
+  ## declared `s : Slice(T)` PARAM, or a view LOCAL (`is_param` false, #1182). Its elements are
   ## multi-word aggregates whose padding/unused payload words are indeterminate, so word-wise
   ## equality is not the answer — fail loud.
   if ent.eek == 2 or ent.eek == 3 or ent.eek == 4 or ent.eek == 7 {
     if slice_ann_elem_span(cx.src, ent.ns, ent.nl).n != 0 { return 2 }
-    if slot_name_is_annotated(cx.src, ent.ns, ent.nl) == false { return 2 }
+    if ent.is_param == false { return 2 }
   }
   0
 }
@@ -6312,13 +6320,11 @@ slice_arr_espan := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan 
 ## Recover the element type from a PARAMETER written `name : Slice(T)` without widening
 ## `SlotEntry`/`LCtx`. The parser stores generic parameter types as the bare head (`Slice`), so this
 ## source scan supplies the erased `T` where the lower needs aggregate stride/field metadata.
-## Is the binding at name span `s`/`n` an ANNOTATED declaration (`name : T` — a PARAM, or any typed
-## binding) rather than an inferred LOCAL (`name := <value>`)? A source-scan past the name: the next
-## non-space byte is `:` AND the one after it is not `=`. Used to tell a struct/enum-element slice
-## LOCAL (`s := arr[lo..hi]` — its slot words hold {data ptr, len} DIRECTLY) from a slice / array
-## PARAM (whose slot holds a POINTER to the caller's block), which the slot entry alone cannot
-## distinguish for an aggregate element (both carry the element TYPE span in `sns`/`snl`, so the
-## scalar-element `snl == 1 && sns == 0` marker is unavailable). Same source-scan technique as
+## Is the binding at name span `s`/`n` an ANNOTATED declaration (`name : T`, a parameter or a typed
+## local) rather than an inferred one (`name := <value>`)? A source-scan past the name: the next
+## non-space byte is `:` AND the one after it is not `=`. It answers a question about the SPELLING
+## only. Whether a slot is a parameter is `SlotEntry.is_param` (#1182): a typed local
+## `xs : Slice(P) = t[0..2]` is annotated and is not a parameter. Same source-scan technique as
 ## `slice_ann_elem_span` / `local_is_mut`.
 slot_name_is_annotated := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   mut p := s + n
@@ -6376,7 +6382,7 @@ slice_ann_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
 ## element data; there is no len word), so it must be excluded. A scalar/float/str-element slice is
 ## told apart by the `snl == 1` runtime-len marker (an array param records `snl == 0`); a
 ## struct/enum/ptr-element slice spends `sns`/`snl` on the element TYPE span instead, so it is told
-## apart by being either an INFERRED local (`s := arr[lo..hi]`, unannotated) or an annotation that
+## apart by being either a view LOCAL (`is_param` false, #1182) or a parameter whose annotation
 ## source-scans to a real `Slice(…)` / `...T` — the same discrimination `emit_str_pair` already uses
 ## on the read side, so a Var this reports as a view is exactly a Var it can emit as a pair.
 view_var_kind := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> u8 {
@@ -6387,7 +6393,7 @@ view_var_kind := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> u8 {
   if ent.ek == 4 { return 4 }
   if ent.ek == 5 and ent.is_ref {
     if ent.eek == 2 or ent.eek == 3 or ent.eek == 7 {
-      if slot_name_is_annotated(src, ent.ns, ent.nl) == false { return 5 }
+      if ent.is_param == false { return 5 }
       if slice_ann_elem_span(src, ent.ns, ent.nl).n != 0 { return 5 }
     } else if ent.snl == 1 { return 5 }
   }
@@ -6408,7 +6414,7 @@ view_dest_is_local := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usiz
   if ent.ek == 5 and ent.is_ref {
     if ent.snl == 1 and ent.sns == 0 { return true }
     if ent.eek == 2 or ent.eek == 3 or ent.eek == 7 {
-      if slot_name_is_annotated(src, ent.ns, ent.nl) == false { return true }
+      if ent.is_param == false { return true }
     }
   }
   false
@@ -6858,9 +6864,9 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
       ## element TYPE span in `sns`/`snl` instead of the `snl == 1` runtime-len marker — so it must take
       ## the DIRECT two-word read too. Without it `s.len()` double-deref'd and returned `8(data_ptr)` =
       ## the first element's SECOND word (a silent WRONG length). A slice/array PARAM (whose slot holds a
-      ## POINTER to the caller's {ptr,len} block) is told apart by its `name : T` ANNOTATION — the slot
-      ## entry alone cannot distinguish the two — and keeps the by-ref branch below (byte-identical).
-      slice_view_local := ent.ek == 5 and ent.is_ref and (ent.eek == 2 or ent.eek == 3) and slot_name_is_annotated(cx.src, ent.ns, ent.nl) == false
+      ## POINTER to the caller's {ptr,len} block) is told apart by `is_param` (#1182; an annotated
+      ## `s : Slice(P) = …` local is a local) and keeps the by-ref branch below.
+      slice_view_local := ent.ek == 5 and ent.is_ref and (ent.eek == 2 or ent.eek == 3) and ent.is_param == false
       if (ent.ek == 5 and ent.is_ref and ent.snl == 1 and ent.sns == 0) or slice_view_local {
         ## a TYPED ARRAY-SLICE local VIEW (§4, `sns == 0`): word 0 = the data pointer, word 1 = the runtime
         ## len — both stored directly in frame slots (the slice's len is materialized, not derived). Emit
@@ -20394,8 +20400,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           ## `sns`/`snl` (so `s[i].field` resolves), so it matches neither marker above and fell to the
           ## by-ref double-deref: `s.len` read `8(data_ptr)` = the first element's SECOND word (a silent
           ## WRONG length — 2 for a `[Pt; 3]` slice of 3). A slice/array PARAM keeps the double-deref, and
-          ## is told apart by its `name : T` ANNOTATION (the slot entry alone cannot distinguish them).
-          if se.ek == 5 and se.is_ref and (se.eek == 2 or se.eek == 3) and slot_name_is_annotated(cx.src, se.ns, se.nl) == false { sfref = false }
+          ## is told apart by `is_param` (#1182), whether or not the local is annotated.
+          if se.ek == 5 and se.is_ref and (se.eek == 2 or se.eek == 3) and se.is_param == false { sfref = false }
         }
       }
       ## `g.name.ptr` / `g.name.len` — `.ptr`/`.len` on a str FIELD of a struct (base is `g.name`, a
@@ -25479,7 +25485,7 @@ emit_st_comp_for_range := fn(cst : ptr(mut Stmt), rvs : usize, rvl : usize, rlo 
             aent := deref(svec_at(SlotEntry, cx.slots, aei))
             if lower_ctx::streq(cx.src, aent.ns, aent.nl, vsp.s, vsp.n) {
               asv := svec_len(cx.slots)
-              svec_push(deref(cx.slots), SlotEntry(ns = rvs, nl = rvl, off = aent.off, sns = aent.sns, snl = aent.snl, ek = aent.ek, estride = aent.estride, eek = aent.eek, is_ref = aent.is_ref, tmod_s = aent.tmod_s, tmod_l = aent.tmod_l))
+              svec_push(deref(cx.slots), SlotEntry(ns = rvs, nl = rvl, off = aent.off, sns = aent.sns, snl = aent.snl, ek = aent.ek, estride = aent.estride, eek = aent.eek, is_ref = aent.is_ref, tmod_s = aent.tmod_s, tmod_l = aent.tmod_l, is_param = aent.is_param))
               ## the body (not the argument, a node of the caller's) is the iteration's
               lower_layout::ir_rec_enter_iter(cst, psite, pk)
               emit_stmts(rbody, sb, cx, nl)
@@ -26156,6 +26162,8 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             ## a `for c in bytes(s)` iterable is a BYTE slice (u8 elements, stride 1) — read each element
             ## with `movzbq` at stride 1, not a word load at stride 8. (Detected on the `bytes(…)` call.)
             mut byte_elem := is_nonvar and is_bytes_call(flo, cx.src)
+            mut byte_signed := false  ## an `[i8; N]` parameter's element: sign-extended (`movsbq`)
+            mut arr_param_n : usize = 0 ## #1287 — a fixed-array parameter's static N (0: not one)
             vslot := slot_of(cx.slots, cx.src, fns, fnl)
             mut islot := vslot + 1   ## hidden loop index; moved to vslot+agg_stride for an aggregate loop var
             ## scalar-word (eek 0) and FLOAT (eek 9) element arrays: both keep the element COUNT in `snl`
@@ -26281,9 +26289,25 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 ## a struct/enum-element slice VIEW: element width from the slot's stride; the loop var is
                 ## that wide, so the hidden index sits at `vslot+agg_stride`; word 0 is the element ptr (by
                 ## value for a local view, or behind the caller's Slice block for a param). Length is runtime.
+                ## A local view, annotated `xs : Slice(P) = …` or not, is not a param (`is_param`, #1182);
+                ## nor is a fixed-array param `xs : [P; N]`: no `Slice` annotation, so it keeps the by-value read.
                 agg_stride = bent.estride
                 islot = vslot + i64(agg_stride)
-                if bent_slice_param_elem.n == 0 { b_is_ref = false }
+                if bent.is_param == false or bent_slice_param_elem.n == 0 { b_is_ref = false }
+              }
+              ## #1287 — a fixed-array PARAMETER `xs : [T; N]` (`bind_param`'s array shape: ek 5, is_ref).
+              ## Its slot holds the caller's element-0 pointer itself, not a pointer to a `{ptr, len}`
+              ## block, and it has no length word at all: its length is the static N of its type. Read as
+              ## a Slice parameter, the loop dereferenced the elements once more (a word element
+              ## segfaulted) and took its bound from a frame word it does not own (a struct element
+              ## trapped). So: the element pointer by value, and N as the bound. A `str` element is the
+              ## str-view read (eek 4, two words), and a byte element (`[u8; N]`, `[i8; N]`) the byte read.
+              if bent.is_param and bent.ek == 5 {
+                arr_param_n = fixed_array_param_len(bent.ns, bent.nl, EMIT_PARAMS, cx.src)
+                if arr_param_n > 0 {
+                  b_is_ref = false
+                  if is_byte_array_eek(bent.eek) { byte_elem = true; byte_signed = bent.eek == 10 }
+                }
               }
             }
             ## `s` is a Slice `{ptr, len}`. A by-VALUE local holds ptr @ slot `B`, len @ slot `B+1`. A by-REF
@@ -26309,6 +26333,11 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## array: the static element count is `snl` (recorded by bind_array_slot)
               push_str(sb, "  movq $")
               push_int(sb, i64(b_snl))
+              push_str(sb, ", %rbx\n")
+            } else if arr_param_n > 0 {
+              ## #1287 — a fixed-array parameter: the static N of its `[T; N]` type
+              push_str(sb, "  movq $")
+              push_int(sb, i64(arr_param_n))
               push_str(sb, ", %rbx\n")
             } else if is_agg_slice {
               ## struct/enum-element slice: local VIEW stores len in frame word 1; PARAM stores a pointer to
@@ -26473,8 +26502,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             push_str(sb, "  movq -")
             push_int(sb, i64((islot + 1) * 8))
             if byte_elem {
-              ## x = *(u8*)(dataptr + __i)  — byte element, stride 1, zero-extended
-              push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,1), %rax\n  movzbq (%rax), %rax\n  movq %rax, -")
+              ## x = *(u8*)(dataptr + __i)  — byte element, stride 1, zero-extended (an `i8` sign-extended)
+              push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,1), %rax\n")
+              if byte_signed { push_str(sb, "  movsbq (%rax), %rax\n  movq %rax, -") } else { push_str(sb, "  movzbq (%rax), %rax\n  movq %rax, -") }
             } else {
               ## x = *(dataptr + __i * 8)  — scalar/word element, stride 8
               push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,8), %rax\n  movq (%rax), %rax\n  movq %rax, -")
@@ -26761,7 +26791,21 @@ base_type_name := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
   CSpan(s = ts, n = tl)
 }
 
+## Bind parameter `pm` and mark every slot entry it created as a parameter (`SlotEntry.is_param`,
+## #1182): the one place a parameter's slot is made is the one place that knows it is a parameter.
 bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize) {
+  first := svec_len(ptr(slots))
+  bind_param_shape(slots, pm, src, decls, a, synth, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
+  mut k := first
+  while k < svec_len(ptr(slots)) {
+    ue := deref(svec_at(SlotEntry, ptr(slots), k))
+    deref(svec_at(SlotEntry, ptr(slots), k)) = SlotEntry(ns = ue.ns, nl = ue.nl, off = ue.off, sns = ue.sns, snl = ue.snl, ek = ue.ek, estride = ue.estride, eek = ue.eek, is_ref = ue.is_ref, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l, is_param = true)
+    k += 1
+  }
+}
+
+## The slot shape of parameter `pm`, by its declared type; `bind_param` is its only caller.
+bind_param_shape := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize) {
   ## GENERICS: substitute the enclosing generic fn's type-parameter (`gps`/`gpl`) with the
   ## monomorphization INSTANCE's concrete type (`its`/`itl`) in the param's type span, so a
   ## param `x : T` of a generic fn is sized as the instance type (e.g. a 3-word `Tok`) rather
@@ -26899,6 +26943,11 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
       estride = struct_words(decls, src, bs, bl, a); eek = 2; ess = bs; esl = bl
     } else if edi >= 0 or is_niche_folded(src, bs, bl) {
       estride = enum_elem_words(decls, src, bs, bl, a); eek = 3; ess = bs; esl = bl
+    } else if str_at((src + bs), bl) == "str" {
+      ## #1287 — a `str` element is the two-word `{ptr, len}` view (Types §7), as in a `[str; N]` local
+      ## (`AElem` eek 4, stride 2). As a word element (eek 0, stride 1) `for s in xs` read the pointer
+      ## words of two consecutive strings as one string each.
+      estride = 2; eek = 4
     } else if type_is_float(decls, src, bs, bl) {
       ## FLOAT-element array / uniform float-tuple param (`a : [f64; N]`, `t : (f64, f64)` — a tuple
       ## param reaches this branch as a `pmode == 1` array of its first component). One word per
