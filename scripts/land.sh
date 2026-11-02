@@ -718,7 +718,10 @@ xb_follow() { # top gate-log PR...
   xb_follow_commit_check "$top" "$c" "$np" "$nr" || return 1
   echo "xbackend-follow: commit $c paths+$np rows+$nr"
 }
-## The publish rule the queue and PHASE 7 share: coverage means the object is the baseline commit.
+## The publish rule, PHASE 6c's last word before the GREEN verdict: coverage means the object to publish
+## is a commit whose parent is the gated object; none means the gated object itself. PHASE 6c builds its
+## arguments from what it just made, so today it cannot refuse; it holds the rule against a later edit
+## of that phase. The queue does not call it: queue_follow re-checks land.sh's commit itself (#1386).
 xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
   if [ "$1" = 0 ] && [ "$2" = 0 ]; then
     [ "$4" = "$3" ] && return 0
@@ -734,7 +737,7 @@ xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=141  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383
+LAND_SELFTEST_EXPECTED=146  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -1219,12 +1222,24 @@ Not a bullet.
   xb_follow_commit_check "$xtop" "$xc" 3 6 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-allowed-a-mismatched-paths-number
   xb_follow_commit_check "$xtop" "$xc" 2 5 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-allowed-a-mismatched-rows-number
   xb_follow_commit_check "$xo" "$xc" 2 6 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-allowed-a-commit-on-another-parent
+  # Each row below fails exactly ONE clause, the right file with the right numbers otherwise (#1386):
+  # an empty commit between it and the gated object; a second parent; the baseline made executable.
+  local xe xpar xtwo xmode xidx="$st/xb-idx"
+  xe="$(git commit-tree "$xtop^{tree}" -p "$xtop" -m e)" && xpar="$(git commit-tree "$xc^{tree}" -p "$xe" -m par)" &&
+    xtwo="$(git commit-tree "$xc^{tree}" -p "$xtop" -p "$xe" -m two)" &&
+    GIT_INDEX_FILE="$xidx" git read-tree "$xc" && GIT_INDEX_FILE="$xidx" git update-index --cacheinfo "100755,$(git rev-parse "$xc:$XB_BASELINE"),$XB_BASELINE" &&
+    xmode="$(git commit-tree "$(GIT_INDEX_FILE="$xidx" git write-tree)" -p "$xtop" -m mode)"
+  _ck $? xb-follow-could-not-build-the-one-clause-commits
+  xb_follow_commit_check "$xtop" "$xpar" 2 6 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-allowed-the-right-file-on-an-intermediate-parent
+  xb_follow_commit_check "$xtop" "$xtwo" 2 6 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-allowed-a-two-parent-commit
+  xb_follow_commit_check "$xtop" "$xmode" 2 6 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-allowed-a-mode-change-of-the-baseline
   printf 'paths=x\nrows=1\n' > "$XB_BASELINE" && git commit -q -am 'chore: bad' -m 'body' &&
     { xb_follow HEAD "$st/xg-cov" 1 >/dev/null; [ $? = 1 ]; }; _ck $? xb-follow-moved-a-malformed-baseline
   cd "$here"; unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
   # The publish rule: a green gate with coverage, pushed without the baseline commit, is refused.
   xb_follow_publish_ok 2 6 "$xtop" "$xtop" "" >/dev/null; [ $? = 1 ]; _ck $? xb-follow-publish-allowed-the-gated-object-without-the-baseline-commit
   xb_follow_publish_ok 2 6 "$xtop" "$xc" "$xtop" >/dev/null; _ck $? xb-follow-publish-refused-the-baseline-commit
+  xb_follow_publish_ok 2 6 "$xtop" "$xc" "$xo" >/dev/null; [ $? = 1 ]; _ck $? xb-follow-publish-allowed-a-commit-on-another-parent
   xb_follow_publish_ok 0 0 "$xtop" "$xtop" "" >/dev/null; _ck $? xb-follow-publish-refused-a-zero-coverage-gated-object
   xb_follow_publish_ok 0 0 "$xtop" "$xc" "$xtop" >/dev/null; [ $? = 1 ]; _ck $? xb-follow-publish-allowed-a-commit-for-zero-coverage
 

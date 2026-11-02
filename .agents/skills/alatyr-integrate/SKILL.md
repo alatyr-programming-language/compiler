@@ -579,7 +579,10 @@ measurement is never folded in. `xb_follow_commit_check` refuses it unless the o
 baseline, the parent is the gated object and the numbers are the gate line's; a publish that carries
 coverage without it is refused. N = M = 0 makes no commit. The queue's batch path runs the same step
 through the base's `scripts/land.sh --xbackend-follow <gated sha> <gate log> <PR>...`, one commit for
-the batch's total naming each member, and re-checks its parent and file before the push. A hand
+the batch's total naming each member, and re-checks its one parent and its one file before the push.
+When that commit is refused after a green batch gate, nothing is pushed and every member is labelled
+`queue-failed` with a comment and a `refused at follow` queue.log line (#1386): the same inputs would
+refuse again, so the batch is not re-gated every pass. A hand
 landing gated elsewhere (omen, or `gate.yml`'s `gate.log`) runs that same command on the gated
 object, or on its oracle commit after a hand PHASE 6a, and publishes the commit it prints.
 

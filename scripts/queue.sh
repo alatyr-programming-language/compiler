@@ -36,6 +36,7 @@
 #   is the gated one plus ONE commit moving scripts/xbackend_diff.baseline by exactly N and M, made and
 #   checked by the base's `land.sh --xbackend-follow` (its PHASE 6c, #1383) and naming every member;
 #   without it every next gate on main would be red on the ratchet alone. Zero coverage, no commit.
+#   A refused baseline commit pushes nothing and labels every member `queue-failed` (#1386).
 #   Red: the set is bisected — its first half is gated alone, recursively — so a red PR is isolated
 #   and marked `queue-failed` with its log tail, while the PRs that are green land. Every refusal and
 #   `queue-failed` relabel also writes one `#N refused at <stage> on <sha8>: <reason>` line to queue.log
@@ -212,6 +213,7 @@ queue_drive() { # PR...
   done
 }
 
+QUEUE_SELFTEST_EXPECTED=62  # the exact count run, compared with -ne like land.sh's; 49, +6 #1383, +7 #1386
 queue_self_test() {
   local k=0 bad="" log t
   _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
@@ -285,6 +287,44 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   ! queue_follow_object "$(printf 'xbackend-follow: none\nxbackend-follow: commit %s paths+1 rows+1' "$b")" "$a" >/dev/null; _ck $? follow-took-two-verdicts
   ! queue_follow_object "xbackend-follow: commit ${b:0:12} paths+1 rows+1" "$a" >/dev/null; _ck $? follow-took-an-abbreviated-commit
   ! queue_follow_object "xbackend-follow: commit $a paths+1 rows+1" "$a" >/dev/null; _ck $? follow-took-the-gated-object-as-its-own-baseline-commit
+  # queue_follow's own recheck, driven with land.sh's report stubbed (#1386). Each wrong commit has the
+  # right numbers and fails exactly ONE clause: an empty commit between it and the gated object (parent),
+  # a second parent (count), a second file (path set). DRY=screen gated nothing and must not run land.sh.
+  local here="$PWD" xg xp xe xok xpar xtwo xfile qd="$DRY" qb="$BUILT" qbb="$BUILT_BASE" qbf="$BUILT_FOR" qgl="$GATE_LOG" lt
+  t="$(mktemp -d "$ROOT/target/queue-selftest.XXXXXX")" && cd "$t" && git init -q . || { cd "$here"; return 1; }
+  export GIT_AUTHOR_NAME=st GIT_AUTHOR_EMAIL=st@example.invalid GIT_COMMITTER_NAME=st GIT_COMMITTER_EMAIL=st@example.invalid
+  mkdir scripts && printf 'paths=1\nrows=1\n' > scripts/xbackend_diff.baseline && printf 'x\n' > other &&
+    git add -A && xg="$(git commit-tree "$(git write-tree)" -m g)" &&
+    xe="$(git commit-tree "$xg^{tree}" -p "$xg" -m e)" &&
+    printf 'paths=3\nrows=7\n' > scripts/xbackend_diff.baseline && git add -A && xp="$(git write-tree)" &&
+    xok="$(git commit-tree "$xp" -p "$xg" -m ok)" && xpar="$(git commit-tree "$xp" -p "$xe" -m par)" &&
+    xtwo="$(git commit-tree "$xp" -p "$xg" -p "$xe" -m two)" &&
+    printf 'y\n' > other && git add -A && xfile="$(git commit-tree "$(git write-tree)" -p "$xg" -m file)" ||
+    { cd "$here"; return 1; }
+  queue_follow_run() { echo run >> "$t/ran"; printf 'xbackend-follow: commit %s paths+2 rows+6\n' "${QF_C:-}"; }
+  qf() { QF_C="$1" DRY=0 BUILT="$xg" GATE_LOG="$t/gate.log"; queue_follow 1309 2>/dev/null; } # commit -> what the queue would publish
+  [ "$(qf "$xok")" = "$xok" ]; _ck $? follow-refused-the-one-child-moving-the-baseline-alone
+  [ "$(qf "$xpar")" = "" ] && [ "$(qf "$xpar" >/dev/null; echo $?)" = 1 ]; _ck $? follow-took-a-commit-on-another-parent
+  [ "$(qf "$xtwo")" = "" ] && [ "$(qf "$xtwo" >/dev/null; echo $?)" = 1 ]; _ck $? follow-took-a-two-parent-commit
+  [ "$(qf "$xfile")" = "" ] && [ "$(qf "$xfile" >/dev/null; echo $?)" = 1 ]; _ck $? follow-took-a-commit-changing-a-second-file
+  rm -f "$t/ran"; [ "$(DRY=screen; BUILT="$xg"; queue_follow 1309 2>/dev/null)" = "$xg" ] && [ ! -e "$t/ran" ]
+  _ck $? follow-under-dry-screen-ran-land-or-published-another-object
+  # A refused baseline commit after a green batch labels every member once; it cannot start, nothing.
+  comment() { echo "comment:$1" >> "$t/ql"; }; relabel() { echo "relabel:$1 +$2 -$3" >> "$t/ql"; }
+  queue_publish() { echo "publish:$1" >> "$t/ql"; }; queue_accept() { echo accept >> "$t/ql"; }
+  queue_follow_run() { echo '  REFUSE: the parent baseline is malformed'; }
+  DRY=0 BUILT="$xg" BUILT_FOR="1 3" GATE_LOG="$t/gate.log"; HEAD[1]="$a"; HEAD[3]="$b"; : > "$t/ql"
+  queue_land 1 3 > "$t/qland.out" 2>/dev/null; lt=$?
+  [ "$lt" = 1 ] && [ "$(tr '\n' ';' < "$t/ql")" = 'comment:1;relabel:1 +queue-failed -queue;comment:3;relabel:3 +queue-failed -queue;' ] &&
+    [ "$(grep -c ' queue: #[13] refused at follow on ' "$t/qland.out")" = 2 ]
+  _ck $? "follow-refusal-did-not-label-each-member-once($(tr '\n' ';' < "$t/ql"))"
+  queue_follow_run() { return 2; }; : > "$t/ql"
+  queue_land 1 3 > "$t/qland.out" 2>/dev/null; lt=$?
+  [ "$lt" = 1 ] && [ ! -s "$t/ql" ]; _ck $? "follow-that-could-not-start-labelled-or-published($(tr '\n' ';' < "$t/ql"))"
+  unset -f qf comment relabel queue_publish queue_accept queue_follow_run; unset 'HEAD[1]' 'HEAD[3]' QF_C
+  DRY="$qd" BUILT="$qb" BUILT_BASE="$qbb" BUILT_FOR="$qbf" GATE_LOG="$qgl"
+  unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+  cd "$here"; rm -rf "$t"
   queue_gate_running "bash scripts/full.sh --force-sweeps"; _ck $? busy-box-missed-a-relative-gate
   queue_gate_running "$(printf 'vim x\n/run/current-system/sw/bin/bash /h/c/scripts/full.sh')"; _ck $? busy-box-missed-an-absolute-gate
   queue_gate_running "$(printf "ssh omen-wan cd c && bash scripts/full.sh\nvim scripts/full.sh\nbash -c tail scripts/full.sh")"
@@ -318,9 +358,12 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   log=""; queue_drive 1 3; [ "$log" = " try:1 3; land:1 3;" ]; _ck $? "failed-publish-did-not-end-the-pass($log)"
   unset -f queue_try queue_land queue_fail
   if [ -n "$bad" ]; then echo "*** queue self-test: FAILED —$bad ***"; return 1; fi
+  if [ "$k" -ne "$QUEUE_SELFTEST_EXPECTED" ]; then
+    echo "*** queue self-test: ran $k checks, expected exactly $QUEUE_SELFTEST_EXPECTED: a check was lost or added uncounted ***"
+    return 1
+  fi
   echo "ok   queue self-test: $k checks — reviewed-head marker, entry rules, head check, gate verdict,"
-  echo "     push arguments, the xbackend baseline commit, busy box and the bisection plan"
-  [ "$k" -ge 55 ] || { echo "queue self-test: $k checks, expected 55"; return 1; }
+  echo "     push arguments, the xbackend baseline commit and its refusal, busy box and the bisection plan"
 }
 
 # ---- GitHub ------------------------------------------------------------------------------------------
@@ -434,26 +477,64 @@ queue_publish() { # object base -> 0 pushed, 1 not
 
 ## The batch's xbackend baseline commit (#1383): land.sh PHASE 6c, run from the BASE's copy of
 ## land.sh (the checkout moves to the base first; the batch's own scripts never run outside the gate),
-## on the gated object, from the gate's own log. Prints the object to publish.
+## on the gated object, from the gate's own log. Prints land.sh's report; 2 when it could not start.
+queue_follow_run() { # PR...
+  git switch --quiet --detach "$BUILT_BASE" || return 2
+  env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/land.sh --xbackend-follow "$BUILT" "$GATE_LOG" "$@" 2>&1 9>&-
+  return 0
+}
+## The queue's own check of the commit land.sh made, independent of land.sh's: its ONE parent is the
+## gated object and the baseline is the only file it changes. Same-shape refusals as land.sh's
+## xb_follow_commit_check, so a base whose land.sh lost one still cannot publish a wrong object.
+queue_follow_commit_ok() { # gated commit -> 0 ok, 1 not
+  [ "$(git rev-list --parents -n 1 "$2" 2>/dev/null | wc -w | tr -d ' ')" = 2 ] &&
+    [ "$(git rev-parse "$2^" 2>/dev/null)" = "$1" ] &&
+    [ "$(git diff --name-only "$1" "$2" 2>/dev/null)" = scripts/xbackend_diff.baseline ]
+}
+## Prints the object to publish: BUILT (no coverage, or DRY=screen, which gated nothing) or its checked
+## baseline commit. 1 = refused: the same inputs would refuse again, so the caller labels the members
+## (land.sh's report is in "$GATE_LOG.follow"); 2 = could not run, the pass ends and nothing changes.
 queue_follow() { # PR...
-  local out obj
+  local out obj rc
   [ "$DRY" = screen ] && { echo "$BUILT"; return 0; }
-  git switch --quiet --detach "$BUILT_BASE" || return 1
-  out="$(env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/land.sh --xbackend-follow "$BUILT" "$GATE_LOG" "$@" 2>&1 9>&-)"
+  out="$(queue_follow_run "$@")"; rc=$?
+  [ "$rc" = 0 ] || return 2
+  printf '%s\n' "$out" > "$GATE_LOG.follow"
   printf '%s\n' "$out" | sed 's/^/  /' >&2
   obj="$(queue_follow_object "$out" "$BUILT")" || return 1
   if [ "$obj" != "$BUILT" ]; then
-    [ "$(git rev-parse "$obj^")" = "$BUILT" ] && [ "$(git rev-list --parents -n 1 "$obj" | wc -w | tr -d ' ')" = 2 ] &&
-      [ "$(git diff --name-only "$BUILT" "$obj")" = scripts/xbackend_diff.baseline ] || return 1
+    queue_follow_commit_ok "$BUILT" "$obj" ||
+      { echo "queue: $obj is not one commit on $BUILT changing scripts/xbackend_diff.baseline alone" >> "$GATE_LOG.follow"; return 1; }
   fi
   echo "$obj"
+}
+## A green batch whose baseline commit is refused would be re-gated every pass for the same refusal,
+## about six minutes each time and silent. It leaves the queue instead, each member labelled.
+queue_follow_failed() { # PR...
+  local pr
+  for pr in "$@"; do
+    refused "$pr" follow "${HEAD[$pr]}" "the xbackend baseline commit on the green $BUILT was refused (#1383)"
+    comment "$pr" "**Merge queue: refused after a green gate** on head \`${HEAD[$pr]}\` (\`scripts/queue.sh\`, #1383). Members $(prs_h "$@") were gated green as \`$BUILT\` (\`$(gate_line "$GATE_LOG")\`), but the xbackend baseline commit that must land with it was refused, so nothing was pushed. Its report (\`$(basename "$GATE_LOG").follow\` under \`target/queue/\` on omen):
+
+\`\`\`
+$(tail -n 15 "$GATE_LOG.follow" 2>/dev/null)
+\`\`\`
+
+Repair the cause (most often \`scripts/xbackend_diff.baseline\` on main) and re-enqueue."
+    relabel "$pr" queue-failed queue
+  done
 }
 
 queue_land() { # PR... — publish exactly BUILT, or BUILT plus its one-file xbackend baseline commit
   [ "$BUILT_FOR" = "$*" ] || die "internal: asked to land [$*] but built [$BUILT_FOR]"
-  local obj
-  obj="$(queue_follow "$@")" ||
-    { say "the xbackend baseline commit on $BUILT failed its checks (#1383); nothing pushed, this pass ends"; return 1; }
+  local obj rc
+  obj="$(queue_follow "$@")"; rc=$?
+  case "$rc" in
+    0) ;;
+    1) say "the xbackend baseline commit on $BUILT was refused (#1383); nothing pushed, the members leave the queue"
+       queue_follow_failed "$@"; return 1 ;;
+    *) say "could not run land.sh --xbackend-follow on $BUILT; nothing pushed, this pass ends"; return 1 ;;
+  esac
   [ "$obj" != "$BUILT" ] && say "xbackend baseline commit $obj on the gated $BUILT"
   queue_publish "$obj" "$BUILT_BASE" || return 1
   queue_accept "batch" "$obj" "$BUILT_BASE" "$GATE_LOG" "$@"
