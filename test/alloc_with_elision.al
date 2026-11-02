@@ -2,6 +2,7 @@
 ## scope, `with_capacity(u64, 16)` OMITS its `ptr(mut Arena)` allocator; the driver's elision pass
 ## splices `ptr(ar)` in at that parameter's position (the same code the explicit `ptr(ar)` form emits).
 ## Push 10, 20, 12 into the arena-backed Vec, then sum with a for-loop: 10 + 20 + 12 = 42.
+## expect: run 42
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 
 main := fn() -> u64 {

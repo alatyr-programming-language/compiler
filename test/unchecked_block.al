@@ -2,6 +2,7 @@
 ## `unchecked (expr | block)`). The block's statements lower with verify.checked FALSE (overflow
 ## guards comptime-absent); a plain in-range loop still computes correctly. 42 iterations → acc 42.
 ## Distinct from the pervasive EXPRESSION form `unchecked <expr>`; guards the new Stmt::Unchecked path.
+## expect: run 42
 main := fn() -> u64 {
   mut acc : u64 = 0
   mut i : u64 = 0

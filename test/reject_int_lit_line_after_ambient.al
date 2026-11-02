@@ -10,3 +10,4 @@
 S := struct { a : u64 }
 
 bad := 0b12
+## expect: reject "at line 12"

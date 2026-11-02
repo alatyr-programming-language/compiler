@@ -9,6 +9,7 @@
 ## `[0; 3]`); `xs` and `ss` are written-out literals that must NOT be folded into a fill — their
 ## element nodes are distinct even when the text repeats; the generic call whose first argument is the
 ## array-fill type is the spelling a reformat used to destroy.
+## expect: run 42
 sum_gen := fn(T : type, a : T) -> u64 {
   mut s : u64 = 0
   mut i : usize = 0

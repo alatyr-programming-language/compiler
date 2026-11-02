@@ -15,3 +15,4 @@ main := fn() -> u64 {
   f() = 65
   7
 }
+## expect: reject "or a pointer dereference [module value_expr_assign_call_reject, at line 15"

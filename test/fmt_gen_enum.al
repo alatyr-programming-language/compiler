@@ -3,6 +3,7 @@
 ## stored on the Decl only as `is_generic`) must survive the format, else fmt is NON-idempotent AND
 ## changes meaning (generic → non-generic). Two instantiations at DISTINCT payload types (u64 and a
 ## nested Box(u64)) prove the header is not tied to one element type. Result = 40 + 2 = 42.
+## expect: run 42
 Box(T) := enum { Wrap(T), Empty }
 
 Opt(T) := enum { Some(T), None }

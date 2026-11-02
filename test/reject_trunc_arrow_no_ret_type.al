@@ -15,3 +15,4 @@ main := fn() -> u64 {
 }
 
 f := fn() ->
+## expect: reject "must be followed by a RETURN TYPE"

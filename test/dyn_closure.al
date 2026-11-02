@@ -4,6 +4,7 @@
 ## pair via `dyn_over(ptr(mut …))` — env borrows the named place, no hidden allocation (I3) — and called
 ## through the fat pair (`d(x)` = one indirect call through `code`, passing `env`).
 ##   d1 = add-10, d2 = add-20 ;  d1(2) + d2(10) = (2+10) + (10+20) = 12 + 30 = 42
+## expect: run 42
 main := fn() -> u64 {
   a := 10
   s1 := fn(x : u64) -> u64 { return x + a }

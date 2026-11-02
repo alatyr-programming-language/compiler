@@ -9,6 +9,7 @@
 ## different one is the forbidden failure, so both spellings are pinned here. The un-attributed
 ## control also exercises CLAYOUT S4: direct scalar fields use their natural §6.1 byte layout (8 bytes
 ## here), while the packed declaration remains a 7-byte no-padding layout.
+## expect: run 42
 Rhs := @packed struct { a : u8, b : u16, c : u32 }
 @packed
 Pfx := struct { a : u8, b : u16, c : u32 }

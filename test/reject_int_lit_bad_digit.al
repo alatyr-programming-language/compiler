@@ -5,3 +5,4 @@ main := fn() -> u64 {
   x : u64 = 0b12
   return x
 }
+## expect: reject
