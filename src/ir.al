@@ -128,6 +128,18 @@ mode_is_none := fn(m : Mode) -> bool {
 pub mode_is_chk := fn(m : Mode) -> bool {
   match m { MdChk => { true }; MdWrap | MdHw | MdNone => { false } }
 }
+## Is `o` the quotient `div`? Of the two dividing ops only it owes the signed `MIN / -1` check: a `rem`
+## of `MIN` by `-1` is `0` (Concurrency §6.1, #1398).
+pub op_is_div := fn(o : Op) -> bool {
+  match o {
+    OpDiv => { true }
+    OpConst | OpFConst | OpAddrSym | OpAddrFrame | OpFnAddr | OpMov | OpAdd | OpSub | OpMul | OpRem | OpAnd | OpOr
+      | OpXor | OpNot | OpNeg | OpShl | OpShr | OpRotl | OpRotr | OpExt | OpFit | OpTrunc | OpCmp | OpFCmp | OpFAdd
+      | OpFSub | OpFMul | OpFDiv | OpFNeg | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpLoad | OpStore | OpBSwap
+      | OpCopy | OpZero | OpGep | OpBound | OpCall | OpCallInd | OpCallC | OpSyscall | OpBlock | OpLoop | OpIf | OpElse
+      | OpUnch | OpEnd | OpBr | OpBrIf | OpSwitch | OpRet | OpTrap | OpTrapIf => { false }
+  }
+}
 mode_is_hw := fn(m : Mode) -> bool {
   match m { MdHw => { true }; MdWrap | MdChk | MdNone => { false } }
 }

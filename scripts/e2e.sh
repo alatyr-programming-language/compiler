@@ -9015,6 +9015,21 @@ run issue606_narrow_div_inrange 63
 run_a64 issue606_narrow_div_inrange 63
 run_rv64 issue606_narrow_div_inrange 63
 run_wat issue606_narrow_div_inrange 63
+## #1398: Concurrency §6.1 gives a CHECKED `MIN % -1` the value 0 at every width — only `MIN / -1` is
+## in the checked-overflow set. On the parent all four backends reused the `/` guard for `%` and trapped
+## (132 / 133 / 133 / 134); the guard now belongs to `/` alone. Registered four times because the sweeps
+## accept a trap as a permitted outcome, so only a VALUE row on each backend says the fix works.
+run issue1398_rem_min_neg1 63
+run_a64 issue1398_rem_min_neg1 63
+run_rv64 issue1398_rem_min_neg1 63
+run_wat issue1398_rem_min_neg1 63
+## #1398 NON-VACUITY: the narrow widths answered 0 on the parent and must still answer 0, and the
+## unsigned arm must keep its own answer. `checked_div_min_neg1` and the three `issue606_divmin_narrow_*`
+## rows above hold the `/` side of the same coin.
+run issue1398_rem_min_neg1_narrow 31
+run_a64 issue1398_rem_min_neg1_narrow 31
+run_rv64 issue1398_rem_min_neg1_narrow 31
+run_wat issue1398_rem_min_neg1_narrow 31
 # Checked integer OVERFLOW on `+` traps on ALL backends (I11/CG-8): plain `run` so x86 asserts the
 # exact SIGILL exit (132, `ud2`) AND the a64/rv64/wasm sweeps assert a TRAP (>= 128, brk/ebreak/
 # unreachable), not a silent wrapped exit. `unchecked_add_ovf` (aarch64-only, below) proves scoping.
