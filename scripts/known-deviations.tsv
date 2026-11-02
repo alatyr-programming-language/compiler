@@ -217,6 +217,7 @@ aarch64	test/issue370_bitcast_scalar_arg.al	run/133	#551
 aarch64	test/issue372_generic_bitcast_target.al	run/133	#713
 aarch64	test/issue373_enum_bitcast_payload.al	run/133	#713
 aarch64	test/issue393_prelude_bare_variant.al	run/133	#1199
+aarch64	test/issue395_vec_subword_generic_deref.al	run/133	#1200
 aarch64	test/issue404_hashmap_protocol_shadow_control.al	run/133	#1200
 aarch64	test/issue404_qualified_hashmap_protocol.al	run/133	#1200
 aarch64	test/issue451_ptr_str_field.al	run/133	#1188
@@ -255,6 +256,8 @@ aarch64	test/issue804_default_int_array_ok.al	run/133	#1194
 aarch64	test/issue805_exhaustive_controls.al	run/133	#577
 aarch64	test/issue806_u64_range_high_bound.al	run/133	#1190
 aarch64	test/issue913_struct_lit_nested_field.al	run/133	#577
+aarch64	test/issue986_expect_call_receiver.al	run/133	#1200
+aarch64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
 aarch64	test/iter_for_chars.al	run/133	#1184
 aarch64	test/iter_for_split.al	run/133	#1184
 aarch64	test/lambda_capture.al	run/133	#1195
@@ -433,6 +436,13 @@ aarch64	test/ufcs_push_local.al	run/133	#1200
 aarch64	test/uint192.al	run/133	#1194
 aarch64	test/uint256.al	run/133	#1191
 aarch64	test/uint_generic_op.al	run/133	#1191
+aarch64	test/unchecked_block_struct3.al	run/133	#1157
+aarch64	test/unchecked_call_enum.al	run/133	#1157
+aarch64	test/unchecked_call_ptr_struct.al	run/133	#1157
+aarch64	test/unchecked_call_struct2.al	run/133	#1157
+aarch64	test/unchecked_call_struct3.al	run/133	#1157
+aarch64	test/unchecked_call_struct_wide.al	run/139	#1157
+aarch64	test/unchecked_call_struct_wraps.al	run/133	#1157
 aarch64	test/unchecked_index_binds_access_str.al	run/133	#1184
 aarch64	test/union_copy.al	run/133	#1187
 aarch64	test/union_global.al	run/133	#1187
@@ -671,6 +681,7 @@ riscv64	test/issue370_bitcast_scalar_arg.al	run/133	#551
 riscv64	test/issue372_generic_bitcast_target.al	run/133	#713
 riscv64	test/issue373_enum_bitcast_payload.al	run/133	#713
 riscv64	test/issue393_prelude_bare_variant.al	run/133	#1199
+riscv64	test/issue395_vec_subword_generic_deref.al	run/133	#1200
 riscv64	test/issue404_hashmap_protocol_shadow_control.al	run/133	#1200
 riscv64	test/issue404_qualified_hashmap_protocol.al	run/133	#1200
 riscv64	test/issue451_ptr_str_field.al	run/133	#1188
@@ -709,6 +720,8 @@ riscv64	test/issue804_default_int_array_ok.al	run/133	#1194
 riscv64	test/issue805_exhaustive_controls.al	run/133	#577
 riscv64	test/issue806_u64_range_high_bound.al	run/133	#1190
 riscv64	test/issue913_struct_lit_nested_field.al	run/133	#577
+riscv64	test/issue986_expect_call_receiver.al	run/133	#1200
+riscv64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
 riscv64	test/iter_for_chars.al	run/133	#1184
 riscv64	test/iter_for_split.al	run/133	#1184
 riscv64	test/lambda_capture.al	run/133	#1195
@@ -892,6 +905,13 @@ riscv64	test/ufcs_push_local.al	run/133	#1200
 riscv64	test/uint192.al	run/133	#1194
 riscv64	test/uint256.al	run/133	#1191
 riscv64	test/uint_generic_op.al	run/133	#1191
+riscv64	test/unchecked_block_struct3.al	run/133	#1157
+riscv64	test/unchecked_call_enum.al	run/133	#1157
+riscv64	test/unchecked_call_ptr_struct.al	run/133	#1157
+riscv64	test/unchecked_call_struct2.al	run/133	#1157
+riscv64	test/unchecked_call_struct3.al	run/133	#1157
+riscv64	test/unchecked_call_struct_wide.al	run/133	#1157
+riscv64	test/unchecked_call_struct_wraps.al	run/133	#1157
 riscv64	test/unchecked_index_binds_access_str.al	run/133	#1184
 riscv64	test/union_copy.al	run/133	#1187
 riscv64	test/union_global.al	run/133	#1187
@@ -1127,6 +1147,7 @@ wasm	test/issue370_bitcast_scalar_arg.al	run/134	#1205
 wasm	test/issue372_generic_bitcast_target.al	run/134	#713
 wasm	test/issue373_enum_bitcast_payload.al	run/134	#713
 wasm	test/issue393_prelude_bare_variant.al	run/134	#1186
+wasm	test/issue395_vec_subword_generic_deref.al	run/134	#1186
 wasm	test/issue404_hashmap_protocol_shadow_control.al	run/134	#1186
 wasm	test/issue404_qualified_hashmap_protocol.al	run/134	#1186
 wasm	test/issue441_bitcast_int_to_ptr_struct.al	run/134	#1205
@@ -1163,6 +1184,8 @@ wasm	test/issue804_default_int_array_ok.al	run/134	#1194
 wasm	test/issue805_exhaustive_controls.al	run/134	#1190
 wasm	test/issue806_u64_range_high_bound.al	run/134	#1190
 wasm	test/issue913_struct_lit_nested_field.al	run/134	#1190
+wasm	test/issue986_expect_call_receiver.al	run/134	#1200
+wasm	test/issue986_expect_multiword_value_reject.al	run/134	#1200
 wasm	test/iter_for_chars.al	run/134	#1184
 wasm	test/iter_for_split.al	run/134	#1184
 wasm	test/linked_deref.al	run/134	#1205
@@ -1335,6 +1358,13 @@ wasm	test/ufcs_push_local.al	run/134	#1186
 wasm	test/uint192.al	run/134	#1191
 wasm	test/uint256.al	run/134	#1191
 wasm	test/uint_generic_op.al	run/134	#1191
+wasm	test/unchecked_block_struct3.al	run/134	#1157
+wasm	test/unchecked_call_enum.al	run/134	#1157
+wasm	test/unchecked_call_ptr_struct.al	run/134	#1157
+wasm	test/unchecked_call_struct2.al	run/134	#1157
+wasm	test/unchecked_call_struct3.al	run/134	#1157
+wasm	test/unchecked_call_struct_wide.al	run/134	#1157
+wasm	test/unchecked_call_struct_wraps.al	run/134	#1157
 wasm	test/unchecked_index_binds_access_str.al	run/134	#1184
 wasm	test/union_copy.al	run/134	#1187
 wasm	test/union_global.al	run/134	#1187

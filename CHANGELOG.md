@@ -132,6 +132,25 @@ Two numbers that are **not** the compiler's version: the specification revision 
   A global owner resolves in the module of the access, and a qualified owner (`z::cfg.x`) is left to
   the module it names. Programs that relied on the old behaviour were invalid. A local or parameter typed
   `u16`, `i16`, `i8`, `char` or a float is not decided yet (#703 stays open for it).
+- **A `Vec` of a sub-word element no longer reads its neighbours into the value (#395).** Inside a
+  generic function, `deref(p)` with `p : ptr(mut T)` used 8 bytes whatever `T` was, so `at`, `try_at`,
+  `get` and `set` on a `Vec(u8)`, `Vec(u16)`, `Vec(u32)` or `Vec(i8)` read the next elements into the
+  value (or wrote over them). It now uses `T`'s width and signedness in that instance.
+- **`.expect(…)` on a call that returns an `Option` no longer panics on `Some` (#986).** An inline
+  unwrap — `f().expect(m)`, `f().expect(m).field`, or a statement `f()?` / `f().expect(m)` — assumed the
+  success variant is the first one, which is true of `Result` and false of the library `Option`
+  (`None` comes first). So `f().expect(m)` panicked when `f` returned `Some`, and a statement `f()?`
+  returned early on `Some` and continued on `None`. All of these now take the success variant from the
+  receiver's type. `x := f().expect(m)` with a struct payload now binds every field, not just the
+  first; using such a multi-word value directly in another expression is refused at build time, as it
+  already was for `?`, instead of silently delivering one word.
+- **An aggregate-returning call under `unchecked` binds its whole value on x86_64 (#1139).**
+  `s := unchecked mk(41)` and `s := unchecked { mk(41) }` sized `s` as one scalar word and stored only
+  the first return register, so a 2- or 3-word struct read wrong fields with exit 0, a struct returned
+  through the hidden result pointer segfaulted, and an `Option(S)` result was refused at build. The
+  grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
+  aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
+  aarch64, riscv64 and wasm still trap on the granted form (#1157).
 - **An annotated struct-element slice view local no longer crashes on x86_64 (#1182).** A local
   written `xs : Slice(P) = t[0..2]` over a struct array was read as a `Slice(P)` parameter, because the
   x86_64 lowering took any annotated name for one: `xs[0].b`, `xs[1]`, `xs[1..2]` and `for p in xs`

@@ -12117,18 +12117,46 @@ run_wat trap_literal_ctx_field_u64 134
 ## by machine; hand-narrowing does not reproduce it — the shape needs the whole set of temporaries.
 run issue973_if_branch_context 2
 run issue977_struct_lit_field_ctx 2
+## #1139 — a binding of an aggregate-returning call under an `unchecked` grant (`s := unchecked mk(41)`,
+## `s := unchecked { mk(41) }`). The grant changes only the verification mode (Concurrency §6.2,
+## CG-7), but the binding was sized and stored as one scalar word. NON-VACUOUS on the parent at
+## 55fa477 (x86_64): the struct rows built and exited 0 where 42 is due, the wide (hidden result
+## pointer) row segfaulted (139), and the enum row was refused at build. `_wraps` proves the grant
+## still reaches the call's arguments (`M + 42` wraps instead of trapping).
+run unchecked_call_struct3 42
+run unchecked_call_struct2 42
+run unchecked_block_struct3 42
+run unchecked_call_struct_wraps 42
+run unchecked_call_struct_wide 42
+run unchecked_call_ptr_struct 42
+run unchecked_call_enum 42
 
 ## #989 — an enum VALUE read through `deref(p)` was emitted as a null enum: `emit_enum_value` sent
 ## `Expr::Deref` to its catch-all, which built discriminant 0 with an empty payload. So `at`/`get` on
 ## a `Vec(E)` returned the first variant with zeros whatever was stored. NON-VACUOUS: on the parent
 ## `55fa477` (x86_64) the fixture exits 101 — element 0, `C(40)`, read back as a zeroed variant.
 run issue989_vec_multi_payload_enum 42
+## #395, #988 — a `deref(p)` inside a generic instance, where `p : ptr(mut T)` and `T` is a sub-word
+## type, loaded and stored 8 bytes: `deref_pointee_bytes` read `p`'s pointee as the raw spelling `T`
+## and fell to the 8-byte default. Every `Vec(u8/u16/u32/i8)` read through `at`/`try_at`/`get` widened
+## its neighbours into the value and every `set` clobbered them. NON-VACUOUS: on the parent `55fa477`
+## (x86_64) the fixture exits 100 — the `Vec(u8)` element 0 read back as 0xD3952A, not 42.
+run issue395_vec_subword_generic_deref 42
 
 ## #1209 — a struct copied or read through `deref(unchecked bitcast(ptr(J), arg))` is the whole `J`
 ## (Memory, `deref`; CG-7). NON-VACUOUS: on the parent 9b9fea98 (x86_64) they exit 132 (a garbage `j.t` underflows `- 7`), 139 and 139.
 run issue1209_deref_bitcast_struct 42
 run issue1209_deref_bitcast_ptr_fields 42
 run issue1209_deref_bitcast_field_inline 42
+## #986 — `<call>.expect(m)` and a statement `<call>?` were unwrapped inline with success hardcoded to
+## variant 0, wrong for the library `Option` (`{None, Some}`), and a struct payload bound with
+## `x := <call>.expect(m)` kept only word 0. NON-VACUOUS: on the parent `55fa477` (x86_64) the fixture
+## exits 1 — `some42().expect("v")` panicked on `Some(42)`.
+run issue986_expect_call_receiver 42
+## #986 — the value of `<call>.expect(m)` over a two-word struct, passed straight as an argument, is
+## refused instead of delivering one word. NON-VACUOUS: on the parent `55fa477` (x86_64) it built rc 0
+## and the program died with SIGSEGV (rc 139).
+build_reject_has issue986_expect_multiword_value_reject "only one word would arrive (#986)"
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
