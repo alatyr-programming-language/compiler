@@ -14,3 +14,4 @@ main := fn() -> u64 {
   comptime for i in 0 .. unchecked ((A * A * (0 - 2)) / (0 - 1)) { c = c + 1 }
   return c + 40
 }
+## expect: run 40

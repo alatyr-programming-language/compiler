@@ -16,3 +16,4 @@ main := fn() -> u64 {
   comptime for i in 0 .. unchecked (K + 1) - 2147483600 { c = c + 1 }
   return c
 }
+## expect: reject "this range bound overflows its type" "for the wrap. at line 16 in "
