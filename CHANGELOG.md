@@ -151,6 +151,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
   grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
   aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
   aarch64, riscv64 and wasm still trap on the granted form (#1157).
+- **A float-to-integer conversion traps on NaN and on an out-of-range value, on every backend (#997,
+  #1374).** `T(f)` used to be a bare truncating conversion with no check. `u64(1.0e30)` answered 2^63,
+  `u8(300.0)` answered 44, `i64(NaN)` answered the integer-indefinite value, and `u64(-1.0)` answered
+  2^64 - 1. Each of these now traps on x86_64, aarch64, riscv64 and wasm (Concurrency §7.7, Types
+  §4.2). `u64`/`usize` values at or above 2^63, such as `u64(0.75 * 2^64)`, now convert correctly on
+  x86_64 where they used to answer a wrong value. Inside `unchecked` an out-of-range result stays
+  hardware-defined; on wasm it now answers a value (the saturating conversion) instead of trapping.
 
 ## 0.2.21 — 2026-11-01
 
@@ -178,14 +185,6 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `scripts/corpus.manifest` keeps only the sources with no directive yet and the directive sources that
   print; the xbackend ratchet reads the walk. A behaviour fix on a directive fixture carries no oracle
   commit: it deletes its own deviation rows.
-
-- **A float-to-integer conversion traps on NaN and on an out-of-range value on x86_64 (#997).**
-  `T(f)` used to be a bare truncating conversion with no check. `u64(1.0e30)` answered 2^63,
-  `u8(300.0)` answered 44, `i64(NaN)` answered the integer-indefinite value, and `u64(-1.0)` answered
-  2^64 - 1. Each of these now traps (Concurrency §7.7, Types §4.2). `u64`/`usize` values at or above 2^63, such as
-  `u64(0.75 * 2^64)`, now convert correctly where they used to answer a wrong value. Inside `unchecked`
-  an out-of-range result stays hardware-defined. The aarch64, riscv64 and wasm conversions are
-  unchanged and remain open in #997.
 
 ## 0.2.20 — 2026-10-31
 
