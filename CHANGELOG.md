@@ -179,6 +179,16 @@ Two numbers that are **not** the compiler's version: the specification revision 
   print; the xbackend ratchet reads the walk. A behaviour fix on a directive fixture carries no oracle
   commit: it deletes its own deviation rows.
 
+- **`for s in xs` over `str` elements binds the right strings on x86_64 (#1177).** Iterating a
+  `Slice(str)` parameter, a local `[str; N]`, a range of one written in the loop header, or a call
+  returning `Slice(str)` bound each element as one word, or copied it from the parameter's own
+  `{ptr, len}` block. The program then ran on with wrong strings and no diagnostic. Iterating a
+  range of a `Slice(str)` parameter (`for s in xs[1..n]`) is still wrong, tracked by #1180.
+- **`for p in f(…)` over a `Slice(T)` of structs, enums or `str` that a call returned binds the right
+  elements on x86_64 (#1211).** A local bound from the call (`r := f(…)`) took the nominal two-word
+  `Slice` struct, and a call iterated directly knew only a `str` element, so the loop variable was one
+  word and the program read zeros. Every `for` over `alloc::vec::as_slice` of a struct was affected.
+
 ## 0.2.20 — 2026-10-31
 
 - **A seed promotion is a script (#1129).** `scripts/promote.sh prepare <version>` runs the
