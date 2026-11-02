@@ -7,3 +7,4 @@ f := fn(x : i64) -> u64 {
 main := fn() -> u64 {
   f(0 - 1) % 256
 }
+## expect: reject "the returned value is an integer of the opposite signedness" "at line 5 in issue942_tail_signedness_reject"
