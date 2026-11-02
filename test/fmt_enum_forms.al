@@ -2,6 +2,7 @@
 ## (a mutable global array initialized with payloaded variant literals) and a WIDE-enum
 ## `return W.Some(<7-word struct>)` (the SRET return path). Both round-trip today; this locks them.
 ##   GE[0] 1 + GE[1] 20 + Big sum 28 = 49
+## expect: run 49
 E := enum {
   A(u64),
   B(u64),

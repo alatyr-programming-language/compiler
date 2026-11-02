@@ -22,3 +22,4 @@ main := fn() -> i64 {
   m = m - 1                       ## m == INT64_MIN, representable: no trap here
   return -m                       ## +2^63 is NOT representable in i64 ⇒ §6.1 TRAP
 }
+## expect: trap

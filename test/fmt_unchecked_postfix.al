@@ -5,6 +5,7 @@
 ## 42 -> 7. Since #410 the operand is the POSTFIX expression, so the bare spelling would re-parse
 ## correctly too; the `unchecked` operand is nonetheless always parenthesized, which is still needed
 ## for a BINARY operand and is right for every operand shape. Returns 42.
+## expect: run 42
 U := union { s(i64), u(u64) }
 
 main := fn() -> u64 {

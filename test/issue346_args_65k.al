@@ -21,3 +21,5 @@ main := fn() -> u64 {
     Result::Err(e) => { return 4 }
   }
 }
+## Run with no arguments, as the corpus walk runs it, `av.len` is 1: the first check answers 1.
+## expect: run 1

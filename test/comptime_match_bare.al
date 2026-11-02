@@ -2,6 +2,7 @@
 ## parser must parse it as a single statement, not consume a phantom `{` and drift (which corrupted
 ## the enclosing decl — e.g. alloc::fmt::display losing its generic-ness). u64 → Scalar arm → the
 ## nested bare `comptime match k` → its `_` arm → 42.
+## expect: run 42
 knd := fn(T : type, v : T) -> u64 {
   comptime match typeinfo(T) {
     Struct(_) => { return 1 }

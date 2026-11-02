@@ -31,3 +31,4 @@ main := fn() -> u64 {
   if xs[0].cell.vals[2] != 30 { return 17 }
   25
 }
+## expect: run 25

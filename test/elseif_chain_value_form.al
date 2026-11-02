@@ -7,6 +7,7 @@
 ## exercised, one distinct value each, so a chain that binds the wrong condition to the wrong value
 ## cannot pass. Returns 42; the first input that disagrees returns its own code 100..106 (each under
 ## 126, which is wasm's `proc_exit` ceiling).
+## expect: run 42
 bound := fn(n : u64) -> u64 {
   v := if n == 0 { 3 } else if n == 1 { 4 } else if n == 2 { 5 } else { 6 }
   return v

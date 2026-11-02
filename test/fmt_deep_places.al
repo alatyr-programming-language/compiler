@@ -5,6 +5,7 @@
 ## field, a `[Struct; N]` field, and the deep places `xs[i].b.c.cx` / `xs[i].arr[j]`, READ and WRITTEN.
 ##   xs[0].b.c.cx 20 (written) + xs[1].arr[1] 30 (written) + xs[0].arr[0] 5 + xs[1].b.c.cy 10
 ##   + t.ps[0].x 1 + t.ps[1].y 4 + sa.v.len 4 + sa.n 5 = 79
+## expect: run 79
 C := struct {
   cx : u64,
   cy : u64,

@@ -21,3 +21,4 @@ main := fn() -> u64 {
   }
   sum
 }
+## expect: run 42

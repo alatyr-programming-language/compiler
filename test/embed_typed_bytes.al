@@ -4,6 +4,7 @@
 ## Failure-first formatter evidence: on parent `f98c62f`, `seed/alatyr fmt test/embed_typed_bytes.al`
 ## returned rc=1, wrote 0 stdout bytes and 91 stderr bytes, with `selfhost: fmt — embed("…") is not
 ## modelled: the node keeps the file BYTES, not the path`.
+## expect: run 42
 main := fn() -> u64 {
   b : [u8; 4] = embed("test/embed_fixture.bin")
   if b.len != 4 { return 1 }

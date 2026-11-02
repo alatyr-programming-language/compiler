@@ -5,6 +5,7 @@
 ## `:=`, a PARSE ERROR. The fix stops the fold at an operator glyph IMMEDIATELY followed by `:=`/`:` (a
 ## binding head — never a valid mid-expression sequence), so the preceding newline stays a declaration
 ## separator and the operator decl parses on its own line without an `@inline`/prefix cue. 40 + 2 -> 42.
+## expect: run 42
 Money := struct { cents : u64 }
 base := 40
 + := fn(a : Money, b : Money) -> u64 {

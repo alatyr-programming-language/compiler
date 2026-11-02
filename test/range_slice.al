@@ -4,6 +4,7 @@
 ## `split` ate `filter`, so the higher-order stdlib failed to link). Now `s[lo..hi]` parses to
 ## `Slice(base, lo, hi)` and lowers to the {ptr = base.ptr + lo, len = hi - lo} sub-view (reusing
 ## the `sub`-view machinery). `t := s[0..2]` is "*b" (len 2, ptr = s.ptr); `bytes(t)[0]` = '*' = 42.
+## expect: run 42
 main := fn() -> u64 {
   s := "*bcd"
   t := s[0..2]

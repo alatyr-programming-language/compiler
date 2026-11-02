@@ -7,6 +7,7 @@
 ## trailing whitespace: this file is balanced and must compile and run exactly as before. Measured
 ## identical on the pre-fix and post-fix compilers: build rc 0, exit 42. Registered with `run
 ## trailing_no_final_newline 42` in scripts/e2e.sh.
+## expect: run 42
 main := fn() -> u64 {
   42
 }

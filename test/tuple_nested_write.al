@@ -4,6 +4,7 @@
 ## (store at offset 0) and `t.1.1` (store at offset +8) — then read them all back.
 ## Neighbour-corruption check: t.0 (10) must survive both writes to component 1.
 ## 10 + 20 + 12 = 42.
+## expect: run 42
 main := fn() -> u64 {
   mut t := (10, (99, 88))
   t.1.0 = 20

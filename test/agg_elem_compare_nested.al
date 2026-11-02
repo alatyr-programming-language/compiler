@@ -35,3 +35,4 @@ main := fn() -> u64 {
   if a[0] == b[0] { acc = acc + 4 }
   acc + compare_params(a, b)
 }
+## expect: run 42

@@ -10,6 +10,7 @@
 ## Each of those is a DIFFERENT PROGRAM, not a different layout of the same one. The head is now
 ## copied verbatim, and a body holding `@`/`=`/`##` is copied verbatim too — not-formatting is safe.
 ## Returns 42.
+## expect: run 42
 Pk := @packed struct { a : u8, @align(4) b : u32, c : u8 }
 
 Pair := struct { x : u64, y : u64 }

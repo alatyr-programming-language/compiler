@@ -151,6 +151,20 @@ Two numbers that are **not** the compiler's version: the specification revision 
   grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
   aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
   aarch64, riscv64 and wasm still trap on the granted form (#1157).
+- **The published deviations name six more defects; 49 more fixtures state their expectation (#1126
+  S4b).** The list that `alatyr version` links to (`scripts/known-deviations.issues.tsv`) gains six
+  defects, all present in this build and now listed by the program each one changes:
+  - a hexadecimal float literal (`0x1.8p+1`) fails to build on all four backends (#1342);
+  - a `str` passed to an integer parameter is not refused by `check` (#519);
+  - on x86_64, four valid programs are refused:
+    - an inferred copy of a fixed array cannot be indexed (#1343);
+    - a module global initialised by a call is not evaluated at compile time (#1354);
+    - a `match` on an enum field of a pointer-derived place (#991);
+    - a field of an array element reached through a pointer (#13).
+
+  The ten pins that `scripts/e2e.sh` kept for backend-specific traps are gone. Those fixtures now state
+  `run N`, and their twin results are listed deviations. A `## expect: run` or `trap` line satisfies a
+  check-only `check_accept` registration. Nothing changes in the compiler.
 
 ## 0.2.21 — 2026-11-01
 

@@ -42,3 +42,5 @@ main := fn() -> u64 {
     Result::Err(e) => { return 105 }
   }
 }
+## Under the corpus walk's fixed `env -i` environment `ALATYR_ENV_PROBE` is absent: `None`, code 104.
+## expect: run 104

@@ -9,3 +9,4 @@ main := fn() -> u64 {
   d : f64 = 0x1.p+2
   return 42
 }
+## expect: run 42

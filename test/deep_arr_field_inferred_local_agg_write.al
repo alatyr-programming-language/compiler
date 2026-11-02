@@ -37,3 +37,4 @@ main := fn() -> u64 {
   if xs[0].pad != 1 or xs[0].tail != 2 { return 6 }
   42
 }
+## expect: run 42

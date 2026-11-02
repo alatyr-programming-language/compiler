@@ -17,3 +17,4 @@ main := fn() -> u64 {
   mut caller_value : u64 = 7
   return read_payload(caller_value, E.A(42))
 }
+## expect: run 42

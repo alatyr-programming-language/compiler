@@ -2,6 +2,7 @@
 ## through `emit_fmt_arms`. The formatter must keep this seed-safe: the element is read through the
 ## loop-local `ga`, while the fill condition only cuts the shared walk short. The old
 ## `fh := deref(arg_p(al_e))` binding inside an `if` in this match arm crashed before it could emit.
+## expect: run 42
 main := fn() -> u64 {
   xs := match 0 {
     0 => [42; 3],

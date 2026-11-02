@@ -1,5 +1,6 @@
 ## BYTES: a typed local tuple with a direct byte-array component uses the
 ## standard byte layout for construction, indexing, writes, and scalar neighbors.
+## expect: run 42
 
 main := fn() -> u64 {
   mut t : ([u8; 4], u64) = ([1, 2, 3, 4], 9)

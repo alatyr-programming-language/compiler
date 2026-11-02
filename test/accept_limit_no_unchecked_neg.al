@@ -3,3 +3,4 @@
 @limits(no_unchecked)
 neg := fn(x : u64) -> u64 { return -x }
 main := fn() -> u64 { return neg(0) + 42 }
+## expect: run 42

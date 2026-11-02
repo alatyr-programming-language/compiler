@@ -4,3 +4,4 @@
 main := fn() -> u64 {
   return oops_undefined_name
 }
+## expect: reject "at line 5"
