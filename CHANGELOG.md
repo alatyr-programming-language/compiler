@@ -163,6 +163,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   elements on x86_64 (#1211).** A local bound from the call (`r := f(…)`) took the nominal two-word
   `Slice` struct, and a call iterated directly knew only a `str` element, so the loop variable was one
   word and the program read zeros. Every `for` over `alloc::vec::as_slice` of a struct was affected.
+- **`for x in xs` over a fixed-array parameter yields its elements on x86_64 (#1287).** A parameter
+  `xs : [T; N]` was iterated as a `Slice(T)` parameter: a word element segfaulted, a struct element
+  trapped, and a `str` element read one word, so `[str; 2]` gave wrong lengths. The loop now reads the
+  element pointer by value, bounds itself by the static `N`, reads a `str` element as its two-word view
+  and a `u8`/`i8` element as a byte (`i8` sign-extended).
 - **A float-to-integer conversion traps on NaN and on an out-of-range value, on every backend (#997,
   #1374).** `T(f)` used to be a bare truncating conversion with no check. `u64(1.0e30)` answered 2^63,
   `u8(300.0)` answered 44, `i64(NaN)` answered the integer-indefinite value, and `u64(-1.0)` answered
