@@ -11554,6 +11554,16 @@ run issue1182_annotated_view_local 42
 run issue1182_for_array_param_agg 42
 ## #1287: `for` over a fixed-array PARAMETER of every element kind (str, word, struct, enum, u8, i8, f64)
 run issue1287_for_array_param 42
+## its review's blocking row: the same parameters indexed. #1287 gave a `str` element the two-word
+## view kind (eek 4) and left the enum (eek 3, #1404), non-plain-scalar struct and float (eek 9)
+## parameters with no bounds block at all, so `xs[i]` past the static N read the caller's memory and
+## answered a word of it where the word, byte and plain-struct kinds trapped 132. One block now
+## compares the raw index against `fixed_array_param_len` for every element kind of a `[T; N]`
+## parameter; each unchecked kind owns a row here. The in-bounds control runs first in each fixture.
+run_x86_trap issue1287_param_str_index_oob 132
+run_x86_trap issue1287_param_enum_index_oob 132
+run_x86_trap issue1287_param_struct_index_oob 132
+run_x86_trap issue1287_param_f64_index_oob 132
 ## #1405: a struct/enum-element `Slice(P)` PARAMETER passed on to a call forwards its pointer to the pair
 run issue1405_slice_param_forward 42
 run slice_enum_param 42

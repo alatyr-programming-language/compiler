@@ -168,6 +168,15 @@ Two numbers that are **not** the compiler's version: the specification revision 
   trapped, and a `str` element read one word, so `[str; 2]` gave wrong lengths. The loop now reads the
   element pointer by value, bounds itself by the static `N`, reads a `str` element as its two-word view
   and a `u8`/`i8` element as a byte (`i8` sign-extended).
+- **An index past the end of a fixed-array parameter traps on x86_64 (#1287, #1404).** A parameter
+  `xs : [T; N]` owns no length word, so its only bound is the static `N` of its type. That check was
+  emitted for a word, byte and plain-scalar-struct element only: a `str` element (the two-word view
+  #1287 introduced), an enum element (#1404), a struct with a non-scalar field and a float element were
+  unchecked, so `xs[i]` with `i >= N` read the caller's memory past the array and answered a word of it
+  — 0, or a neighbour's field, where the same index into `[u64; N]` or `[u8; N]` trapped. Every element
+  kind of a `[T; N]` parameter is now compared against `N` and traps out of range (SIGILL, 132). A
+  program that read past the end and used the value now stops; it was invalid (I11, Types §4.5/§6.4).
+  Inside `unchecked` the check stays off (CG-7).
 - **A float-to-integer conversion traps on NaN and on an out-of-range value, on every backend (#997,
   #1374).** `T(f)` used to be a bare truncating conversion with no check. `u64(1.0e30)` answered 2^63,
   `u8(300.0)` answered 44, `i64(NaN)` answered the integer-indefinite value, and `u64(-1.0)` answered
