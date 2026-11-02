@@ -3095,7 +3095,8 @@ rv_emit_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out 
       ## width materializes its own bound with the `li` pseudo-instruction instead (every narrow
       ## minimum is a 32-bit signed value, so `li` expands to at most `lui`+`addiw`). The zero case
       ## keeps the previous bytes exactly. `%` (29) never sets `dvmin`: `MIN % -1` is 0.
-      if dsigned {
+      ## `%` owes no arm at all (§6.1, #1398): the ISA's `rem` of `MIN` by `-1` is 0.
+      if dsigned and op == 19 {
         if dvmin == 0 { push_str(sb, "  li a2, -1\n  bne a1, a2, 1f\n  li a3, 1\n  slli a3, a3, 63\n  bne a0, a3, 1f\n  ebreak # div_overflow\n1:\n") }
         else {
           push_str(sb, "  li a2, -1\n  bne a1, a2, 1f\n  li a3, ")

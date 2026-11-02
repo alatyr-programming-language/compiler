@@ -18306,8 +18306,13 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
   }
   if (op == 19 or op == 29) and (not expr_is_pos_num(r)) {
     push_str(sb, "  testq %rbx, %rbx\n  jnz 1f\n  ud2\n1:\n")
-    if dsigned {
+    if dsigned and op == 19 {
       push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  movq $-9223372036854775808, %rdx\n  cmpq %rdx, %rax\n  jne 1f\n  ud2\n1:\n")
+    }
+    if dsigned and op == 29 {
+      ## A checked signed `%` by `-1` is `0` for every dividend, `MIN` included (§6.1, #1398). The routed
+      ## body's `idivq` would fault (#DE) on `MIN`, so the body gets the divisor `1` instead: the same `0`.
+      push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  movl $1, %ebx\n1:\n")
     }
   }
 }
@@ -19403,9 +19408,12 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           dvmin = narrow_signed_min(str_at((cx.src + dvb.s), dvb.n))
         }
       }
-      if cx.vchk and (op == 19 or op == 29) and (not expr_is_pos_num(r)) {
+      ## A checked signed `%` by `-1` is `0` for every dividend, `MIN` included (§6.1, #1398): it skips
+      ## the `idivq`, which would fault (#DE) on `MIN`, with a zero remainder.
+      dvchk := cx.vchk and (op == 19 or op == 29) and (not expr_is_pos_num(r))
+      if dvchk {
         push_str(sb, "  testq %rbx, %rbx\n  jnz 1f\n  ud2\n1:\n")
-        if dsigned {
+        if dsigned and op == 19 {
           if dvmin == 0 { push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  movq $-9223372036854775808, %rdx\n  cmpq %rdx, %rax\n  jne 1f\n  ud2\n1:\n") }
           else {
             push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  movq $")
@@ -19418,7 +19426,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if dsigned { push_str(sb, "  cqto\n  idivq %rbx\n") } else { push_str(sb, "  xorq %rdx, %rdx\n  divq %rbx\n") }
       }
       if op == 29 {
-        if dsigned { push_str(sb, "  cqto\n  idivq %rbx\n  movq %rdx, %rax\n") } else { push_str(sb, "  xorq %rdx, %rdx\n  divq %rbx\n  movq %rdx, %rax\n") }
+        if dsigned and dvchk { push_str(sb, "  xorl %edx, %edx\n  cmpq $-1, %rbx\n  je 1f\n  cqto\n  idivq %rbx\n1:\n  movq %rdx, %rax\n") }
+        else if dsigned { push_str(sb, "  cqto\n  idivq %rbx\n  movq %rdx, %rax\n") } else { push_str(sb, "  xorq %rdx, %rdx\n  divq %rbx\n  movq %rdx, %rax\n") }
       }
       ## Bitwise `&` (34) / `|` (35) / `^` (36): the operands are already in %rax (left) /
       ## %rbx (right); apply the register-to-register form. No signedness — a pure bit op.

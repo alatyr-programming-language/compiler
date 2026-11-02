@@ -329,6 +329,8 @@ ir_emit_ovf_guard := fn(signed : bool) {
 ## divide, so the x86_64 hardware `#DE` (SIGFPE) is never the observable failure. `ud2` (op 13) is a dead
 ## end and each CONT label is a block boundary the allocator already splits on; `cmp` (op 4) is read-only,
 ## so no vreg is defined across a branch except the short-lived INT64_MIN constant.
+## `signed` asks for the `MIN / -1` arm, which only a quotient owes: a checked `MIN % -1` is `0` (§6.1,
+## #1398), and `ir_lower_bin` produces it without the divide.
 ir_emit_div_guard := fn(rok : usize, rov : i64, signed : bool) {
   cz := ir_fresh_label()
   regalloc::ra_ir_emit(4, rok, rov, 1, 0)                      ## cmp R, $0
@@ -423,7 +425,21 @@ ir_lower_bin := fn(be : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr), cx : p
     lo := ir_lower_expr(l, cx, unch)
     ro := ir_to_reg(ir_lower_expr(r, cx, unch))
     regalloc::ra_ir_emit(0, 2, 0, lo.k, lo.v)                  ## mov rax, L
-    if (not unch) and (not expr_is_pos_num(r)) { ir_emit_div_guard(ro.k, ro.v, dsigned) }
+    guarded := (not unch) and (not expr_is_pos_num(r))
+    if guarded { ir_emit_div_guard(ro.k, ro.v, dsigned and op == 19) }
+    if guarded and dsigned and op == 29 {
+      ## A checked signed `%` by `-1` is `0` for every dividend, `MIN` included (§6.1, #1398): the `-1`
+      ## divisor skips the `idivq`, which would fault (#DE) on `MIN`.
+      tz := ir_fresh_vreg()
+      lz := ir_fresh_label()
+      regalloc::ra_ir_emit(0, 3, i64(tz), 1, 0)                ## mov tz, $0
+      regalloc::ra_ir_emit(4, ro.k, ro.v, 1, 0 - 1)            ## cmp R, $-1
+      regalloc::ra_ir_emit(9, 4, i64(lz), 1, 0)                ## je LZ     (remainder by -1: tz stays 0)
+      regalloc::ra_ir_emit(12, ro.k, ro.v, 0, 0)               ## idiv R (renderer: cqto)
+      regalloc::ra_ir_emit(0, 3, i64(tz), 2, 3)                ## remainder (%rdx)
+      regalloc::ra_ir_emit(10, 4, i64(lz), 0, 0)               ## LZ:
+      return IROperand(k = 3, v = i64(tz))
+    }
     if dsigned { regalloc::ra_ir_emit(12, ro.k, ro.v, 0, 0) }  ## idiv R (renderer: cqto)
     else { regalloc::ra_ir_emit(11, ro.k, ro.v, 0, 0) }        ## udiv R (renderer: xorq %rdx,%rdx)
     t := ir_fresh_vreg()
