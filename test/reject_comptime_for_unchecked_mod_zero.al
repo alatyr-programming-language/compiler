@@ -15,3 +15,4 @@ main := fn() -> u64 {
   if total != 0 { return 1 }
   return 42
 }
+## expect: reject "range bound divides by zero" "under `unchecked` too. at line 14 in "

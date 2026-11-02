@@ -342,6 +342,8 @@ aarch64	test/ra_codec_next_usize.al	run/133	#1188
 aarch64	test/ra_codec_slice_cast.al	run/133	#1188
 aarch64	test/range_int_match.al	run/133	#1190
 aarch64	test/reject_agg_compare.al	run/133	#1192
+aarch64	test/reject_comptime_for_div_zero.al	run/133	#1232
+aarch64	test/reject_comptime_for_unchecked_mod_zero.al	run/133	#1232
 aarch64	test/resolves_query.al	run/133	#1193
 aarch64	test/result_and_then.al	run/133	#1200
 aarch64	test/result_map.al	run/133	#1200
@@ -807,6 +809,8 @@ riscv64	test/ra_codec_next_usize.al	run/133	#1188
 riscv64	test/ra_codec_slice_cast.al	run/133	#1188
 riscv64	test/range_int_match.al	run/133	#1190
 riscv64	test/reject_agg_compare.al	run/133	#1192
+riscv64	test/reject_comptime_for_div_zero.al	run/133	#1232
+riscv64	test/reject_comptime_for_unchecked_mod_zero.al	run/133	#1232
 riscv64	test/resolves_query.al	run/133	#1193
 riscv64	test/result_and_then.al	run/133	#1200
 riscv64	test/result_map.al	run/133	#1200
@@ -1258,6 +1262,8 @@ wasm	test/ra_codec_slice_cast.al	run/134	#1188
 wasm	test/random_prng.al	run/134	#1190
 wasm	test/range_int_match.al	run/134	#1190
 wasm	test/reject_agg_compare.al	run/134	#1192
+wasm	test/reject_comptime_for_div_zero.al	run/134	#1232
+wasm	test/reject_comptime_for_unchecked_mod_zero.al	run/134	#1232
 wasm	test/resolves_query.al	run/134	#1193
 wasm	test/result_and_then.al	run/134	#1186
 wasm	test/result_map.al	run/134	#1186
