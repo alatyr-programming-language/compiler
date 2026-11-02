@@ -1492,3 +1492,6 @@ wasm	test/zst_and_empty_ctor.al	run/134	#713
 x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
 x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
+aarch64	test/issue1238_vec_slice_range_narrow_elem.al	run/133	#1288
+riscv64	test/issue1238_vec_slice_range_narrow_elem.al	run/133	#1288
+wasm	test/issue1238_vec_slice_range_narrow_elem.al	run/134	#1288
