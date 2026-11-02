@@ -182,6 +182,19 @@ Two numbers that are **not** the compiler's version: the specification revision 
   pointee type, so inside a `Deque(u8)`, `Deque(i16)` or `Deque(bool)` instance `deref(slot) = x` wrote
   8 bytes over the elements after the slot and `deref(slot)` read them into the value. A local bound
   from a call that returns a pointer to a sub-word scalar now carries that pointee.
+- **A checked `+ - *` that overflows in a `comptime for` range bound is refused, not wrapped
+  (#1234).** `0 .. K + 2` with `K : u64 = 2^64 - 1` wrapped to 1 and unrolled once on all four
+  backends, and the `i64` shape wrapped to MIN and unrolled zero times. The fold now runs the
+  checked guard in the operation's own type and width (Comptime §2.6): a located compile error on
+  x86_64, a trap on the twins until #1232. Inside `unchecked` the wrap is defined and still folds.
+  The overflow judgement is now one function in `lower_layout`, shared by the const checker and both
+  range-bound folders.
+- **An `unchecked` `+ - *` in a `comptime for` range bound wraps at its type's width (#1271).** The fold
+  kept every bound as an `i64` pattern, so an `i32` or `u32` wrap never happened: with `K : i32` at
+  MAX, `0 .. unchecked (K + 1) - 2147483600` built and ran 48 times instead of being refused, `u32`
+  `unchecked (K + 3)` hit the unroll budget instead of unrolling twice, and an `i32` product that
+  wraps to 0 reached the compiler's own `idiv` as `i64::MIN / -1` (SIGFPE). The result now wraps to
+  the operation's width (Comptime §2.6), on all four backends.
 
 ## 0.2.21 — 2026-11-01
 
