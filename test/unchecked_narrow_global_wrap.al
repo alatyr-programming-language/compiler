@@ -22,3 +22,4 @@ main := fn() -> u64 {
   if w != (0 - 2147483645) { return 4 }
   return 40
 }
+## expect: run 40

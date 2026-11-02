@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if x != 0 { return 1 }
   return 40
 }
+## expect: run 40
