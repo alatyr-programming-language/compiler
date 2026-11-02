@@ -402,14 +402,17 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
       ## against itself and always answer EQUAL). A `Var` operand is NOT counted: it already has a
       ## frame home and `emit_arg` passes its address directly, taking no pool block — which is why
       ## the two-`Var` shape that was routed before this change keeps its exact frame.
+      ## #1394 — a CALL operand returning a multi-word struct/enum by value is routed the same way and
+      ## is materialized the same way (the callee's result lands in a pool block passed by reference),
+      ## so it takes its own block too.
       mut own : usize = 0
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
         if struct_lit_info(l).is_s or enum_lit_info(l).is_e {
           if agg_value_words(l, decls, src, a) > 1 { own = own + 1 }
-        }
+        } else if agg_value_call_words(l, decls, src, a) > 1 { own = own + 1 }
         if struct_lit_info(r).is_s or enum_lit_info(r).is_e {
           if agg_value_words(r, decls, src, a) > 1 { own = own + 1 }
-        }
+        } else if agg_value_call_words(r, decls, src, a) > 1 { own = own + 1 }
       }
       m = own + deepest
     }

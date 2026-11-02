@@ -5576,27 +5576,92 @@ agg_value_lit_is_enum := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   if eli.is_e == false { return false }
   enum_decl_of(cx.decls, cx.src, eli.es, eli.el) >= 0
 }
+## #1394 — the declared RETURN TYPE span of `e` IFF it is a CALL to a concrete (non-generic) fn that
+## returns a MULTI-WORD struct or enum BY VALUE, else 0/0. The CALL dual of `agg_value_lit_words`:
+## a call operand is neither a `Var` nor a constructor, so the bare-comparison routing declined it and
+## `mk(2) == E.A(7)` fell to the scalar `cmpq`, comparing the returned tag in `%rax` with the `$0` a
+## multi-word constructor materializes as there (#469's class, left open for a call operand). A
+## generic callee answers 0/0: its declared return names its own type parameters, which only the
+## emit-side instance resolves; `agg_cmp_call_unresolved` refuses that shape instead. A union return
+## is not an enum value with a structural `eq` and answers 0/0. Takes `decls`/`src` (no `cx`) so the
+## emit gate, the mono pre-pass and the agg-temp pool scan classify the operand identically.
+agg_call_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  if agg_call_is_generic(e, decls, src, a) { return CSpan(s = 0, n = 0) }
+  if enum_ret_call_d(e, decls, src, a) or enum_sret_ret_call(e, decls, src, a) {
+    es := call_ret_enum_span_d(e, decls, src, a)
+    if es.n == 0 or enum_decl_of(decls, src, es.s, es.n) < 0 or is_union_decl(decls, src, es.s, es.n) { return CSpan(s = 0, n = 0) }
+    if 1 + enum_inst_words(decls, src, es.s, es.n, a) > 1 { return es }
+    return CSpan(s = 0, n = 0)
+  }
+  if struct_ret_call(e, decls, src, a) or sret_ret_call(e, decls, src, a) {
+    cs := call_ret_struct_span(e, decls, src, a)
+    if cs.n == 0 or struct_decl_of(decls, src, cs.s, cs.n) < 0 { return CSpan(s = 0, n = 0) }
+    if struct_words(decls, src, cs.s, cs.n, a) > 1 { return cs }
+  }
+  CSpan(s = 0, n = 0)
+}
+## True IFF `e` is a CALL whose callee resolves to a GENERIC fn decl.
+agg_call_is_generic := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+  match deref(e) {
+    Expr::Call(cs, cl, nargs, args_head) => {
+      ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)
+      if ci < 0 { return false }
+      deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci)))).is_generic
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+## The WORD SIZE of a call operand classified by `agg_call_ret_span`, else 0.
+agg_value_call_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+  cr := agg_call_ret_span(e, decls, src, a)
+  if cr.n == 0 { return 0 }
+  if enum_decl_of(decls, src, cr.s, cr.n) >= 0 { return 1 + enum_inst_words(decls, src, cr.s, cr.n, a) }
+  struct_words(decls, src, cr.s, cr.n, a)
+}
+## True IFF `e` is a call to a GENERIC fn: the routing cannot type its result here, so a comparison
+## of it against a multi-word aggregate is refused rather than compared by word 0 (#1394).
+agg_cmp_call_unresolved := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  agg_call_is_generic(e, cx.decls, cx.src, deref(cx.mar))
+}
+## The LOCATED reject for that shape: the call's source line to stderr, then the refusal.
+reject_cmp_generic_call := fn(ce : ptr(Expr), src : ptr(u8)) {
+  ci := call_callee_span(ce)
+  if ci.n != 0 { lower_show_src_line(src, ci.s) }
+  panic("selfhost: a bare comparison of a GENERIC call's result with a multi-word struct/enum value is not yet supported (the source line above; the call's result type is resolved only per instance); bind the call's result to a local first (`v := f(…)` then `v == …`)")
+}
 ## The comparison-operand classification the structural routing gate asks: the operand's MULTI-WORD
-## by-value aggregate WIDTH, whether the operand is spelled as a `Var` (a frame slot) or as a
-## CONSTRUCTOR EXPRESSION. 0 for every other shape — a scalar, a pointer-to-aggregate (`ek == 7`,
-## `p != 0`), a single-word aggregate, a tuple/array block (its own arms above), an index read.
+## by-value aggregate WIDTH, whether the operand is spelled as a `Var` (a frame slot), as a
+## CONSTRUCTOR EXPRESSION, or as a CALL returning the aggregate by value (#1394). 0 for every other
+## shape — a scalar, a pointer-to-aggregate (`ek == 7`, `p != 0`), a single-word aggregate, a
+## tuple/array block (its own arms above), an index read.
 agg_cmp_operand_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
   w := agg_value_var_words(e, cx, a)
   if w != 0 { return w }
-  agg_value_lit_words(e, cx, a)
+  lw := agg_value_lit_words(e, cx, a)
+  if lw != 0 { return lw }
+  agg_value_call_words(e, cx.decls, cx.src, deref(cx.mar))
 }
 ## The ENUM half of that classification, for the ordering fail-loud.
 agg_cmp_operand_is_enum := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   if agg_value_var_is_enum(e, cx) { return true }
-  agg_value_lit_is_enum(e, cx)
+  if agg_value_lit_is_enum(e, cx) { return true }
+  cr := agg_call_ret_span(e, cx.decls, cx.src, deref(cx.mar))
+  cr.n != 0 and enum_decl_of(cx.decls, cx.src, cr.s, cr.n) >= 0
 }
 ## True IFF at least one operand of the comparison is an aggregate CONSTRUCTOR EXPRESSION, i.e. the
 ## routing reaches the derive through the newly classified shape rather than the two-`Var` shape that
 ## was already routed. Gates the same-type proof below so the pre-existing two-`Var` path keeps the
 ## exact emission it had (fixpoint / oracle neutrality is a property of that, not an assertion).
+## A CALL operand (#1394) takes the same proof: its declared return names its type exactly as a
+## constructor does.
 agg_cmp_has_lit_operand := fn(l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> bool {
   if agg_value_lit_words(l, cx, a) > 1 { return true }
-  agg_value_lit_words(r, cx, a) > 1
+  if agg_value_lit_words(r, cx, a) > 1 { return true }
+  if agg_value_call_words(l, cx.decls, cx.src, deref(cx.mar)) > 1 { return true }
+  agg_value_call_words(r, cx.decls, cx.src, deref(cx.mar)) > 1
 }
 ## The DECL-NAME span of a comparison operand's aggregate type — a `Var`'s slot type name or a
 ## constructor expression's own type name, both canonicalized through `type_lit_tag`. `base::derive`
@@ -5608,6 +5673,11 @@ agg_cmp_operand_tag := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   if sli.is_s { return type_lit_tag(cx.decls, cx.src, sli.ss, sli.sl) }
   eli := enum_lit_info(e)
   if eli.is_e { return type_lit_tag(cx.decls, cx.src, eli.es, eli.el) }
+  cr := agg_call_ret_span(e, cx.decls, cx.src, deref(cx.mar))
+  if cr.n != 0 {
+    cbn := base_type_name(cx.src, cr.s, cr.n)
+    return type_lit_tag(cx.decls, cx.src, cbn.s, cbn.n)
+  }
   vn := var_name_span(e)
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
@@ -19284,6 +19354,11 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## adds the constructor shape to the SAME gate, so Stdlib §2.6 / Comptime §5.4-§5.5
         ## componentwise equality reaches `base::derive::eq`/`lt` for it too. The already-routed
         ## two-`Var` shape is unchanged (`agg_value_var_words` is asked first and answers first).
+        ## #1394 — a GENERIC call beside a multi-word aggregate returns that aggregate (both operands
+        ## have one type), but its declared return names the callee's own type parameters, so it is
+        ## not classified above and would compare by word 0. Refuse it rather than answer wrongly.
+        if agg_cmp_operand_words(l, cx, a) > 1 and agg_cmp_call_unresolved(r, cx) { reject_cmp_generic_call(r, cx.src) }
+        if agg_cmp_call_unresolved(l, cx) and agg_cmp_operand_words(r, cx, a) > 1 { reject_cmp_generic_call(l, cx.src) }
         if agg_cmp_operand_words(l, cx, a) > 1 and agg_cmp_operand_words(r, cx, a) > 1 {
           use_lt := op == 24 or op == 25 or op == 26 or op == 27       ## ordering ops call `lt`; `==`/`!=` call `eq`
           ## SAME-TYPE PROOF, for the newly classified constructor shape only. `base::derive::eq`/`lt`
