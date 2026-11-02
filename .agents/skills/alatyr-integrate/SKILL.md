@@ -543,9 +543,14 @@ Then run `scripts/land.sh <pr>`. Every step is a check that stops on failure:
   screen sends such a PR solo. Any other CHANGELOG shape (a rewritten line, a
   non-bullet addition, a hunk outside `## Unreleased`, a conflict-marker-like line in the base, main
   or the PR version) and any other conflicted path is `LAND REFUSED (the merge conflicts)`. The merge
-  message records the resolution, and the gate runs on that merge. The queue sends a PR that
-  conflicts with main only there through this solo path (`land.sh --screen` reports `solo=yes`)
-  instead of back to its author.
+  message records the resolution, and the gate runs on that merge. The queue no longer sends such a
+  PR solo: its batch composer calls the same two resolvers through `land.sh --settle-append-only`
+  and settles a conflict confined to `CHANGELOG.md` or `scripts/e2e.sh` whose both sides only add
+  lines at one anchor, keeping both runs with main's first (#1390). A conflict the settle will not
+  have — a rewritten or deleted line, any other path, a counted registry such as
+  `scripts/seed_forms.tsv`, where keeping both sides also means rewriting its `# live-rows:` count —
+  is refused there, in seconds, and goes back to its author; a clean merge that misfiles a line under
+  a release heading still takes the solo path (#1319).
 - **PHASE 3b**, for a rebased delta only: the rebase is a hypothesis about `main`'s code, which can
   change what the PR's own fixtures do without moving a manifest row (#1215). land.sh builds the merge
   and walks the corpus alone (~15 min with the two self-builds); a walk that does not realise the rebased delta is

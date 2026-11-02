@@ -196,6 +196,19 @@ Two numbers that are **not** the compiler's version: the specification revision 
   wraps to 0 reached the compiler's own `idiv` as `i64::MIN / -1` (SIGFPE). The result now wraps to
   the operation's width (Comptime §2.6), on all four backends.
 
+- **The merge queue composes through an append-only conflict instead of sending it back (#1390).**
+  Every landing appends at the same anchor — a bullet at the end of `## Unreleased` in `CHANGELOG.md`,
+  a `run` row at the end of the fixture list in `scripts/e2e.sh` — so every second queued PR came back
+  as "conflicts with main", and the ones that conflicted only there took a solo landing of ~80–90
+  minutes on a loaded gate machine, which is how a queue of ~17 PRs drains in over a day. A batch now
+  composes through such a conflict when BOTH sides only added lines at one anchor: both runs are kept,
+  ours first, and the merge commit says so. It is `scripts/land.sh`'s existing CHANGELOG resolver
+  (#1312, #1319) doing the work, called by the queue rather than copied. A conflict where either side
+  rewrote or deleted a line, one in any other file, and one in a counted registry —
+  `scripts/seed_forms.tsv`, whose `# live-rows: N` must equal the rows that parse, and
+  `scripts/known-deviations.tsv`, which is sorted and unique — stay refusals: keeping both sides of
+  those means re-sorting them and rewriting a count, which is a decision, not an addition.
+
 ## 0.2.21 — 2026-11-01
 
 - **A struct read through `deref(unchecked bitcast(ptr(S), x))` is the whole `S` (#1209).** Binding it
