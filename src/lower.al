@@ -9390,6 +9390,116 @@ subst_gen_struct_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
   res
 }
 
+## #1257 — the implicit-UFCS dual of `subst_gen_struct_ret_span`. A call that OMITS every type argument
+## (`v.index_range(1, 3)`, and `v[1..3]`, which the driver rewrites to that call) has the receiver `v`, not
+## a type, at `T`'s argument position, so the explicit reading answers 0/0 and `s := v[1..3]` kept the raw
+## `Slice(T)`: a `str` element was read one word wide (a silent wrong value). Here `T` is read against
+## the receiver's own slot type (`Vec(str)`) at the position the first value parameter gives it
+## (`v : ptr(Vec(T))` by auto-ref, Types §4.5), as `ufcs_ret_struct_span` reads `o.unwrap()`. Only the
+## receiver is read. 0/0 unless some resolved type argument is an aggregate, so every other binding keeps
+## its raw span (byte-identical).
+ufcs_gen_struct_ret_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, synth : ptr(mut rt::Arena)) -> CSpan {
+  mut res := CSpan(s = 0, n = 0)
+  match deref(v) {
+    Expr::Call(cs, cl, nargs, ah) => {
+      if nargs == 0 { return res }
+      ci := ret_call_target(decls, src, cs, cl, nargs, ah, a)
+      if ci < 0 { return res }
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
+      if not d.is_generic or d.ret_tl == 0 { return res }
+      bn := base_type_name(src, d.ret_ts, d.ret_tl)
+      sdi := struct_decl_of(decls, src, bn.s, bn.n)
+      if sdi < 0 { return res }
+      sd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(sdi))))
+      if not sd.is_generic { return res }
+      ## the implicit shape: every type argument omitted, and the first value parameter's type `R`
+      mut ntpc : usize = 0
+      mut rts : usize = 0
+      mut rtl : usize = 0
+      mut pp := d.params_head
+      loop {
+        match pp {
+          Some(ppq) => {
+            pm := deref(param_p(ppq))
+            if str_at((src + pm.ts), pm.tl) == "type" { ntpc += 1 }
+            else if rtl == 0 { rts = pm.ts; rtl = pm.tl }
+            pp = pm.next
+          }
+          None => { break }
+        }
+      }
+      if ntpc == 0 or rtl == 0 or nargs + ntpc != d.arity { return res }
+      ## `R` itself, or its pointee when the receiver reaches it by auto-ref
+      mut xs := rts
+      mut xn := rtl
+      match ufcs_ref_pointee(src, rts, rtl) {
+        Some(x) => { xs = x.s; xn = x.n }
+        None => {}
+      }
+      xbn := base_type_name(src, xs, xn)
+      rvn := var_name_span(arg_expr_at(ah, 0, a))
+      if rvn.n == 0 or slot_of(slots, src, rvn.s, rvn.n) < 0 { return res }
+      rent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, rvn.s, rvn.n)))
+      if rent.snl == 0 { return res }
+      ## PASS 1 (no allocation): does some return type argument resolve to an aggregate?
+      mut anyp := false
+      mut k : usize = 0
+      mut go := true
+      while go {
+        ta := typearg_at(src, bn.s, bn.n, k)
+        if ta.n == 0 { go = false }
+        else {
+          rta := ufcs_recv_slot_targ(ta, xs, xn, xbn, rent.sns, rent.snl, src)
+          if rta.n != 0 and ty_is_agg_span(decls, src, rta.s, rta.n) { anyp = true }
+          k += 1
+        }
+      }
+      if anyp {
+        mut msb := rt::strbuf(deref(synth), 192)
+        push_str(msb, str_at((src + bn.s), bn.n))
+        push_str(msb, "(")
+        mut k2 : usize = 0
+        mut go2 := true
+        while go2 {
+          ta := typearg_at(src, bn.s, bn.n, k2)
+          if ta.n == 0 { go2 = false }
+          else {
+            if k2 > 0 { push_str(msb, ", ") }
+            rta := ufcs_recv_slot_targ(ta, xs, xn, xbn, rent.sns, rent.snl, src)
+            if rta.n != 0 { push_str(msb, str_at((src + rta.s), rta.n)) }
+            else { push_str(msb, str_at((src + ta.s), ta.n)) }
+            k2 += 1
+          }
+        }
+        push_str(msb, ")")
+        ## unchecked-ok: the synthesized name's address read as an integer to rebase it on `src`
+        base_abs := unchecked bitcast(usize, rt::strbuf_base(msb))
+        ## unchecked-ok: modular pointer difference; every consumer wraps it back with `src + s`
+        res = CSpan(s = unchecked (base_abs - src), n = bn.n)   ## rebase seam
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  res
+}
+
+## #1257 — the type the receiver's slot type `[rs, rn)` (`Vec(str)`) supplies for the callee type
+## parameter `ta` (`T`), read at `T`'s position in the receiver parameter's type `[xs, xn)` (`Vec(T)`,
+## head `xbn`). 0/0 when that type does not take `T` directly or the slot has another head.
+ufcs_recv_slot_targ := fn(ta : CSpan, xs : usize, xn : usize, xbn : CSpan, rs : usize, rn : usize, src : ptr(u8)) -> CSpan {
+  match ufcs_param_tpos(src, xs, xn, ta.s, ta.n) {
+    Some(tp) => {
+      r := ufcs_head_targ(rs, rn, tp, xbn.s, xbn.n, src)
+      if r.n == 0 { return r }
+      return full_app_span(src, r.s, r.n)
+    }
+    None => { return CSpan(s = 0, n = 0) }
+  }
+}
+
 ## `subst_inst_struct_span` keyed on the EMIT context: the RESOLVED generic-struct application span for
 ## a type reference written inside the current monomorphization INSTANCE (`Box(T)` → `Box(P)`), or the
 ## span UNCHANGED when nothing substitutes (a non-generic head, a scalar type-arg, a non-instance emit)
@@ -12743,6 +12853,39 @@ ufcs_param_tpos := fn(src : ptr(u8), ps : usize, pl : usize, ts : usize, tl : us
     else { if lower_ctx::streq(src, pta.s, pta.n, ts, tl) { tpos = Option(usize).Some(kk); gk = false } ; kk += 1 }
   }
   tpos
+}
+
+## #987 — the pointee `X` of a callee parameter typed `ptr(X)` / `ptr(mut X)` (`at`'s `v : ptr(Vec(T))`),
+## or None for any other parameter type. A value receiver reaches such a parameter by auto-ref
+## (Types §4.5: `v.at(i)` ≡ `at(ptr(v), i)`), so its type arguments are read against `X`. Read with
+## `typearg_at`, bounded by the type's own parentheses, NOT `ptr_pointee_name` over `extend_type_span`:
+## the collect pass runs before `emit_program` publishes `LOWER_SRC_N`, and that extent fails closed
+## at 0, so the two passes would name different instances (an undefined `at__v` at link time).
+ufcs_ref_pointee := fn(src : ptr(u8), ps : usize, pl : usize) -> Option(CSpan) {
+  bn := base_type_name(src, ps, pl)
+  if str_at((src + bn.s), bn.n) != "ptr" { return Option(CSpan).None }
+  pe := typearg_at(src, bn.s, bn.n, 0)
+  if pe.n > 4 and str_at((src + pe.s), 4) == "mut " { return Option(CSpan).Some(CSpan(s = pe.s + 4, n = pe.n - 4)) }
+  if pe.n == 0 { return Option(CSpan).None }
+  Option(CSpan).Some(CSpan(s = pe.s, n = pe.n))
+}
+
+## #987 — the type argument for the type parameter `[ts, tl)` that a UFCS receiver `e` supplies through
+## an auto-ref first parameter typed `[ps, pl)` = `ptr([mut] X)` (`v.at(i)` → `at(T, v, i)` with
+## `v : ptr(Vec(T))`), read from the receiver's bindings against `X` exactly as #988 reads a by-value
+## receiver. 0/0 when the parameter is not such a pointer, `X` does not take `T` directly, or the
+## bindings disagree or cannot be read — a pointer-typed receiver among them — and the call is then
+## refused (Comptime §3.3), never tagged by the receiver's name. Both mono passes call it.
+ufcs_autoref_targ := fn(e : ptr(Expr), ps : usize, pl : usize, ts : usize, tl : usize, body : Option(ptr(mut Stmt)), params : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  match ufcs_ref_pointee(src, ps, pl) {
+    Some(x) => {
+      match ufcs_param_tpos(src, x.s, x.n, ts, tl) {
+        Some(tp) => { return ufcs_recv_targ(e, tp, body, params, x.s, x.n, decls, src, a) }
+        None => { return CSpan(s = 0, n = 0) }
+      }
+    }
+    None => { return CSpan(s = 0, n = 0) }
+  }
 }
 
 ## #988 — the type argument at `tpos` of a UFCS receiver Var `e`, for a callee parameter typed `[ps, pl)`
@@ -17013,6 +17156,11 @@ infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(L
         if str_at((cx.src + pm.ts), pm.tl) == "type" {
           pc = pm.next
         } else {
+          ## #987 — an auto-ref receiver (`v.at(i)` into `v : ptr(Vec(T))`, Types §4.5); the pre-pass mirrors it.
+          if j2 == 0 {
+            art := ufcs_autoref_targ(arg_expr_at(args_head, 0, a), pm.ts, pm.tl, tpn_s, tpn_l, EMIT_BODY, EMIT_PARAMS, cx.decls, cx.src, deref(cx.mar))
+            if art.n != 0 { return inst_tparam_cx(art.s, art.n, cx) }
+          }
           if param_type_has_tparam(cx.src, pm.ts, pm.tl, tpn_s, tpn_l) {
             rae := arg_expr_at(args_head, j2, a)
             vn := var_name_span(rae)
@@ -28984,6 +29132,11 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
         if str_at((src + pmm.ts), pmm.tl) == "type" {
           pcm = pmm.next
         } else {
+          ## #987 — the COLLECT-side mirror of the emit side's auto-ref receiver step.
+          if jm == 0 {
+            art := ufcs_autoref_targ(arg_expr_at(args_head, 0, a), pmm.ts, pmm.tl, tpn_s, tpn_l, COLLECT_FN_BODY, penv, decls, src, a)
+            if art.n != 0 { return art }
+          }
           if param_type_has_tparam(src, pmm.ts, pmm.tl, tpn_s, tpn_l) {
             rty := recv_full_pre(arg_expr_at(args_head, jm, a), decls, src, penv, a)
             if rty.n != 0 {
