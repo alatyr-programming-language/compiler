@@ -3,7 +3,7 @@
 ## local stand-in for the stdlib frees (strbuf_free/hashmap_free/…), which are consumers by convention.
 my_free := fn(s : u64) -> u64 { 0 }
 main := fn() -> u64 {
-  x := 5
+  x : u64 = 5
   r := my_free(x)
   y := x
   y

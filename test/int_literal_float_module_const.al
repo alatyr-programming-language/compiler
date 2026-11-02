@@ -89,8 +89,8 @@ main := fn() -> u64 {
   if k7 != 0 { return 70 + k7 }
 
   ## 8 — control: an INTEGER local from the same module constant keeps the integer.
-  n8 : u64 = K3
-  k8 := classify(i64(n8), 3)
+  n8 : i64 = K3
+  k8 := classify(n8, 3)
   if k8 != 0 { return 80 + k8 }
 
   ## 9 — control: an INTEGER local from the same const-struct field keeps the integer.
