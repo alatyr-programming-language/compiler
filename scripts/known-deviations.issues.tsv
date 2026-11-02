@@ -40,4 +40,3 @@
 1207	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: two programs fail to assemble or link on aarch64 and riscv64	rows
 1288	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: a range-slice binding over a non-frame base and a slice argument are fail-loud stubs (`unsupported slice binding` / `unsupported slice argument`)	rows
 1336	Modules §2, §4 (MOD-3): `::` names a sibling module's `pub` item and `.` reads a field of that value	a qualified field read of a sibling's `pub` struct global (`z::cfg.x`) is refused at compile time with a bare `invalid`, on every backend	rows
-1392	Overview §6 (code consistent with the normative lowering rules, per selected target)	wasm: a `for` over an `[i8; N]` local reads a negative element unsigned after a stored, iterated `[u8; N]` local (a silent wrong value)	rows
