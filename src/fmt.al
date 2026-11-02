@@ -2433,14 +2433,13 @@ emit_fmt_comptime_arms := fn(arms_head : Option(ptr(mut Arm)), scrut : ptr(Expr)
 ## Pretty-print a STATEMENT-match's arm list (each body a braced statement block). The PATTERN follows
 ## the value-match form (variant `V(b0, …)` / integer literal / `_`); the body renders multi-line and
 ## indented (like `emit_fmt_comptime_arms`). A str-literal pattern (`wild == 4`) renders `"…"`; comptime
-## template arms (`wild` 2) render the nested `comptime for`; var arms (`wild` 3) remain fail-loud.
+## template arms (`wild` 2) render the nested `comptime for`; var arms (`wild` 3) render `T.(v)(p)`.
 emit_fmt_stmt_match_arms := fn(arms_head : Option(ptr(mut Arm)), body_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), indent : usize, tparam : str) {
   mut arm : Option(ptr(mut Arm)) = arms_head
   loop {
     match arm {
       Some(armq) => {
         am := deref(arm_p(armq))
-        if am.wild == 3 { panic("selfhost: fmt — comptime statement-match var arm not modelled") }
         if am.wild == 2 {
           emit_indent(sb, indent + 1)
           push_str(sb, "comptime for ")
@@ -2463,6 +2462,12 @@ emit_fmt_stmt_match_arms := fn(arms_head : Option(ptr(mut Arm)), body_head : Opt
         } else {
         emit_indent(sb, indent + 1)
         if am.wild == 1 { push_str(sb, "_") }
+        if am.wild == 3 {
+          ## A `T.(v)(p)` arm of a statement match nested in a comptime unroll (#1369: derive's `eq`
+          ## matches `b` against the outer arm's variant). The statement-match twin of the value-match
+          ## pattern, rendered by the same function: the head as the author spelled it, then `.(v)`.
+          fmt_emit_value_arm_pattern(am, sb, src, a, decls)
+        }
         if am.wild == 4 {
           ## STR-LITERAL pattern `"lit" => { … }` (§5.4): `am.lit` holds the `Expr::StrLit` node handle
           ## (recovered as a `ptr(Expr)`), rendered `"…"` by the StrLit arm — the statement-match twin of the

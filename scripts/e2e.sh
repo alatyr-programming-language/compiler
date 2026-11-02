@@ -7943,6 +7943,7 @@ fmt_test_has fmt_test_decl 42 "@test(\"a test with no return type at all\")"
 fmt_test_has fmt_comptime_param 42 "fn(comptime N : u64, a : w(N)"
 fmt_test_has fmt_compfor_typeinfo_arg 42 "comptime for f in typeinfo(B).fields"
 fmt_test_has fmt_comptime_arm_template 42 "comptime for v in typeinfo(T).variants { T.(v)(pa) =>"
+fmt_test_has fmt_comptime_var_arm_stmt 42 "T.(v)(pb) => {"
 ## the OWN-LINE prefix attribute -- the form that became MEANINGFUL the same day fmt was last swept, and
 ## so was silently erased by it (the packed declaration changed from size 7 to the natural size 24).
 ## Lockable now only because the fixture's two in-body notes
