@@ -9,7 +9,7 @@ elem := fn(xs : [C; 3], i : usize) -> u64 {
   return 0
 }
 flag := fn(b : bool) -> u64 {
-  r := match b { true => { 2 }; false => { 1 } }
+  r : u64 = match b { true => { 2 }; false => { 1 } }
   return r
 }
 main := fn() -> u64 {

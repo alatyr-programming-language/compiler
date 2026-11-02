@@ -1,7 +1,7 @@
 E := enum { A(u64), B(u64) }
 
 sum := fn(T : type, v : T) -> u64 {
-  mut out := 0
+  mut out : u64 = 0
   match v {
     comptime for k in typeinfo(T).variants {
       T.(k)(p) => {

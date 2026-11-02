@@ -4,7 +4,7 @@
 ## reads raw. `N` is a compile-time value the compiler knows from the array's type. x86_64-only for
 ## now (the bounds check lives in the x86_64 index lowering; other backends keep the raw read).
 main := fn() -> u64 {
-  a := [10, 20, 30]
+  a : [u64; 3] = [10, 20, 30]
   i : u64 = 5
   return a[i]
 }

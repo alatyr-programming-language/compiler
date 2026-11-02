@@ -5,7 +5,7 @@
 Pt := struct { x : u64, y : u64 }
 
 main := fn() -> u64 {
-  t := (12, Pt(x = 20, y = 10))
+  t : (u64, Pt) = (12, Pt(x = 20, y = 10))
   return t.0 + t.1.x + t.1.y
 }
 ## expect: run 42

@@ -8,7 +8,7 @@
 ## cannot pass. Returns 42; the first input that disagrees returns its own code 100..106 (each under
 ## 126, which is wasm's `proc_exit` ceiling).
 bound := fn(n : u64) -> u64 {
-  v := if n == 0 { 3 } else if n == 1 { 4 } else if n == 2 { 5 } else { 6 }
+  v : u64 = if n == 0 { 3 } else if n == 1 { 4 } else if n == 2 { 5 } else { 6 }
   return v
 }
 tail := fn(n : u64) -> u64 {

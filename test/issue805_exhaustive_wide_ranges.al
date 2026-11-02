@@ -3,7 +3,7 @@
 ## accepts them. (Run-time matching of a range whose bound is at or above 2^63 is #806; the checker's
 ## verdict is the property under test here.)
 wide := fn(n : u64) -> u64 {
-  r := match n { 0..=9 => { 1 }; 10..=18446744073709551615 => { 4 } }
+  r : u64 = match n { 0..=9 => { 1 }; 10..=18446744073709551615 => { 4 } }
   return r
 }
 word := fn(n : usize) -> u64 {

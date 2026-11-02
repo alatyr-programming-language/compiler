@@ -8,7 +8,7 @@ classify := fn(s : str) -> u64 {
   return match s { "fn" => 10, "return" => 20, _ => 1 }
 }
 pick := fn(n : u64) -> u64 {
-  r := match n { 1 => 5, 2 => 7, 3 => 9, _ => 0 }
+  r : u64 = match n { 1 => 5, 2 => 7, 3 => 9, _ => 0 }
   return r
 }
 main := fn() -> u64 {

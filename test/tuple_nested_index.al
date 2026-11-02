@@ -5,7 +5,7 @@
 ## mis-address the wider component). Values chosen so ONLY a correct nested read totals 42:
 ## t.0 + t.1.0 + t.1.1 = 20 + 14 + 8 = 42 (a wrong offset re-reads t.0=20 or a filler → not 42).
 main := fn() -> u64 {
-  t := (20, (14, 8))
+  t : (u64, (u64, u64)) = (20, (14, 8))
   return t.0 + t.1.0 + t.1.1
 }
 ## expect: run 42

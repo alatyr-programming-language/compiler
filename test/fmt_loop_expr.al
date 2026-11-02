@@ -1,5 +1,5 @@
 main := fn() -> u64 {
-  x := loop {
+  x : u64 = loop {
     break 42
   }
   return x

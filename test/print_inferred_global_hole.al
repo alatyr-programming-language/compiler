@@ -4,7 +4,7 @@
 ## default numeric type is i64). Prints "L 7 G 40" (verified manually) and returns 7 + 35 = 42.
 mut G := 40
 main := fn() -> u64 {
-  L := 7
+  L : u64 = 7
   std::fmt::print("L {} G {}\n", L, G)
   L + 35
 }

@@ -5,9 +5,9 @@
 ##   `(a < c) == (b < c)` keeps them (a comparison operand of a comparison is non-associative).
 ## a=8, b=3, c=10:  r=(8|3)&10=10, s=(8&3)|10=10, t=(8^3)&10=10 → 30; (8<10)==(3<10) → true → +12 = 42.
 main := fn() -> u64 {
-  a := 8
-  b := 3
-  c := 10
+  a : u64 = 8
+  b : u64 = 3
+  c : u64 = 10
   r := (a | b) & c
   s := (a & b) | c
   t := (a ^ b) & c

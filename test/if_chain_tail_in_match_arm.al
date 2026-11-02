@@ -9,7 +9,7 @@
 ## wasmtime (134). Measured identical on the base compiler for the same three-arm match with no chain
 ## in it at all, so this is the pre-existing cross-backend match gap, not this fixture's construct —
 ## the portable half of the same defect is `if_chain_nested_else_tail`.
-mut R := 0
+mut R : u64 = 0
 setr := fn(x : u64) -> u64 { R = x ; return x }
 in_match_arm := fn(n : u64) -> u64 {
   R = 0
@@ -21,7 +21,7 @@ in_match_arm := fn(n : u64) -> u64 {
   return R
 }
 main := fn() -> u64 {
-  mut bad := 0
+  mut bad : u64 = 0
   if in_match_arm(0) != 11 { bad = bad + 1 }
   if in_match_arm(1) != 14 { bad = bad + 2 }
   if in_match_arm(3) != 15 { bad = bad + 4 }
