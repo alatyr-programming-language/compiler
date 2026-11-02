@@ -42,3 +42,4 @@ main := fn() -> u64 {
   if d.eek != mk5(1).eek { return 21 }
   42
 }
+## expect: run 42
