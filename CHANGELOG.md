@@ -136,6 +136,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   generic function, `deref(p)` with `p : ptr(mut T)` used 8 bytes whatever `T` was, so `at`, `try_at`,
   `get` and `set` on a `Vec(u8)`, `Vec(u16)`, `Vec(u32)` or `Vec(i8)` read the next elements into the
   value (or wrote over them). It now uses `T`'s width and signedness in that instance.
+- **Comparing a function's struct or enum result with `==` or `!=` gives the right answer on x86_64
+  (#1394).** `mk(2) == E.A(7)` compared the returned variant tag with 0 and ignored the payload, so it
+  answered false for two equal values (and `!=` answered true). A call that returns a struct or an enum
+  of more than one word now compares the whole value, like a local does. When the callee is generic,
+  the compiler reports the comparison with its source line and asks to bind the result to a local
+  first, instead of answering wrongly.
 
 ## 0.2.21 — 2026-11-01
 
