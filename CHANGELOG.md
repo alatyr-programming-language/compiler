@@ -137,6 +137,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   x86_64 lowering took any annotated name for one: `xs[0].b`, `xs[1]`, `xs[1..2]` and `for p in xs`
   dereferenced the view's data pointer once more and crashed (SIGSEGV). Parameter-ness is now recorded
   where parameters are bound, so the annotated local reads exactly like `xs := t[0..2]`.
+- **`for x in xs` over a fixed-array parameter yields its elements on x86_64 (#1287).** A parameter
+  `xs : [T; N]` was iterated as a `Slice(T)` parameter: a word element segfaulted, a struct element
+  trapped, and a `str` element read one word, so `[str; 2]` gave wrong lengths. The loop now reads the
+  element pointer by value, bounds itself by the static `N`, reads a `str` element as its two-word view
+  and a `u8`/`i8` element as a byte (`i8` sign-extended).
 
 ## 0.2.21 — 2026-11-01
 
