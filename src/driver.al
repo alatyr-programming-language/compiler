@@ -5441,6 +5441,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
   ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
+  ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
   decls.len = 0
   nstr = 0
   ## --- PASS 2: re-parse with the enum-name table (the AST/decls used for emit) ---
@@ -6879,6 +6880,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
   ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
+  ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
   decls.len = 0
   nstr = 0
   ## --- PASS 2: re-parse with the enum-name table (the AST/decls the backend emits) ---
@@ -7294,6 +7296,7 @@ pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   ## reset for PASS 2 (the AST arena, decls, and the token buffer)
   na.off = 0
   ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
+  ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
   decls.len = 0
   tokar.off = 0
   mut rt_toks2 := rt::Vec(data = rt::bump(tokar, tcap * 8), len = 0, cap = tcap)
@@ -7690,6 +7693,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
   ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
+  ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
   decls.len = 0
   nstr = 0
   ## --- PASS 2: re-parse with the enum-name table — the AST `sema` actually checks ---
@@ -8027,6 +8031,7 @@ pub check := fn(src : str, in out a : Arena) -> usize {
       parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
       na.off = 0
       ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
+      ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
       decls.len = 0
       mut toks2 := rt::Vec(data = rt::bump(tar, tcap * 8), len = 0, cap = tcap)
       ze2 := lexrt::lex_rt(src, 0, toks2, tar)

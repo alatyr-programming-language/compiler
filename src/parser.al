@@ -692,7 +692,13 @@ pub clone_expr := fn(a : ptr(mut rt::Arena), e : ptr(Expr), ok : ptr(mut bool)) 
     Expr::StrLit(s, n, ix, ps, pn) => { r = newnode(a, Expr.StrLit(s, n, ix, ps, pn)) }
     Expr::FloatLit(s, n) => { r = newnode(a, Expr.FloatLit(s, n)) }
     Expr::FnRef(fp, ms, ml) => { r = newnode(a, Expr.FnRef(fp, ms, ml)) }
-    Expr::Bin(op, l, rr) => { cl := clone_expr(a, l, ok); cr := clone_expr(a, rr, ok); r = newnode(a, Expr.Bin(op, cl, cr)) }
+    Expr::Bin(op, l, rr) => {
+      cl := clone_expr(a, l, ok)
+      cr := clone_expr(a, rr, ok)
+      ## #1154 — a cloned unary negation stays a negation: its fresh zero is recorded too.
+      if op == 17 and ast::neg_zero_is(l) { ast::neg_zero_mark(cl) }
+      r = newnode(a, Expr.Bin(op, cl, cr))
+    }
     Expr::Unchecked(inner) => { ci := clone_expr(a, inner, ok); r = newnode(a, Expr.Unchecked(ci)) }
     Expr::Bitcast(inner, bps, bpl) => {
       ci := clone_expr(a, inner, ok)
@@ -1503,6 +1509,9 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       ## A programmer who wants the wrap writes `unchecked -x`; that wrapper is parsed separately, wraps
       ## this node, and lowers guard-free exactly as §6.2 says. `no_unchecked` fixtures get simpler too:
       ## there is no internal marker left for them to forgive (`test/accept_limit_no_unchecked_neg.al`).
+      ## #1154 — the zero is recorded as a NEGATION's, so a written `0 - x` (a distinct operation,
+      ## Concurrency §6.5) is never read as this one; `ast::neg_zero_is` is the only reader.
+      ast::neg_zero_mark(uzero)
       subn := newnode(pc.arena, Expr.Bin(17, uzero, uinner))
       return subn
     }

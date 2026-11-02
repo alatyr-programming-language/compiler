@@ -3051,20 +3051,21 @@ pub arith_sg_soft := fn(be : ptr(Expr), l : ptr(Expr), r : ptr(Expr), src : ptr(
 ##
 ## A `0` on the left is three different facts, and only these are safe:
 ##   * `0 + x` and `0 * x` — the result IS `x` / zero; nothing can overflow.
-##   * `0 - x` over an UNSIGNED operand — this is the parser's unary `-x` (a synthesized `Num(0)` with an
-##     empty span) or a written zero minus. §6.5 makes the unsigned negation's value `2^N - x`, a
+##   * the unary negation `-x` over an UNSIGNED operand — the parser builds it as `0 - x` and records
+##     its zero (`ast::neg_zero_is`, #1154). §6.5 makes the unsigned negation's value `2^N - x`, a
 ##     representable value, and §6.3 says "an unsigned negation … has no overflow member". No guard.
-## And this is NOT safe: `0 - x` over a SIGNED operand is negation, a member of the checked-overflow set
-## by name (Concurrency §6.1: "unary `−` (negating the minimum value)"), so the guard stays at every
-## width and traps exactly when `x` is the type's minimum. `signed` is the OPERATION's signedness as the
-## caller read it from sema's record (§6.5), never a shape.
+## And these are NOT safe:
+##   * a WRITTEN `0 - x` over an unsigned operand, or one whose zero the compiler made: a binary
+##     unsigned subtraction, which §6.5 borrow-checks, so `0 - 1` traps (#1154);
+##   * `0 - x` over a SIGNED operand, negation or written: a member of the checked-overflow set by name
+##     (Concurrency §6.1: "unary `−` (negating the minimum value)"), so the guard stays at every width
+##     and traps exactly when `x` is the type's minimum.
+## `signed` is the OPERATION's signedness as the caller read it from sema's record (§6.5), never a shape.
 ##
 ## Before #1049 every emitter skipped on `0` alone, and the parser additionally wrapped every `-x` in an
 ## `unchecked` the source never wrote (§6.6), so `-MIN` wrapped silently on all four targets and the
 ## operand of a negation (`-(a * b)`) lost its own guards.
 ##
-## Residual, recorded rather than widened here: a WRITTEN `0 - x` over an unsigned operand still takes
-## the negation's rule, although §6.5 makes a binary unsigned `-` borrow-checked.
 ## The three checked operations a zero LEFT operand can meet; the builder maps its `AstBin`, the
 ## byte-holding emitters their AST operator byte (`lower_layout::zero_left_guard_skip`).
 pub ZeroLeftOp := enum { ZlAdd, ZlSub, ZlMul }
@@ -3079,7 +3080,7 @@ pub zero_left_no_overflow := fn(o : ZeroLeftOp, l : ptr(Expr), signed : bool) ->
   }
   if not z { return false }
   match o {
-    ZlSub => { not signed }
+    ZlSub => { not signed and ast::neg_zero_is(l) }
     ZlAdd | ZlMul => { true }
   }
 }

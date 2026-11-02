@@ -26,6 +26,7 @@ aarch64	test/accept_call_arg_conform.al	run/133	#1184
 aarch64	test/accept_comptime_unchecked_wrap.al	run/133	#1189
 aarch64	test/accept_enum_match_deref_annotated_local.al	run/133	#577
 aarch64	test/accept_enum_match_param_deref.al	run/133	#577
+aarch64	test/accept_neg_unsigned_hof_clone.al	run/133	#1196
 aarch64	test/agg_arr_elem_arg.al	run/133	#1194
 aarch64	test/agg_arr_slice_elem.al	run/133	#1187
 aarch64	test/agg_cmp_not_address.al	run/133	#1192
@@ -496,6 +497,7 @@ riscv64	test/accept_call_arg_conform.al	run/133	#1184
 riscv64	test/accept_comptime_unchecked_wrap.al	run/133	#1189
 riscv64	test/accept_enum_match_deref_annotated_local.al	run/133	#577
 riscv64	test/accept_enum_match_param_deref.al	run/133	#577
+riscv64	test/accept_neg_unsigned_hof_clone.al	run/133	#1196
 riscv64	test/agg_arr_elem_arg.al	run/133	#1194
 riscv64	test/agg_arr_slice_elem.al	run/133	#1187
 riscv64	test/agg_cmp_not_address.al	run/133	#1192
@@ -973,6 +975,7 @@ wasm	test/accept_call_arg_conform.al	run/134	#1184
 wasm	test/accept_comptime_unchecked_wrap.al	run/134	#1204
 wasm	test/accept_enum_match_deref_annotated_local.al	run/134	#1188
 wasm	test/accept_enum_match_param_deref.al	run/134	#1188
+wasm	test/accept_neg_unsigned_hof_clone.al	run/134	#1195
 wasm	test/agg_arr_elem_arg.al	run/134	#1194
 wasm	test/agg_arr_elem_matrix.al	run/134	#1194
 wasm	test/agg_cmp_not_address.al	run/134	#1192
