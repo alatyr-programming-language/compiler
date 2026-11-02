@@ -27,9 +27,16 @@
 #   the screen says solo=yes, and land.sh PHASE 3 settles that file (#1312). So, too, is a PR whose
 #   clean merge would file a CHANGELOG.md line under a release heading: PHASE 3 moves it (#1319). The
 #   others are composed
-#   onto origin/main one merge at a time and never resolved: a PR that conflicts with main is sent
-#   back; one that conflicts only with an earlier member waits for the next pass, where a CHANGELOG-only
-#   conflict with the member that landed takes the solo path.
+#   onto origin/main one merge at a time and never resolved by the queue itself: a PR that conflicts
+#   with main is sent back; one that conflicts only with an earlier member waits for the next pass.
+#   The one thing the composer does settle (#1390) is a conflict confined to files `land.sh
+#   --settle-append-only` covers — scripts/e2e.sh, whose `run` rows every fixture PR appends at the
+#   end of one list — where BOTH sides only ADDED lines at the same anchor: it keeps both runs, ours
+#   first, and says so in the merge message. That is land.sh's resolver called, not a second one
+#   written here. CHANGELOG.md is not on the list: a new entry is a changelog.d fragment (#1566),
+#   which never conflicts, and the solo route above stays only for PRs opened before it. A counted
+#   registry (scripts/known-deviations.tsv, scripts/seed_forms.tsv) is not on the list: keeping both
+#   sides of one means re-sorting it and rewriting its `# live-rows:` count, which is a decision.
 # - The composed object is gated once by `full.sh`. Green: it is pushed exactly, with
 #   `--force-with-lease` on the base it was built on, and every member gets an acceptance comment.
 #   When the gate's `xbackend diff:` line reports `new-paths=N new-rows=M` or `x86fix-paths=P
@@ -63,7 +70,8 @@
 #   scripts/queue.sh --install            from the dedicated checkout .worktrees/queue on omen: write
 #                                         and start the systemd user timer
 #   scripts/queue.sh --self-test          the deciders: marker, entry rules, gate verdict, push
-#                                         arguments, busy box, bisection plan
+#                                         arguments, busy box, bisection plan, and the append-only batch
+#                                         settle against a planted repository (#1390)
 #
 #   ALATYR_QUEUE_DRY=1       --once screens, composes and gates but neither pushes, labels nor comments
 #   ALATYR_QUEUE_DRY=screen  as 1, and no gate runs (each counted green): a check of the plumbing
@@ -215,7 +223,8 @@ queue_drive() { # PR...
   done
 }
 
-QUEUE_SELFTEST_EXPECTED=73  # the exact count run, compared with -ne like land.sh's; 49, +6 #1383, +7 #1386, +9 #1423, +2 #1526
+## The exact number of checks queue_self_test runs, compared with -ne like land.sh's.
+QUEUE_SELFTEST_EXPECTED=82  # 49, +6 #1383, +7 #1386, +9 #1423, +2 #1526, +9 #1390
 queue_self_test() {
   local k=0 bad="" log t
   _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
@@ -406,14 +415,89 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   queue_bootstrap_recover "$s/wt" >/dev/null 2>&1; _ck $? bootstrap-refused-dirt-it-can-clean
   [ "$(cat "$s/wt/f.txt")" = "main moved" ]; _ck $? bootstrap-kept-dirty-tracked-content
   rm -rf "$s"
+  # ---- the batch composer's append-only settle (#1390) ------------------------------------------
+  # Two members that both append at one anchor of scripts/e2e.sh settle through land.sh's
+  # pure-addition resolver, reached by `--settle-append-only`, which accepts a hunk only when its diff3
+  # base section is empty. A rewritten line, a deleted line, a file off the list (CHANGELOG.md among
+  # them: an entry is a changelog.d fragment since #1566) and a counted registry stay refusals,
+  # with the merge aborted, HEAD where it was and the tree clean. The settled tree must still hold
+  # both counted registries whole: rows in LC_ALL=C order, and a `# live-rows:` that equals what
+  # parses. The fixture's land.sh is this tree's, the one the composer will call in production.
+  local here="$PWD" qa qhead qrc qb pb qh qn
+  qa="$(mktemp -d "$ROOT/target/queue-selftest.XXXXXX")" || return 1
+  qhead="$(git -C "$ROOT" rev-parse HEAD)" || { cd "$here"; rm -rf "$qa"; return 1; }
+  ( set -e; cd "$qa"; git init -q -b main qa; cd qa
+    git config user.name t; git config user.email t@t; git config commit.gpgsign false
+    git config core.hooksPath /dev/null
+    mkdir -p scripts src
+    printf '# C\n\n## Unreleased\n\n## 0.1.0 — d\n\n- old\n' > CHANGELOG.md
+    printf 'run base\nrun old\n' > scripts/e2e.sh
+    printf '# live-rows: 1\nform_a\ttree\t42\t#1\ts.al:k\n' > scripts/seed_forms.tsv
+    printf '# rows\nbase\tf.al\tsema/1\t#1\n' > scripts/known-deviations.tsv
+    printf '# union\nscripts/known-deviations.tsv merge=union\n' > .gitattributes
+    printf 'x\n' > src/x.al
+    git add -A; git commit -q -m base
+    git switch -q -c ours                                     # the batch so far, on main
+    printf '# C\n\n## Unreleased\n\n- main bullet\n\n## 0.1.0 — d\n\n- old\n' > CHANGELOG.md
+    printf 'run base\nrun old\nrun main\n' > scripts/e2e.sh
+    printf '# live-rows: 2\nform_a\ttree\t42\t#1\ts.al:k\nform_b\ttree\t7\t#2\ts.al:m\n' > scripts/seed_forms.tsv
+    printf 'ours-x\n' > src/x.al
+    git add -A; git commit -q -m ours
+    git switch -q -c p1 main                                # e2e.sh: additions at the same anchor
+    printf 'run base\nrun old\nrun pr\n  cont\n' > scripts/e2e.sh
+    git add -A; git commit -q -m p1
+    git switch -q -c p2 main                              # rewrites an existing e2e row
+    printf 'run base\nrun old REWRITTEN\n' > scripts/e2e.sh
+    git add -A; git commit -q -m p2
+    git switch -q -c p3 main                              # deletes an existing e2e row
+    printf 'run base\n' > scripts/e2e.sh
+    git add -A; git commit -q -m p3
+    git switch -q -c p4 main                              # a settleable e2e row beside a source conflict
+    printf 'run base\nrun old\nrun pr\n' > scripts/e2e.sh
+    printf 'pr-x\n' > src/x.al
+    git add -A; git commit -q -m p4
+    git switch -q -c p5 main                              # a counted registry alone
+    printf '# live-rows: 2\nform_a\ttree\t42\t#1\ts.al:k\nform_c\ttree\t9\t#4\ts.al:n\n' > scripts/seed_forms.tsv
+    git add -A; git commit -q -m p5
+    git switch -q -c p6 main                              # an Unreleased bullet: off the list since #1566
+    printf '# C\n\n## Unreleased\n\n- pr bullet\n\n## 0.1.0 — d\n\n- old\n' > CHANGELOG.md
+    git add -A; git commit -q -m p6 ) >/dev/null 2>&1
+  _ck $? selftest-could-not-build-the-append-only-fixture
+  QUEUE_LAND_REF="$qhead"
+  cd "$qa/qa" || return 1
+  git switch -q --detach ours
+  queue_merge_member p1 'merge #21: p1'; qrc=$?
+  [ "$qrc" = 0 ] &&
+    [ "$(git show HEAD:scripts/e2e.sh | tr '\n' '|')" = 'run base|run old|run main|run pr|  cont|' ]
+  _ck $? "composer-refused-a-pure-addition-conflict-in-e2e.sh(rc $qrc)"
+  git merge --abort 2>/dev/null
+  git log -1 --format=%B | grep -q 'scripts/e2e.sh: 1 conflict hunk(s) settled by scripts/land.sh (#1390)'
+  _ck $? settled-merge-message-did-not-name-the-settle
+  grep -v '^#' scripts/known-deviations.tsv | LC_ALL=C sort -c &&
+    [ "$(grep -cv -e '^#' -e '^[[:space:]]*$' scripts/seed_forms.tsv)" = "$(sed -n 's/^# live-rows: *\([0-9][0-9]*\) *$/\1/p' scripts/seed_forms.tsv | head -n 1)" ]
+  _ck $? settled-tree-broke-a-counted-registry
+  for pb in 'p2 rewrote an existing line' 'p3 deleted an existing line' \
+            'p4 a settleable e2e row beside a source conflict' \
+            'p5 a counted registry alone' 'p6 an Unreleased bullet in CHANGELOG.md'; do
+    read -r qh qn <<< "$pb"; pb="${qn// /-}"
+    git switch -q --detach ours; qb="$(git rev-parse HEAD)"
+    queue_merge_member "$qh" "merge: $qh"; qrc=$?
+    git merge --abort 2>/dev/null      # a refusal leaves the merge in progress; the composer aborts it
+    [ "$qrc" = 1 ] && [ "$(git rev-parse HEAD)" = "$qb" ] && ! git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 &&
+      [ -z "$(git status --porcelain --untracked-files=no)" ]
+    _ck $? "composer-settled-a-conflict-that-$pb"
+  done
+  QUEUE_LAND_REF="${ALATYR_QUEUE_LAND_REF:-origin/main}"
+  cd "$here" || return 1
+  rm -rf "$qa"
   if [ -n "$bad" ]; then echo "*** queue self-test: FAILED —$bad ***"; return 1; fi
   if [ "$k" -ne "$QUEUE_SELFTEST_EXPECTED" ]; then
     echo "*** queue self-test: ran $k checks, expected exactly $QUEUE_SELFTEST_EXPECTED: a check was lost or added uncounted ***"
     return 1
   fi
   echo "ok   queue self-test: $k checks — reviewed-head marker, entry rules, head check, gate verdict,"
-  echo "     push arguments, the xbackend baseline commit and its refusal, busy box, the bisection plan"
-  echo "     and the bootstrap recovery (#1423)"
+  echo "     push arguments, the xbackend baseline commit and its refusal, busy box, the bisection plan,"
+  echo "     the bootstrap recovery (#1423) and the append-only batch settle (#1390)"
 }
 
 # ---- GitHub ------------------------------------------------------------------------------------------
@@ -450,12 +534,58 @@ wait_for_box() {
 BUILT_FOR=""; BUILT=""; BUILT_BASE=""; GATE_LOG=""
 HEAD=(); LINK=(); BRANCH=()   # indexed by PR number
 
+## The BASE's copy of land.sh, run for one thing only: `--settle-append-only <path>...` (#1390).
+## The tree is mid-merge and therefore holds the batch's scripts, so the queue takes this script's
+## own base revision out of git rather than running what is checked out (`never a batch's`, the Trust
+## section above). It lands directly under target/ because land.sh resolves its ROOT to the copy's
+## parent's parent, and it is named `land-run-*` so land.sh takes its private-copy path and does not
+## re-exec. It removes the copy itself on exit; the rm here covers a run that never got that far.
+## Prints land.sh's sentences for the merge message. 0 settled, 1 refused (the merge is untouched),
+## 2 could not run.
+QUEUE_LAND_REF="${ALATYR_QUEUE_LAND_REF:-origin/main}"
+queue_land_sh() { # path...
+  local top copy rc
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 2
+  mkdir -p "$top/target" || return 2
+  copy="$top/target/land-run-queue-$$.sh"
+  git -C "$ROOT" show "$QUEUE_LAND_REF:scripts/land.sh" > "$copy" 2>/dev/null ||
+    { rm -f "$copy"; return 2; }
+  bash "$copy" --settle-append-only "$@"; rc=$?
+  rm -f "$copy"
+  case "$rc" in 0|1) return "$rc" ;; *) return 2 ;; esac
+}
+
+## Merge one member into the tree the batch is being composed in (#1390). A clean merge commits as it
+## always did. A conflict goes to land.sh's append-only settle, and ONLY there: it accepts a path
+## whose every hunk has an empty diff3 base section — both sides inserted at one anchor, neither
+## deleted nor rewrote a line — and refuses everything else. The queue decides nothing of its own here;
+## it asks, and a refusal aborts the merge exactly as before.
+##   0 merged (QUEUE_MERGE_NOTE carries land.sh's sentences when it settled anything)
+##   1 a conflict the settle does not cover — back to the author, or wait for the next pass
+##   2 git could not merge, or land.sh could not run — this pass ends
+QUEUE_MERGE_NOTE=""
+queue_merge_member() { # ref msg
+  local ref="$1" msg="$2" un=() p note rc
+  QUEUE_MERGE_NOTE=""
+  git merge --quiet --no-ff --no-verify -m "$msg" "$ref" >/dev/null 2>&1 && return 0
+  while IFS= read -r p; do [ -n "$p" ] && un+=("$p"); done < <(git diff --name-only --diff-filter=U)
+  { [ "${#un[@]}" -gt 0 ] && git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; } || return 2
+  note="$(queue_land_sh "${un[@]}" 2>&1)"; rc=$?   # land.sh names the hunk it refused on stderr
+  [ "$rc" = 0 ] || return "$rc"     # 1 refused, 2 could not run: both leave the merge untouched
+  git commit --quiet --no-verify -m "$msg
+
+$note" >/dev/null 2>&1 || return 2
+  QUEUE_MERGE_NOTE="$note"
+  return 0
+}
+
 queue_try() { # PR... — compose onto origin/main and gate
   [ "$DRY" = screen ] || wait_for_box || return 2   # before the base is read: a long wait would void the lease
   git fetch --quiet origin main || return 2
-  local base pr msg
+  local base pr msg rc
   base="$(git rev-parse origin/main)"
   git switch --quiet --detach "$base" || return 2
+  QUEUE_LAND_REF="$base"     # the base's copy of land.sh settles, never a batch's (#1390)
   for pr in "$@"; do
     git fetch --quiet origin "+refs/pull/$pr/head:refs/remotes/pr/$pr" || return 2
     queue_head_ok "${HEAD[$pr]}" "$(git rev-parse "refs/remotes/pr/$pr")" ||
@@ -464,8 +594,14 @@ queue_try() { # PR... — compose onto origin/main and gate
     [ -n "${LINK[$pr]}" ] && msg="$msg
 
 ${LINK[$pr]}"
-    git merge --quiet --no-ff --no-verify -m "$msg" "refs/remotes/pr/$pr" >/dev/null 2>&1 ||
-      { git merge --abort 2>/dev/null; say "#$pr no longer composes onto $base; this pass ends"; return 2; }
+    queue_merge_member "refs/remotes/pr/$pr" "$msg"; rc=$?
+    if [ "$rc" != 0 ]; then
+      git merge --abort 2>/dev/null
+      say "#$pr no longer composes onto $base (rc $rc); this pass ends"
+      [ "$rc" = 1 ] && printf '%s\n' "$QUEUE_MERGE_NOTE" | sed 's/^/  /'
+      return 2
+    fi
+    [ -z "$QUEUE_MERGE_NOTE" ] || say "#$pr composed with an append-only conflict settled (#1390)"
   done
   BUILT="$(git rev-parse HEAD)"; BUILT_BASE="$base"; BUILT_FOR="$*"
   GATE_LOG="$QDIR/gate-$(date -u +%Y%m%dT%H%M%S)-$(git rev-parse --short HEAD).log"
@@ -625,24 +761,32 @@ The label moved to \`queue-failed\`. Fix, push, and re-enqueue after review."
 
 ## Which of the screened PRs compose onto origin/main, in order? One that conflicts with main alone is
 ## sent back for a rebase; one that conflicts only with an earlier member waits for the next pass. The
-## queue never resolves a conflict: that is a semantic decision (alatyr-integrate §3).
+## queue resolves nothing itself: `queue_merge_member` asks land.sh's append-only settle (#1390) and a
+## refusal is the old refusal.
 COMPOSED=""
 queue_compose_screen() { # PR...
-  local base pr mt; COMPOSED=""
+  local base pr mt rc
+  COMPOSED=""
   git fetch --quiet origin main || return 0
   base="$(git rev-parse origin/main)"
   git switch --quiet --detach "$base" || return 0
+  QUEUE_LAND_REF="$base"     # the base's copy of land.sh settles, never a batch's (#1390)
   for pr in "$@"; do
     git fetch --quiet origin "+refs/pull/$pr/head:refs/remotes/pr/$pr" || continue
-    if git merge --quiet --no-ff --no-verify -m "screen #$pr" "refs/remotes/pr/$pr" >/dev/null 2>&1; then
-      COMPOSED="$COMPOSED $pr"; continue
+    queue_merge_member "refs/remotes/pr/$pr" "screen #$pr"; rc=$?
+    if [ "$rc" = 0 ]; then
+      COMPOSED="$COMPOSED $pr"
+      [ -z "$QUEUE_MERGE_NOTE" ] ||
+        say "#$pr composes with an append-only conflict settled (#1390): $(printf '%s ' "$QUEUE_MERGE_NOTE" | tr -s '\n ' ' ')"
+      continue
     fi
     git merge --abort 2>/dev/null
+    [ "$rc" = 2 ] && { say "git could not compose #$pr onto the batch; it waits for the next pass"; continue; }
     git merge-tree --write-tree "$base" "refs/remotes/pr/$pr" >/dev/null 2>&1; mt=$?
     case "$mt" in
-      0) say "#$pr conflicts with an earlier member of this batch; it waits for the next pass" ;;
+      0) say "#$pr conflicts with an earlier member of this batch in a shape the settle does not cover; it waits for the next pass" ;;
       1) refused "$pr" compose "${HEAD[$pr]}" "conflicts with main $base"
-         comment "$pr" "**Merge queue: conflicts with main** on head \`${HEAD[$pr]}\`. Rebase onto \`$base\` and re-enqueue after review."
+         comment "$pr" "**Merge queue: conflicts with main** on head \`${HEAD[$pr]}\`. Rebase onto \`$base\` and re-enqueue after review. The append-only settle (#1390) covers a conflict confined to \`scripts/e2e.sh\` where both sides only add lines at one anchor; this conflict is not that."
          relabel "$pr" queue-failed queue ;;
       *) say "git merge-tree failed (rc $mt) on #$pr; it waits for the next pass" ;;
     esac
