@@ -15,3 +15,4 @@ main := fn() -> u64 {
   comptime for i in 0 .. K + 2 { c = c + 1 }
   return c + 7
 }
+## expect: reject "this range bound overflows its type" "for the wrap. at line 15 in "

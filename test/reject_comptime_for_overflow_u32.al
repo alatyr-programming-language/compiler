@@ -14,3 +14,4 @@ main := fn() -> u64 {
   comptime for i in 0 .. K + 3 { c = c + 1 }
   return c + 7
 }
+## expect: reject "for the wrap. at line 14 in "
