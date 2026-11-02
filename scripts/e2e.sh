@@ -10917,9 +10917,6 @@ run issue1369_enum_eq 42
 ## shape, both orders, wide hidden-result returns, a fn-value call). NON-VACUOUS: on the parent
 ## `ea6651db` (x86_64) the fixture exits 11: `mk(2) == E.A(7)` compared the returned tag with `$0`.
 run issue1394_call_enum_eq 42
-## #1394 / #1397 — the same comparison over a GENERIC call's result: x86_64 cannot type it at the
-## comparison yet, so it stops with the call's source line (parent `ea6651db`: builds and exits 11).
-build_reject_has issue1394_generic_call_eq "GENERIC call's result with a multi-word struct/enum value"
 run comptime_enum_eq 42
 run agg_compare_fields 42
 run nested_match_agg 42
