@@ -170,8 +170,9 @@ sr_arith := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst), o : ir
   sr_st2(sb, ip)
 }
 ## `/ %` at 64 bits. `chk` traps `div_zero` on a zero divisor and, signed, `div_overflow` on
-## `MIN / -1` (§4). Any other mode is the hardware division (`hw`, owner decision D1: RISC-V answers
-## all ones for a zero divisor, the dividend for its remainder, and `MIN` for `MIN / -1`).
+## `MIN / -1` (§4). A `rem` of `MIN` by `-1` is `0` and no trap (Concurrency §6.1, #1398), which is
+## the ISA's own `rem` answer there. Any other mode is the hardware division (`hw`, owner decision
+## D1: RISC-V answers all ones for a zero divisor, the dividend for its remainder, and `MIN` for `MIN / -1`).
 sr_div := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst), o : ir::Op) -> bool {
   if not ir::kty_eq(ir::i_ty(ip), ir::Kty.KI64) { return false }
   if not sr_lda(sb, "t0", ip) or not sr_ldb(sb, "t1", ip) { return false }
@@ -182,7 +183,7 @@ sr_div := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst), o : ir::
     sr_put(sb, "  bnez t1, 1f\n")
     sr_trap(sb, x, ir::TrapKind.TkDivZero, ip)
     sr_put(sb, "1:\n")
-    if signed {
+    if signed and ir::op_is_div(o) {
       sr_put(sb, "  li t3, -1\n  bne t1, t3, 1f\n  li t3, 1\n  slli t3, t3, 63\n  bne t0, t3, 1f\n")
       sr_trap(sb, x, ir::TrapKind.TkDivOverflow, ip)
       sr_put(sb, "1:\n")
