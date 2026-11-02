@@ -151,6 +151,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
   aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
   aarch64, riscv64 and wasm still trap on the granted form (#1157).
+- **A `+ - *` over a global narrow constant wraps, or traps, at the constant's width on x86_64
+  (#1272).** x86_64 took the width of a `+ - *` only from its operands' source spelling, and a global
+  const operand has none, so with `A : i32 = 2147483647` the result stayed 64-bit: `unchecked (A + A)`
+  read as 2^32 - 2 instead of -2, `unchecked ((H * H * (0 - 8)) / (0 - 1))` reached `idivq` as
+  `i64::MIN / -1` and died with SIGFPE, and a checked `A + (k + 1)` stored 2^31 in an `i32` instead of
+  trapping. Where no operand names a width, sema's record of the operation now gives it.
 
 ## 0.2.21 — 2026-11-01
 
