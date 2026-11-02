@@ -307,35 +307,28 @@ collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
 ## Returns the FULL type span (`Result(u64, u64)`) so both the base name (redirect) and the type-args
 ## (implicit-tag inference) are recoverable.
 pub recv_full_pre := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), penv : Option(ptr(mut Param)), a : rt::Arena) -> CSpan {
-  vn := var_name_span(e)
-  if vn.n == 0 { return CSpan(s = 0, n = 0) }
-  mut ts := 0
-  mut tl := 0
-  if stmt_any(COLLECT_BODY) {
-    ltp := block_decl_type(COLLECT_BODY, vn.s, vn.n, src, decls, a)
-    if ltp.n != 0 { ts = ltp.s; tl = ltp.n }
-  }
-  if tl == 0 {
-    pt := param_type_of(vn.s, vn.n, penv, src, a)
-    if pt.n != 0 { ts = pt.s; tl = pt.n }
-  }
-  if tl == 0 { return CSpan(s = 0, n = 0) }
-  CSpan(s = ts, n = tl)
+  recv_full_in(e, COLLECT_BODY, penv, decls, src, a)
 }
 ## The EMIT-side counterpart of `recv_full_pre`: a receiver Var's FULL declared type span, resolved
 ## from the enclosing fn's body (`EMIT_BODY`/`block_decl_type`) or its params (`EMIT_PARAMS`), so the
 ## emit side recovers the type-args (`Result(u64, u64)`) the slot dropped. 0/0 when unresolvable.
 pub recv_full_emit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  recv_full_in(e, EMIT_BODY, EMIT_PARAMS, decls, src, a)
+}
+## The ONE receiver lookup behind `recv_full_pre` and `recv_full_emit`: a receiver Var's FULL declared
+## type span, from the statement list `head` (`block_decl_type`, a flat scan) or else from `params`.
+## 0/0 when unresolvable.
+pub recv_full_in := fn(e : ptr(Expr), head : Option(ptr(mut Stmt)), params : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   vn := var_name_span(e)
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
   mut ts := 0
   mut tl := 0
-  if stmt_any(EMIT_BODY) {
-    ltp := block_decl_type(EMIT_BODY, vn.s, vn.n, src, decls, a)
+  if stmt_any(head) {
+    ltp := block_decl_type(head, vn.s, vn.n, src, decls, a)
     if ltp.n != 0 { ts = ltp.s; tl = ltp.n }
   }
-  if tl == 0 and param_any(EMIT_PARAMS) {
-    pt := param_type_of(vn.s, vn.n, EMIT_PARAMS, src, a)
+  if tl == 0 and param_any(params) {
+    pt := param_type_of(vn.s, vn.n, params, src, a)
     if pt.n != 0 { ts = pt.s; tl = pt.n }
   }
   if tl == 0 { return CSpan(s = 0, n = 0) }

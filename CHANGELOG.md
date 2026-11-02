@@ -151,6 +151,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
   aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
   aarch64, riscv64 and wasm still trap on the granted form (#1157).
+- **`v.push(x)` on a `Vec` of a sub-word element stores what it is given (#988).** A UFCS call that
+  infers its type argument from the receiver was its own instance below two words, tagged by the
+  receiver's name, and `size(T)` in it was 8 bytes: `push` on a `Vec(u8)`, `Vec(u16)` or `Vec(u32)`
+  wrote with a word stride. It is now the same instance as `vec::push(u32, v, x)`.
 
 ## 0.2.21 — 2026-11-01
 
