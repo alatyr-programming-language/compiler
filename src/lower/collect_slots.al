@@ -23,7 +23,7 @@ assign_is_reassign := ast::assign_is_reassign
 local_is_comptime := ast::binding_is_comptime
 (Expr, Stmt, bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 (SVec, CSpan, arg_expr_at, var_name_span) := lower_ctx
-(base_type_name, enum_decl_of, enum_inst_words, is_niche_folded, pointee_agg_kind, variant_bind_pointee, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
+(base_type_name, enum_decl_of, enum_elem_words, enum_inst_words, is_niche_folded, pointee_agg_kind, variant_bind_pointee, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
@@ -593,6 +593,13 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               dce := deref_enum_pointee_span(v, ptr(slots), decls, src, a)
               mx := enum_inst_words(decls, src, dce.s, dce.n, a)
               bind_enum_slot(slots, decls, src, ns, nl, dce.s, dce.n, 1 + mx)
+            } else if deref_inst_enum_span(v, ptr(slots), decls, src, a, sub).n != 0 {
+              ## #1369 — the pointee is an enum only through the instance substitution (the map's
+              ## `existing := deref(key_at(K, …))`, `k := deref(okp)` at an enum `K`): reserve it as that
+              ## enum (one word if niche-folded, else disc + widest payload), so `eq(existing, key)` /
+              ## `hash(K, k)` pass it BY REFERENCE and every payload word is copied in.
+              die := deref_inst_enum_span(v, ptr(slots), decls, src, a, sub)
+              bind_enum_slot(slots, decls, src, ns, nl, die.s, die.n, enum_elem_words(decls, src, die.s, die.n, a))
             } else if call_ret_ptrstruct_span(v, decls, src, a).n != 0 {
               ## a `ep := node_ptr(S, …)` / `ep := decl_at(S, …)` binding — record `ep` as a
               ## pointer-to-struct (ek 7) carrying the pointee struct's type, so a later

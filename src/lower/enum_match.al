@@ -676,10 +676,8 @@ pub emit_enum_match := fn(head_in : Option(ptr(mut Arm)), si : ScrutInfo, in out
           push_str(sb, "\n")
           hadwild = true
         } else if folded {
-          ## nullary `None` (binds none) ⟺ `word == 0`; payload `Some` (binds one) ⟺ `word != 0`. The bind
-          ## count avoids resolving the parenthesized `Option(ptr(T))` span through `enum_decl_of`.
-          fnb := bind_count(am.binds_head)
-          if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }          ## None ⟺ null (0)
+          ## nullary `None` ⟺ `word == 0`; payload `Some` ⟺ `word != 0` (`folded_arm_is_null` decides).
+          if folded_arm_is_null(am, cx.decls, cx.src, si.es, si.el, deref(cx.mar)) { push_str(sb, "  cmpq $0, %r12\n  je ") }          ## None ⟺ null (0)
           else { push_str(sb, "  cmpq $0, %r12\n  jne ") }                ## Some ⟺ nonzero pointer
           emit_label(sb, lbody)
           push_str(sb, "\n")

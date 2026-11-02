@@ -12658,6 +12658,46 @@ deref_view_span_cx := fn(v : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   pt
 }
 
+## #1369 — a niche-folded `Option(ptr(T))` arm takes the NULL test (`None`, `word == 0`) iff its variant
+## carries no payload; every other arm tests `word != 0`. The arm's binding count answered this alone,
+## but an expanded comptime variant pattern `T.(v)(p)` binds a name on EVERY arm, the unit `None` too,
+## so that arm tested `word != 0` and the structural `eq` of two `None`s answered false. The variant's
+## declared payload decides once the variant resolves; an unresolved one keeps the binding-count answer.
+folded_arm_is_null := fn(am : Arm, decls : ptr(rt::Vec), src : ptr(u8), es : usize, en : usize, a : rt::Arena) -> bool {
+  if bind_count(am.binds_head) == 0 { return true }
+  if variant_index(decls, src, es, en, am.vs, am.vl, a) < 0 { return false }
+  variant_payload_type(decls, src, es, en, am.vs, am.vl, a).n == 0
+}
+
+## #1369 — `x := deref(<pointer>)` whose pointee is an ENUM reached through the enclosing generic
+## INSTANCE: the hash map's `existing := deref(key_at(K, …))` and `k := deref(okp)` (a
+## `bitcast(ptr(mut K), …)` local) at an enum `K` (`E0`, `Option(u64)`, the folded `Option(ptr(u64))`).
+## The enum twin of `deref_view_pointee_span` / `deref_view_span_cx`, over the same pointer resolvers.
+## Without it the binding took ONE scalar word: a payload was dropped, and the local reached `eq__K` /
+## `hash__K`'s by-reference enum parameter as its tag VALUE, which the callee dereferenced (SIGSEGV in
+## every `HashMap` with an enum key). {0,0} unless the pointee is an enum.
+enum_pointee_only := fn(pt : CSpan, decls : ptr(rt::Vec), src : ptr(u8)) -> CSpan {
+  if pt.n == 0 { return CSpan(s = 0, n = 0) }
+  bn := base_type_name(src, pt.s, pt.n)
+  if bn.n == 0 or enum_decl_of(decls, src, bn.s, bn.n) < 0 { return CSpan(s = 0, n = 0) }
+  if is_union_decl(decls, src, bn.s, bn.n) { return CSpan(s = 0, n = 0) }
+  pt
+}
+## The slot-collection half (`collect_slots`, an instance `Subst`).
+deref_inst_enum_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, sub : ptr(Subst)) -> CSpan {
+  inner := deref_inner_expr(v)
+  ## null-ok: deref_inner_expr answers a null Expr when its operand is not a `deref(…)`
+  if unchecked bitcast(usize, inner) == 0 { return CSpan(s = 0, n = 0) }
+  enum_pointee_only(ptr_expr_pointee_span(inner, slots, decls, src, a, sub), decls, src)
+}
+## The emit half (the `LCtx` carries the same substitution).
+deref_inst_enum_span_cx := fn(v : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  inner := deref_inner_expr(v)
+  ## null-ok: deref_inner_expr answers a null Expr when its operand is not a `deref(…)`
+  if unchecked bitcast(usize, inner) == 0 { return CSpan(s = 0, n = 0) }
+  enum_pointee_only(deref_dest_pointee_span(inner, cx), cx.decls, cx.src)
+}
+
 ## The pointee BYTE WIDTH (1 / 2 / 4 / 8) that a `deref` LOAD/STORE through pointer expression `p`
 ## must move, or 8 when the pointee is word-sized / unknown (keep the full `movq`). Sees THROUGH an
 ## `Unchecked` wrapper and parses the full pointer target in `Expr::Bitcast(_, ts, tl)`; a bare narrow
@@ -23759,8 +23799,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
               push_str(sb, "\n")
               hadwild = true
             } else if folded {
-              fnb := bind_count(am.binds_head)
-              if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }
+              if folded_arm_is_null(am, cx.decls, cx.src, ses, sel, deref(cx.mar)) { push_str(sb, "  cmpq $0, %r12\n  je ") }
               else { push_str(sb, "  cmpq $0, %r12\n  jne ") }
               emit_label(sb, lbody)
               push_str(sb, "\n")
@@ -24505,10 +24544,8 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
         } else if folded {
           ## §8 `@niche` folded `Option(ptr)`: dispatch on the null niche — nullary `None` ⟺ `word == 0`,
           ## payload `Some` ⟺ `word != 0` (a non-null pointer). No discriminant compare. Nullary-vs-payload
-          ## is read from the arm's BINDING COUNT (`Some(p)` binds one, `None` binds none) — robust without
-          ## resolving the parenthesized `Option(ptr(T))` span through `enum_decl_of`.
-          fnb := bind_count(am.binds_head)
-          if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }
+          ## is decided once, by `folded_arm_is_null`.
+          if folded_arm_is_null(am, cx.decls, cx.src, ses, sel, deref(cx.mar)) { push_str(sb, "  cmpq $0, %r12\n  je ") }
           else { push_str(sb, "  cmpq $0, %r12\n  jne ") }
           emit_label(sb, lbody)
           push_str(sb, "\n")

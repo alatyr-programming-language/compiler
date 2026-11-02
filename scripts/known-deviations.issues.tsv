@@ -38,3 +38,4 @@
 1206	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: overloaded functions do not assemble on aarch64, riscv64 and wasm	rows
 1207	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: two programs fail to assemble or link on aarch64 and riscv64	rows
 1336	Modules §2, §4 (MOD-3): `::` names a sibling module's `pub` item and `.` reads a field of that value	a qualified field read of a sibling's `pub` struct global (`z::cfg.x`) is refused at compile time with a bare `invalid`, on every backend	rows
+1380	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: a module-local `@abi(syscall)` callee after a prelude `eq` call is emitted unqualified (`bl sys_mmap`), so the link fails	rows

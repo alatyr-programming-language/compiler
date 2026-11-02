@@ -7943,6 +7943,7 @@ fmt_test_has fmt_test_decl 42 "@test(\"a test with no return type at all\")"
 fmt_test_has fmt_comptime_param 42 "fn(comptime N : u64, a : w(N)"
 fmt_test_has fmt_compfor_typeinfo_arg 42 "comptime for f in typeinfo(B).fields"
 fmt_test_has fmt_comptime_arm_template 42 "comptime for v in typeinfo(T).variants { T.(v)(pa) =>"
+fmt_test_has fmt_comptime_var_arm_stmt 42 "T.(v)(pb) => {"
 ## the OWN-LINE prefix attribute -- the form that became MEANINGFUL the same day fmt was last swept, and
 ## so was silently erased by it (the packed declaration changed from size 7 to the natural size 24).
 ## Lockable now only because the fixture's two in-body notes
@@ -10711,6 +10712,10 @@ run comptime_enum_hash 42
 ## and of a `str` beside it. NON-VACUOUS: on the parent `da18fef2` (x86_64) the fixture stops with
 ## SIGSEGV (rc 139): the derive's `hash(p)` reached the module's `hash(s : str)` overload by arity.
 run issue1303_enum_hash 42
+## #1369 — the library's structural `eq` of an enum (tuple payload, unit variant, folded `Option(ptr)`)
+## and a `HashMap` keyed by an enum or an `Option`. NON-VACUOUS: on the parent `7cb5c053` (x86_64) the
+## fixture exits 11: `eq` compared only the first word of `B(u8, i64)`'s tuple payload.
+run issue1369_enum_eq 42
 run comptime_enum_eq 42
 run agg_compare_fields 42
 run nested_match_agg 42

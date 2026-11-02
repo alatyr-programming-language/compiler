@@ -28,7 +28,7 @@ fld_at := ast::fld_at
 (Decl, Expr, FieldDecl, local_is_uninit, local_type_span) := ast
 (push_str, push_int) := strbuf
 (CSpan, LCtx, arg_expr_at, num_lit_value, var_name_span) := lower_ctx
-(eff_field_wsize, enum_decl_of, enum_inst_words, field_align_attr, field_byte_size, field_endian_attr, field_offset_attr, field_word_offset, field_words, is_niche_folded, is_packed, is_packed_aggregate, is_union_decl, is_view_type, layout_copy_nsteps, layout_copy_step, layout_kind, layout_kind_is_byte, layout_struct_is_word_stored, packed_field_byte_offset, packed_field_endian, packed_struct_bytes, round_up_to, scalar_byte_size, standard_field_byte_offset, standard_struct_bytes, std_array_elem_byte_tier, std_copy_image_bytes, std_copy_kind, std_struct_has_direct_byte_layout, std_struct_is_byte_writable, std_struct_is_word_granular, struct_decl_of, struct_words, subst_field_ty, variant_index) := lower_layout
+(eff_field_wsize, enum_decl_of, enum_elem_words, enum_inst_words, field_align_attr, field_byte_size, field_endian_attr, field_offset_attr, field_word_offset, field_words, is_niche_folded, is_packed, is_packed_aggregate, is_union_decl, is_view_type, layout_copy_nsteps, layout_copy_step, layout_kind, layout_kind_is_byte, layout_struct_is_word_stored, packed_field_byte_offset, packed_field_endian, packed_struct_bytes, round_up_to, scalar_byte_size, standard_field_byte_offset, standard_struct_bytes, std_array_elem_byte_tier, std_copy_image_bytes, std_copy_kind, std_struct_has_direct_byte_layout, std_struct_is_byte_writable, std_struct_is_word_granular, struct_decl_of, struct_words, subst_field_ty, variant_index) := lower_layout
 ## SIBLING children, reached by an EXPLICIT qualified path (Modules §4) — never by a bare name. Each
 ## of these was a bare name while the arms lived in `src/lower.al` and the ancestor chain answered;
 ## from here a bare call would bind through the unique-declaration leniency instead, and
@@ -2452,6 +2452,18 @@ st_dest_folded := fn(ns : usize, nl2 : usize, v : ptr(Expr), cx : ptr(LCtx), a :
   folded_value_span(v, dfs, cx.slots, cx.decls, cx.src, a).n != 0
 }
 
+## Copy `nf` words from `k*8(%rax)` into the down-growing frame slots of the local whose base slot is
+## `dst` (word k at `-(dst - k + 1)*8(%rbp)`): the read side of a `x := deref(<pointer>)` aggregate copy.
+emit_words_from_rax := fn(in out sb : strbuf::StrBuf, dst : i64, nf : usize) {
+  for k in 0..nf {
+    push_str(sb, "  movq ")
+    push_int(sb, i64(k * 8))
+    push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
+    push_int(sb, (dst - i64(k) + 1) * 8)
+    push_str(sb, "(%rbp)\n")
+  }
+}
+
 pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## A comptime binding has no runtime store. Its value is re-entered only when a later expression
   ## asks for the name through `emit_gas`.
@@ -3039,6 +3051,14 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_int(sb, i64((dst - i64(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
+  } else if deref_inst_enum_span_cx(v, cx).n != 0 {
+    ## #1369 — the emit dual of the collect_slots reservation (an enum pointee reached only through
+    ## the instance substitution): copy the enum's words (one if niche-folded) into the local's slots.
+    die := deref_inst_enum_span_cx(v, cx)
+    dst := slot_of(cx.slots, cx.src, ns, nl2)
+    emit_gas(deref_inner_expr(v), sb, cx, a, nl)
+    push_str(sb, "  popq %rax\n")
+    emit_words_from_rax(sb, dst, enum_elem_words(cx.decls, cx.src, die.s, die.n, a))
   } else if is_mut_struct_global_var(v, cx.decls, cx.src) {
     ## `p := STATE` — snapshot a mutable STRUCT global: copy its CURRENT `.data` words (ascending
     ## `LABEL + k*8`) into `p`'s down-growing frame slots. `leaq LABEL(%rip)` (PIE-safe base), then
