@@ -143,6 +143,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   §4.2). `u64`/`usize` values at or above 2^63, such as `u64(0.75 * 2^64)`, now convert correctly on
   x86_64 where they used to answer a wrong value. Inside `unchecked` an out-of-range result stays
   hardware-defined; on wasm it now answers a value (the saturating conversion) instead of trapping.
+- **Comparing a function's struct or enum result with `==` or `!=` gives the right answer on x86_64
+  (#1394).** `mk(2) == E.A(7)` compared the returned variant tag with 0 and ignored the payload, so it
+  answered false for two equal values (and `!=` answered true). A call that returns a struct or an enum
+  of more than one word now compares the whole value, like a local does. When the callee is generic,
+  the compiler reports the comparison with its source line and asks to bind the result to a local
+  first, instead of answering wrongly.
 
 ## 0.2.24 — 2026-11-07
 
