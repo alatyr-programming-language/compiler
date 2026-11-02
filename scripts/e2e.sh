@@ -11153,6 +11153,11 @@ run enum_dot_match 42
 run slice_param 42
 run slice_struct_param 42
 run slice_struct_local_arg 42
+## #1182: an ANNOTATED struct-element view local `xs : Slice(P) = t[0..2]` reads as a local, not a param
+run issue1182_annotated_view_local 42
+## its review row: a struct-element fixed-array PARAMETER keeps the by-value read (139 on the PR's first
+## head f9a2e2d4; 132 on the parent e313f2aa and here). Due 42 once #1287 is fixed.
+run issue1182_for_array_param_agg 132
 run slice_enum_param 42
 ## the .len FIELD (vs the .len() method) on a slice PARAM: must double-deref the caller's {ptr,len}
 ## block (was reading a garbage slot word). Scalar + str element.
@@ -11331,6 +11336,16 @@ check_accept index_base_tail_controls
 ## `xs[3]` = 55 past the view. Both rows are x86-only; the non-x86 tails are separate code, still emit
 ## a fail-loud trap for this shape (a133 / rv133 / wasm134) and are unchanged.
 run_x86_trap arr_slice_direct_index_oob 132
+## #1274: an out-of-range index into a view LOCAL of any non-scalar element kind traps on x86_64
+run_x86_trap issue1274_struct_view_oob_field 132
+run_x86_trap issue1274_struct_view_oob_copy 132
+run_x86_trap issue1274_struct_view_oob_store 132
+run_x86_trap issue1274_struct_view_oob_annotated 132
+run_x86_trap issue1274_enum_view_oob 132
+run_x86_trap issue1274_str_view_oob 132
+run_x86_trap issue1274_ptr_view_oob 132
+run_x86_trap issue1274_f64_view_oob 132
+run issue1274_view_in_range 42
 check_accept arr_slice_direct_index_oob
 ## Grammar §3.4 / Types §9.4 (#422), the NON-x86 residual. The paragraph above described the tree
 ## before this: aarch64, riscv64 and WAT had no lowering for `xs[lo..hi][i]` at all, so every arm of
