@@ -4016,6 +4016,22 @@ a64_emit_narrow_trap := fn(name : str, in out sb : rt::StrBuf) {
   else if name == "i32" { push_str(sb, "  sxtw x2, w0\n  cmp x2, x0\n  b.eq 1f\n  brk #0 // narrow\n1:\n") }
 }
 
+## CHECKED float→integer conversion guard (Concurrency §7.7, Types §4.2 numeric row; #1374) — the
+## aarch64 dual of the x86_64 `emit_f2i` guard. The operand is the f64 in d0; it must lie strictly
+## inside `lower_layout::f2i_bounds(name)`, the exact f64 values just outside `name`'s range, else
+## `brk #0`. `b.gt` and `b.mi` are both false on an unordered compare, so a NaN traps at the first
+## test. Without it `fcvtzs`/`fcvtzu` saturate and map a NaN to 0: a quiet wrong value. Emitted only
+## under `A64_CHK`; inside `unchecked` the saturating result is the hardware-defined one (§7.7).
+a64_emit_f2i_guard := fn(name : str, in out sb : rt::StrBuf) {
+  b := lower_layout::f2i_bounds(name)
+  push_str(sb, "  ldr x1, =")
+  push_str(sb, b.lo)
+  push_str(sb, "\n  fmov d1, x1\n  fcmp d0, d1\n  b.gt 1f\n  brk #0 // f2i\n1:\n")
+  push_str(sb, "  ldr x1, =")
+  push_str(sb, b.hi)
+  push_str(sb, "\n  fmov d1, x1\n  fcmp d0, d1\n  b.mi 1f\n  brk #0 // f2i\n1:\n")
+}
+
 ## Is a module GLOBAL `[ns,nl)` float-typed? A `: f64`/`: f32` annotation OR an inferred FloatLit init
 ## (`mut F := 40.0`). Guards `deref(d.value)` on a null value (some decls carry no value expr).
 a64_global_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> bool {
@@ -5138,7 +5154,8 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         emit_a64_print_template(sb, a, src, expr_str_lit_ns(sarg), expr_str_lit_nl(sarg), expr_str_lit_label(sarg), ispln, args_head, params_head, pcount, body_head, decls, bind_head, bind_base)
       } else if (isconv or isfconv) and arg_any(args_head) {
         ## CONVERSION `uN(x)`/`iN(x)`/`fN(x)` — value bits in x0; FP conversions round-trip via a d-register.
-        ## int→float `scvtf`; float→int `fcvtzu`/`fcvtzs` (truncating) + narrow; int→int the plain narrow.
+        ## int→float `scvtf`; float→int `fcvtzu`/`fcvtzs` (truncating, range/NaN-guarded when checked,
+        ## #1374) + narrow; int→int the plain narrow.
         gc0 := deref(arg_at(args_head, "argument list ended early"))
         argisf := a64_is_float_expr(gc0.e, body_head, src, a, params_head, decls, 0)
         emit_a64_expr(gc0.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -5147,6 +5164,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         } else {
           if argisf {
             push_str(sb, "  fmov d0, x0\n")
+            if A64_CHK { a64_emit_f2i_guard(nm, sb) }
             if str_at((src + cs), 1) == "u" { push_str(sb, "  fcvtzu x0, d0\n") } else { push_str(sb, "  fcvtzs x0, d0\n") }
             a64_emit_narrow(nm, sb)
           } else {
