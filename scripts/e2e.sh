@@ -9759,6 +9759,18 @@ run_x86_trap chariter_truncated_lead 132
 ## The invalid lead is a library validity failure (`panic`/exit 1), not the architecture's direct bounds trap.
 run_x86 chariter_invalid_ff 1
 run chariter_valid_utf8 42
+## Issue #364 compiler half / Types §4.6 (v1.8.0, l.338) + TYP-14 — a `char(n)` site denotes the
+## in-scope `@convert` (`base::char::to_char`) and its code-point guard runs; the brand construction no
+## longer short-circuits ahead of it. On the parent both refused sites returned silently (measured:
+## exit 42, empty stderr, native x86_64 with the committed seed). The refused site fails through
+## `panic` (exit 1), not the specified `trap()`, for the same reason the row above is a `run_x86 … 1`:
+## #1427 holds that `trap()` is not yet a callable prelude identifier.
+run_x86 issue364_char_convert_guard 1
+## The CT-11 half of the same rule, which the fix must NOT overreach: §4.6 l.345 selects step (2)
+## "checked or unchecked alike", so `unchecked char(n)` calls `to_char` too and only its guard is absent
+## (the body ends in `unchecked bitcast(char, n)` — "an identity crossing", l.344). Cross-backend: the
+## twins reach it through `driver::d_convert_expr` → `lower::twin_convert_callee`, mode-blind as well.
+run issue364_char_unchecked_crossing 42
 # Issue #402 / Control Flow §6 + Stdlib appendix §2.4 — `for` over a type that provides
 # `next(in out self) -> Opt` must DRIVE `next`, not count the backing view. The parent walked the
 # byte length (10 for four code points) and yielded garbage; `iter_for_split` is the same class on
