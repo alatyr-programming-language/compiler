@@ -12246,6 +12246,11 @@ run issue987_vec_ufcs_autoref 42
 ## `7bb90a3a` (x86_64) the build fails (rc 1) with an unrelated lowering message, without the needle.
 build_reject_has issue987_vec_index_field_write "a value, not a place"
 
+## #1321 — `for x in xs` over struct/enum elements kept its hidden index at `slot(x) + stride`, which
+## is the body's first local, so a body binding a local reset the index and the loop ran once.
+## NON-VACUOUS: on the parent `c5fc685d` (x86_64) the fixture exits 1.
+run for_aggregate_body_local 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================
