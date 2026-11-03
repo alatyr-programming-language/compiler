@@ -288,18 +288,32 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   log=""; queue_drive 1 3; [ "$log" = " try:1 3; land:1 3;" ]; _ck $? "failed-publish-did-not-end-the-pass($log)"
   unset -f queue_try queue_land queue_fail
   # The bootstrap recovers the queue checkout from a merge left in flight (#1423), and still cleans dirt.
+  ## The scratch clone names its branch `main` EXPLICITLY, three times over: `git init -b`, the bare
+  ## repo's HEAD, and every clone's `-b`. A row that inherits the machine's `init.defaultBranch` passes
+  ## on a laptop set to `main` and dies on a runner whose default is `master` — which is exactly what
+  ## happened to the first version of these rows (run 41602783694: three rows red on the runner, green
+  ## here). A check whose verdict depends on a git config the test never sets is not a check.
   local s; s="$(mktemp -d "$ROOT/target/queue-bootstrap.XXXXXX")" || return 1
-  git init -q --bare "$s/up" && git clone -q "$s/up" "$s/wt" &&
-    git -C "$s/wt" config user.email q@q && git -C "$s/wt" config user.name q &&
+  git init -q --bare "$s/up" && git -C "$s/up" symbolic-ref HEAD refs/heads/main &&
+    git clone -q -b main "$s/up" "$s/wt" 2>/dev/null || git clone -q "$s/up" "$s/wt"
+  git -C "$s/wt" symbolic-ref HEAD refs/heads/main
+  git -C "$s/wt" config user.email q@q && git -C "$s/wt" config user.name q &&
     printf 'base\n' > "$s/wt/f.txt" && git -C "$s/wt" add f.txt && git -C "$s/wt" commit -q -m base &&
     git -C "$s/wt" push -q origin HEAD:refs/heads/main && git -C "$s/wt" fetch -q origin
+  [ "$(git -C "$s/wt" rev-parse --abbrev-ref HEAD)" = main ] &&
+    [ "$(git -C "$s/wt" rev-parse --verify origin/main)" = "$(git -C "$s/wt" rev-parse HEAD)" ]
+  _ck $? bootstrap-case-had-no-main-to-recover-to
   queue_bootstrap_recover "$s/wt" >/dev/null 2>&1; _ck $? bootstrap-refused-a-clean-checkout
   # A compose that conflicts mid-merge: MERGE_HEAD stays, and `git switch` refuses to move.
   git -C "$s/wt" checkout -q -b side && printf 'side\n' > "$s/wt/f.txt" && git -C "$s/wt" commit -q -am side
-  git clone -q "$s/up" "$s/other" && git -C "$s/other" config user.email o@o && git -C "$s/other" config user.name o &&
+  git -C "$s/up" symbolic-ref HEAD refs/heads/main
+  git clone -q "$s/up" "$s/other" && git -C "$s/other" symbolic-ref HEAD refs/heads/main &&
+    git -C "$s/other" config user.email o@o && git -C "$s/other" config user.name o &&
     printf 'main moved\n' > "$s/other/f.txt" && git -C "$s/other" commit -q -am moved &&
     git -C "$s/other" push -q origin HEAD:refs/heads/main
-  git -C "$s/wt" checkout -q main && git -C "$s/wt" fetch -q origin
+  git -C "$s/wt" checkout -q -B main "$(git -C "$s/other" rev-parse HEAD~1)" 2>/dev/null ||
+    git -C "$s/wt" checkout -q main
+  git -C "$s/wt" fetch -q origin
   git -C "$s/wt" merge --no-ff --no-commit origin/main >/dev/null 2>&1
   [ -e "$(git -C "$s/wt" rev-parse --absolute-git-dir)/MERGE_HEAD" ]; _ck $? bootstrap-case-left-no-merge-state-to-recover
   ! git -C "$s/wt" switch -q --detach origin/main 2>/dev/null; _ck $? bootstrap-case-switched-while-a-merge-was-in-flight
