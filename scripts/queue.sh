@@ -213,7 +213,7 @@ queue_drive() { # PR...
   done
 }
 
-QUEUE_SELFTEST_EXPECTED=62  # the exact count run, compared with -ne like land.sh's; 49, +6 #1383, +7 #1386
+QUEUE_SELFTEST_EXPECTED=71  # the exact count run, compared with -ne like land.sh's; 49, +6 #1383, +7 #1386, +9 #1423
 queue_self_test() {
   local k=0 bad="" log t
   _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
@@ -357,13 +357,53 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   queue_land() { log="$log land:$*;"; return 1; }
   log=""; queue_drive 1 3; [ "$log" = " try:1 3; land:1 3;" ]; _ck $? "failed-publish-did-not-end-the-pass($log)"
   unset -f queue_try queue_land queue_fail
+  # The bootstrap recovers the queue checkout from a merge left in flight (#1423), and still cleans dirt.
+  ## The scratch clone names its branch `main` EXPLICITLY, three times over: `git init -b`, the bare
+  ## repo's HEAD, and every clone's `-b`. A row that inherits the machine's `init.defaultBranch` passes
+  ## on a laptop set to `main` and dies on a runner whose default is `master` — which is exactly what
+  ## happened to the first version of these rows (run 41602783694: three rows red on the runner, green
+  ## here). A check whose verdict depends on a git config the test never sets is not a check.
+  local s; s="$(mktemp -d "$ROOT/target/queue-bootstrap.XXXXXX")" || return 1
+  git init -q --bare "$s/up" && git -C "$s/up" symbolic-ref HEAD refs/heads/main &&
+    git clone -q -b main "$s/up" "$s/wt" 2>/dev/null || git clone -q "$s/up" "$s/wt"
+  git -C "$s/wt" symbolic-ref HEAD refs/heads/main
+  git -C "$s/wt" config user.email q@q && git -C "$s/wt" config user.name q &&
+    printf 'base\n' > "$s/wt/f.txt" && git -C "$s/wt" add f.txt && git -C "$s/wt" commit -q -m base &&
+    git -C "$s/wt" push -q origin HEAD:refs/heads/main && git -C "$s/wt" fetch -q origin
+  [ "$(git -C "$s/wt" rev-parse --abbrev-ref HEAD)" = main ] &&
+    [ "$(git -C "$s/wt" rev-parse --verify origin/main)" = "$(git -C "$s/wt" rev-parse HEAD)" ]
+  _ck $? bootstrap-case-had-no-main-to-recover-to
+  queue_bootstrap_recover "$s/wt" >/dev/null 2>&1; _ck $? bootstrap-refused-a-clean-checkout
+  # A compose that conflicts mid-merge: MERGE_HEAD stays, and `git switch` refuses to move.
+  git -C "$s/wt" checkout -q -b side && printf 'side\n' > "$s/wt/f.txt" && git -C "$s/wt" commit -q -am side
+  git -C "$s/up" symbolic-ref HEAD refs/heads/main
+  git clone -q "$s/up" "$s/other" && git -C "$s/other" symbolic-ref HEAD refs/heads/main &&
+    git -C "$s/other" config user.email o@o && git -C "$s/other" config user.name o &&
+    printf 'main moved\n' > "$s/other/f.txt" && git -C "$s/other" commit -q -am moved &&
+    git -C "$s/other" push -q origin HEAD:refs/heads/main
+  git -C "$s/wt" checkout -q -B main "$(git -C "$s/other" rev-parse HEAD~1)" 2>/dev/null ||
+    git -C "$s/wt" checkout -q main
+  git -C "$s/wt" fetch -q origin
+  git -C "$s/wt" merge --no-ff --no-commit origin/main >/dev/null 2>&1
+  [ -e "$(git -C "$s/wt" rev-parse --absolute-git-dir)/MERGE_HEAD" ]; _ck $? bootstrap-case-left-no-merge-state-to-recover
+  ! git -C "$s/wt" switch -q --detach origin/main 2>/dev/null; _ck $? bootstrap-case-switched-while-a-merge-was-in-flight
+  queue_bootstrap_recover "$s/wt" >/dev/null 2>&1; _ck $? bootstrap-did-not-recover-a-conflicted-merge
+  [ "$(git -C "$s/wt" rev-parse HEAD)" = "$(git -C "$s/wt" rev-parse origin/main)" ]
+  _ck $? bootstrap-recovered-to-the-wrong-object
+  [ ! -e "$(git -C "$s/wt" rev-parse --absolute-git-dir)/MERGE_HEAD" ]; _ck $? bootstrap-left-MERGE_HEAD-behind
+  # Tracked dirt is reset, and said out loud while it goes.
+  printf 'dirt\n' > "$s/wt/f.txt"
+  queue_bootstrap_recover "$s/wt" >/dev/null 2>&1; _ck $? bootstrap-refused-dirt-it-can-clean
+  [ "$(cat "$s/wt/f.txt")" = "main moved" ]; _ck $? bootstrap-kept-dirty-tracked-content
+  rm -rf "$s"
   if [ -n "$bad" ]; then echo "*** queue self-test: FAILED —$bad ***"; return 1; fi
   if [ "$k" -ne "$QUEUE_SELFTEST_EXPECTED" ]; then
     echo "*** queue self-test: ran $k checks, expected exactly $QUEUE_SELFTEST_EXPECTED: a check was lost or added uncounted ***"
     return 1
   fi
   echo "ok   queue self-test: $k checks — reviewed-head marker, entry rules, head check, gate verdict,"
-  echo "     push arguments, the xbackend baseline commit and its refusal, busy box and the bisection plan"
+  echo "     push arguments, the xbackend baseline commit and its refusal, busy box, the bisection plan"
+  echo "     and the bootstrap recovery (#1423)"
 }
 
 # ---- GitHub ------------------------------------------------------------------------------------------
@@ -633,13 +673,57 @@ $(grep -E '^\*\*\* ' "$log" | tail -n 10)
   return 0
 }
 
+## Recover the queue checkout to `origin/main` before a pass (#1423). A compose that conflicts mid-merge
+## leaves `MERGE_HEAD` in `.worktrees/queue`; `git switch` refuses to move while a merge is in flight, so
+## every later pass died at bootstrap with rc 128 and the queue sat silent for two hours. The checkout is
+## dedicated to the queue — every object it ever holds is either `origin/main` or a compose that was
+## already refused and is recomputed next pass — so recovering it is safe, and silence about it is not:
+## each step says what it found and what it discarded. Returns 0 when the checkout stands clean at
+## `origin/main`, 1 when a human must look.
+queue_bootstrap_recover() { # [dir]
+  local d="${1:-$ROOT}" g target dirty was=""
+  g="$(git -C "$d" rev-parse --absolute-git-dir 2>/dev/null)" || { say "queue: no git checkout at $d"; return 1; }
+  target="$(git -C "$d" rev-parse --verify origin/main 2>/dev/null)" ||
+    { say "queue: no origin/main to stand on in $d"; return 1; }
+  if [ -e "$g/MERGE_HEAD" ] || [ -e "$g/rebase-merge" ] || [ -e "$g/rebase-apply" ] ||
+     [ -e "$g/CHERRY_PICK_HEAD" ] || [ -e "$g/BISECT_LOG" ]; then
+    was="an unfinished merge or sequencer at $(git -C "$d" rev-parse HEAD)"
+    say "queue: #1423 — $was; aborting it, the pass that left it there is over"
+    git -C "$d" merge --abort >/dev/null 2>&1 || git -C "$d" merge --quit >/dev/null 2>&1 || true
+    git -C "$d" rebase --abort >/dev/null 2>&1 || true
+    git -C "$d" cherry-pick --abort >/dev/null 2>&1 || true
+    git -C "$d" bisect reset >/dev/null 2>&1 || true
+  fi
+  if [ "$(git -C "$d" rev-parse HEAD 2>/dev/null)" != "$target" ]; then
+    say "queue: #1423 — the checkout stood at $(git -C "$d" rev-parse HEAD), not origin/main $target; detaching"
+    git -C "$d" switch -q --detach "$target" 2>/dev/null || {
+      dirty="$(git -C "$d" status --porcelain --untracked-files=no | head -n 5)"
+      say "queue: #1423 — switch refused; hard-resetting to $target, discarding: $(echo "$dirty" | tr '\n' ' ')"
+      git -C "$d" reset --hard -q "$target" || { say "queue: #1423 recovery FAILED — cannot reach $target"; return 1; }
+    }
+  fi
+  dirty="$(git -C "$d" status --porcelain --untracked-files=no)"
+  if [ -n "$dirty" ]; then
+    say "queue: #1423 — tracked files differ from origin/main; resetting, discarding:"
+    echo "$dirty" | head -n 10 | sed 's/^/queue:   /'
+    git -C "$d" reset --hard -q "$target" || { say "queue: #1423 recovery FAILED"; return 1; }
+    [ -z "$(git -C "$d" status --porcelain --untracked-files=no)" ] ||
+      { say "queue: the checkout is dirty after recovery — a human looks at $d now"; return 1; }
+  fi
+  [ "$(git -C "$d" rev-parse HEAD)" = "$target" ] ||
+    { say "queue: recovery ended at $(git -C "$d" rev-parse HEAD), not $target"; return 1; }
+  [ -e "$g/MERGE_HEAD" ] && { say "queue: MERGE_HEAD survived recovery in $d"; return 1; }
+  [ -n "$was" ] && say "queue: #1423 — recovered, the checkout stands at origin/main $target"
+  return 0
+}
+
 queue_once() {
   mkdir -p "$QDIR" || die "cannot create $QDIR"
   if [ "${QUEUE_LOCK_HELD:-0}" != 1 ]; then
     exec 9> "$QDIR/lock"
     flock -n 9 || { say "another pass holds the lock"; return 0; }
   fi
-  [ -z "$(git status --porcelain --untracked-files=no)" ] || die "the queue checkout is dirty"
+  queue_bootstrap_recover || die "the queue checkout cannot be cleaned to origin/main (#1423) — see above"
   local prs pr head marker out why solo batch=() shead rc base draft labels body
   prs="$(gh_cmd pr list -R "$REPO" --label queue --state open --json number --jq '.[].number' | sort -n | head -n "$QUEUE_MAX")"
   [ -n "$prs" ] || { say "queue empty"; return 0; }
@@ -748,7 +832,7 @@ Type=oneshot
 WorkingDirectory=$wt
 Environment=PATH=/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin
 Environment=QUEUE_LOCK_HELD=1
-ExecStart=/run/current-system/sw/bin/flock -n -o $wt/target/queue/lock /run/current-system/sw/bin/bash -c 'exec >> target/queue/queue.log 2>&1; git fetch -q origin main && git switch -q --detach origin/main && git show origin/main:scripts/queue.sh > target/queue/queue-run.sh && nix build --inputs-from . nixpkgs#gh -o target/queue/gh-tool && PATH="\$\$PWD/target/queue/gh-tool/bin:\$\$PATH" exec bash target/queue/queue-run.sh --once || { echo "queue: bootstrap failed (rc \$\$?)"; exit 1; }'
+ExecStart=/run/current-system/sw/bin/flock -n -o $wt/target/queue/lock /run/current-system/sw/bin/bash -c 'exec >> target/queue/queue.log 2>&1; if [ -e "$(git rev-parse --absolute-git-dir)/MERGE_HEAD" ]; then echo "queue: #1423 — an unfinished merge was left here at $(git rev-parse HEAD); aborting before the pass"; git merge --abort 2>/dev/null || git merge --quit 2>/dev/null || true; fi; git fetch -q origin main && { git switch -q --detach origin/main || { echo "queue: #1423 — switch refused, hard-resetting to $(git rev-parse origin/main)"; git reset --hard -q origin/main || { echo "queue: bootstrap FAILED — the checkout cannot reach origin/main"; exit 1; }; }; } && git show origin/main:scripts/queue.sh > target/queue/queue-run.sh && nix build --inputs-from . nixpkgs#gh -o target/queue/gh-tool && PATH="\$\$PWD/target/queue/gh-tool/bin:\$\$PATH" exec bash target/queue/queue-run.sh --once || { echo "queue: bootstrap failed (rc \$\$?)"; exit 1; }'
 TimeoutStartSec=infinity
 EOF
   cat > "$unit/alatyr-queue.timer" <<EOF
