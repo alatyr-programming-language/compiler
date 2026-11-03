@@ -205,6 +205,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
   refused. The declared element type now decides the two-word element. A byte-slice view local stored
   into a `Slice(u8)` field no longer loses its length. A wider `Slice(T)` element is refused where it is declared, until an index
   into it loads a `T` (#1341).
+- **A function the program declares named `sub` is that function (#1406).** The lower keyed its
+  internal str-view `sub(s, start, len)` on the callee *text* alone, so declaring `sub` took over every
+  call to it. `x := sub(t[0..3])` over a `Slice(P)` or `str` result **segfaulted the compiler** (exit
+  139, no diagnostic) — the view emitter read argument positions 1 and 2 of a call that has one — and
+  `u64(sub(10))` was refused as a "str/view expression". Both compile and run. `sub` is not a keyword
+  (Grammar §2.3) and no prelude declares it, so the program's declaration wins (Declarations §6.1); an
+  *undeclared* `sub(…)` keeps the internal view path unchanged.
 
 ## 0.2.21 — 2026-11-01
 

@@ -5759,14 +5759,29 @@ str_lit_info := fn(e : ptr(Expr)) -> StrInfo {
 ## (a str-slot binding + a {ptr, len} store). The deref-`match` on the expr pointer stays in this
 ## pointer-PARAM helper (the lowerable shape). `cx` carries `src` so the callee name can be read.
 is_str_call := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
-  is_sub_call(e, cx.src)
+  is_sub_call(e, cx.decls, cx.src, arena_of(cx))
 }
 
-## The `src`-only form of the str-VIEW-call detector (used by `collect_slots`, which has `src` but no
-## `LCtx`): is `e` a `Call` to `sub`? The deref-`match` stays in this pointer-PARAM helper.
-is_sub_call := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+## Is `e` a call to the internal str-VIEW `sub(s, start, len)` — and NOT a call to a DECLARED function
+## that merely happens to be spelled `sub` (#1406)?
+## Grammar §2.3 (v1.6.0) lists the keywords and states: "**Not keywords:** built-ins are **prelude
+## identifiers** (OP-1) — flat word-functions". `sub` is in no keyword list and in no prelude catalog
+## (Stdlib appendix §4; the only `sub` the spec names there is the checked-arithmetic row of §7, an
+## operator overload on `uN`/`iN`), so it is an ORDINARY identifier and a program may declare it.
+## Declarations §6.1 then decides the call: "A declaration in an inner scope **may shadow** an outer name;
+## within the inner scope the inner name wins". A callee that resolves to a kind-1 decl is therefore a
+## call to THAT declaration, and lowers as the same call under any other name does.
+## Answering by the callee TEXT alone routed `x := sub(t[0..3])` (a user fn) to `emit_sub_pair`, which
+## reads argument positions 1 and 2 of a one-argument call: `arg_expr_at` answers null there (its own
+## `res := 0`) and `emit_gas` dereferences its argument unguarded — SIGSEGV, exit 139, no diagnostic.
+## The resolution is asked AFTER the name test, so every callee not spelled `sub` answers exactly as
+## before; an UNDECLARED `sub(…)` still resolves to nothing and keeps the internal view path.
+is_sub_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
   match deref(e) {
-    Expr::Call(cs, cl, nargs, args_head) => { str_at((src + cs), cl) == "sub" }
+    Expr::Call(cs, cl, nargs, args_head) => {
+      if str_at((src + cs), cl) != "sub" { return false }
+      ret_call_target(decls, src, cs, cl, nargs, args_head, a) < 0
+    }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
@@ -6754,7 +6769,7 @@ is_ecallee_call := fn(e : ptr(Expr)) -> bool {
 ## them here would change emission for the whole self-host build.
 view_pair_base := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   if str_lit_info(e).is_s { return true }
-  if is_sub_call(e, cx.src) { return true }
+  if is_sub_call(e, cx.decls, cx.src, arena_of(cx)) { return true }
   if is_strat_call(e, cx.src) { return true }
   if is_bytes_call(e, cx.src) { return true }
   is_slice_expr(e)
@@ -10294,7 +10309,7 @@ is_str_operand := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   si := str_lit_info(e)
   if si.is_s { return true }
   if is_strat_call(e, cx.src) { return true }
-  if is_sub_call(e, cx.src) { return true }
+  if is_sub_call(e, cx.decls, cx.src, deref(cx.mar)) { return true }
   if is_slice_expr(e) { return true }
   if str_ret_call(e, cx.decls, cx.src, deref(cx.mar)) { return true }
   ## A `str` FIELD is the same two-word view as a str local, but its Expr is a Field rather than a Var.
@@ -19936,7 +19951,10 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## position it leaves the view's {ptr, len} pair on the stack (the str-expression value shape);
       ## `str_eq`/`byte_at`/`name := sub(…)` reach `sub` through `emit_str_pair`/the Assign path, not
       ## here, but a bare `sub(…)` is handled so it never falls to the generic `call sub` (undefined).
-      if callee == "sub" {
+      ## #1406: the question is asked of `is_sub_call`, the ONE home for "the internal view `sub`, and
+      ## no declaration named `sub`", so a program that DECLARES `sub` (Grammar §2.3: not a keyword;
+      ## Declarations §6.1: the inner declaration wins) reaches the generic call below like any other name.
+      if is_sub_call(e, cx.decls, cx.src, a) {
         emit_sub_pair(e, sb, cx, a, nl)
         return
       }
@@ -23422,7 +23440,7 @@ emit_pair_field_store := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBu
 pair_value_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   if str_lit_info(e).is_s { return true }
   if is_slice_expr(e) { return true }
-  if is_sub_call(e, cx.src) { return true }
+  if is_sub_call(e, cx.decls, cx.src, arena_of(cx)) { return true }
   if is_strat_call(e, cx.src) { return true }
   if is_bytes_call(e, cx.src) { return true }
   vn := var_name_span(e)
@@ -24571,7 +24589,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
 expr_is_str_val := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
   si := str_lit_info(e)
   if si.is_s { return true }
-  if is_sub_call(e, src) or is_strat_call(e, src) or is_slice_expr(e) or is_bytes_call(e, src) { return true }
+  if is_sub_call(e, decls, src, a) or is_strat_call(e, src) or is_slice_expr(e) or is_bytes_call(e, src) { return true }
   str_ret_call(e, decls, src, a)
 }
 ## The FIRST real value body of a `match`/`if` EXPRESSION — the first non-wildcard (or str-literal)
