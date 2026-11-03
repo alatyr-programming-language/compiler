@@ -9,7 +9,7 @@ procedures in `.agents/skills/`. At most 150 lines (`scripts/agents_size_check.s
 - Decide a language question in the specification before changing `src/`. If it is silent, stop and get
   the decision recorded; never infer semantics from current behaviour.
 - **The pin.** This repository is answerable to specification revision **1.7.0** (tag `v1.7.0`,
-  `01c75ab`), a tagged release and never a moving branch head. It records what the compiler is
+  `74fc2a2`), a tagged release and never a moving branch head. It records what the compiler is
   answerable to, not what it implements; each gap is an open issue. `src/spec_revision.al` holds the
   number `alatyr version` reports (TOOL-21), and `scripts/spec_pin_check.sh` keeps its prose copies in
   step. Move the pin only in its own explicit commit.
