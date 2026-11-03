@@ -24,7 +24,7 @@
 ## release number, never a bare commit hash. The pin itself moves only in its own explicit commit
 ## (AGENTS.md, Authority); this file moves with it.
 
-pub SPEC_REVISION := "1.6.0"
+pub SPEC_REVISION := "1.8.0"
 
 ## Where the known deviations from SPEC_REVISION are published (Overview §6; TOOL-21 at spec 9438d00;
 ## compiler#1000). SPEC_REVISION is this compiler's TARGET revision, not a conformance claim, so
