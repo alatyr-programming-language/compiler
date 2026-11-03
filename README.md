@@ -1,6 +1,6 @@
 # Alatyr compiler (self-hosted)
 
-![targets spec 1.6.0](https://img.shields.io/badge/spec-1.6.0-blue)
+![targets spec 1.7.0](https://img.shields.io/badge/spec-1.7.0-blue)
 ![status: self-hosted, pre-release](https://img.shields.io/badge/status-self--hosted%2C%20pre--release-orange)
 ![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green)
 
@@ -38,7 +38,7 @@ Cross-language benchmarks live in a separate repository,
 
 The language is defined by the [specification](https://github.com/alatyr-programming-language/spec),
 which is the source of truth: the toolchain conforms to it, never the other way round. This tree
-is answerable to specification revision **1.6.0** (tag `v1.6.0`, spec commit `01c75ab`) — a tagged
+is answerable to specification revision **1.7.0** (tag `v1.7.0`, spec commit `74fc2a2`) — a tagged
 release, because this compiler pins tagged releases and never a moving branch head. `AGENTS.md` carries
 the full pin and moves it in its own commit; `src/spec_revision.al` is the constant the binary answers
 with. The pin is an obligation, not a claim of completeness: where the tree lags it, the gap is an open
@@ -50,11 +50,11 @@ self-host binary is frozen and not published; `seed/HISTORY.md` records the line
 
 ```sh
 $ target/debug/alatyr --version
-alatyr 0.2.20, spec 1.6.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)
+alatyr 0.2.20, spec 1.7.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)
 ```
 
 Two axes, per Tooling §4 (TOOL-21): **`0.2.20`** is this implementation's own version, injected from
-`package.al` (TOOL-15), and it moves on a seed promotion and only on one; **`1.6.0`** is the
+`package.al` (TOOL-15), and it moves on a seed promotion and only on one; **`1.7.0`** is the
 specification revision this build is answerable to, pinned in `src/spec_revision.al`, and it moves with
 the pin. It is a **target revision**, not a conformance claim (Overview §6, TOOL-21 as refined by spec
 `9438d00`; #1000): the line says so, and names the published list of known deviations,
