@@ -11439,6 +11439,33 @@ check_accept issue422_direct_range_slice_index
 run_a64 arr_slice_direct_index_oob 133
 run_rv64 arr_slice_direct_index_oob 133
 run_wat arr_slice_direct_index_oob 134
+## Grammar §3.4 / Types §6.4 / appendix 160 §3.5 (#422), the PACKED BYTE element — the last element
+## kind for which the two spellings of ONE access still disagreed on x86_64. `xs[lo..hi][i]` with
+## `xs : [u8; N]` (and `[i8; N]` / `[bits8; N]`) was REFUSED at compile time by the located refusal
+## below the recognizer, while `v := xs[lo..hi]; v[i]` answered 42 / 93 on the same compiler
+## (measured on `main` `c00eae90`, seed 0.2.21, native x86_64). The element is now read through the
+## view's OWN `{ptr, len}` pair at the element's OWN width: `emit_arr_slice_pair` already scales `lo`
+## by 1 for a packed byte kind, and the load is `movzbq` / `movsbq` at `(%rbx,%rax,1)` — Types §6.4's
+## "the stride is `T`'s size rounded up to its alignment; element access is `base + i × stride`", where
+## `sizeof(u8)` is one byte. x86_64 is the only backend this moves: aarch64, riscv64 and WAT store
+## `[u8; N]` one WORD per element and already answered 42 / 93 both ways, so their rows are CONTROLS
+## that they do not move, and the x86_64 `run` row is the regression. Float (eek 9) and struct/enum
+## (eek 2/3/7) elements keep their existing located reject / fail-loud trap and stay with #422/#494.
+run issue422_direct_range_slice_byte_index 42
+run_a64 issue422_direct_range_slice_byte_index 42
+run_rv64 issue422_direct_range_slice_byte_index 42
+run_wat issue422_direct_range_slice_byte_index 42
+check_accept issue422_direct_range_slice_byte_index
+## The OUT-OF-VIEW index of the same packed byte view: the bound is the VIEW's runtime length, so
+## index 2 of {42, 93} TRAPS (x86_64 132 `ud2`) instead of reading `xs[3]` = 55 past the view. On the
+## parent x86_64 never reached the trap — the build was refused — so this row is a regression there
+## too; a64/rv64/wasm trapped 133/133/134 on the parent for their own reason and are CONTROLS. The
+## `unchecked` half of the same address math (55, no trap) is a value row in the fixture above.
+run_x86_trap issue422_direct_range_slice_byte_oob 132
+run_a64 issue422_direct_range_slice_byte_oob 133
+run_rv64 issue422_direct_range_slice_byte_oob 133
+run_wat issue422_direct_range_slice_byte_oob 134
+check_accept issue422_direct_range_slice_byte_oob
 ## BYTES bounded return ABI: `[u8; N]` with 1 <= N <= 16 is returned as one or two packed words and
 ## indexed both after binding and directly. The bound form remains x86-only; the direct form is also
 ## covered on AArch64 by its matching x0/x1 carrier. The wider/non-u8 direct forms below remain located rejects.

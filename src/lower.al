@@ -21869,6 +21869,53 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         }
         emit_view_byte_index(bsrc, idx, sb, cx, a, nl)
       } else {
+        ## Grammar §3.4 / Types §6.4 / appendix 160 §3.5 (#422) — a BYTE element read through a RANGE
+        ## SLICE used DIRECTLY as the index base, `xs[lo..hi][i]` with `xs : [u8; N]` (or `[i8; N]` /
+        ## `[bits8; N]`). `postfix-expr ::= primary { postfix }` lists both `"[" expr "]"` and the range
+        ## form among the postfix ops, so this is ONE primary plus TWO postfix steps and needs no
+        ## intermediate binding; `v := xs[lo..hi]; v[i]` is the SAME access one binding later and answered
+        ## 42 / 93 on this tree while the direct spelling was REFUSED below — the disagreement #422
+        ## reported, still open for every element kind that is not a one-word scalar.
+        ##
+        ## THE ELEMENT IS READ AT THE VIEW'S OWN STRIDE AND ITS OWN WIDTH, which for a packed byte
+        ## element is ONE BYTE (Types §6.4: "the stride is `T`'s size rounded up to its alignment;
+        ## element access is `base + i × stride`"; appendix 160 §3.5: `[T]` is a `{ptr, len}` pair over
+        ## "a contiguous run of `T`"). x86_64 lays `[u8; N]` as packed bytes — measured in the emitted
+        ## GAS of the BOUND spelling: `movb %al, 0(%r13)` … `3(%r13)`, the view's word 0 = `leaq
+        ## -8(%rbp)` advanced by `lo * 1`, the element read `movzbq (%rax)` — so a word here would read
+        ## the next seven bytes of the run and answer a plausible wrong integer.
+        ##
+        ## The deliverer already exists and is already byte-correct: `emit_arr_slice_pair` materialises
+        ## exactly the two words the BOUND spelling stores, and for a packed byte kind it scales `lo` by
+        ## 1 (`is_byte_array_eek` → `imulq $1`) rather than by `estride * 8`. This arm composes the
+        ## element off that pair and loads it at the element's own width, so the ADDRESS and the WIDTH
+        ## are decided in one place and a byte address can never meet a word load. The index is
+        ## bounds-checked against the VIEW's runtime length `hi - lo` with the same unsigned `jb`/`ud2`
+        ## shape every other index uses (a negative i64 index is a huge unsigned and traps too), dropped
+        ## in an `unchecked` scope (CG-7) — identical to the word-element recognizer in
+        ## `src/lower/place.al`, which this mirrors and does not modify.
+        ##
+        ## Narrow BY MEASUREMENT: `slice_arr_stride != 0` (a `Slice` over a name-matched ARRAY local,
+        ## `ek == 5`) AND `is_byte_array_eek` (eek 8 / 10 / 11, the packed byte kinds — `is_byte_array_eek`
+        ## is their one home). A one-word scalar element (`eek == 0`) keeps `src/lower/place.al`'s
+        ## recognizer byte-for-byte; a float (9), struct/enum (2/3/7) or `str` (4) element keeps the
+        ## refusal below, unchanged, and stays with #422/#494. Nothing else reaches this line: every arm
+        ## above keys on a `StrLit` / `Var` / `Field` / `Index` / `Call` base or on a module global, and
+        ## an `Expr::Slice` base answered none of them — measured on the parent, where it fell HERE and
+        ## was refused. Placed immediately above `emit_index_addr` so no other shape's emission moves.
+        dsbe := slice_arr_eek(base, cx.slots, cx.src)
+        if slice_arr_stride(base, cx.slots, cx.src) != 0 and is_byte_array_eek(dsbe) {
+          emit_gas(idx, sb, cx, a, nl)                ## the index → stack (lowered FIRST: the pair's own
+                                                      ## `lo`/`hi` lowering may clobber every register)
+          emit_arr_slice_pair(base, sb, cx, a, nl)    ## stack: [idx, ptr (deeper), len (top)]
+          push_str(sb, "  popq %rdx\n  popq %rbx\n  popq %rax\n")   ## len → %rdx, data ptr → %rbx, idx → %rax
+          if cx.vchk { push_str(sb, "  cmpq %rdx, %rax\n  jb 1f\n  ud2\n1:\n") }
+          ## `movsbq` for the signed byte kind, `movzbq` for the two unsigned ones — the same split the
+          ## sibling byte loads in this arm make, and `byte_type_eek` is the one home mapping `i8` to it.
+          if dsbe == 10 { push_str(sb, "  movsbq (%rbx,%rax,1), %rax\n") } else { push_str(sb, "  movzbq (%rbx,%rax,1), %rax\n") }
+          push_str(sb, "  pushq %rax\n")
+          return
+        }
         emit_index_addr(base, idx, sb, cx, a, nl)
         tbread := tuple_byte_component_base(base, cx)
         if tbread.ok {

@@ -126,6 +126,16 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A packed byte array range-sliced and indexed in one expression works on x86_64 (#422).**
+  `xs[1..3][0]` with `xs : [u8; 4]` — and the same through `[i8; N]` and `[bits8; N]` — was refused
+  at build time with `index BASE is not a named array/slice place`, while `v := xs[1..3]; v[0]`,
+  the same access one binding later, answered correctly. Grammar §3.4 makes both postfix steps one
+  expression and Types §6.4 fixes the read at the element's own stride, which for `u8` is one byte;
+  the element is now read through the view's own `{ptr, len}` pair with a one-byte load, bounds-checked
+  against the view's runtime length and unchecked under `unchecked` (CG-7), so both spellings name the
+  same byte. Aarch64, riscv64 and WAT already accepted this shape — they store `[u8; N]` one word per
+  element — and are unchanged. A float or struct/enum element of a directly indexed range slice is still
+  refused on x86_64 and still traps on the other three (#422, #494 stay open for them).
 - **A field access on a scalar is a compile error (#703).** `x.a` on an annotated `u64`, `bool` or other
   scalar local, parameter or module global compiled and read a fabricated `0`, or dropped the store.
   A scalar has no fields (Modules §2, Types §6.1), so `check` now refuses it with a located diagnostic.
