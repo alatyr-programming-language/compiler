@@ -8,8 +8,19 @@ pub char := brand(u32)
 ## defined trap. A library conversion-constructor (`@convert`, 4.6) — no built-in
 ## code-point range. The validity guard is mode-dependent: present in checked
 ## code, dropped under `unchecked` (a raw reinterpret there).
-to_char := @convert fn(n : u32) -> char {
+##
+## `pub`, per §4.6 "Scope, not coherence" — "A `@convert` is an ordinary `pub` binding, found
+## by the name-resolution rules in effect at the call site" — and TYP-14's recorded stdlib
+## consequence: "The stdlib's `to_char` becomes `pub` (an unimportable conversion is not 'in
+## scope' for anyone, so option 1 would be inert otherwise)" (spec `730486f`, released 1.7.0;
+## compiler#364). Measured on the parent, `base::char::to_char(65)` was refused by `check`.
+pub to_char := @convert fn(n : u32) -> char {
   comptime if verify.checked {
+    ## §3.2 requires this guard to fail through `trap()` — the same instruction as the built-in
+    ## narrowing guard (§4.1, CG-13), never `panic`. `trap()` is not yet a callable prelude
+    ## intrinsic: a call to it emits a reference to `<module>__trap` that no definition answers,
+    ## so every program linking this module fails at `ld`. #1427 records that gap; until it is
+    ## fixed the guard stays on `panic` as a named blocker, not as the chosen form.
     if n > 1114111 { panic("invalid code point") }
     if n >= 55296 and n <= 57343 { panic("surrogate code point") }
   }

@@ -11295,6 +11295,10 @@ run str_byte_ops 42
 ## base/char classification + folding, now pub: is_digit/is_alpha/is_alnum/is_whitespace/is_hex_digit,
 ## to_lower/to_upper (ASCII), hex_value (Option(u32)), via the base:: root.
 run char_class 42
+## Issue #364 library half: `base::char::to_char` is `pub`, so the §4.6 conversion-constructor that
+## Stdlib §3.2 gives to `char(n)` is in scope at a call site (§4.6 "Scope, not coherence"; TYP-14).
+## On the parent the qualified call was refused by `check` on all four backends.
+run issue364_to_char_pub 42
 ## base/slice READ-ONLY functional toolkit (len/reduce/count_if/any/all/contains/find/first/last, fn-value
 ## predicates) + base/cmp min/max/clamp — now pub. Slices passed directly (arr[0..N]).
 run slice_toolkit 42
