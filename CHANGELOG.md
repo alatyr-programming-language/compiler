@@ -136,6 +136,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
   same byte. Aarch64, riscv64 and WAT already accepted this shape — they store `[u8; N]` one word per
   element — and are unchanged. A float or struct/enum element of a directly indexed range slice is still
   refused on x86_64 and still traps on the other three (#422, #494 stay open for them).
+- **`base::char::to_char` is public (#364, library half).** `char(n)`'s checked conversion-constructor
+  (Stdlib §3.2, Types §4.6) carried no `pub`, so no caller could name it: `base::char::to_char(65)`
+  was refused by `check` on all four backends. §4.6 makes a `@convert` "an ordinary `pub` binding,
+  found by the name-resolution rules in effect at the call site", and TYP-14 (spec `8da0372`, released
+  as 1.8.0) records publishing it as a consequence of that decision. `char(n)` itself still takes the
+  unguarded brand crossing, so #364 stays open, and the guard still reports through `panic` because a
+  call to `trap()` does not link yet (#1427).
 - **A field access on a scalar is a compile error (#703).** `x.a` on an annotated `u64`, `bool` or other
   scalar local, parameter or module global compiled and read a fabricated `0`, or dropped the store.
   A scalar has no fields (Modules §2, Types §6.1), so `check` now refuses it with a located diagnostic.
