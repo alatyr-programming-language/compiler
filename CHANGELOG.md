@@ -233,16 +233,26 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `u64(sub(10))` was refused as a "str/view expression". Both compile and run. `sub` is not a keyword
   (Grammar §2.3) and no prelude declares it, so the program's declaration wins (Declarations §6.1); an
   *undeclared* `sub(…)` keeps the internal view path unchanged.
-- **A function the program declares named `shl` or `shr` is that function (#1434).** The same name-keyed
-  hijack #1406 closed for `sub` still stood at the shift/rotate arm: it matched the callee *text*
-  `shl`/`shr`/`rotl`/`rotr` before the generic call and read argument 1 of whatever call it got. A program
-  declaring `shl := fn(x : u64) -> u64 { x }` and calling it with one argument **crashed the compiler**
-  (exit **139**, SIGSEGV, no diagnostic); `shr` the same. Both compile and run to 42 now. Measured on the
-  parent `48ecfed4` with the tree's own Stage1 on native x86_64: `shl` and `shr` exit 139, while the
-  identical program under `shlx`, `rotl`, `rotr`, `size`, `bytes`, `str_at` and `expect` exits 0, and the
-  same declared callee called with two arguments exits 0 — which is what names the missing argument as the
-  cause. None of the four is a keyword (Grammar §2.3), so the program's declaration wins (Declarations
-  §6.1); an *undeclared* `shl(…)` keeps the intrinsic path unchanged.
+- **A function the program declares named `shl` or `shr` is that function (#1434).** Three sites matched
+  the callee *text* `shl`/`shr`/`rotl`/`rotr` before resolving the callee, and each assumed the arguments
+  of the intrinsic. Two faults, both measured on native x86_64 with the tree's own Stage1 on the parent
+  `48ecfed4`, every program a declared function called once and the identical program under another name
+  answering 42:
+  - **a crash**: one argument — `shl := fn(x : u64) -> u64 { x }`, `shl(10) + 32` — **segfaulted the
+    compiler** (exit **139**, no diagnostic), `shr` the same, because the emitter read argument 1 and
+    `arg_expr_at` answers null there. Both compile and run to 42 now.
+  - **a silent wrong value**: two arguments — `shl := fn(a, b) -> u64 { a }`, `shl(10, 2) + 32` — built
+    **cleanly** and answered **72** (40 + 32), `shr` answered **34**; the emitted assembly held
+    `shlq %cl, %rsi` and no `call …__shl`. Both answer 42 now.
+  The x86_64 emitter, the aarch64, riscv64 and wasm emitters and the IR builder now ask one predicate
+  (`lower::is_shift_intrinsic_call`, and `not ib_fn_named` in the IR builder, the guard its neighbouring
+  arms already ask). `rotl`/`rotr` were measured already correct on x86_64 — the IR shift refuses
+  rotations, so they reached the user call — and are guarded for one rule over the family, not as a fix.
+  None of the four is a keyword (Grammar §2.3), so the program's declaration wins (Declarations §6.1); an
+  *undeclared* shift keeps the intrinsic path, measured: `shl(10, 2) + 2` and `shr(10, 1) + 37` both
+  still answer 42, so the intrinsic still shifts and did not become identity. No program in `src/` or
+  `lib/` declares any of the four names (`grep -c` over both trees: 0), so the fixpoint's assembly is
+  unchanged.
 - **The full gate runs a generated container matrix (#1124).** `scripts/container_matrix.py` writes one
   program per element shape × container × operation (19 shapes; `vec`, `deque`, `hashmap`; 378 cells)
   into `target/`, builds and runs each, and prints `OK`, `WRONG <check>`, `TRAP <rc>` or `REFUSED`.

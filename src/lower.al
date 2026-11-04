@@ -5791,16 +5791,17 @@ is_sub_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
 
 ## #1434 — is this call one of the shift/rotate OPERATION-FUNCTIONS (`shl`/`shr`/`rotl`/`rotr`, OP-6,
 ## Types §2.2) AND not a call to a declaration the program wrote? The question #1406 answers for `sub`,
-## asked once of the TWO sites that key on those four names by text. The emit arm reads argument 1
-## unconditionally, so a program that DECLARES `shl(x)` with one argument had `arg_expr_at` answer null
-## (its own `res := 0`) and `emit_gas` dereference it — SIGSEGV, exit 139, no diagnostic; and the type
-## query answers argument 0's type, which is the intrinsic's rule rather than a declaration's. Grammar §2.3
-## lists the keywords and states built-ins are prelude identifiers, and none of these four is a keyword;
+## asked once of EVERY emitter that keys on those four names by text: x86_64 (`emit_gas`), aarch64,
+## riscv64 and wasm each read argument 1 unconditionally, so a program that DECLARES one of them with a
+## single argument had `arg_expr_at` answer null (its own `res := 0`) and the emitter dereference it —
+## SIGSEGV, exit 139, no diagnostic, on all four backends. Cross-module like `pub shift_call_signed` in
+## lower_layout and the `lower::call_ret_ty_span` these same three arms already call. Grammar §2.3 lists
+## the keywords and states built-ins are prelude identifiers, and none of these four is a keyword;
 ## Declarations §6.1 gives the inner declaration the win, so a callee that resolves to a kind-1 decl is a
 ## call to THAT declaration and lowers as the same call under any other name does. The resolution is asked
 ## AFTER the name test, so every callee not spelled like a shift answers exactly as before, and an
 ## UNDECLARED `shl(…)` still resolves to nothing and keeps the intrinsic path.
-is_shift_intrinsic_call := fn(cs : usize, cl : usize, nargs : usize, args_head : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+pub is_shift_intrinsic_call := fn(cs : usize, cl : usize, nargs : usize, args_head : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
   cn := str_at((src + cs), cl)
   if cn != "shl" and cn != "shr" and cn != "rotl" and cn != "rotr" { return false }
   ret_call_target(decls, src, cs, cl, nargs, args_head, a) < 0

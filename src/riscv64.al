@@ -4407,13 +4407,18 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           }
         }
         push_str(sb, "\n")
-      } else if nm == "shl" or nm == "shr" or nm == "rotl" or nm == "rotr" {
+      } else if lower::is_shift_intrinsic_call(cs, cl, nargs, args_head, decls, src, a) {
         ## bit shift/rotate ops (OP-6): eval v -> a0 (pushed), count -> a1, then the op. `shr` picks
         ## `srl`(logical)/`sra`(arithmetic) by the value's signedness (rv_operand_signed). RV64I (base) has
         ## NO rotate insn (that is the Zbb ext), so rotate is EMULATED: rotr(v,n) = (v>>n)|(v<<(64-n)),
         ## rotl(v,n) = (v<<n)|(v>>(64-n)), via srl/sll + a `64-n` count in t1 and t0/t2 scratch. A SHIFT count
         ## n>=64 is a checked over-width trap (ebreak; I11), dropped under `unchecked` (RV_CHK false); rotation
         ## is total (RV64 masks the count mod 64). Native-64 operands (narrow-width masking = follow-up).
+        ## #1434 — the callee TEXT alone is not enough: a program that DECLARES `shl`/`shr`/`rotl`/`rotr`
+        ## is calling that declaration (Grammar §2.3: not keywords; Declarations §6.1: the inner wins), and
+        ## reading argument 1 of a one-argument call dereferences `arg_expr_at`'s null answer. The same
+        ## predicate the x86_64 emitter asks, reached the way this module already reaches
+        ## `lower::call_ret_ty_span`. An undeclared shift still takes the intrinsic path below.
         rsv := arg_expr_at(args_head, 0, a)
         rsn := arg_expr_at(args_head, 1, a)
         emit_rv_expr(rsv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)

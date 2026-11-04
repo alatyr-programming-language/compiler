@@ -5308,11 +5308,16 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         } else {
           push_str(sb, "(unreachable) (; empty conversion ;)\n")
         }
-      } else if str_at((src + cs), cl) == "shl" or str_at((src + cs), cl) == "shr" or str_at((src + cs), cl) == "rotl" or str_at((src + cs), cl) == "rotr" {
+      } else if lower::is_shift_intrinsic_call(cs, cl, nargs, args_head, decls, src, a) {
         ## bit shift/rotate ops (OP-6): WASM's native `i64.shl`/`shr_u`/`shr_s`/`rotl`/`rotr`, each popping
         ## v then n. `shr` picks `_s`/`_u` by the value's signedness (wat_operand_signed), like `/`. WASM
         ## masks the count mod 64; rotation is total, but in checked mode a shift traps before native masking
         ## when `n >= 64` (I11 / Concurrency §6), using the fn's reusable scratch local.
+        ## #1434 — the callee TEXT alone is not enough: a program that DECLARES `shl`/`shr`/`rotl`/`rotr`
+        ## is calling that declaration (Grammar §2.3: not keywords; Declarations §6.1: the inner wins), and
+        ## reading argument 1 of a one-argument call dereferences `arg_expr_at`'s null answer. The same
+        ## predicate the x86_64 emitter asks, reached the way this module already reaches
+        ## `lower::call_ret_ty_span`. An undeclared shift still takes the intrinsic path below.
         wscn := str_at((src + cs), cl)
         wsv := arg_expr_at(args_head, 0, a)
         wsn := arg_expr_at(args_head, 1, a)

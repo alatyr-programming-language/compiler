@@ -12397,6 +12397,8 @@ run match_slice_payload_for 42
 ## one-argument call. NON-VACUOUS: on the parent (x86_64) both builds are refused with exit 139.
 run issue1434_declared_shl_value 42
 run issue1434_declared_shr_value 42
+run issue1434_declared_shl_two_args 42
+run issue1434_declared_shr_two_args 42
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.

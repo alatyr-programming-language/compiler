@@ -5179,12 +5179,17 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           }
         }
         push_str(sb, "\n")
-      } else if nm == "shl" or nm == "shr" or nm == "rotl" or nm == "rotr" {
+      } else if lower::is_shift_intrinsic_call(cs, cl, nargs, args_head, decls, src, a) {
         ## bit shift/rotate ops (OP-6): eval v → x0 (pushed), count → x1, then the AArch64 op. `shr` picks
         ## `lsr`(logical)/`asr`(arithmetic) by the value's signedness (a64_operand_signed, like `/`). AArch64
         ## has `ror` (rotate right) but no rotate-LEFT insn, so `rotl(v, n)` = `ror(v, 64 - n)`. A SHIFT count
         ## `n ≥ 64` is a checked over-width trap (`brk #0`; I11), dropped under `unchecked` (A64_CHK false);
         ## rotation is total (the CPU masks the count). Native-64 operands (narrow-width masking = follow-up).
+        ## #1434 — the callee TEXT alone is not enough: a program that DECLARES `shl`/`shr`/`rotl`/`rotr`
+        ## is calling that declaration (Grammar §2.3: not keywords; Declarations §6.1: the inner wins), and
+        ## reading argument 1 of a one-argument call dereferences `arg_expr_at`'s null answer. The same
+        ## predicate the x86_64 emitter asks, reached the way this module already reaches
+        ## `lower::call_ret_ty_span`. An undeclared shift still takes the intrinsic path below.
         sv := arg_expr_at(args_head, 0, a)
         sn := arg_expr_at(args_head, 1, a)
         emit_a64_expr(sv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
