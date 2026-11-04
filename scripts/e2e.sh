@@ -12295,6 +12295,15 @@ build_reject_has issue987_vec_index_field_write "a value, not a place"
 ## NON-VACUOUS: on the parent `c5fc685d` (x86_64) the fixture exits 1.
 run for_aggregate_body_local 42
 
+## #1406 — a program that DECLARES a function named `sub` was lowered as the internal str-view
+## `sub(s, start, len)`, because the classifier and two emit arms keyed on the callee TEXT alone. The
+## crash is one arm (`emit_sub_pair` dereferenced the null `arg_expr_at` answer for an argument the call
+## does not have); the other is a valid program refused. NON-VACUOUS on the parent c00eae90 (x86_64):
+## the first SIGSEGVs at 139 with no diagnostic, the second is refused at 1; `check` answers 0 on both.
+## Each has the identical program under `take` measured green on that parent, which is the post-fix shape.
+run issue1406_declared_sub_slice_ret 42
+run issue1406_declared_sub_value 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

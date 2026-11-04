@@ -323,7 +323,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               ## (ek 5 is_ref + a runtime len word), NOT a str byte-view, so `s[i]` reads elements (§4).
               sesp := slice_arr_espan(v, ptr(slots), src)
               bind_slice_slot(slots, src, ns, nl, slice_arr_stride(v, ptr(slots), src), slice_arr_eek(v, ptr(slots), src), sesp.s, sesp.n)
-            } else if is_sub_call(v, src) or is_strat_call(v, src) or is_bytes_call(v, src) or is_slice_expr(v) {
+            } else if is_sub_call(v, decls, src, a) or is_strat_call(v, src) or is_bytes_call(v, src) or is_slice_expr(v) {
               ## a `name := sub(s, start, len)` / `str_at(base, len)` / `bytes(x)` / `base[lo..hi]`
               ## binding (a str VIEW) is a str value too — a str slot (ptr + len = 2 reserved words),
               ## like a literal binding.

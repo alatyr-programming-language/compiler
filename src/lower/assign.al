@@ -2700,7 +2700,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     ## and stores it into the str local's slots (the same layout as a `sub` binding).
     base := slot_of(cx.slots, cx.src, ns, nl2)
     emit_slice_assign(v, base, sb, cx, a, nl)
-  } else if is_sub_call(v, cx.src) {
+  } else if is_sub_call(v, cx.decls, cx.src, a) {
     ## a `name := sub(s, start, len)` binding materializes the view's {ptr, len} pair and
     ## stores it into the str local's slots (the same layout as a literal binding).
     base := slot_of(cx.slots, cx.src, ns, nl2)
