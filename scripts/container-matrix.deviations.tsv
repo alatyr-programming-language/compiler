@@ -10,8 +10,6 @@
 x86_64	deque.front_back.array3	REFUSED	#1250
 x86_64	deque.front_back.char	REFUSED	#1244
 x86_64	deque.front_back.enumN	WRONG 10	#1212
-x86_64	deque.front_back.struct2	WRONG 10	#1212
-x86_64	deque.front_back.struct3	WRONG 10	#1212
 x86_64	deque.pop_back.array3	REFUSED	#1250
 x86_64	deque.pop_back.char	REFUSED	#1244
 x86_64	deque.pop_back.enumN	WRONG 10	#1212
@@ -25,13 +23,9 @@ x86_64	deque.pop_front.struct3	WRONG 10	#1212
 x86_64	deque.push_back_at.array3	REFUSED	#1250
 x86_64	deque.push_back_at.char	REFUSED	#1244
 x86_64	deque.push_back_at.enumN	WRONG 11	#1212
-x86_64	deque.push_back_at.struct2	WRONG 11	#1212
-x86_64	deque.push_back_at.struct3	WRONG 11	#1212
 x86_64	deque.push_front.array3	REFUSED	#1250
 x86_64	deque.push_front.char	REFUSED	#1244
 x86_64	deque.push_front.enumN	WRONG 10	#1212
-x86_64	deque.push_front.struct2	WRONG 10	#1212
-x86_64	deque.push_front.struct3	WRONG 10	#1212
 x86_64	hashmap.key.char	REFUSED	#1244
 x86_64	hashmap.value.array3	REFUSED	#1250
 x86_64	hashmap.value.char	REFUSED	#1244
@@ -49,8 +43,6 @@ x86_64	vec.for_in.u8	WRONG 10	#1238
 x86_64	vec.get.array3	REFUSED	#1250
 x86_64	vec.get.char	REFUSED	#1244
 x86_64	vec.get.enumN	WRONG 10	#1212
-x86_64	vec.get.struct2	WRONG 10	#1212
-x86_64	vec.get.struct3	WRONG 10	#1212
 x86_64	vec.grow.array3	REFUSED	#1250
 x86_64	vec.grow.char	REFUSED	#1244
 x86_64	vec.index_read.array3	REFUSED	#1250
@@ -66,8 +58,6 @@ x86_64	vec.len.char	REFUSED	#1244
 x86_64	vec.pop.array3	REFUSED	#1250
 x86_64	vec.pop.char	REFUSED	#1244
 x86_64	vec.pop.enumN	WRONG 10	#1212
-x86_64	vec.pop.struct2	WRONG 10	#1212
-x86_64	vec.pop.struct3	WRONG 10	#1212
 x86_64	vec.push_at.array3	REFUSED	#1250
 x86_64	vec.push_at.char	REFUSED	#1244
 x86_64	vec.range.array3	REFUSED	#1250
@@ -84,8 +74,6 @@ x86_64	vec.set.char	REFUSED	#1244
 x86_64	vec.try_at.array3	REFUSED	#1250
 x86_64	vec.try_at.char	REFUSED	#1244
 x86_64	vec.try_at.enumN	WRONG 10	#1212
-x86_64	vec.try_at.struct2	WRONG 10	#1212
-x86_64	vec.try_at.struct3	WRONG 10	#1212
 x86_64	vec.ufcs.array3	REFUSED	#1250
 x86_64	vec.ufcs.char	REFUSED	#1244
 x86_64	vec.ufcs.option_ptr	REFUSED	#1280
