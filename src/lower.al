@@ -11342,7 +11342,8 @@ call_ret_ty_span := fn(recv : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
       if idx < 0 { idx = resolve_callee_idx(decls, src, cs, cl, qms, qml) }
       ## `T(v)` user CONVERSION-CONSTRUCTOR (Types §4.6): resolve the @convert fn so its declared
       ## RETURN type `T` types the call result (field-type recovery, scalar bindings). Neutral — see
-      ## `convert_callee_idx` (filters builtin/brand, so src/lib's `char(n)` never resolves here).
+      ## `convert_callee_idx` (filters builtin names; a BRAND target now resolves, TYP-14, and its
+      ## return type is the same brand `T`, so the span this returns for `char(n)` is `char`'s).
       if idx < 0 { idx = convert_callee_idx(decls, src, cs, cl) }
       if idx < 0 { return CSpan(s = 0, n = 0) }
       d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(idx))))
@@ -11415,8 +11416,10 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
   ## USER CONVERSION-CONSTRUCTOR `T(v)` (Types §4.6 / TYP-6): the callee `T` is a type name with an
   ## in-scope `@convert fn(…) -> T` — dispatch to that fn by ITS OWN (mangled) name, not `T` (there is
   ## no fn named `T`). The result is delivered in the return registers (%rax/%rdx…), matching the
-  ## aggregate-return convention of this fn. Fixpoint-neutral: `convert_callee_idx` filters builtin/brand,
-  ## so no `src/lib` call resolves here (its only @convert `to_char` targets the brand `char`).
+  ## aggregate-return convention of this fn. `convert_callee_idx` filters builtin names and now admits a
+  ## BRAND target (TYP-14), so `char(n)` DOES resolve here on the x86_64 value path — that is the fix.
+  ## The self-host build stays byte-identical: `src/` declares no `@convert` and the self-host build
+  ## injects no `lib/`, so nothing in it resolves at this arm.
   cvi0 := convert_callee_idx(cx.decls, cx.src, cs, cl)
   if cvi0 >= 0 {
     cvd := deref(lower_ctx::decl_get(cx.decls, usize(cvi0)))
@@ -14228,9 +14231,16 @@ fn_is_convert := fn(src : ptr(u8), name_s : usize, name_l : usize) -> bool {
 }
 ## The decl index of the SINGLE in-scope `@convert` fn whose RETURN type's base name == the callee
 ## `[cs, cl)` (Types §4.6 dispatch step 2 / TYP-6), else -1. Builtin lattice conversions (`conv_kind >=
-## 0`) and BRAND constructions (`brand_underlying`) keep PRIORITY — a `T(v)` that rides either is
-## short-circuited here, so it never resolves to a @convert (this is what makes `char(n)`, a brand,
-## stay the brand path → fixpoint-neutral: src/lib's only @convert `to_char` targets the brand `char`).
+## 0`) keep PRIORITY — a `T(v)` that rides one is short-circuited here, so it never resolves to a
+## @convert. A BRAND target does NOT: TYP-14 (§4.6, v1.8.0 l.338) — "An in-scope `@convert` therefore
+## precedes the brand crossing to a branded target: §4.2's "cost: zero" states what that crossing *costs*,
+## and a cost statement does not settle which operation a site denotes — where a conversion matches, the
+## site denotes the conversion". l.341 names this site: "So `char(n)` — `char` being a brand over `u32`
+## with the prelude's `@convert` in scope — runs that conversion". So `char(n)` resolves to `to_char`
+## here, and its guard is reached. A brand with NO in-scope `@convert` still answers -1 — step (2) finds
+## no candidate — so every other brand keeps the zero-cost crossing untouched. The mode is NOT consulted
+## here either: l.345 selects step (2) "checked or unchecked alike", because `unchecked` drops the guard
+## INSIDE the operation the site denotes and never substitutes another.
 ## Two @convert to the same target are an AMBIGUITY error (fail-loud, no guessing).
 ## The §3 scope rank of a `@convert` declaration's module as seen from the module being lowered. A
 ## declaration in NO module (a single-file program, `mod_len == 0`) and a compile with no published
@@ -14245,8 +14255,6 @@ convert_scope_rank := fn(src : ptr(u8), as_ : usize, al : usize) -> i64 {
 
 convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
   if conv_kind(str_at((src + cs), cl)) >= 0 { return 0 - 1 }
-  bu := brand_underlying(decls, src, cs, cl)
-  if bu.n != 0 { return 0 - 1 }
   cnt := rt::vec_len(deref(decls))
   mut found := 0 - 1
   ## Modules §3 (TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE
@@ -14280,8 +14288,11 @@ convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
 ## Like `convert_callee_idx` but WITHOUT the builtin-conv-name bail — the in-scope `@convert fn(U) -> T`
 ## whose RETURN type is `T` (which MAY be a builtin scalar name, e.g. `@convert fn(c : Celsius) -> u64`).
 ## Used ONLY when the conversion operand is a user AGGREGATE (struct/enum), where `u64(structval)` is a
-## legitimate user conversion rather than the scalar-lattice identity. The brand bail stays (a brand
-## `Id(v)` reinterprets, never dispatches). No self-host `@convert` returns a builtin name → neutral.
+## legitimate user conversion rather than the scalar-lattice identity. The brand bail stays, but it is not
+## TYP-14's rule: this lookup is reached only for a callee name `conv_kind` already answers (a builtin
+## scalar), and §4.6 l.338's rule — "An in-scope `@convert` therefore precedes the brand crossing to a
+## branded target" — is answered by `convert_callee_idx`, which no longer filters brands. No
+## self-host `@convert` returns a builtin name → neutral.
 convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
   bu := brand_underlying(decls, src, cs, cl)
   if bu.n != 0 { return 0 - 1 }
@@ -14321,11 +14332,18 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
 ## `u64(c)` with an in-scope `@convert fn(c : Celsius) -> u64` — read the operand as a scalar: wasm
 ## answered the struct's ADDRESS. The twins' front end (`driver::d_desugar_convert`) renames such a
 ## call to the @convert's own name before emission; this answers WHICH decl, by x86_64's rules:
-##   * a NON-builtin target `T` resolves through `convert_callee_idx` (a brand or a builtin name never
-##     does), and only when no fn is itself named `T` — the regular callee wins, as on x86_64;
+##   * a NON-builtin target `T` resolves through `convert_callee_idx` (a builtin name never does), and
+##     only when no fn is itself named `T` — the regular callee wins, as on x86_64;
 ##   * a BUILTIN target resolves through `convert_callee_idx_incl_builtin`, and only for an operand
 ##     that is a provable AGGREGATE (`twin_operand_aggregate`), so `u64(5)` stays the scalar lattice.
 ## -1 = not a user conversion; the call is left exactly as it was.
+## A BRAND target is NOT filtered out, and the mode is not consulted here: TYP-14 (§4.6, v1.8.0 l.338) —
+## "An in-scope `@convert` therefore precedes the brand crossing to a branded target", and l.345 selects
+## the step "checked or unchecked alike: `unchecked` drops the guard inside the operation the site denotes,
+## and never substitutes a different one". So `unchecked char(n)` denotes `to_char` too, and it is
+## `to_char`'s own body that is mode-dependent — its guard sits behind `comptime if verify.checked`, so
+## inside `unchecked` the body is the identity crossing and costs nothing (CT-11, Stdlib appendix §3.2).
+## A brand with no in-scope `@convert` answers -1 and keeps today's crossing untouched.
 pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, a0 : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt))) -> i64 {
   ## null-ok: d_convert_expr passes a null `a0` for a call with no argument (see its `a0` binding)
   if nargs != 1 or unchecked bitcast(usize, a0) == 0 { return 0 - 1 }
@@ -14465,7 +14483,8 @@ ret_call_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   ## TYP-6): the callee is a TYPE name `T` with an in-scope `@convert fn(…) -> T`. Resolving to that
   ## fn's decl lets the `*_ret_call` classifiers (struct/enum/str/tuple) + `call_ret_*_span` size the
   ## `c := T(v)` binding by the @convert's RETURN type. Fires only when no same-name fn exists AND a
-  ## @convert matches — src/lib's `char(n)` (a brand) is filtered inside `convert_callee_idx` → neutral.
+  ## @convert matches. src/lib's `char(n)` (a brand) resolves here since TYP-14, so the `c := char(n)`
+  ## binding is sized by `to_char`'s RETURN type `char` — the same brand the site names (#364).
   if res < 0 {
     cvi := convert_callee_idx(decls, src, cs, cl)
     if cvi >= 0 { return cvi }
@@ -19536,9 +19555,23 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## path for a float underlying). Resolve the brand's underlying, then reuse the scalar-conversion
       ## lowering below (an unknown underlying, e.g. `bitsN`, is an identity ck 0 — the bits already
       ## occupy the 64-bit word).
+      ## TYP-14 (§4.6, v1.8.0 l.338) narrows the peel: "An in-scope `@convert` therefore precedes the
+      ## brand crossing to a branded target: §4.2's "cost: zero" states what that crossing *costs*, and a
+      ## cost statement does not settle which operation a site denotes — where a conversion matches, the
+      ## site denotes the conversion". l.341 names this site: "So `char(n)` — `char` being a brand over
+      ## `u32` with the prelude's `@convert` in scope — runs that conversion, whose code-point validity
+      ## check is library code under `comptime if verify.checked` (§4.5, CT-11)". The mode is NOT consulted
+      ## here: l.345 selects step (2) "checked or unchecked alike: `unchecked` drops the guard inside the
+      ## operation the site denotes, and never substitutes a different one: each guarded operation takes
+      ## its hardware-defined behaviour, the same operation and never another (CG-7)" — inside `unchecked`
+      ## `to_char`'s guard is comptime-absent and its body is the identity crossing, so the value is the
+      ## same either way and no site silently loses a different operation (I1, I11). A brand with NO
+      ## in-scope `@convert` answers -1 at every site, so every other brand keeps today's zero-cost
+      ## crossing untouched. In the self-host build no `@convert` is declared and no `lib/` is injected,
+      ## so the extra lookup walks an empty candidate list.
       if ck < 0 {
         bu := brand_underlying(cx.decls, cx.src, cs, cl)
-        if bu.n != 0 {
+        if bu.n != 0 and convert_callee_idx(cx.decls, cx.src, cs, cl) < 0 {
           uk := conv_kind(str_at((cx.src + bu.s), bu.n))
           ck = if uk >= 0 { uk } else { 0 }
         }
@@ -30082,8 +30115,13 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
       }
       ## USER CONVERSION-CONSTRUCTOR `T(v)` (Types §4.6 / TYP-6): the callee `T` names no fn, so
       ## `mark_name` marked nothing — but an in-scope `@convert fn(…) -> T` is the real callee. Mark it
-      ## reachable so DCE keeps it (the reachability fixpoint then walks its body). Neutral: every
-      ## `src/lib` call yields -1 here (`convert_callee_idx` filters builtin/brand) → reachable set unchanged.
+      ## reachable so DCE keeps it (the reachability fixpoint then walks its body). Since TYP-14 this
+      ## also fires for a BRAND target (`char(n)` → `to_char`), which is exactly what makes the guard's
+      ## body exist in the emitted program. The self-host reachable set is unchanged: `src/` declares no
+      ## `@convert` and the self-host build injects no `lib/`. A brand site inside `unchecked` marks and
+      ## calls the conversion too — §4.6 l.345 selects step (2) "checked or unchecked alike", and it is
+      ## the conversion's own body that drops the guard there (CT-11) — so the body is emitted and called
+      ## in both modes, which is what keeps the two modes denoting one operation (I1, I11).
       cvm := convert_callee_idx(decls, src, cs, cl)
       if cvm >= 0 { rb_set(rb, usize(cvm), 1) }
       ## A `@convert` whose TARGET is a BUILTIN-conv name (`u64(structval)` → `@convert fn(U) -> u64`):
