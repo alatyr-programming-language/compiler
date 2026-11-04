@@ -211,6 +211,7 @@ aarch64	test/issue1209_deref_bitcast_struct.al	run/133	#1188
 aarch64	test/issue1254_deque_subword_call_deref.al	run/133	#1200
 aarch64	test/issue1254_deque_subword_slot.al	run/133	#1200
 aarch64	test/issue1255_hashmap_subword_growth.al	run/133	#1200
+aarch64	test/issue1305_alias_callee_option.al	run/133	#1188
 aarch64	test/issue1307_instance_ptr_width.al	run/133	#1188
 aarch64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 aarch64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
@@ -701,6 +702,7 @@ riscv64	test/issue1209_deref_bitcast_struct.al	run/133	#1188
 riscv64	test/issue1254_deque_subword_call_deref.al	run/133	#1200
 riscv64	test/issue1254_deque_subword_slot.al	run/133	#1200
 riscv64	test/issue1255_hashmap_subword_growth.al	run/133	#1200
+riscv64	test/issue1305_alias_callee_option.al	run/133	#1188
 riscv64	test/issue1307_instance_ptr_width.al	run/133	#1188
 riscv64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 riscv64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
@@ -1192,6 +1194,7 @@ wasm	test/issue1209_deref_bitcast_struct.al	run/134	#1188
 wasm	test/issue1254_deque_subword_call_deref.al	run/134	#1186
 wasm	test/issue1254_deque_subword_slot.al	run/134	#1186
 wasm	test/issue1255_hashmap_subword_growth.al	run/134	#1186
+wasm	test/issue1305_alias_callee_option.al	run/134	#1186
 wasm	test/issue1307_instance_ptr_width.al	run/134	#1188
 wasm	test/issue1406_declared_sub_slice_ret.al	run/134	#1191
 wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
