@@ -233,6 +233,16 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `u64(sub(10))` was refused as a "str/view expression". Both compile and run. `sub` is not a keyword
   (Grammar §2.3) and no prelude declares it, so the program's declaration wins (Declarations §6.1); an
   *undeclared* `sub(…)` keeps the internal view path unchanged.
+- **A function the program declares named `shl` or `shr` is that function (#1434).** The same name-keyed
+  hijack #1406 closed for `sub` still stood at the shift/rotate arm: it matched the callee *text*
+  `shl`/`shr`/`rotl`/`rotr` before the generic call and read argument 1 of whatever call it got. A program
+  declaring `shl := fn(x : u64) -> u64 { x }` and calling it with one argument **crashed the compiler**
+  (exit **139**, SIGSEGV, no diagnostic); `shr` the same. Both compile and run to 42 now. Measured on the
+  parent `48ecfed4` with the tree's own Stage1 on native x86_64: `shl` and `shr` exit 139, while the
+  identical program under `shlx`, `rotl`, `rotr`, `size`, `bytes`, `str_at` and `expect` exits 0, and the
+  same declared callee called with two arguments exits 0 — which is what names the missing argument as the
+  cause. None of the four is a keyword (Grammar §2.3), so the program's declaration wins (Declarations
+  §6.1); an *undeclared* `shl(…)` keeps the intrinsic path unchanged.
 - **The full gate runs a generated container matrix (#1124).** `scripts/container_matrix.py` writes one
   program per element shape × container × operation (19 shapes; `vec`, `deque`, `hashmap`; 378 cells)
   into `target/`, builds and runs each, and prints `OK`, `WRONG <check>`, `TRAP <rc>` or `REFUSED`.

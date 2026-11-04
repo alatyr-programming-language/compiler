@@ -5789,6 +5789,23 @@ is_sub_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
   }
 }
 
+## #1434 — is this call one of the shift/rotate OPERATION-FUNCTIONS (`shl`/`shr`/`rotl`/`rotr`, OP-6,
+## Types §2.2) AND not a call to a declaration the program wrote? The question #1406 answers for `sub`,
+## asked once of the TWO sites that key on those four names by text. The emit arm reads argument 1
+## unconditionally, so a program that DECLARES `shl(x)` with one argument had `arg_expr_at` answer null
+## (its own `res := 0`) and `emit_gas` dereference it — SIGSEGV, exit 139, no diagnostic; and the type
+## query answers argument 0's type, which is the intrinsic's rule rather than a declaration's. Grammar §2.3
+## lists the keywords and states built-ins are prelude identifiers, and none of these four is a keyword;
+## Declarations §6.1 gives the inner declaration the win, so a callee that resolves to a kind-1 decl is a
+## call to THAT declaration and lowers as the same call under any other name does. The resolution is asked
+## AFTER the name test, so every callee not spelled like a shift answers exactly as before, and an
+## UNDECLARED `shl(…)` still resolves to nothing and keeps the intrinsic path.
+is_shift_intrinsic_call := fn(cs : usize, cl : usize, nargs : usize, args_head : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+  cn := str_at((src + cs), cl)
+  if cn != "shl" and cn != "shr" and cn != "rotl" and cn != "rotr" { return false }
+  ret_call_target(decls, src, cs, cl, nargs, args_head, a) < 0
+}
+
 ## Is `e` a `bytes(x)` call — the str→`[u8]` view (appendix 160 §3.5)? `str` and `[u8]` share the
 ## `{ptr, len}` representation, so `bytes(x)` is a str-VALUED expression: a `name := bytes(x)`
 ## binding reserves a str slot, and `emit_str_pair` emits `x`'s pair. (`src/` uses `bytes` only in
@@ -8548,7 +8565,13 @@ infer_local_scalar_type := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::
       cn := str_at((src + cs), cl)
       if conv_kind(cn) == 0 { r = CSpan(s = cs, n = cl) }
       else {
-        if cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr" {
+        if is_shift_intrinsic_call(cs, cl, na, ah, decls, src, a) {
+          ## #1434 — the same question, asked here for consistency: this site answers the type of
+          ## ARGUMENT 0, which is right for the intrinsic (the result takes the operand's width) and wrong
+          ## for a declared callee, whose type is its declaration's return type — so a declared callee now
+          ## falls to `call_ret_ty_span` below. NOT a measured wrong value: every one-argument call to a
+          ## declared `shl`/`shr` crashes at the emit arm first, so no program reaches this answer to show
+          ## the difference. The measured defect is the SIGSEGV (test/issue1434_declared_shl_value.al).
           r = operand_type_from_slots(arg_expr_at(ah, 0, a), slots, src)
         } else {
           r = call_ret_ty_span(v, decls, src, a)
@@ -20019,7 +20042,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## (zero-fill). Rotation is total (the CPU masks the count mod 64), so no guard. A SHIFT count `n >= N`
       ## (operand width) is a checked over-width trap (I11 / Concurrency §6); dropped inside `unchecked`
       ## (cx.vchk false). Sub-native operands are narrowed back to their value width after the shift.
-      if callee == "shl" or callee == "shr" or callee == "rotl" or callee == "rotr" {
+      if is_shift_intrinsic_call(cs, cl, nargs, args_head, cx.decls, cx.src, a) {
         sa0 := arg_expr_at(args_head, 0, a)
         sa1 := arg_expr_at(args_head, 1, a)
         emit_gas(sa0, sb, cx, a, nl)   ## v → stack (deep)
