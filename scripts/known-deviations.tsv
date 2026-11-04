@@ -288,7 +288,6 @@ aarch64	test/match_binding_root.al	run/133	#1194
 aarch64	test/match_binding_root_value.al	run/133	#1194
 aarch64	test/match_call_bind.al	run/133	#1200
 aarch64	test/match_comma_arms.al	run/133	#1190
-aarch64	test/match_mixed_arm.al	run/133	#577
 aarch64	test/match_slice_payload_for.al	run/133	#1191
 aarch64	test/module_global_init_expr.al	run/133	#1189
 aarch64	test/module_str_const.al	run/133	#1189
@@ -781,7 +780,6 @@ riscv64	test/match_binding_root.al	run/133	#1194
 riscv64	test/match_binding_root_value.al	run/133	#1194
 riscv64	test/match_call_bind.al	run/133	#1200
 riscv64	test/match_comma_arms.al	run/133	#1190
-riscv64	test/match_mixed_arm.al	run/133	#577
 riscv64	test/match_slice_payload_for.al	run/133	#1191
 riscv64	test/match_struct_value.al	run/133	#1191
 riscv64	test/module_global_init_expr.al	run/133	#1189
