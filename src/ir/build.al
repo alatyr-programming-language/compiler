@@ -1140,7 +1140,13 @@ ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize
   nm := str_at((src + cs), cl)
   so : Option(ShiftK) = ib_shift_of(nm)
   match so {
-    Some(sk) => { if na == 2 { sv : Option(VRegId) = ib_bx_shift(bp, a, e, sk, ah); return ib_call_out(sv) } }
+    ## #1434 — the same question the two arms above ask (`not ib_fn_named`): a callee that resolves to a
+    ## declaration the program wrote is a call to THAT declaration (Grammar §2.3: `shl`/`shr` are not
+    ## keywords; Declarations §6.1: the inner name wins). Answered by the name alone, `shl := fn(a, b)`
+    ## called `shl(10, 2)` became a hardware `shlq` on the operand: 40 + 32 = **72** where 42 was due,
+    ## with no diagnostic (measured on native x86_64; `shr` the same, 34). `rotl`/`rotr` reach
+    ## `ib_call_user` because `ib_bx_shift` refuses them, which is why only the two shifts were hijacked.
+    Some(sk) => { if na == 2 and not ib_fn_named(bp, cs, cl) { sv : Option(VRegId) = ib_bx_shift(bp, a, e, sk, ah); return ib_call_out(sv) } }
     None => {}
   }
   lo : Option(LayoutQ) = ib_layout_q_of(nm)

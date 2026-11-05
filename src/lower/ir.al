@@ -178,6 +178,24 @@ ir_lower_barrier := fn(e : ptr(Expr), cx : ptr(LCtx)) -> IROperand {
 ## of %rax into a fresh vreg IMMEDIATELY (nothing the rewriter inserts between the call and this mov
 ## touches %rax — a spill store is a `movq` to a frame slot). The callee symbol is recorded in the call
 ## side-table and rendered via `emit_mangled_call`.
+## #1434 — does the program DECLARE a fn named `[cs, cs+cl)`? The shift form is MODELLED by callee name
+## inside `ir_lower_call` and `ir_check_call` below (OP-6, no `call` inst), so a program that declares
+## `shl`/`shr` must not be claimed by that model: it is calling its OWN declaration (Grammar §2.3: none of
+## these is a keyword, built-ins are prelude identifiers; Declarations §6.1: the inner name wins). Measured
+## on native x86_64 at the parent: `shl := fn(a, b) -> u64 { a }` called `shl(10, 2) + 32` built cleanly
+## and answered **72** (`shlq %cl, %rsi` in the assembly, no `call …__shl`). Arena-free, the same
+## `decl_get`/`streq` scan `ir_is_vecbuild_call` makes.
+ir_fn_declared_named := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl : usize) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(lower_ctx::decl_get(decls, i))
+    if d.kind == lower_layout::DECL_KIND_FN and lower_ctx::streq(src, d.name_start, d.name_len, cs, cl) { return true }
+    i += 1
+  }
+  false
+}
+
 ir_lower_call := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), cx : ptr(LCtx), unch : bool) -> IROperand {
   ## BIT SHIFT `shl`/`shr(v, n)` (OP-6): an operation-FN, not a real call (no `call` inst). The count `n`
   ## must sit in %cl (the sole variable-count shift register), so lower v→a fresh vreg `t`, lower n, move
@@ -187,7 +205,9 @@ ir_lower_call := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)
   ## over-width trap (count >= native width 64) is the same `cmpq $64,<cnt>; jb CONT; ud2; CONT:` guard the
   ## text path emits (emit_shift_width_guard), so a register-allocated shift never drops the I11 guard.
   cnm := str_at((cx.src + cs), cl)
-  if cnm == "shl" or cnm == "shr" {
+  ## #1434 — only when the program declares NO fn of this name: a declared `shl` is a call to that
+  ## declaration, and modelling it as a shift silently replaced the call (measured: 72 where 42 was due).
+  if (cnm == "shl" or cnm == "shr") and not ir_fn_declared_named(cx.src, cx.decls, cs, cl) {
     a0 := deref(arg_at(ah, "argument list ended early")).e                        ## the value v
     a1 := deref(arg_at(deref(arg_at(ah, "argument list ended early")).next, "argument list ended early")).e     ## the count n
     vo := ir_lower_expr(a0, cx, unch)
@@ -1509,7 +1529,10 @@ ir_check_call := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl : usize,
   ## label) budgeted via IRP_NCHK exactly like a checked arith bin. `rotl`/`rotr` are NOT modelled — they
   ## fall through to the callee-resolution reject (intrinsic → text path).
   cnm := str_at((src + cs), cl)
-  if cnm == "shl" or cnm == "shr" {
+  ## #1434 — and only when the program declares NO fn of this name: admitting a declared `shl` here would
+  ## budget and admit a modelled shift that `ir_lower_call` no longer emits, so the call must fall through
+  ## to the callee-resolution path below, like any other call.
+  if (cnm == "shl" or cnm == "shr") and not ir_fn_declared_named(src, decls, cs, cl) {
     if na != 2 { IRP_OK = false }
     IRP_NBIN = IRP_NBIN + 1
     if not unch { IRP_NCHK = IRP_NCHK + 1 }

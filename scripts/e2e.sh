@@ -12404,6 +12404,13 @@ run issue1406_declared_sub_value 42
 ## NON-VACUOUS: on the parent `cc1064e3` (x86_64) the build is refused at `ps[1].a`, and without that
 ## check the fixture exits 2 (a struct-element sum read the wrong words).
 run match_slice_payload_for 42
+## #1434 — a declared `shl`/`shr` is a call to THAT declaration, not the intrinsic keyed on the text:
+## a one-argument user `shl` reached `emit_shift_pair`, which read argument positions 1 and 2 of a
+## one-argument call. NON-VACUOUS: on the parent (x86_64) both builds are refused with exit 139.
+run issue1434_declared_shl_value 42
+run issue1434_declared_shr_value 42
+run issue1434_declared_shl_two_args 42
+run issue1434_declared_shr_two_args 42
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
