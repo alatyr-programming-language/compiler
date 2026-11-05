@@ -9470,8 +9470,12 @@ subst_inst_struct_span := fn(s : usize, n : usize, decls : ptr(rt::Vec), src : p
 ## type the CALL supplies at that parameter's position, and the resolved `Box(P)` is synthesized into
 ## `synth` (rebased, head-length — the same seam). Lets `bx := mkbox(P, p)` reserve + stage the FULL
 ## instantiated width instead of the one word the un-substituted `Box(T)` sizes to. 0/0 unless the
-## return head is a GENERIC struct AND some type-arg resolves to an AGGREGATE, so every existing
-## struct-returning call keeps its raw span (byte-identical → fixpoint-neutral).
+## return head is a GENERIC struct AND some type-arg resolves to an AGGREGATE or to a concrete SCALAR
+## whose width this backend knows (#1238: `v := vec::new(u8, …)` must record `Vec(u8)`, not the bare
+## head `Vec` — the head hides the element type from every later reader, and a `v[3..9]` view over it
+## then has no width to recover, so `s[i]` stepped and loaded a word where the element is one byte),
+## so every existing struct-returning call keeps its raw span where the element stays unresolved
+## (byte-identical → fixpoint-neutral).
 subst_gen_struct_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, synth : ptr(mut rt::Arena)) -> CSpan {
   mut res := CSpan(s = 0, n = 0)
   match deref(v) {
@@ -9497,7 +9501,7 @@ subst_gen_struct_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
                   pp := callee_param_pos(decls, usize(ci), src, ta.s, ta.n, a)
                   if pp >= 0 and usize(pp) < nargs {
                     cta := type_arg_full_at(ah, usize(pp), decls, src, a)
-                    if cta.n != 0 and ty_is_agg_span(decls, src, cta.s, cta.n) { anyp = true }
+                    if cta.n != 0 and (ty_is_agg_span(decls, src, cta.s, cta.n) or slice_elem_w_known(src, cta.s, cta.n)) { anyp = true }
                   }
                   k += 1
                 }

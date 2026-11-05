@@ -96,6 +96,51 @@ main := fn() -> u64 {
     }
   }
   if sum != 48 { return 112 }
+
+  ## #1238's other half — the SAME views bound WITHOUT an annotation. Every check above writes
+  ## `s : Slice(T) = …`; the annotation was how the earlier fix recovered the width. Bound bare
+  ## (`s := …`, or the UFCS `v[lo..hi]` that desugars to the same call) the slot recorded only the
+  ## HEAD `Slice`, and the receiver `v := alloc::vec::new(u8, …)` recorded only `Vec` — so no later
+  ## reader could recover the element type, and `[i]` stepped and loaded a WORD (Types §6.4).
+  ## Codes 120 up. Parent `aecb2762` (x86_64, omen): ran to 121 where 42 was due.
+  mut zw16 := alloc::vec::new(u16, ptr(ar))
+  zn0 := zw16.push(1000)
+  zn1 := zw16.push(2000)
+  zn2 := zw16.push(3000)
+  zr16 := zw16[1..3]
+  if zr16.len != 2 { return 120 }
+  if u64(zr16[0]) != 2000 { return 121 }
+  if u64(zr16[1]) != 3000 { return 122 }
+
+  mut zw8 := alloc::vec::new(u8, ptr(ar))
+  zp0 := zw8.push(11)
+  zp1 := zw8.push(22)
+  zp2 := zw8.push(33)
+  zr8 := zw8[1..3]
+  if zr8.len != 2 { return 123 }
+  if u64(zr8[0]) != 22 { return 124 }
+  if u64(zr8[1]) != 33 { return 125 }
+
+  mut zw32 := alloc::vec::new(u32, ptr(ar))
+  zq0 := zw32.push(70000)
+  zq1 := zw32.push(80000)
+  zq2 := zw32.push(90000)
+  zr32 := zw32[1..3]
+  if u64(zr32[0]) != 80000 { return 126 }
+  if u64(zr32[1]) != 90000 { return 127 }
+
+  mut zwb := alloc::vec::new(bool, ptr(ar))
+  zb0 := zwb.push(true)
+  zb1 := zwb.push(false)
+  zb2 := zwb.push(true)
+  zrb := zwb[1..3]
+  if zrb[0] != false { return 128 }
+  if zrb[1] != true { return 129 }
+
+  ## The explicit call bound bare is the same shape from the other side of the same seam.
+  zrc := alloc::vec::index_range(u16, ptr(zw16), 1, 3)
+  if u64(zrc[0]) != 2000 { return 130 }
+  if u64(zrc[1]) != 3000 { return 131 }
   42
 }
 
