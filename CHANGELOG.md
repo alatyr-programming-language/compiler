@@ -323,6 +323,9 @@ Two numbers that are **not** the compiler's version: the specification revision 
   parameter (`Slice(T)` at an unresolved `T`) and a `Slice(str)` keep the old span unchanged. The
   container matrix's five `vec.range.*` cells — `u8`, `u16`, `u32`, `i8`, `bool` — went from WRONG to
   OK, and with the five `vec.for_in.*` cells no x86_64 cell is WRONG.
+- **`alloc::with(ar)` reaches through a `match` (#992).** An `alloc::with` written in a match arm,
+  or a `match` inside an `alloc::with` body, left the calls in it without their elided allocator
+  argument, and `vec::new(u64)` trapped "allocator out of memory". They are now passed `ptr(ar)`.
 
 ## 0.2.21 — 2026-11-01
 

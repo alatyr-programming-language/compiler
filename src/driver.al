@@ -2234,9 +2234,28 @@ d_elide_alloc_expr := fn(e : ptr(Expr), amb : usize, decls : rt::Vec, na : ptr(m
       loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_elide_alloc_expr(ga.e, amb, decls, na, src); g = ga.next }; None => { break } } }
       if amb != 0 { d_elide_call(e, cs, cl, nargs, ah, amb, decls, na, src) }
     }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::Field
+    ## #992 — a `match` is lexical scope like any block (Memory §5.2.1): its scrutinee and its arms are
+    ## inside the enclosing `alloc::with`, and an `alloc::with` written in an arm is reached through it.
+    Expr::Match(sc, ah) => { d_elide_alloc_expr(sc, amb, decls, na, src); d_elide_alloc_arms(ah, amb, decls, na, src) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+}
+## #992 — `d_elide_alloc_*` across a match arm list: each arm's statements and its value.
+d_elide_alloc_arms := fn(ah : Option(ptr(mut Arm)), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut arm : Option(ptr(mut Arm)) = ah
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        d_elide_alloc_stmts(am.body_stmts, amb, decls, na, src)
+        ## null-ok: #1069 — Arm.body — an arm with a statement body carries a null value expression (ast.al), as in `d_lift_arms`.
+        if unchecked bitcast(usize, am.body) != 0 { d_elide_alloc_expr(am.body, amb, decls, na, src) }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
 }
 d_elide_alloc_stmts := fn(head : Option(ptr(mut Stmt)), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
@@ -2255,7 +2274,8 @@ d_elide_alloc_stmts := fn(head : Option(ptr(mut Stmt)), amb : usize, decls : rt:
           Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_elide_alloc_expr(lo, amb, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_elide_alloc_expr(hi, amb, decls, na, src) }; d_elide_alloc_stmts(b, amb, decls, na, src) }
           Stmt::Unchecked(b, nx) => { d_elide_alloc_stmts(b, amb, decls, na, src) }
           Stmt::AllocWith(ae, b, nx) => { d_elide_alloc_stmts(b, unchecked bitcast(usize, ae), decls, na, src) }
-          Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+          Stmt::Match(sc, ah, nx) => { d_elide_alloc_expr(sc, amb, decls, na, src); d_elide_alloc_arms(ah, amb, decls, na, src) }
+          Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
             | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
             | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
         }

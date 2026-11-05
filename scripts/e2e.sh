@@ -12416,6 +12416,11 @@ run issue1434_declared_shr_value 42
 run issue1434_declared_shl_two_args 42
 run issue1434_declared_shr_two_args 42
 
+## #992 — `alloc::with(ar)` inside a match arm, and a match inside `alloc::with`, pass the ambient
+## `ptr(ar)` to a call that omits its allocator (Memory §5.2.1); the splice never walked a `match`.
+## NON-VACUOUS: on the parent `488186d7` (x86_64) the fixture exits 1 — the allocator trap.
+run issue992_alloc_with_match_arm 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================
