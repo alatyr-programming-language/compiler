@@ -278,6 +278,26 @@ Two numbers that are **not** the compiler's version: the specification revision 
   resolver, which knows no parameter: a concrete function lost the payload, and a generic one at
   `T = Option(u64)` returned 0 for 42. A generic `p : ptr(T)` whose instance makes `T` an enum
   application is now bound as a pointer to that enum, and the payload is read through it.
+- **A `Slice(T)` view indexes by `T`'s width, not by the word (#1238).** A view from
+  `alloc::vec::index_range(T, …)` or `alloc::vec::iter(T, …)` — and any other `Slice(T)` local or
+  parameter — stepped 8 bytes and moved 8 bytes for every element wider than a byte: `t[0]` of a
+  `Slice(u16)` answered `5 + (7 << 16)`, a `Slice(bool)` read a whole word, and `v[i] = x` through
+  such a view overwrote the neighbours. Types §6.4 makes element access `base + i × stride` with the
+  stride `T`'s size rounded up to its alignment, and Types §7 makes `[T]` a pair over a contiguous run
+  of `T`, so the view now carries its element's byte width and signedness: a `u16` element is a
+  2-byte zero-extended load at stride 2, an `i16` one sign-extends, a `bool` is one byte. A word or
+  byte element emits the same instructions as before.
+- **The same view bound *without* an annotation carries its element width too (#1238).** The fix
+  above read the width from the binding's annotation (`s : Slice(u16) = …`). Written bare —
+  `s := v[1..3]`, or `s := alloc::vec::index_range(u16, …)` with no annotation — the slot recorded
+  only the head name `Slice`, and the receiver `v := alloc::vec::new(u16, …)` only `Vec`, so there
+  was still no element type to read and `[i]` went back to stepping a word. The three span
+  substitutions that build those slots used to fire only for an AGGREGATE type argument; each now
+  also fires for a concrete scalar whose width this backend knows, so the instantiated `Vec(u16)` and
+  `Slice(u16)` reach the slot and the width is recovered where the annotation was absent. A type
+  parameter (`Slice(T)` at an unresolved `T`) and a `Slice(str)` keep the old span unchanged. The
+  container matrix's five `vec.range.*` cells — `u8`, `u16`, `u32`, `i8`, `bool` — went from WRONG to
+  OK, and with the five `vec.for_in.*` cells no x86_64 cell is WRONG.
 
 ## 0.2.21 — 2026-11-01
 
