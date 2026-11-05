@@ -190,7 +190,7 @@ ir_fn_declared_named := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl :
   mut i : usize = 0
   while i < cnt {
     d := deref(lower_ctx::decl_get(decls, i))
-    if d.kind == 1 and lower_ctx::streq(src, d.name_start, d.name_len, cs, cl) { return true }
+    if d.kind == lower_layout::DECL_KIND_FN and lower_ctx::streq(src, d.name_start, d.name_len, cs, cl) { return true }
     i += 1
   }
   false
