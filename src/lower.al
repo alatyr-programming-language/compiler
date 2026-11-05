@@ -9287,14 +9287,16 @@ subst_enum_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
 }
 
 ## The STRUCT dual of `subst_enum_ret_span`, restricted to a generic `Slice(<typeparam>)` return whose
-## element resolves to a MULTI-WORD struct — e.g. `omap_values(K, V, …) -> Slice(V)` called with a
-## struct `V`. The element type-arg (`V`) is resolved to the concrete type the call supplies (its arg at
+## element resolves to a MULTI-WORD struct OR to a concrete SCALAR whose width this backend knows — e.g.
+## `omap_values(K, V, …) -> Slice(V)` called with a struct `V`, or `index_range(T, …) -> Slice(T)`
+## called at `T = u8`. The element type-arg (`V`) is resolved to the concrete type the call supplies (its arg at
 ## `V`'s parameter position), then through the enclosing instance substitution, and a synthetic
 ## `Slice(<concrete>)` name is written into the PERSISTENT `synth` arena (like `subst_enum_ret_span`), so a
 ## `vs := omap_values(…)` binding records the SUBSTITUTED element (`Slice(Rec)`), not the un-substituted
 ## param (`Slice(V)`). That lets `slice_val_struct_espan` recover the concrete element for the whole-element
-## copy `v := vs[i]`. 0/0 unless the return HEAD is `Slice` AND its element resolves to a `>1`-word struct
-## (so `Slice(scalar)` / a non-struct element keeps the raw span → byte-identical for every existing bind).
+## copy `v := vs[i]`, and `slice_var_ref` recover a sub-word element's WIDTH (#1238). 0/0 unless the return
+## HEAD is `Slice` AND its element resolves to a `>1`-word struct or a known concrete scalar (so an
+## unresolved `Slice(T)` at a type parameter, and `Slice(str)`, keep the raw span → byte-identical).
 subst_slice_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, synth : ptr(mut rt::Arena), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize) -> CSpan {
   mut res := CSpan(s = 0, n = 0)
   match deref(v) {
@@ -9318,7 +9320,15 @@ subst_slice_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
             }
             if gpl != 0 and lower_ctx::streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
             else if gpl2 != 0 and lower_ctx::streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
-            if struct_decl_of(decls, src, rs, rn) >= 0 and struct_words(decls, src, rs, rn, a) > 1 {
+            ## #1238 — a SUB-WORD SCALAR element joins the multi-word struct here. The gate used to be
+            ## `struct_words > 1` alone, so a `Slice(u8)` element kept the callee's RAW span `Slice(T)`:
+            ## the slot recorded no element type at all, and `slice_var_ref` had nothing to read, so
+            ## `s[i]` stepped and loaded a full word (`movq (%rax,%r8,8)`) where the element is one byte
+            ## (Types §6.4). `slice_elem_w_known` admits only a concrete type NAME — a type PARAMETER
+            ## (`T`, `V`) still answers false and keeps the raw span, so every unresolved element bind,
+            ## every `Slice(str)` and every word-sized `Slice(u64)` stays byte-identical.
+            if (struct_decl_of(decls, src, rs, rn) >= 0 and struct_words(decls, src, rs, rn, a) > 1)
+              or slice_elem_w_known(src, rs, rn) {
               mut msb := rt::strbuf(deref(synth), 128)
               push_str(msb, "Slice(")
               push_str(msb, str_at((src + rs), rn))
@@ -9582,7 +9592,9 @@ ufcs_gen_struct_ret_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt:
       if rvn.n == 0 or slot_of(slots, src, rvn.s, rvn.n) < 0 { return res }
       rent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, rvn.s, rvn.n)))
       if rent.snl == 0 { return res }
-      ## PASS 1 (no allocation): does some return type argument resolve to an aggregate?
+      ## PASS 1 (no allocation): does some return type argument resolve to an aggregate, or to a
+      ## concrete scalar whose width this backend knows (#1238 — a `Slice(u8)` element needs the
+      ## synthesized span too, else the binding records no element type and `[i]` reads a word)?
       mut anyp := false
       mut k : usize = 0
       mut go := true
@@ -9591,7 +9603,7 @@ ufcs_gen_struct_ret_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt:
         if ta.n == 0 { go = false }
         else {
           rta := ufcs_recv_slot_targ(ta, xs, xn, xbn, rent.sns, rent.snl, src)
-          if rta.n != 0 and ty_is_agg_span(decls, src, rta.s, rta.n) { anyp = true }
+          if rta.n != 0 and (ty_is_agg_span(decls, src, rta.s, rta.n) or slice_elem_w_known(src, rta.s, rta.n)) { anyp = true }
           k += 1
         }
       }
