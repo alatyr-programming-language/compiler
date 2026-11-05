@@ -11264,6 +11264,18 @@ run issue354_vec_reserve_overflow 42
 ## alloc::deque — a double-ended queue (ring buffer): push/pop both ends, wrap-around, growth (cap 2
 ## → forced doubling + re-linearize), front/back/dq_at reads.
 run deque_ops 42
+## #1302 — a multi-word enum or struct element read back through a generic container instance
+## (`vec::get` at `Option(u64)`, deque `pop_front`/`pop_back` and hashmap `get` at a struct, a
+## multi-payload enum and `Option(u64)`) kept one word. NON-VACUOUS: on the parent `1262da5d` (x86_64)
+## the fixture stops with SIGSEGV (rc 139).
+run issue1302_container_elem_enum 42
+## #1334 — `deref(p) = o` with `o` a niche-folded `Option(ptr(T))` wrote a second word past the
+## pointee. NON-VACUOUS: on the parent `1262da5d` (x86_64) the fixture returns 100.
+run issue1334_folded_deref_store 42
+## #1364 — `Option(E).Some(deref(p))` through a pointer PARAMETER at a multi-word enum (concrete, generic
+## at `T = EN`, generic at `T = Option(u64)`) lost the payload. NON-VACUOUS: on the parent `32f0f6e8`
+## (x86_64) the fixture returns 100.
+run issue1364_deref_param_enum_payload 42
 ## alloc::oset — an ordered set (sorted array): insert keeps it sorted + duplicate-free via a caller
 ## `less` comparator (binary search + tail byte-shift, growth), contains (O(log n)), sorted as_slice.
 run oset_ops 42
