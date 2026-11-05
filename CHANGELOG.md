@@ -126,6 +126,18 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **`alatyr fmt` keeps the comments after the last declaration (#1178).** Every `##` comment below the
+  final top-level declaration was deleted: `alatyr fmt p.al` exited 0 and wrote the file without them,
+  against Tooling §4.3.4, where comments are "preserved verbatim" and "`fmt` never deletes, merges, or
+  rewrites the content of a comment". A comment above or between declarations survived, because each one
+  is emitted as the *leading* block of the declaration beneath it; a comment at the end of the file has
+  no declaration beneath it, so nothing ever reached it. The formatter now flushes that tail at the end
+  of the file, through the same helper that emits leading blocks — a comment with any code after it has a
+  non-blank gap to the end of the file and is not touched, so no comment is emitted twice. A file of
+  comments and no declarations is kept whole too. `test/fmt_trailing_comment.al` ends with three trailing
+  comments and is the first fmt fixture that does: `fmt_test` already compares the comment COUNT of
+  source and output (idempotence alone is satisfied by deleting them), which is why 41 fmt rows stayed
+  green over this defect.
 - **A packed byte array range-sliced and indexed in one expression works on x86_64 (#422).**
   `xs[1..3][0]` with `xs : [u8; 4]` — and the same through `[i8; N]` and `[bits8; N]` — was refused
   at build time with `index BASE is not a named array/slice place`, while `v := xs[1..3]; v[0]`,

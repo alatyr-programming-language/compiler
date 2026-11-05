@@ -7313,7 +7313,7 @@ pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   mut comments := rt::Vec(data = rt::bump(tar, (nread + 16) * 8), len = 0, cap = nread + 16)
   fmt::scan_comments(base, nread, ptr(comments))
   mut out := strbuf::strbuf(tar, ocap)
-  fmt::emit_fmt_program(ptr(decls), base, out, na, ptr(comments))
+  fmt::emit_fmt_program(ptr(decls), base, out, na, ptr(comments), nread)
   out
 }
 

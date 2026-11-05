@@ -4508,8 +4508,9 @@ emit_fmt_decl := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Are
 ## Pretty-print a whole program: every top-level decl, blank line between.
 ## Pretty-print a whole program: each top-level decl preceded by its retained leading (`##`) comment
 ## block (from `comments`, a source-order (start,end) pair list — pass an empty Vec to drop comments),
-## with a blank line between decls.
-pub emit_fmt_program := fn(decls : ptr(rt::Vec), src : ptr(u8), in out sb : rt::StrBuf, a : rt::Arena, comments : ptr(rt::Vec)) {
+## with a blank line between decls. `src_len` is the length of `src`: it is the anchor for the
+## TRAILING flush below, so a comment that belongs to no declaration still reaches the output.
+pub emit_fmt_program := fn(decls : ptr(rt::Vec), src : ptr(u8), in out sb : rt::StrBuf, a : rt::Arena, comments : ptr(rt::Vec), src_len : usize) {
   cnt := rt::vec_len(deref(decls))
   mut i : usize = 0
   while i < cnt {
@@ -4519,4 +4520,14 @@ pub emit_fmt_program := fn(decls : ptr(rt::Vec), src : ptr(u8), in out sb : rt::
     if i + 1 < cnt { push_str(sb, "\n") }
     i += 1
   }
+  ## #1178 — the TAIL. Every comment above is emitted because some declaration is BELOW it and
+  ## `emit_leading_comments` anchors on that declaration's name; a comment after the LAST top-level
+  ## declaration has no declaration below it, so no anchor ever reached it and `fmt` DELETED it —
+  ## against Tooling §4.3.4, where comments are "preserved verbatim" and "`fmt` never deletes,
+  ## merges, or rewrites the content of a comment". Anchoring at `src_len` reaches exactly that tail
+  ## and nothing else: the helper takes the comment directly above the anchor with only blank between
+  ## and climbs while the gap stays blank, so a comment with any code after it has a non-blank gap to
+  ## EOF and is NOT re-emitted here (the comment above the last decl keeps being emitted by its own
+  ## anchor above). A file of comments and no declarations, whose loop never ran, is flushed too.
+  emit_leading_comments(src, comments, src_len, sb)
 }
