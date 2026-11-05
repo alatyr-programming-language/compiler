@@ -10531,7 +10531,7 @@ payload_enum_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize 
 ## returned 0 for 42. The enum twin of `payload_deref_struct_words`' resolution. {0,0} when unresolved.
 deref_enum_pointee_cx := fn(e : ptr(Expr), inner : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   des := deref_enum_span(e, cx.slots, cx.src)
-  if des.n != 0 { return tparam_span_cx(des, cx) }
+  if des.n != 0 { return inst_tparam_cx(des.s, des.n, cx) }
   deref_dest_pointee_span(inner, cx)
 }
 
