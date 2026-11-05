@@ -27163,6 +27163,23 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## a `str`-element non-var iterable (`xs[1..n]`, a `Slice(str)`-returning call): the temp now
               ## holds its {ptr, len} by value; each element is a 2-word str (#1177).
               if for_iter_str_elem(flo, cx.slots, cx.decls, cx.src, a, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l) { is_str_slice = true; b_estride = 2 }
+              ## #1238 — the element's OWN width for a CALL iterable (`for x in vec::iter(u8, v)`). The
+              ## var branch below reads the width off the iterable's ANNOTATION, and a call has none, so
+              ## `elem_w` kept its default word: the loop emitted `leaq (base, i, 8)` + `movq` over
+              ## `u8`/`u16`/`u32` elements and read the seven bytes beside each one (the container matrix's
+              ## `vec.for_in.*` and `vec.range.*` cells). `slice_ret_elem` is the existing home for "what
+              ## element does this `Slice(T)`-returning call yield" — the callee's declared type-arg, mapped
+              ## through the caller's argument and then the enclosing instance — so the width comes from the
+              ## same resolution `for_iter_str_elem` already uses two lines above, not a second one. Taken
+              ## only for a type this backend KNOWS the width of, so a type PARAMETER keeps the word it had
+              ## and a `str` element stays on the two-word pair path above; a word element recomputes 8 and
+              ## emits byte-identical GAS.
+              sri := slice_ret_elem(flo, cx.decls, cx.src, a, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l)
+              if sri.is_slice and sri.esl != 0 and slice_elem_w_known(cx.src, sri.ess, sri.esl) {
+                elem_w = scalar_byte_size(cx.src, sri.ess, sri.esl)
+                elem_sg = str_at((cx.src + sri.ess), 1) == "i"
+                if str_at((cx.src + sri.ess), sri.esl) == "f32" { elem_w = 8 }
+              }
             } else if unchecked bitcast(usize, gfor_mgv) != 0 and array_lit_info(gfor_mgv).is_a {
               is_glob_arr = true
               glob_nel = array_lit_info(gfor_mgv).nel
