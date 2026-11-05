@@ -12604,6 +12604,10 @@ run for_aggregate_body_local 42
 ## Each has the identical program under `take` measured green on that parent, which is the post-fix shape.
 run issue1406_declared_sub_slice_ret 42
 run issue1406_declared_sub_value 42
+## #1403: a `for` over a `Slice(T)` local bound WITHOUT an annotation. x86_64-only (`run_x86`, so the
+## arch sweeps' `^run [a-z]` grep skips it): the width fix is in x86_64's `for` arm, and the other
+## backends' misses are rows of scripts/known-deviations.tsv (#1201 aarch64/riscv64, #1186 wasm).
+run_x86 issue1403_for_slice_bound_no_annotation 42
 ## #1318 — a single `match` payload typed `Slice(T)` of struct/enum/str elements is bound as a slice
 ## view, not as the nominal two-word `Slice` struct (whose `for` copied one word per element).
 ## NON-VACUOUS: on the parent `cc1064e3` (x86_64) the build is refused at `ps[1].a`, and without that
