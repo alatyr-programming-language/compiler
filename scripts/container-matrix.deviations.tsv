@@ -3,10 +3,12 @@
 # on a WRONG or REFUSED cell with no row (UNLISTED), a row whose verdict differs (CHANGED), a row whose
 # cell now passes or traps (STALE: the fix deletes its own row), and a row naming no cell (UNKNOWN).
 # A TRAP is a recorded outcome and has no row. The verdict holds a WRONG's check code and only the kind
-# of a refusal (its message carries absolute paths). Measured at main 8ca9478d on omen, native x86_64,
-# compiler built from this tree: 378 cells, OK=223 WRONG=35 TRAP=72 REFUSED=48. 83 rows under 7 open
-# issues (#987, #1212, #1238, #1244, #1249, #1250, #1280); the 15 sub-word Deque rows of #1254 are
-# gone, fixed by #1281.
+# of a refusal (its message carries absolute paths). Measured at the head of #1422 on omen, native
+# x86_64, compiler built from this tree: 378 cells, OK=276 WRONG=0 TRAP=54 REFUSED=48. NO x86_64 cell
+# is WRONG: every one of the 48 rows is a REFUSED — 20 `char` (#1244), 19 `[T; 3]` (#1250), 8 `Option`
+# element (#1280), 1 `none.control.option_u64` (#1249). The 5 `vec.range.*` and 5 `vec.for_in.*` WRONG
+# rows of #1238 are gone, deleted by the fix that made those cells observe OK; the 15 sub-word Deque
+# rows of #1254 were fixed by #1281.
 x86_64	deque.front_back.array3	REFUSED	#1250
 x86_64	deque.front_back.char	REFUSED	#1244
 x86_64	deque.pop_back.array3	REFUSED	#1250
@@ -24,12 +26,7 @@ x86_64	none.control.array3	REFUSED	#1250
 x86_64	none.control.char	REFUSED	#1244
 x86_64	none.control.option_u64	REFUSED	#1249
 x86_64	vec.for_in.array3	REFUSED	#1250
-x86_64	vec.for_in.bool	WRONG 10	#1238
 x86_64	vec.for_in.char	REFUSED	#1244
-x86_64	vec.for_in.i8	WRONG 10	#1238
-x86_64	vec.for_in.u16	WRONG 10	#1238
-x86_64	vec.for_in.u32	WRONG 10	#1238
-x86_64	vec.for_in.u8	WRONG 10	#1238
 x86_64	vec.get.array3	REFUSED	#1250
 x86_64	vec.get.char	REFUSED	#1244
 x86_64	vec.grow.array3	REFUSED	#1250
@@ -49,14 +46,9 @@ x86_64	vec.pop.char	REFUSED	#1244
 x86_64	vec.push_at.array3	REFUSED	#1250
 x86_64	vec.push_at.char	REFUSED	#1244
 x86_64	vec.range.array3	REFUSED	#1250
-x86_64	vec.range.bool	WRONG 11	#1238
 x86_64	vec.range.char	REFUSED	#1244
-x86_64	vec.range.i8	WRONG 11	#1238
 x86_64	vec.range.option_ptr	REFUSED	#1280
 x86_64	vec.range.option_u64	REFUSED	#1280
-x86_64	vec.range.u16	WRONG 11	#1238
-x86_64	vec.range.u32	WRONG 11	#1238
-x86_64	vec.range.u8	WRONG 11	#1238
 x86_64	vec.set.array3	REFUSED	#1250
 x86_64	vec.set.char	REFUSED	#1244
 x86_64	vec.try_at.array3	REFUSED	#1250
