@@ -384,6 +384,16 @@ Two numbers that are **not** the compiler's version: the specification revision 
   at `check` with the located "a scalar has no field to name" diagnostic (Modules §2, Types §6.1), which
   also replaces the misleading `unbound name` that `if b.a {` used to report. An unannotated local bound
   to a float literal (`x := 2.5`) is still accepted (#703).
+- **A `for` over a `Slice(T)` local bound *without* an annotation steps by `T`'s width (#1403).**
+  `r := pass(t[0..4])` where `pass : Slice(u8) -> Slice(u8)` carries no annotation at the binding site,
+  and the loop read the element's width from that annotation. Finding nothing, it kept the default word
+  and stepped 8 bytes per element over a `u8` run, so the folded sum came out wrong (the issue's
+  `r := pass(…); for x in r` row answered 1 where 42 was due). The width now also comes from the slot,
+  which names the instantiated `Slice(u8)` after the fix above — one answer shared with `r[i]`, not two.
+  Measured native x86_64 on omen: `u8` and `i8` (sign-extended) went from wrong to 42, and the
+  `u64` control did not move. **Still open on #1403:** a range slice over a *fixed-array* local —
+  `v := t[1..4]; for x in v` traps 139 and `for x in t[1..4]` traps 132 — which takes its stride from
+  the array's own element kind, a different seam.
 
 ## 0.2.21 — 2026-11-01
 

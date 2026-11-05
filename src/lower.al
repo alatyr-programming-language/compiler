@@ -27467,6 +27467,25 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 elem_sg = str_at((cx.src + bent_slice_param_elem.s), 1) == "i"
                 if str_at((cx.src + bent_slice_param_elem.s), bent_slice_param_elem.n) == "f32" { elem_w = 8 }
               }
+              ## #1403 — the SAME width when the binding carries NO annotation. `r := pass(t[0..4])` with
+              ## `pass : Slice(u8) -> Slice(u8)` has no `: Slice(u8)` at the binding site, so the text query
+              ## above answers nothing and `elem_w` kept its default word: the loop stepped 8 bytes over
+              ## `u8` elements (the issue's `r := pass(…); for x in r` row, rc 1). The slot DOES name the
+              ## element now — `subst_slice_ret_span` synthesizes `Slice(u8)` into it (#1238) — so the
+              ## element type-arg is read off the SLOT, the same source `slice_var_ref` consults for
+              ## `r[i]`, rather than a second text scan. A type PARAMETER still answers nothing here
+              ## (`slice_elem_w_known` refuses `T`), so every unresolved element keeps the word it had.
+              if bent_slice_param_elem.n == 0 and bent.ek == 2 and bent.snl != 0 {
+                vbn2 := base_type_name(cx.src, bent.sns, bent.snl)
+                if str_at((cx.src + vbn2.s), vbn2.n) == "Slice" {
+                  eta := typearg_at(cx.src, bent.sns, bent.snl, 0)
+                  if slice_elem_w_known(cx.src, eta.s, eta.n) {
+                    elem_w = scalar_byte_size(cx.src, eta.s, eta.n)
+                    elem_sg = str_at((cx.src + eta.s), 1) == "i"
+                    if str_at((cx.src + eta.s), eta.n) == "f32" { elem_w = 8 }
+                  }
+                }
+              }
               if is_agg_arr {
                 ## a `[Pt; N]` array of structs/enums: N is not in the slot (`snl` holds the element type
                 ## span) — recover it from the `[T; N]` annotation via local_type_span + parse_arr_len,
