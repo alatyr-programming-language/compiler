@@ -8077,6 +8077,10 @@ fmt_test fmt_types 42
 fmt_test_has fmt_gen_enum 42 "(T)"
 fmt_test fmt_array 42
 fmt_test fmt_comments 42
+## #1178: a comment after the LAST top-level declaration was deleted by `fmt` (Tooling §4.3.4 says
+## comments are preserved verbatim). `fmt_test` already compares the `##` COUNT of source vs output;
+## the needle names the tail itself, so a regression points at the deleted text and not just a number.
+fmt_test_has fmt_trailing_comment 42 "And one more after a blank line"
 fmt_test fmt_comptime 42
 fmt_test comptime_if 42
 fmt_test fmt_comptime_match 42
