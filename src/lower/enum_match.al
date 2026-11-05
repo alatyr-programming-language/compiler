@@ -728,7 +728,12 @@ pub emit_enum_match := fn(head_in : Option(ptr(mut Arm)), si : ScrutInfo, in out
         mut agg_esl := 0
         mut agg_estride := 1
         mut agg_nel := 0
-        if nbind == 1 and pty.n != 0 {
+        ## #1318 — a single `Slice(T)` payload of struct/enum/str elements binds as a slice VIEW over the
+        ## payload words (word 0 = data ptr, word 1 = len, as a view keeps them), not as the nominal
+        ## `Slice` struct, whose `for`/index read one word per element. Same answer as `collect_slots`.
+        mut slice_pv := SliceRetInfo(is_slice = false, eek = 0, stride = 1, ess = 0, esl = 0)
+        if nbind == 1 { slice_pv = slice_payload_layout(cx.decls, cx.src, pty.s, pty.n, deref(cx.mar)) }
+        if nbind == 1 and pty.n != 0 and slice_pv.is_slice == false {
           if struct_decl_of(cx.decls, cx.src, base_type_name(cx.src, pty.s, pty.n).s, base_type_name(cx.src, pty.s, pty.n).n) >= 0 { agg_ek = 2 }
           else if enum_decl_of(cx.decls, cx.src, base_type_name(cx.src, pty.s, pty.n).s, base_type_name(cx.src, pty.s, pty.n).n) >= 0 { agg_ek = 3 }   ## nested generic-instance payload resolves via BASE name; FULL span kept in the slot
           else if str_at((cx.src + pty.s), pty.n) == "str" { agg_ek = 4 }   ## a str payload → 2-word {ptr, len} binding
@@ -761,7 +766,9 @@ pub emit_enum_match := fn(head_in : Option(ptr(mut Arm)), si : ScrutInfo, in out
             Some(bndq) => {
               bmns := bnd_ns(bndq)
               bmnl := bnd_nl(bndq)
-              if agg_ek == 5 {
+              if slice_pv.is_slice {
+                push_slice_view_alias(cx.slots, bmns, bmnl, si.base - 1 - bi, slice_pv, owner_type_s, owner_type_l)
+              } else if agg_ek == 5 {
                 ## Match aliases point into the enum's already-reserved payload block rather than owning a
                 ## newly allocated array block. Mirror bind_array_slot's filler metadata solely for checked
                 ## bounds recovery (`agg_arr_fill_count`); the filler `off`s are intentionally irrelevant.

@@ -212,6 +212,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `unchecked (K + 3)` hit the unroll budget instead of unrolling twice, and an `i32` product that
   wraps to 0 reached the compiler's own `idiv` as `i64::MIN / -1` (SIGFPE). The result now wraps to
   the operation's width (Comptime §2.6), on all four backends.
+- **A `Slice` carried by an enum variant is a slice when matched (#1318).** A `match` arm binding a
+  `Slice(T)` payload of structs, enums or strings got the two-word `Slice` record instead, so `for`
+  read one word per element: wrong fields, a crash on nested enums, and `ps[1].a` refused. The
+  binding is now a slice view over the payload, like any other slice.
 - **A `for` loop over structs or enums visits every element (#1321).** When the loop body bound a
   local, x86_64 stored that local over the hidden loop index, and the loop stopped after the first
   element. The index now sits in the one slot reserved for it, whatever the element's width.
