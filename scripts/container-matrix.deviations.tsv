@@ -24,12 +24,7 @@ x86_64	none.control.array3	REFUSED	#1250
 x86_64	none.control.char	REFUSED	#1244
 x86_64	none.control.option_u64	REFUSED	#1249
 x86_64	vec.for_in.array3	REFUSED	#1250
-x86_64	vec.for_in.bool	WRONG 10	#1238
 x86_64	vec.for_in.char	REFUSED	#1244
-x86_64	vec.for_in.i8	WRONG 10	#1238
-x86_64	vec.for_in.u16	WRONG 10	#1238
-x86_64	vec.for_in.u32	WRONG 10	#1238
-x86_64	vec.for_in.u8	WRONG 10	#1238
 x86_64	vec.get.array3	REFUSED	#1250
 x86_64	vec.get.char	REFUSED	#1244
 x86_64	vec.grow.array3	REFUSED	#1250
