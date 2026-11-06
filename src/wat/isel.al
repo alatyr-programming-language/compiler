@@ -183,8 +183,9 @@ sw_arith := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst), o : ir
   sw_setd(sb, ip)
 }
 ## `/ %` at 64 bits. `chk` traps `div_zero` on a zero divisor and, signed, `div_overflow` on
-## `MIN / -1` (§4). Any other mode is the hardware division (`hw`, owner decision D1: wasm's
-## `div`/`rem` trap on a zero divisor and `div_s` on `MIN / -1`, as the legacy emitter's do).
+## `MIN / -1` (§4). A `rem` of `MIN` by `-1` is `0` and no trap (Concurrency §6.1, #1398), which is
+## what `i64.rem_s` defines there. Any other mode is the hardware division (`hw`, owner decision D1:
+## wasm's `div`/`rem` trap on a zero divisor and `div_s` on `MIN / -1`, as the legacy emitter's do).
 sw_div := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst), o : ir::Op) -> bool {
   if not ir::kty_eq(ir::i_ty(ip), ir::Kty.KI64) { return false }
   sg : ir::Sgn = ir::i_sg(ip)
@@ -194,7 +195,7 @@ sw_div := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst), o : ir::
     if not sw_ldb(sb, ip) { return false }
     sw_op(sb, "i64.eqz")
     sw_trap_on(sb, x, ir::TrapKind.TkDivZero, ip)
-    if signed {
+    if signed and ir::op_is_div(o) {
       d1 := sw_ldb(sb, ip); sw_const(sb, 0 - 1); sw_op(sb, "i64.eq")
       d2 := sw_lda(sb, ip); sw_const(sb, 0 - 9223372036854775807 - 1); sw_op(sb, "i64.eq")
       sw_op(sb, "i32.and")

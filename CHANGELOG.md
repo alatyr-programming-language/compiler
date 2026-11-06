@@ -386,6 +386,15 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `IB_I64_MIN : i64 = 0 - 9223372036854775807 - 1` the two subtractions are now signed and guarded
   (`jno`) where they were an unguarded zero-left subtraction and a borrow guard (`jnc`), and
   `i64(0 - 1)` in `lower::param_tuple_layout_collect` gains its signed guard.
+- **A checked `MIN % -1` yields 0 instead of trapping (#1398).** `x % y` over `i64` or `isize` with a
+  runtime divisor of `-1` and a dividend of the type's minimum trapped on all four backends (x86_64
+  `ud2`, aarch64 `brk`, riscv64 `ebreak`, wasm `unreachable`): all four reused the `MIN / -1` guard for
+  `%`. Concurrency §6.1 puts only `MIN / -1` in the checked-overflow set — the remainder's mathematical
+  result `0` is representable — and says the compiler produces `0` without executing the divide, so no
+  target faults. The guard is now asked of `/` alone, and on x86_64, where `idivq` faults on `MIN / -1`,
+  a checked signed `%` skips the divide on a `-1` divisor with a zero remainder. `MIN / -1` still traps,
+  the narrow widths and the unsigned path are unchanged, and inside `unchecked` `%` stays hardware-defined
+  (§6.2).
 
 ## 0.2.19 — 2026-10-31
 
