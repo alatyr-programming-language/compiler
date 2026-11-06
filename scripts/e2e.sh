@@ -12287,15 +12287,20 @@ check_accept issue703_vty_owner_controls
 ## (`if 1` and `if p + 1` both answer a `Mismatch`), so these three rows are exactly the hole: a bare
 ## NAME whose kind the checker does not surface. A rule about an ill-formed program, independent of the
 ## target, so one refusal covers all four backends and no deviation row is owed.
+build_reject_has issue774_if_numeric_cond_immutable "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond_immutable"
 build_reject_has issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
 build_reject_has issue774_if_numeric_cond_unannotated "a bare numeric condition is ill-formed at line 6 in issue774_if_numeric_cond_unannotated"
 build_reject_has issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
 check_reject_has issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+check_reject_has issue774_if_numeric_cond_immutable "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond_immutable"
 check_reject_has issue774_if_numeric_cond_unannotated "a bare numeric condition is ill-formed at line 6 in issue774_if_numeric_cond_unannotated"
 check_reject_has issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
 emit_reject_has wat issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+emit_reject_has wat issue774_if_numeric_cond_immutable "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond_immutable"
 emit_reject_has aarch64 issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+emit_reject_has aarch64 issue774_if_numeric_cond_immutable "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond_immutable"
 emit_reject_has riscv64 issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+emit_reject_has riscv64 issue774_if_numeric_cond_immutable "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond_immutable"
 emit_reject_has wat issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
 emit_reject_has aarch64 issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
 emit_reject_has riscv64 issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
