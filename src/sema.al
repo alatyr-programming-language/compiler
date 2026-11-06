@@ -295,8 +295,12 @@ scalar_field_access_err := fn(s : usize) -> CheckErr { SCALAR_FIELD_ACCESS_DIAG_
 ## answering 1. The existing condition test refuses a KNOWN non-bool (`if 1`, `if p + 1` both stop with
 ## a `Mismatch`), so the hole is exactly the bare NAME whose kind the checker does not surface. Placed
 ## above SCALAR_FIELD_ACCESS_DIAG_MARKER and below the CT window, so only the scalar window's upper bound
-## moves and every other decoded CheckErr range stays byte-identical.
-NUMERIC_COND_DIAG_MARKER : usize = 6903500000000000000
+## moves and every other decoded CheckErr range stays byte-identical. NOT 6903500000000000000: PR #1461
+## claims that value for `CONST_CYCLE_DIAG_MARKER`, and two classes sharing one code decode to whichever
+## text the driver tests first — a constant-cycle refusal would print this message and vice versa, with
+## nothing red to show it. 6905000000000000000 is above the three classes already allocated to open PRs
+## (#1461 6903500000000000000, #1465 6904000000000000000, #1469 6904500000000000000) and below CT.
+NUMERIC_COND_DIAG_MARKER : usize = 6905000000000000000
 numeric_cond_err := fn(s : usize) -> CheckErr { NUMERIC_COND_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.

@@ -4664,8 +4664,11 @@ DIAG_SCALAR_FIELD_ACCESS_MARKER : usize = 6903000000000000000
 ## (`sema::NUMERIC_COND_DIAG_MARKER`). It sits between the scalar-owner field-access class and the
 ## comptime window, so only that class's upper bound moves and every other decoded range stays
 ## byte-identical. As with its neighbours, the window is NOT optional: without it the new code decodes
-## as `scalar_field_access` and reports a field access the program never wrote.
-DIAG_NUMERIC_COND_MARKER : usize = 6903500000000000000
+## as `scalar_field_access` and reports a field access the program never wrote. NOT 6903500000000000000:
+## PR #1461 claims that value for `DIAG_CONST_CYCLE_MARKER`; two classes on one code share one window and
+## the first `if` in the decoder wins, so one of the two messages is always wrong. 6905000000000000000
+## clears the values already allocated to #1461, #1465 and #1469 and stays below `DIAG_CT_MARKER`.
+DIAG_NUMERIC_COND_MARKER : usize = 6905000000000000000
 ## Issue #221 / Modules §3 — the exact qualified private-constant value path. Keep this class distinct
 ## from the generic located visibility reject and below the comptime range so older codes stay stable.
 DIAG_QUALIFIED_PRIVATE_CONST_MARKER : usize = 6900000000000000000
