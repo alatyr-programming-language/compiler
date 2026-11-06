@@ -1904,4 +1904,27 @@ The original reading note, verbatim:
 #
 # VERSION 0.2.20 -> 0.2.21, PATCH: a wrong value on x86_64 became the correct one; no surface changes.
 # The specification pin (spec 1.6.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.21 -> 0.2.22   promoted 2026-11-06   seed/alatyr := Stage2
+#
+# WHY: #1295 (PR #1295): reading a sub-word (byte) field off a struct-returning call loaded a whole word on x86_64, so the upper bytes of the register survived into the value. The fix zero-extends every such read; it changes emitted code, so the frozen seed must carry it. #1295 fixes #1228 (mk(1).eek read the wrong field of a sub-word struct).
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k>): 661 hunks, 661 added, 0 removed. One sentence:
+# Every byte-width field read that previously took a whole register now zero-extends the byte into it, at 661 sites across the corpus; nothing is removed and no other instruction kind appears.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1625068 lines.
+# GAS SHA-256 (Stage2): 5dcfc140e8317cec618087e5951630f1706074f5f833bd39867bcd27f7ea8033.
+# Stage2 == Stage3 BINARY SHA-256:
+# c239ce2c9c261d001f7f43445d0571f9bfa3de7c54b7bd4ea3f85f769ef15f89 (6190608 B).
+# All three answer `alatyr 0.2.22, spec 1.8.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.2.21) SHA-256:
+# c0570cd5e964768588f6e54a67de50a533576801c1cc47b452acacc381d171e2.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1625068 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.2.21 -> 0.2.22, PATCH: a wrong value on x86_64 became the correct one; no surface changes.
+# The specification pin (spec 1.8.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```

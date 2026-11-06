@@ -126,6 +126,8 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+## 0.2.22 — 2026-11-06
+
 - **`alatyr fmt` keeps the comments after the last declaration (#1178).** Every `##` comment below the
   final top-level declaration was deleted: `alatyr fmt p.al` exited 0 and wrote the file without them,
   against Tooling §4.3.4, where comments are "preserved verbatim" and "`fmt` never deletes, merges, or
