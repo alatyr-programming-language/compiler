@@ -18,5 +18,5 @@
 #
 # name	state	due	issue	sites
 #
-# live-rows: 2
+# live-rows: 1
 store_call_aggregate	tree	42	#1237	src/driver.al:d_idxop_expr
