@@ -12277,6 +12277,33 @@ emit_reject_has riscv64 issue703_scalar_tuple_pos "a scalar has no field to name
 ## and str global, and a field through a `ptr(P)` parameter) keep compiling and answer 18.
 run issue703_vty_owner_controls 18
 check_accept issue703_vty_owner_controls
+## Issue #774 (the `if`/`while` half) — a BARE NUMERIC CONDITION is refused (Control Flow §4: "A
+## numeric scalar is not truthy (it provides no `is_true`, Stdlib §2.1): a numeric condition uses an
+## explicit comparison yielding `bool` (`if n != 0 { … }`), never a bare `if n { … }`"; §6 gives
+## `while` the same condition). Parent verdicts (`origin/main` `2d6e05f4`, native x86_64, every rc read
+## outside a pipeline): `check` 0 and `build` 0 on all three rows, and each took the branch or spun the
+## loop on the word — the annotated `u64` and the unannotated `p := 10` (default `i64`, Types §9.1)
+## answered 1, the `while` ran to completion. The existing tolerant test already stops a KNOWN non-bool
+## (`if 1` and `if p + 1` both answer a `Mismatch`), so these three rows are exactly the hole: a bare
+## NAME whose kind the checker does not surface. A rule about an ill-formed program, independent of the
+## target, so one refusal covers all four backends and no deviation row is owed.
+build_reject_has issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+build_reject_has issue774_if_numeric_cond_unannotated "a bare numeric condition is ill-formed at line 6 in issue774_if_numeric_cond_unannotated"
+build_reject_has issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
+check_reject_has issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+check_reject_has issue774_if_numeric_cond_unannotated "a bare numeric condition is ill-formed at line 6 in issue774_if_numeric_cond_unannotated"
+check_reject_has issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
+emit_reject_has wat issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+emit_reject_has aarch64 issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+emit_reject_has riscv64 issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+emit_reject_has wat issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
+emit_reject_has aarch64 issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
+emit_reject_has riscv64 issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
+## The control: the conditions §4 and §8.1 make legal — a `bool` local (which §4 NAMES as the
+## condition), an explicit comparison, and `and` over two bools — keep compiling and answer 7 = 1 + 2 +
+## 4 on the parent and after. A refusal that fires here is over-broad.
+run issue774_truthy_cond_controls 7
+check_accept issue774_truthy_cond_controls
 ## The over-reach fence for the predicate's other direction is the four fixtures whose desugared callee
 ## span IS synthesized and which must keep COMPILING and answering their own values —
 ## `ambient_alloc_scalar` and `ambient_alloc_attr` (42, four backends), `map_capture` (42, `run_x86`
