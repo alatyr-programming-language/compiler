@@ -288,6 +288,12 @@ enum_field_access_err := fn(s : usize) -> CheckErr { ENUM_FIELD_ACCESS_DIAG_MARK
 ## moves and every other decoded CheckErr range stays byte-identical.
 SCALAR_FIELD_ACCESS_DIAG_MARKER : usize = 6903000000000000000
 scalar_field_access_err := fn(s : usize) -> CheckErr { SCALAR_FIELD_ACCESS_DIAG_MARKER + diag_span(s) * 4 }
+## Issue #1239 / Functions §5.5 step (4) — an ELIDED allocator parameter with no resolvable ambient
+## and no default ("allocator required"). Placed above SCALAR_FIELD_ACCESS_DIAG_MARKER and below the
+## CT window, so only the scalar window's upper bound moves and every other decoded CheckErr range
+## stays byte-identical. The span is the CALL's callee, which is the allocating site.
+NO_AMBIENT_ALLOC_DIAG_MARKER : usize = 6904000000000000000
+no_ambient_alloc_err := fn(s : usize) -> CheckErr { NO_AMBIENT_ALLOC_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -7127,6 +7133,198 @@ sema_global_init_call_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -
   if local_is_mut(src, d.name_start) { return false }
   if unchecked bitcast(usize, d.value) == 0 { return false }
   sema_call_returns_aggregate(d.value, decls, src)
+}
+
+## Functions §5.5 — an ELIDED allocator resolves as (1) the nearest enclosing `alloc::with`, (2) the
+## enclosing function's own `alloc` parameter, (3) a §5.1 default on the parameter, else **(4) a
+## compile error ("allocator required")**; Memory §5.2.1 says the same site in other words — "an
+## allocating site with **no** resolvable ambient and no default is a **compile error**, never a hidden
+## heap". Before this fence the compiler took step (4) silently: the driver's elision
+## (`driver::d_elide_call`) splices `ptr(amb)` only `if amb != 0`, so with no ambient the call was
+## left one argument short and lower ran it with the allocator register holding garbage — `vec::new(u64)`
+## built rc 0 and the program died at run time with SIGSEGV (#1239).
+##
+## Steps (1) and (2) are the two ways an ambient exists in this AST: an `alloc::with` scope, and a
+## function whose own parameter list carries the `ptr(mut Arena)` that §5.2.1 makes the ambient inside
+## its body. Step (3) has NO representation — `ast::Param` records no default expression — so an
+## omitted allocator with neither ambient is step (4), which is what this fence reports, at the CALL.
+## The callee shape is `callee_elided_alloc_idx`, the checker's existing recognizer of an elided
+## `ptr(… Arena)` parameter (#726), so the fence cannot fire on a call that supplies its allocator.
+sema_no_ambient_args := fn(ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8), cnt : usize, amb : bool) -> usize {
+  mut r : usize = 0
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        rr := sema_no_ambient_expr(ga.e, decls, src, cnt, amb)
+        if rr != 0 { r = rr }
+        g = ga.next
+      }
+      None => { break }
+    }
+  }
+  r
+}
+
+sema_no_ambient_arms := fn(ah : Option(ptr(mut Arm)), decls : ptr(rt::Vec), src : ptr(u8), cnt : usize, amb : bool) -> usize {
+  mut r : usize = 0
+  mut arm : Option(ptr(mut Arm)) = ah
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        rb := sema_no_ambient_stmts(am.body_stmts, decls, src, cnt, amb)
+        if rb != 0 { r = rb }
+        arm = am.next
+      }
+      None => { break }
+    }
+  }
+  r
+}
+
+sema_no_ambient_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cnt : usize, amb : bool) -> usize {
+  mut r : usize = 0
+  match deref(e) {
+    Expr::Call(cs, cl, nargs, ah) => {
+      ra := sema_no_ambient_args(ah, decls, src, cnt, amb)
+      if ra != 0 { r = ra }
+      else if not amb { if callee_elided_alloc_idx(decls, cnt, src, cs, cl, nargs) >= 0 { r = cs } }
+    }
+    Expr::Bin(op, l, rr) => {
+      rl := sema_no_ambient_expr(l, decls, src, cnt, amb)
+      if rl != 0 { r = rl } else { r = sema_no_ambient_expr(rr, decls, src, cnt, amb) }
+    }
+    Expr::If(c, th, el) => {
+      rc := sema_no_ambient_expr(c, decls, src, cnt, amb)
+      if rc != 0 { r = rc } else {
+        rt2 := sema_no_ambient_expr(th, decls, src, cnt, amb)
+        if rt2 != 0 { r = rt2 } else { r = sema_no_ambient_expr(el, decls, src, cnt, amb) }
+      }
+    }
+    Expr::Match(sc, ah) => {
+      rs := sema_no_ambient_expr(sc, decls, src, cnt, amb)
+      if rs != 0 { r = rs } else { r = sema_no_ambient_arms(ah, decls, src, cnt, amb) }
+    }
+    Expr::Unchecked(p) => { r = sema_no_ambient_expr(p, decls, src, cnt, amb) }
+    Expr::Try(p) => { r = sema_no_ambient_expr(p, decls, src, cnt, amb) }
+    Expr::AddrOf(p) => { r = sema_no_ambient_expr(p, decls, src, cnt, amb) }
+    Expr::Deref(p) => { r = sema_no_ambient_expr(p, decls, src, cnt, amb) }
+    Expr::Bitcast(p, bs, bn) => { r = sema_no_ambient_expr(p, decls, src, cnt, amb) }
+    Expr::Field(b, fs, fl) => { r = sema_no_ambient_expr(b, decls, src, cnt, amb) }
+    Expr::Index(b, ix) => {
+      rb := sema_no_ambient_expr(b, decls, src, cnt, amb)
+      if rb != 0 { r = rb } else { r = sema_no_ambient_expr(ix, decls, src, cnt, amb) }
+    }
+    Expr::StructLit(ns, nl, nf, fh) => { r = sema_no_ambient_args(fh, decls, src, cnt, amb) }
+    Expr::ArrayLit(nel, eh) => { r = sema_no_ambient_args(eh, decls, src, cnt, amb) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::EnumLit
+      | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { }
+  }
+  r
+}
+
+## The statement walk. `amb` is "an ambient allocator is in scope here": false at a function body's
+## top unless the function itself takes the allocator parameter (§5.5 step 2), set true by every
+## `alloc::with` body (§5.5 step 1) and restored when its block ends — plain lexical shadowing,
+## Memory §5.2.1. A form the walk does not descend into is a conservative FALSE: it can miss an
+## allocating site, never invent one.
+sema_no_ambient_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), cnt : usize, amb : bool) -> usize {
+  mut r : usize = 0
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        mut nx : Option(ptr(mut Stmt)) = Option.None
+        match st {
+          Stmt::Assign(ns, nl, v, n1) => { r = sema_no_ambient_expr(v, decls, src, cnt, amb); nx = n1 }
+          Stmt::ExprStmt(e, n1) => { r = sema_no_ambient_expr(e, decls, src, cnt, amb); nx = n1 }
+          Stmt::Return(v, n1) => { r = sema_no_ambient_expr(v, decls, src, cnt, amb); nx = n1 }
+          Stmt::Break(v, dep, n1) => { r = sema_no_ambient_expr(v, decls, src, cnt, amb); nx = n1 }
+          Stmt::FieldAssign(bns, bnl, fs, fl, v, n1) => { r = sema_no_ambient_expr(v, decls, src, cnt, amb); nx = n1 }
+          Stmt::FieldPathAssign(pl, v, n1) => { r = sema_no_ambient_expr(v, decls, src, cnt, amb); nx = n1 }
+          Stmt::DerefAssign(pe, v, n1) => { r = sema_no_ambient_expr(v, decls, src, cnt, amb); nx = n1 }
+          Stmt::IndexAssign(ib, ii, v, n1) => { r = sema_no_ambient_expr(v, decls, src, cnt, amb); nx = n1 }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, v, n1) => { r = sema_no_ambient_expr(v, decls, src, cnt, amb); nx = n1 }
+          Stmt::If(c, th, el, n1) => {
+            r = sema_no_ambient_expr(c, decls, src, cnt, amb)
+            if r == 0 { r = sema_no_ambient_stmts(th, decls, src, cnt, amb) }
+            if r == 0 { r = sema_no_ambient_stmts(el, decls, src, cnt, amb) }
+            nx = n1
+          }
+          Stmt::While(c, b, n1) => {
+            r = sema_no_ambient_expr(c, decls, src, cnt, amb)
+            if r == 0 { r = sema_no_ambient_stmts(b, decls, src, cnt, amb) }
+            nx = n1
+          }
+          Stmt::For(fns, fnl, flo, fhi, b, n1) => {
+            r = sema_no_ambient_expr(flo, decls, src, cnt, amb)
+            if r == 0 { r = sema_no_ambient_expr(fhi, decls, src, cnt, amb) }
+            if r == 0 { r = sema_no_ambient_stmts(b, decls, src, cnt, amb) }
+            nx = n1
+          }
+          Stmt::Loop(b, n1) => { r = sema_no_ambient_stmts(b, decls, src, cnt, amb); nx = n1 }
+          Stmt::Unchecked(b, n1) => { r = sema_no_ambient_stmts(b, decls, src, cnt, amb); nx = n1 }
+          Stmt::CompIf(c, th, el, n1) => {
+            r = sema_no_ambient_expr(c, decls, src, cnt, amb)
+            if r == 0 { r = sema_no_ambient_stmts(th, decls, src, cnt, amb) }
+            if r == 0 { r = sema_no_ambient_stmts(el, decls, src, cnt, amb) }
+            nx = n1
+          }
+          Stmt::CompFor(vs, vl, k, b, n1) => { r = sema_no_ambient_stmts(b, decls, src, cnt, amb); nx = n1 }
+          Stmt::CompForRange(vs, vl, lo, hi, b, n1) => {
+            r = sema_no_ambient_expr(lo, decls, src, cnt, amb)
+            if r == 0 { r = sema_no_ambient_expr(hi, decls, src, cnt, amb) }
+            if r == 0 { r = sema_no_ambient_stmts(b, decls, src, cnt, amb) }
+            nx = n1
+          }
+          Stmt::Match(sc, ah, n1) => {
+            r = sema_no_ambient_expr(sc, decls, src, cnt, amb)
+            if r == 0 { r = sema_no_ambient_arms(ah, decls, src, cnt, amb) }
+            nx = n1
+          }
+          Stmt::CompMatch(sc, ah, n1) => {
+            r = sema_no_ambient_expr(sc, decls, src, cnt, amb)
+            if r == 0 { r = sema_no_ambient_arms(ah, decls, src, cnt, amb) }
+            nx = n1
+          }
+          ## §5.5 step (1): the body of `alloc::with(A) { … }` HAS an ambient. Its own allocator
+          ## expression is checked under the OUTER `amb`, so `alloc::with(vec::new(u64)) { … }` is
+          ## still refused at the inner call.
+          Stmt::AllocWith(ae, b, n1) => {
+            r = sema_no_ambient_expr(ae, decls, src, cnt, amb)
+            if r == 0 { r = sema_no_ambient_stmts(b, decls, src, cnt, true) }
+            nx = n1
+          }
+          Stmt::Continue(dep, n1) => { nx = n1 }
+        }
+        if r != 0 { s = Option.None } else { s = nx }
+      }
+      None => { break }
+    }
+  }
+  r
+}
+
+## Does this function body contain an allocating site whose elided allocator has no ambient? The
+## ambient exists at a call iff an `alloc::with` encloses it (§5.5 step 1) or the function's OWN
+## parameter list carries the `ptr(mut Arena)` that §5.2.1 makes the ambient inside the body (step 2).
+sema_body_needs_alloc_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), cnt : usize) -> usize {
+  mut amb := false
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if pm.tl != 0 and pm.ppl != 0 and str_at((src + pm.ts), pm.tl) == "ptr" and str_at((src + pm.pps), pm.ppl) == "Arena" { amb = true }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  sema_no_ambient_stmts(d.body_stmts, decls, src, cnt, amb)
 }
 
 ## Types §4.2/§4.4 — a string value has no value-conversion path into an integer. The lower treats
@@ -21291,6 +21489,13 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
       ## CALL would therefore be folded as zeroed/static storage while its callee never runs; reject the
       ## same CONST shape before any backend can emit it, with one diagnostic class for every CLI path.
       if sema_global_init_call_bad(d, decls, src) { return global_init_call_err(d.name_start) }
+      ## Functions §5.5 step (4) / Memory §5.2.1 — an allocating site with no resolvable ambient and
+      ## no default is a compile error, never a hidden heap. The elision pass leaves such a call one
+      ## argument short and the program runs with a garbage allocator, so refuse it at the call.
+      if d.is_fn {
+        naa := sema_body_needs_alloc_bad(d, decls, src, cnt)
+        if naa != 0 { return no_ambient_alloc_err(naa) }
+      }
       ## Issue #214 / Types §6.4 + I11: the lower's direct nested-array field fence must run on the
       ## check path too. Reject the declaration before any backend can reserve a word-only image;
       ## the sema helper shares lower_layout's exact source predicate and preserves the field line.

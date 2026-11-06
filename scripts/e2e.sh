@@ -11050,6 +11050,8 @@ run issue1254_deque_subword_call_deref 42
 ## #1254 — `push_front`, `pop_front` and `pop_back` at a sub-word element: `slot := dq_elem(T, …)` then
 ## `deref(slot) = x` / `v := deref(slot)` moved 8 bytes. NON-VACUOUS: on the parent `c4e20937` (x86_64) it exits 10.
 run issue1254_deque_subword_slot 42
+check_build_located issue1239_elided_alloc_no_ambient 24 "allocator required"
+run issue1239_elided_alloc_with_scope_ok 42
 run deref_view_pointee 42
 ## Types §7 — a `[T]`/`str` view IS its two-word {ptr,len} pair wherever it appears. A view ARGUMENT that is
 ## not a plain local (a struct FIELD at any depth, a `sub(…)`/range sub-view, a `[str;N]` element, a str field
