@@ -9043,6 +9043,13 @@ run_x86 deref_field_byref_param 42
 run_x86 deref_ptrfield_write 42
 ## §4: `deref(p) = E.V(scalar payloads)` stores disc + payloads (was a silent 1-garbage-word store).
 run_x86 deref_assign_enum_lit 42
+## #1237 — Memory §4 / Types §4.3: `deref(p) = f()` with `f` returning a MULTI-WORD aggregate writes
+## the WHOLE pointee. Both were SILENT wrong values: the call fell to the scalar DerefAssign store and
+## moved word 0 alone — the struct row answered **40** where `q.a + q.b` owes 42, and the enum row
+## kept the earlier `deref(p) = E.B(9)` and answered **9** where `E.A(40, 2)` owes 42. MEASURED on the
+## parent `aab6ce1a` (2 and 9 by fixture assertion code). The literal spellings above already worked.
+run_x86 deref_assign_call_struct 42
+run_x86 deref_assign_call_enum 42
 # Checked div-by-zero traps on ALL backends (I11/CG-7): plain `run` so x86 asserts the exact
 # SIGFPE exit (136) AND the a64/rv64/wasm sweeps assert a TRAP (exit >= 128), not a silent
 # wrong low exit. `unchecked_div_zero` (aarch64-only, below) proves the guard is scoped away.

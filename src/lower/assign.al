@@ -1190,6 +1190,23 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
   }
   }
 }
+## #1237 — the word count a `deref(p) = f()` store must move when `f` returns a MULTI-WORD aggregate,
+## and 0 for every other shape. The DESTINATION pointee sizes it (Memory §4 / Types §4.3: a store
+## through `ptr(mut T)` writes the whole `T`), and the source is admitted only when it really is a
+## register-returning aggregate call — `struct_ret_call` / `enum_ret_call_d`, both of which deliver word
+## `k` in `emit_retreg(k)`. A WIDE (SRET) return answers 0: there the callee already writes through the
+## hidden %rdi and `emit_retreg` stops at %r11, so reading registers back would invent a garbage tail.
+## Beyond the register budget or with an unresolvable pointee it answers 0 too, which leaves that
+## program on the path it has today rather than guessing a width.
+deref_call_ret_words := fn(dptr : ptr(Expr), val : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
+  mut is_agg_call := false
+  if struct_ret_call(val, cx.decls, cx.src, a) and not sret_ret_call(val, cx.decls, cx.src, a) { is_agg_call = true }
+  if enum_ret_call_d(val, cx.decls, cx.src, deref(cx.mar)) and not enum_sret_ret_call(val, cx.decls, cx.src, a) { is_agg_call = true }
+  if not is_agg_call { return 0 }
+  dw := ptr_var_agg_words(dptr, cx)
+  if dw < 2 or dw > 7 { return 0 }
+  dw
+}
 ## The `Stmt::DerefAssign` arm of `emit_stmts`, moved out verbatim (Step 4.1). A `deref(p) = v` store
 ## through a pointer. The arm's payload binding is spelled `ptr` at the match site; the parameter is
 ## `dptr` so it cannot shadow the `ptr(T)` type constructor in its own signature. Caller keeps
@@ -1354,6 +1371,38 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
       push_str(sb, "(%rbx), %rcx\n  movq %rcx, ")
       push_int(sb, i64(k * 8))
       push_str(sb, "(%rax)\n")
+    }
+  } else if ptr_var_agg_words(dptr, cx) > 1 and deref_call_ret_words(dptr, val, cx, a) > 1 {
+    ## #1237 — `deref(p) = f()` where `f` returns a MULTI-WORD aggregate: the store writes the whole
+    ## pointee. Memory §4 / Types §4.3 make a store through `ptr(mut T)` a write of the whole `T`, and
+    ## the destination's `T` is what sizes it — `ptr_var_agg_words` already answers that for the
+    ## pointer-to-struct (ek 7) and pointer-to-enum (ek 6) pointees this arm admits. Before it existed
+    ## the call fell to the SCALAR store below, which moved word 0 alone: `s1.al` (`mk` → `P(a,b,c)`)
+    ## answered **40** where `q.a + q.b` owes 42, and `e2.al` (`mk` → `E.A(40, 2)` over an earlier
+    ## `deref(p) = E.B(9)`) answered **9** — the second store never landed. Both SILENT (I11). The
+    ## spellings beside it already worked and stay untouched: a struct LITERAL (`elit_word_payloads` /
+    ## `slit_scalar_fields`), an enum LITERAL, a struct VAR (`vw > 1`) and `deref(vd) = deref(vs)`.
+    ## Both call shapes deliver word `k` in `emit_retreg(k)` — a struct in %rax:%rdx:%rcx:…, an enum
+    ## disc-first — so ONE loop stores them, ascending at `+k*8`, the same pointee layout the
+    ## `deref`→`deref` arm and the enum-literal arm above use. The pointee address is pushed BEFORE
+    ## the call and popped after it: a call leaves the stack balanced, so it cannot eat the operand,
+    ## and no register held across the call has to be trusted not to clobber. A WIDE (SRET) return is
+    ## excluded — the callee already writes through the hidden %rdi there, and `emit_retreg` stops at
+    ## %r11, so reading back would invent a garbage tail.
+    dwac := ptr_var_agg_words(dptr, cx)
+    emit_gas(dptr, sb, cx, a, nl)
+    if enum_ret_call_d(val, cx.decls, cx.src, deref(cx.mar)) {
+      emit_enum_value(val, sb, cx, a, nl)
+    } else {
+      emit_struct_value(val, sb, cx, a, nl)
+    }
+    push_str(sb, "  popq %rbx\n")
+    for k in 0..dwac {
+      push_str(sb, "  movq ")
+      emit_retreg(sb, k)
+      push_str(sb, ", ")
+      push_int(sb, i64(k * 8))
+      push_str(sb, "(%rbx)\n")
     }
   } else if ptr_var_agg_words(dptr, cx) > 1 and expr_is_branch(val) {
     ## `deref(p) = if/match …` into a MULTI-WORD pointee — the scalar store path below moves only
