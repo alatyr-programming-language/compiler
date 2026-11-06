@@ -45,4 +45,9 @@ main := fn() -> u64 {
 
   42
 }
-## expect(x86_64): run 42
+## expect: run 42
+## The qualifier this line carried — `expect(x86_64):` — was a permission, and the table's own header
+## says a deviation is a defect of the implementation, never a permission: the directive stays the
+## expectation. This program is valid and returns 42 on x86_64, so 42 is what every backend owes; the
+## three that trap (aarch64 run/133, riscv64 run/133, wasm run/134) are held by rows in
+## scripts/known-deviations.tsv naming #1452, not by narrowing what is asked of them (#1452, #263).
