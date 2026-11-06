@@ -6824,27 +6824,38 @@ sema_enum_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::Ve
 ## selects a field of a struct or union, a position of a tuple (`.N`), or — one level through a pointer —
 ## a field of the pointed-to struct; an integer, `bool`, `char` or float has no fields, so `x.a` names
 ## nothing. Measured on the parent, `x : u64 = 3  x.a` compiled at rc 0 and answered a fabricated `0`.
-## The owner is identified only by a DECLARED type span (an annotated local, a parameter, or an annotated
+## The owner is identified first by a DECLARED type span (an annotated local, a parameter, or an annotated
 ## module global) naming a builtin scalar (`sema_is_scalar_name`, which leaves out the multiword
-## `u128`/`i128`: library structs with a `words` field). An unannotated local is not decided here: its
-## recorded kind reads `TyInt` for a user-operator result or a `u128` value as well as for `x := 3`, so
-## the bare kind would refuse legal struct reads (#703 census: 24 such rows in test/, all legal).
-## A LOCAL or PARAMETER typed `u16`, `i16`, `i8`, `char`, `f32` or `f64` records no span either (`resolve_ty`
-## keeps one only for the types it classifies), so it is not decided here yet (#703 residual); a module
-## global reads its declared span.
+## `u128`/`i128`: library structs with a `words` field). Where no span answers, the owner's recorded
+## VALUE TYPE does (`sema_owner_vty_is_scalar`): a `u16`/`i16`/`i8`/`char`/`f32`/`f64` local or parameter
+## (`resolve_ty` keeps a span only for the types it classifies), an unannotated local, and a QUALIFIED
+## owner `z::n`, whose declaration `sema_vty_global` finds in the module `z` names. The bare `TyInt` kind
+## of an unannotated local is never the evidence: it reads `TyInt` for a user-operator result or a `u128`
+## value as well as for `x := 3` (#703 census: 24 such rows in test/, all legal); its value type does not.
 sema_scalar_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
   if is_prelude_ns_var(base, src) { return 0 }
   bv := expr_var_span(base)
   if bv.n == 0 or not sema_name_owner_is_scalar(decls, upto, src, locals, nloc, bv.s, bv.n) { return 0 }
   scalar_field_access_err(fs)
 }
+## …and a TUPLE POSITION `x.N` on a scalar owner, which the parser lowers to `Index(base, Num(N))`
+## (`p_field`). Types §6.1 gives `.N` to tuples ONLY, so a scalar owner names no position either. Told
+## from the bracket `x[i]` by the `.` the source holds right after the owner's name; the bracket form on
+## a scalar is Types §6.4's question, not this one. Located at the position `N`.
+sema_scalar_owner_tuple_pos_err := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  if is_prelude_ns_var(base, src) { return 0 }
+  bv := expr_var_span(base)
+  if bv.n == 0 or str_at((src + bv.s + bv.n), 1) != "." { return 0 }
+  if not sema_name_owner_is_scalar(decls, upto, src, locals, nloc, bv.s, bv.n) { return 0 }
+  scalar_field_access_err(bv.s + bv.n + 1)
+}
 ## …the same question over a NAME place `[s, s+n)` — the read walkers above and the `v.a = x` store,
 ## which the parser keeps as two name spans that no expression walker sees.
 sema_name_owner_is_scalar := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> bool {
-  ## Only an UNQUALIFIED owner is decided. A qualified `z::cfg` reaches here as its last segment `cfg`
-  ## (or as the whole path), and `::` names the item of module `z` (Modules §2, MOD-3), so neither this
-  ## module's locals nor its globals answer for it. `sema_gref_split` recognises both span forms.
-  if sema_gref_split(src, s, n).qual { return false }
+  ## A QUALIFIED `z::cfg` reaches here as its last segment `cfg` (or as the whole path), and `::` names
+  ## the item of module `z` (Modules §2, MOD-3), so neither this module's locals nor its globals answer
+  ## for it: only the declaration the path names does. `sema_gref_split` recognises both span forms.
+  if sema_gref_split(src, s, n).qual { return sema_owner_vty_is_scalar(sema_vty_global(decls, src, s, n)) }
   mut ts : usize = 0
   mut tl : usize = 0
   if nloc != 0 and local_in(locals, nloc, src, s, n) {
@@ -6854,13 +6865,35 @@ sema_name_owner_is_scalar := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
     lt := local_lookup(locals, nloc, src, s, n)
     ts = lt.ty.ns
     tl = lt.ty.nl
+    ## No span: the binding's recorded value type decides, but only for a kind that can be a scalar's
+    ## (an aggregate, pointer, view or wrapper kind keeps its own field rules).
+    lk : TyKind = lt.ty.kind
+    if tl == 0 and (kind_is_unknown(lk) or kind_is_int(lk) or kind_is_bool(lk)) {
+      return sema_owner_vty_is_scalar(sema_vty_local(locals, nloc, src, s, n))
+    }
   } else {
     ## Only the global this module's scope resolves the name to (Modules §2), never a sibling's.
     gt := global_type_span_in_mod(decls, src, upto, s, n)
     ts = gt.s
     tl = gt.n
+    ## No annotation (`G := 5`): the value type of the binding Modules §3 resolves the name to.
+    if tl == 0 { return sema_owner_vty_is_scalar(sema_vty_global(decls, src, s, n)) }
   }
   tl != 0 and sema_is_scalar_name(str_at((src + ts), tl))
+}
+## Is `t`, an owner's recorded value type, a single-word SCALAR: an integer, `bool`, float, or an untyped
+## literal's default (Types §9.1)? A pointer is not (`p.x` reaches the pointee's field, §6.1), nor an
+## aggregate, nor a wider-than-word integer (the library `u128`/`i128`). An UNKNOWN type decides nothing.
+## Not consulted while a generic body is re-checked for an instance (`SEMA_INST_RECORDING`): that walk
+## answers only the signedness class, and its bound `T` would reach code a comptime branch never keeps.
+sema_owner_vty_is_scalar := fn(t : ir::VTy) -> bool {
+  if SEMA_INST_RECORDING { return false }
+  c : ir::VCls = ir::vty_cls(t)
+  match c {
+    VcInt | VcBool | VcFloat => { t.bytes <= 8 }
+    VcLit => { true }
+    VcAbsent | VcUnknown | VcPtr | VcAgg => { false }
+  }
 }
 ## The direct/local/global field-name fence. A known struct must contain the selected field; otherwise
 ## the old `field_ty` returned unknown and the lower read/stored word zero. Keep prelude namespace and
@@ -8389,7 +8422,12 @@ expr_statement_has_unbound_m := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
     Expr::AddrOf(p) => { false }
     Expr::Deref(p) => { false }
     Expr::ArrayLit(ne, eh) => { false }
-    Expr::Index(base, idx) => { false }
+    ## Issue #703 — a tuple position `x.N` on a scalar owner is refused here as the Field arm refuses `x.a`.
+    Expr::Index(base, idx) => {
+      tpe := sema_scalar_owner_tuple_pos_err(base, decls, upto, src, locals, nloc)
+      if tpe != 0 { mark_failed(locals, tpe) }
+      tpe != 0
+    }
     Expr::Try(inner) => { false }
     Expr::Slice(base, lo, hi) => { false }
     Expr::CompField(base, idx) => { false }
@@ -8590,7 +8628,12 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       loop { match g { Some(gq) => { ga := deref(arg_p(gq)); if expr_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }; g = ga.next }; None => { break } } }
       bad
     }
-    Expr::Index(base, idx) => { expr_has_unbound(base, decls, upto, src, a, locals, nloc) or expr_has_unbound(idx, decls, upto, src, a, locals, nloc) }
+    Expr::Index(base, idx) => {
+      ## Issue #703 — the same tuple-position refusal on the full walk.
+      tpe := sema_scalar_owner_tuple_pos_err(base, decls, upto, src, locals, nloc)
+      if tpe != 0 { mark_failed(locals, tpe); return true }
+      expr_has_unbound(base, decls, upto, src, a, locals, nloc) or expr_has_unbound(idx, decls, upto, src, a, locals, nloc)
+    }
     Expr::Try(inner) => { expr_has_unbound(inner, decls, upto, src, a, locals, nloc) }
     Expr::Unchecked(inner) => {
       ug := ptrint_grant_enter()
@@ -13662,6 +13705,11 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
 ## error used to fall back to `invalid` at the declaration; it now keeps that same `invalid` class while
 ## carrying the actual unbound child's source line.
 unbound_code := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  ## Issue #703 — a walk that refused a SCALAR owner's field or tuple position recorded that located
+  ## class (`mark_failed`) before answering "bad"; reporting the walk's verdict as an unbound name would
+  ## name a defect the program does not have (`if b.a {`, the qualified store `z::n.x = 4`).
+  fsc : CheckErr = deref((deref(locals)).fspan)
+  if fsc >= SCALAR_FIELD_ACCESS_DIAG_MARKER and fsc < CT_DIAG_MARKER { return fsc }
   legacy := s_of(e, a)
   nested := expr_unbound_span(e, decls, upto, src, a, locals, nloc)
   if nested != 0 {
@@ -15387,6 +15435,9 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
       ## introduces no new local. Element/value type agreement is deferred (element-type
       ## tracking is not done — the toy arrays hold word-sized ints).
       Stmt::IndexAssign(ib, ii, iv, nx) => {
+        ## Issue #703 — `x.N = v` on a scalar owner writes a tuple position the owner does not have.
+        itpe := sema_scalar_owner_tuple_pos_err(ib, decls, upto, src, locals, cnt)
+        if itpe != 0 { return Result(usize, CheckErr).Err(itpe) }
         ## The base is a write place, not a value read. A simple local array may still be unreadied here.
         cib := check_expr(ib, decls, upto, src, a, locals, cnt)?
         ## Types §6.4 / Assembly §3 / issue #5 — the write target has the same statically provable
