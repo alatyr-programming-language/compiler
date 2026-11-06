@@ -20,3 +20,4 @@ main := fn() -> u64 {
   }
   return av + bv
 }
+## expect(x86_64): run 42

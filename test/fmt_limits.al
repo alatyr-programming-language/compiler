@@ -2,3 +2,4 @@
 ## the `@`, since name_start points inside `@limits(`). Comment fidelity + the directive round-trip.
 @limits(no_alloc, no_comptime)
 main := fn() -> u64 { return 42 }
+## expect(x86_64): run 42

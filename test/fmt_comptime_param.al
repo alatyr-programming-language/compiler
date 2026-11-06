@@ -46,3 +46,4 @@ main := fn() -> u64 {
   if peek(g) != 7 { return 5 }
   return 42
 }
+## expect(x86_64): run 42

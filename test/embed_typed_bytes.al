@@ -13,3 +13,4 @@ main := fn() -> u64 {
   if u64(bytes(b)[3]) != 10 { return 5 }
   return 42
 }
+## expect(x86_64): run 42

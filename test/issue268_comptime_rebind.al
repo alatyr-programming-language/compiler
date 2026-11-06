@@ -31,3 +31,4 @@ block := fn() -> u64 {
 main := fn() -> u64 {
   return seq() + branch(true) + branch(false) + block()
 }
+## expect: run 26

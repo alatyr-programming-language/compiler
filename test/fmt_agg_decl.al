@@ -36,3 +36,4 @@ main := fn() -> u64 {
   d := Def(y = 12)
   return d.x + d.y
 }
+## expect(x86_64): run 42

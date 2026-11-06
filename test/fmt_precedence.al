@@ -15,3 +15,4 @@ main := fn() -> u64 {
   if (a < c) == (b < c) { acc = acc + 12 }
   return acc
 }
+## expect(x86_64): run 42

@@ -34,3 +34,4 @@ main := fn() -> u64 {
   if h.v != 99 { return 8 }
   return 42
 }
+## expect: run 42

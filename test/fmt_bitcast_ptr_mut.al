@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if u64(deref(rp)) != 42 { return 1 }
   u64(deref(rp))
 }
+## expect(x86_64): run 42

@@ -39,3 +39,4 @@ main := fn() -> u64 {
   if eq(E, b5, b5) { r = r + 2 }
   return r
 }
+## expect(x86_64): run 42

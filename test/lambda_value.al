@@ -8,3 +8,4 @@ main := fn() -> u64 {
   inc := fn(n : u64) -> u64 { return n + 1 }
   return apply(inc, 41)
 }
+## expect: run 42

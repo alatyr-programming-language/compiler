@@ -43,3 +43,4 @@ main := fn() -> u64 {
   if c != 1100 { return 102 }
   return 42
 }
+## expect: run 42

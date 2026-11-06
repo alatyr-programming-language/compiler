@@ -20,3 +20,4 @@ other := fn() -> u64 {
 main := fn() -> u64 {
   pick() + other()
 }
+## expect: run 42

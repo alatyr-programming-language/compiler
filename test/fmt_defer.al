@@ -25,3 +25,4 @@ main := fn() -> u64 {
   z := f()
   return ACC + z
 }
+## expect(x86_64): run 123
