@@ -4662,6 +4662,11 @@ DIAG_SEAM_CMP_GRANT_MARKER : usize = 6902500000000000000
 ## comptime window, so only the seam window's upper bound moves and every other decoded range stays
 ## byte-identical.
 DIAG_SCALAR_FIELD_ACCESS_MARKER : usize = 6903000000000000000
+## Issue #926 / Declarations §7.1 — the sema-side COMPTIME-INITIALIZER-CYCLE class
+## (`sema::CONST_CYCLE_DIAG_MARKER`). It sits between the scalar-field-access class and the function-value-owner class
+## (`DIAG_FNVAL_FIELD_ACCESS_MARKER`), at the value the integrator allocated in the range chain, so only the scalar window's upper bound moves and every other decoded range stays
+## byte-identical. The payload is the declaration's name offset in a four-byte slot.
+DIAG_CONST_CYCLE_MARKER : usize = 6903500000000000000
 ## Issue #1464 / Functions §1.5 + Modules §2 — the sema-side FUNCTION-VALUE-OWNER FIELD ACCESS class
 ## (`sema::FNVAL_FIELD_ACCESS_DIAG_MARKER`). It sits between the scalar-owner class and the
 ## numeric-condition class (`DIAG_NUMERIC_COND_MARKER`), at the value the integrator allocated in the
@@ -4816,7 +4821,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   unapplied_type_fn := code >= DIAG_UNAPPLIED_TYPE_FN_MARKER and code < DIAG_ENUM_FIELD_ACCESS_MARKER
   enum_field_access := code >= DIAG_ENUM_FIELD_ACCESS_MARKER and code < DIAG_SEAM_CMP_GRANT_MARKER
   seam_cmp_grant := code >= DIAG_SEAM_CMP_GRANT_MARKER and code < DIAG_SCALAR_FIELD_ACCESS_MARKER
-  scalar_field_access := code >= DIAG_SCALAR_FIELD_ACCESS_MARKER and code < DIAG_FNVAL_FIELD_ACCESS_MARKER
+  scalar_field_access := code >= DIAG_SCALAR_FIELD_ACCESS_MARKER and code < DIAG_CONST_CYCLE_MARKER
+  const_cycle := code >= DIAG_CONST_CYCLE_MARKER and code < DIAG_FNVAL_FIELD_ACCESS_MARKER
   fnval_field_access := code >= DIAG_FNVAL_FIELD_ACCESS_MARKER and code < DIAG_NUMERIC_COND_MARKER
   numeric_cond := code >= DIAG_NUMERIC_COND_MARKER and code < DIAG_CT_MARKER
   multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
@@ -4904,6 +4910,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if scalar_field_access {
     raw = code - DIAG_SCALAR_FIELD_ACCESS_MARKER
     span = raw / 4
+  } else if const_cycle {
+    raw = code - DIAG_CONST_CYCLE_MARKER
+    span = raw / 4
   } else if unresolved_qual_head {
     raw = code - DIAG_UNRESOLVED_QUAL_HEAD_MARKER
     span = raw / DIAG_UNRESOLVED_QUAL_HEAD_SLOT
@@ -4947,7 +4956,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or fnval_field_access or numeric_cond or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or fnval_field_access or numeric_cond or const_cycle or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::fd_str(2, "@limits(")
       wk1 := rt::fd_str(2, limit_name(kind))
@@ -4982,6 +4991,11 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if fnval_field_access { wkfva := rt::fd_str(2, "a FIELD ACCESS on a FUNCTION VALUE: `.` selects a struct or union field, a tuple position `.N`, or a UFCS call (Modules §2), and a function value is one machine word, a code address (Functions §1.5) — a function value has no field to name") }
     else if numeric_cond { wknc := rt::fd_str(2, "a NUMERIC value used as a CONDITION: a numeric scalar is not truthy and provides no `is_true` (Control Flow §4, Stdlib §2.1) — a numeric condition uses an explicit comparison yielding `bool`, `if n != 0 { … }`, and a bare numeric condition is ill-formed") }
     else if scalar_field_access { wksfa := rt::fd_str(2, "a FIELD ACCESS on a SCALAR value: `.` selects a struct or union field, a tuple position `.N`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name") }
+    else if const_cycle {
+      wccc0 := rt::fd_str(2, "a COMPTIME INITIALIZER CYCLE: `")
+      wccc1 := rt::fd_str(2, str_at(base + span, d_diag_ident_len(base, span)))
+      wccc2 := rt::fd_str(2, "` reaches back to itself through its initializer — a module-level binding's initializer must be compile-time-known and comptime initializers are evaluated in dependency order, so a cycle among them has no order to evaluate it in (Declarations §7.1); give it a value that does not reach back to itself")
+    }
     else if unapplied_type_fn {
       wkua0 := rt::fd_str(2, "type function `")
       wkua1 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))
@@ -7809,7 +7823,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   unapplied_type_fn := r >= DIAG_UNAPPLIED_TYPE_FN_MARKER and r < DIAG_ENUM_FIELD_ACCESS_MARKER
   enum_field_access := r >= DIAG_ENUM_FIELD_ACCESS_MARKER and r < DIAG_SEAM_CMP_GRANT_MARKER
   seam_cmp_grant := r >= DIAG_SEAM_CMP_GRANT_MARKER and r < DIAG_SCALAR_FIELD_ACCESS_MARKER
-  scalar_field_access := r >= DIAG_SCALAR_FIELD_ACCESS_MARKER and r < DIAG_FNVAL_FIELD_ACCESS_MARKER
+  scalar_field_access := r >= DIAG_SCALAR_FIELD_ACCESS_MARKER and r < DIAG_CONST_CYCLE_MARKER
+  const_cycle := r >= DIAG_CONST_CYCLE_MARKER and r < DIAG_FNVAL_FIELD_ACCESS_MARKER
   fnval_field_access := r >= DIAG_FNVAL_FIELD_ACCESS_MARKER and r < DIAG_NUMERIC_COND_MARKER
   numeric_cond := r >= DIAG_NUMERIC_COND_MARKER and r < DIAG_CT_MARKER
   multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
@@ -7897,6 +7912,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if scalar_field_access {
     raw = r - DIAG_SCALAR_FIELD_ACCESS_MARKER
     span = raw / 4
+  } else if const_cycle {
+    raw = r - DIAG_CONST_CYCLE_MARKER
+    span = raw / 4
   } else if unresolved_qual_head {
     raw = r - DIAG_UNRESOLVED_QUAL_HEAD_MARKER
     span = raw / DIAG_UNRESOLVED_QUAL_HEAD_SLOT
@@ -7941,7 +7959,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or fnval_field_access or numeric_cond or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or fnval_field_access or numeric_cond or const_cycle or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::fd_str(2, "duplicate linker symbol") }
       else {
@@ -7979,6 +7997,11 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if fnval_field_access { dwkfva := rt::fd_str(2, "a FIELD ACCESS on a FUNCTION VALUE: `.` selects a struct or union field, a tuple position `.N`, or a UFCS call (Modules §2), and a function value is one machine word, a code address (Functions §1.5) — a function value has no field to name") }
     else if numeric_cond { dwknc := rt::fd_str(2, "a NUMERIC value used as a CONDITION: a numeric scalar is not truthy and provides no `is_true` (Control Flow §4, Stdlib §2.1) — a numeric condition uses an explicit comparison yielding `bool`, `if n != 0 { … }`, and a bare numeric condition is ill-formed") }
     else if scalar_field_access { dwksfa := rt::fd_str(2, "a FIELD ACCESS on a SCALAR value: `.` selects a struct or union field, a tuple position `.N`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name") }
+    else if const_cycle {
+      dwccc0 := rt::fd_str(2, "a COMPTIME INITIALIZER CYCLE: `")
+      dwccc1 := rt::fd_str(2, str_at(base + span, d_diag_ident_len(base, span)))
+      dwccc2 := rt::fd_str(2, "` reaches back to itself through its initializer — a module-level binding's initializer must be compile-time-known and comptime initializers are evaluated in dependency order, so a cycle among them has no order to evaluate it in (Declarations §7.1); give it a value that does not reach back to itself")
+    }
     else if unapplied_type_fn {
       dwkua0 := rt::fd_str(2, "type function `")
       dwkua1 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))

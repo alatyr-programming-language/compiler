@@ -11259,6 +11259,15 @@ run issue1245_match_call_binop_arg 42
 ## alias present — #1414's condition). NON-VACUOUS: on the parent `58a80376` (x86_64) the BUILD itself
 ## dies — rc 139 SIGSEGV, no diagnostic — and with only `:4780` fixed it still dies at `:6942`.
 run issue1247_vec_set_str_binop_arg 42
+## #926 — a cycle among comptime initializers is a compile error (Declarations §7.1). `check` accepted
+## it (rc 0) and the x86_64 backend then died in `global_init_value`, which recursed into the
+## initializer with no cycle guard: rc 139 SIGSEGV, no diagnostic. `check` and `build` now refuse at
+## the declaration with one located diagnostic, for the self-reference and for the mutual pair. The
+## third row is the control that keeps the refusal honest: a legal chain still folds. NON-VACUOUS: on
+## the parent `58a80376` (x86_64) both rejected fixtures BUILD — `check` rc 0, `build` rc 139.
+check_build_located issue926_const_init_self_ref 15 "COMPTIME INITIALIZER CYCLE"
+check_build_located issue926_const_init_cycle_pair 15 "COMPTIME INITIALIZER CYCLE"
+run_x86 issue926_const_chain_ok 2
 run deref_view_pointee 42
 ## Types §7 — a `[T]`/`str` view IS its two-word {ptr,len} pair wherever it appears. A view ARGUMENT that is
 ## not a plain local (a struct FIELD at any depth, a `sub(…)`/range sub-view, a `[str;N]` element, a str field
