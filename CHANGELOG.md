@@ -193,6 +193,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   grant changes only the verification mode (Concurrency §6.2, CG-7): the binding now takes the same
   aggregate path as `s := mk(41)`, and the call's arguments are still lowered with the checks off.
   aarch64, riscv64 and wasm still trap on the granted form (#1157).
+- **A field read straight off a struct-returning call reads that field when the struct has sub-word
+  fields (#1228).** `mk(1).eek` on `struct { is_slice : bool, eek : u8, stride : usize }` returned
+  `stride`: the call returns the struct's byte image in registers (`eek` is byte 1 of the first word),
+  and the read picked one register per field. It now takes the field's byte offset, the one
+  `d := mk(1); d.eek` already used, and extracts the narrow value with its sign.
 - **`v.push(x)` on a `Vec` of a sub-word element stores what it is given (#988).** A UFCS call that
   infers its type argument from the receiver was its own instance below two words, tagged by the
   receiver's name, and `size(T)` in it was 8 bytes: `push` on a `Vec(u8)`, `Vec(u16)` or `Vec(u32)`

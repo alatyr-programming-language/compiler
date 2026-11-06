@@ -20,4 +20,4 @@
 #
 # live-rows: 2
 store_call_aggregate	tree	42	#1237	src/driver.al:d_idxop_expr
-call_field_subword	tree	24	#1228	src/lower.al:for_iter_str_elem
+call_field_subword	seed	24	#1228	src/lower.al:for_iter_str_elem
