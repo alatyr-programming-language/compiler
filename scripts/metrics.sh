@@ -207,12 +207,45 @@ gate_line="$(gh run list -R "$REPO" --workflow gate.yml -L 40 \
       else "\(map(tostring + " min") | join(", ")) (last \(length) hosted gate.yml runs, newest first)" end')"
 [ -n "$gate_line" ] || gate_line="n/a — gh run list failed"
 
+## ---- container matrix (#1124) and pilots (#1125) ---------------------------------------------------
+## These two rows used to be hardcoded `n/a — no matrix report on main yet` / `no pilot exists on main
+## yet`, written before either landed. Both HAVE landed: the matrix runs inside the full gate and its
+## deviations table is committed, and `pilots/` holds four packages. A report that keeps saying a met
+## exit criterion has not started is worse than no row — it is the number the milestone is read from.
+## The per-cell verdict (cells/OK/WRONG/TRAP/REFUSED) is printed by the full gate into a log that is
+## not committed, and this script must not build anything to get it; so the row states what IS committed
+## on main and names where the verdict is printed.
+cm_file="scripts/container-matrix.deviations.tsv"
+if git cat-file -e "origin/main:$cm_file" 2>/dev/null; then
+  cm_rows="$(git show "origin/main:$cm_file" | grep -vc '^#')"
+  cm_wrong="$(git show "origin/main:$cm_file" | grep -v '^#' | awk -F'\t' '$1 == "x86_64" && $3 ~ /^WRONG/' | wc -l | tr -d ' ')"
+  cm_refused="$(git show "origin/main:$cm_file" | grep -v '^#' | awk -F'\t' '$3 == "REFUSED"' | wc -l | tr -d ' ')"
+  cm_issues="$(git show "origin/main:$cm_file" | grep -v '^#' | awk -F'\t' '{print $4}' | sort | uniq -c | sort -rn | awk '{printf "%s(%s) ", $2, $1}')"
+  cm_line="$cm_wrong x86_64 WRONG held by $cm_rows committed deviation rows ($cm_refused REFUSED, over ${cm_issues% }); the per-cell verdict is printed by the full gate as \`container matrix: cells=… WRONG=…\` and is not committed"
+else
+  cm_line="n/a — $cm_file is not on main (#1124)"
+fi
+pl_pkgs="$(git ls-tree --name-only origin/main pilots/ 2>/dev/null | tr '\n' ' ')"
+pl_n="$(git ls-tree --name-only origin/main pilots/ 2>/dev/null | grep -c '/')"
+if [ "$pl_n" -gt 0 ]; then
+  pl_line="$pl_n packages on main (${pl_pkgs% }); the verdict is printed by the full gate as \`pilots: libraries=… failed=…\` and is not committed"
+else
+  pl_line="n/a — no pilot exists on main yet (#1125)"
+fi
+
 ## ---- seed promotion cadence (#1129) ------------------------------------------------------------------
 ## scripts/promote.sh owns the decision; this report is what asks it every week. The owed count comes from
 ## the issue list above and the last promotion from origin/main, so the answer is about main, not this tree.
 seed_last="$(git log -1 --format=%cs origin/main -- seed/alatyr)"
-seed_line="$(bash scripts/promote.sh due --owed "$(lab reseed-owed)" --last "$seed_last")"
+# `lab` counts ISSUES. A reseed can also be owed by a PR — one whose fix changes code the compiler
+# itself contains, so the frozen seed no longer reproduces it — and #1290 carries `reseed-owed` exactly
+# that way. Counting issues only, the cadence answered "not due" while a landing-ready PR owed it.
+seed_owed_issue="$(lab reseed-owed)"
+seed_owed_pr="$(gh pr list -R "$REPO" --label reseed-owed --state open --json number 2>/dev/null | jq 'length' 2>/dev/null)"
+[ -n "$seed_owed_pr" ] || seed_owed_pr=0
+seed_line="$(bash scripts/promote.sh due --owed "$((seed_owed_issue + seed_owed_pr))" --last "$seed_last")"
 seed_rc=$?
+[ "$seed_owed_pr" -gt 0 ] && seed_line="$seed_line — $seed_owed_pr open PR(s) labelled reseed-owed ($(gh pr list -R "$REPO" --label reseed-owed --state open --json number -q '.[].number' 2>/dev/null | sed 's/^/#/' | tr '\n' ' '))"
 seed_line="${seed_line#"${seed_line%%[! ]*}"}"
 case $seed_rc in 0) seed_line="**due** — $seed_line (\`scripts/promote.sh prepare\`)" ;; 1) ;; *) seed_line="n/a — $seed_line" ;; esac
 
@@ -229,8 +262,8 @@ cat <<EOF
 | landings on main (first-parent) | $land_n commits, $merge_n of them merges |
 | PRs merged / median lead time | $pr_n / $lead_h h (opened → merged) |
 | $debt_label | $dev_line |
-| container matrix \`WRONG\` cells | n/a — no matrix report on main yet (#1124) |
-| pilots green / red | n/a — no pilot exists on main yet (#1125) |
+| container matrix \`WRONG\` cells | $cm_line |
+| pilots on main | $pl_line |
 | full-gate wall time, hosted | $gate_line |
 | full-gate wall time, omen | n/a — omen runs are not recorded anywhere this script can read |
 | seed promotion (last $seed_last) | $seed_line |

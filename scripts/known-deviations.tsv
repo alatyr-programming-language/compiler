@@ -223,6 +223,7 @@ aarch64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 aarch64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 aarch64	test/issue169_wasm_nested_return.al	run/133	#1191
 aarch64	test/issue171_global_const_str.al	run/133	#1200
+aarch64	test/issue263_slice_narrow_field_write.al	run/133	#1452
 aarch64	test/issue345_ptr_target_spacing.al	run/133	#550
 aarch64	test/issue349_arena_bad_alignment.al	run/133	#1199
 aarch64	test/issue354_vec_reserve_overflow.al	run/133	#1200
@@ -725,6 +726,7 @@ riscv64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 riscv64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200
+riscv64	test/issue263_slice_narrow_field_write.al	run/133	#1452
 riscv64	test/issue345_ptr_target_spacing.al	run/133	#550
 riscv64	test/issue349_arena_bad_alignment.al	run/133	#1199
 riscv64	test/issue354_vec_reserve_overflow.al	run/133	#1200
@@ -1229,6 +1231,7 @@ wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
 wasm	test/issue169_wasm_array_write.al	run/134	#1194
 wasm	test/issue169_wasm_nested_return.al	run/134	#1191
 wasm	test/issue171_global_const_str.al	run/134	#1200
+wasm	test/issue263_slice_narrow_field_write.al	run/134	#1452
 wasm	test/issue345_ptr_target_spacing.al	run/134	#1186
 wasm	test/issue349_arena_bad_alignment.al	run/134	#1186
 wasm	test/issue354_vec_reserve_overflow.al	run/134	#1186
