@@ -25472,10 +25472,10 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
       ## wide-enum-returning fn → dormant → fixpoint-neutral.
       ovssc := cx.sret_call
       cx.sret_call = i64(tbm)
-      emit_enum_value(scrut, sb, cx, a)
+      emit_enum_value(scrut, sb, cx, a, nl)
       cx.sret_call = ovssc
     } else {
-    emit_enum_value(scrut, sb, cx, a)
+    emit_enum_value(scrut, sb, cx, a, nl)
     for k in 0..etwm {
       push_str(sb, "  movq ")
       emit_retreg(sb, k)
