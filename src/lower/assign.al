@@ -1190,6 +1190,33 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
   }
   }
 }
+## #1237 — the WHOLE word count of a `deref(p) = f()` store whose right-hand side is a CALL that
+## delivers a multi-word aggregate in the return registers and whose pointee resolves to that
+## aggregate; 0 for every other shape, so each keeps the lowering it has today byte-for-byte.
+## Memory §4.3 (spec v1.8.0): `deref(p)` in value context loads; `deref(p) = v` STORES — and §4.6
+## fixes that the store happens "at the addressed location, honoring the place's type". The place's
+## type is the POINTEE, so the store covers the whole pointee; Codegen §4 makes an aggregate copy a
+## byte copy by the layout rule (Types §6). A one-word store of a multi-word aggregate is therefore a
+## wrong value (I11), never a legal narrowing. The register budget bounds this slice: `emit_retreg`
+## reaches %r11 (7 words), and a wider result arrives through the hidden sret pointer, which this
+## store does not stage — those answer 0 here and keep the path they had (the residual, recorded on
+## the PR).
+deref_call_agg_store_words := fn(val : ptr(Expr), dvps : CSpan, cx : ptr(LCtx), a : rt::Arena) -> usize {
+  if dvps.n == 0 { return 0 }
+  mut w : usize = 0
+  if struct_decl_of(cx.decls, cx.src, dvps.s, dvps.n) >= 0 {
+    if struct_ret_call(val, cx.decls, cx.src, a) == false or sret_ret_call(val, cx.decls, cx.src, a) { return 0 }
+    w = struct_words(cx.decls, cx.src, dvps.s, dvps.n, deref(cx.mar))
+  } else if enum_decl_of(cx.decls, cx.src, dvps.s, dvps.n) >= 0 {
+    if enum_ret_call_d(val, cx.decls, cx.src, deref(cx.mar)) == false or enum_sret_ret_call(val, cx.decls, cx.src, a) { return 0 }
+    w = 1 + enum_inst_words(cx.decls, cx.src, dvps.s, dvps.n, deref(cx.mar))
+  } else {
+    return 0
+  }
+  if w < 2 or w > 7 { return 0 }
+  w
+}
+
 ## The `Stmt::DerefAssign` arm of `emit_stmts`, moved out verbatim (Step 4.1). A `deref(p) = v` store
 ## through a pointer. The arm's payload binding is spelled `ptr` at the match site; the parameter is
 ## `dptr` so it cannot shadow the `ptr(T)` type constructor in its own signature. Caller keeps
@@ -1208,6 +1235,8 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
   ## struct pointees, so this is fixpoint-neutral.
   if call_ret_pointee_unresolved(dptr, cx.decls, cx.src, a) { reject_call_pointee_unresolved(dptr, cx.src) }
   dvps := deref_dest_pointee_span(dptr, cx)
+  ## #1237 — the whole-pointee word count when the source is an aggregate-returning CALL (0 otherwise).
+  dcaws := deref_call_agg_store_words(val, dvps, cx, a)
   if dvps.n != 0 and is_view_type(cx.src, dvps.s, dvps.n) {
     emit_str_pair(val, sb, cx, a, nl)
     emit_gas(dptr, sb, cx, a, nl)
@@ -1362,6 +1391,34 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
     ## multi-word DEST + an if/match source, so every scalar store (`deref(p) = x`) and the existing
     ## multi-word source paths are unaffected → fixpoint-neutral.
     panic("selfhost: a whole-STRUCT store through a pointer from an if/match BRANCH (`deref(p) = if …`) is unsupported (the scalar store path would drop words) — bind the branch value to a local first (`t := if …`), then `deref(p) = t`")
+  } else if dcaws > 1 {
+    ## #1237 — `deref(p) = f()` where `f` returns a multi-word aggregate. The scalar path below keeps
+    ## only word 0, so the pointee's tail stayed whatever it held: `s1.al` answered 40 for 42
+    ## (`q.a + q.b`, `b` never written) and `e2.al` answered 9 for 42 (the discriminant of the
+    ## PREVIOUS store's payload, read back as variant `A`). Deliver EVERY word: stage what the call
+    ## leaves in `emit_retreg(k)` into an agg-temp block, then copy the block whole to the pointee at
+    ## the ascending offsets every by-reference aggregate read uses. The same two steps the multi-word
+    ## FIELD-through-a-pointer store in `emit_st_field_path_assign` uses, and the pointee dual of the
+    ## `vw > 1` struct-local arm above. The RHS is evaluated first and the destination address only
+    ## then, as Memory §1's store order reads.
+    dsave := cx.agg_next
+    dabase := agg_alloc_words(cx, dcaws)
+    if struct_ret_call(val, cx.decls, cx.src, a) {
+      emit_struct_value(val, sb, cx, a, nl)
+    } else {
+      emit_enum_value(val, sb, cx, a, nl)
+    }
+    for k in 0..dcaws {
+      push_str(sb, "  movq ")
+      emit_retreg(sb, k)
+      push_str(sb, ", -")
+      push_int(sb, (dabase - i64(k) + 1) * 8)
+      push_str(sb, "(%rbp)\n")
+    }
+    emit_gas(dptr, sb, cx, a, nl)
+    push_str(sb, "  popq %r11\n")
+    emit_frame_words_to_r11(dabase, dcaws, sb)
+    cx.agg_next = dsave
   } else {
     emit_gas(val, sb, cx, a, nl)
     emit_gas(dptr, sb, cx, a, nl)
