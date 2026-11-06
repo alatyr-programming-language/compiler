@@ -12268,6 +12268,37 @@ emit_reject_has riscv64 issue703_scalar_tuple_pos "a scalar has no field to name
 ## and str global, and a field through a `ptr(P)` parameter) keep compiling and answer 18.
 run issue703_vty_owner_controls 18
 check_accept issue703_vty_owner_controls
+## Issue #1464 — a FIELD ACCESS whose OWNER is a FUNCTION VALUE is refused at the access (Functions §1.5
+## gives a function value the representation of one machine word, a code address; Modules §2 gives `.` a
+## field, a tuple position or a UFCS call; Types §6.1 gives `.N` to tuples ONLY). Parent verdicts
+## (`origin/main` `aab6ce1a`, native x86_64, every rc read outside a pipeline): `check` 0 and `build` 0
+## on all four rows, and each answered a fabricated 0 — the local bound to a named function (`g := f`
+## then `g.a`), the function's own NAME in value position (`f.a`), the tuple position (`g.0`), and the
+## store (`g.a = 4`, which landed nowhere). A rule about an ill-formed program, independent of the target,
+## so it belongs in `check`: one refusal for all four backends, and no deviation row is owed.
+build_reject_has issue1464_fnval_field "a function value has no field to name at line 8 in issue1464_fnval_field"
+build_reject_has issue1464_fnval_field_global "a function value has no field to name at line 6 in issue1464_fnval_field_global"
+build_reject_has issue1464_fnval_tuple_pos "a function value has no field to name at line 8 in issue1464_fnval_tuple_pos"
+build_reject_has issue1464_fnval_field_store "a function value has no field to name at line 8 in issue1464_fnval_field_store"
+check_reject_has issue1464_fnval_field "a function value has no field to name at line 8 in issue1464_fnval_field"
+check_reject_has issue1464_fnval_field_global "a function value has no field to name at line 6 in issue1464_fnval_field_global"
+check_reject_has issue1464_fnval_tuple_pos "a function value has no field to name at line 8 in issue1464_fnval_tuple_pos"
+check_reject_has issue1464_fnval_field_store "a function value has no field to name at line 8 in issue1464_fnval_field_store"
+emit_reject_has wat issue1464_fnval_field "a function value has no field to name at line 8 in issue1464_fnval_field"
+emit_reject_has aarch64 issue1464_fnval_field "a function value has no field to name at line 8 in issue1464_fnval_field"
+emit_reject_has riscv64 issue1464_fnval_field "a function value has no field to name at line 8 in issue1464_fnval_field"
+emit_reject_has wat issue1464_fnval_tuple_pos "a function value has no field to name at line 8 in issue1464_fnval_tuple_pos"
+emit_reject_has aarch64 issue1464_fnval_tuple_pos "a function value has no field to name at line 8 in issue1464_fnval_tuple_pos"
+emit_reject_has riscv64 issue1464_fnval_tuple_pos "a function value has no field to name at line 8 in issue1464_fnval_tuple_pos"
+emit_reject_has wat issue1464_fnval_field_store "a function value has no field to name at line 8 in issue1464_fnval_field_store"
+emit_reject_has aarch64 issue1464_fnval_field_store "a function value has no field to name at line 8 in issue1464_fnval_field_store"
+emit_reject_has riscv64 issue1464_fnval_field_store "a function value has no field to name at line 8 in issue1464_fnval_field_store"
+## The control: the six owner kinds #1464 must leave ALONE, one row each of the #703 item-3 census —
+## a struct field and a struct field through a pointer (Types §6.1), a raw union member (§6.3, which
+## REQUIRES it stays accepted), and a slice view's, a fixed array's and a `str`'s length (§6.4/§7).
+## It answers 135 = 42 + 42 + 42 + 3 + 3 + 3 on the parent and after.
+run issue1464_owner_kind_controls 135
+check_accept issue1464_owner_kind_controls
 ## The over-reach fence for the predicate's other direction is the four fixtures whose desugared callee
 ## span IS synthesized and which must keep COMPILING and answering their own values —
 ## `ambient_alloc_scalar` and `ambient_alloc_attr` (42, four backends), `map_capture` (42, `run_x86`
