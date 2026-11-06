@@ -3172,6 +3172,37 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     esvc := var_name_span(einner)
     esentc := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, esvc.s, esvc.n)))
     emit_agg_slot_copy(esentc.off, esentc.is_ref, dstbe, nwbe, sb)
+  } else if fixed_arr_copy_len(v, cx.slots, cx.src, ns, nl2, local_type_span(cx.src, ns, nl2).s, local_type_span(cx.src, ns, nl2).n) > 0 {
+    ## #937 — `ys : [T; N] = xs` / `ys = xs`: copy the WHOLE `N`-element block. `collect_slots` has
+    ## reserved `ys` as that block (the branch beside the struct/enum `Var` binding there), and
+    ## `fixed_arr_block_words` is the ONE count both the reservation and this copy read, so the words
+    ## that move cannot disagree with the words reserved. `emit_agg_slot_copy` is THE whole-aggregate
+    ## frame-slot copy of this band: word `k` of a local source at slot `off - k` lands at slot
+    ## `dst - k`, which for an `ek == 5` array is element `k` at stride 1, or element `k / stride`
+    ## word `k % stride` for a struct/enum element (q3: `[R; 2]` moves all four words). Before this the
+    ## binding took the generic SCALAR store: one word moved, `ys[0]` got `xs[0]` and every later
+    ## element read the neighbour's frame word — MEASURED `ys[1] + ys[2]` = 12 where `[5,7,9]` owes 16,
+    ## and `ys[1]` = 5 after `xs[1] = 1` where a copy must not alias. Types §6.4 + Memory §5.9.
+    ## A BYTE-PACKED array (`[u8|i8|bits8; N]`) keeps a DIFFERENT origin — its data block starts at
+    ## `-(base*8)(%rbp)` and grows up, one word above a word array's element 0 — so it copies through
+    ## that origin rather than `emit_agg_slot_copy`'s slot descent. Same `nw`, different base word.
+    baseac := slot_of(cx.slots, cx.src, ns, nl2)
+    avsn := var_name_span(v)
+    asent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, avsn.s, avsn.n)))
+    nwac := fixed_arr_block_words(usize(fixed_arr_copy_len(v, cx.slots, cx.src, ns, nl2, local_type_span(cx.src, ns, nl2).s, local_type_span(cx.src, ns, nl2).n)), asent.eek, asent.estride)
+    if is_byte_array_eek(asent.eek) {
+      mut jb : usize = 0
+      while jb < nwac {
+        push_str(sb, "  movq -")
+        push_int(sb, (i64(asent.off) - i64(jb)) * 8)
+        push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
+        push_int(sb, (baseac - i64(jb)) * 8)
+        push_str(sb, "(%rbp)\n")
+        jb += 1
+      }
+    } else {
+      emit_agg_slot_copy(asent.off, asent.is_ref, baseac, nwac, sb)
+    }
   } else if var_agg_info(v, cx.slots, cx.src).ek != 0 {
     ## `x := <struct/enum var>` — COPY the source aggregate's words into `x`'s fresh slots. A
     ## LOCAL source keeps word k at slot `off+k`; a by-REF PARAM (`is_ref`) holds a POINTER at
