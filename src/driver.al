@@ -2207,74 +2207,107 @@ d_insert_arg := fn(ah : Option(ptr(mut Arg)), k : usize, ae : ptr(Expr), na : pt
   }
   ah
 }
-## If Call `e` (span cs,cl; nargs; arg head ah) omits its allocator param, splice `ptr(amb)` at it.
-d_elide_call := fn(e : ptr(Expr), cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+## The index of the allocator parameter this call ELIDES, or -1 (Functions §5.5): a callee resolvable
+## by its tail name that declares a `ptr(mut Arena)` parameter, and a call exactly one argument short
+## of that callee's parameter count. ONE predicate for both halves of this pass — the SPLICE (an
+## ambient is in scope) and the REFUSAL (none is, #1239) — so the two can never drift apart.
+d_elide_site := fn(decls : rt::Vec, cs : usize, cl : usize, nargs : usize, na : ptr(mut rt::Arena), src : ptr(u8)) -> i64 {
+  mut r : i64 = 0 - 1
   di1 := d_alloc_callee(decls, cs, cl, na, src)
   if di1 != 0 {
     k := d_arena_param_idx(decls, di1 - 1, na, src)
     p := d_param_count(decls, di1 - 1, na)
-    if k >= 0 and nargs + 1 == p {
+    if k >= 0 and nargs + 1 == p { r = k }
+  }
+  r
+}
+## Call `e` (span cs,cl; nargs; arg head ah) that omits its allocator parameter. With an ambient `amb`
+## in scope (§5.5 steps (1)-(2)) splice `ptr(amb)` at it, exactly as before. With NONE it is §5.5 step
+## (4) — "allocator required", a COMPILE ERROR — and this returns the call's span: before #1239 that
+## step was taken SILENTLY, the argument simply dropped, and the program ran with the allocator register
+## holding whatever the caller left in it (`run` of the #1239 fixture: SIGSEGV, rc 139). `rf` is the
+## fence's own scope rule: 0 inside a function that declares its OWN `ptr(mut Arena)` parameter, where
+## §5.5 step (2) says the elided allocator IS resolvable — this pass splices only for `alloc::with`
+## scopes, and the fence must not refuse a program the spec accepts.
+d_elide_call := fn(e : ptr(Expr), cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)), amb : usize, rf : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
+  mut bad : usize = 0
+  k := d_elide_site(decls, cs, cl, nargs, na, src)
+  if k >= 0 {
+    if amb != 0 {
       aexpr := unchecked bitcast(ptr(Expr), amb)
       addr := unchecked bitcast(ptr(Expr), parser::newnode(na, Expr.AddrOf(aexpr)))
       nh := d_insert_arg(ah, usize(k), addr, na)
       nc := Expr.Call(cs, cl, nargs + 1, nh)
       deref(unchecked bitcast(ptr(mut Expr), e)) = nc
-    }
+    } else if rf != 0 { bad = cs }
   }
+  bad
 }
-d_elide_alloc_expr := fn(e : ptr(Expr), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+## The walk. Every splice happens exactly where it happened before; the return is the FIRST call whose
+## elided allocator resolves to nothing (§5.5 step (4)), 0 when the body needs no refusal. A form the
+## walk does not descend into is a conservative FALSE: it can miss an allocating site, never invent one.
+d_elide_alloc_expr := fn(e : ptr(Expr), amb : usize, rf : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
+  mut bad : usize = 0
   match deref(e) {
-    Expr::Bin(op, l, r) => { d_elide_alloc_expr(l, amb, decls, na, src); d_elide_alloc_expr(r, amb, decls, na, src) }
-    Expr::Unchecked(inner) => { d_elide_alloc_expr(inner, amb, decls, na, src) }
-    Expr::Try(inner) => { d_elide_alloc_expr(inner, amb, decls, na, src) }
-    Expr::AddrOf(inner) => { d_elide_alloc_expr(inner, amb, decls, na, src) }
-    Expr::If(c, th, el) => { d_elide_alloc_expr(c, amb, decls, na, src); d_elide_alloc_expr(th, amb, decls, na, src); d_elide_alloc_expr(el, amb, decls, na, src) }
+    Expr::Bin(op, l, r) => { b1 := d_elide_alloc_expr(l, amb, rf, decls, na, src); b2 := d_elide_alloc_expr(r, amb, rf, decls, na, src); if bad == 0 { bad = b1 }; if bad == 0 { bad = b2 } }
+    Expr::Unchecked(inner) => { bad = d_elide_alloc_expr(inner, amb, rf, decls, na, src) }
+    Expr::Try(inner) => { bad = d_elide_alloc_expr(inner, amb, rf, decls, na, src) }
+    Expr::AddrOf(inner) => { bad = d_elide_alloc_expr(inner, amb, rf, decls, na, src) }
+    Expr::If(c, th, el) => { b1 := d_elide_alloc_expr(c, amb, rf, decls, na, src); b2 := d_elide_alloc_expr(th, amb, rf, decls, na, src); b3 := d_elide_alloc_expr(el, amb, rf, decls, na, src); if bad == 0 { bad = b1 }; if bad == 0 { bad = b2 }; if bad == 0 { bad = b3 } }
     Expr::Call(cs, cl, nargs, ah) => {
       mut g : Option(ptr(mut Arg)) = ah
-      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_elide_alloc_expr(ga.e, amb, decls, na, src); g = ga.next }; None => { break } } }
-      if amb != 0 { d_elide_call(e, cs, cl, nargs, ah, amb, decls, na, src) }
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); b1 := d_elide_alloc_expr(ga.e, amb, rf, decls, na, src); if bad == 0 { bad = b1 }; g = ga.next }; None => { break } } }
+      b4 := d_elide_call(e, cs, cl, nargs, ah, amb, rf, decls, na, src)
+      if bad == 0 { bad = b4 }
     }
     ## #992 — a `match` is lexical scope like any block (Memory §5.2.1): its scrutinee and its arms are
     ## inside the enclosing `alloc::with`, and an `alloc::with` written in an arm is reached through it.
-    Expr::Match(sc, ah) => { d_elide_alloc_expr(sc, amb, decls, na, src); d_elide_alloc_arms(ah, amb, decls, na, src) }
+    Expr::Match(sc, ah) => { b1 := d_elide_alloc_expr(sc, amb, rf, decls, na, src); b2 := d_elide_alloc_arms(ah, amb, rf, decls, na, src); if bad == 0 { bad = b1 }; if bad == 0 { bad = b2 } }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
+  bad
 }
 ## #992 — `d_elide_alloc_*` across a match arm list: each arm's statements and its value.
-d_elide_alloc_arms := fn(ah : Option(ptr(mut Arm)), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+d_elide_alloc_arms := fn(ah : Option(ptr(mut Arm)), amb : usize, rf : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
+  mut bad : usize = 0
   mut arm : Option(ptr(mut Arm)) = ah
   loop {
     match arm {
       Some(armq) => {
         am := deref(arm_p(armq))
-        d_elide_alloc_stmts(am.body_stmts, amb, decls, na, src)
+        b1 := d_elide_alloc_stmts(am.body_stmts, amb, rf, decls, na, src)
+        if bad == 0 { bad = b1 }
         ## null-ok: #1069 — Arm.body — an arm with a statement body carries a null value expression (ast.al), as in `d_lift_arms`.
-        if unchecked bitcast(usize, am.body) != 0 { d_elide_alloc_expr(am.body, amb, decls, na, src) }
+        if unchecked bitcast(usize, am.body) != 0 { b2 := d_elide_alloc_expr(am.body, amb, rf, decls, na, src); if bad == 0 { bad = b2 } }
         arm = am.next
       }
       None => { break }
     }
   }
+  bad
 }
-d_elide_alloc_stmts := fn(head : Option(ptr(mut Stmt)), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+d_elide_alloc_stmts := fn(head : Option(ptr(mut Stmt)), amb : usize, rf : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
+  mut bad : usize = 0
   mut st : Option(ptr(mut Stmt)) = head
   loop {
     match st {
       Some(stq) => {
         x := deref(stmt_p(Stmt, stq))
         match x {
-          Stmt::Assign(ns, nl, v, nx) => { d_elide_alloc_expr(v, amb, decls, na, src) }
-          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_elide_alloc_expr(rv, amb, decls, na, src) } }
-          Stmt::ExprStmt(e, nx) => { d_elide_alloc_expr(e, amb, decls, na, src) }
-          Stmt::If(c, th, el, nx) => { d_elide_alloc_expr(c, amb, decls, na, src); d_elide_alloc_stmts(th, amb, decls, na, src); d_elide_alloc_stmts(el, amb, decls, na, src) }
-          Stmt::While(c, b, nx) => { d_elide_alloc_expr(c, amb, decls, na, src); d_elide_alloc_stmts(b, amb, decls, na, src) }
-          Stmt::Loop(b, nx) => { d_elide_alloc_stmts(b, amb, decls, na, src) }
-          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_elide_alloc_expr(lo, amb, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_elide_alloc_expr(hi, amb, decls, na, src) }; d_elide_alloc_stmts(b, amb, decls, na, src) }
-          Stmt::Unchecked(b, nx) => { d_elide_alloc_stmts(b, amb, decls, na, src) }
-          Stmt::AllocWith(ae, b, nx) => { d_elide_alloc_stmts(b, unchecked bitcast(usize, ae), decls, na, src) }
-          Stmt::Match(sc, ah, nx) => { d_elide_alloc_expr(sc, amb, decls, na, src); d_elide_alloc_arms(ah, amb, decls, na, src) }
+          Stmt::Assign(ns, nl, v, nx) => { b1 := d_elide_alloc_expr(v, amb, rf, decls, na, src); if bad == 0 { bad = b1 } }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { b1 := d_elide_alloc_expr(rv, amb, rf, decls, na, src); if bad == 0 { bad = b1 } } }
+          Stmt::ExprStmt(e, nx) => { b1 := d_elide_alloc_expr(e, amb, rf, decls, na, src); if bad == 0 { bad = b1 } }
+          Stmt::If(c, th, el, nx) => { b1 := d_elide_alloc_expr(c, amb, rf, decls, na, src); b2 := d_elide_alloc_stmts(th, amb, rf, decls, na, src); b3 := d_elide_alloc_stmts(el, amb, rf, decls, na, src); if bad == 0 { bad = b1 }; if bad == 0 { bad = b2 }; if bad == 0 { bad = b3 } }
+          Stmt::While(c, b, nx) => { b1 := d_elide_alloc_expr(c, amb, rf, decls, na, src); b2 := d_elide_alloc_stmts(b, amb, rf, decls, na, src); if bad == 0 { bad = b1 }; if bad == 0 { bad = b2 } }
+          Stmt::Loop(b, nx) => { b1 := d_elide_alloc_stmts(b, amb, rf, decls, na, src); if bad == 0 { bad = b1 } }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { b1 := d_elide_alloc_expr(lo, amb, rf, decls, na, src); if bad == 0 { bad = b1 } }; if unchecked bitcast(usize, hi) != 0 { b2 := d_elide_alloc_expr(hi, amb, rf, decls, na, src); if bad == 0 { bad = b2 } }; b3 := d_elide_alloc_stmts(b, amb, rf, decls, na, src); if bad == 0 { bad = b3 } }
+          Stmt::Unchecked(b, nx) => { b1 := d_elide_alloc_stmts(b, amb, rf, decls, na, src); if bad == 0 { bad = b1 } }
+          ## §5.5 step (1): the body of `alloc::with(A) { … }` HAS an ambient, so its elided allocators
+          ## splice as they always did; the fence stays down inside it.
+          Stmt::AllocWith(ae, b, nx) => { b1 := d_elide_alloc_stmts(b, unchecked bitcast(usize, ae), rf, decls, na, src); if bad == 0 { bad = b1 } }
+          Stmt::Match(sc, ah, nx) => { b1 := d_elide_alloc_expr(sc, amb, rf, decls, na, src); b2 := d_elide_alloc_arms(ah, amb, rf, decls, na, src); if bad == 0 { bad = b1 }; if bad == 0 { bad = b2 } }
           Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
             | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
             | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
@@ -2284,6 +2317,7 @@ d_elide_alloc_stmts := fn(head : Option(ptr(mut Stmt)), amb : usize, decls : rt:
       None => { break }
     }
   }
+  bad
 }
 
 ## ---- USER CONVERSIONS on the emit twins (Types §4.6 / TYP-6, #683) ------------------------------
@@ -3069,8 +3103,9 @@ d_desugar_index_ops := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8
 ## the count) for lambdas. Require-typed aliases are not functions, but their inline predicate is an
 ## Expr::Lambda stored in `Decl.value`, so lift that value too. Reads decls the WORKING driver way
 ## (`decl_at` bitcast over `vec_get`).
-d_lift_lambdas := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(mut rt::Arena), src : ptr(u8)) {
+d_lift_lambdas := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
   mut i : usize = 0
+  mut bad : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     ## Most non-function declarations carry a Num(0) placeholder, so this is a no-op for them. A
@@ -3078,12 +3113,19 @@ d_lift_lambdas := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(
     ## the function-only capture pass below.
     d_lift_expr(d.value, d.mod_start, d.mod_len, decls, na, tar)
     if d.is_fn {
-      d_elide_alloc_stmts(d.body_stmts, 0, decls, na, src)
+      ## §5.5 step (2): inside a function that declares its OWN `ptr(mut Arena)` parameter, that
+      ## parameter IS the ambient, so an elided allocator there resolves and the fence stays down —
+      ## #1239 refuses only what no step of §5.5 can fill.
+      mut rf : usize = 1
+      if d_arena_param_idx(decls, i, na, src) >= 0 { rf = 0 }
+      b1 := d_elide_alloc_stmts(d.body_stmts, 0, rf, decls, na, src)
+      if bad == 0 { bad = b1 }
       d_capture_pass(d.body_stmts, d.value, decls, na, d.params_head, src)
       d_lift_stmts(d.body_stmts, d.mod_start, d.mod_len, decls, na, tar)
     }
     i = i + 1
   }
+  bad
 }
 
 ## Compile `src` to a complete runnable x86_64 GAS program in a fresh `StrBuf` allocated
@@ -4660,6 +4702,12 @@ DIAG_SEAM_CMP_GRANT_MARKER : usize = 6902500000000000000
 ## comptime window, so only the seam window's upper bound moves and every other decoded range stays
 ## byte-identical.
 DIAG_SCALAR_FIELD_ACCESS_MARKER : usize = 6903000000000000000
+## Issue #1239 / Functions §5.5 step (4) — the ELIDED-ALLOCATOR-WITH-NO-AMBIENT class. It is raised
+## by THIS file (the elision pass is what resolves an elided allocator), not by `sema`, and sits above
+## the scalar-field-access class and below the comptime window, so only that class's upper bound moves
+## and every other decoded range stays byte-identical. The payload is the CALL's callee offset / 4,
+## like the plain CheckErr encoding.
+DIAG_NO_AMBIENT_ALLOC_MARKER : usize = 6904000000000000000
 ## Issue #221 / Modules §3 — the exact qualified private-constant value path. Keep this class distinct
 ## from the generic located visibility reject and below the comptime range so older codes stay stable.
 DIAG_QUALIFIED_PRIVATE_CONST_MARKER : usize = 6900000000000000000
@@ -4798,7 +4846,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   unapplied_type_fn := code >= DIAG_UNAPPLIED_TYPE_FN_MARKER and code < DIAG_ENUM_FIELD_ACCESS_MARKER
   enum_field_access := code >= DIAG_ENUM_FIELD_ACCESS_MARKER and code < DIAG_SEAM_CMP_GRANT_MARKER
   seam_cmp_grant := code >= DIAG_SEAM_CMP_GRANT_MARKER and code < DIAG_SCALAR_FIELD_ACCESS_MARKER
-  scalar_field_access := code >= DIAG_SCALAR_FIELD_ACCESS_MARKER and code < DIAG_CT_MARKER
+  scalar_field_access := code >= DIAG_SCALAR_FIELD_ACCESS_MARKER and code < DIAG_NO_AMBIENT_ALLOC_MARKER
+  no_ambient_alloc := code >= DIAG_NO_AMBIENT_ALLOC_MARKER and code < DIAG_CT_MARKER
   multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_BRAND_CONVERSION_MARKER
   brand_conv := code >= DIAG_BRAND_CONVERSION_MARKER and code < DIAG_SIGNEDNESS_CONVERSION_MARKER
@@ -4878,6 +4927,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if scalar_field_access {
     raw = code - DIAG_SCALAR_FIELD_ACCESS_MARKER
     span = raw / 4
+  } else if no_ambient_alloc {
+    raw = code - DIAG_NO_AMBIENT_ALLOC_MARKER
+    span = raw / 4
   } else if unresolved_qual_head {
     raw = code - DIAG_UNRESOLVED_QUAL_HEAD_MARKER
     span = raw / DIAG_UNRESOLVED_QUAL_HEAD_SLOT
@@ -4921,7 +4973,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or no_ambient_alloc or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::fd_str(2, "@limits(")
       wk1 := rt::fd_str(2, limit_name(kind))
@@ -4954,6 +5006,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if enum_field_access { wkefa := rt::fd_str(2, "a FIELD ACCESS on an ENUM value: an enum value is a discriminant plus ONE variant's payload and has no fields at all (Types §6.2/§9.4) — reach the payload through `match` and its binding patterns, not through a field name") }
     else if seam_cmp_grant { wscg := rt::fd_str(2, "a COMPARISON between a POINTER and an INTEGER outside `unchecked`: `p == 0` tests a fabricated pointer for null without `Option` (#1030 option B, Memory §4.5) — compare at one type, or spell the crossing inside `unchecked { … }`") }
     else if scalar_field_access { wksfa := rt::fd_str(2, "a FIELD ACCESS on a SCALAR value: `.` selects a struct or union field, a tuple position `.N`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name") }
+    else if no_ambient_alloc { wknaa := rt::fd_str(2, "allocator required: this call omits its allocator parameter and no ambient allocator is in scope — Functions §5.5 fills an elided allocator from the nearest enclosing `alloc::with`, then the enclosing function's own `alloc` parameter, then a §5.1 default, and otherwise it is a compile error (Memory §5.2.1: an allocating site with no resolvable ambient and no default is a compile error, never a hidden heap); an arena in a plain local is NOT ambient — wrap the site in `alloc::with(ar) { … }` or pass the allocator explicitly") }
     else if unapplied_type_fn {
       wkua0 := rt::fd_str(2, "type function `")
       wkua1 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))
@@ -5484,7 +5537,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     k += 1
   }
   if root_k < n { d_manifest_drop_root_decl(decls, rt::vec_get(name_start, root_k), rt::vec_get(name_len, root_k)) }
-  d_lift_lambdas(decls, ptr(na), ptr(tar), base)
+  elidebad := d_lift_lambdas(decls, ptr(na), ptr(tar), base)
   d_desugar_iter_for(decls, ptr(na), base)
   d_desugar_index_ops(decls, ptr(na), base)
   d_manifest_module_decls(pv, name_start, name_len, decls, na, tar, nstr)
@@ -5520,7 +5573,11 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## (§8.6): a per-instance refusal is reported on fd 97, not raised.
   io := lower::mono_insts_opt()
   match io { Some(iv) => { sema::set_insts(iv) }; None => {} }
-  scode := sema::check_program(ptr(decls), base, ptr(na))
+  mut scode := sema::check_program(ptr(decls), base, ptr(na))
+  ## #1239 / Functions §5.5 step (4) — the elision pass found a call whose omitted allocator no step
+  ## of §5.5 can fill. That verdict outranks the type verdict and reaches the SAME located renderer, so
+  ## `build` refuses what `check` refuses with the same message at the same line.
+  if elidebad != 0 { scode = DIAG_NO_AMBIENT_ALLOC_MARKER + elidebad * 4 }
   if scode != 0 { d_sema_reject(scode, base, ptr(ftab), tar) }
   dlc := sema::enforce_declared_limits(ptr(decls), base, ptr(na))
   if dlc != 0 { d_limit_reject(dlc, "a module violates its declared @limits / @export contract", base, ptr(ftab), tar) }
@@ -7740,7 +7797,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   }
   if perr { return 9 }
   if root_k < n { d_manifest_drop_root_decl(decls, rt::vec_get(name_start, root_k), rt::vec_get(name_len, root_k)) }
-  d_lift_lambdas(decls, ptr(na), ptr(tar), base)
+  elidebad := d_lift_lambdas(decls, ptr(na), ptr(tar), base)
   d_desugar_iter_for(decls, ptr(na), base)
   d_desugar_index_ops(decls, ptr(na), base)
   d_manifest_module_decls(pv, name_start, name_len, decls, na, tar, nstr)
@@ -7753,6 +7810,10 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   io := lower::mono_insts_opt()
   match io { Some(iv) => { sema::set_insts(iv) }; None => {} }
   mut r := sema::check_program(ptr(decls), base, ptr(na))
+  ## #1239 / Functions §5.5 step (4) — an elided allocator with no ambient and no default is a
+  ## compile error, never a hidden heap; the elision pass reports the call and it outranks the type
+  ## verdict here exactly as it does on the build path, so both commands agree (Tooling §2.2/FND-11).
+  if elidebad != 0 { r = DIAG_NO_AMBIENT_ALLOC_MARKER + elidebad * 4 }
   ## FND-11 — the LAXER-THAN-CEILING rule, which `check` was missing while `build` enforced it: a file whose
   ## `@limits` list OMITS a ceiling limit declares a weaker contract than the package allows. `check` ran
   ## only `enforce_ceiling` (does the code VIOLATE a restriction), so a module declaring `@limits(no_comptime)`
@@ -7781,7 +7842,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   unapplied_type_fn := r >= DIAG_UNAPPLIED_TYPE_FN_MARKER and r < DIAG_ENUM_FIELD_ACCESS_MARKER
   enum_field_access := r >= DIAG_ENUM_FIELD_ACCESS_MARKER and r < DIAG_SEAM_CMP_GRANT_MARKER
   seam_cmp_grant := r >= DIAG_SEAM_CMP_GRANT_MARKER and r < DIAG_SCALAR_FIELD_ACCESS_MARKER
-  scalar_field_access := r >= DIAG_SCALAR_FIELD_ACCESS_MARKER and r < DIAG_CT_MARKER
+  scalar_field_access := r >= DIAG_SCALAR_FIELD_ACCESS_MARKER and r < DIAG_NO_AMBIENT_ALLOC_MARKER
+  no_ambient_alloc := r >= DIAG_NO_AMBIENT_ALLOC_MARKER and r < DIAG_CT_MARKER
   multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_BRAND_CONVERSION_MARKER
   brand_conv := r >= DIAG_BRAND_CONVERSION_MARKER and r < DIAG_SIGNEDNESS_CONVERSION_MARKER
@@ -7861,6 +7923,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if scalar_field_access {
     raw = r - DIAG_SCALAR_FIELD_ACCESS_MARKER
     span = raw / 4
+  } else if no_ambient_alloc {
+    raw = r - DIAG_NO_AMBIENT_ALLOC_MARKER
+    span = raw / 4
   } else if unresolved_qual_head {
     raw = r - DIAG_UNRESOLVED_QUAL_HEAD_MARKER
     span = raw / DIAG_UNRESOLVED_QUAL_HEAD_SLOT
@@ -7905,7 +7970,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or no_ambient_alloc or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::fd_str(2, "duplicate linker symbol") }
       else {
@@ -7941,6 +8006,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if enum_field_access { dwkefa := rt::fd_str(2, "a FIELD ACCESS on an ENUM value: an enum value is a discriminant plus ONE variant's payload and has no fields at all (Types §6.2/§9.4) — reach the payload through `match` and its binding patterns, not through a field name") }
     else if seam_cmp_grant { dwscg := rt::fd_str(2, "a COMPARISON between a POINTER and an INTEGER outside `unchecked`: `p == 0` tests a fabricated pointer for null without `Option` (#1030 option B, Memory §4.5) — compare at one type, or spell the crossing inside `unchecked { … }`") }
     else if scalar_field_access { dwksfa := rt::fd_str(2, "a FIELD ACCESS on a SCALAR value: `.` selects a struct or union field, a tuple position `.N`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name") }
+    else if no_ambient_alloc { dwknaa := rt::fd_str(2, "allocator required: this call omits its allocator parameter and no ambient allocator is in scope — Functions §5.5 fills an elided allocator from the nearest enclosing `alloc::with`, then the enclosing function's own `alloc` parameter, then a §5.1 default, and otherwise it is a compile error (Memory §5.2.1: an allocating site with no resolvable ambient and no default is a compile error, never a hidden heap); an arena in a plain local is NOT ambient — wrap the site in `alloc::with(ar) { … }` or pass the allocator explicitly") }
     else if unapplied_type_fn {
       dwkua0 := rt::fd_str(2, "type function `")
       dwkua1 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))
