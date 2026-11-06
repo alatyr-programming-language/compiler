@@ -11054,6 +11054,15 @@ run issue1254_deque_subword_call_deref 42
 ## #1254 — `push_front`, `pop_front` and `pop_back` at a sub-word element: `slot := dq_elem(T, …)` then
 ## `deref(slot) = x` / `v := deref(slot)` moved 8 bytes. NON-VACUOUS: on the parent `c4e20937` (x86_64) it exits 10.
 run issue1254_deque_subword_slot 42
+## #1239 / Functions §5.5 step (4) — a call that ELIDES its allocator parameter with NO ambient in
+## scope is a compile error, never a silent drop of the argument: the arena in the plain local `ar` is
+## not one of §5.5's three sources, and the call was emitted one argument short — `run` of exactly this
+## program SIGSEGV'd (rc 139) with the allocator register holding whatever the caller left there.
+## NON-VACUOUS: on `aab6ce1a` `check` exits 0 with no diagnostic at all.
+check_build_located issue1239_elided_alloc_no_ambient 24 "allocator required"
+## The control: the fence refuses only what §5.5 cannot fill. An explicit allocator argument never asks
+## §5.5, and `alloc::with(ar) { … }` is step (1) — both still build, run and sum to 42.
+run issue1239_elided_alloc_with_scope_ok 42
 run deref_view_pointee 42
 ## Types §7 — a `[T]`/`str` view IS its two-word {ptr,len} pair wherever it appears. A view ARGUMENT that is
 ## not a plain local (a struct FIELD at any depth, a `sub(…)`/range sub-view, a `[str;N]` element, a str field
