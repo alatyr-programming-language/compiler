@@ -2572,7 +2572,11 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
   mut r := Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)
   if tl == 0 { return r }
   w := str_at((src + ts), tl)
-  if w == "u64" or w == "usize" or w == "i64" or w == "i32" or w == "u32" or w == "u8" or w == "isize" {
+  ## Issue #1283 - the COMPLETE kernel integer interpretation set (Types §3). `i8`, `u16` and `i16`
+  ## were missing, so `v : i8` resolved UNKNOWN: the binding recorded no type name (15035 below), a
+  ## later `v = 200` had no range to be judged against, and the place silently held 200. The list is
+  ## one decision about what a kernel integer is, and it was simply incomplete.
+  if w == "u64" or w == "usize" or w == "i64" or w == "i32" or w == "u32" or w == "u16" or w == "u8" or w == "i16" or w == "i8" or w == "isize" {
     r = Ty(kind = TyKind.TyInt, ns = ts, nl = tl)
     return r
   }
@@ -12090,6 +12094,18 @@ ann_lit_range_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) ->
   num_lit_out_of_range(str_at((src + ts), tl), expr_num_lit_val(e))
 }
 
+## Is the place's declared integer type a SUB-NATIVE width (`u8`/`i8`/`u16`/`i16`/`u32`/`i32`)? The
+## comptime arithmetic judgement is applied at an assignment place ONLY here, and #1268's control
+## `s.f = 5 - 6` at `f : u64` stays a RUN-TIME trap (Concurrency §6.1, 132 / 133 / 133 / 134): at a
+## native width the machine's own checked guard exists and fails there, so the store keeps its pinned
+## behaviour. At a sub-word width the 64-bit word never overflows - `200 + 100` carries no flag - and
+## the truncating store silently delivered 44, so the compile-time judgement is the only gate.
+ct_place_is_narrow := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  if tl == 0 { return false }
+  bn := base_type_name(src, ts, tl)
+  ct_width(str_at((src + bn.s), bn.n)) < 64
+}
+
 ## TYP-13 (Types §9.1/§9.2) — float spelling is semantic.  Do not let an integral
 ## value such as `1.0` take an integer annotation's type merely because the value happens
 ## to have no fractional part.  This is deliberately a separate predicate rather than a
@@ -14811,6 +14827,21 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
           ## type is where this sink's declared identity lives.
           rbe := sema_brand_sink_err(xt, v, sema_brand_span(s_of(v, a), ns), decls, upto, src, locals, cnt, a)
           if rbe != 0 { mark_failed(locals, rbe) }
+          ## Issue #1283 - Types §9.1 / Declarations §3.4: the TARGET PLACE is a literal's context, so
+          ## a `=` re-assignment is judged for representability exactly as the annotated binding below
+          ## already is. `raw.ty.ns`/`raw.ty.nl` is that place's declared type NAME - the width
+          ## `xt.kind` collapsed away. Before this hook `x = 300` and `x = 200 + 100` at `x : u8` were
+          ## accepted and the place then held 300 / 44, a value its type cannot hold (I11: the silent
+          ## wrap §9.1 forbids), while `x : u8 = 300` was refused. Two judges, both already the
+          ## binding sink's: `ann_lit_range_bad` for a bare literal, `ct_guard_err` for the comptime
+          ## arithmetic whose narrow overflow the initializer form already reports.
+          if kind_is_int(xt.kind) {
+            if ann_lit_range_bad(src, raw.ty.ns, raw.ty.nl, v) { mark_failed(locals, mismatch_err(ns, 0)) }
+            if ct_place_is_narrow(src, raw.ty.ns, raw.ty.nl) {
+              rge := ct_guard_err(src, raw.ty.ns, raw.ty.nl, v, ns, decls, upto)
+              if rge != 0 { mark_failed(locals, rge) }
+            }
+          }
         } else {
           mut bad_decl := false
           if ann.n != 0 { ptrint_probe_site("BIND", "annbind", true, tv.kind, dt.kind, ns, src) }
@@ -15156,6 +15187,18 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
           if ftsp0.n != 0 {
             ft0 := resolve_ty(src, ftsp0.s, ftsp0.n, decls, upto)
             if sema_direct_place_value_bad(ft0, cv, fv, src, locals, cnt, "FIELD-STORE", bns) { mark_failed(locals, mismatch_err(bns, 0)) }
+            ## Issue #1283 - the field is a target place of Types §9.1 / Declarations §3.4, so
+            ## `s.f = 300` at `f : u8` is the same compile error `a : u8 = 300` already was, and
+            ## `s.f = 200 + 100` the comptime guard failure the initializer form gives. Both were
+            ## accepted here and the field held 44. `ftsp0` is the field's declared type span, already
+            ## resolved above for the TYP-6 conformance check - no second recovery of the same fact.
+            if kind_is_int(ft0.kind) {
+              if ann_lit_range_bad(src, ftsp0.s, ftsp0.n, fv) { mark_failed(locals, mismatch_err(bns, 0)) }
+              if ct_place_is_narrow(src, ftsp0.s, ftsp0.n) {
+                fge := ct_guard_err(src, ftsp0.s, ftsp0.n, fv, bns, decls, upto)
+                if fge != 0 { mark_failed(locals, fge) }
+              }
+            }
             ## Issue #299 census hook — the struct-FIELD STORE sink, `s.x = b`. The field's declared
             ## type is already resolved directly above for the TYP-6 conformance check, so this sink
             ## needs no new type recovery: it is the same `dst` the annotated binding gets, reached
