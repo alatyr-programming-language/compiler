@@ -9092,6 +9092,13 @@ run_x86 deref_field_byref_param 42
 run_x86 deref_ptrfield_write 42
 ## §4: `deref(p) = E.V(scalar payloads)` stores disc + payloads (was a silent 1-garbage-word store).
 run_x86 deref_assign_enum_lit 42
+## #1237 — `deref(p) = f()` where `f` returns a multi-word aggregate in the return registers. The
+## source is neither an aggregate LITERAL nor an aggregate VAR, so it fell to the scalar store and kept
+## only word 0: the struct program answered 40 for 42 (`q.b` never written) and the enum program 9 for
+## 42 (the discriminant only, so the previous `E.B(9)` payload was read back as variant `A`). Now all
+## words are staged and copied whole to the pointee. x86-only (the mmap syscall number is x86-specific).
+run_x86 deref_assign_struct_call 42
+run_x86 deref_assign_enum_call 42
 # Checked div-by-zero traps on ALL backends (I11/CG-7): plain `run` so x86 asserts the exact
 # SIGFPE exit (136) AND the a64/rv64/wasm sweeps assert a TRAP (exit >= 128), not a silent
 # wrong low exit. `unchecked_div_zero` (aarch64-only, below) proves the guard is scoped away.
