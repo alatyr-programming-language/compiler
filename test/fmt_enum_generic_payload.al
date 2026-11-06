@@ -31,3 +31,4 @@ main := fn() -> u64 {
   if get(E.Z) != 0 { return 105 }
   42
 }
+## expect(x86_64): run 42

@@ -8,3 +8,4 @@ wr := @abi(syscall) fn(num : usize, fd : usize, buf : usize, len : usize) -> isi
 main := fn() -> u64 {
   return 40 + 2
 }
+## expect(x86_64): run 42

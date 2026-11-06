@@ -56,3 +56,4 @@ main := fn() -> u64 {
   r8 := id(ops[1](14, 4))
   return r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8
 }
+## expect(x86_64): run 80

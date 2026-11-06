@@ -16,3 +16,4 @@ main := fn() -> u64 {
   if align(t) != 8 { return 7 }
   42
 }
+## expect(x86_64): run 42

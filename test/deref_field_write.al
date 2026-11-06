@@ -17,3 +17,4 @@ main := fn() -> u64 {
   setab(ptr(mut r))
   u64(r.a + r.b)
 }
+## expect(x86_64): run 42

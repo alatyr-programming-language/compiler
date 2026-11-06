@@ -13,3 +13,4 @@ classify := fn(s : str) -> u64 {
 main := fn() -> u64 {
   return classify("yes") + 41
 }
+## expect(x86_64): run 42

@@ -13,3 +13,4 @@ main := fn() -> u64 {
   if which == E.One { return local + 0 }
   return 0
 }
+## expect: run 42

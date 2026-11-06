@@ -28,3 +28,4 @@ main := fn() -> u64 {
   c := Celsius(22)
   return consumer() + c.deg
 }
+## expect(x86_64): run 42

@@ -44,3 +44,4 @@ main := fn() -> u64 {
   if p.c != 3 { return 12 }
   return 42
 }
+## expect: run 42

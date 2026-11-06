@@ -47,3 +47,4 @@ main := fn() -> u64 {
   sa := SA(v = ys[0..4], n = 5)
   return xs[0].b.c.cx + xs[1].arr[1] + xs[0].arr[0] + xs[1].b.c.cy + t.ps[0].x + t.ps[1].y + u64(sa.v.len) + sa.n
 }
+## expect(x86_64): run 79

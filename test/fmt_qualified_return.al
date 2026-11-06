@@ -18,3 +18,4 @@ main := fn() -> u64 {
   mut sb := make_buffer(ptr(ar))
   return tail() + 2
 }
+## expect(x86_64): run 42

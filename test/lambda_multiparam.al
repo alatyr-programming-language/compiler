@@ -10,3 +10,4 @@ main := fn() -> u64 {
   f3 := fn(a : u64, b : u64, c : u64) -> u64 { return a + b + c }
   return f2(20, 2) + f3(10, 6, 4)
 }
+## expect: run 42

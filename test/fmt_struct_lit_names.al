@@ -27,3 +27,4 @@ main := fn() -> u64 {
   if e.c != 1 { return 7 }
   return p.x + p.y + e.b + d.b + e.c + d.a
 }
+## expect(x86_64): run 42

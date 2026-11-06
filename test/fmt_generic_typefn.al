@@ -24,3 +24,4 @@ main := fn() -> u64 {
     R(y) => { return y + 30 }
   }
 }
+## expect(x86_64): run 42

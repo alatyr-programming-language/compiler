@@ -44,3 +44,4 @@ main := fn() -> u64 {
   if cnt((u64, u64)) != 2 { return 10 }
   42
 }
+## expect(x86_64): run 42

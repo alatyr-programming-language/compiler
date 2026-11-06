@@ -38,3 +38,4 @@ main := fn() -> u64 {
   if small_call_value != 3 { return 6 }
   42
 }
+## expect(x86_64): run 42

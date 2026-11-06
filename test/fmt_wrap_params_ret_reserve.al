@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if s != 255 { return 100 }
   return 42
 }
+## expect: run 42

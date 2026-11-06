@@ -18,3 +18,4 @@ main := fn() -> u64 {
   if size(Ov) != 4 { return 3 }
   return 42
 }
+## expect: run 42
