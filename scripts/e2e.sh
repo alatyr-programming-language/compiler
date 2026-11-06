@@ -12875,7 +12875,16 @@ _e2e_completeness_check() { # executed, selected, lost, recorded, filter
 if [ -n "$FILTER" ]; then
   echo "=== e2e: FILTERED run (ALATYR_E2E_FILTER='$FILTER') — this is NOT the gate ==="
 fi
+# The self-test resets the global `fail` on its way out (`:12543`, `:12641`, `:12722`, `:12734`,
+# `:12772`) and it runs at top level, so every guard that fired BEFORE it was erased: the suite
+# printed `*** e2e: all green ***` and exited 0 over its own `FAIL` lines (#1449). Four guards were
+# toothless this way, the vacuous-needle check of #1126 S2 among them — which is how #1444 landed
+# carrying a needle that cannot fail while three consecutive gates named it on the console. A self-test
+# reports its own health through its exit code (`|| exit 1`); it has no business resetting the verdict
+# of the run that hosts it. Same isolation the re-observation ledger right below already gets.
+_suite_fail="$fail"
 _e2e_selftest || exit 1
+fail="$_suite_fail"
 ## The self-test's own probes deliberately breach the ceiling (rows 5 and 5b), so the re-observation
 ## ledger starts empty for the SUITE. Otherwise every run would report two breaches it manufactured.
 : > "$WORK/runtime-reobserved"
