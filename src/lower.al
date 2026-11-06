@@ -6362,6 +6362,19 @@ arr_elem_info := fn(ehead : Option(ptr(mut Arg)), src : ptr(u8), decls : ptr(rt:
   res
 }
 
+## The WORD COUNT a fixed-array block occupies: `nel * stride` element words, except a tuple-byte
+## element (`eek 12`), which packs the whole array into `stride` words, and a byte element
+## (`is_byte_array_eek`), which packs `nel` bytes into `(nel + 7) / 8` words. THE one answer, lifted
+## out of `bind_array_slot` so the RESERVATION of a block and the whole-value COPY of that same block
+## are the same number and cannot disagree (#937 — the copy moved one word because nothing had to agree
+## with the reservation).
+fixed_arr_block_words := fn(nel : usize, eek : u8, stride : usize) -> usize {
+  mut nw := nel * stride
+  if eek == 12 { nw = stride }
+  if is_byte_array_eek(eek) { nw = (nel + 7) / 8 }
+  nw
+}
+
 ## Bind an ARRAY local: the base name takes slot `off` (ek = 5) and `nel` element words occupy
 ## slots `off .. off+nel` contiguously — `nel` anonymous filler slots are reserved after the
 ## base so no later local overlaps the element words. (Element 0 shares the base slot `off`;
@@ -6392,9 +6405,7 @@ bind_array_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, 
   ## §4 UP-GROWING: reserve nel*stride element FILLER words FIRST (below the base), then the base name
   ## at the TOP (see bind_struct_slot). Element `i` word `j` is then at slot `off - (i*stride + j)`;
   ## `agg_arr_fill_count` scans these anonymous fillers BACKWARD from the base.
-  mut nw := nel * el.stride
-  if el.eek == 12 { nw = el.stride }
-  if is_byte_array_eek(el.eek) { nw = (nel + 7) / 8 }
+  nw := fixed_arr_block_words(nel, el.eek, el.stride)
   for i in 0..nw {
     fo := svec_len(ptr(slots))
     svec_push(slots, SlotEntry(ns = 0, nl = 0, off = fo, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
@@ -6486,8 +6497,16 @@ str_elem_slot := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> b
 fixed_arr_len := fn(base : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> i64 {
   bv := var_name_span(base)
   if bv.n == 0 { return -1 }
-  if slot_of(slots, src, bv.s, bv.n) < 0 { return -1 }
-  si := entry_of(slots, src, bv.s, bv.n)
+  fixed_arr_len_of(slots, src, bv.s, bv.n)
+}
+
+## `fixed_arr_len` over a NAME rather than an expression — the same answer, so the binder and the
+## emitter can ask it of a place they only have a name span for (the destination of `ys = xs`, which
+## carries no annotation). Byte-identical to the `Var` form: every check is the one `fixed_arr_len`
+## already makes, in the same order.
+fixed_arr_len_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  if slot_of(slots, src, s, n) < 0 { return -1 }
+  si := entry_of(slots, src, s, n)
   ent := deref(svec_at(SlotEntry, slots, si))
   if ent.ek != 5 { return -1 }
   if ent.is_ref { return -1 }
@@ -6537,6 +6556,42 @@ fixed_arr_field_len := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> i6
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
+}
+
+## Is `[ns, ns+nl)` a local DECLARED `[T; N]` being bound from `v`, where `v` is a `Var` whose slot is
+## a fixed-array LOCAL (`ek == 5`, not `is_ref`) holding the SAME element count? That is the whole-value
+## array copy `ys : [T; N] = xs`, and its reassignment form `ys = xs`. Returns `N` (> 0) for exactly
+## that shape and -1 for anything else. #937.
+##
+## Types §6.4 lays `[T; N]` out as `N` contiguous elements, and Memory §5.9 makes an assignment copy the
+## bits — "an aggregate is copied byte-for-byte by a documented rule (its cost is therefore visible, I1)".
+## So the copy moves the WHOLE `N`-element block. Before this, no binder reserved `ys` as an array and
+## no emitter copied one: `ys` took ONE scalar word, its element addresses ran up into `xs`'s own block,
+## and `ys[i]` answered `xs[i-1]` — MEASURED on x86_64, `ys[1] + ys[2]` over `[5,7,9]` gave 12 where the
+## spec owes 16, and `ys[1]` after `xs[1] = 1` still gave 5 where the copy must not alias. A SILENT
+## WRONG VALUE (I11); aarch64 and riscv64 answered 16 already, so the backends disagreed on one source.
+##
+## `ats`/`atn` is the local's DECLARED annotation span, supplied by the caller (`local_type_span` lives
+## in `ast`, and both callers already bind it) so ONE predicate answers for the binder and the emitter
+## alike — rule "one decision, one place". The annotation is what makes it a fixed array; the source
+## slot supplies the element kind and stride, which Types §4.1 makes identical for two `[T; N]` of the
+## same `T`. A count mismatch answers -1, leaving that program on the path it has today rather than
+## inventing a truncation the spec has not decided (that question belongs to sema, not here).
+fixed_arr_copy_len := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize, ats : usize, atn : usize) -> i64 {
+  bv := var_name_span(v)
+  if bv.n == 0 { return -1 }
+  if slot_of(slots, src, bv.s, bv.n) < 0 { return -1 }
+  sent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, bv.s, bv.n)))
+  if not lower_ctx::streq(src, sent.ns, sent.nl, bv.s, bv.n) { return -1 }
+  sn := fixed_arr_len_of(slots, src, bv.s, bv.n)
+  if sn <= 0 { return -1 }
+  ## The destination's `N`: its DECLARED `[T; N]` annotation at a binding; else — a reassignment
+  ## `ys = xs` carries no annotation — its OWN array slot, which `collect_slots` already reserved.
+  mut dn := i64(0)
+  if atn != 0 and bytes(str_at((src + ats), 1))[0] == 91 { dn = i64(parse_arr_len(src, ats, atn)) }
+  if dn == 0 { dn = fixed_arr_len_of(slots, src, ns, nl) }
+  if dn <= 0 or dn != sn { return -1 }
+  dn
 }
 
 ## The ELEMENT TYPE span of an array type `[T; N]` — the text between `[` and `;` (or `]`), trimmed of
