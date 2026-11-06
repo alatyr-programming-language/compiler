@@ -6234,9 +6234,12 @@ for_iter_str_elem := fn(it : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
       bv.n != 0 and str_elem_slot(slots, src, bv.s, bv.n)
     }
     Expr::Call => {
-      ## bound before `.eek` is read: a field read straight off this call reads the wrong field
-      ## (`SliceRetInfo` has `bool`/`u8` fields), in the seed and the tree alike (#1228,
-      ## `scripts/seed_forms.tsv` row `call_field_subword`).
+      ## Bound before `.eek` is read. It used to be REQUIRED: a field read straight off this call
+      ## read the wrong word (`SliceRetInfo` has `bool`/`u8` fields) — #1228, the
+      ## `call_field_subword` row of `scripts/seed_forms.tsv`. Seed 0.2.22 zero-extends every
+      ## sub-word field read, so the seed now answers this form itself (24) and the row is
+      ## retired with it. The binding stays: it costs nothing, and the direct
+      ## `slice_ret_elem(…).eek` spelling is a separate cleanup with its own gate.
       sri := slice_ret_elem(it, decls, src, a, gps, gpl, its, itl, gps2, gpl2, its2, itl2)
       sri.eek == 4
     }
