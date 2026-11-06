@@ -178,6 +178,10 @@ fail=0
 # Logs live in this checkout's own target/, never a fixed /tmp path: every worktree runs this script, and a
 # shared path means two lanes silently overwrite each other's evidence (and then read the other's).
 LOGDIR="$ROOT/target"; mkdir -p "$LOGDIR"
+# When this run began. A conditional stage (a sweep that did not run) leaves its log from an
+# earlier run in target/, so the attribution at the end must ask which logs are THIS run's —
+# otherwise a stale log is blamed for a red gate it never took part in (#1447).
+gate_started_epoch=$(date +%s)
 FP_LOG="$LOGDIR/full_fp.log"; E2E_LOG="$LOGDIR/full_e2e.log"; CM_LOG="$LOGDIR/full_corpus_manifest.log"
 
 # The INPUT-SET check, and it runs FIRST on purpose. Every stage below enumerates its input either
@@ -886,6 +890,22 @@ fi
 
 if [ "$fail" != 0 ]; then
   echo "*** FULL GATE: FAILURES ***"
+  # Name the stage. `fail=1` is set at ~60 sites here and most print only a parenthetical note,
+  # so a red gate was undiagnosable from its own log: five PRs were refused overnight on one base
+  # with every echoed stage clean and no cause named (#1447). The evidence already exists — each
+  # stage writes $LOGDIR/full_<stage>.log. Scan THIS run's logs and print the first offending line
+  # of each. A line beginning `ok` is a planted negative test reporting itself, so it stays out.
+  echo "  stages that failed (from the per-stage logs of this run):"
+  found=0
+  while IFS= read -r slog; do
+    [ -n "$slog" ] || continue
+    off=$(grep -E '^(  FAIL|FAIL|GATE: FAIL|DIFFER|Terminated)|WRONG=[1-9]|failed=[1-9]|exited [1-9]' "$slog" 2>/dev/null | grep -vE '^[[:space:]]*ok[[:space:]]' | head -1)
+    [ -n "$off" ] || continue
+    printf '    %-28s %s\n' "$(basename "$slog" .log)" "${off:0:150}"
+    found=$((found + 1))
+  done < <(find "$LOGDIR" -maxdepth 1 -name 'full_*.log' -newermt "@$gate_started_epoch" 2>/dev/null | sort)
+  [ "$found" = 0 ] && echo "    NO per-stage log carries a failure line — the cause is in this script's"
+  [ "$found" = 0 ] && echo "    own output above, or a stage wrote no log at all."
 elif [ "$sw_status" = "RAN" ]; then
   echo "*** FULL GATE: GREEN (sweeps RAN) ***"
   echo "    corpus enum:     $ce_cover"
