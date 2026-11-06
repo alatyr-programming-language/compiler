@@ -8078,9 +8078,12 @@ fmt_test_has fmt_gen_enum 42 "(T)"
 fmt_test fmt_array 42
 fmt_test fmt_comments 42
 ## #1178: a comment after the LAST top-level declaration was deleted by `fmt` (Tooling §4.3.4 says
-## comments are preserved verbatim). `fmt_test` already compares the `##` COUNT of source vs output;
-## the needle names the tail itself, so a regression points at the deleted text and not just a number.
-fmt_test_has fmt_trailing_comment 42 "And one more after a blank line"
+## comments are preserved verbatim). `fmt_test` already compares the `##` COUNT of source vs output,
+## and that is the assertion: before the fix it reports `comments N want M`. The needle this row used
+## to carry was taken from the fixture's own `##` comment, so it could never fail — e2e.sh's own
+## vacuous-needle guard names that and refuses it. `fmt_test_has` is `fmt_test` plus the grep, so
+## dropping the grep loses no coverage (#1444, found by that guard).
+fmt_test fmt_trailing_comment 42
 fmt_test fmt_comptime 42
 fmt_test comptime_if 42
 fmt_test fmt_comptime_match 42
