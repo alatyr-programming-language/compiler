@@ -295,7 +295,7 @@ scalar_field_access_err := fn(s : usize) -> CheckErr { SCALAR_FIELD_ACCESS_DIAG_
 ## `g := f` `return g.a` compiled at rc 0 and answered a fabricated `0`. Placed above
 ## SCALAR_FIELD_ACCESS_DIAG_MARKER and below the CT window, so only the scalar window's upper bound moves
 ## and every other decoded CheckErr range stays byte-identical.
-FNVAL_FIELD_ACCESS_DIAG_MARKER : usize = 6903500000000000000
+FNVAL_FIELD_ACCESS_DIAG_MARKER : usize = 6904500000000000000
 fnval_field_access_err := fn(s : usize) -> CheckErr { FNVAL_FIELD_ACCESS_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.

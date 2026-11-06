@@ -4665,7 +4665,7 @@ DIAG_SCALAR_FIELD_ACCESS_MARKER : usize = 6903000000000000000
 ## window, so only the scalar window's upper bound moves and every other decoded range stays
 ## byte-identical. As with the scalar class, the window is NOT optional: without it the new code decodes
 ## as `scalar_field_access` and reports a scalar with an offset invented by subtracting the wrong marker.
-DIAG_FNVAL_FIELD_ACCESS_MARKER : usize = 6903500000000000000
+DIAG_FNVAL_FIELD_ACCESS_MARKER : usize = 6904500000000000000
 ## Issue #221 / Modules §3 — the exact qualified private-constant value path. Keep this class distinct
 ## from the generic located visibility reject and below the comptime range so older codes stay stable.
 DIAG_QUALIFIED_PRIVATE_CONST_MARKER : usize = 6900000000000000000
