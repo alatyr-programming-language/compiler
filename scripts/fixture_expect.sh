@@ -57,11 +57,16 @@
 # exit, different stderr hash, on all four backends). The generator holds them until S3 retires that
 # hash, and it never touches a file whose last byte is not a newline, so the edit only appends.
 #
-# The end has a second cost. `alatyr fmt` deletes every comment after the last declaration (#1178,
+# The end had a second cost. `alatyr fmt` deleted every comment after the last declaration (#1178,
 # against Tooling §4.3.4), and the formatter rows (FMT_TRAILING_HOLD) count the `##` lines before and
-# after `fmt`. That count is right — the line is a comment and the formatter must keep it — so the
-# generator holds every fixture a formatter row counts (measured: 99 rows went red at 0330b70, gate run
-# 41021299879) until #1178 is fixed, rather than exempting the directive from the count.
+# after `fmt`. That count is right — the line is a comment and the formatter must keep it — so rather
+# than exempting the directive from the count, the generator held every fixture a formatter row counts
+# (measured: 99 rows went red at 0330b70, gate run 41021299879) until #1178 was fixed.
+# THE HOLD IS NOW LIFTED: #1178 was fixed by #1444 and landed at d13a1a98. Measured on that revision
+# with the compiler the gate built from it, all 97 fixtures the hold covered keep every `##` line
+# through `alatyr fmt` (97 ok, 0 bad, 0 missing — `grep -c '##'` of source vs output). The mechanism
+# stays, empty by default and settable through the environment, so a regression of #1178 re-holds the
+# same set with one variable and the self-test below keeps proving the machinery works.
 #
 # On one backend, the registration's expectation is the fold of its `*` claims when it has any (the
 # four-backend claim), else of that backend's own claims. `accept` is absorbed by a run/trap/reject
@@ -145,8 +150,13 @@ EXCERPT_HOLD="reject_call_call_callee reject_call_index_callee reject_float_expo
   reject_int_lit_line_after_ambient reject_int_lit_upper_prefix reject_trunc_arrow_no_ret_type
   reject_trunc_bind_no_value reject_trunc_fn_params_body string_xhh_invalid
   str_literal_elem_assign_reject value_expr_assign_call_reject value_expr_assign_view_byte_reject"
-## the formatter verbs that count `##` lines (scripts/e2e.sh fmt_test, fmt_check): held for #1178
-FMT_TRAILING_HOLD="fmt_test fmt_test_has fmt_test_has_all fmt_check"
+## the formatter verbs that count `##` lines (scripts/e2e.sh fmt_test, fmt_check). HELD NOTHING since
+## #1178 was fixed (#1444, landed d13a1a98): the hold existed only because `fmt` deleted a comment
+## after the last declaration, and all 97 fixtures it covered now keep every `##` line (measured at
+## that revision, 97 ok / 0 bad). Empty by default; `FMT_TRAILING_HOLD="fmt_test fmt_test_has
+## fmt_test_has_all fmt_check"` re-holds the set if #1178 ever regresses, and --self-test sets exactly
+## that to keep the mechanism proven.
+FMT_TRAILING_HOLD="${FMT_TRAILING_HOLD-}"
 
 ## ---- registrations ----------------------------------------------------------------------------------
 ## e2e_rows -> the recorded table, one `printf %q` row per line.
@@ -588,6 +598,10 @@ issues_open() { # table [states]
 
 self_test() {
   local d rc=0 got nchk=0
+  ## The real corpus holds NOTHING here (#1178 is fixed, see the header), so the self-test sets the
+  ## hold itself: `fmtcount` and `fmtd` below are held back by it, and without this line the review
+  ## assertions would stop proving the mechanism while the code still had it.
+  local FMT_TRAILING_HOLD="fmt_test fmt_test_has fmt_test_has_all fmt_check"
   mkdir -p "$ROOT/target" && d="$(mktemp -d "$ROOT/target/fixture-expect-selftest.XXXXXX")" || return 2
   chk() { nchk=$((nchk + 1)); if [ "$2" = "$3" ]; then echo "  ok   $1"; else echo "  FAIL $1 — got [$2], want [$3]"; rc=1; fi; }
   mkdir -p "$d/t"
