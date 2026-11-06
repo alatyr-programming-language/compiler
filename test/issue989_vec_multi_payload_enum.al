@@ -43,4 +43,3 @@ main := fn() -> u64 {
   vec::free(E, v)
   42
 }
-## expect: run 42

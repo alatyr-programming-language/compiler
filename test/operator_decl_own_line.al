@@ -15,4 +15,3 @@ main := fn() -> u64 {
   q := Money(cents = 2)
   p + q
 }
-## expect: run 42

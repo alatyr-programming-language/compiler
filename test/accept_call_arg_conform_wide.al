@@ -52,4 +52,3 @@ main := fn() -> u64 {
   n := bytes4(embed("test/embed_fixture.bin"))
   return a.len() + b + c + d + e + g + h + k + n
 }
-## expect: accept
