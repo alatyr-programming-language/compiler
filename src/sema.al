@@ -288,6 +288,12 @@ enum_field_access_err := fn(s : usize) -> CheckErr { ENUM_FIELD_ACCESS_DIAG_MARK
 ## moves and every other decoded CheckErr range stays byte-identical.
 SCALAR_FIELD_ACCESS_DIAG_MARKER : usize = 6903000000000000000
 scalar_field_access_err := fn(s : usize) -> CheckErr { SCALAR_FIELD_ACCESS_DIAG_MARKER + diag_span(s) * 4 }
+## Issue #926 / Declarations §7.1 — a CYCLE among comptime initializers (`A := A + 1`, or a mutual
+## pair). Placed above SCALAR_FIELD_ACCESS_DIAG_MARKER and below FNVAL_FIELD_ACCESS_DIAG_MARKER (the integrator-allocated range chain), so only the scalar
+## window's upper bound moves and every other decoded CheckErr range stays byte-identical. The span is
+## the DECLARATION's name, which is where the author must break the cycle.
+CONST_CYCLE_DIAG_MARKER : usize = 6903500000000000000
+const_cycle_err := fn(s : usize) -> CheckErr { CONST_CYCLE_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #1464 / Functions §1.5 + Modules §2 — a FIELD ACCESS whose OWNER is a FUNCTION VALUE
 ## (`sema_fnval_owner_field_err`). A function value is one machine word, a CODE ADDRESS (Functions §1.5);
 ## it has no field, and `.N` is a tuple position (Types §6.1), so neither `g.a` nor `g.0` names anything.
@@ -7356,6 +7362,108 @@ sema_global_init_call_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -
   if local_is_mut(src, d.name_start) { return false }
   if unchecked bitcast(usize, d.value) == 0 { return false }
   sema_call_returns_aggregate(d.value, decls, src)
+}
+
+## Declarations §7.1 — a **cycle** among comptime initializers is a compile error. A module-level data
+## binding whose initializer reaches its OWN name, directly or through other module-level const
+## initializers, has no dependency order to be evaluated in. `lower::global_init_value` chases such a
+## name UNBOUNDED and exhausts the stack: `A := A + 1`, `A : u64 = A + 1` and the mutual pair
+## `A := B + 1` / `B := A + 1` each exit 139 with no diagnostic on `58a80376` (measured, omen), while
+## `check` answers rc 0. `check` refuses the declaration here, before any backend can emit it.
+##
+## The chase is bounded by `SEMA_CONST_CYCLE_DEPTH` and answers NOT-A-CYCLE at the bound: a refusal
+## must be CERTAIN, and §7.1 explicitly allows an initializer to reference another binding's comptime
+## value, so a deep-but-finite chain is legal. Every cycle contains the binding it is checked from, so
+## the bound misses only cycles LONGER than it — a residual, stated, not a silent pass.
+SEMA_CONST_CYCLE_DEPTH : i64 = 8
+
+## The initializer of the module-level CONST data binding named `[s, s+n)` — the comptime value a
+## reference to that name is folded into. A `mut` global is excluded (its `.data` is runtime storage,
+## not a comptime value), as are functions, types and every other declaration kind. `None` means no
+## such const: the name is a local, a parameter, a function, or unbound.
+sema_const_init_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> Option(ptr(Expr)) {
+  mut r : Option(ptr(Expr)) = Option.None
+  cnt := rt::vec_len(deref(decls))
+  th := sema_name_hash(src, s, n)
+  mut jc := sni_lo(cnt, th)
+  jce := sni_hi(cnt, th)
+  while jc < jce {
+    i := sni_at(cnt, jc)
+    jc = jc + 1
+    if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
+      d := deref(decl_get(decls, i))
+      if d.kind == 0 and not d.is_fn and d.arity == 0 and not local_is_mut(src, d.name_start) and streq(src, d.name_start, d.name_len, s, n) {
+        ## null-ok: blocked by #789 — `ir::expr_present` is the same test and is not `pub`, and
+        ## matching an `Option(ptr(Expr))` then dereferencing its payload SIGSEGVs on x86_64, so
+        ## presence is asked of the handle here and the payload is read only on the non-null path.
+        if unchecked bitcast(usize, d.value) != 0 { r = Option.Some(d.value) }
+      }
+    }
+  }
+  r
+}
+
+## Does `[e]` reach the name `[os, on)` through module-level const initializers? `depth` counts
+## const-to-const hops. The AST walk covers every child that can carry a value except the forms the
+## existing `expr_mentions_var` also omits (`Match`, `EnumLit`, `CompField`, `Lambda`, `FnRef`,
+## `Loop`): an omitted form is a conservative FALSE, never a false refusal, and the backend's own
+## bound remains the backstop there.
+sema_const_cycle_hit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), os : usize, on : usize, depth : i64) -> bool {
+  if depth > SEMA_CONST_CYCLE_DEPTH { return false }
+  match deref(e) {
+    Expr::Var(s, n) => {
+      if streq(src, s, n, os, on) { return true }
+      mut hit := false
+      iv := sema_const_init_of(decls, src, s, n)
+      match iv {
+        Some(ivp) => { if sema_const_cycle_hit(ivp, decls, src, os, on, depth + 1) { hit = true } }
+        None => { }
+      }
+      hit
+    }
+    Expr::Bin(op, l, rr) => { sema_const_cycle_hit(l, decls, src, os, on, depth) or sema_const_cycle_hit(rr, decls, src, os, on, depth) }
+    Expr::If(c, t, f) => { sema_const_cycle_hit(c, decls, src, os, on, depth) or sema_const_cycle_hit(t, decls, src, os, on, depth) or sema_const_cycle_hit(f, decls, src, os, on, depth) }
+    Expr::Field(b, fs, fl) => { sema_const_cycle_hit(b, decls, src, os, on, depth) }
+    Expr::Deref(p) => { sema_const_cycle_hit(p, decls, src, os, on, depth) }
+    Expr::AddrOf(p) => { sema_const_cycle_hit(p, decls, src, os, on, depth) }
+    Expr::Try(p) => { sema_const_cycle_hit(p, decls, src, os, on, depth) }
+    Expr::Unchecked(p) => { sema_const_cycle_hit(p, decls, src, os, on, depth) }
+    Expr::Bitcast(p, bs, bn) => { sema_const_cycle_hit(p, decls, src, os, on, depth) }
+    Expr::Index(b, ix) => { sema_const_cycle_hit(b, decls, src, os, on, depth) or sema_const_cycle_hit(ix, decls, src, os, on, depth) }
+    Expr::Call(cs, cl, na, ah) => {
+      mut r := false
+      mut g : Option(ptr(mut Arg)) = ah
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); if sema_const_cycle_hit(ga.e, decls, src, os, on, depth) { r = true }; g = ga.next }; None => { break } } }
+      r
+    }
+    Expr::StructLit(ns, nl, nf, fh) => {
+      mut r := false
+      mut g : Option(ptr(mut Arg)) = fh
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); if sema_const_cycle_hit(ga.e, decls, src, os, on, depth) { r = true }; g = ga.next }; None => { break } } }
+      r
+    }
+    Expr::ArrayLit(nel, eh) => {
+      mut r := false
+      mut g : Option(ptr(mut Arg)) = eh
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); if sema_const_cycle_hit(ga.e, decls, src, os, on, depth) { r = true }; g = ga.next }; None => { break } } }
+      r
+    }
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::Match | Expr::EnumLit
+      | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { false }
+  }
+}
+
+## Is this declaration a module-level CONST data binding whose initializer names itself, directly or
+## through a chain? The shape is the one `sema_global_init_call_bad` fences — a non-`fn`, non-`mut`
+## value binding with an initializer — widened to carry a type ANNOTATION, because `A : u64 = A + 1`
+## crashes the backend exactly as the inferred form does (measured on `58a80376`).
+sema_global_init_cycle_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  if d.is_fn or d.kind != 0 or d.arity != 0 { return false }
+  if local_is_mut(src, d.name_start) { return false }
+  ## null-ok: blocked by #789 — Decl.value is null when a declaration carries no initializer
+  ## (ast.al); this asks only "is there one" and never dereferences the null path.
+  if unchecked bitcast(usize, d.value) == 0 { return false }
+  sema_const_cycle_hit(d.value, decls, src, d.name_start, d.name_len, 0)
 }
 
 ## Types §4.2/§4.4 — a string value has no value-conversion path into an integer. The lower treats
@@ -21626,6 +21734,11 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
       ## CALL would therefore be folded as zeroed/static storage while its callee never runs; reject the
       ## same CONST shape before any backend can emit it, with one diagnostic class for every CLI path.
       if sema_global_init_call_bad(d, decls, src) { return global_init_call_err(d.name_start) }
+      ## Declarations §7.1 — a cycle among comptime initializers is a compile error. Reject the
+      ## declaration before any backend can chase it: `lower::global_init_value` recursed into the
+      ## initializer with no cycle guard and exhausted the stack (#926, rc 139 measured on `58a80376`
+      ## for the direct, the annotated and the mutual spelling, with `check` answering rc 0).
+      if sema_global_init_cycle_bad(d, decls, src) { return const_cycle_err(d.name_start) }
       ## Issue #214 / Types §6.4 + I11: the lower's direct nested-array field fence must run on the
       ## check path too. Reject the declaration before any backend can reserve a word-only image;
       ## the sema helper shares lower_layout's exact source predicate and preserves the field line.
