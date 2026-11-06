@@ -8078,12 +8078,13 @@ fmt_test_has fmt_gen_enum 42 "(T)"
 fmt_test fmt_array 42
 fmt_test fmt_comments 42
 ## #1178: a comment after the LAST top-level declaration was deleted by `fmt` (Tooling §4.3.4 says
-## comments are preserved verbatim). `fmt_test` already compares the `##` COUNT of source vs output,
-## and that is the assertion: before the fix it reports `comments N want M`. The needle this row used
-## to carry was taken from the fixture's own `##` comment, so it could never fail — e2e.sh's own
-## vacuous-needle guard names that and refuses it. `fmt_test_has` is `fmt_test` plus the grep, so
-## dropping the grep loses no coverage (#1444, found by that guard).
-fmt_test fmt_trailing_comment 42
+## comments are preserved verbatim). `fmt_test` compares the `##` COUNT of source vs output, which
+## catches DELETION; the needle adds the part §4.3.4 actually demands — that the text survives
+## VERBATIM, since `fmt` could keep the line count and rewrite what is on it. `fmt_test_has` greps
+## `$o1`, the FORMATTER'S output, not the source: so a needle taken from the fixture's own `##`
+## comment is the correct needle here, and was never the vacuous case. (An earlier commit on this
+## branch dropped it on the opposite reading; corrected here, with the guard fixed below.)
+fmt_test_has fmt_trailing_comment 42 "And one more after a blank line"
 fmt_test fmt_comptime 42
 fmt_test comptime_if 42
 fmt_test fmt_comptime_match 42
@@ -12435,25 +12436,27 @@ if [ -n "${ALATYR_E2E_LIST_ROWS:-}" ]; then
   exit 0
 fi
 
-## A `*_has` needle that appears in its OWN fixture's comments makes the assertion VACUOUS. The
-## helpers grep the whole formatted artifact, and `fmt_test` separately asserts comment fidelity, so
-## the comment is GUARANTEED to be in the text being searched: the row prints `ok` on an unfixed
-## compiler. This was written down in two places — one of them a PR checkbox — and had accumulated
-## twenty live violations anyway, which is why it is a check and not a sentence. Needs no compiler: the
-## recording phase already holds every row's kind and arguments.
+## A `*_has` needle that appears in its OWN fixture's comments makes the assertion VACUOUS — but ONLY
+## if the helper greps the SOURCE. It does not: `fmt_test_has` and `fmt_test_has_all` grep `$o1`, the
+## FORMATTER'S output (see their bodies). A needle taken from the fixture's own `##` comment is then
+## exactly the right needle — it asserts what Tooling §4.3.4 demands, that the comment survives
+## VERBATIM through `fmt`. `fmt_test`'s own check compares only the `##` COUNT, so it catches a
+## DELETED comment but not a REWRITTEN one; the needle is the only thing that catches the rewrite.
 ##
-## Pre-existing violations live in `scripts/needle.baseline` and are REPORTED on every run rather
-## than fixed here, because a banner the reader sees every time is worth more than a one-off cleanup.
-## Following `idiom_gate.sh`: a baseline entry that stops occurring is `allow-unused` and does NOT
-## fail, so fixing one is never punished.
+## This check was added on the opposite reading and flagged twenty such rows, all legitimate, and
+## caused one to be deleted (#1444, then #1448 — both mine, both corrected here). It is retired rather
+## than deleted: the recording phase and the baseline reporting stay, so a future `*_has` helper that
+## DOES grep the source is caught. The list of such helpers is `SOURCE_GREPPING_HAS` and is empty,
+## deliberately; adding a helper name to it is the way to re-arm this for that helper.
 NEEDLE_BASELINE="$ROOT/scripts/needle.baseline"
+SOURCE_GREPPING_HAS=""
 _e2e_needle_check() {
   local i kind name needle line key n_new=0 n_base=0 n_unused=0 seen="" base=""
   [ -f "$NEEDLE_BASELINE" ] && base="$(grep -v '^#' "$NEEDLE_BASELINE" | grep -v '^$' || true)"
   for i in $(seq 1 "$E2E_RECORDED"); do
     eval "set -- ${E2E_ROW[$i]}"
     kind="$1"
-    case "$kind" in fmt_test_has|fmt_test_has_all) ;; *) continue ;; esac
+    case "$kind" in $SOURCE_GREPPING_HAS) ;; *) continue ;; esac
     name="$2"; shift 3
     [ -f "$E2E_TEST/$name.al" ] || continue
     for needle in "$@"; do
