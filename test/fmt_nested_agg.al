@@ -9,3 +9,4 @@ main := fn() -> u64 {
   arr : [u64; 3] = [10, 20, 12]
   return o.a.x + o.a.y + o.b.x + o.b.y + arr[0] + arr[1] + arr[2]
 }
+## expect(x86_64): run 52

@@ -16,3 +16,4 @@ main := fn() -> u64 {
   d := mk(2).v + mk(4).w
   return a + b + c + d - 1
 }
+## expect(x86_64): run 42

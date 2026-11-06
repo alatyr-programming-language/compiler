@@ -11,3 +11,4 @@ main := fn() -> u64 {
   o := Opt.Some(p.x)
   return match o { Some(v) => v + p.y, None => 0 }
 }
+## expect(x86_64): run 42

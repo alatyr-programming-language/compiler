@@ -34,3 +34,4 @@ main := fn() -> u64 {
   if align(Words) != 1 { return 7 }
   return 42
 }
+## expect: run 42

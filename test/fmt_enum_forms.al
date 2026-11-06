@@ -37,3 +37,4 @@ main := fn() -> u64 {
   w := match v { W::Some(p) => p.a + p.b + p.c + p.d + p.e + p.f + p.g, W::None => 0 }
   return s + t + w
 }
+## expect(x86_64): run 49

@@ -33,3 +33,4 @@ main := fn() -> u64 {
   if h != 2 { return 8 }
   return 42
 }
+## expect: run 42

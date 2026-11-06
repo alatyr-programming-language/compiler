@@ -37,3 +37,4 @@ main := fn() -> u64 {
 }
 
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
+## expect(x86_64): run 42

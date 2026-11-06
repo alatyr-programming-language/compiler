@@ -62,3 +62,4 @@ main := fn() -> u64 {
   outsix(n)
   return viaptr(ptr(mut r)) + viaslice(ys[0..5]) + viaarr([2, 4]) + viafn(mk, 6) + m + n + withdef(2)
 }
+## expect(x86_64): run 42

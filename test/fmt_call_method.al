@@ -15,3 +15,4 @@ main := fn() -> u64 {
   c := mk(4).v + mk(6).bump(2)
   return a + b + c
 }
+## expect(x86_64): run 42

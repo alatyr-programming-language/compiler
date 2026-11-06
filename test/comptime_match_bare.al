@@ -12,3 +12,4 @@ knd := fn(T : type, v : T) -> u64 {
   }
 }
 main := fn() -> u64 { return knd(u64, 5) }
+## expect: run 42

@@ -12,3 +12,4 @@ sumfields := fn(T : type, v : T) -> u64 {
 main := fn() -> u64 {
   return sumfields(Pt, Pt(x = 40, y = 2))
 }
+## expect(x86_64): run 42

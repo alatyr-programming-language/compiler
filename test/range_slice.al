@@ -9,3 +9,4 @@ main := fn() -> u64 {
   t := s[0..2]
   u64(bytes(t)[0])
 }
+## expect: run 42

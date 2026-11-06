@@ -13,3 +13,4 @@ main := fn() -> u64 {
   d2 : dyn fn(u64) -> u64 = dyn_over(ptr(mut s2))
   return d1(2) + d2(10)
 }
+## expect(x86_64): run 42

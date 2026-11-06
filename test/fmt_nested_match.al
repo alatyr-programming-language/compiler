@@ -17,3 +17,4 @@ main := fn() -> u64 {
   }
   return v + w
 }
+## expect(x86_64): run 37

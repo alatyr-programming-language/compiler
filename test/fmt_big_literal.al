@@ -13,3 +13,4 @@ main := fn() -> u64 {
   if h == 9223372036854775808 { acc = acc + 22 }
   return acc
 }
+## expect(x86_64): run 42

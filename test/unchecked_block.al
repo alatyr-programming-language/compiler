@@ -13,3 +13,4 @@ main := fn() -> u64 {
   }
   return acc
 }
+## expect: run 42

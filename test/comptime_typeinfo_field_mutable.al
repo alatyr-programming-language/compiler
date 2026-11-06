@@ -10,3 +10,4 @@ count_mut := fn(T : type) -> u64 {
 }
 
 main := fn() -> u64 { count_mut(S) + 41 }
+## expect(x86_64): run 42
