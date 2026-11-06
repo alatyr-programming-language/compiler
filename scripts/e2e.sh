@@ -12355,11 +12355,11 @@ run_wat trap_literal_ctx_field_u64 134
 ## a `=` re-assignment or a field store, so `x = 300` / `s.f = 300` into a `u8` were accepted and the
 ## place held 300 / 44. The five refusals are sema's, so they are backend-independent; the control is
 ## the in-range half of the same rule and must run on all four backends.
-check_reject_has reject_narrow_lit_reassign "type mismatch"
-check_reject_has reject_narrow_arith_reassign "comptime overflow"
-check_reject_has reject_narrow_lit_field_store "type mismatch"
-check_reject_has reject_narrow_arith_field_store "comptime overflow"
-check_reject_has reject_narrow_lit_reassign_signed "type mismatch"
+check_build_located reject_narrow_lit_reassign 10 "type mismatch"
+check_build_located reject_narrow_arith_reassign 7 "comptime overflow"
+check_build_located reject_narrow_lit_field_store 11 "type mismatch"
+check_build_located reject_narrow_arith_field_store 8 "comptime overflow"
+check_build_located reject_narrow_lit_reassign_signed 11 "type mismatch"
 run accept_narrow_reassign_range 42
 run_a64 accept_narrow_reassign_range 42
 run_rv64 accept_narrow_reassign_range 42
