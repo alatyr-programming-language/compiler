@@ -4777,7 +4777,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   ## pushed the data pointer as the by-ref pointer → a garbage len / crash. src/ binds such results to a
   ## local first → the branch never fires on the self-build → fixpoint-neutral.
   if (str_ret_call(e, cx.decls, cx.src, deref(cx.mar)) or generic_inferred_str_ret(e, cx, a)) and cx.agg_tmp >= 0 {
-    emit_struct_value(e, sb, cx, a)
+    emit_struct_value(e, sb, cx, a, nl)
     saoff := agg_alloc(cx)
     for k in 0..2 {
       push_str(sb, "  movq ")
@@ -6939,7 +6939,7 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
   ## call fell to the `_` default (`pushq $0` twice) → an EMPTY str, so any `return <str-call>` (or a
   ## str-call as a `str_eq` operand) yielded a 0-length string — the §1.0 CLI argv-read returned 0.
   if str_ret_call(e, cx.decls, cx.src, deref(cx.mar)) or generic_inferred_str_ret(e, cx, a) {
-    emit_struct_value(e, sb, cx, a)
+    emit_struct_value(e, sb, cx, a, nl)
     push_str(sb, "  pushq %rax\n  pushq %rdx\n")
     return
   }
