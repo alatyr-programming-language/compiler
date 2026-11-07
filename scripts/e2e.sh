@@ -10933,6 +10933,29 @@ run comptime_for_unchecked_wrap_bound 42
 run_a64 comptime_for_unchecked_wrap_bound 42
 run_rv64 comptime_for_unchecked_wrap_bound 42
 run_wat comptime_for_unchecked_wrap_bound 42
+## #1499: the unroll budget (Comptime §2.2) orders a range in its own type. A `u64` bound of 2^63 or
+## more was a negative `i64` pattern to the signed budget test, so it compiled to an empty loop on all
+## four backends; a const bound past the budget aborted with no location. Both are now located rejects
+## on x86_64; the twins trap until #1232. The controls: ranges within the budget that cross or sit
+## above 2^63, start negative, or are empty, unroll their exact count everywhere.
+build_reject_has reject_comptime_for_budget_u64 'budget exhausted'
+build_reject_has reject_comptime_for_budget_u64 'never a silent partial result. at line 16 in '
+build_reject_has reject_comptime_for_budget_const 'budget exhausted'
+build_reject_has reject_comptime_for_budget_const 'never a silent partial result. at line 13 in '
+run_a64 reject_comptime_for_budget_u64 133
+run_rv64 reject_comptime_for_budget_u64 133
+run_wat reject_comptime_for_budget_u64 134
+run_a64 reject_comptime_for_budget_const 133
+run_rv64 reject_comptime_for_budget_const 133
+run_wat reject_comptime_for_budget_const 134
+run comptime_for_u64_high_bound 42
+run_a64 comptime_for_u64_high_bound 42
+run_rv64 comptime_for_u64_high_bound 42
+run_wat comptime_for_u64_high_bound 42
+run comptime_for_u64_cross_bound 42
+run_a64 comptime_for_u64_cross_bound 42
+run_rv64 comptime_for_u64_cross_bound 42
+run_wat comptime_for_u64_cross_bound 42
 ## #1271: an `unchecked` `+ - *` in a range bound wraps at the operation type's width (Comptime §2.6),
 ## as at run time, so a later checked step judges a value the type can hold.
 build_reject_has reject_comptime_for_wrap_then_overflow_i32 'this range bound overflows its type'

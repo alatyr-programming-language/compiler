@@ -126,6 +126,16 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A `u64` `comptime for` bound of 2^63 or more is refused by the unroll budget, not unrolled 0 times
+  (#1499).** `comptime for i in 0 .. B` with `B : u64 = 2^63 + 1` compiled cleanly and ran no
+  iterations on all four backends, against Comptime §2.2's "no silent partial results": the budget test
+  compared the bounds' `i64` patterns signed, so the unsigned bound read as negative and the range as
+  empty. The range is now ordered in its own type (Types §3.2) by one shared helper, so x86_64 refuses
+  it with a located "budget exhausted" diagnostic and the twins trap (#1232). A const bound past the
+  budget, which used to abort the compiler with an internal message and no line, gets the same located
+  reject. A `u64` range that crosses 2^63 within the budget, which killed the compiler, now unrolls its
+  exact count everywhere.
+
 ## 0.2.24 — 2026-11-07
 
 - **A `+ - *` over a global narrow constant wraps, or traps, at the constant's width on x86_64
