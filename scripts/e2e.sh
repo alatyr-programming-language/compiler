@@ -12382,6 +12382,21 @@ run_a64 trap_literal_ctx_field_u64 133
 run_rv64 trap_literal_ctx_field_u64 133
 run_wat trap_literal_ctx_field_u64 134
 
+## #1283 - Types §9.1 / Declarations §3.4 at the ASSIGNMENT place. The representability check existed
+## at the annotated binding, the array element, the `T(v)` constructor and the call argument, but not at
+## a `=` re-assignment or a field store, so `x = 300` / `s.f = 300` into a `u8` were accepted and the
+## place held 300 / 44. The five refusals are sema's, so they are backend-independent; the control is
+## the in-range half of the same rule and must run on all four backends.
+check_build_located reject_narrow_lit_reassign 10 "type mismatch"
+check_build_located reject_narrow_arith_reassign 7 "comptime overflow"
+check_build_located reject_narrow_lit_field_store 11 "type mismatch"
+check_build_located reject_narrow_arith_field_store 8 "comptime overflow"
+check_build_located reject_narrow_lit_reassign_signed 11 "type mismatch"
+run accept_narrow_reassign_range 42
+run_a64 accept_narrow_reassign_range 42
+run_rv64 accept_narrow_reassign_range 42
+run_wat accept_narrow_reassign_range 42
+
 ## #973 — the same fallback, through a gap #966 did not close. `ib_bx_if` built each branch of an
 ## `if`-in-value-position with `ib_bx`, which asks the expression its OWN type; the bare literal branch
 ## `else { 1000 }` has none (`VcLit`), so the branch refused, `g13` was refused as `sema-gap literal`
