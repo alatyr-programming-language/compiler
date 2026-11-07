@@ -288,6 +288,20 @@ enum_field_access_err := fn(s : usize) -> CheckErr { ENUM_FIELD_ACCESS_DIAG_MARK
 ## moves and every other decoded CheckErr range stays byte-identical.
 SCALAR_FIELD_ACCESS_DIAG_MARKER : usize = 6903000000000000000
 scalar_field_access_err := fn(s : usize) -> CheckErr { SCALAR_FIELD_ACCESS_DIAG_MARKER + diag_span(s) * 4 }
+## Issue #774 / Control Flow §4 — a BARE NUMERIC CONDITION. §4: "A numeric scalar is not truthy (it
+## provides no `is_true`, Stdlib §2.1): a numeric condition uses an explicit comparison yielding `bool`
+## (`if n != 0 { … }`), never a bare `if n { … }`." Measured on the parent (`origin/main` `2d6e05f4`,
+## native x86_64), `p : u64 = 10  if p { return 1 }` compiled at rc 0 and took the branch on the word,
+## answering 1. The existing condition test refuses a KNOWN non-bool (`if 1`, `if p + 1` both stop with
+## a `Mismatch`), so the hole is exactly the bare NAME whose kind the checker does not surface. Placed
+## above SCALAR_FIELD_ACCESS_DIAG_MARKER and below the CT window, so only the scalar window's upper bound
+## moves and every other decoded CheckErr range stays byte-identical. NOT 6903500000000000000: PR #1461
+## claims that value for `CONST_CYCLE_DIAG_MARKER`, and two classes sharing one code decode to whichever
+## text the driver tests first — a constant-cycle refusal would print this message and vice versa, with
+## nothing red to show it. 6905000000000000000 is above the three classes already allocated to open PRs
+## (#1461 6903500000000000000, #1465 6904000000000000000, #1469 6904500000000000000) and below CT.
+NUMERIC_COND_DIAG_MARKER : usize = 6905000000000000000
+numeric_cond_err := fn(s : usize) -> CheckErr { NUMERIC_COND_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -6895,6 +6909,65 @@ sema_owner_vty_is_scalar := fn(t : ir::VTy) -> bool {
     VcAbsent | VcUnknown | VcPtr | VcAgg => { false }
   }
 }
+## Issue #774 / Control Flow §4 + Types §3.1 — is `nm` a NUMERIC scalar type NAME? #703's
+## `sema_is_scalar_name` answers TRUE for `bool` and `char` too, and §4 makes a `bool` TRUTHY while
+## §3.1 keeps `char` out of the numeric interpretations — only an integer or a float is the bare
+## condition §4 forbids. The same list minus those two, so the truthy question never re-decides the
+## field question and a `bool` condition stays accepted.
+sema_is_numeric_scalar_name := fn(nm : str) -> bool {
+  if nm == "usize" or nm == "isize" { return true }
+  if nm == "u8" or nm == "u16" or nm == "u32" or nm == "u64" { return true }
+  if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" { return true }
+  if nm == "f32" or nm == "f64" { return true }
+  false
+}
+## …and the recorded VALUE TYPE half of the same numeric subset. `VcLit` stays FALSE: an undetermined
+## literal's default is `i64` (§9.1), but a `true`/`false` literal reaches this table the same way for
+## some owners, and §4 refuses only what it names. Fail-open is the safe side of a truthy question.
+sema_owner_vty_is_numeric := fn(t : ir::VTy) -> bool {
+  if SEMA_INST_RECORDING { return false }
+  c : ir::VCls = ir::vty_cls(t)
+  match c {
+    VcInt | VcFloat => { true }
+    VcAbsent | VcUnknown | VcLit | VcBool | VcPtr | VcAgg => { false }
+  }
+}
+## …and the NAME place, over the SAME evidence #703's `sema_name_owner_is_scalar` walks — declared type
+## span first, recorded value type where no span exists — with the numeric twins substituted, so a
+## `bool` owner is not refused.
+sema_name_owner_is_numeric := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> bool {
+  if sema_gref_split(src, s, n).qual { return sema_owner_vty_is_numeric(sema_vty_global(decls, src, s, n)) }
+  mut ts : usize = 0
+  mut tl : usize = 0
+  if nloc != 0 and local_in(locals, nloc, src, s, n) {
+    if local_prov(locals, nloc, src, s, n) != 0 { return false }
+    lt := local_lookup(locals, nloc, src, s, n)
+    ts = lt.ty.ns
+    tl = lt.ty.nl
+    lk : TyKind = lt.ty.kind
+    if tl == 0 and (kind_is_unknown(lk) or kind_is_int(lk)) {
+      return sema_owner_vty_is_numeric(sema_vty_local(locals, nloc, src, s, n))
+    }
+  } else {
+    gt := global_type_span_in_mod(decls, src, upto, s, n)
+    ts = gt.s
+    tl = gt.n
+    if tl == 0 { return sema_owner_vty_is_numeric(sema_vty_global(decls, src, s, n)) }
+  }
+  tl != 0 and sema_is_numeric_scalar_name(str_at((src + ts), tl))
+}
+## Issue #774 — the BARE NUMERIC CONDITION refusal, at the condition itself. Only a bare NAME is asked:
+## a comparison already yields `bool`, and the existing condition test stops a KNOWN non-bool there
+## (`if 1` and `if p + 1` both answer a `Mismatch`); this fence covers the bare name whose kind the
+## checker does not surface. A truthy owner — `bool`, or anything with an `is_true` protocol — is not
+## numeric and stays accepted.
+sema_numeric_condition_err := fn(c : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  if is_prelude_ns_var(c, src) { return 0 }
+  cv := expr_var_span(c)
+  if cv.n == 0 { return 0 }
+  if not sema_name_owner_is_numeric(decls, upto, src, locals, nloc, cv.s, cv.n) { return 0 }
+  numeric_cond_err(cv.s)
+}
 ## The direct/local/global field-name fence. A known struct must contain the selected field; otherwise
 ## the old `field_ty` returned unknown and the lower read/stored word zero. Keep prelude namespace and
 ## unknown-owner accesses tolerant, because their associated/pointer layouts are outside this bounded
@@ -11448,6 +11521,10 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     }
     Expr::If(c, t, f) => {
       cc := check_expr(c, decls, upto, src, a, locals, nloc)?
+      ## Issue #774 / Control Flow §4 — a bare NUMERIC condition, before the tolerant test below can
+      ## pass it as unknown.
+      nce := sema_numeric_condition_err(c, decls, upto, src, locals, nloc)
+      if nce != 0 { er := Result(Ty, CheckErr).Err(nce); return er }
       ## the condition must be bool (a known non-bool is a `Mismatch`; unknown is poison-tolerant).
       if not kind_is_unknown(cc.kind) and not kind_is_bool(cc.kind) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(c, a), 0)); return er }
       tt := check_expr(t, decls, upto, src, a, locals, nloc)?
@@ -15113,6 +15190,10 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
           return Result(usize, CheckErr).Err(unbound_code(c, decls, upto, src, a, locals, cnt))
         }
         cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
+        ## Issue #774 / Control Flow §4 — a bare NUMERIC condition is not truthy; §6 gives `while` the
+        ## same condition as `if`, so both are refused here with one diagnostic class.
+        nce := sema_numeric_condition_err(c, decls, upto, src, locals, cnt)
+        if nce != 0 { return Result(usize, CheckErr).Err(nce) }
         ## the loop condition must be bool (a known non-bool is a `Mismatch`).
         if not kind_is_unknown(cc.kind) and not kind_is_bool(cc.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
         cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
@@ -15313,6 +15394,11 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
           return Result(usize, CheckErr).Err(unbound_code(c, decls, upto, src, a, locals, cnt))
         }
         cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
+        ## Issue #774 / Control Flow §4 — a bare NUMERIC condition is not truthy: `if n != 0 { … }`,
+        ## never a bare `if n { … }`. Asked before the tolerant test below, which passes this condition
+        ## because a numeric local's kind is not surfaced here.
+        nce := sema_numeric_condition_err(c, decls, upto, src, locals, cnt)
+        if nce != 0 { return Result(usize, CheckErr).Err(nce) }
         ## the condition must be bool (a known non-bool is a `Mismatch`).
         if not kind_is_unknown(cc.kind) and not kind_is_bool(cc.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
         ## A branch-local comptime name cannot safely be read after this join while the current
