@@ -13749,6 +13749,33 @@ deref_addrof_byref_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr
   CSpan(s = ent.sns, n = ent.snl)
 }
 
+## Issue #554 — the STRUCT-LOCAL sibling of `deref_addrof_byref_struct_span`, the half #506
+## deliberately left: `ek = 2` with `is_ref = FALSE`, which that helper's own comment names as "every
+## other `ek = 2` binding". `deref(ptr(loc)).b` on a struct LOCAL reached NO arm for the same reason
+## #506's did — `deref_var_span` sees an `AddrOf`, not a `Var`, so `deref_struct_span` answered 0/0,
+## the by-ref fallback refused on `is_ref == false`, and each other deref arm wants a different inner
+## node — so `field_slot` fell through and the read contributed NOTHING: `40 + deref(ptr(loc)).b`
+## answered 40 where the direct `loc.b` answered 101 on the SAME binary. Memory §4.3 decides it:
+## `ptr(x)` takes the address of a memory-resident place and `deref(p)` yields "the place it denotes",
+## so on such a place the two are INVERSE and `deref(ptr(loc)).b` IS `loc.b`.
+##
+## The emission is NOT the by-ref pair. A by-ref param's slot HOLDS a pointer, so that arm loads the
+## slot (`movq -off(%rbp), %rax`) and follows it; here the slot IS the struct, so the address is a
+## `leaq` of the frame — which is exactly what `emit_gas` already emits for `ptr(loc)` (ast.al: the
+## POINTER tier "`ptr(<place>)` … lower `leaq`s its frame slot"). So this arm re-enters on the inner
+## `AddrOf` node to get that address into %rax, then loads the field at its ASCENDING word offset,
+## the same `fi*8(%rax)` the direct read of that struct's field uses.
+deref_addrof_local_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan {
+  av := deref_addrof_var_span(e)
+  if av.n == 0 { return CSpan(s = 0, n = 0) }
+  ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, av.s, av.n)))
+  if lower_ctx::streq(src, ent.ns, ent.nl, av.s, av.n) == false { return CSpan(s = 0, n = 0) }
+  if ent.ek != 2 { return CSpan(s = 0, n = 0) }
+  if ent.is_ref { return CSpan(s = 0, n = 0) }
+  if ent.snl == 0 { return CSpan(s = 0, n = 0) }
+  CSpan(s = ent.sns, n = ent.snl)
+}
+
 ## The base-`Var` span + field-name span of `deref(<Var>.<field>)` (e.g. `ab := deref(v.arena)`).
 ## `ok` false unless `e` is exactly `Deref(Field(Var(o), f))`. Split out so each destructure is a
 ## single-level function-body match (the nested-match gotcha): `deref_inner_expr` peels the Deref,
@@ -21308,6 +21335,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## only when `deref_struct_span` found nothing, so every shape that already had an arm keeps it
       ## and the emitted GAS for the existing corpus is byte-identical.
       if dsb.n == 0 { dsb = deref_addrof_byref_struct_span(base, cx.slots, cx.src) }
+      ## #554 — the struct-LOCAL root, claimed only when NOTHING above found the pointee, so every
+      ## shape that already had an arm keeps it and the existing corpus stays byte-identical.
+      dals := deref_addrof_local_struct_span(base, cx.slots, cx.src)
       ## Declarations §6.2 — this used to spell the name `fbi`, which the arm ALREADY binds far above
       ## (the `ARR[i].field` global path); re-declaring a name already bound in the same scope is a
       ## compile error, and `sema` now says so. Same value, own name — the sibling `s3fbi` above had
@@ -21386,6 +21416,19 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         push_int(sb, i64((pent.off + 1) * 8))
         push_str(sb, "(%rbp), %rax\n  movq ")
         push_int(sb, fi * 8)
+        push_str(sb, "(%rax), %rax\n  pushq %rax\n")
+      } else if dals.n != 0 {
+        ## #554 — `deref(ptr(loc)).f` where `loc` is a struct LOCAL (`ek = 2`, `is_ref = false`). The
+        ## inner node is an `AddrOf`, so `emit_gas` on it yields the struct's frame ADDRESS (`leaq`),
+        ## NOT a loaded pointer — which is why the by-ref arm above cannot serve this root: that one
+        ## loads its slot and follows it, but here the slot IS the struct. Pop the address, load the
+        ## field at its ascending word offset: the same `fi*8(%rax)` the direct `loc.f` read emits.
+        dalsinner := deref_inner_expr(base)
+        dalsfi := field_word_offset(cx.decls, cx.src, dals.s, dals.n, fs, fl, deref(cx.mar))
+        if dalsfi < 0 { panic("selfhost: no word offset for a field of a struct reached through deref(ptr(local)) — the pointee type span and the field name disagree") }
+        emit_gas(dalsinner, sb, cx, a, nl)
+        push_str(sb, "  popq %rax\n  movq ")
+        push_int(sb, dalsfi * 8)
         push_str(sb, "(%rax), %rax\n  pushq %rax\n")
       } else if dcf.n != 0 {
         ## `deref(<call: node_ptr/decl_at/get(S, …)>).f` — a field read INLINE off a deref of a
