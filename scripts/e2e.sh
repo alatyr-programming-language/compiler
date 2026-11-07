@@ -10880,6 +10880,10 @@ run_rv64 reject_comptime_for_unchecked_min_mod_neg1 133
 run_wat reject_comptime_for_unchecked_min_mod_neg1 134
 ## The checked `%` folds to `0` on every backend — measured, so all four are asserted as values.
 run comptime_min_mod_neg1_folds_zero 42
+## #1493: an unsigned bound's `/ %` divides unsigned (Types §3.2, Concurrency §6.5), and the signed
+## `% -1` -> 0 shortcut does not apply to a `u64` divisor `2^64 - 1`. Measured on all four backends.
+run comptime_for_div_bound_signedness 42
+run comptime_for_umod_allones_divisor 42
 ## #1234: a checked `+ - *` that overflows the operation's type in a range bound is a located
 ## diagnostic (Comptime §2.6), never a wrapped bound; the twins trap until #1232. Inside `unchecked`
 ## the wrap is defined and still folds.

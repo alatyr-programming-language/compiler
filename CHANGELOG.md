@@ -237,6 +237,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `unchecked (K + 3)` hit the unroll budget instead of unrolling twice, and an `i32` product that
   wraps to 0 reached the compiler's own `idiv` as `i64::MIN / -1` (SIGFPE). The result now wraps to
   the operation's width (Comptime §2.6), on all four backends.
+- **A `u64` `/` or `%` in a `comptime for` range bound divides unsigned (#1493).** The fold divided the
+  bound's `i64` patterns signed whatever the type: with `D : u64 = 2^64 - 1`, `0 .. D / 2^62` and
+  `0 .. D % 10` unrolled zero times instead of 3 and 5, `5 % D` took the signed `% -1` shortcut and
+  unrolled zero times instead of 5, and `2^63 / D` killed the compiler with SIGFPE. Signedness lives
+  in the operation (Types §3.2, Concurrency §6.5); fixed on all four backends.
 - **A `Slice` carried by an enum variant is a slice when matched (#1318).** A `match` arm binding a
   `Slice(T)` payload of structs, enums or strings got the two-word `Slice` record instead, so `for`
   read one word per element: wrong fields, a crash on nested enums, and `ps[1].a` refused. The
