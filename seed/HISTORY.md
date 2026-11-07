@@ -1927,4 +1927,27 @@ The original reading note, verbatim:
 #
 # VERSION 0.2.21 -> 0.2.22, PATCH: a wrong value on x86_64 became the correct one; no surface changes.
 # The specification pin (spec 1.8.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.22 -> 0.2.23   promoted 2026-11-07   seed/alatyr := Stage2
+#
+# WHY: #1411 (fixes #1398): a checked signed `%` reused the `MIN / -1` overflow guard, so a checked i64 `MIN % -1` trapped on all four backends, where spec 1.8.0 Concurrency §6.1 says it yields 0 without trapping. The fix asks the guard of `/` alone and, on x86_64, skips `idivq` with a zero remainder on a -1 divisor. It changes the code emitted for the compiler's own checked signed `%`, so the frozen seed must carry it.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k>): 3 hunks, 3 added, 6 removed. One sentence:
+# At the compiler's one checked signed `%` site, the `MIN / -1` trap guard (compare with the minimum, `ud2`) is replaced by zeroing `%rdx` before the -1 test and jumping past `idivq` when the divisor is -1; nothing else changes.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1628657 lines.
+# GAS SHA-256 (Stage2): af7471e47e63889643dab56fcf00a5da520b152c888b9a9303fd26d14db64f2e.
+# Stage2 == Stage3 BINARY SHA-256:
+# 666f7d246983caea8d7e0240c07a7c72a9ff878428bd6e300ab1fc0368cfcb1f (6204400 B).
+# All three answer `alatyr 0.2.23, spec 1.8.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.2.22) SHA-256:
+# c239ce2c9c261d001f7f43445d0571f9bfa3de7c54b7bd4ea3f85f769ef15f89.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1628657 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.2.22 -> 0.2.23, PATCH: a trap where a value is due became the correct value on all four backends; no surface changes.
+# The specification pin (spec 1.8.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
