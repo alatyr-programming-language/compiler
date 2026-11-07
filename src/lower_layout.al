@@ -5819,7 +5819,21 @@ pub ct_bound_w := fn(e : ptr(Expr)) -> Option(str) {
 ## The verdict of one `comptime for` range-bound operation's CT-12 guard (Comptime §2.6): it may be
 ## performed, or it fails as a checked overflow, or it divides by zero. Both folders decide on it with
 ## an exhaustive `match`.
-pub RangeGuard := enum { RgPass, RgOverflow, RgDivZero }
+pub RangeGuard := enum { RgPass, RgOverflow, RgDivZero, RgDivOverflow }
+## The SIGNED minimum of the recorded type `w`, at EVERY width including the native one — which is
+## where `narrow_signed_min` answers 0 by design (it exists to keep each emitter's native arm
+## byte-unchanged). A comptime guard has no emitter to keep byte-stable and must catch the native
+## `MIN / -1` too, so it reads this. An unsigned `w` has no signed minimum: 0, which no dividend
+## that is a MIN can equal. Follows `ct_wrap`'s explicit-per-width style, not a computed shift.
+ct_signed_min := fn(w : str) -> i64 {
+  if not ct_signed(w) { return 0 }
+  if w == "i8" { return 0 - 128 }
+  if w == "i16" { return 0 - 32768 }
+  if w == "i32" { return 0 - 2147483648 }
+  ## i64 / isize / an unrecognized name read as the native signed word (ct_width's own reading).
+  ## `0 - MIN` is itself the overflow, so the minimum is built in two steps, as everywhere here.
+  0 - 9223372036854775807 - 1
+}
 ## Does a checked `a <op> b` overflow the recorded type `w`? No recorded type, no judgement: false.
 ct_bound_ovf := fn(op : u8, a : i64, b : i64, w : Option(str)) -> bool {
   match w { Some(t) => { ct_arith_ovf(op, a, b, t) }; None => { false } }
@@ -5831,6 +5845,23 @@ ct_bound_ovf := fn(op : u8, a : i64, b : i64, w : Option(str)) -> bool {
 pub ct_range_guard := fn(op : u8, lv : i64, rv : i64, w : Option(str), chk : bool) -> RangeGuard {
   if (op == 19 or op == 29) and rv == 0 { return RangeGuard.RgDivZero }
   if chk and (op == 16 or op == 17 or op == 18) and ct_bound_ovf(op, lv, rv, w) { return RangeGuard.RgOverflow }
+  ## `MIN / -1` and, under `unchecked`, `MIN % -1`: a DIVISION OVERFLOW at comptime. Comptime §2.6
+  ## is explicit that these remain a diagnostic INSIDE `unchecked` too — "the evaluator has no
+  ## hardware behaviour to reproduce and I11 forbids inventing one" — so unlike every other guard in
+  ## this family the `chk` flag does NOT release them. Before this, neither op was guarded here at
+  ## all and the fold ran the host's `idiv`: the compiler died with SIGFPE (rc 136), no message, no
+  ## location (#1233). A CHECKED `MIN % -1` is NOT in the checked-overflow set — §6.1 says it yields
+  ## `0`, representable at every width — so it passes and folds to 0, exactly as run time now does.
+  ## No recorded type means the fold works on the native signed word (`ct_bound_wrap`'s own reading),
+  ## so it is guarded as native rather than let through.
+  if (op == 19 or op == 29) and rv == 0 - 1 {
+    mut signed_min : i64 = 0 - 9223372036854775807 - 1
+    match w { Some(t) => { signed_min = ct_signed_min(t) }; None => {} }
+    if signed_min != 0 and lv == signed_min {
+      if op == 19 { return RangeGuard.RgDivOverflow }
+      if not chk { return RangeGuard.RgDivOverflow }
+    }
+  }
   RangeGuard.RgPass
 }
 ## The const arithmetic of a `comptime for` range bound, ONE place for both folders (x86
@@ -5842,7 +5873,7 @@ pub ct_range_arith := fn(op : u8, lv : i64, rv : i64, w : Option(str), chk : boo
   g : RangeGuard = ct_range_guard(op, lv, rv, w, chk)
   match g {
     RgPass => { ct_range_perform(op, lv, rv, w) }
-    RgOverflow | RgDivZero => { Option(i64).None }
+    RgOverflow | RgDivZero | RgDivOverflow => { Option(i64).None }
   }
 }
 ## Perform a bound operation whose guard passed. Any op outside `+ - * / %` is not a bound: `None`.
@@ -5856,7 +5887,12 @@ ct_range_perform := fn(op : u8, lv : i64, rv : i64, w : Option(str)) -> Option(i
   if op == 17 { v = ct_bound_wrap(w, unchecked (lv - rv)) }
   if op == 18 { v = ct_bound_wrap(w, unchecked (lv * rv)) }
   if op == 19 { v = unchecked (lv / rv) }
-  if op == 29 { v = unchecked (lv % rv) }
+  ## `MIN % -1` is answered, not divided: §6.1 says it is `0` and the host's `idivq` FAULTS on it
+  ## (`#DE`, appendix §2), so performing it would kill the compiler with SIGFPE on x86_64 — the very
+  ## failure #1233 is about, on the arm the guard lets THROUGH because a checked `%` has no overflow
+  ## member. The mathematical remainder of anything by `-1` is `0`, so the answer is written directly
+  ## and the divide is never executed (the same shape as the x86_64 run-time fix in #1487).
+  if op == 29 { if rv == 0 - 1 { v = 0 } else { v = unchecked (lv % rv) } }
   if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 { return Option(i64).Some(v) }
   Option(i64).None
 }

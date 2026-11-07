@@ -10842,6 +10842,32 @@ run_wat reject_comptime_for_div_zero 134
 run_a64 reject_comptime_for_unchecked_mod_zero 133
 run_rv64 reject_comptime_for_unchecked_mod_zero 133
 run_wat reject_comptime_for_unchecked_mod_zero 134
+## #1233 — `MIN / -1` in a range bound is a located diagnostic, never a compiler crash. Before the
+## guard neither `/` nor `%` was checked at comptime, so the fold ran the HOST's `idiv` and the compiler
+## died with SIGFPE (rc 136), no message, no location: measured on the frozen `seed/alatyr`, native
+## x86_64, on all four fixtures below. Comptime §2.6 keeps `MIN / -1` — and `MIN % -1` under
+## `unchecked` — a diagnostic INSIDE `unchecked` too ("no hardware behaviour to reproduce, I11 forbids
+## inventing one"), while a CHECKED `MIN % -1` is §6.1's `0` and folds. The twins do not refuse until
+## #1232: they emit, and their programs trap (measured under qemu-aarch64 / qemu-riscv64 / wasmtime on
+## this tree, 133/133/134), held by rows naming #1232. The fold fixture is the proof of the split:
+## it runs to 42 on ALL FOUR backends, so it carries no deviation row.
+build_reject_has reject_comptime_for_min_div_neg1 'divides the minimum value of its type by -1'
+build_reject_has reject_comptime_for_min_div_neg1 'at line 12 in '
+build_reject_has reject_comptime_for_unchecked_min_div_neg1 'divides the minimum value of its type by -1'
+build_reject_has reject_comptime_for_unchecked_min_div_neg1 'at line 14 in '
+build_reject_has reject_comptime_for_unchecked_min_mod_neg1 'divides the minimum value of its type by -1'
+build_reject_has reject_comptime_for_unchecked_min_mod_neg1 'at line 17 in '
+run_a64 reject_comptime_for_min_div_neg1 133
+run_rv64 reject_comptime_for_min_div_neg1 133
+run_wat reject_comptime_for_min_div_neg1 134
+run_a64 reject_comptime_for_unchecked_min_div_neg1 133
+run_rv64 reject_comptime_for_unchecked_min_div_neg1 133
+run_wat reject_comptime_for_unchecked_min_div_neg1 134
+run_a64 reject_comptime_for_unchecked_min_mod_neg1 133
+run_rv64 reject_comptime_for_unchecked_min_mod_neg1 133
+run_wat reject_comptime_for_unchecked_min_mod_neg1 134
+## The checked `%` folds to `0` on every backend — measured, so all four are asserted as values.
+run comptime_min_mod_neg1_folds_zero 42
 ## #1234: a checked `+ - *` that overflows the operation's type in a range bound is a located
 ## diagnostic (Comptime §2.6), never a wrapped bound; the twins trap until #1232. Inside `unchecked`
 ## the wrap is defined and still folds.

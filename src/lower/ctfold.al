@@ -1414,5 +1414,12 @@ ct_bound_guarded := fn(e : ptr(Expr), rr : ptr(Expr), cx : ptr(LCtx), op : u8, l
       codegen_reject(cx.src, ct_bound_site_off(e), cx.mod_s, cx.mod_l, "`comptime for` — this range bound overflows its type. Comptime §2.6: a checked operation that fails during comptime evaluation is a compile-time diagnostic, never a wrapped bound; write `unchecked (…)` for the wrap.", deref(cx.mar))
       Option(i64).Some(0)
     }
+    RgDivOverflow => {
+      ## Located at the divisor, as the zero-divisor reject is: `-1` is the operand the guard is about.
+      mut doff := ct_bound_site_off(rr)
+      if doff == 0 { doff = ct_bound_site_off(e) }
+      codegen_reject(cx.src, doff, cx.mod_s, cx.mod_l, "`comptime for` — this range bound divides the minimum value of its type by -1. Comptime §2.6: `MIN / -1`, and `MIN % -1` under `unchecked`, stay a diagnostic at comptime even inside `unchecked`, because the evaluator has no hardware behaviour to reproduce and I11 forbids inventing one; a checked `MIN % -1` yields 0 (§6.1) and is not refused.", deref(cx.mar))
+      Option(i64).Some(0)
+    }
   }
 }
