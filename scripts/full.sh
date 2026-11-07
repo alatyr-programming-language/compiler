@@ -62,11 +62,37 @@ _full_gate_filter_self_test() {
   echo "ok   full gate self-test: non-empty ALATYR_E2E_FILTER is rejected before the gate"
 }
 
+# The failure-shaped line the red-gate summary looks for in each per-stage log (#1491). A `failed=N`
+# counter counts only as its own word: the IR DIFF coverage line carries `dump-failed=1` and
+# `verify-failed=N`, which are reported, not gating, and matched an unanchored `failed=[1-9]` — so every
+# red gate listed full_ir_diff as failed whatever that stage's verdict was.
+_FULL_STAGE_FAIL_RE='^(  FAIL|FAIL|GATE: FAIL|DIFFER|Terminated)|WRONG=[1-9]|(^|[^-])failed=[1-9]|exited [1-9]'
+
+_full_stage_summary_self_test() {
+  local line want got
+  while IFS='|' read -r want line; do
+    if printf '%s\n' "$line" | grep -qE "$_FULL_STAGE_FAIL_RE"; then got=hit; else got=miss; fi
+    if [ "$got" != "$want" ]; then
+      echo "FAIL full gate self-test: stage summary pattern gave $got, want $want, on: $line" >&2
+      return 1
+    fi
+  done <<'EOF'
+miss|ir diff: programs=2484 agree=713 disagree=4 attributed=3 unexplained=1 verify-failed=0 dump-failed=1
+miss|ir diff: programs=2484 verify-failed=2 dump-failed=0
+hit|*** e2e: rows=3264 executed=3264 lost=0 assertions=4360 skipped=0 missing=0 failed=2 reobserved=0 ***
+hit|pilots: libraries=3 tests=11 programs=3 cases=6 failed=1
+miss|pilots: libraries=3 tests=11 programs=3 cases=6 failed=0
+hit|FAIL golden ig_agg: the built IR and every refusal equal the golden report
+EOF
+  echo "ok   full gate self-test: the red-gate stage summary skips dump-failed=/verify-failed= counters (#1491)"
+}
+
 _full_gate_filter_guard || exit $?
 if [ "${1:-}" = "--self-test" ]; then
   _full_gate_filter_self_test
   _full_gate_filter_self_test_rc=$?
   [ "$_full_gate_filter_self_test_rc" = 0 ] || exit "$_full_gate_filter_self_test_rc"
+  _full_stage_summary_self_test || exit 1
   # The INPUT-SET decider's gate-of-the-gate (issue #645). It belongs here, with the gate's other
   # self-tests, for the reason that issue records: on a healthy tree the enumeration check never
   # reaches its own failure verdict, so a neutered decider would go on printing a green line for
@@ -899,7 +925,7 @@ if [ "$fail" != 0 ]; then
   found=0
   while IFS= read -r slog; do
     [ -n "$slog" ] || continue
-    off=$(grep -E '^(  FAIL|FAIL|GATE: FAIL|DIFFER|Terminated)|WRONG=[1-9]|failed=[1-9]|exited [1-9]' "$slog" 2>/dev/null | grep -vE '^[[:space:]]*ok[[:space:]]' | head -1)
+    off=$(grep -E "$_FULL_STAGE_FAIL_RE" "$slog" 2>/dev/null | grep -vE '^[[:space:]]*ok[[:space:]]' | head -1)
     [ -n "$off" ] || continue
     printf '    %-28s %s\n' "$(basename "$slog" .log)" "${off:0:150}"
     found=$((found + 1))
