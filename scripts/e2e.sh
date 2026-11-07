@@ -12429,9 +12429,13 @@ emit_reject_has riscv64 issue1464_fnval_field_store "a function value has no fie
 ## The control: the six owner kinds #1464 must leave ALONE, one row each of the #703 item-3 census —
 ## a struct field and a struct field through a pointer (Types §6.1), a raw union member (§6.3, which
 ## REQUIRES it stays accepted), and a slice view's, a fixed array's and a `str`'s length (§6.4/§7).
-## It answers 135 = 42 + 42 + 42 + 3 + 3 + 3 on the parent and after.
-run issue1464_owner_kind_controls 135
-check_accept issue1464_owner_kind_controls
+## It answers 135 = 42 + 42 + 42 + 3 + 3 + 3 on the parent and after, on x86_64. `run_x86` because the
+## twins trap on three of the six terms (#1489: raw union member, field through a call-returned pointer,
+## `str` length); their cells are rows of scripts/known-deviations.tsv, and when #1489 lands this row
+## becomes `run … 135` and the rows leave. No `check_accept` beside it: that verb registers `accept` on
+## every backend, which contradicts the header's `run 135` on the twins (fixture_expect's (a)); the
+## x86_64 build runs the same checker, so a refusal here fails `run_x86` (the #263 and #1081 shape).
+run_x86 issue1464_owner_kind_controls 135
 ## The over-reach fence for the predicate's other direction is the four fixtures whose desugared callee
 ## span IS synthesized and which must keep COMPILING and answering their own values —
 ## `ambient_alloc_scalar` and `ambient_alloc_attr` (42, four backends), `map_capture` (42, `run_x86`
