@@ -247,7 +247,8 @@ sx_arith := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), o : Sx
 }
 ## `/ %` at 64 bits. `chk` traps `div_zero` on a zero divisor and, signed, `div_overflow` on
 ## `MIN / -1` (§4); the builder states both checks before the op as well, and the op keeps its own
-## meaning regardless. Any other mode is the hardware division (`hw`, owner decision D1: x86's
+## meaning regardless. A checked signed `rem` by `-1` is `0` with no trap and no `idivq` (Concurrency
+## §6.1, #1398). Any other mode is the hardware division (`hw`, owner decision D1: x86's
 ## `idivq`/`divq` fault — SIGFPE — on a zero divisor and on `MIN / -1`, as the legacy emitter's do).
 sx_div := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), o : SxDivK) -> bool {
   if not ir::kty_eq(ir::i_ty(ip), ir::Kty.KI64) { return false }
@@ -255,19 +256,23 @@ sx_div := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), o : SxDi
   sg : ir::Sgn = ir::i_sg(ip)
   mut signed := false
   match sg { SgS => { signed = true }; SgU => {}; SgNone => { return false } }
-  if ir::mode_is_chk(ir::i_md(ip)) {
+  chk := ir::mode_is_chk(ir::i_md(ip))
+  mut rem := false
+  match o { XdQuot => {}; XdRem => { rem = true } }
+  if chk {
     sx_put(sb, "  testq %rcx, %rcx\n")
     sx_trap_unless(sb, x, "jnz", ir::TrapKind.TkDivZero, ip)
-    if signed {
+    if signed and not rem {
       sx_put(sb, "  cmpq $-1, %rcx\n  jne 1f\n  movabsq $-9223372036854775808, %rdx\n  cmpq %rdx, %rax\n")
       sx_trap_unless(sb, x, "jne", ir::TrapKind.TkDivOverflow, ip)
     }
   }
-  if signed { sx_put(sb, "  cqto\n  idivq %rcx\n") } else { sx_put(sb, "  xorl %edx, %edx\n  divq %rcx\n") }
-  match o {
-    XdQuot => {}
-    XdRem => { sx_put(sb, "  movq %rdx, %rax\n") }
-  }
+  if chk and signed and rem {
+    ## A checked `rem` by `-1` is `0` for every dividend, `MIN` included (Concurrency §6.1, #1398). The
+    ## `idivq` would fault (#DE) on `MIN`, so the `-1` divisor skips it with a zero remainder.
+    sx_put(sb, "  xorl %edx, %edx\n  cmpq $-1, %rcx\n  je 1f\n  cqto\n  idivq %rcx\n1:\n")
+  } else if signed { sx_put(sb, "  cqto\n  idivq %rcx\n") } else { sx_put(sb, "  xorl %edx, %edx\n  divq %rcx\n") }
+  if rem { sx_put(sb, "  movq %rdx, %rax\n") }
   sx_strax(sb, ip)
 }
 ## `& | ^` on canonical operands, at any integer width or `bool` (canonical-preserving, V3).
