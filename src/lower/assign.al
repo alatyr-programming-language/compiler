@@ -61,9 +61,12 @@ fld_at := ast::fld_at
 ## `build` here.
 ##
 ## Re-measured on this tree with #655 fixed, by planting a 25th variant in `ast::Expr`: each of the
-## four enumerated sites below — `expr_num_const`, `direct_num_float_target`, `emit_struct_assign`,
+## four enumerated sites measured there — `expr_num_const`, `direct_num_float_target`, `emit_struct_assign`,
 ## `const_scalar_lit` — produces its own located `alatyr: check: type mismatch … in lower__assign`.
-## On the parent the same planted variant was refused only at `src/lower.al`, naming no site here.
+## `const_shadow_declinable` (#598) is a FIFTH enumerated site, spelled out over all 24 variants the same way;
+## it is written to the same rule but has NOT been re-measured with a planted variant, so it is named here as
+## enumerated, not as measured. On the parent the same planted variant was refused only at `src/lower.al`,
+## naming no site here.
 ## The companion measurement is the deletion census #544 stage 1 owes, run over ALL 57 line-initial
 ## `_ =>` arms under `src/lower/`, one arm at a time, on both sides with a compiler built from its own
 ## tree: the parent catches **0 of 57** — every deletion accepted, rc 0, silent — and this tree
@@ -2418,21 +2421,23 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
 ## bindings the use can see (Declarations §7.2): `a : u64 = K` followed by a LATER local `K` keeps
 ## reading the constant, which is what all four backends already answer.
 ##
-## Deliberately narrowed to a SCALAR constant value — `Num`, `BoolLit`, `FloatLit`. Refusing the
-## resolution is sound only while it cannot change the frame-slot SHAPE that `collect_slots` reserved
-## from its OWN `const_rhs` call: a scalar constant and a scalar `Var` are one word either way, so
-## the two agree without a second edit there. A shadowed `str`, struct, array or enum constant needs
-## the slot sizing decided together with it, and on the other three backends those shapes already
-## trap or diverge, so every one of them keeps exactly the path it takes today — filed as #598. The
-## `Expr::Field` const-struct-field arm below is likewise untouched: `var_name_span` of a `Field` is
-## empty, so the guard declines it, and that shape answers the constant on ALL FOUR backends today
-## (#597 — one agreed defect, not an x86 divergence, so fixing only x86 would hand the sweeps three
-## fresh disagreements).
+## Narrowed to the shapes whose DECLINING cannot move the frame-slot size — see `const_shadow_declinable`
+## below. #589 stopped at the one-word scalars (`Num`, `BoolLit`, `FloatLit`) because a scalar constant and
+## a scalar `Var` are one word either way, so the normalizer and `collect_slots`' OWN `const_rhs` call agree
+## without a second edit there. #598 widens it by `StrLit` and `StructLit`: those are two words and the
+## struct's own word block, and because checked sema has already forced the binding's type and the constant's
+## type to agree, `collect_slots` reserves the same words whichever value it is given — so again no second
+## edit is owed. An ARRAY and an ENUM stay DECLINED: a const array takes `.data` storage under a label while a
+## local array lives in frame words, and a variant's payload width comes from the literal's variant, so for
+## those two the resolution and the shape are not independent questions.
+##
+## The `Expr::Field` const-struct-field arm is a separate position and is guarded in `const_struct_field`
+## itself (#597): `var_name_span` of a `Field` is empty, so this guard never sees a field base.
 const_rhs_unshadowed := fn(v : ptr(Expr), cx : ptr(LCtx), use_s : usize) -> ptr(Expr) {
   r := const_rhs(v, cx.decls, cx.src)
   ## Nothing was resolved (not a `Var`, or a `Var` that is not a module constant): no question to ask.
   if unchecked bitcast(usize, r) == unchecked bitcast(usize, v) { return v }
-  if const_scalar_lit(r) == false { return r }
+  if const_shadow_declinable(r) == false { return r }
   vn := var_name_span(v)
   if name_shadowed(cx.slots, cx.ctslots, cx.src, vn.s, vn.n, use_s) { return v }
   r
@@ -2456,6 +2461,38 @@ const_scalar_lit := fn(e : ptr(Expr)) -> bool {
       | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
+}
+## #598 — the shapes for which declining a module-constant resolution CANNOT move the frame-slot size, so
+## the shadow guard above may fire on them. It widens `const_scalar_lit` (the one-word scalars, #589) by
+## the two shapes that stayed wrong after it: a `str` constant (`M := "abc"` with `f := fn(M : str)`) and a
+## STRUCT constant (`C := S(k = 3, m = 4)` with `f := fn(C : S)`), both of which the guard returned early on
+## and so answered the constant's value for a shadowing parameter or local — clean compile, exit 0.
+##
+## WHY THE WIDENING IS SOUND WHERE #589 stopped: the slot SIZE is not what the resolution decides here. The
+## binding's declared type and the constant's type are forced to agree by checked sema before this runs, so a
+## `str` RHS is a two-word {ptr,len} view whether it came from the `StrLit` or from the shadowing binding,
+## and a struct RHS is that struct's own word block either way — `collect_slots` reserves the same words and
+## needs no matching edit. An ARRAY is the exception and stays DECLINED: a module const array takes `.data`
+## STORAGE under a label (`const_array_value`, `global_needs_storage`) while a local array lives in frame
+## words, so there declining WOULD change the shape, not just the value. `EnumLit` stays declined for the
+## same reason in miniature — a variant's payload word count comes from the literal's variant, and this guard
+## has no business re-deciding it. Every other variant is declined because `const_rhs` never returns one.
+const_shadow_declinable := fn(e : ptr(Expr)) -> bool {
+  if const_scalar_lit(e) { return true }
+  mut ok := false
+  match deref(e) {
+    ## A `str` view (two words) and a struct block (its own field words): the same size as the shadowing
+    ## binding of the same type, which is what makes declining safe here.
+    Expr::StrLit | Expr::StructLit => { ok = true }
+    ## The scalars were answered by `const_scalar_lit` above; an array needs `.data` storage and an enum's
+    ## width comes from its variant, so both stay on the old path; the rest `const_rhs` never produces.
+    Expr::Num | Expr::BoolLit | Expr::FloatLit | Expr::ArrayLit | Expr::EnumLit
+      | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::AddrOf | Expr::Deref | Expr::Field | Expr::Index | Expr::Try
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  ok
 }
 ## The `Stmt::Assign` arm of `emit_stmts`, moved out verbatim (Step 4.1) — the largest arm, and it
 ## touches NO module global. Covers `name := e` / `name = e` in every RHS shape. The
