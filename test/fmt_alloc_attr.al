@@ -22,3 +22,4 @@ main := fn() -> u64 {
   m := get(isize, ar, n)
   return s.x + s.y + u64(deref(m))
 }
+## expect(x86_64): run 42

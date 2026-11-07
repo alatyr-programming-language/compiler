@@ -22,3 +22,4 @@ bonus := 20 when target.arch == Arch.x86_64
 main := fn() -> u64 {
   answer() + bonus + pick(S, 0)
 }
+## expect(x86_64): run 42

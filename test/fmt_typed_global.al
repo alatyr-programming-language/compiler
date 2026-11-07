@@ -7,3 +7,4 @@ mut TICK : i64 = 0
 STEP : u64 = 2
 
 main := fn() -> u64 { return LIMIT + STEP }
+## expect(x86_64): run 42

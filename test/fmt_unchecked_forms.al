@@ -24,3 +24,4 @@ main := fn() -> u64 {
   r : ptr(mut u64) = unchecked bitcast(ptr(mut u64), base)
   return 42
 }
+## expect(x86_64): run 42

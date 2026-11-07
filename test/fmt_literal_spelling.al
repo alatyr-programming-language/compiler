@@ -15,3 +15,4 @@ main := fn() -> u64 {
   if max_word() != 18446744073709551615 { return 0 }
   return 42
 }
+## expect(x86_64): run 42

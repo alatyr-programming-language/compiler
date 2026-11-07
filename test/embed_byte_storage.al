@@ -25,3 +25,4 @@ main := fn() -> u64 {
   if local.len != 4 or EMBED_GLOBAL.len != 4 or EMBED_CONST.len != 4 { return 8 }
   return 42
 }
+## expect(x86_64): run 42

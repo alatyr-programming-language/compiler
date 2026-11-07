@@ -20,3 +20,4 @@ sum := fn(T : type, v : T) -> u64 {
 main := fn() -> u64 {
   return sum(E, E.B(7))
 }
+## expect(x86_64): run 7

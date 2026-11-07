@@ -28,3 +28,4 @@ main := fn() -> u64 {
   t = t + Sixteen - 10
   return t
 }
+## expect(x86_64): run 42

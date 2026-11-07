@@ -9,3 +9,4 @@ main := fn() -> u64 {
   c : u64 = (1 + 2) * 9
   return a + b + c
 }
+## expect(x86_64): run 42

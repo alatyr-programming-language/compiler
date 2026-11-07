@@ -32,3 +32,4 @@ main := fn() -> u64 {
   if total_sum != 5500000 { return 3 }
   42
 }
+## expect(x86_64): run 42

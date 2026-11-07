@@ -7,3 +7,4 @@ main := fn() -> u64 {
   b := -a
   return u64(b - 58)
 }
+## expect(x86_64): run 42

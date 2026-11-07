@@ -7,3 +7,4 @@ answer := fn() -> u64 {
 main := fn() -> u64 {
   return answer()
 }
+## expect(x86_64): run 42

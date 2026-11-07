@@ -34,3 +34,4 @@ main := fn() -> u64 {
   if n != 42 { return 2 }
   return n
 }
+## expect(x86_64): run 42

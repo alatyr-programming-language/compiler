@@ -14,3 +14,4 @@ main := fn() -> u64 {
   if verdict(1, 1, 2) != 1 { return 101 }
   return 42
 }
+## expect: run 42

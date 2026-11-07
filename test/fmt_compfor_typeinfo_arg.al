@@ -45,3 +45,4 @@ main := fn() -> u64 {
   if own(A, x) != 2 { return 4 }
   return 42
 }
+## expect(x86_64): run 42

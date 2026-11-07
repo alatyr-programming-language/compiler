@@ -5,3 +5,4 @@ pub STEP : u64 = 2
 pub Pt := struct { x : u64, y : u64 }
 pub dbl := fn(v : u64) -> u64 { v + v }
 main := fn() -> u64 { dbl(20) + STEP }
+## expect(x86_64): run 42
