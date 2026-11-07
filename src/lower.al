@@ -2846,10 +2846,20 @@ const_rhs := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ptr(Expr)
 ## where `ORIGIN := Pt(x = …, y = …)`), else null. The const's `StructLit` args are in field
 ## DECLARATION order (as `emit_struct_assign` places them), so the field's value is the arg at its
 ## declaration index. Lets a const-struct field access emit the compile-time value inline.
-const_struct_field := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> ptr(Expr) {
+##
+## #597 — the base is looked up in the MODULE declaration table, on NAME ALONE. When the function being
+## emitted has a parameter or a local of that name, the inner binding owns the name (Declarations §5 +
+## §6.1) and there is no compile-time value to inline: answer null and let the ordinary runtime field read
+## run. Before this guard `f := fn(C : S) -> u64 { a : u64 = C.k }` stored the CONSTANT's 3 for a call
+## with `S(k = 41)` — clean compile, exit 0, no diagnostic. Measured on the parent 2d6e05f41 x86_64 was
+## the WRONG column (3) and the other three already answered 41; the issue's table, measured at 31ab74f,
+## had all four wrong. The use position is the BASE's own offset, so a local declared AFTER this occurrence
+## still does not shadow it (§7.2).
+const_struct_field := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, slots : ptr(SVec), ctslots : ptr(SVec)) -> ptr(Expr) {
   z := unchecked bitcast(ptr(Expr), 0)
   vn := var_name_span(base)
   if vn.n == 0 { return z }
+  if name_shadowed(slots, ctslots, src, vn.s, vn.n, vn.s) { return z }
   mcv := module_const_value(decls, src, vn.s, vn.n)
   if unchecked bitcast(usize, mcv) == 0 { return z }
   sli := struct_lit_info(mcv)
@@ -2880,10 +2890,10 @@ const_struct_field := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(r
 ## `collect_slots` wrote it inline over a payload binding, which the lowering could not type, so its
 ## `Field` arm was compared against tag 0 and never taken — the slot was sized for the unresolved
 ## field (one scalar word) while `emit_st_assign` stored the resolved value (a two-word `str`).
-const_field_rhs := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> ptr(Expr) {
+const_field_rhs := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, slots : ptr(SVec), ctslots : ptr(SVec)) -> ptr(Expr) {
   match deref(v) {
     Expr::Field(base, fs, fl) => {
-      cv := const_struct_field(base, fs, fl, decls, src, a)
+      cv := const_struct_field(base, fs, fl, decls, src, a, slots, ctslots)
       if unchecked bitcast(usize, cv) != 0 { return cv }
     }
     ## NOT A FIELD SELECTION: there is no `<const struct>.<field>` to materialize, and `v` is the
@@ -3207,6 +3217,21 @@ slot_declared_before := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usiz
     i += 1
   }
   res
+}
+
+## THE SHADOW PREDICATE (#597, #589): does the name `[s, s+n)` have an INNER-SCOPE binding — a
+## comptime binding, a bind, a parameter or a local — that the use at `use_s` can see? Declarations §5
+## makes a function (its parameters and its body) an inner scope of the module, and §6.1 gives the inner
+## name the win for the extent of that scope, so a name answered here by the MODULE declaration table is
+## answered WRONG whenever this returns true. ONE ANSWER, ONE PLACE: every pass that resolves a bare name
+## through `module_const_value` asks HERE first (#589's scalar `Var` half in
+## `lower::assign::const_rhs_unshadowed`, #597's const-struct-FIELD base in `const_struct_field`), so the
+## normalizer and the read cannot drift apart by construction rather than by coincidence. The two halves
+## are kept exactly as each was measured: `comptime_slot_is` takes the comptime side table, and
+## `slot_declared_before` restricts `slot_of`'s whole-function answer to what the use can see
+## (Declarations §7.2).
+name_shadowed := fn(slots : ptr(SVec), ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize, use_s : usize) -> bool {
+  comptime_slot_is(ctslots, src, s, n, use_s) or slot_declared_before(slots, src, s, n, use_s)
 }
 
 ## COMPTIME scalar locals have no frame slot. `collect_slots` records binding events in this separate
@@ -20982,8 +21007,10 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       }
       ## `CONST.field` — a field read on a module-level const struct (`ORIGIN.x`): emit the field's
       ## compile-time value inline (there is no runtime storage). Checked first: the base names a
-      ## const, not a local slot / tryable receiver.
-      csf := const_struct_field(base, fs, fl, cx.decls, cx.src, a)
+      ## const, not a local slot / tryable receiver. #597 — `const_struct_field` declines when the
+      ## base name is shadowed by an inner binding, so `f := fn(C : S) -> u64 { return C.k }` reads
+      ## the PARAMETER's field instead of inlining the constant.
+      csf := const_struct_field(base, fs, fl, cx.decls, cx.src, a, cx.slots, cx.ctslots)
       if unchecked bitcast(usize, csf) != 0 {
         emit_gas(csf, sb, cx, a, nl)
         return

@@ -2434,8 +2434,7 @@ const_rhs_unshadowed := fn(v : ptr(Expr), cx : ptr(LCtx), use_s : usize) -> ptr(
   if unchecked bitcast(usize, r) == unchecked bitcast(usize, v) { return v }
   if const_scalar_lit(r) == false { return r }
   vn := var_name_span(v)
-  if comptime_slot_is(cx.ctslots, cx.src, vn.s, vn.n, use_s) { return v }
-  if slot_declared_before(cx.slots, cx.src, vn.s, vn.n, use_s) { return v }
+  if name_shadowed(cx.slots, cx.ctslots, cx.src, vn.s, vn.n, use_s) { return v }
   r
 }
 
@@ -2502,7 +2501,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
   ## `str` field (for example TOOL-15's `app.version`) takes the existing two-word emit_str_assign
   ## path instead of bare emit_gas, whose deliberate scalar StrLit arm carries only the pointer word.
   ## `collect_slots` sizes the slot through the same `const_field_rhs` (#716).
-  mut v := const_field_rhs(const_rhs_unshadowed(v, cx, ns), cx.decls, cx.src, a)
+  mut v := const_field_rhs(const_rhs_unshadowed(v, cx, ns), cx.decls, cx.src, a, cx.slots, cx.ctslots)
   rqa := require_agg_parts(v, cx.decls, cx.src, a)
   ## (TYP-6) the ANNOTATED-scalar-local (`x : u64 = s`) and scalar-RE-ASSIGN (`G = s` / `x = s`)
   ## aggregate-into-scalar soundness nets moved UP into `sema::check_program` (build-path gate).
