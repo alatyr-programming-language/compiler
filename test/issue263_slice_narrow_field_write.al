@@ -50,4 +50,5 @@ main := fn() -> u64 {
 ## says a deviation is a defect of the implementation, never a permission: the directive stays the
 ## expectation. This program is valid and returns 42 on x86_64, so 42 is what every backend owes; the
 ## three that trap (aarch64 run/133, riscv64 run/133, wasm run/134) are held by rows in
-## scripts/known-deviations.tsv naming #1452, not by narrowing what is asked of them (#1452, #263).
+## scripts/known-deviations.tsv naming #263, not by narrowing what is asked of them (#263). The rows
+## named #1452 until it closed; #1472 retargeted them to #263, the open issue for this behaviour.

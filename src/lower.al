@@ -2846,10 +2846,20 @@ const_rhs := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ptr(Expr)
 ## where `ORIGIN := Pt(x = …, y = …)`), else null. The const's `StructLit` args are in field
 ## DECLARATION order (as `emit_struct_assign` places them), so the field's value is the arg at its
 ## declaration index. Lets a const-struct field access emit the compile-time value inline.
-const_struct_field := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> ptr(Expr) {
+##
+## #597 — the base is looked up in the MODULE declaration table, on NAME ALONE. When the function being
+## emitted has a parameter or a local of that name, the inner binding owns the name (Declarations §5 +
+## §6.1) and there is no compile-time value to inline: answer null and let the ordinary runtime field read
+## run. Before this guard `f := fn(C : S) -> u64 { a : u64 = C.k }` stored the CONSTANT's 3 for a call
+## with `S(k = 41)` — clean compile, exit 0, no diagnostic. Measured on the parent 2d6e05f41 x86_64 was
+## the WRONG column (3) and the other three already answered 41; the issue's table, measured at 31ab74f,
+## had all four wrong. The use position is the BASE's own offset, so a local declared AFTER this occurrence
+## still does not shadow it (§7.2).
+const_struct_field := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, slots : ptr(SVec), ctslots : ptr(SVec)) -> ptr(Expr) {
   z := unchecked bitcast(ptr(Expr), 0)
   vn := var_name_span(base)
   if vn.n == 0 { return z }
+  if name_shadowed(slots, ctslots, src, vn.s, vn.n, vn.s) { return z }
   mcv := module_const_value(decls, src, vn.s, vn.n)
   if unchecked bitcast(usize, mcv) == 0 { return z }
   sli := struct_lit_info(mcv)
@@ -2880,10 +2890,10 @@ const_struct_field := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(r
 ## `collect_slots` wrote it inline over a payload binding, which the lowering could not type, so its
 ## `Field` arm was compared against tag 0 and never taken — the slot was sized for the unresolved
 ## field (one scalar word) while `emit_st_assign` stored the resolved value (a two-word `str`).
-const_field_rhs := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> ptr(Expr) {
+const_field_rhs := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, slots : ptr(SVec), ctslots : ptr(SVec)) -> ptr(Expr) {
   match deref(v) {
     Expr::Field(base, fs, fl) => {
-      cv := const_struct_field(base, fs, fl, decls, src, a)
+      cv := const_struct_field(base, fs, fl, decls, src, a, slots, ctslots)
       if unchecked bitcast(usize, cv) != 0 { return cv }
     }
     ## NOT A FIELD SELECTION: there is no `<const struct>.<field>` to materialize, and `v` is the
@@ -3207,6 +3217,21 @@ slot_declared_before := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usiz
     i += 1
   }
   res
+}
+
+## THE SHADOW PREDICATE (#597, #589): does the name `[s, s+n)` have an INNER-SCOPE binding — a
+## comptime binding, a bind, a parameter or a local — that the use at `use_s` can see? Declarations §5
+## makes a function (its parameters and its body) an inner scope of the module, and §6.1 gives the inner
+## name the win for the extent of that scope, so a name answered here by the MODULE declaration table is
+## answered WRONG whenever this returns true. ONE ANSWER, ONE PLACE: every pass that resolves a bare name
+## through `module_const_value` asks HERE first (#589's scalar `Var` half in
+## `lower::assign::const_rhs_unshadowed`, #597's const-struct-FIELD base in `const_struct_field`), so the
+## normalizer and the read cannot drift apart by construction rather than by coincidence. The two halves
+## are kept exactly as each was measured: `comptime_slot_is` takes the comptime side table, and
+## `slot_declared_before` restricts `slot_of`'s whole-function answer to what the use can see
+## (Declarations §7.2).
+name_shadowed := fn(slots : ptr(SVec), ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize, use_s : usize) -> bool {
+  comptime_slot_is(ctslots, src, s, n, use_s) or slot_declared_before(slots, src, s, n, use_s)
 }
 
 ## COMPTIME scalar locals have no frame slot. `collect_slots` records binding events in this separate
@@ -6286,6 +6311,45 @@ fixed_arr_len := fn(base : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> i64 {
 ## `parse_arr_len` lives in `lower_layout` (shared with sema, docs/ir-slice-1.md §8.4); this binding keeps the
 ## name for `lower` and its descendants.
 parse_arr_len := lower_layout::parse_arr_len
+
+## The comptime element COUNT `N` of a FIXED-ARRAY FIELD read — `r.u.len` where `u : [T; N]` is a
+## field of the struct that `base`'s receiver names (#936). Types §6.4 lays `[T; N]` out as `N`
+## contiguous elements and makes `N` a compile-time value; Control-Flow §5.4 calls the same number the
+## indexed base's "own length". A `[T; N]` carries NO runtime length word, so the only correct answer
+## to `.len` is the declared `N` — and it is an immediate, so it costs nothing (I2).
+##
+## `fixed_arr_len` above answers this for a `Var` base that OWNS its storage in a frame slot; it cannot
+## see a FIELD, whose length lives in the field's declared TYPE span rather than in any slot. This is
+## the same query `global_field_off` already answers for a mutable-global struct field: resolve the
+## receiver's struct type span, take the field's declared type span, fold its `N` — a literal through
+## `parse_arr_len`, a comptime expression (`[T; K]`) through `ct_arr_len`.
+##
+## Returns -1 when `base` is not such a place: not a field, an unresolvable receiver or field type, or
+## a field whose type is not spelled as an array (`str`, `Slice(T)`, a struct, a scalar). Every one of
+## those keeps the `.len` read it has today BYTE-IDENTICAL — the neutrality lever.
+fixed_arr_field_len := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> i64 {
+  mut res : i64 = -1
+  match deref(base) {
+    Expr::Field(b, fs, fl) => {
+      bt := base_struct_span(b, cx)
+      if bt.n != 0 {
+        fts := field_type_span(cx.decls, cx.src, bt.s, bt.n, fs, fl, a)
+        ## byte 91 is `[` — the field's declared type is spelled as a fixed array (the byte form
+        ## `bytes(str_at(…))[0]`, as in `arr_type_lit_len`, so no new rodata string enters the pool).
+        if fts.n != 0 and bytes(str_at((cx.src + fts.s), 1))[0] == 91 {
+          mut nel := i64(parse_arr_len(cx.src, fts.s, fts.n))
+          if nel == 0 { nel = i64(ct_arr_len(cx.decls, cx.src, bt.s, bt.n, fts.s, fts.n, a)) }
+          if nel != 0 { res = nel }
+        }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  res
+}
 
 ## The ELEMENT TYPE span of an array type `[T; N]` — the text between `[` and `;` (or `]`), trimmed of
 ## surrounding spaces. `[u64; 3]` → `u64`. 0/0 if the span isn't an array. Used to mangle an array
@@ -20691,6 +20755,19 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           push_str(sb, ", %rax\n  pushq %rax\n")
           return
         }
+        ## #936 — the SAME question asked of a FIXED-ARRAY FIELD: `r.u.len` where `u : [u64; 3]`.
+        ## `fixed_arr_len` reads a slot and so answers only for a `Var` base; a field's `N` lives in
+        ## its declared type span. Without this arm `r.u.len` matched no Field path, fell to the slot
+        ## default and read a never-written frame word — MEASURED 0 on x86_64 while `r.u[i]` read the
+        ## right element, and 3 on aarch64/riscv64: a backend-dependent wrong value (I11). Gated to a
+        ## field whose declared type is spelled `[`, so every other `.len` is byte-identical.
+        fafl := fixed_arr_field_len(base, cx, a)
+        if fafl >= 0 {
+          push_str(sb, "  movq $")
+          push_int(sb, fafl)
+          push_str(sb, ", %rax\n  pushq %rax\n")
+          return
+        }
       }
       ## `f(…).len` / `f(…).ptr` — a DIRECT `.len`/`.ptr` on a `Slice(T)`-returning CALL result (not
       ## bound to a local). The call delivers {ptr/%rax, len/%rdx} (the slice-return convention); read
@@ -20933,8 +21010,10 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       }
       ## `CONST.field` — a field read on a module-level const struct (`ORIGIN.x`): emit the field's
       ## compile-time value inline (there is no runtime storage). Checked first: the base names a
-      ## const, not a local slot / tryable receiver.
-      csf := const_struct_field(base, fs, fl, cx.decls, cx.src, a)
+      ## const, not a local slot / tryable receiver. #597 — `const_struct_field` declines when the
+      ## base name is shadowed by an inner binding, so `f := fn(C : S) -> u64 { return C.k }` reads
+      ## the PARAMETER's field instead of inlining the constant.
+      csf := const_struct_field(base, fs, fl, cx.decls, cx.src, a, cx.slots, cx.ctslots)
       if unchecked bitcast(usize, csf) != 0 {
         emit_gas(csf, sb, cx, a, nl)
         return

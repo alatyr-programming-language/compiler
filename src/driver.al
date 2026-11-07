@@ -4660,6 +4660,15 @@ DIAG_SEAM_CMP_GRANT_MARKER : usize = 6902500000000000000
 ## comptime window, so only the seam window's upper bound moves and every other decoded range stays
 ## byte-identical.
 DIAG_SCALAR_FIELD_ACCESS_MARKER : usize = 6903000000000000000
+## Issue #774 / Control Flow §4 — the sema-side BARE-NUMERIC-CONDITION class
+## (`sema::NUMERIC_COND_DIAG_MARKER`). It sits between the scalar-owner field-access class and the
+## comptime window, so only that class's upper bound moves and every other decoded range stays
+## byte-identical. As with its neighbours, the window is NOT optional: without it the new code decodes
+## as `scalar_field_access` and reports a field access the program never wrote. NOT 6903500000000000000:
+## PR #1461 claims that value for `DIAG_CONST_CYCLE_MARKER`; two classes on one code share one window and
+## the first `if` in the decoder wins, so one of the two messages is always wrong. 6905000000000000000
+## clears the values already allocated to #1461, #1465 and #1469 and stays below `DIAG_CT_MARKER`.
+DIAG_NUMERIC_COND_MARKER : usize = 6905000000000000000
 ## Issue #221 / Modules §3 — the exact qualified private-constant value path. Keep this class distinct
 ## from the generic located visibility reject and below the comptime range so older codes stay stable.
 DIAG_QUALIFIED_PRIVATE_CONST_MARKER : usize = 6900000000000000000
@@ -4798,7 +4807,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   unapplied_type_fn := code >= DIAG_UNAPPLIED_TYPE_FN_MARKER and code < DIAG_ENUM_FIELD_ACCESS_MARKER
   enum_field_access := code >= DIAG_ENUM_FIELD_ACCESS_MARKER and code < DIAG_SEAM_CMP_GRANT_MARKER
   seam_cmp_grant := code >= DIAG_SEAM_CMP_GRANT_MARKER and code < DIAG_SCALAR_FIELD_ACCESS_MARKER
-  scalar_field_access := code >= DIAG_SCALAR_FIELD_ACCESS_MARKER and code < DIAG_CT_MARKER
+  scalar_field_access := code >= DIAG_SCALAR_FIELD_ACCESS_MARKER and code < DIAG_NUMERIC_COND_MARKER
+  numeric_cond := code >= DIAG_NUMERIC_COND_MARKER and code < DIAG_CT_MARKER
   multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_BRAND_CONVERSION_MARKER
   brand_conv := code >= DIAG_BRAND_CONVERSION_MARKER and code < DIAG_SIGNEDNESS_CONVERSION_MARKER
@@ -4875,6 +4885,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if seam_cmp_grant {
     raw = code - DIAG_SEAM_CMP_GRANT_MARKER
     span = raw / 4
+  } else if numeric_cond {
+    raw = code - DIAG_NUMERIC_COND_MARKER
+    span = raw / 4
   } else if scalar_field_access {
     raw = code - DIAG_SCALAR_FIELD_ACCESS_MARKER
     span = raw / 4
@@ -4921,7 +4934,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or numeric_cond or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::fd_str(2, "@limits(")
       wk1 := rt::fd_str(2, limit_name(kind))
@@ -4953,6 +4966,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if private_const { wkv := rt::fd_str(2, "qualified private constant is not visible from this module") }
     else if enum_field_access { wkefa := rt::fd_str(2, "a FIELD ACCESS on an ENUM value: an enum value is a discriminant plus ONE variant's payload and has no fields at all (Types §6.2/§9.4) — reach the payload through `match` and its binding patterns, not through a field name") }
     else if seam_cmp_grant { wscg := rt::fd_str(2, "a COMPARISON between a POINTER and an INTEGER outside `unchecked`: `p == 0` tests a fabricated pointer for null without `Option` (#1030 option B, Memory §4.5) — compare at one type, or spell the crossing inside `unchecked { … }`") }
+    else if numeric_cond { wknc := rt::fd_str(2, "a NUMERIC value used as a CONDITION: a numeric scalar is not truthy and provides no `is_true` (Control Flow §4, Stdlib §2.1) — a numeric condition uses an explicit comparison yielding `bool`, `if n != 0 { … }`, and a bare numeric condition is ill-formed") }
     else if scalar_field_access { wksfa := rt::fd_str(2, "a FIELD ACCESS on a SCALAR value: `.` selects a struct or union field, a tuple position `.N`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name") }
     else if unapplied_type_fn {
       wkua0 := rt::fd_str(2, "type function `")
@@ -7781,7 +7795,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   unapplied_type_fn := r >= DIAG_UNAPPLIED_TYPE_FN_MARKER and r < DIAG_ENUM_FIELD_ACCESS_MARKER
   enum_field_access := r >= DIAG_ENUM_FIELD_ACCESS_MARKER and r < DIAG_SEAM_CMP_GRANT_MARKER
   seam_cmp_grant := r >= DIAG_SEAM_CMP_GRANT_MARKER and r < DIAG_SCALAR_FIELD_ACCESS_MARKER
-  scalar_field_access := r >= DIAG_SCALAR_FIELD_ACCESS_MARKER and r < DIAG_CT_MARKER
+  scalar_field_access := r >= DIAG_SCALAR_FIELD_ACCESS_MARKER and r < DIAG_NUMERIC_COND_MARKER
+  numeric_cond := r >= DIAG_NUMERIC_COND_MARKER and r < DIAG_CT_MARKER
   multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_BRAND_CONVERSION_MARKER
   brand_conv := r >= DIAG_BRAND_CONVERSION_MARKER and r < DIAG_SIGNEDNESS_CONVERSION_MARKER
@@ -7858,6 +7873,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if seam_cmp_grant {
     raw = r - DIAG_SEAM_CMP_GRANT_MARKER
     span = raw / 4
+  } else if numeric_cond {
+    raw = r - DIAG_NUMERIC_COND_MARKER
+    span = raw / 4
   } else if scalar_field_access {
     raw = r - DIAG_SCALAR_FIELD_ACCESS_MARKER
     span = raw / 4
@@ -7905,7 +7923,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or numeric_cond or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::fd_str(2, "duplicate linker symbol") }
       else {
@@ -7940,6 +7958,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if private_const { dwkv := rt::fd_str(2, "qualified private constant is not visible from this module") }
     else if enum_field_access { dwkefa := rt::fd_str(2, "a FIELD ACCESS on an ENUM value: an enum value is a discriminant plus ONE variant's payload and has no fields at all (Types §6.2/§9.4) — reach the payload through `match` and its binding patterns, not through a field name") }
     else if seam_cmp_grant { dwscg := rt::fd_str(2, "a COMPARISON between a POINTER and an INTEGER outside `unchecked`: `p == 0` tests a fabricated pointer for null without `Option` (#1030 option B, Memory §4.5) — compare at one type, or spell the crossing inside `unchecked { … }`") }
+    else if numeric_cond { dwknc := rt::fd_str(2, "a NUMERIC value used as a CONDITION: a numeric scalar is not truthy and provides no `is_true` (Control Flow §4, Stdlib §2.1) — a numeric condition uses an explicit comparison yielding `bool`, `if n != 0 { … }`, and a bare numeric condition is ill-formed") }
     else if scalar_field_access { dwksfa := rt::fd_str(2, "a FIELD ACCESS on a SCALAR value: `.` selects a struct or union field, a tuple position `.N`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name") }
     else if unapplied_type_fn {
       dwkua0 := rt::fd_str(2, "type function `")

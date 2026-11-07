@@ -6655,6 +6655,18 @@ run int_literal_float_module_const 99
 ## column and the sweeps' own reference was the defect. Registered on all four backends (11 on
 ## x86_64, 99 elsewhere at 31ab74f) — four of the eleven cases are ORDER/over-eagerness controls.
 run module_const_shadowed_name 99
+## #597 / Declarations §5+§6.1: a PARAMETER or a LOCAL named like a module CONST STRUCT does not shadow
+## it for a FIELD read. `lower::const_struct_field` resolved the base through `module_const_value` on the
+## NAME ALONE at three sites (`emit_st_assign`'s `const_field_rhs` normalizer, `collect_slots`' slot
+## sizing beside it, and `emit_gas`' own `Expr::Field` arm), so `f := fn(C : S) -> u64 { a : u64 = C.k }`
+## called with `S(k = 41)` stored the CONSTANT's 3 from a clean compile. Measured on the parent 2d6e05f41
+## this is x86_64-ONLY (11 there; aarch64, riscv64 and wasm already answer 99), which corrects the issue's
+## table — measured at 31ab74f — and means the sweeps had a divergence to see but no fixture to see it on.
+## Registered on all four backends because the requirement is that they AGREE ON THE RIGHT ANSWER. Six
+## shadow cases (parameter, unannotated local, expression position, call argument, second field, annotated
+## local) and two OVER-EAGERNESS controls (unshadowed first and second field). Fails on the parent at
+## 2d6e05f41 with 11 = case 1, class 1: the constant's own field value.
+run issue597_shadowed_const_struct_field 99
 build_reject_has reject_typed_float_integer_f32 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_f64 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_u64 "check: type mismatch at line 2"
@@ -10320,6 +10332,11 @@ run nested_tuple_dot 42
 run array_enum_match 42
 run for_over_array 42
 run fixed_array_len 42
+## Types §6.4 / Control-Flow §5.4 — `.len` of a FIXED-ARRAY STRUCT FIELD (`r.u.len`, `u : [u64; 3]`)
+## is the declared `N`. #936: x86_64 answered 0 (the fold was gated on the slot-reading
+## `fixed_arr_len`, which sees only a `Var` base) while `r.u[i]` read the right element — a SILENT
+## WRONG VALUE, and a backend disagreement: aarch64/riscv64/wasm already answered 3.
+run fixed_array_field_len 42
 ## Grammar §2/§3: newline is an array item separator, not only a source whitespace byte.
 run array_literal_newline_separator 42
 ## Types §6.4 — `size([T; N])` ARRAY-TYPE literal as a comptime builtin argument (direct + UFCS,
@@ -10841,6 +10858,32 @@ run_wat reject_comptime_for_div_zero 134
 run_a64 reject_comptime_for_unchecked_mod_zero 133
 run_rv64 reject_comptime_for_unchecked_mod_zero 133
 run_wat reject_comptime_for_unchecked_mod_zero 134
+## #1233 — `MIN / -1` in a range bound is a located diagnostic, never a compiler crash. Before the
+## guard neither `/` nor `%` was checked at comptime, so the fold ran the HOST's `idiv` and the compiler
+## died with SIGFPE (rc 136), no message, no location: measured on the frozen `seed/alatyr`, native
+## x86_64, on all four fixtures below. Comptime §2.6 keeps `MIN / -1` — and `MIN % -1` under
+## `unchecked` — a diagnostic INSIDE `unchecked` too ("no hardware behaviour to reproduce, I11 forbids
+## inventing one"), while a CHECKED `MIN % -1` is §6.1's `0` and folds. The twins do not refuse until
+## #1232: they emit, and their programs trap (measured under qemu-aarch64 / qemu-riscv64 / wasmtime on
+## this tree, 133/133/134), held by rows naming #1232. The fold fixture is the proof of the split:
+## it runs to 42 on ALL FOUR backends, so it carries no deviation row.
+build_reject_has reject_comptime_for_min_div_neg1 'divides the minimum value of its type by -1'
+build_reject_has reject_comptime_for_min_div_neg1 'at line 12 in '
+build_reject_has reject_comptime_for_unchecked_min_div_neg1 'divides the minimum value of its type by -1'
+build_reject_has reject_comptime_for_unchecked_min_div_neg1 'at line 14 in '
+build_reject_has reject_comptime_for_unchecked_min_mod_neg1 'divides the minimum value of its type by -1'
+build_reject_has reject_comptime_for_unchecked_min_mod_neg1 'at line 17 in '
+run_a64 reject_comptime_for_min_div_neg1 133
+run_rv64 reject_comptime_for_min_div_neg1 133
+run_wat reject_comptime_for_min_div_neg1 134
+run_a64 reject_comptime_for_unchecked_min_div_neg1 133
+run_rv64 reject_comptime_for_unchecked_min_div_neg1 133
+run_wat reject_comptime_for_unchecked_min_div_neg1 134
+run_a64 reject_comptime_for_unchecked_min_mod_neg1 133
+run_rv64 reject_comptime_for_unchecked_min_mod_neg1 133
+run_wat reject_comptime_for_unchecked_min_mod_neg1 134
+## The checked `%` folds to `0` on every backend — measured, so all four are asserted as values.
+run comptime_min_mod_neg1_folds_zero 42
 ## #1234: a checked `+ - *` that overflows the operation's type in a range bound is a located
 ## diagnostic (Comptime §2.6), never a wrapped bound; the twins trap until #1232. Inside `unchecked`
 ## the wrap is defined and still folds.
@@ -11757,6 +11800,7 @@ run_wat signed_local_divmod 42
 run_wat int_literal_float_unchecked 99
 run_wat int_literal_float_module_const 99
 run_wat module_const_shadowed_name 99
+run_wat issue597_shadowed_const_struct_field 99
 run_wat bitcast_cmp_signedness 99
 run_wat inline_call 42
 run_wat stack_args 42
@@ -11860,6 +11904,7 @@ run_a64 signed_local_divmod 42
 run_a64 int_literal_float_unchecked 99
 run_a64 int_literal_float_module_const 99
 run_a64 module_const_shadowed_name 99
+run_a64 issue597_shadowed_const_struct_field 99
 run_a64 bitcast_cmp_signedness 99
 ## I11/CG-7 scoping: `unchecked` drops the aarch64 div-by-zero guard → raw `sdiv x,x,0` = 0.
 run_a64 unchecked_div_zero 0
@@ -11941,6 +11986,7 @@ run_rv64 signed_local_divmod 42
 run_rv64 int_literal_float_unchecked 99
 run_rv64 int_literal_float_module_const 99
 run_rv64 module_const_shadowed_name 99
+run_rv64 issue597_shadowed_const_struct_field 99
 run_rv64 bitcast_cmp_signedness 99
 run_rv64 unchecked_udiv_zero 42
 run_rv64 unchecked_rem_zero 41
@@ -12276,6 +12322,38 @@ emit_reject_has riscv64 issue703_scalar_tuple_pos "a scalar has no field to name
 ## and str global, and a field through a `ptr(P)` parameter) keep compiling and answer 18.
 run issue703_vty_owner_controls 18
 check_accept issue703_vty_owner_controls
+## Issue #774 (the `if`/`while` half) — a BARE NUMERIC CONDITION is refused (Control Flow §4: "A
+## numeric scalar is not truthy (it provides no `is_true`, Stdlib §2.1): a numeric condition uses an
+## explicit comparison yielding `bool` (`if n != 0 { … }`), never a bare `if n { … }`"; §6 gives
+## `while` the same condition). Parent verdicts (`origin/main` `2d6e05f4`, native x86_64, every rc read
+## outside a pipeline): `check` 0 and `build` 0 on all three rows, and each took the branch or spun the
+## loop on the word — the annotated `u64` and the unannotated `p := 10` (default `i64`, Types §9.1)
+## answered 1, the `while` ran to completion. The existing tolerant test already stops a KNOWN non-bool
+## (`if 1` and `if p + 1` both answer a `Mismatch`), so these three rows are exactly the hole: a bare
+## NAME whose kind the checker does not surface. A rule about an ill-formed program, independent of the
+## target, so one refusal covers all four backends and no deviation row is owed.
+build_reject_has issue774_if_numeric_cond_immutable "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond_immutable"
+build_reject_has issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+build_reject_has issue774_if_numeric_cond_unannotated "a bare numeric condition is ill-formed at line 6 in issue774_if_numeric_cond_unannotated"
+build_reject_has issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
+check_reject_has issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+check_reject_has issue774_if_numeric_cond_immutable "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond_immutable"
+check_reject_has issue774_if_numeric_cond_unannotated "a bare numeric condition is ill-formed at line 6 in issue774_if_numeric_cond_unannotated"
+check_reject_has issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
+emit_reject_has wat issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+emit_reject_has wat issue774_if_numeric_cond_immutable "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond_immutable"
+emit_reject_has aarch64 issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+emit_reject_has aarch64 issue774_if_numeric_cond_immutable "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond_immutable"
+emit_reject_has riscv64 issue774_if_numeric_cond "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond"
+emit_reject_has riscv64 issue774_if_numeric_cond_immutable "a bare numeric condition is ill-formed at line 7 in issue774_if_numeric_cond_immutable"
+emit_reject_has wat issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
+emit_reject_has aarch64 issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
+emit_reject_has riscv64 issue774_while_numeric_cond "a bare numeric condition is ill-formed at line 6 in issue774_while_numeric_cond"
+## The control: the conditions §4 and §8.1 make legal — a `bool` local (which §4 NAMES as the
+## condition), an explicit comparison, and `and` over two bools — keep compiling and answer 7 = 1 + 2 +
+## 4 on the parent and after. A refusal that fires here is over-broad.
+run issue774_truthy_cond_controls 7
+check_accept issue774_truthy_cond_controls
 ## The over-reach fence for the predicate's other direction is the four fixtures whose desugared callee
 ## span IS synthesized and which must keep COMPILING and answering their own values —
 ## `ambient_alloc_scalar` and `ambient_alloc_attr` (42, four backends), `map_capture` (42, `run_x86`
@@ -12348,6 +12426,21 @@ run trap_literal_ctx_field_u64 132
 run_a64 trap_literal_ctx_field_u64 133
 run_rv64 trap_literal_ctx_field_u64 133
 run_wat trap_literal_ctx_field_u64 134
+
+## #1283 - Types §9.1 / Declarations §3.4 at the ASSIGNMENT place. The representability check existed
+## at the annotated binding, the array element, the `T(v)` constructor and the call argument, but not at
+## a `=` re-assignment or a field store, so `x = 300` / `s.f = 300` into a `u8` were accepted and the
+## place held 300 / 44. The five refusals are sema's, so they are backend-independent; the control is
+## the in-range half of the same rule and must run on all four backends.
+check_build_located reject_narrow_lit_reassign 10 "type mismatch"
+check_build_located reject_narrow_arith_reassign 7 "comptime overflow"
+check_build_located reject_narrow_lit_field_store 11 "type mismatch"
+check_build_located reject_narrow_arith_field_store 8 "comptime overflow"
+check_build_located reject_narrow_lit_reassign_signed 11 "type mismatch"
+run accept_narrow_reassign_range 42
+run_a64 accept_narrow_reassign_range 42
+run_rv64 accept_narrow_reassign_range 42
+run_wat accept_narrow_reassign_range 42
 
 ## #973 — the same fallback, through a gap #966 did not close. `ib_bx_if` built each branch of an
 ## `if`-in-value-position with `ib_bx`, which asks the expression its OWN type; the bare literal branch

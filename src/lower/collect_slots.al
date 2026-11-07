@@ -186,7 +186,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
             ## `v := app.version` reserves one scalar word even though its const field is a two-word str
             ## view, and the later call ABI passes `v`'s ptr word instead of its pair address. (#716: the
             ## inline `match deref(v)` this replaces never took its `Field` arm — see the helper.)
-            mut v := const_field_rhs(const_rhs(v, decls, src), decls, src, a)
+            mut v := const_field_rhs(const_rhs(v, decls, src), decls, src, a, ptr(slots), ctslots)
             ## #1139 — size `s := unchecked mk(…)` from the peeled aggregate-returning call, exactly
             ## as `emit_st_assign` stores it.
             v = granted_agg_call_rhs(v, decls, src, a).e
