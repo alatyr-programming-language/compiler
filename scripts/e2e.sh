@@ -10316,6 +10316,11 @@ run nested_tuple_dot 42
 run array_enum_match 42
 run for_over_array 42
 run fixed_array_len 42
+## Types §6.4 / Control-Flow §5.4 — `.len` of a FIXED-ARRAY STRUCT FIELD (`r.u.len`, `u : [u64; 3]`)
+## is the declared `N`. #936: x86_64 answered 0 (the fold was gated on the slot-reading
+## `fixed_arr_len`, which sees only a `Var` base) while `r.u[i]` read the right element — a SILENT
+## WRONG VALUE, and a backend disagreement: aarch64/riscv64/wasm already answered 3.
+run fixed_array_field_len 42
 ## Grammar §2/§3: newline is an array item separator, not only a source whitespace byte.
 run array_literal_newline_separator 42
 ## Types §6.4 — `size([T; N])` ARRAY-TYPE literal as a comptime builtin argument (direct + UFCS,

@@ -6284,6 +6284,45 @@ fixed_arr_len := fn(base : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> i64 {
 ## name for `lower` and its descendants.
 parse_arr_len := lower_layout::parse_arr_len
 
+## The comptime element COUNT `N` of a FIXED-ARRAY FIELD read — `r.u.len` where `u : [T; N]` is a
+## field of the struct that `base`'s receiver names (#936). Types §6.4 lays `[T; N]` out as `N`
+## contiguous elements and makes `N` a compile-time value; Control-Flow §5.4 calls the same number the
+## indexed base's "own length". A `[T; N]` carries NO runtime length word, so the only correct answer
+## to `.len` is the declared `N` — and it is an immediate, so it costs nothing (I2).
+##
+## `fixed_arr_len` above answers this for a `Var` base that OWNS its storage in a frame slot; it cannot
+## see a FIELD, whose length lives in the field's declared TYPE span rather than in any slot. This is
+## the same query `global_field_off` already answers for a mutable-global struct field: resolve the
+## receiver's struct type span, take the field's declared type span, fold its `N` — a literal through
+## `parse_arr_len`, a comptime expression (`[T; K]`) through `ct_arr_len`.
+##
+## Returns -1 when `base` is not such a place: not a field, an unresolvable receiver or field type, or
+## a field whose type is not spelled as an array (`str`, `Slice(T)`, a struct, a scalar). Every one of
+## those keeps the `.len` read it has today BYTE-IDENTICAL — the neutrality lever.
+fixed_arr_field_len := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> i64 {
+  mut res : i64 = -1
+  match deref(base) {
+    Expr::Field(b, fs, fl) => {
+      bt := base_struct_span(b, cx)
+      if bt.n != 0 {
+        fts := field_type_span(cx.decls, cx.src, bt.s, bt.n, fs, fl, a)
+        ## byte 91 is `[` — the field's declared type is spelled as a fixed array (the byte form
+        ## `bytes(str_at(…))[0]`, as in `arr_type_lit_len`, so no new rodata string enters the pool).
+        if fts.n != 0 and bytes(str_at((cx.src + fts.s), 1))[0] == 91 {
+          mut nel := i64(parse_arr_len(cx.src, fts.s, fts.n))
+          if nel == 0 { nel = i64(ct_arr_len(cx.decls, cx.src, bt.s, bt.n, fts.s, fts.n, a)) }
+          if nel != 0 { res = nel }
+        }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  res
+}
+
 ## The ELEMENT TYPE span of an array type `[T; N]` — the text between `[` and `;` (or `]`), trimmed of
 ## surrounding spaces. `[u64; 3]` → `u64`. 0/0 if the span isn't an array. Used to mangle an array
 ## type-arg (`Array_<T>_<N>`) and to bind the element type in `display`'s array unroll.
@@ -20685,6 +20724,19 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if falf >= 0 {
           push_str(sb, "  movq $")
           push_int(sb, falf)
+          push_str(sb, ", %rax\n  pushq %rax\n")
+          return
+        }
+        ## #936 — the SAME question asked of a FIXED-ARRAY FIELD: `r.u.len` where `u : [u64; 3]`.
+        ## `fixed_arr_len` reads a slot and so answers only for a `Var` base; a field's `N` lives in
+        ## its declared type span. Without this arm `r.u.len` matched no Field path, fell to the slot
+        ## default and read a never-written frame word — MEASURED 0 on x86_64 while `r.u[i]` read the
+        ## right element, and 3 on aarch64/riscv64: a backend-dependent wrong value (I11). Gated to a
+        ## field whose declared type is spelled `[`, so every other `.len` is byte-identical.
+        fafl := fixed_arr_field_len(base, cx, a)
+        if fafl >= 0 {
+          push_str(sb, "  movq $")
+          push_int(sb, fafl)
           push_str(sb, ", %rax\n  pushq %rax\n")
           return
         }
