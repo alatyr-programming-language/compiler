@@ -16,4 +16,4 @@ main := fn() -> u64 {
   comptime for i in 0 .. B { a = a + 1 }
   return a + 7
 }
-## expect: reject "budget exhausted" "at line 16 in "
+## expect: reject "budget exhausted" "never a silent partial result. at line 16 in "
