@@ -6655,6 +6655,18 @@ run int_literal_float_module_const 99
 ## column and the sweeps' own reference was the defect. Registered on all four backends (11 on
 ## x86_64, 99 elsewhere at 31ab74f) — four of the eleven cases are ORDER/over-eagerness controls.
 run module_const_shadowed_name 99
+## #597 / Declarations §5+§6.1: a PARAMETER or a LOCAL named like a module CONST STRUCT does not shadow
+## it for a FIELD read. `lower::const_struct_field` resolved the base through `module_const_value` on the
+## NAME ALONE at three sites (`emit_st_assign`'s `const_field_rhs` normalizer, `collect_slots`' slot
+## sizing beside it, and `emit_gas`' own `Expr::Field` arm), so `f := fn(C : S) -> u64 { a : u64 = C.k }`
+## called with `S(k = 41)` stored the CONSTANT's 3 from a clean compile. Measured on the parent 2d6e05f41
+## this is x86_64-ONLY (11 there; aarch64, riscv64 and wasm already answer 99), which corrects the issue's
+## table — measured at 31ab74f — and means the sweeps had a divergence to see but no fixture to see it on.
+## Registered on all four backends because the requirement is that they AGREE ON THE RIGHT ANSWER. Six
+## shadow cases (parameter, unannotated local, expression position, call argument, second field, annotated
+## local) and two OVER-EAGERNESS controls (unshadowed first and second field). Fails on the parent at
+## 2d6e05f41 with 11 = case 1, class 1: the constant's own field value.
+run issue597_shadowed_const_struct_field 99
 build_reject_has reject_typed_float_integer_f32 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_f64 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_u64 "check: type mismatch at line 2"
@@ -11753,6 +11765,7 @@ run_wat signed_local_divmod 42
 run_wat int_literal_float_unchecked 99
 run_wat int_literal_float_module_const 99
 run_wat module_const_shadowed_name 99
+run_wat issue597_shadowed_const_struct_field 99
 run_wat bitcast_cmp_signedness 99
 run_wat inline_call 42
 run_wat stack_args 42
@@ -11856,6 +11869,7 @@ run_a64 signed_local_divmod 42
 run_a64 int_literal_float_unchecked 99
 run_a64 int_literal_float_module_const 99
 run_a64 module_const_shadowed_name 99
+run_a64 issue597_shadowed_const_struct_field 99
 run_a64 bitcast_cmp_signedness 99
 ## I11/CG-7 scoping: `unchecked` drops the aarch64 div-by-zero guard → raw `sdiv x,x,0` = 0.
 run_a64 unchecked_div_zero 0
@@ -11937,6 +11951,7 @@ run_rv64 signed_local_divmod 42
 run_rv64 int_literal_float_unchecked 99
 run_rv64 int_literal_float_module_const 99
 run_rv64 module_const_shadowed_name 99
+run_rv64 issue597_shadowed_const_struct_field 99
 run_rv64 bitcast_cmp_signedness 99
 run_rv64 unchecked_udiv_zero 42
 run_rv64 unchecked_rem_zero 41
