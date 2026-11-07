@@ -209,6 +209,7 @@ aarch64	test/issue1209_deref_bitcast_field_inline.al	run/133	#1188
 aarch64	test/issue1209_deref_bitcast_ptr_fields.al	run/133	#1188
 aarch64	test/issue1209_deref_bitcast_struct.al	run/133	#1188
 aarch64	test/issue1212_option_deref_struct.al	run/133	#1188
+aarch64	test/issue1228_call_field_subword.al	run/133	#1187
 aarch64	test/issue1238_vec_slice_range_narrow_elem.al	run/133	#1288
 aarch64	test/issue1254_deque_subword_call_deref.al	run/133	#1200
 aarch64	test/issue1254_deque_subword_slot.al	run/133	#1200
@@ -711,6 +712,7 @@ riscv64	test/issue1209_deref_bitcast_field_inline.al	run/133	#1188
 riscv64	test/issue1209_deref_bitcast_ptr_fields.al	run/133	#1188
 riscv64	test/issue1209_deref_bitcast_struct.al	run/133	#1188
 riscv64	test/issue1212_option_deref_struct.al	run/133	#1188
+riscv64	test/issue1228_call_field_subword.al	run/133	#1187
 riscv64	test/issue1238_vec_slice_range_narrow_elem.al	run/133	#1288
 riscv64	test/issue1254_deque_subword_call_deref.al	run/133	#1200
 riscv64	test/issue1254_deque_subword_slot.al	run/133	#1200
@@ -1214,6 +1216,7 @@ wasm	test/issue1209_deref_bitcast_field_inline.al	run/134	#1188
 wasm	test/issue1209_deref_bitcast_ptr_fields.al	run/134	#1188
 wasm	test/issue1209_deref_bitcast_struct.al	run/134	#1188
 wasm	test/issue1212_option_deref_struct.al	run/134	#1188
+wasm	test/issue1228_call_field_subword.al	run/134	#1187
 wasm	test/issue1238_vec_slice_range_narrow_elem.al	run/134	#1288
 wasm	test/issue1254_deque_subword_call_deref.al	run/134	#1186
 wasm	test/issue1254_deque_subword_slot.al	run/134	#1186
