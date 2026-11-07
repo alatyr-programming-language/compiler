@@ -17993,8 +17993,15 @@ emit_arch_intr := fn(mn_s : usize, mn_l : usize, phead : Option(ptr(mut Arg)), i
     if mn == "addl" { push_str(sb, "  addl %ebx, %eax\n") }
     if mn == "subl" { push_str(sb, "  subl %ebx, %eax\n") }
     ## signed divide/remainder: sign-extend %rax into %rdx:%rax (`cqto`), `idivq` → quo %rax, rem %rdx.
+    ## CHECKED `MIN % -1` yields `0` (§6.1, #1398) and x86_64 `idivq` FAULTS on it (`#DE`), so under
+    ## `chk` the divisor `== -1` case answers the remainder in %rdx and jumps past the divide; under
+    ## `unchecked` (§6.2) the hardware behaviour stands. `num.al` says it itself: "a remainder cannot
+    ## overflow" (lib/base/num.al §Remainder).
     if mn == "idivq" { push_str(sb, "  cqto\n  idivq %rbx\n") }
-    if mn == "iremq" { push_str(sb, "  cqto\n  idivq %rbx\n  movq %rdx, %rax\n") }
+    if mn == "iremq" {
+      if cx.vchk { push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  xorl %edx, %edx\n  jmp 2f\n1:\n  cqto\n  idivq %rbx\n2:\n  movq %rdx, %rax\n") }
+      else { push_str(sb, "  cqto\n  idivq %rbx\n  movq %rdx, %rax\n") }
+    }
     ## unsigned divide/remainder: zero %rdx, `divq` → quo %rax, rem %rdx.
     if mn == "divq" { push_str(sb, "  xorq %rdx, %rdx\n  divq %rbx\n") }
     if mn == "remq" { push_str(sb, "  xorq %rdx, %rdx\n  divq %rbx\n  movq %rdx, %rax\n") }
@@ -18281,7 +18288,9 @@ emit_routed_int_guard := fn(op : i64, typ : str, be : ptr(Expr), l : ptr(Expr), 
   }
   if (op == 19 or op == 29) and (not expr_is_pos_num(r)) {
     push_str(sb, "  testq %rbx, %rbx\n  jnz 1f\n  ud2\n1:\n")
-    if dsigned {
+    ## `/` ONLY: `MIN % -1` is not in the checked-overflow set (§6.1) and must answer 0, which the
+    ## routed `iremq` below does without reaching `idivq` (#1398).
+    if dsigned and op == 19 {
       push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  movq $-9223372036854775808, %rdx\n  cmpq %rdx, %rax\n  jne 1f\n  ud2\n1:\n")
     }
   }
@@ -19380,7 +19389,11 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       }
       if cx.vchk and (op == 19 or op == 29) and (not expr_is_pos_num(r)) {
         push_str(sb, "  testq %rbx, %rbx\n  jnz 1f\n  ud2\n1:\n")
-        if dsigned {
+        ## The division-overflow trap is `/` ONLY. `MIN % -1` is NOT in the checked-overflow set
+        ## (§6.1): its result 0 is representable, so `%` must answer 0 and never trap — see the `%`
+        ## arm below, which answers it without reaching `idivq`. Emitting this trap for `%` too is
+        ## what made a valid program fault on all four backends (#1398).
+        if dsigned and op == 19 {
           if dvmin == 0 { push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  movq $-9223372036854775808, %rdx\n  cmpq %rdx, %rax\n  jne 1f\n  ud2\n1:\n") }
           else {
             push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  movq $")
@@ -19393,7 +19406,16 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if dsigned { push_str(sb, "  cqto\n  idivq %rbx\n") } else { push_str(sb, "  xorq %rdx, %rdx\n  divq %rbx\n") }
       }
       if op == 29 {
-        if dsigned { push_str(sb, "  cqto\n  idivq %rbx\n  movq %rdx, %rax\n") } else { push_str(sb, "  xorq %rdx, %rdx\n  divq %rbx\n  movq %rdx, %rax\n") }
+        ## CHECKED `MIN % -1` yields `0` (§6.1, #1398): x86_64 `idivq` FAULTS on it (`#DE`, CG-8), so
+        ## the divisor `== -1` case — the same compare as the `MIN / -1` guard above — answers the
+        ## remainder in %rdx directly and JUMPS past the divide; every other divisor divides normally.
+        ## Under `unchecked` (cx.vchk false) the guard is dropped and the hardware fault stands (§6.2).
+        ## A positive-literal divisor can never be -1, so `expr_is_pos_num` skips the guard entirely.
+        if dsigned and cx.vchk and (not expr_is_pos_num(r)) {
+          push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  xorl %edx, %edx\n  jmp 2f\n1:\n")
+          push_str(sb, "  cqto\n  idivq %rbx\n2:\n  movq %rdx, %rax\n")
+        }
+        else if dsigned { push_str(sb, "  cqto\n  idivq %rbx\n  movq %rdx, %rax\n") } else { push_str(sb, "  xorq %rdx, %rdx\n  divq %rbx\n  movq %rdx, %rax\n") }
       }
       ## Bitwise `&` (34) / `|` (35) / `^` (36): the operands are already in %rax (left) /
       ## %rbx (right); apply the register-to-register form. No signedness — a pure bit op.

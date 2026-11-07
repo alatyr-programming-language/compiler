@@ -255,15 +255,29 @@ sx_div := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), o : SxDi
   sg : ir::Sgn = ir::i_sg(ip)
   mut signed := false
   match sg { SgS => { signed = true }; SgU => {}; SgNone => { return false } }
+  ## `%` vs `/`, as a flag: the checked-overflow trap belongs to `/` alone, and `%` answers the
+  ## `MIN % -1` case itself (§6.1, #1398) — see the two arms below.
+  mut is_rem := false
+  match o { XdQuot => {}; XdRem => { is_rem = true } }
   if ir::mode_is_chk(ir::i_md(ip)) {
     sx_put(sb, "  testq %rcx, %rcx\n")
     sx_trap_unless(sb, x, "jnz", ir::TrapKind.TkDivZero, ip)
-    if signed {
+    ## The division-overflow trap is `/` ONLY. `MIN % -1` is NOT in the checked-overflow set (§6.1):
+    ## its result 0 is representable, so `%` answers 0 and never traps — the `XdRem` arm below answers
+    ## it without reaching `idivq`, which faults (`#DE`) on x86_64. Emitting this trap for `%` too is
+    ## what made a valid program fault on all four backends (#1398).
+    if signed and not is_rem {
       sx_put(sb, "  cmpq $-1, %rcx\n  jne 1f\n  movabsq $-9223372036854775808, %rdx\n  cmpq %rdx, %rax\n")
       sx_trap_unless(sb, x, "jne", ir::TrapKind.TkDivOverflow, ip)
     }
   }
-  if signed { sx_put(sb, "  cqto\n  idivq %rcx\n") } else { sx_put(sb, "  xorl %edx, %edx\n  divq %rcx\n") }
+  if signed and is_rem and ir::mode_is_chk(ir::i_md(ip)) {
+    ## CHECKED `MIN % -1` yields `0` (§6.1, #1398): the divisor `== -1` case — the same compare as the
+    ## `MIN / -1` guard above — answers the remainder in %rdx and jumps past the divide. `unchecked`
+    ## (§6.2) keeps the hardware fault. %rdx is what the `XdRem` arm below moves to %rax.
+    sx_put(sb, "  cmpq $-1, %rcx\n  jne 1f\n  xorl %edx, %edx\n  jmp 2f\n1:\n")
+    sx_put(sb, "  cqto\n  idivq %rcx\n2:\n")
+  } else if signed { sx_put(sb, "  cqto\n  idivq %rcx\n") } else { sx_put(sb, "  xorl %edx, %edx\n  divq %rcx\n") }
   match o {
     XdQuot => {}
     XdRem => { sx_put(sb, "  movq %rdx, %rax\n") }

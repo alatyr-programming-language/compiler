@@ -5237,6 +5237,26 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           push_str(sb, " (i64.div_s (global.get $__ova) (global.get $__ovb)))")
           return
         }
+        ## CHECKED `MIN % -1` yields `0` (§6.1, #1398): WASM `i64.rem_s` TRAPS on division overflow, so
+        ## the divisor `== -1` case answers `0` inside an `if` whose `else` is the ONLY place `rem_s`
+        ## appears — the divide is never executed for that divisor, which is exactly what §6.1 requires
+        ## ("produces 0 without executing the divide", CG-8/CG-13). Every other divisor takes the `else`
+        ## and divides normally, including 0, whose hardware trap is unchanged. Under `unchecked` (§6.2)
+        ## this block does not fire and the generic path below keeps the hardware trap. Operands ride the
+        ## same nesting-safe scratch globals the checked blocks above use ($__ova dividend, $__ovb
+        ## divisor). `nw` is empty for `/` and `%` (computed for 16/17/18/36 only), so no narrow wrap
+        ## is lost by returning here.
+        if op == 29 and dsigned and WAT_CHK {
+          push_str(sb, "(block (result i64) ")
+          emit_wat_expr(l, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, " ")
+          emit_wat_expr(r, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, " global.set $__ovb global.set $__ova")
+          push_str(sb, " (if (i64.eq (global.get $__ovb) (i64.const -1))")
+          push_str(sb, " (then (i64.const 0))")
+          push_str(sb, " (else (i64.rem_s (global.get $__ova) (global.get $__ovb)))))")
+          return
+        }
         ## bind pre/post to locals FIRST — an inline str-returning call as a push_str arg scrambles it.
         pre := wat_narrow_pre(nw)
         post := wat_narrow_post(nw)

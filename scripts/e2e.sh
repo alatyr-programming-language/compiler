@@ -9057,6 +9057,16 @@ run checked_div_zero 132
 run checked_udiv_zero 132
 run checked_rem_zero 132
 run checked_div_min_neg1 132
+## #1398 — the OTHER half of the same rule: `MIN % -1` is NOT in the checked-overflow set (§6.1), so a
+## checked `%` answers `0` and never traps, on EVERY backend. Each emitter reused the trapping `MIN / -1`
+## guard for `%`, so a valid program faulted: x86_64 `ud2` (132, and the hardware `#DE` 136 without it),
+## aarch64 `brk #0` (133), riscv64 `ebreak` (133), wasm `i64.rem_s` trap (134). x86_64 and wasm FAULT on
+## it, so their emitters answer 0 WITHOUT EXECUTING the divide; aarch64 and riscv64 define it as 0 in
+## hardware (appendix §2), so their guard is simply scoped to `/`. `run N` on `*` asserts 63 on all four.
+## Scoped to x86_64 for now: aarch64, riscv64 and wasm still trap on `%` at the native width, held
+## by rows in scripts/known-deviations.tsv naming #1486 (the IR path guards `%` with the MIN / -1
+## trap). When #1486 lands this row becomes `run issue1398_min_mod_minus_one 63` and the rows leave.
+run_x86 issue1398_min_mod_minus_one 63
 ## #606 — `MIN / -1` is a member of the checked-overflow set at EVERY signed width, not only i64.
 ## Each backend's guard compared the dividend against the 64-bit INT64_MIN, which a narrow dividend
 ## can never equal, so `(-128 : i8) / (-1 : i8)` answered 128 — a value OUTSIDE `i8` living in an
