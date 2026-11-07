@@ -3200,23 +3200,105 @@ slot_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> i64 {
 ## outer name: for `K : u64 = K` over a module constant `K`, the slot's recorded `ns` IS that
 ## statement's own name offset, so it is not "before" it. A PARAMETER's `ns` lies in the parameter
 ## list, textually ahead of every body statement, so a parameter always answers true.
-slot_declared_before := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize, use_s : usize) -> bool {
+##
+## #1497 — "before" is not enough: the binding must also still be IN SCOPE at the use. Scope is
+## lexical and block-structured (Declarations §5) and the inner name wins only WITHIN the inner scope
+## (§6.1), so after `if t == 1 { C := S(k = 50, m = 0) }` has closed, `C.k` is the module constant's
+## field again; asking only the source order read the dead local's slot (50 where 7 is due, on x86_64,
+## aarch64 and riscv64). `binding_in_scope_at` answers the scope half. The slot map alone cannot be
+## asked it: it is function-scoped by name (#406) and keeps only the FIRST declaration of a name, so
+## for `if a { C := … }` followed by `if b { C := … ; x = C.k }` its one entry is out of scope while
+## the second declaration is in scope. Every ordinary `Assign` also leaves an event in the comptime
+## side table (`collect_slots` → `bind_comptime_shadow`, `ek == 254`), each at its own name offset, so
+## the declaration sites are the slot entries (parameters, loop variables, pattern bindings, first
+## declarations) and those events together — the shadow holds when ANY of them is in scope.
+slot_declared_before := fn(slots : ptr(SVec), ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize, use_s : usize) -> bool {
   if n == 0 { return false }
   cnt := svec_len(slots)
-  st := svec_stride()
-  base := deref(slots).base
-  mut res := false
   mut i : usize = 0
   while i < cnt {
-    e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
+    e := svec_at(SlotEntry, slots, i)
     ## The same inline length pre-check `slot_of` uses, and `streq` is the same arbiter; only the
-    ## position test and the bool result differ.
+    ## position and scope tests and the bool result differ.
     if deref(e).nl == n and deref(e).ns < use_s {
-      if lower_ctx::streq(src, deref(e).ns, n, s, n) { res = true }
+      if lower_ctx::streq(src, deref(e).ns, n, s, n) {
+        if binding_in_scope_at(src, deref(e).ns, n, use_s) { return true }
+      }
     }
     i += 1
   }
-  res
+  ccnt := ctslots_len(ctslots)
+  if ccnt == 0 { return false }
+  mut j : usize = 0
+  while j < ccnt {
+    c := svec_at(SlotEntry, ctslots, j)
+    if deref(c).ek == 254 and deref(c).nl == n and deref(c).ns < use_s {
+      if lower_ctx::streq(src, deref(c).ns, n, s, n) {
+        if binding_in_scope_at(src, deref(c).ns, n, use_s) { return true }
+      }
+    }
+    j += 1
+  }
+  false
+}
+
+## #1497 — the block a binding's scope is (Declarations §5), read off the token after its name:
+## `RestOfBlock` for a `:=` or annotated local, a parameter, and a pattern binding (whose enclosing
+## block is its `match`, so a sibling arm still counts it — the answer this guard gave before #1497);
+## `LoopBody` for a `for` / `comptime for` loop variable, written before the `{` of the body it is
+## scoped to, so the body's own `}` ends it.
+BindScope := enum { RestOfBlock, LoopBody }
+
+bind_scope_of := fn(src : ptr(u8), after : usize) -> BindScope {
+  mut i := after
+  while src_is_blank(src_byte(src, i)) { i += 1 }
+  if src_byte(src, i) == 105 and src_byte(src, i + 1) == 110 and src_is_blank(src_byte(src, i + 2)) {
+    return BindScope.LoopBody                                           ## `in`
+  }
+  BindScope.RestOfBlock
+}
+
+src_byte := fn(src : ptr(u8), i : usize) -> u8 { bytes(str_at((src + i), 1))[0] }
+src_is_blank := fn(b : u8) -> bool { b == 32 or b == 9 or b == 10 or b == 13 }
+
+## #1497 — is the binding whose name is `[ns, ns+nl)` still in scope at `use_s` (`ns < use_s`)? Walk the
+## source between the two and count the braces, skipping string and char literals and `#` comments
+## (Grammar §2.5), the three places a brace is not a token. A `}` that closes a block opened before the
+## name ends a `RestOfBlock` binding; a `}` that closes the first block opened after it ends a `LoopBody`
+## one. Reaching the end of the text answers true, the answer before #1497, rather than guess.
+binding_in_scope_at := fn(src : ptr(u8), ns : usize, nl : usize, use_s : usize) -> bool {
+  form := bind_scope_of(src, ns + nl)
+  mut depth : i64 = 0
+  mut i : usize = ns + nl
+  while i < use_s {
+    b := src_byte(src, i)
+    if b == 0 { return true }
+    if b == 34 or b == 39 {
+      ## a string or char literal: up to its unescaped closing quote
+      i += 1
+      while src_byte(src, i) != b and src_byte(src, i) != 0 {
+        if src_byte(src, i) == 92 { i += 1 }
+        i += 1
+      }
+      i += 1
+    } else if b == 35 {
+      while src_byte(src, i) != 10 and src_byte(src, i) != 0 { i += 1 }
+    } else if b == 123 {
+      depth += 1
+      i += 1
+    } else if b == 125 {
+      depth -= 1
+      i += 1
+      if depth < 0 { return false }
+      match form {
+        BindScope::RestOfBlock => {}
+        BindScope::LoopBody => { if depth == 0 { return false } }
+      }
+    } else {
+      i += 1
+    }
+  }
+  true
 }
 
 ## THE SHADOW PREDICATE (#597, #589): does the name `[s, s+n)` have an INNER-SCOPE binding — a
@@ -3231,7 +3313,13 @@ slot_declared_before := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usiz
 ## `slot_declared_before` restricts `slot_of`'s whole-function answer to what the use can see
 ## (Declarations §7.2).
 name_shadowed := fn(slots : ptr(SVec), ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize, use_s : usize) -> bool {
-  comptime_slot_is(ctslots, src, s, n, use_s) or slot_declared_before(slots, src, s, n, use_s)
+  comptime_slot_is(ctslots, src, s, n, use_s) or slot_declared_before(slots, ctslots, src, s, n, use_s)
+}
+
+## The number of entries in the comptime side table, 0 when there is no table.
+ctslots_len := fn(ctslots : ptr(SVec)) -> usize {
+  if unchecked bitcast(usize, ctslots) == 0 { return 0 }
+  svec_len(ctslots)
 }
 
 ## COMPTIME scalar locals have no frame slot. `collect_slots` records binding events in this separate
@@ -3240,8 +3328,8 @@ name_shadowed := fn(slots : ptr(SVec), ctslots : ptr(SVec), src : ptr(u8), s : u
 ## both markers stay out of the ordinary frame-slot vector, so they cannot change a function's ABI or
 ## frame size. The source offset in `off` keeps an earlier branch/use from inheriting a later rebind.
 comptime_slot_is := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize, use_s : usize) -> bool {
-  if unchecked bitcast(usize, ctslots) == 0 { return false }
-  cnt := svec_len(ctslots)
+  cnt := ctslots_len(ctslots)
+  if cnt == 0 { return false }
   st := svec_stride()
   base := deref(ctslots).base
   mut i : usize = 0

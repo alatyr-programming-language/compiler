@@ -11263,6 +11263,13 @@ run_x86 issue864_global_arg_str 42
 # #865 — a local annotated `Option(ptr(T))` and initialized from a component of a multi-payload variant's
 # pattern is the one-word folded Option: it can be walked with `match` (the AST list migrations' shape).
 run_x86 issue865_option_ptr_payload_local 42
+# #1497 / Declarations §5+§6.1 — after the block that declared a local `C` closes, `C.k` is the module
+# constant's field again. `lower::slot_declared_before` asked only whether the slot was declared EARLIER,
+# not whether its block was still open, so the read took the dead local's slot. Fails on the parent
+# (#1502's tip) with 5 (case 1, class 1: the dead local's 50 where 7 is due). x86_64 only: aarch64,
+# riscv64 and wasm trap on the block-local declaration (#1502's fail-loud stub; wasm's own #1496 trap
+# follows it), known deviations.
+run_x86 issue1497_block_scoped_shadow_const 99
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.

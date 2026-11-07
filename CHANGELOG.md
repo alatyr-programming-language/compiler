@@ -131,6 +131,14 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `0 .. D % 10` unrolled zero times instead of 3 and 5, `5 % D` took the signed `% -1` shortcut and
   unrolled zero times instead of 5, and `2^63 / D` killed the compiler with SIGFPE. Signedness lives
   in the operation (Types §3.2, Concurrency §6.5); fixed on all four backends.
+- **A local no longer shadows a module constant after its block closes, on x86_64 (#1497).** After
+  `if t == 1 { C := S(k = 50, m = 0) }`, a later `C.k` (or `a : u64 = K` after a block-local `K := 50`)
+  read the dead local's slot: 50 where the constant's 7 is due, from a clean compile with no diagnostic.
+  When the block never ran, it read 0. Declarations §5 and §6.1 limit the inner name to its block. The
+  shadow check now also asks whether the declaring block is still open, and a `for` variable's scope is
+  the loop body only. A sibling block's re-declaration still shadows inside its own block. aarch64,
+  riscv64 and wasm trap on such a block-local declaration (#1502; wasm also has #1496), and a bare-name
+  read such as `return K` after the block still leaks on x86_64 (#432).
 - **A block-local declaration that names a module binding traps on aarch64, riscv64 and wasm instead of
   overwriting the binding (#1502).** After `if t == 1 { K := 50 ... }` in one function, a read of the
   module constant `K` anywhere later, in that function or another, answered the dead local's 50 where 7
