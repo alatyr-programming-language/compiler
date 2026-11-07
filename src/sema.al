@@ -293,9 +293,10 @@ scalar_field_access_err := fn(s : usize) -> CheckErr { SCALAR_FIELD_ACCESS_DIAG_
 ## it has no field, and `.N` is a tuple position (Types §6.1), so neither `g.a` nor `g.0` names anything.
 ## Measured on the parent (`origin/main` `aab6ce1a`, native x86_64), `f := fn() -> u64 { return 42 }`
 ## `g := f` `return g.a` compiled at rc 0 and answered a fabricated `0`. Placed above
-## SCALAR_FIELD_ACCESS_DIAG_MARKER and below the CT window, so only the scalar window's upper bound moves
-## and every other decoded CheckErr range stays byte-identical.
-FNVAL_FIELD_ACCESS_DIAG_MARKER : usize = 6903500000000000000
+## SCALAR_FIELD_ACCESS_DIAG_MARKER and below NUMERIC_COND_DIAG_MARKER, at the integrator-allocated
+## value in the range chain, so only the scalar window's upper bound moves and every other decoded
+## CheckErr range stays byte-identical.
+FNVAL_FIELD_ACCESS_DIAG_MARKER : usize = 6904500000000000000
 fnval_field_access_err := fn(s : usize) -> CheckErr { FNVAL_FIELD_ACCESS_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #774 / Control Flow §4 — a BARE NUMERIC CONDITION. §4: "A numeric scalar is not truthy (it
 ## provides no `is_true`, Stdlib §2.1): a numeric condition uses an explicit comparison yielding `bool`

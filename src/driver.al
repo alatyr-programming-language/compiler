@@ -4661,11 +4661,12 @@ DIAG_SEAM_CMP_GRANT_MARKER : usize = 6902500000000000000
 ## byte-identical.
 DIAG_SCALAR_FIELD_ACCESS_MARKER : usize = 6903000000000000000
 ## Issue #1464 / Functions §1.5 + Modules §2 — the sema-side FUNCTION-VALUE-OWNER FIELD ACCESS class
-## (`sema::FNVAL_FIELD_ACCESS_DIAG_MARKER`). It sits between the scalar-owner class and the comptime
-## window, so only the scalar window's upper bound moves and every other decoded range stays
-## byte-identical. As with the scalar class, the window is NOT optional: without it the new code decodes
+## (`sema::FNVAL_FIELD_ACCESS_DIAG_MARKER`). It sits between the scalar-owner class and the
+## numeric-condition class (`DIAG_NUMERIC_COND_MARKER`), at the value the integrator allocated in the
+## range chain (each class owns `[its marker, the next class's marker)`), so only the scalar window's
+## upper bound moves and every other decoded range stays byte-identical. As with the scalar class, the window is NOT optional: without it the new code decodes
 ## as `scalar_field_access` and reports a scalar with an offset invented by subtracting the wrong marker.
-DIAG_FNVAL_FIELD_ACCESS_MARKER : usize = 6903500000000000000
+DIAG_FNVAL_FIELD_ACCESS_MARKER : usize = 6904500000000000000
 ## Issue #774 / Control Flow §4 — the sema-side BARE-NUMERIC-CONDITION class
 ## (`sema::NUMERIC_COND_DIAG_MARKER`). It sits between the scalar-owner field-access class and the
 ## comptime window, so only that class's upper bound moves and every other decoded range stays
