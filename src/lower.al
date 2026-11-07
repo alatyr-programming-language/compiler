@@ -23962,9 +23962,10 @@ folded_slot_span := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize)
 ## Option parameter as if it were the block address (a SIGSEGV). Every binding of a folded value now asks
 ## THIS one question, and the local, the argument and the assignment all agree on the one-word shape.
 ## Recognized forms: a variant literal with a folded head (`Option(ptr(T)).None`), a folded local or
-## parameter (`ek 3` over a folded span), a call whose declared return is folded, and a field read
-## (`s.f`, `p.f`, `deref(p).f`, `deref(<call>).f`) whose declared field type is folded. Anything else —
-## an `if`/`match` value, an index — answers 0/0 and keeps its existing path. `expect` is the type the
+## parameter (`ek 3` over a folded span), a call whose declared return is folded, a field read
+## (`s.f`, `p.f`, `deref(p).f`, `deref(<call>).f`) whose declared field type is folded, and — #1337 —
+## a `deref(p)` whose POINTEE type is folded. Anything else — an `if`/`match` value, an index —
+## answers 0/0 and keeps its existing path. `expect` is the type the
 ## position expects (a destination local's, a parameter's), or 0/0 where none is known; only a bare
 ## `Option.Some(p)` / `Option.None`, whose head has no type argument, reads it (#789).
 folded_value_span := fn(v : ptr(Expr), expect : CSpan, slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
@@ -24005,6 +24006,31 @@ folded_value_span := fn(v : ptr(Expr), expect : CSpan, slots : ptr(SVec), decls 
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   if iae.n != 0 { return iae }
+  ## #1337 — `deref(p)` where `p` points at a niche-folded `Option(ptr(T))`. Memory §4.2/§4.6 make
+  ## that read THE one folded word, so the binding `v := deref(p)` and a by-reference `Option` argument
+  ## must take the folded shape whatever produced the value. Every form above is keyed on the value's
+  ## OWN type witness; a `Deref` carries none, so it answered 0/0: the local bound an untyped scalar
+  ## word and the argument pushed that WORD to a parameter that reads its one word THROUGH the pointer
+  ## it receives — the stored address became the block address and `match` answered `None` for a stored
+  ## `Some`. The witness is the POINTEE, read with `slot_ptr_pointee_span` (the annotation, the eek-6/
+  ## eek-13 view marker, or the preserved `bitcast(ptr(mut T), …)` spelling) — the same resolver
+  ## `ptr_expr_pointee_span` uses for a `Var`, minus the instance substitution this position cannot
+  ## need. Asked last, so every shape answered above keeps its answer; a non-folded pointee, a pointer
+  ## this resolver cannot type and a `deref` of anything else keep the existing path.
+  mut dpv := z
+  match deref(v) {
+    Expr::Deref(inner) => {
+      ivn := var_name_span(inner)
+      if ivn.n != 0 and slot_of(slots, src, ivn.s, ivn.n) >= 0 {
+        dpv = slot_ptr_pointee_span(slots, src, ivn.s, ivn.n)
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  if dpv.n != 0 and is_niche_folded(src, dpv.s, dpv.n) { return dpv }
   ft := field_place_type_span(v, slots, decls, src, a)
   if ft.n != 0 and is_niche_folded(src, ft.s, ft.n) { return ft }
   z

@@ -11323,6 +11323,11 @@ run issue1302_container_elem_enum 42
 ## #1334 — `deref(p) = o` with `o` a niche-folded `Option(ptr(T))` wrote a second word past the
 ## pointee. NON-VACUOUS: on the parent `1262da5d` (x86_64) the fixture returns 100.
 run issue1334_folded_deref_store 42
+## #1337 — the READ side of the same type: `v := deref(p)` and `pkey(deref(p))` over a niche-folded
+## `Option(ptr(u64))` pushed the folded word to a by-reference Option parameter instead of its address,
+## so the callee read the stored address as the block address and answered `None` for a stored `Some`.
+## NON-VACUOUS: on the parent `58a80376` (x86_64) the fixture returns 10.
+run issue1337_folded_deref_read 42
 ## #1364 — `Option(E).Some(deref(p))` through a pointer PARAMETER at a multi-word enum (concrete, generic
 ## at `T = EN`, generic at `T = Option(u64)`) lost the payload. NON-VACUOUS: on the parent `32f0f6e8`
 ## (x86_64) the fixture returns 100.
