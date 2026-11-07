@@ -1847,6 +1847,9 @@ wat_is_agg_place := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body
   ## compared ADDRESSES — equal slices at different addresses compared unequal (a silent wrong value).
   ## As an aggregate place it reaches the structural-compare arm: a user operator, else a loud trap.
   if wat_field_is_slice(e, params_head, body_head, src, a, decls) { return true }
+  ## #1399: a CALL returning a struct or an enum by value yields the value's block address too, so
+  ## `mk(2) == E.A(7)` compared two addresses and answered not equal for equal values.
+  if wat_call_ret_agg(e, src, a, decls) { return true }
   vn := expr_var_name(e)
   if vn.n == 0 { return false }
   et := base_enum_type(params_head, body_head, src, vn.s, vn.n, a, decls, false)
@@ -1857,6 +1860,42 @@ wat_is_agg_place := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body
   if is_array_local(body_head, src, vn.s, vn.n, a) { return true }
   if is_slice_local(body_head, src, vn.s, vn.n, a) { return true }
   false
+}
+
+## #1399 — is `e` a CALL whose callee's declared return names a struct or a non-union enum? Either
+## comes back as a `$__sp` block address. Unlike `callee_ret_enum`, a wide-payload enum counts: this
+## only decides that a scalar compare would be wrong, not how to bind the value. A generic callee
+## returning its type-param is resolved through its explicit leading type-arg, as there.
+wat_call_ret_agg := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+  match deref(e) {
+    Expr::Call(cs, cl, na, ah) => {
+      if callee_ret_struct(decls, src, cs, cl, ah, a).n != 0 { return true }
+      cnt := rt::vec_len(deref(decls))
+      mut i : usize = 0
+      mut found := false
+      while i < cnt {
+        d := deref(decl_get(decls, i))
+        if d.kind == lower_layout::DECL_KIND_FN and streq(src, d.name_start, d.name_len, cs, cl) and d.ret_tl != 0 {
+          mut ebs := d.ret_ts
+          mut ebn := d.ret_tl
+          if d.is_generic {
+            tpn := wat_tparam_name(d, src)
+            if tpn.n != 0 and d.ret_tl == tpn.n and streq(src, d.ret_ts, d.ret_tl, tpn.s, tpn.n) and arg_list_count(ah, a) == i64(d.arity) {
+              evn := expr_var_name(arg_expr_at(ah, 0, a))
+              if evn.n != 0 { ebs = evn.s ; ebn = evn.n }
+            }
+          }
+          if enum_decl_of(decls, src, ebs, ebn) >= 0 and lower_layout::is_union_decl(decls, src, ebs, ebn) == false { found = true }
+        }
+        i += 1
+      }
+      found
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { false }
+  }
 }
 
 ## #844 — is `e` an operand whose wasm value is an AGGREGATE's block address rather than a scalar? An

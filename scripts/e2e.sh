@@ -10716,6 +10716,10 @@ run issue1303_enum_hash 42
 ## and a `HashMap` keyed by an enum or an `Option`. NON-VACUOUS: on the parent `7cb5c053` (x86_64) the
 ## fixture exits 11: `eq` compared only the first word of `B(u8, i64)`'s tuple payload.
 run issue1369_enum_eq 42
+## #1394 — `==` / `!=` with a CALL operand returning a multi-word struct or enum by value (every payload
+## shape, both orders, wide hidden-result returns, a fn-value call). NON-VACUOUS: on the parent
+## `ea6651db` (x86_64) the fixture exits 11: `mk(2) == E.A(7)` compared the returned tag with `$0`.
+run issue1394_call_enum_eq 42
 run comptime_enum_eq 42
 run agg_compare_fields 42
 run nested_match_agg 42
