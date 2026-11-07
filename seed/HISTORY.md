@@ -1950,4 +1950,27 @@ The original reading note, verbatim:
 #
 # VERSION 0.2.22 -> 0.2.23, PATCH: a trap where a value is due became the correct value on all four backends; no surface changes.
 # The specification pin (spec 1.8.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.23 -> 0.2.24   promoted 2026-11-07   seed/alatyr := Stage2
+#
+# WHY: #1290 (fixes #1272): on x86_64 a `+ - *` took its width only from its operands' source spelling, and a global narrow constant has none, so the operation ran at 64 bits: `unchecked (A + A)` over `A : i32` did not wrap, a checked one did not trap, and an `i32` `MIN / -1` reached `idivq` (SIGFPE). Where no operand names a width, sema's record of the operation now gives it. The compiler's own source has such operations, so the frozen seed must carry it.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k>): 32 hunks, 65 added, 17 removed. One sentence:
+# At 16 checked `u8` arithmetic sites whose operand is a global narrow constant, the 64-bit carry test (`jnc`) becomes a test that the result fits 8 bits (`shrq $8` + `jz`) followed by a zero-extension to the byte, and the one multiply among them becomes `imulq`; nothing else changes.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1628964 lines.
+# GAS SHA-256 (Stage2): a715defbd43bac476dedc04f4305e87be28003f370c295b49580ae0ee6db0a32.
+# Stage2 == Stage3 BINARY SHA-256:
+# b4a30699ba1b33a23ecb027862bc4ee49a4b10897c9c6bd3871e80fc20726df9 (6204520 B).
+# All three answer `alatyr 0.2.24, spec 1.8.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.2.23) SHA-256:
+# 666f7d246983caea8d7e0240c07a7c72a9ff878428bd6e300ab1fc0368cfcb1f.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1628964 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.2.23 -> 0.2.24, PATCH: wrong values and a crash on x86_64 became the correct values or the due trap; no surface changes.
+# The specification pin (spec 1.8.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
