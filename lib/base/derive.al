@@ -11,7 +11,10 @@
 ## equal payloads — matched via the comptime variant pattern `T.(v)`, one
 ## unrolled arm per variant, the whole payload bound and compared with `==` (a unit
 ## variant's empty payload compares trivially equal); a scalar leaf compares
-## directly. An aggregate recurses through the per-field/-payload `==`.
+## directly; a **`Pointer`** leaf compares its ADDRESS BITS, reached by the
+## `unchecked bitcast(usize, …)` §2.6 puts in the GENERATED body so the checked
+## call site needs no grant of its own. An aggregate recurses through the
+## per-field/-payload `==`.
 pub eq := fn(T : type, a : T, b : T) -> bool {
   comptime match typeinfo(T) {
     Struct(_) => {
@@ -51,6 +54,20 @@ pub eq := fn(T : type, a : T, b : T) -> bool {
       }
       return true
     }
+    Pointer(_) => {
+      ## A `Pointer` leaf (§4.1 `Pointer{pointee, mutable}`, typeinfo kind 8; not a `ScalarKind`
+      ## member) "compares **by its address bits**, which is the only thing a pointer has" (§2.6).
+      ## The read that gets those bits IS a `bitcast` and it IS granted, but the grant sits in the
+      ## GENERATED body, not at the caller's site (§2.6): `p == q` in checked code needs no grant of
+      ## the author's own, while every confined crossing it reaches is named where it is spelled.
+      ## The spelling cannot be `u64(a) == u64(b)`: `T(value)` preserves a value or re-brands it,
+      ## and reading address bits out of a pointer is reinterpret, whose only form is `bitcast`
+      ## (Types §4.4). Same shape as `Option::get`, the precedent in this stdlib (`option.al:41-48`).
+      ## Consistent with the `hash` arm below, as §2.6 requires.
+## The operands are `ptr(_)`; what is compared is ADDRESS BITS (cf. `option.al:41-48`).
+## unchecked-ok: a pointer has no integer type to convert from; `bitcast(usize, _)` is the only legal reinterpret (Types §4.4)
+      return unchecked bitcast(usize, a) == unchecked bitcast(usize, b)
+    }
     _ => { return a == b }
   }
 }
@@ -58,7 +75,8 @@ pub eq := fn(T : type, a : T, b : T) -> bool {
 ## Lexicographic order by declaration order (the default `Ord`, §2.6): for a
 ## **struct**, the first field at which the two differ decides; for an **enum**,
 ## the variant **declaration order** decides, then the payload. A scalar leaf
-## orders directly; equal ⇒ not less-than.
+## orders directly; a **`Pointer`** leaf orders its address bits by the same granted
+## crossing as `eq` (§4.5 names `Eq`/`Ord`/`Hash` together); equal ⇒ not less-than.
 pub lt := fn(T : type, a : T, b : T) -> bool {
   comptime match typeinfo(T) {
     Struct(_) => {
@@ -99,6 +117,19 @@ pub lt := fn(T : type, a : T, b : T) -> bool {
       }
       return false
     }
+    Pointer(_) => {
+      ## `Ord` is named with `Eq` and `Hash` by §4.5: "A derived `Eq`/`Ord`/`Hash` over a whole
+      ## pointer reaches that read too, but **granted where it is generated**". So the leaf orders by
+      ## the same address-bits read as `eq` above, through the same spelled `unchecked bitcast(usize,
+      ## …)` (§2.6), never `u64(a) < u64(b)` (Types §4.4: reinterpret has one form, `bitcast`).
+      ## WHICH of two live pointers is the smaller is not fixed by the spec — §4.5 fixes only that
+      ## "given two `usize` values, every conforming target returns the same `true` or `false`", and
+      ## where an object lands in memory is the target's — so a fixture asserts the LAWS (irreflexive,
+      ## asymmetric, and agreeing with `eq` on the same pair), never a chosen winner.
+## Ordering two pointers orders ADDRESS BITS; the fixture asserts the LAWS, not a winner.
+## unchecked-ok: a pointer has no integer type to convert from; `bitcast(usize, _)` is the only legal reinterpret (Types §4.4)
+      return unchecked bitcast(usize, a) < unchecked bitcast(usize, b)
+    }
     _ => { return a < b }
   }
 }
@@ -106,8 +137,10 @@ pub lt := fn(T : type, a : T, b : T) -> bool {
 ## Structural hash **consistent with `eq`** (the default `Hash`, §2.6): a **struct**
 ## folds its field hashes (an FNV-style mix); an **enum** hashes the matched
 ## variant's payload (comptime variant match); an **array** folds element
-## hashes; a scalar leaf hashes its own value. Recurses, so padding never enters the
-## hash. Equal values (same variant / elements) hash equally — consistent with `eq`.
+## hashes; a scalar leaf hashes its own value; a **`Pointer`** leaf hashes the
+## address bits it reaches by the same granted `bitcast`, so it stays consistent
+## with `eq`. Recurses, so padding never enters the hash. Equal values (same
+## variant / elements) hash equally — consistent with `eq`.
 pub hash := fn(T : type, v : T) -> u64 {
   comptime if (match typeinfo(T) { Struct(_) => true; _ => false }) {
     mut h : u64 = 1469598103934665603
@@ -146,7 +179,30 @@ pub hash := fn(T : type, v : T) -> u64 {
           ## grown map hash differently from the one it grew out of.
           return str_hash(v)
         } else {
-          return u64(v)
+          comptime if (match typeinfo(T) { Pointer(_) => true; _ => false }) {
+            ## The `hash` half of the `Pointer` leaf above, and it must agree with `eq` (§2.6: "equal
+            ## pointers hash alike, different pointers need not"). The address bits are reached by the
+            ## SAME spelled crossing §4.5 names — "the derive expands to library code that spells its
+            ## `Pointer` arm as `unchecked bitcast(usize, ...)`, so the crossing is named and granted
+            ## inside the generated body and the author's checked call site needs no grant of its own"
+            ## - never by `u64(v)`, which is the spelling this issue exists to remove (Types §4.4:
+            ## reading address bits out of a pointer is reinterpret, whose only form is `bitcast`).
+            ## The mix keeps the result a PURE FUNCTION OF THE ADDRESS, so consistency with `eq` is
+            ## exact: same address -> same value, always. It is not the raw address because the low bits
+            ## of an aligned address are always zero, and a map that buckets on them (`hash(key) % cap`,
+            ## `lib/alloc/hashmap.al:165`) would send every pointer key of a table to bucket 0 and turn
+            ## open addressing into a linear chain. Xoring the address down by its own alignment (3 =
+            ## log2 of the 8-byte word every key sits on) moves the bits that DO distinguish neighbouring
+            ## objects into the low bits; the multiply by the FNV prime used above spreads them upward.
+            ## Both are bijections on the address bits, so no two addresses collapse to one hash.
+## The hash needs the address bits of the pointer as a `usize`.
+## unchecked-ok: a pointer has no integer type; `bitcast(usize, _)` is the only legal reinterpret of address bits (Types §4.4)
+            bits : usize = unchecked bitcast(usize, v)
+## unchecked-ok: a hash is not a place a checked overflow would protect; the wrap IS the mixing
+            return u64(unchecked ((bits ^ bits.shr(3)) * 1099511628211))
+          } else {
+            return u64(v)
+          }
         }
       }
     }

@@ -11314,6 +11314,15 @@ run ambient_hashmap_struct 42
 ## NESTED-aggregate structural eq through the derive: a nested field must compare ALL its words, not
 ## word 0 only (the derive recurses explicitly `eq(f.type, …)`, so a struct-in-struct key is exact).
 run hashmap_nested_key 42
+## Stdlib §2.6 / Memory §4.5 — a POINTER key through `HashMap`, in CHECKED code (#1081). The derive
+## had no `Pointer` arm: `hash` fell through to `u64(v)`, a `T(value)` conversion over a pointer that
+## Types §4.4 gives no class to (it was accepted SILENTLY - measured rc=88, the address's low byte -
+## so nothing went red). The arm now spells the crossing `unchecked bitcast(usize, …)` in the GENERATED
+## body, so no key call here carries a grant of the author's own. Pins §2.6's "equal pointers hash
+## alike, different pointers need not": a second handle on the same address lands in the same bucket and
+## is found, a different address holding the SAME value is not, a rehash keeps every key, and a
+## pointer-bearing STRUCT key walks the field into the same arm.
+run_x86 issue1081_derive_ptr_key 42
 ## std::random — splitmix64 PRNG: determinism (same seed → same stream) + range + state advance
 run random_prng 42
 ## std::time — clock_gettime(2): monotonic non-decreasing + realtime-after-epoch + to_nanos conversion.
