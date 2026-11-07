@@ -64,6 +64,8 @@ pub eq := fn(T : type, a : T, b : T) -> bool {
       ## and reading address bits out of a pointer is reinterpret, whose only form is `bitcast`
       ## (Types §4.4). Same shape as `Option::get`, the precedent in this stdlib (`option.al:41-48`).
       ## Consistent with the `hash` arm below, as §2.6 requires.
+## The operands are `ptr(_)`; what is compared is ADDRESS BITS (cf. `option.al:41-48`).
+## unchecked-ok: a pointer has no integer type to convert from; `bitcast(usize, _)` is the only legal reinterpret (Types §4.4)
       return unchecked bitcast(usize, a) == unchecked bitcast(usize, b)
     }
     _ => { return a == b }
@@ -124,6 +126,8 @@ pub lt := fn(T : type, a : T, b : T) -> bool {
       ## "given two `usize` values, every conforming target returns the same `true` or `false`", and
       ## where an object lands in memory is the target's — so a fixture asserts the LAWS (irreflexive,
       ## asymmetric, and agreeing with `eq` on the same pair), never a chosen winner.
+## Ordering two pointers orders ADDRESS BITS; the fixture asserts the LAWS, not a winner.
+## unchecked-ok: a pointer has no integer type to convert from; `bitcast(usize, _)` is the only legal reinterpret (Types §4.4)
       return unchecked bitcast(usize, a) < unchecked bitcast(usize, b)
     }
     _ => { return a < b }
@@ -191,7 +195,10 @@ pub hash := fn(T : type, v : T) -> u64 {
             ## log2 of the 8-byte word every key sits on) moves the bits that DO distinguish neighbouring
             ## objects into the low bits; the multiply by the FNV prime used above spreads them upward.
             ## Both are bijections on the address bits, so no two addresses collapse to one hash.
+## The hash needs the address bits of the pointer as a `usize`.
+## unchecked-ok: a pointer has no integer type; `bitcast(usize, _)` is the only legal reinterpret of address bits (Types §4.4)
             bits : usize = unchecked bitcast(usize, v)
+## unchecked-ok: a hash is not a place a checked overflow would protect; the wrap IS the mixing
             return u64(unchecked ((bits ^ bits.shr(3)) * 1099511628211))
           } else {
             return u64(v)
