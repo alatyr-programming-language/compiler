@@ -5905,15 +5905,48 @@ ct_range_perform := fn(op : u8, lv : i64, rv : i64, w : Option(str)) -> Option(i
   if op == 16 { v = ct_bound_wrap(w, unchecked (lv + rv)) }
   if op == 17 { v = ct_bound_wrap(w, unchecked (lv - rv)) }
   if op == 18 { v = ct_bound_wrap(w, unchecked (lv * rv)) }
-  if op == 19 { v = unchecked (lv / rv) }
-  ## `MIN % -1` is answered, not divided: §6.1 says it is `0` and the host's `idivq` FAULTS on it
-  ## (`#DE`, appendix §2), so performing it would kill the compiler with SIGFPE on x86_64 — the very
-  ## failure #1233 is about, on the arm the guard lets THROUGH because a checked `%` has no overflow
-  ## member. The mathematical remainder of anything by `-1` is `0`, so the answer is written directly
-  ## and the divide is never executed (the same shape as the x86_64 run-time fix in #1487).
-  if op == 29 { if rv == 0 - 1 { v = 0 } else { v = unchecked (lv % rv) } }
+  if op == 19 { v = ct_bound_div(w, lv, rv) }
+  if op == 29 { v = ct_bound_rem(w, lv, rv) }
   if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 { return Option(i64).Some(v) }
   Option(i64).None
+}
+## Does a bound's `/ %` divide UNSIGNED? Yes when sema recorded an unsigned type for the operation
+## (Types §3.2, Concurrency §6.5: the operands' interpretation selects the operation). No recorded
+## type: the fold works on the native signed word (`ct_bound_wrap`'s own reading), so signed.
+ct_bound_unsigned := fn(w : Option(str)) -> bool {
+  match w { Some(t) => { not ct_signed(t) }; None => { false } }
+}
+## A bound's `/` whose guard passed (the divisor is not 0, and not `-1` under a signed `MIN`). An
+## unsigned one divides the patterns as `u64`: a `u64` `(2^64 - 1) / 2^62` is 3, where the signed
+## divide of the same patterns answered 0, and `2^63 / (2^64 - 1)` is 0, where it was the host's
+## faulting `idiv(MIN, -1)` (#1493).
+ct_bound_div := fn(w : Option(str), lv : i64, rv : i64) -> i64 {
+  if ct_bound_unsigned(w) { return ct_bound_udiv(lv, rv, false) }
+  unchecked (lv / rv)
+}
+## A bound's `%` whose guard passed. Unsigned: the `u64` remainder, so `5 % (2^64 - 1)` is 5 (#1493).
+## Signed: `MIN % -1` is answered, not divided — §6.1 says it is `0` and the host's `idivq` FAULTS on
+## it (`#DE`, appendix §2), so performing it would kill the compiler with SIGFPE on x86_64 (#1233).
+## The remainder of any signed value by `-1` is `0`, so the answer is written directly and the
+## divide is never executed (the same shape as the x86_64 run-time fix in #1487). The shortcut is
+## signed-only: an unsigned divisor whose pattern reads as `-1` is `2^64 - 1`, not `-1`.
+ct_bound_rem := fn(w : Option(str), lv : i64, rv : i64) -> i64 {
+  if ct_bound_unsigned(w) { return ct_bound_udiv(lv, rv, true) }
+  if rv == 0 - 1 { return 0 }
+  unchecked (lv % rv)
+}
+## The unsigned quotient (`rem` false) or remainder (`rem` true) of two bound patterns read as `u64`.
+## Narrow unsigned bounds are wrapped non-negative, so only a `u64`/`usize` pattern with its high bit
+## set divides differently from the signed reading. The divisor is not 0: the guard passed.
+ct_bound_udiv := fn(lv : i64, rv : i64, rem : bool) -> i64 {
+  ## unchecked-ok: the fold carries every bound as an `i64` pattern; an unsigned operand is reread as `u64`
+  lu : u64 = unchecked bitcast(u64, lv)
+  ## unchecked-ok: as above, the divisor's pattern reread as `u64`
+  ru : u64 = unchecked bitcast(u64, rv)
+  mut q : u64 = lu / ru
+  if rem { q = lu % ru }
+  ## unchecked-ok: the `u64` result carried back as the fold's `i64` pattern
+  unchecked bitcast(i64, q)
 }
 ## `v` wrapped to the width of a bound's recorded type; unchanged where sema recorded none (the fold
 ## then works on the native `i64` word).

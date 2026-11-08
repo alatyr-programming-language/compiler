@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A `u64` `/` or `%` in a `comptime for` range bound divides unsigned (#1493).** The fold divided the
+  bound's `i64` patterns signed whatever the type: with `D : u64 = 2^64 - 1`, `0 .. D / 2^62` and
+  `0 .. D % 10` unrolled zero times instead of 3 and 5, `5 % D` took the signed `% -1` shortcut and
+  unrolled zero times instead of 5, and `2^63 / D` killed the compiler with SIGFPE. Signedness lives
+  in the operation (Types §3.2, Concurrency §6.5); fixed on all four backends.
+
 ## 0.2.24 — 2026-11-07
 
 - **A `+ - *` over a global narrow constant wraps, or traps, at the constant's width on x86_64
