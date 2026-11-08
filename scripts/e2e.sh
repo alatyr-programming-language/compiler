@@ -9936,6 +9936,16 @@ run issue364_char_unchecked_crossing 42
 ## native x86_64: 1 on the parent `ae3623d1` (no `@convert` ran) and 132 on #1436's earlier head (the
 ## conversion re-selected itself until `SEEN * 10` overflowed).
 run issue364_unchecked_instance_one_level 42
+## The IR path of the guard row above: sema reads `char` as `u32`, so the IR builder built `char(n)` as a
+## narrow and `to_char` never ran when `alatyr x86-ir` took `main` (this `main` is one it takes).
+run_x86 issue364_char_guard_ir 1
+## Types §4.6 step (1) precedes step (2) (l.330-331, l.357): `R(41)` over a required type is the contract
+## gate, not the competing `@convert u64 -> R` that answers 42.
+run issue1436_require_gate_precedes_convert 41
+## A brand's step (2) asks the parameter (l.332-333): a `@convert` from `bool` leaves `Flag(42)` the
+## crossing, and a second one from `u64` is selected by a `u64` operand, not refused as ambiguous.
+run issue1436_brand_convert_other_source 42
+run issue1436_brand_convert_two_sources 42
 # Issue #402 / Control Flow §6 + Stdlib appendix §2.4 — `for` over a type that provides
 # `next(in out self) -> Opt` must DRIVE `next`, not count the backing view. The parent walked the
 # byte length (10 for four code points) and yielded garbage; `iter_for_split` is the same class on

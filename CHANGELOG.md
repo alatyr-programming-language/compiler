@@ -167,7 +167,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   still yields the raw value; the instance's own operation sites keep their lexical mode ("one level
   deep"). A conversion no longer re-selects itself: `Lvl(n)` inside `@convert fn(n : u64) -> Lvl` is the
   brand crossing (§4.6, Termination). A brand with no in-scope `@convert` keeps its zero-cost crossing,
-  and the guard still reports through `panic`, not `trap()`, until `trap()` is a callable prelude
+  and so does one whose conversions do not accept the operand's type (`Flag(42)` beside a lone
+  `@convert fn(b : bool) -> Flag`; the selection asks the parameter, #1518). A required type's contract
+  gate still precedes a competing `@convert` when the operand is assignable to its `U` (§4.6 step 1). The
+  shared IR builder selects the same way, and its `char(n)` calls `to_char` instead of narrowing to
+  `u32`. The guard still reports through `panic`, not `trap()`, until `trap()` is a callable prelude
   identifier (#1427). The per-mode instance covers a `@convert` on x86_64 only: an ordinary call to a
   function that reads `verify.checked`, and every call on aarch64, riscv64 and wasm, still run the
   checked body (#1517).

@@ -1140,16 +1140,24 @@ ib_bx_bitcast := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), inne
 ## parameters and result are all kernel scalars.
 ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg))) -> CallOut {
   src := ib_b_src(bp)
+  ## Types §4.6 step (2) before the scalar-name arm: sema reads `char` as the kernel `u32`
+  ## (`sema_vty_scalar`), so `char(n)` would otherwise be built as a narrow to `u32` and never reach
+  ## `to_char` — "So `char(n)` … runs that conversion" (l.341, TYP-14). A builtin name answers -1 here
+  ## (`conv_kind`), so only a brand that sema also reads as a scalar name can be routed. Every other
+  ## brand is asked the same question by the same helper, so it is asked once, here.
+  bu := lower_layout::brand_underlying(ib_b_decls(bp), src, cs, cl)
+  if bu.n != 0 and na == 1 and not ib_fn_named(bp, cs, cl) {
+    cvs : Option(CallOut) = ib_call_brand_convert(bp, a, e, cs, cl, na, ah)
+    match cvs { Some(co) => { return co }; None => {} }
+  }
   tk : Option(IbKS) = ib_name_ks(src, cs, cl)
   match tk {
     Some(to) => { cv : Option(VRegId) = ib_bx_conv(bp, a, e, to, na, ah); return ib_call_out(cv) }
     None => {}
   }
-  ## Slice 5a: `B(v)` of a brand or a required type — the contract construction of Types §8.1.
-  bu := lower_layout::brand_underlying(ib_b_decls(bp), src, cs, cl)
+  ## Slice 5a: `B(v)` of a brand or a required type — the contract construction of Types §8.1 (no
+  ## conversion matched above: `ib_call_brand_convert`).
   if bu.n != 0 and na == 1 and not ib_fn_named(bp, cs, cl) {
-    cvo : Option(CallOut) = ib_call_brand_convert(bp, a, e, cs, cl, na, ah)
-    match cvo { Some(co) => { return co }; None => {} }
     bcv : Option(VRegId) = ib_bx_brand_ctor(bp, a, e, cs, cl, bu.s, bu.n, ah)
     return ib_call_out(bcv)
   }
