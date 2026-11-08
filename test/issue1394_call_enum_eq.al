@@ -5,9 +5,11 @@
 ## with the `$0` a multi-word constructor materializes as in a scalar position, and never built the
 ## constructor. Covered: payload none / scalar / two words / struct / `str`; `==` and `!=`; the call on
 ## either side; call against call and against a local; a struct-returning call; a wide (hidden result
-## pointer) struct and enum return; a call through a fn value. Exit 42 = every answer right; 10..39
-## names the first wrong one; a trap ends with a signal. NON-VACUOUS: on the parent `ea6651db`
-## (x86_64) this program exits 11.
+## pointer) struct and enum return; a call through a fn value; call against call in a function that
+## builds nothing wider (`calls_only_*`). Exit 42 = every answer right; 10..39 and 43..44 name the first
+## wrong one; a trap ends with a signal. NON-VACUOUS: on the parent `ea6651db` (x86_64) this program
+## exits 11, and on #1400's first head `927f3981` it exits 43 (the pool blocks of `mk(1) == mk(1)` were
+## one word wide there, so the second result overwrote the first).
 
 P := struct { x : u64, y : u64 }
 W := struct { a : u64, b : u64, c : u64, d : u64, e : u64, f : u64, g : u64, h : u64 }
@@ -24,8 +26,16 @@ mk := fn(k : u64) -> E {
 mp := fn(y : u64) -> P { P(x = 3, y = y) }
 mw := fn(h : u64) -> W { W(a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 7, h = h) }
 mv := fn(h : u64) -> V { V.Hi(mw(h)) }
+## Call against call and nothing else: the agg-temp pool's block width comes from this function alone,
+## so it must come from the calls' own result width (`main` below builds the 8-word `W`, which would
+## widen every block and hide a too-narrow one). ONE comparison per function: with four call-against-call
+## comparisons in one function, `927f3981` answered all four right (measured), so that shape proves nothing.
+calls_only_eq := fn() -> bool { mk(1) == mk(1) }
+calls_only_ne := fn() -> bool { mk(1) != mk(1) }
 
 main := fn() -> u64 {
+  if not calls_only_eq() { return 43 }
+  if calls_only_ne() { return 44 }
   ## a scalar payload, the issue's first row
   if not (mk(2) == E.A(7)) { return 11 }
   if mk(2) == E.A(8) { return 12 }
