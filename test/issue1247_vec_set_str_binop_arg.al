@@ -2,7 +2,7 @@
 ##
 ## The program is valid (Stdlib: `vec::set(T, v, i, x)` replaces element `i`; Expressions: a call is an
 ## expression). The compiler crashed on it. `emit_arg`'s "str-returning call passed directly as an
-## argument" branch (`src/lower.al:4755`) called `emit_struct_value(e, sb, cx, a)` and omitted the
+## argument" branch (`src/lower.al:4780`) called `emit_struct_value(e, sb, cx, a)` and omitted the
 ## trailing `in out nl` of its five-parameter signature. Because `emit_struct_value` is declared LATER
 ## in the file, sema never arity-checked the forward reference, so `nl` reached the callee as a NULL
 ## pointer. It stayed dormant until the argument `val(i + 100)` routed its `+` to an overloaded
@@ -25,6 +25,8 @@ val := fn(k : u64) -> str {
   "z"
 }
 same := fn(x : str, y : str) -> bool { x == y }
+## a str-call over a binary operand in a `return`: `emit_str_pair`'s path (`src/lower.al:6942`)
+wrap := fn(k : u64) -> str { return val(k + 1) }
 
 main := fn() -> u64 {
   r := unchecked sys_mmap(std::sysno::MMAP, 0, 1048576, 3, 34, bitcast(usize, 0 - 1), 0)
@@ -58,6 +60,21 @@ main := fn() -> u64 {
   q1 := vec::push(str, w, val(6 + 100))
   if not same(vec::at(str, ptr(w), 0), val(107)) { return 11 }
   if not same(vec::at(str, ptr(w), 1), val(106)) { return 12 }
+
+  ## the second dropped argument, in `emit_str_pair` (`src/lower.al:6942`): str-calls over a binary
+  ## operand as the operands of `==` (#1414's reduction) and in a `return`. With only `:4780` fixed
+  ## the build still dies (rc 139); the alias `vec` above is part of the condition.
+  i = 0
+  while i < 20 { if val(i) == val(i + 1) { return 13 } i += 1 }
+  mut eq : u64 = 0
+  i = 0
+  while i < 20 { if val(i) == val(i + 4) { eq += 1 } i += 1 }
+  if eq != 20 { return 14 }
+  i = 0
+  while i < 20 {
+    if not same(wrap(i), val(i + 1)) { return 15 }
+    i += 1
+  }
 
   return 42
 }

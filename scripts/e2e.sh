@@ -11167,12 +11167,13 @@ run issue1254_deque_subword_slot 42
 ## no diagnostic.
 run issue1245_match_call_binop_arg 42
 ## #1247 — a `str`-returning call passed DIRECTLY as an argument, over a binary operand. `emit_arg`'s
-## str-call branch (`src/lower.al:4755`) omitted the trailing `in out nl` on `emit_struct_value`; the
+## str-call branch (`src/lower.al:4780`) omitted the trailing `in out nl` on `emit_struct_value`; the
 ## forward reference hid it from sema's arity check, so `nl` arrived NULL and the overloaded-operator
 ## expansion (`emit_gas` -> `emit_inline_binop` -> `emit_inline_body`, whose first act is `iend := nl`)
-## loaded through it. `emit_str_pair`'s twin at `src/lower.al:6875` is the same dropped argument, fixed
-## by inspection (no fixture reaches it on x86_64 today). NON-VACUOUS: on the parent `58a80376`
-## (x86_64) the BUILD itself dies — rc 139 SIGSEGV, no diagnostic.
+## loaded through it. `emit_str_pair`'s twin at `src/lower.al:6942` is the same dropped argument; codes
+## 13-15 reach it (a str-call over a binary operand as an `==` operand and in a `return`, with a module
+## alias present — #1414's condition). NON-VACUOUS: on the parent `58a80376` (x86_64) the BUILD itself
+## dies — rc 139 SIGSEGV, no diagnostic — and with only `:4780` fixed it still dies at `:6942`.
 run issue1247_vec_set_str_binop_arg 42
 run deref_view_pointee 42
 ## Types §7 — a `[T]`/`str` view IS its two-word {ptr,len} pair wherever it appears. A view ARGUMENT that is
