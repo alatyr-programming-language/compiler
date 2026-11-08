@@ -20,7 +20,6 @@ x86_64	deque.push_back_at.char	REFUSED	#1244
 x86_64	deque.push_front.array3	REFUSED	#1250
 x86_64	deque.push_front.char	REFUSED	#1244
 x86_64	hashmap.key.char	REFUSED	#1244
-x86_64	hashmap.key.enumN	WRONG 12	#1369
 x86_64	hashmap.value.array3	REFUSED	#1250
 x86_64	hashmap.value.char	REFUSED	#1244
 x86_64	none.control.array3	REFUSED	#1250
