@@ -7290,6 +7290,13 @@ emit_a64_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, 
             ## FLAT (no nesting): a StructLit constructs fields into p's slots; an EnumLit constructs
             ## {disc, payload…}; anything else is the scalar store (PARAM > GLOBAL > LOCAL). Guards
             ## (`isslit`/`iselit`/`useframe`) keep the paths disjoint.
+            ## #1502 — a DECLARATION inside a nested block (this list is not the function body) of a name that
+            ## is a module data binding: the paths below resolve the name to the binding's `.data` label before
+            ## any frame slot, so the store would overwrite the module binding, and every later read of it would
+            ## answer the dead local. Fail loud rather than store there.
+            if (not stmt_same(list_head, body_head)) and ast::assign_is_decl(src, ns, nl) and lower_ctx::names_module_data(decls, src, ns, nl) {
+              push_str(sb, "  brk #0 // unsupported: block-local declaration shadowing a module binding (#1502)\n")
+            }
             isslit := expr_is_struct_lit(v)
             iselit := expr_is_enum_lit(v)
             isalit := ex_is_array_lit(v)

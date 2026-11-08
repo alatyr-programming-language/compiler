@@ -6556,6 +6556,12 @@ emit_wat_stmts := fn(list_head : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut
             ## the struct span of an aggregate PLACE RHS (`q := p` / `x := arr[i]`) — a whole-aggregate COPY.
             cpsp := wat_place_agg_span(v, params_head, fn_head, src, a, decls)
             lami := wat_bound_lambda(fn_head, src, ns, nl, decls)
+            ## #1502 — a DECLARATION inside a nested block of a name that is a module data binding: the
+            ## `global.set` arms below would write the module binding itself, so every later read of it, after
+            ## the block or in another function, would answer the dead local. Fail loud instead.
+            if nested and ast::assign_is_decl(src, ns, nl) and lower_ctx::names_module_data(decls, src, ns, nl) {
+              push_str(sb, "    (unreachable) (; unsupported: block-local declaration shadowing a module binding (#1502) ;)\n")
+            }
             if lami >= 0 {
               idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)
               push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " (i64.const 0))\n")

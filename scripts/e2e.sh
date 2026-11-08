@@ -12581,6 +12581,12 @@ run for_aggregate_body_local 42
 ## Each has the identical program under `take` measured green on that parent, which is the post-fix shape.
 run issue1406_declared_sub_slice_ret 42
 run issue1406_declared_sub_value 42
+## #1502 / Declarations §5+§6.1 — a local declared in a nested block of one function with a module
+## constant's name must leave the constant alone; another function's read after it ran answers the
+## constant. aarch64, riscv64 (`.data` label) and wasm (`global.set`) stored the local into the constant's
+## own cell: the parent fde7acec answers 5 there (case 1, class 1), 99 on x86_64. Those three now trap on
+## the declaration (fail-loud stub), known deviations under #1502.
+run issue1502_block_local_module_binding 99
 ## #1318 — a single `match` payload typed `Slice(T)` of struct/enum/str elements is bound as a slice
 ## view, not as the nominal two-word `Slice` struct (whose `for` copied one word per element).
 ## NON-VACUOUS: on the parent `cc1064e3` (x86_64) the build is refused at `ps[1].a`, and without that
