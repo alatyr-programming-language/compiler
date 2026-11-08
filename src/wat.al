@@ -7716,19 +7716,24 @@ emit_wat_stmts := fn(list_head : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut
                 lo := lower_layout::opt_i64_or(lo_o, 0)
                 hi := lower_layout::opt_i64_or(hi_o, 0)
                 if lower_layout::opt_i64_is_some(lo_o) == false or lower_layout::opt_i64_is_some(hi_o) == false { push_str(sb, "    (unreachable) (; comptime-for range bound is not comptime-known ;)\n") }
-                else if hi - lo > 100000 { push_str(sb, "    (unreachable) (; comptime-for range exceeds the unroll budget ;)\n") }
                 else {
-                  ## The counter is `i64` and, since #602 folds a written negative literal, `lo` is now
-                  ## reachably NEGATIVE — `comptime for i in -2..2` used to fold to 0 here and unroll the
-                  ## wrong iteration set (#638). #648's `unchecked` bypass on the increment is GONE: the
-                  ## lower now records this local's `i64` annotation even though the name owns an older
-                  ## untyped slot in this function, so `k + 1` takes the SIGNED overflow guard that
-                  ## matches the SIGNED `<` beside it (#646). Both read `k = -1` the same way.
-                  mut k : i64 = lo
-                  while k < hi {
-                    push_str(sb, "    (local.set ") ; push_int(sb, vidx) ; push_str(sb, " (i64.const ") ; push_int(sb, k) ; push_str(sb, "))\n")
-                    emit_wat_stmts(rb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-                    k = k + 1
+                  ## The count is ordered in the range's own type (`ct_range_count`, #1499): a `u64`
+                  ## bound of 2^63 or more is over the budget and traps, never an empty unroll. Since
+                  ## #602 `lo` is reachably NEGATIVE (`comptime for i in -2..2`, #638), and a `u64`
+                  ## range may cross 2^63, so the walk counts iterations rather than testing `k < hi`;
+                  ## `k` is the value's pattern, `lo + n`, wrapping exactly as the range's type does.
+                  cnt := lower_layout::ct_range_count(lo, hi, lower_layout::ct_range_w(rlo, rhi))
+                  if cnt > lower_layout::CT_UNROLL_BUDGET { push_str(sb, "    (unreachable) (; comptime-for range exceeds the unroll budget ;)\n") }
+                  else {
+                    mut k : i64 = lo
+                    mut n : u64 = 0
+                    while n < cnt {
+                      push_str(sb, "    (local.set ") ; push_int(sb, vidx) ; push_str(sb, " (i64.const ") ; push_int(sb, k) ; push_str(sb, "))\n")
+                      emit_wat_stmts(rb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+                      ## unchecked-ok: the next value's pattern; a `u64` range crossing 2^63 passes i64 MAX here
+                      k = unchecked (k + 1)
+                      n += 1
+                    }
                   }
                 }
               }

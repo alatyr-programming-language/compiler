@@ -5770,6 +5770,31 @@ pub ct_ult := fn(x : i64, y : i64) -> bool {
   if (x < 0) == (y < 0) { return x < y }
   return y < 0
 }
+## The unroll budget of a numeric `comptime for` (Comptime §2.2): a range of more iterations is
+## "budget exhausted", a compile-time failure on x86_64 and a trap on the twins, never a silent
+## partial result. ONE number for the five places that judge it (#1499).
+pub CT_UNROLL_BUDGET : u64 = 100000
+## The type a numeric `comptime for` range `lo .. hi` runs in, as `ct_bound_w` spells it: the upper
+## bound's recorded type, else the lower's (a literal next to a typed bound may carry none). `None`:
+## sema recorded no integer type for either, and the range is read as the native signed word.
+pub ct_range_w := fn(lo : ptr(Expr), hi : ptr(Expr)) -> Option(str) {
+  hw : Option(str) = ct_bound_w(hi)
+  match hw { Some(t) => { hw }; None => { ct_bound_w(lo) } }
+}
+## The iteration count of a numeric `comptime for` range `lo .. hi` over the folded `i64` patterns,
+## ordered in the range's type `w` (#1499): an unsigned `w` compares the patterns unsigned, so a `u64`
+## bound of 2^63 or more is the large value it is (Types §3.2, Concurrency §6.5), not a negative one
+## that made the range look empty and unrolled it 0 times. Empty (`hi <= lo` in that order) is 0. The
+## count is the patterns' wrapping difference, exact because `hi > lo` in the range's own order, and
+## it is a `u64`: a signed `hi - lo` overflowed for a range wider than 2^63 and killed the compiler.
+pub ct_range_count := fn(lo : i64, hi : i64, w : Option(str)) -> u64 {
+  mut uns := false
+  match w { Some(t) => { uns = not ct_signed(t) }; None => {} }
+  if uns and not ct_ult(lo, hi) { return 0 }
+  if not uns and hi <= lo { return 0 }
+  ## unchecked-ok: `hi > lo` in the range's order, so the wrapping difference read as `u64` is the exact count
+  unchecked bitcast(u64, unchecked (hi - lo))
+}
 ## The unsigned high / low 32 bits of a raw 64-bit pattern. The high half comes from a LOGICAL right
 ## shift (`shr` on a `u64`, OP-6) — a signed `/ 2^32` would truncate toward zero and read a negative
 ## pattern as a small negative number rather than as its large unsigned value. The low half is then

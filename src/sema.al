@@ -15964,7 +15964,9 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         ## §3.3 COMPTIME STEP BUDGET: a LITERAL-bounded `comptime for` unrolling > 100000 steps is a
         ## clean CHECK diagnostic (the lower aborts on ANY over-budget range; this catches the common
         ## literal case at check with a location). Non-literal bounds are left to the lower's guard.
-        if expr_is_num_lit(rlo) and expr_is_num_lit(rhi) and expr_num_lit_val(rhi) - expr_num_lit_val(rlo) > 100000 {
+        ## A literal-only range is the native signed word (`sema_vty_range`); its count is the shared
+        ## `ct_range_count`, never a signed `hi - lo` that overflows on a wide range (#1499).
+        if expr_is_num_lit(rlo) and expr_is_num_lit(rhi) and lower_layout::ct_range_count(expr_num_lit_val(rlo), expr_num_lit_val(rhi), Option(str).Some("i64")) > lower_layout::CT_UNROLL_BUDGET {
           return Result(usize, CheckErr).Err(located_err(s_of(rlo, a)))
         }
         mut egcr := sema_enum_global_array_value_bad(rlo, decls, upto, src, locals, cnt, a, false)

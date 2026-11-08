@@ -91,7 +91,7 @@ ecallee_is := ast::ecallee_is
 ## after it could never be imported by bare name (measured — see the file's header).
 ## `set_build_flags` + `BUILD_FLAGS_*` stay HERE (`pub`; `cli` calls it). `compfor_iter_arg` and the
 ## `comptime_arg_end` it calls now live in `lower_layout`, shared with sema (docs/ir-slice-1.md §8.4).
-(lower_show_src_line, comptime_cond_src_off, comptime_reject_cond, comptime_cond_eval, comptime_query_expr_ok, compfor_target_type, comptime_range_bound, stmts_have_compfor, stmts_have_variant_template, emit_build_flag_value, target_facet_eq) := ctfold
+(lower_show_src_line, comptime_cond_src_off, comptime_reject_cond, comptime_cond_eval, comptime_query_expr_ok, compfor_target_type, comptime_range_bound, comptime_range_count, stmts_have_compfor, stmts_have_variant_template, emit_build_flag_value, target_facet_eq) := ctfold
 ## The `@abi(c)` FOREIGN-CALL ABI (`src/lower/abi_c.al`) — a CHILD module under MOD-12, imported by
 ## BARE NAME. It is the C-ABI half of the audit's `abi` band; the rest stays here because `lower::fnval`
 ## already names `emit_call_args`/`nstack_args`/`align_pad`/the float classifiers, and a child-to-child
@@ -27505,17 +27505,23 @@ emit_st_comp_for_range := fn(cst : ptr(mut Stmt), rvs : usize, rvl : usize, rlo 
     ## truncation — a `comptime for` unrolling > 100000 steps would either bloat the output or (with
     ## the old `rguard` cap) silently emit a WRONG program missing its tail iterations. Deterministic:
     ## the same over-budget input always aborts here. (src/ has no such loop, so this never fires on
-    ## the self-build → fixpoint byte-identical.)
-    if rhi_v - rlo_v > 100000 { panic("selfhost: comptime-for range exceeds the unroll budget (100000)") }
-    mut rk := rlo_v
-    while rk < rhi_v {
+    ## the self-build → fixpoint byte-identical.) The count is ordered in the range's own type
+    ## (`ct_range_count`, #1499): a `u64` bound of 2^63 or more is refused here, never an empty loop.
+    rcount := comptime_range_count(rlo, rhi, rlo_v, rhi_v, cx)
+    ## Walk the count, not `rk < rhi_v`: a signed `<` stops at once on a `u64` range that crosses 2^63.
+    ## The value is the pattern `rlo_v + k`, which wraps exactly as the range's type does.
+    mut rk : i64 = rlo_v
+    mut rn : u64 = 0
+    while rn < rcount {
       push_str(sb, "  movq $")
       push_int(sb, rk)
       push_str(sb, ", %rax\n  movq %rax, -")
       push_int(sb, (rslot + 1) * 8)
       push_str(sb, "(%rbp)\n")
       emit_stmts(rbody, sb, cx, nl)
-      rk += 1
+      ## unchecked-ok: the next value's pattern; a `u64` range crossing 2^63 passes i64 MAX here
+      rk = unchecked (rk + 1)
+      rn += 1
     }
   }
 }

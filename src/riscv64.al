@@ -7647,17 +7647,21 @@ emit_rv_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, a
                 lo := lower_layout::opt_i64_or(lo_o, 0)
                 hi := lower_layout::opt_i64_or(hi_o, 0)
                 if lower_layout::opt_i64_is_some(lo_o) == false or lower_layout::opt_i64_is_some(hi_o) == false { push_str(sb, "  ebreak # comptime-for range bound is not comptime-known\n") }
-                else if hi - lo > 100000 { push_str(sb, "  ebreak # comptime-for range exceeds the unroll budget\n") }
                 else {
-                  ## See the note on the same unroll in `wat::emit_wat_stmts` (#602/#638/#646): `lo` is
-                  ## now reachably negative, and #648's `unchecked` bypass on the increment is gone —
-                  ## the lower records this local's `i64` annotation, so the increment's overflow guard
-                  ## is the SIGNED one that matches the SIGNED `<` beside it.
-                  mut k : i64 = lo
-                  while k < hi {
-                    push_str(sb, "  li a0, ") ; push_int(sb, k) ; push_str(sb, "\n  sd a0, ") ; push_int(sb, ioff) ; push_str(sb, "(s0)\n")
-                    emit_rv_stmts(rb, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
-                    k = k + 1
+                  ## See the note on the same unroll in `wat::emit_wat_stmts` (#638, #1499): the count is
+                  ## ordered in the range's own type, and the walk counts iterations, not `k < hi`.
+                  cnt := lower_layout::ct_range_count(lo, hi, lower_layout::ct_range_w(rlo, rhi))
+                  if cnt > lower_layout::CT_UNROLL_BUDGET { push_str(sb, "  ebreak # comptime-for range exceeds the unroll budget\n") }
+                  else {
+                    mut k : i64 = lo
+                    mut n : u64 = 0
+                    while n < cnt {
+                      push_str(sb, "  li a0, ") ; push_int(sb, k) ; push_str(sb, "\n  sd a0, ") ; push_int(sb, ioff) ; push_str(sb, "(s0)\n")
+                      emit_rv_stmts(rb, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
+                      ## unchecked-ok: the next value's pattern; a `u64` range crossing 2^63 passes i64 MAX here
+                      k = unchecked (k + 1)
+                      n += 1
+                    }
                   }
                 }
               }

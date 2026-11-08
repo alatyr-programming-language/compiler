@@ -42,7 +42,7 @@ stmt_p := ast::stmt_p
 (push_str, push_int) := strbuf
 (CSpan, LCtx, arg_expr_at, var_name_span) := lower_ctx
 (base_type_name, ct_bind_depth, ct_bound_value, enum_decl_of, struct_decl_of, typearg_at) := lower_layout
-(EX_VALUE_DEPTH, RangeGuard, ct_bound_w, ct_range_arith, ct_range_guard, opt_i64_is_some, opt_i64_or) := lower_layout
+(EX_VALUE_DEPTH, RangeGuard, ct_bound_w, ct_range_arith, ct_range_guard, opt_i64_is_some, opt_i64_or, CT_UNROLL_BUDGET, ct_range_count, ct_range_w) := lower_layout
 ## moved to `lower_layout` so sema reads a `comptime for` header the way this lowering does (docs/ir-slice-1.md §8.4)
 (comptime_arg_end, compfor_iter_arg) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
@@ -1354,6 +1354,17 @@ pub comptime_range_bound := fn(e : ptr(Expr), cx : ptr(LCtx)) -> i64 {
       0
     }
   }
+}
+## The iteration count of the numeric `comptime for` range `lo .. hi`, whose bounds folded to `lo_v`
+## and `hi_v`: ordered in the range's own type (`ct_range_count`, #1499), and a range over the unroll
+## budget is a LOCATED "budget exhausted" reject (Comptime §2.2), placed at the upper bound — never an
+## empty or truncated unroll. The reject fails the build; its count is unread.
+pub comptime_range_count := fn(lo : ptr(Expr), hi : ptr(Expr), lo_v : i64, hi_v : i64, cx : ptr(LCtx)) -> u64 {
+  n := ct_range_count(lo_v, hi_v, ct_range_w(lo, hi))
+  if n > CT_UNROLL_BUDGET {
+    codegen_reject(cx.src, ct_bound_site_off(hi), cx.mod_s, cx.mod_l, "`comptime for` — this range unrolls more than 100000 iterations: budget exhausted. Comptime §2.2: an evaluation that exceeds the step budget is a compile-time failure, never a silent partial result.", deref(cx.mar))
+  }
+  n
 }
 ## The fold behind `comptime_range_bound`: `None` is "not comptime-known". `hops` counts
 ## const-to-const steps, capped like `ex_value_fold`'s, so a const cycle is refused, never a hang.
