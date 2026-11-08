@@ -156,6 +156,14 @@ Two numbers that are **not** the compiler's version: the specification revision 
   element's width, the bound-loop form of that slice answers wrong too, as its annotated and indexed
   forms already did. Also still open on #1403: the fixed-array view rows, where `v := t[1..4]; for x in v`
   over a `[u8; 4]` segfaults.
+- **A block-local declaration that names a module binding traps on aarch64, riscv64 and wasm instead of
+  overwriting the binding (#1502).** After `if t == 1 { K := 50 ... }` in one function, a read of the
+  module constant `K` anywhere later, in that function or another, answered the dead local's 50 where 7
+  is due, from a clean compile with no diagnostic: those emitters stored the declaration into `K`'s own
+  `.data` cell (wasm: its `global`). Declarations §5 and §6.1 limit the inner name to its block. Such a
+  declaration now traps there (a fail-loud stub) until a block-local declaration gets a slot of its own;
+  a program that relied on it must rename the local. This includes a typed constant whose reads were
+  folded and so happened to answer correctly. x86_64 is unchanged.
 
 ## 0.2.24 — 2026-11-07
 

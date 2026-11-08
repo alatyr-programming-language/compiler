@@ -45,6 +45,22 @@ pub streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usiz
   str_at((src + a_s), a_n) == str_at((src + b_s), b_n)
 }
 
+## Whether `[ns, ns+nl)` names a module DATA binding: a non-fn, arity-0 kind-0 declaration, the same
+## test the twins' `*_global_value` use to find a `.data` label. #1502: aarch64 and riscv64 resolve such
+## a name to its label BEFORE a frame slot, and wasm to its `global`, so a declaration of that name inside
+## a nested block stores into the module binding, and a read after the block (or in another function)
+## answers the dead local. Their statement emitters ask this to fail loud on that declaration instead.
+pub names_module_data := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.is_fn == false and d.kind == lower_layout::DECL_KIND_VALUE and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) { return true }
+    i += 1
+  }
+  false
+}
+
 ## 0-based index of the PARAM named `[ns, ns+nl)`, or -1 when the supplied arena-linked list does not
 ## contain it. Native scalar backends pass either the complete parameter list or the value-only tail after
 ## their existing generic handling; this helper deliberately does not reinterpret or skip type parameters.
