@@ -9,6 +9,7 @@ arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 (Expr, Stmt) := ast
+ex_is_cmp_op := lower_layout::ex_is_cmp_op
 
 ## STRING tier — str-temp-pool SIZING. A str LITERAL passed as a call argument is materialized
 ## into a reserved 2-word frame block (`emit_arg` / `str_arg_tmp_off`); every str-literal arg of a
@@ -300,7 +301,15 @@ pub scan_agg_width_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
   mut m : usize = 0
   if arg_is_agg_value(e, decls, src, a) or str_ret_call(e, decls, src, a) { m = agg_value_words(e, decls, src, a) }
   match deref(e) {
-    Expr::Bin(op, l, r) => { m = imax(m, imax(scan_agg_width_expr(l, decls, src, a), scan_agg_width_expr(r, decls, src, a))) }
+    Expr::Bin(op, l, r) => {
+      m = imax(m, imax(scan_agg_width_expr(l, decls, src, a), scan_agg_width_expr(r, decls, src, a)))
+      ## #1394 — a comparison's CALL operand returning a multi-word struct/enum by value takes its own
+      ## pool block (`scan_agg_arg_expr` counts it, `emit_arg` lands the result there), so the block
+      ## must be as wide as that result. `arg_is_agg_value` above does not see a register-returned enum
+      ## call, so without this the blocks of `mk(1) == mk(1)` stayed one word wide and the second
+      ## result overwrote the first. `agg_value_call_words` is 0 for every non-call operand.
+      if ex_is_cmp_op(op) { m = imax(m, imax(agg_value_call_words(l, decls, src, a), agg_value_call_words(r, decls, src, a))) }
+    }
     Expr::If(c, t, f) => { m = imax(m, imax(scan_agg_width_expr(c, decls, src, a), imax(scan_agg_width_expr(t, decls, src, a), scan_agg_width_expr(f, decls, src, a)))) }
     Expr::Match(scrut, head) => {
       m = imax(m, scan_agg_width_expr(scrut, decls, src, a))
