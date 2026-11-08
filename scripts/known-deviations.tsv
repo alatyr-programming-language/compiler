@@ -218,6 +218,7 @@ aarch64	test/issue1254_deque_subword_call_deref.al	run/133	#1200
 aarch64	test/issue1254_deque_subword_slot.al	run/133	#1200
 aarch64	test/issue1255_hashmap_subword_growth.al	run/133	#1200
 aarch64	test/issue1302_container_elem_enum.al	run/133	#1200
+aarch64	test/issue1303_enum_hash.al	run/133	#1189
 aarch64	test/issue1305_alias_callee_option.al	run/133	#1188
 aarch64	test/issue1307_instance_ptr_width.al	run/133	#1188
 aarch64	test/issue1334_folded_deref_store.al	run/133	#1200
@@ -730,6 +731,7 @@ riscv64	test/issue1254_deque_subword_call_deref.al	run/133	#1200
 riscv64	test/issue1254_deque_subword_slot.al	run/133	#1200
 riscv64	test/issue1255_hashmap_subword_growth.al	run/133	#1200
 riscv64	test/issue1302_container_elem_enum.al	run/133	#1200
+riscv64	test/issue1303_enum_hash.al	run/133	#1189
 riscv64	test/issue1305_alias_callee_option.al	run/133	#1188
 riscv64	test/issue1307_instance_ptr_width.al	run/133	#1188
 riscv64	test/issue1334_folded_deref_store.al	run/133	#1200
@@ -1243,6 +1245,7 @@ wasm	test/issue1254_deque_subword_call_deref.al	run/134	#1186
 wasm	test/issue1254_deque_subword_slot.al	run/134	#1186
 wasm	test/issue1255_hashmap_subword_growth.al	run/134	#1186
 wasm	test/issue1302_container_elem_enum.al	run/134	#1186
+wasm	test/issue1303_enum_hash.al	run/134	#1189
 wasm	test/issue1305_alias_callee_option.al	run/134	#1186
 wasm	test/issue1307_instance_ptr_width.al	run/134	#1188
 wasm	test/issue1334_folded_deref_store.al	run/134	#1186
