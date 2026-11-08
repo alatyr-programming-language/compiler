@@ -171,6 +171,9 @@ IbB := struct {
   span0 : u64,
   ## Slice 3d: the declared spelling of an aggregate RESULT (`rn == 0`: a scalar result or none).
   rs : usize, rn : usize,
+  ## The declaration being built — the function a `T(v)` inside it must not re-select as its own
+  ## conversion (Types §4.6 Termination, `lower::convert_callee_excl`).
+  di : usize,
 }
 
 ## Record reads, copy-then-read (#792: an enum or bool field read straight through `deref(p)` is wrong
@@ -181,6 +184,7 @@ ib_b_src := fn(bp : ptr(mut IbB)) -> ptr(u8) { bv : IbB = deref(bp); bv.src }
 ib_b_decls := fn(bp : ptr(mut IbB)) -> ptr(rt::Vec) { bv : IbB = deref(bp); bv.decls }
 ib_b_failed := fn(bp : ptr(mut IbB)) -> bool { bv : IbB = deref(bp); bv.failed }
 ib_b_unch := fn(bp : ptr(mut IbB)) -> bool { bv : IbB = deref(bp); bv.unch }
+ib_b_di := fn(bp : ptr(mut IbB)) -> usize { bv : IbB = deref(bp); bv.di }
 ib_b_term := fn(bp : ptr(mut IbB)) -> bool { bv : IbB = deref(bp); bv.term }
 ib_b_set_unch := fn(bp : ptr(mut IbB), u : bool) { mut bv : IbB = deref(bp); bv.unch = u; deref(bp) = bv }
 ib_b_set_term := fn(bp : ptr(mut IbB), t : bool) { mut bv : IbB = deref(bp); bv.term = t; deref(bp) = bv }
@@ -1144,6 +1148,8 @@ ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize
   ## Slice 5a: `B(v)` of a brand or a required type — the contract construction of Types §8.1.
   bu := lower_layout::brand_underlying(ib_b_decls(bp), src, cs, cl)
   if bu.n != 0 and na == 1 and not ib_fn_named(bp, cs, cl) {
+    cvo : Option(CallOut) = ib_call_brand_convert(bp, a, e, cs, cl, na, ah)
+    match cvo { Some(co) => { return co }; None => {} }
     bcv : Option(VRegId) = ib_bx_brand_ctor(bp, a, e, cs, cl, bu.s, bu.n, ah)
     return ib_call_out(bcv)
   }
@@ -1170,6 +1176,31 @@ ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize
 }
 ib_call_out := fn(v : Option(VRegId)) -> CallOut {
   match v { Some(x) => { CallOut.CoValue(x) }; None => { CallOut.CoRefused } }
+}
+
+## `B(v)` for a brand `B` with an in-scope `@convert` to it: Types §4.6 dispatch step (2) — "An in-scope
+## `@convert` therefore precedes the brand crossing to a branded target … where a conversion matches,
+## the site denotes the conversion" (TYP-14). `None` = no conversion matches (or it is the function being
+## built, §4.6 Termination), so the caller takes the brand crossing. Which conversion is the legacy
+## lower's own answer, `lower::convert_callee_excl` (#364), so the two paths cannot select differently.
+##
+## In a checked scope the site is an ordinary `call` of the conversion. Inside `unchecked` it must run the
+## conversion's UNCHECKED instance (Comptime §7.5, CT-11: a function reading `verify.checked` "is
+## instantiated per the verification mode of each call site"), and an IR symbol names a declaration, not
+## a mode instance of one; a plain `call` here would run the checked guard where the site wants none. So
+## that site refuses the function, located at the call, and it keeps its target's legacy emission (D7):
+## x86_64 calls the unchecked instance there, the twins are #1517's rows. A generic conversion is not
+## built here either.
+ib_call_brand_convert := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg))) -> Option(CallOut) {
+  decls := ib_b_decls(bp)
+  ci := lower::convert_callee_excl(decls, ib_b_src(bp), cs, cl, Option(usize).Some(ib_b_di(bp)))
+  if ci < 0 { return Option(CallOut).None }
+  cd : Decl = deref(ib_decl_ptr(decls, usize(ci)))
+  if ib_b_unch(bp) or cd.is_generic {
+    ib_refuse_expr(bp, e, NyWhy.NwOutside)
+    return Option(CallOut).Some(CallOut.CoRefused)
+  }
+  Option(CallOut).Some(ib_call_decl(bp, a, e, usize(ci), na, ah))
 }
 
 ## `T(x)` for a kernel integer or `bool` `T`. A literal argument is the constant at `T`, wrapped to its
@@ -4428,7 +4459,7 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
           taken = wb_new(a, 8),
           lexit = wb_new(a, 8), lcont = wb_new(a, 8), lres = wb_new(a, 8), lhasres = wb_new(a, 8), lbroken = wb_new(a, 8),
           unch = false, term = false, failed = false, fail_c = Construct.CEmpty, fail_w = NyWhy.NwOutside,
-          fail_s = u64(d.name_start), span0 = u64(d.name_start), rs = 0, rn = 0)
+          fail_s = u64(d.name_start), span0 = u64(d.name_start), rs = 0, rn = 0, di = di)
   mut bb := nb
   if rwords > 0 { bb.rs = d.ret_ts; bb.rn = d.ret_tl }
   bp := ptr(mut bb)

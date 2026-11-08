@@ -14632,7 +14632,7 @@ convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
 ## construction never reached step (2), so no body could re-select itself; now `Lvl(n)` inside
 ## `to_lvl := @convert fn(n : u64) -> Lvl` would. `None` = the enclosing function is not known as one
 ## decl (a generic instance), where no exclusion applies — a generic `@convert` is not selected here.
-convert_callee_excl := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, self_fn : Option(usize)) -> i64 {
+pub convert_callee_excl := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, self_fn : Option(usize)) -> i64 {
   ci := convert_callee_idx(decls, src, cs, cl)
   match self_fn {
     Some(si) => { if ci >= 0 and usize(ci) == si { return 0 - 1 } }
