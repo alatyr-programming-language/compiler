@@ -156,6 +156,21 @@ Two numbers that are **not** the compiler's version: the specification revision 
   element's width, the bound-loop form of that slice answers wrong too, as its annotated and indexed
   forms already did. Also still open on #1403: the fixed-array view rows, where `v := t[1..4]; for x in v`
   over a `[u8; 4]` segfaults.
+- **A checked `char(n)` reaches its code-point guard, and `unchecked char(n)` drops it (#364).**
+  `char(1114112)` and `char(0xD800)` answered `1114112` and `55296` in checked code, silently: the lower
+  short-circuited every brand construction ahead of `@convert` dispatch, so `base::char::to_char`'s
+  guard was dead code. A `T(v)` whose target is a brand now denotes the in-scope `@convert` to it —
+  Types §4.6 (spec 1.8.0): "An in-scope `@convert` therefore precedes the brand crossing to a branded
+  target" — in both verification modes. Inside `unchecked` the site runs the conversion's **unchecked
+  instance**, a second emission in which `verify.checked` reads false (Comptime §7.5, CT-11: a function
+  that reads it is "instantiated per the verification mode of each call site"), so `unchecked char(n)`
+  still yields the raw value; the instance's own operation sites keep their lexical mode ("one level
+  deep"). A conversion no longer re-selects itself: `Lvl(n)` inside `@convert fn(n : u64) -> Lvl` is the
+  brand crossing (§4.6, Termination). A brand with no in-scope `@convert` keeps its zero-cost crossing,
+  and the guard still reports through `panic`, not `trap()`, until `trap()` is a callable prelude
+  identifier (#1427). The per-mode instance covers a `@convert` on x86_64 only: an ordinary call to a
+  function that reads `verify.checked`, and every call on aarch64, riscv64 and wasm, still run the
+  checked body (#1517).
 
 ## 0.2.24 — 2026-11-07
 
@@ -232,21 +247,6 @@ Two numbers that are **not** the compiler's version: the specification revision 
   A global owner resolves in the module of the access, and a qualified owner (`z::cfg.x`) is left to
   the module it names. Programs that relied on the old behaviour were invalid. A local or parameter typed
   `u16`, `i16`, `i8`, `char` or a float is covered by the later #703 entry below.
-- **A checked `char(n)` reaches its code-point guard, and `unchecked char(n)` drops it (#364).**
-  `char(1114112)` and `char(0xD800)` answered `1114112` and `55296` in checked code, silently: the lower
-  short-circuited every brand construction ahead of `@convert` dispatch, so `base::char::to_char`'s
-  guard was dead code. A `T(v)` whose target is a brand now denotes the in-scope `@convert` to it —
-  Types §4.6 (spec 1.8.0): "An in-scope `@convert` therefore precedes the brand crossing to a branded
-  target" — in both verification modes. Inside `unchecked` the site runs the conversion's **unchecked
-  instance**, a second emission in which `verify.checked` reads false (Comptime §7.5, CT-11: a function
-  that reads it is "instantiated per the verification mode of each call site"), so `unchecked char(n)`
-  still yields the raw value; the instance's own operation sites keep their lexical mode ("one level
-  deep"). A conversion no longer re-selects itself: `Lvl(n)` inside `@convert fn(n : u64) -> Lvl` is the
-  brand crossing (§4.6, Termination). A brand with no in-scope `@convert` keeps its zero-cost crossing,
-  and the guard still reports through `panic`, not `trap()`, until `trap()` is a callable prelude
-  identifier (#1427). The per-mode instance covers a `@convert` on x86_64 only: an ordinary call to a
-  function that reads `verify.checked`, and every call on aarch64, riscv64 and wasm, still run the
-  checked body (#1517).
 - **A `Vec` of a sub-word element no longer reads its neighbours into the value (#395).** Inside a
   generic function, `deref(p)` with `p : ptr(mut T)` used 8 bytes whatever `T` was, so `at`, `try_at`,
   `get` and `set` on a `Vec(u8)`, `Vec(u16)`, `Vec(u32)` or `Vec(i8)` read the next elements into the
