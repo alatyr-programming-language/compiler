@@ -136,6 +136,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
   x86_64 lowering took any annotated name for one: `xs[0].b`, `xs[1]`, `xs[1..2]` and `for p in xs`
   dereferenced the view's data pointer once more and crashed (SIGSEGV). Parameter-ness is now recorded
   where parameters are bound, so the annotated local reads exactly like `xs := t[0..2]`.
+- **A float-to-integer conversion traps on NaN and on an out-of-range value, on every backend (#997,
+  #1374).** `T(f)` used to be a bare truncating conversion with no check. `u64(1.0e30)` answered 2^63,
+  `u8(300.0)` answered 44, `i64(NaN)` answered the integer-indefinite value, and `u64(-1.0)` answered
+  2^64 - 1. Each of these now traps on x86_64, aarch64, riscv64 and wasm (Concurrency §7.7, Types
+  §4.2). `u64`/`usize` values at or above 2^63, such as `u64(0.75 * 2^64)`, now convert correctly on
+  x86_64 where they used to answer a wrong value. Inside `unchecked` an out-of-range result stays
+  hardware-defined; on wasm it now answers a value (the saturating conversion) instead of trapping.
 
 ## 0.2.24 — 2026-11-07
 
