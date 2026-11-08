@@ -13222,13 +13222,21 @@ ufcs_ref_pointee := fn(src : ptr(u8), ps : usize, pl : usize) -> Option(CSpan) {
 ## an auto-ref first parameter typed `[ps, pl)` = `ptr([mut] X)` (`v.at(i)` → `at(T, v, i)` with
 ## `v : ptr(Vec(T))`), read from the receiver's bindings against `X` exactly as #988 reads a by-value
 ## receiver. 0/0 when the parameter is not such a pointer, `X` does not take `T` directly, or the
-## bindings disagree or cannot be read — a pointer-typed receiver among them — and the call is then
-## refused (Comptime §3.3), never tagged by the receiver's name. Both mono passes call it.
-ufcs_autoref_targ := fn(e : ptr(Expr), ps : usize, pl : usize, ts : usize, tl : usize, body : Option(ptr(mut Stmt)), params : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+## binding the receiver occurrence sees (#1230) has another head or cannot be read — a pointer-typed
+## receiver among them — and the call is then refused (Comptime §3.3), never tagged by the receiver's
+## name. Both mono passes call it, with the fn's body and tail (`ufcs_recv_targ`).
+ufcs_autoref_targ := fn(e : ptr(Expr), ps : usize, pl : usize, ts : usize, tl : usize, body : Option(ptr(mut Stmt)), tail : Option(ptr(Expr)), params : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   match ufcs_ref_pointee(src, ps, pl) {
     Some(x) => {
       match ufcs_param_tpos(src, x.s, x.n, ts, tl) {
-        Some(tp) => { return ufcs_recv_targ(e, tp, body, params, x.s, x.n, decls, src, a) }
+        Some(tp) => {
+          ut : UfcsTarg = ufcs_recv_targ(e, tp, body, tail, params, x.s, x.n, decls, src, a)
+          match ut {
+            UfcsTarg::Read(us, un) => { return CSpan(s = us, n = un) }
+            UfcsTarg::OtherHead => { return CSpan(s = 0, n = 0) }
+            UfcsTarg::Unread => { return CSpan(s = 0, n = 0) }
+          }
+        }
         None => { return CSpan(s = 0, n = 0) }
       }
     }
@@ -18125,7 +18133,7 @@ infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(L
         } else {
           ## #987 — an auto-ref receiver (`v.at(i)` into `v : ptr(Vec(T))`, Types §4.5); the pre-pass mirrors it.
           if j2 == 0 {
-            art := ufcs_autoref_targ(arg_expr_at(args_head, 0, a), pm.ts, pm.tl, tpn_s, tpn_l, EMIT_BODY, EMIT_PARAMS, cx.decls, cx.src, deref(cx.mar))
+            art := ufcs_autoref_targ(arg_expr_at(args_head, 0, a), pm.ts, pm.tl, tpn_s, tpn_l, EMIT_BODY, EMIT_TAIL, EMIT_PARAMS, cx.decls, cx.src, deref(cx.mar))
             if art.n != 0 { return inst_tparam_cx(art.s, art.n, cx) }
           }
           if param_type_has_tparam(cx.src, pm.ts, pm.tl, tpn_s, tpn_l) {
@@ -30476,7 +30484,7 @@ infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Opti
         } else {
           ## #987 — the COLLECT-side mirror of the emit side's auto-ref receiver step.
           if jm == 0 {
-            art := ufcs_autoref_targ(arg_expr_at(args_head, 0, a), pmm.ts, pmm.tl, tpn_s, tpn_l, COLLECT_FN_BODY, penv, decls, src, a)
+            art := ufcs_autoref_targ(arg_expr_at(args_head, 0, a), pmm.ts, pmm.tl, tpn_s, tpn_l, COLLECT_FN_BODY, COLLECT_FN_TAIL, penv, decls, src, a)
             if art.n != 0 { return art }
           }
           if param_type_has_tparam(src, pmm.ts, pmm.tl, tpn_s, tpn_l) {
