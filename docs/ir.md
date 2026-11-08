@@ -1054,7 +1054,7 @@ census says in advance whether it does.
 | `match` | evaluate the scrutinee once; `switch` on the tag or scalar in source order; range arms as compare chains; payload bindings are `load`s from the matched variant's offsets; an arm body per region; `default` → `trap match_no_arm` (D2) |
 | `e?` | `load` tag; `br_if` success → continue with the payload; else build the error result (through `@convert` when the enclosing return type differs) and `ret` — the success variant comes from the enum's declaration, never from its name |
 | brand / named `T(v)` | the kernel value, plus the brand's declared checks (`@require`) as `trap_if … require` |
-| `@convert` | a `call` to the resolved conversion function |
+| `@convert` | a `call` to the conversion function Types §4.6 step 2 selects — the one whose parameter accepts the operand's type (#1518), through `lower::convert_callee_excl`, so both paths select alike. A brand target asks it before its crossing (TYP-14) and before the scalar-name conversion, so `char(n)` — sema's `u32` — calls `to_char` (#364); a required type's contract gate (step 1) precedes it when the operand is assignable to `U`. Inside `unchecked` the site needs the conversion's unchecked instance (Comptime §7.5), which no IR symbol names yet, so the function is refused there |
 | `size(T)`, `align(T)`, `typeinfo` facts | `const` from `lower_layout` |
 | generics | one IR function per mono instance; types substituted before build |
 | comptime `if` / `for` / `match typeinfo` | already folded or unrolled by the front half; the IR never sees comptime |

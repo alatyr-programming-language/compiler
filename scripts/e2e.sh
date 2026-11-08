@@ -6243,6 +6243,13 @@ run convert_to_builtin 42
 ## operand WITH an in-scope `@convert fn((i64,i64)) -> u64` routes to it (returns 42).
 build_reject_has convert_agg_reject "needs a scalar operand"
 build_reject_has convert_tuple_reject "needs a scalar operand"
+## #1518 — Types §4.6 step (2) asks the conversion's PARAMETER: two conversions to one target from
+## different sources coexist and the operand selects (literal, widened local, `bool`, and an aggregate
+## operand of a builtin target); one whose parameter does not accept the operand is never called, so a
+## struct target with no accepting conversion is refused; two from the same source stay ambiguous.
+run issue1518_convert_param_select 42
+build_reject_has issue1518_convert_param_refused "accepts the operand's type"
+build_reject_has issue1518_convert_same_source_ambiguous "ambiguous @convert"
 build_reject_has reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
 check_reject reject_p0_f32_zeroarg
 emit_reject_has wat reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
@@ -9907,6 +9914,38 @@ run_x86_trap chariter_truncated_lead 132
 ## The invalid lead is a library validity failure (`panic`/exit 1), not the architecture's direct bounds trap.
 run_x86 chariter_invalid_ff 1
 run chariter_valid_utf8 42
+## Issue #364 compiler half / Types §4.6 (v1.8.0, l.338) + TYP-14 — a `char(n)` site denotes the
+## in-scope `@convert` (`base::char::to_char`) and its code-point guard runs; the brand construction no
+## longer short-circuits ahead of it. On the parent both refused sites returned silently (measured:
+## exit 42, empty stderr, native x86_64 with the committed seed). The refused site fails through
+## `panic` (exit 1), not the specified `trap()`, for the same reason the row above is a `run_x86 … 1`:
+## #1427 holds that `trap()` is not yet a callable prelude identifier.
+run_x86 issue364_char_convert_guard 1
+## The CT-11 half of the same rule, which the fix must NOT overreach: §4.6 l.345 selects step (2)
+## "checked or unchecked alike", so `unchecked char(n)` calls `to_char` too and only its guard is absent
+## (the body ends in `unchecked bitcast(char, n)` — "an identity crossing", l.344). The guard is absent
+## because the site runs `to_char`'s UNCHECKED instance (Comptime §7.5, CT-11: "instantiated per the
+## verification mode of each call site"); x86_64 emits it as `base__char__to_char.unchecked`. Measured on
+## #1436's earlier head, which called the one checked body: exit 1 ("invalid code point"). The twins
+## still call the checked body and trap: rows under #1517 in scripts/known-deviations.tsv.
+run issue364_char_unchecked_crossing 42
+## Which instance of a mode-polymorphic conversion each `T(v)` site runs (Comptime §7.5, CT-11): a site
+## inside `unchecked` runs the unchecked instance, a call inside that instance runs at its own lexical
+## mode ("one level deep"), and `Lvl(n)` inside `to_lvl` is the brand crossing, not `to_lvl` again
+## (Types §4.6, Termination). Each instance appends a digit to a global, so no trap is needed. Measured on
+## native x86_64: 1 on the parent `ae3623d1` (no `@convert` ran) and 132 on #1436's earlier head (the
+## conversion re-selected itself until `SEEN * 10` overflowed).
+run issue364_unchecked_instance_one_level 42
+## The IR path of the guard row above: sema reads `char` as `u32`, so the IR builder built `char(n)` as a
+## narrow and `to_char` never ran when `alatyr x86-ir` took `main` (this `main` is one it takes).
+run_x86 issue364_char_guard_ir 1
+## Types §4.6 step (1) precedes step (2) (l.330-331, l.357): `R(41)` over a required type is the contract
+## gate, not the competing `@convert u64 -> R` that answers 42.
+run issue1436_require_gate_precedes_convert 41
+## A brand's step (2) asks the parameter (l.332-333): a `@convert` from `bool` leaves `Flag(42)` the
+## crossing, and a second one from `u64` is selected by a `u64` operand, not refused as ambiguous.
+run issue1436_brand_convert_other_source 42
+run issue1436_brand_convert_two_sources 42
 # Issue #402 / Control Flow §6 + Stdlib appendix §2.4 — `for` over a type that provides
 # `next(in out self) -> Opt` must DRIVE `next`, not count the backing view. The parent walked the
 # byte length (10 for four code points) and yielded garbage; `iter_for_split` is the same class on

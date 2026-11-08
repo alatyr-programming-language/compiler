@@ -164,6 +164,25 @@ Two numbers that are **not** the compiler's version: the specification revision 
   method call (`a := r1.ok()`). A receiver whose type is still not read (copied out of a struct field,
   a `for` or match binding) is refused at its line instead of guessing; `push(u32, v, x)` stays
   expressible.
+- **A checked `char(n)` reaches its code-point guard, and `unchecked char(n)` drops it (#364).**
+  `char(1114112)` and `char(0xD800)` answered `1114112` and `55296` in checked code, silently: the lower
+  short-circuited every brand construction ahead of `@convert` dispatch, so `base::char::to_char`'s
+  guard was dead code. A `T(v)` whose target is a brand now denotes the in-scope `@convert` to it —
+  Types §4.6 (spec 1.8.0): "An in-scope `@convert` therefore precedes the brand crossing to a branded
+  target" — in both verification modes. Inside `unchecked` the site runs the conversion's **unchecked
+  instance**, a second emission in which `verify.checked` reads false (Comptime §7.5, CT-11: a function
+  that reads it is "instantiated per the verification mode of each call site"), so `unchecked char(n)`
+  still yields the raw value; the instance's own operation sites keep their lexical mode ("one level
+  deep"). A conversion no longer re-selects itself: `Lvl(n)` inside `@convert fn(n : u64) -> Lvl` is the
+  brand crossing (§4.6, Termination). A brand with no in-scope `@convert` keeps its zero-cost crossing,
+  and so does one whose conversions do not accept the operand's type (`Flag(42)` beside a lone
+  `@convert fn(b : bool) -> Flag`; the selection asks the parameter, #1518). A required type's contract
+  gate still precedes a competing `@convert` when the operand is assignable to its `U` (§4.6 step 1). The
+  shared IR builder selects the same way, and its `char(n)` calls `to_char` instead of narrowing to
+  `u32`. The guard still reports through `panic`, not `trap()`, until `trap()` is a callable prelude
+  identifier (#1427). The per-mode instance covers a `@convert` on x86_64 only: an ordinary call to a
+  function that reads `verify.checked`, and every call on aarch64, riscv64 and wasm, still run the
+  checked body (#1517).
 
 ## 0.2.24 — 2026-11-07
 

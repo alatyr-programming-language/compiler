@@ -11554,9 +11554,10 @@ call_ret_ty_span := fn(recv : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
       mut idx := generic_decl_of(decls, src, cs, cl, qms, qml, nargs, ah, a)
       if idx < 0 { idx = resolve_callee_idx(decls, src, cs, cl, qms, qml) }
       ## `T(v)` user CONVERSION-CONSTRUCTOR (Types §4.6): resolve the @convert fn so its declared
-      ## RETURN type `T` types the call result (field-type recovery, scalar bindings). Neutral — see
-      ## `convert_callee_idx` (filters builtin/brand, so src/lib's `char(n)` never resolves here).
-      if idx < 0 { idx = convert_callee_idx(decls, src, cs, cl) }
+      ## RETURN type `T` types the call result (field-type recovery, scalar bindings). Every candidate
+      ## returns `T`, so any one answers (`convert_target_any`; it filters builtin names; a BRAND
+      ## target resolves since TYP-14, and its return type is that same brand `T`).
+      if idx < 0 { idx = convert_target_any(decls, src, cs, cl) }
       if idx < 0 { return CSpan(s = 0, n = 0) }
       d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(idx))))
       return CSpan(s = d.ret_ts, n = d.ret_tl)
@@ -11624,20 +11625,62 @@ try_value_payload_words := fn(inner : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) 
 ## `sema::check_program` (now run on the build path), which rejects the class post-overload-resolution
 ## with a located diagnostic, in BOTH directions. Only the `T(aggregate)` builtin-CONVERSION net (in
 ## `emit_call_dispatch`'s value-position arm) remains here — sema does not yet model conversions.
+## MODE-POLYMORPHIC CONVERSIONS (Comptime §7.5, CT-11; Types §4.6; compiler #364). "A function whose
+## body reads `verify.checked` is mode-polymorphic: like a function generic over a comptime value, it is
+## instantiated per the verification mode of each call site" — so a `T(v)` that selects a `@convert`
+## (`char(n)` → `base::char::to_char`) inside `unchecked` must run a copy of it in which `verify.checked`
+## reads false, while the same site in checked code runs the ordinary one. The x86_64 lower emits a
+## function's body once at its definition, so the caller's `unchecked` (`cx.vchk`) never reached the
+## callee's `comptime if verify.checked` and `unchecked char(1114112)` trapped. The selecting call now
+## names the UNCHECKED instance — the ordinary label plus `emit_unchecked_instance_suffix` — and records
+## the callee here; `emit_unchecked_instances` emits each recorded fn once more with `PCtx.vinst` false.
+## In that copy only the `verify.checked` fold moves (`LCtx.vinst`): its own operation sites keep their
+## lexical mode, and a call inside it selects by that lexical mode — "one level deep" (§7.5, CG-7).
+## Mode-blind about whether the callee actually reads `verify.checked`: a mode-opaque conversion's two
+## copies are the same code, which is the as-if answer §7.5 gives for it. `None` outside `emit_program`.
+mut UNCHECKED_INSTANCES : Option(ptr(mut rt::Vec)) = Option.None
+
+## The label tail of a function's UNCHECKED instance (see above). `.` cannot occur in a source
+## identifier, so no mangled ordinary label ends this way.
+emit_unchecked_instance_suffix := fn(in out sb : strbuf::StrBuf) { push_str(sb, ".unchecked") }
+
+## Write the callee label of a `T(v)` that selected the non-generic `@convert` `cvd` (decl `ci`), in the
+## current verification mode: inside `unchecked` (`cx.vchk` false) its UNCHECKED instance, recorded for
+## `emit_unchecked_instances`; otherwise the ordinary label. An `@extern` conversion has no body to
+## instantiate, so it keeps the ordinary (external) symbol.
+emit_convert_callee_label := fn(in out sb : strbuf::StrBuf, cvd : Decl, ci : usize, cx : ptr(LCtx)) {
+  emit_mangled_call(sb, cx.src, cvd.name_start, cvd.name_len, cvd.mod_start, cvd.mod_len, cx.decls)
+  if cx.vchk or cvd.is_generic or extern_symbol(cx.src, cvd.name_start, cvd.name_len).n != 0 { return }
+  emit_unchecked_instance_suffix(sb)
+  match UNCHECKED_INSTANCES {
+    Some(up) => {
+      mut seen := false
+      for k in 0..rt::vec_len(deref(up)) {
+        if rt::vec_get(deref(up), k) == ci { seen = true }
+      }
+      if seen == false { rt::vec_push(deref(up), ci) }
+    }
+    None => { panic("selfhost: internal — an unchecked @convert call was lowered outside emit_program (no UNCHECKED_INSTANCES list)") }
+  }
+}
+
 emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## USER CONVERSION-CONSTRUCTOR `T(v)` (Types §4.6 / TYP-6): the callee `T` is a type name with an
   ## in-scope `@convert fn(…) -> T` — dispatch to that fn by ITS OWN (mangled) name, not `T` (there is
   ## no fn named `T`). The result is delivered in the return registers (%rax/%rdx…), matching the
-  ## aggregate-return convention of this fn. Fixpoint-neutral: `convert_callee_idx` filters builtin/brand,
-  ## so no `src/lib` call resolves here (its only @convert `to_char` targets the brand `char`).
-  cvi0 := convert_callee_idx(cx.decls, cx.src, cs, cl)
+  ## aggregate-return convention of this fn. `convert_callee_idx` filters builtin names and admits a
+  ## BRAND target (TYP-14), so `char(n)` resolves to `to_char` here. The self-host build stays
+  ## byte-identical: `src/` declares no `@convert` and the self-host build injects no `lib/`. Which
+  ## conversion is asked of the operand (#1518, `convert_pick`); the function being lowered is never
+  ## re-selected (Termination, `convert_callee_at`).
+  cvi0 := convert_callee_at(cx, cs, cl, convert_operand(nargs, args_head, a))
   if cvi0 >= 0 {
     cvd := deref(lower_ctx::decl_get(cx.decls, usize(cvi0)))
     cx.call_cidx = cvi0
     sc_shift0 := if cx.sret_call >= 0 { 1 } else { 0 }
     emit_call_args(args_head, -1, -1, -1, nargs, sb, cx, nl)
     push_str(sb, "  call ")
-    emit_mangled_call(sb, cx.src, cvd.name_start, cvd.name_len, cvd.mod_start, cvd.mod_len, cx.decls)
+    emit_convert_callee_label(sb, cvd, usize(cvi0), cx)
     push_str(sb, "\n")
     emit_call_cleanup_shift(sb, nargs, sc_shift0)
     return
@@ -14951,12 +14994,6 @@ fn_is_convert := fn(src : ptr(u8), name_s : usize, name_l : usize) -> bool {
   }
   str_at((src + p), 8) == "@convert"
 }
-## The decl index of the SINGLE in-scope `@convert` fn whose RETURN type's base name == the callee
-## `[cs, cl)` (Types §4.6 dispatch step 2 / TYP-6), else -1. Builtin lattice conversions (`conv_kind >=
-## 0`) and BRAND constructions (`brand_underlying`) keep PRIORITY — a `T(v)` that rides either is
-## short-circuited here, so it never resolves to a @convert (this is what makes `char(n)`, a brand,
-## stay the brand path → fixpoint-neutral: src/lib's only @convert `to_char` targets the brand `char`).
-## Two @convert to the same target are an AMBIGUITY error (fail-loud, no guessing).
 ## The §3 scope rank of a `@convert` declaration's module as seen from the module being lowered. A
 ## declaration in NO module (a single-file program, `mod_len == 0`) and a compile with no published
 ## module both rank 0, so every candidate ties there and the historical flat-ambiguity behaviour is
@@ -14968,76 +15005,400 @@ convert_scope_rank := fn(src : ptr(u8), as_ : usize, al : usize) -> i64 {
   callee_mod_rank(src, as_, al, lower_layout::type_ref_mod_s(), ml)
 }
 
-convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
-  if conv_kind(str_at((src + cs), cl)) >= 0 { return 0 - 1 }
-  bu := brand_underlying(decls, src, cs, cl)
-  if bu.n != 0 { return 0 - 1 }
+## Is decl `i` a `@convert` fn whose RETURN type's base name is the callee `[cs, cl)`? Its §3 scope rank
+## (`convert_scope_rank`) when it is, `None` otherwise. These are the CANDIDATES of Types §4.6 dispatch
+## step (2) before the parameter is asked; `convert_pick` asks it.
+## Modules §3 (TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE at a
+## construction is the same question a bare call asks — `callee_mod_rank` answers it (this module, then
+## its ancestors nearest-first, -1 for a sibling / a descendant / an unrelated module). Without the rank,
+## two `@convert` to the same target in unrelated modules were a flat AMBIGUITY even when §3 lets the
+## naming module see exactly ONE of them (measured: a child constructing through its ancestor's
+## `@convert` was rejected as ambiguous because a sibling declared one too).
+convert_target_rank := fn(decls : ptr(rt::Vec), src : ptr(u8), cnt : usize, i : usize, cs : usize, cl : usize) -> Option(i64) {
+  d := deref(lower_ctx::decl_get(decls, i))
+  mut isc := false
+  if dic_live(cnt) { isc = dic_is_convert(cnt, i) } else { if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { isc = true } }
+  if isc == false { return Option(i64).None }
+  rb := base_type_name(src, d.ret_ts, d.ret_tl)
+  if rb.n == 0 or lower_ctx::streq(src, rb.s, rb.n, cs, cl) == false { return Option(i64).None }
+  Option(i64).Some(convert_scope_rank(src, d.mod_start, d.mod_len))
+}
+
+## Does a `@convert`'s parameter accept the operand of a `T(v)` (Types §4.6 step (2), below)? `CaUnknown`
+## = the operand's type is not known at this site, so the question cannot be answered — never a yes.
+ConvAccept := enum { CaYes, CaNo, CaUnknown }
+convert_acc := fn(b : bool) -> ConvAccept { if b { ConvAccept.CaYes } else { ConvAccept.CaNo } }
+
+## A kernel integer type name's width and signedness; `bytes == 0` for every other name. `usize` and
+## `isize` are the 64-bit integers they expand to — "prelude aliases that compile-time-expand to the
+## kernel's pointer-width interpretation for the target" (Types §5) — read as `sema_vty_scalar` reads
+## them. `char` is NOT one: it is a brand over `u32` (Stdlib appendix §3.2), which no integer is
+## assignable to (§4.3: a brand crossing is always explicit).
+ConvInt := struct { bytes : u64, signed : bool }
+convert_kint := fn(t : str) -> ConvInt {
+  if t == "u8" { return ConvInt(bytes = 1, signed = false) }
+  if t == "u16" { return ConvInt(bytes = 2, signed = false) }
+  if t == "u32" { return ConvInt(bytes = 4, signed = false) }
+  if t == "u64" or t == "usize" { return ConvInt(bytes = 8, signed = false) }
+  if t == "i8" { return ConvInt(bytes = 1, signed = true) }
+  if t == "i16" { return ConvInt(bytes = 2, signed = true) }
+  if t == "i32" { return ConvInt(bytes = 4, signed = true) }
+  if t == "i64" or t == "isize" { return ConvInt(bytes = 8, signed = true) }
+  ConvInt(bytes = 0, signed = false)
+}
+## A float type name's width in bytes; 0 for every other name.
+convert_kfloat := fn(t : str) -> u64 {
+  if t == "f32" { return 4 }
+  if t == "f64" { return 8 }
+  0
+}
+## Is an integer of `o` assignable to the integer `p`? Equal, or a **widen** — "lossless size increase
+## within one numeric domain" (§4.2), the one implicit class (§4.3); a signedness change is **numeric**
+## and always explicit. `p.bytes == 0` (not an integer) answers false.
+convert_int_widens := fn(o : ConvInt, p : ConvInt) -> bool {
+  p.bytes != 0 and o.bytes != 0 and o.signed == p.signed and o.bytes <= p.bytes
+}
+## Is the integer literal `v` (a `Num` node: never negative, a value past `i64::MAX` held as its bit
+## pattern) representable in the integer `p`? Types §9.1: "its representability in that type is checked
+## at compile time".
+convert_lit_fits := fn(v : i64, p : ConvInt) -> bool {
+  if p.bytes == 8 { return p.signed == false or v >= 0 }
+  if v < 0 { return false }
+  mut bits : u64 = p.bytes * 8
+  if p.signed { bits = bits - 1 }
+  lim : u64 = shl(u64(1), bits)
+  u64(v) < lim
+}
+
+## #1518 — does `pm`, a `@convert`'s single parameter, ACCEPT the operand `a0`? Types §4.6 dispatch step
+## (2) (v1.8.0 l.332-333): "the **one** in-scope `@convert` whose return type is `T` and whose parameter
+## **accepts** `typeof(v)` — equal to it, or assignable to it per §4.3". Assignable is equal, or the
+## implicit **widen** (§4.3); an integer literal is "a compile-time number" whose type "is inferred from
+## context" and is assignable to any numeric type that represents it (§9.1) — so a parameter is a
+## context it can take.
+##
+## The operand's type is sema's record (D6, docs/ir.md §3.8: `ir::sty_get_cur` / `ir::sty_spell_get_cur`):
+## a literal by its shape first, then the SPELLING sema resolved (which tells a brand or a struct from
+## its representation), then the bare value type. Where none of them names the type the answer is
+## `CaUnknown`. Residual, said plainly: an array/tuple parameter (`pmode == 1` or a tuple) is matched by
+## the operand being an unnamed aggregate, not by its element types; a spelling is compared as text.
+convert_param_accepts := fn(src : ptr(u8), pq : ptr(mut Param), a0 : ptr(Expr)) -> ConvAccept {
+  pm := deref(param_p(pq))
+  if pm.pmode > 1 { return ConvAccept.CaNo }
+  pagg := pm.pmode == 1 or lower_layout::param_tuple_open_at(src, pm.ns, pm.nl) >= 0
+  convert_type_accepts(src, pm.ts, pm.tl, pagg, a0)
+}
+## Is the operand `a0` assignable to the type spelled `[pts, pts+ptl)` (an aggregate one when `pagg`)? The
+## question `convert_param_accepts` asks of a parameter, and dispatch step (1) asks of a required type's
+## immediate `U` ("`v` is assignable to the immediate `U`").
+convert_type_accepts := fn(src : ptr(u8), pts : usize, ptl : usize, pagg : bool, a0 : ptr(Expr)) -> ConvAccept {
+  pb := base_type_name(src, pts, ptl)
+  if pb.n == 0 { return ConvAccept.CaUnknown }
+  pt := str_at((src + pb.s), pb.n)
+  pi := convert_kint(pt)
+  pf := convert_kfloat(pt)
+  pscalar := pi.bytes != 0 or pf != 0 or pt == "bool"
+  match deref(a0) {
+    Expr::Num(v, vs, vn) => {
+      if pagg { return ConvAccept.CaNo }
+      if pi.bytes != 0 { return convert_acc(convert_lit_fits(v, pi)) }
+      ## An integer literal in a float context: accepted exactly when exactly representable (§9.1).
+      ## Every integer up to the significand's reach is; past it the answer is not computed here.
+      if pf != 0 {
+        mut exact : u64 = shl(u64(1), 53)
+        if pf == 4 { exact = shl(u64(1), 24) }
+        if v >= 0 and u64(v) <= exact { return ConvAccept.CaYes }
+        return ConvAccept.CaUnknown
+      }
+      return ConvAccept.CaNo
+    }
+    Expr::BoolLit => { return convert_acc(pagg == false and pt == "bool") }
+    Expr::StrLit => { return convert_acc(pagg == false and pt == "str") }
+    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  vt : ir::VTy = ir::sty_get_cur(a0)
+  c : ir::VCls = vt.cls
+  ## A literal-only expression (`0 - 1`) no context typed: an integer of whatever type it lands in.
+  if ir::vcls_is_lit(c) {
+    if pi.bytes != 0 { return ConvAccept.CaYes }
+    if pf != 0 { return ConvAccept.CaUnknown }
+    return ConvAccept.CaNo
+  }
+  sp : ir::TySpell = ir::sty_spell_get_cur(a0)
+  f : ir::SpellForm = sp.form
+  if sp.layers == 0 and sp.ed == 0 {
+    match f {
+      SfText => { if sp.n != 0 { return convert_named_accepts(src, sp.s, sp.n, pts, ptl, pagg, pb.s, pb.n) } }
+      SfBytesView => { return convert_acc(pagg == false and pt == "str") }
+      SfI64 => { return convert_acc(pagg == false and convert_int_widens(ConvInt(bytes = 8, signed = true), pi)) }
+      SfU8 => { return convert_acc(pagg == false and convert_int_widens(ConvInt(bytes = 1, signed = false), pi)) }
+    }
+  }
+  ## No spelling: the value type alone. It cannot tell a brand from its representation, so an integer,
+  ## `bool` or float value meets only a kernel parameter of that class.
+  g : ir::Sgn = vt.sg
+  osg := match g { SgS => { true }; SgU | SgNone => { false } }
+  match c {
+    VcInt => { return convert_acc(pagg == false and convert_int_widens(ConvInt(bytes = vt.bytes, signed = osg), pi)) }
+    VcBool => { return convert_acc(pagg == false and pt == "bool") }
+    VcFloat => { return convert_acc(pagg == false and pf != 0 and vt.bytes <= pf) }
+    VcAgg => {
+      if pagg { return ConvAccept.CaYes }
+      if pscalar { return ConvAccept.CaNo }
+      return ConvAccept.CaUnknown
+    }
+    VcPtr => {
+      if pagg or pscalar { return ConvAccept.CaNo }
+      return ConvAccept.CaUnknown
+    }
+    VcLit | VcAbsent | VcUnknown => { return ConvAccept.CaUnknown }
+  }
+}
+## `convert_param_accepts` for an operand whose type sema SPELLED as `[s, s+n)`: a tuple or array
+## spelling meets only an aggregate parameter; a kernel integer or float meets a kernel parameter it
+## widens to; any other named type (a struct, an enum, a brand such as `char`, `bool`, `str`) meets only
+## the same name — and, when either side carries type arguments (`Vec(u64)`), the same spelling.
+convert_named_accepts := fn(src : ptr(u8), s : usize, n : usize, pts : usize, ptl : usize, pagg : bool, pbs : usize, pbn : usize) -> ConvAccept {
+  h := str_at((src + s), 1)
+  if h == "(" or h == "[" { return convert_acc(pagg) }
+  if pagg { return ConvAccept.CaNo }
+  ob := base_type_name(src, s, n)
+  if ob.n == 0 { return ConvAccept.CaUnknown }
+  ot := str_at((src + ob.s), ob.n)
+  pt := str_at((src + pbs), pbn)
+  oi := convert_kint(ot)
+  pi := convert_kint(pt)
+  if oi.bytes != 0 { return convert_acc(convert_int_widens(oi, pi)) }
+  of := convert_kfloat(ot)
+  pf := convert_kfloat(pt)
+  if of != 0 { return convert_acc(pf != 0 and of <= pf) }
+  if pi.bytes != 0 or pf != 0 { return ConvAccept.CaNo }
+  if lower_ctx::streq(src, ob.s, ob.n, pbs, pbn) == false { return ConvAccept.CaNo }
+  if ob.n == n and pbn == ptl { return ConvAccept.CaYes }
+  convert_acc(lower_ctx::streq(src, s, n, pts, ptl))
+}
+## `convert_param_accepts` over the candidate declaration `i` (its first and only parameter).
+convert_accepts := fn(decls : ptr(rt::Vec), src : ptr(u8), i : usize, a0 : ptr(Expr)) -> ConvAccept {
+  d := deref(lower_ctx::decl_get(decls, i))
+  match d.params_head {
+    Some(pq) => { return convert_param_accepts(src, pq, a0) }
+    None => { return ConvAccept.CaNo }
+  }
+}
+
+## The operand of a `T(v)` call with `nargs` arguments at `args_head` (in the emit arena `a`): `None`
+## unless there is exactly one — §4.6: "The multi-argument and named forms … are aggregate construction".
+convert_operand := fn(nargs : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena) -> Option(ptr(Expr)) {
+  if nargs != 1 { return Option(ptr(Expr)).None }
+  Option(ptr(Expr)).Some(arg_expr_at(args_head, 0, a))
+}
+
+## What Types §4.6 step (2) found at a `T(v)` site: no `@convert` to `T` is in scope (`CpNone`), there
+## are some and none accepts the operand (`CpNoneAccepts`), or the one that does (`CpFn`, its decl).
+ConvPick := enum { CpNone, CpNoneAccepts, CpFn(usize) }
+
+## #1518 — Types §4.6 dispatch step (2): "the **one** in-scope `@convert` whose return type is `T` and
+## whose parameter **accepts** `typeof(v)`". A conversion is "keyed by its (**source parameter type**,
+## **return type**) … two conversions to the same target therefore coexist under distinct names"
+## (l.359-363), so the candidates to `T` are filtered by `convert_accepts` and only the accepting ones
+## compete. Before #1518 the parameter was never asked: the one conversion to `T` was called with an
+## operand its parameter does not accept (`P(42)` ran `from_bool`, answering 7), and two conversions from
+## different sources were refused as ambiguous.
+##
+## Refused, located at the site (no guessing, FND-3): two accepting candidates at the same best scope
+## rank — "Two in-scope `@convert`s matching the same (source, target) at a site are an ambiguity error"
+## (l.371-372), and two that accept one operand leave no "one" to select either — and an operand whose
+## type is unknown here while some candidate's answer depends on it (`CaUnknown`): selecting anyway is
+## exactly the guess this replaces. `a0` = the operand; `None` for a site that is not a one-argument
+## `T(v)` — "The multi-argument and named forms … are aggregate construction (§5), not conversion".
+##
+## Step (1) comes first (l.330-331): "when `T` is a required type `R = @require(pred) U` and `v` is
+## assignable to the immediate `U`, the built-in contract gate (§8.1)", and l.357: "If `v` is assignable to
+## `U`, the gate takes precedence over a competing `@convert U`→`R`". A required type is a brand over its
+## `U` here (`require_pred` + `brand_underlying`), so the gate answers `CpNone` and the site takes the
+## brand path, which runs the predicate. An operand the gate cannot place is refused as `CaUnknown` is.
+##
+## `self_fn` is the conversion whose body is being compiled, never a candidate — **Termination**
+## (l.350-352): "Step (2) does not re-select the conversion whose own body is being compiled: inside a
+## `@convert` to a brand, `T(v)` over the type that brand directly brands resolves at step (3) to the
+## **brand** crossing". It is dropped before the others are asked, so it cannot make them ambiguous.
+convert_pick := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a0 : Option(ptr(Expr)), self_fn : Option(usize)) -> ConvPick {
+  match a0 {
+    Some(op) => { return convert_pick_op(decls, src, cs, cl, op, self_fn) }
+    None => { return ConvPick.CpNone }
+  }
+}
+convert_pick_op := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, op : ptr(Expr), self_fn : Option(usize)) -> ConvPick {
+  mut skip_i : usize = rt::vec_len(deref(decls))
+  match self_fn {
+    Some(si) => { skip_i = si }
+    None => {}
+  }
   cnt := rt::vec_len(deref(decls))
-  mut found := 0 - 1
-  ## Modules §3 (TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE
-  ## at this construction is the same question a bare call asks — `callee_mod_rank` answers it (this
-  ## module, then its ancestors nearest-first, -1 for a sibling / a descendant / an unrelated module).
-  ## Without the rank, two `@convert` to the same target in unrelated modules were a flat AMBIGUITY
-  ## even when §3 lets the naming module see exactly ONE of them (measured: a child constructing
-  ## through its ancestor's `@convert` was rejected as ambiguous because a sibling declared one too).
-  ## The fail-loud is PRESERVED for a genuine tie — two candidates at the SAME best rank.
-  mut bestr := 0 - 2                     ## below EVERY rank, including the -1 "not on the chain"
+  mut found : Option(usize) = Option(usize).None
+  mut bestr : i64 = 0 - 2               ## below EVERY rank, including the -1 "not on the chain"
+  mut tie := false
+  mut cands : usize = 0
+  mut unknown := false
   mut j : usize = 0
   je := dcv_hi(cnt)
   while j < je {
     i := dcv_at(cnt, j)
-    d := deref(lower_ctx::decl_get(decls, i))
-    mut isc := false
-    if dic_live(cnt) { isc = dic_is_convert(cnt, i) } else { if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { isc = true } }
-    if isc {
-      rb := base_type_name(src, d.ret_ts, d.ret_tl)
-      if rb.n != 0 and lower_ctx::streq(src, rb.s, rb.n, cs, cl) {
-        r := convert_scope_rank(src, d.mod_start, d.mod_len)
-        if found < 0 or r > bestr { bestr = r; found = i64(i) }
-        else if r == bestr { panic("selfhost: ambiguous @convert to target type (TYP-6)") }
+    mut rk : Option(i64) = convert_target_rank(decls, src, cnt, i, cs, cl)
+    if i == skip_i { rk = Option(i64).None }
+    match rk {
+      Some(r) => {
+        cands += 1
+        acc := convert_accepts(decls, src, i, op)
+        match acc {
+          CaYes => {
+            if r > bestr { bestr = r; found = Option(usize).Some(i); tie = false }
+            else if r == bestr { tie = true }
+          }
+          CaUnknown => { unknown = true }
+          CaNo => {}
+        }
       }
+      None => {}
+    }
+    j += 1
+  }
+  if cands == 0 { return ConvPick.CpNone }
+  ## Step (1): asked only when a conversion competes, so a site with none never scans for `@require`.
+  if require_pred(decls, src, cs, cl).n != 0 {
+    ru := brand_underlying(decls, src, cs, cl)
+    if ru.n != 0 {
+      uagg := str_at((src + ru.s), 1) == "("
+      ga := convert_type_accepts(src, ru.s, ru.n, uagg, op)
+      match ga {
+        CaYes => { return ConvPick.CpNone }
+        CaUnknown => { unknown = true }
+        CaNo => {}
+      }
+    }
+  }
+  if tie {
+    lower_show_src_line(src, cs)
+    panic("selfhost: ambiguous @convert to target type (TYP-6): two in-scope conversions accept this operand's type (Types §4.6)")
+  }
+  if unknown {
+    lower_show_src_line(src, cs)
+    panic("selfhost: the operand's type is not known at this `T(v)`, so which in-scope @convert accepts it cannot be decided (Types §4.6 step 2) — bind the operand to an annotated local first")
+  }
+  match found {
+    Some(fi) => { return ConvPick.CpFn(fi) }
+    None => {}
+  }
+  ConvPick.CpNoneAccepts
+}
+
+## Any `@convert` to `T` at its best scope rank, without asking the parameter — for the questions every
+## candidate answers alike because each returns `T`: the RESULT's type and size (`call_ret_ty_span`,
+## `ret_call_target`). Which one the site calls is `convert_pick`'s answer, asked where the call is
+## emitted; it refuses there what this does not. Builtin target names are filtered as
+## `convert_callee_idx` filters them; a BRAND target resolves (TYP-14), and every conversion to it returns
+## that brand — the type its crossing yields too — so the answer is the same whichever the site takes.
+convert_target_any := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
+  if conv_kind(str_at((src + cs), cl)) >= 0 { return 0 - 1 }
+  cnt := rt::vec_len(deref(decls))
+  mut found : i64 = 0 - 1
+  mut bestr : i64 = 0 - 2
+  mut j : usize = 0
+  je := dcv_hi(cnt)
+  while j < je {
+    i := dcv_at(cnt, j)
+    rk : Option(i64) = convert_target_rank(decls, src, cnt, i, cs, cl)
+    match rk {
+      Some(r) => { if r > bestr { bestr = r; found = i64(i) } }
+      None => {}
     }
     j += 1
   }
   found
 }
 
-## Like `convert_callee_idx` but WITHOUT the builtin-conv-name bail — the in-scope `@convert fn(U) -> T`
-## whose RETURN type is `T` (which MAY be a builtin scalar name, e.g. `@convert fn(c : Celsius) -> u64`).
-## Used ONLY when the conversion operand is a user AGGREGATE (struct/enum), where `u64(structval)` is a
-## legitimate user conversion rather than the scalar-lattice identity. The brand bail stays (a brand
-## `Id(v)` reinterprets, never dispatches). No self-host `@convert` returns a builtin name → neutral.
-convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
-  bu := brand_underlying(decls, src, cs, cl)
-  if bu.n != 0 { return 0 - 1 }
+## Types §4.6, **Termination** (v1.8.0): "Step (2) does not re-select the conversion whose own body is
+## being compiled: inside a `@convert` to a brand, `T(v)` over the type that brand directly brands
+## resolves at step (3) to the **brand** crossing (§4.2)". Before #364's brand rule a brand construction
+## never reached step (2), so no body could re-select itself; now `Lvl(n)` inside `to_lvl := @convert
+## fn(n : u64) -> Lvl` would. This is `convert_callee_excl` for the function the x86_64 lower is emitting:
+## its decl index is `cx.fn_id`, except in a generic INSTANCE (`cx.gp_l != 0`), whose `fn_id` is not the
+## decl's — there no exclusion applies (a generic `@convert` is not selected here).
+convert_callee_at := fn(cx : ptr(LCtx), cs : usize, cl : usize, a0 : Option(ptr(Expr))) -> i64 {
+  mut self_fn : Option(usize) = Option.None
+  if cx.gp_l == 0 { self_fn = Option.Some(cx.fn_id) }
+  convert_callee_excl(cx.decls, cx.src, cs, cl, a0, self_fn)
+}
+
+
+## Mark every `@convert` to `T` reachable (DCE keeps it): reachability is asked before the operand's
+## site is emitted, and keeping one conversion too many costs only its body.
+convert_mark_targets := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) {
   cnt := rt::vec_len(deref(decls))
-  mut found := 0 - 1
-  ## Modules §3 (TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE
-  ## at this construction is the same question a bare call asks — `callee_mod_rank` answers it (this
-  ## module, then its ancestors nearest-first, -1 for a sibling / a descendant / an unrelated module).
-  ## Without the rank, two `@convert` to the same target in unrelated modules were a flat AMBIGUITY
-  ## even when §3 lets the naming module see exactly ONE of them (measured: a child constructing
-  ## through its ancestor's `@convert` was rejected as ambiguous because a sibling declared one too).
-  ## The fail-loud is PRESERVED for a genuine tie — two candidates at the SAME best rank.
-  mut bestr := 0 - 2                     ## below EVERY rank, including the -1 "not on the chain"
   mut j : usize = 0
   je := dcv_hi(cnt)
   while j < je {
     i := dcv_at(cnt, j)
-    d := deref(lower_ctx::decl_get(decls, i))
-    mut isc := false
-    if dic_live(cnt) { isc = dic_is_convert(cnt, i) } else { if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { isc = true } }
-    if isc {
-      rb := base_type_name(src, d.ret_ts, d.ret_tl)
-      if rb.n != 0 and lower_ctx::streq(src, rb.s, rb.n, cs, cl) {
-        r := convert_scope_rank(src, d.mod_start, d.mod_len)
-        if found < 0 or r > bestr { bestr = r; found = i64(i) }
-        else if r == bestr { panic("selfhost: ambiguous @convert to target type (TYP-6)") }
-      }
+    rk : Option(i64) = convert_target_rank(decls, src, cnt, i, cs, cl)
+    match rk {
+      Some(r) => { rb_set(rb, i, 1) }
+      None => {}
     }
     j += 1
   }
-  found
+}
+
+## The decl index of the in-scope `@convert` a `T(v)` selects (`convert_pick`), else -1. Builtin lattice
+## conversions (`conv_kind >= 0`) keep PRIORITY — a `T(v)` that rides one is short-circuited here, so it
+## never resolves to a @convert. A BRAND target does NOT: TYP-14 (§4.6, v1.8.0 l.338) — "An in-scope
+## `@convert` therefore precedes the brand crossing to a branded target". l.341 names this site: "So
+## `char(n)` — `char` being a brand over `u32` with the prelude's `@convert` in scope — runs that
+## conversion". So `char(n)` resolves to `to_char` here, and its guard is reached. A brand with no
+## in-scope `@convert` that accepts the operand answers -1 — step (2) matches nothing — and the site takes
+## step (3), the brand crossing. The mode is NOT consulted: l.345 selects step (2) "checked or unchecked
+## alike". Any other target has no step (3) to fall to, so candidates of which none accepts the operand
+## are refused here, located.
+convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a0 : Option(ptr(Expr))) -> i64 {
+  convert_callee_excl(decls, src, cs, cl, a0, Option(usize).None)
+}
+## `convert_callee_idx` with the conversion whose body is being compiled (`self_fn`) taken out of the
+## candidates — see `convert_pick` (Termination).
+pub convert_callee_excl := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a0 : Option(ptr(Expr)), self_fn : Option(usize)) -> i64 {
+  if conv_kind(str_at((src + cs), cl)) >= 0 { return 0 - 1 }
+  pk := convert_pick(decls, src, cs, cl, a0, self_fn)
+  match pk {
+    CpFn(fi) => { return i64(fi) }
+    CpNone => { return 0 - 1 }
+    CpNoneAccepts => {
+      if brand_underlying(decls, src, cs, cl).n != 0 { return 0 - 1 }
+      lower_show_src_line(src, cs)
+      panic("selfhost: no in-scope @convert to this target accepts the operand's type (Types §4.6 step 2: the parameter must accept typeof(v))")
+    }
+  }
+  0 - 1
+}
+
+## Like `convert_callee_idx` but WITHOUT the builtin-conv-name bail — the in-scope `@convert fn(U) -> T`
+## whose RETURN type is `T` (which MAY be a builtin scalar name, e.g. `@convert fn(c : Celsius) -> u64`).
+## Used ONLY when the conversion operand is a user AGGREGATE (struct/enum), where `u64(structval)` is a
+## legitimate user conversion rather than the scalar-lattice identity. The brand bail stays, but it is
+## not TYP-14's rule: this lookup is reached only for a callee name `conv_kind` already answers (a builtin
+## scalar), and §4.6 l.338's rule — "An in-scope `@convert` therefore precedes the brand crossing to a
+## branded target" — is answered by `convert_callee_idx`, which no longer filters brands. No self-host
+## `@convert` returns a builtin name → neutral.
+## None accepting answers -1: every caller then refuses the aggregate operand itself, located.
+convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a0 : Option(ptr(Expr))) -> i64 {
+  bu := brand_underlying(decls, src, cs, cl)
+  if bu.n != 0 { return 0 - 1 }
+  pk := convert_pick(decls, src, cs, cl, a0, Option(usize).None)
+  match pk {
+    CpFn(fi) => { return i64(fi) }
+    CpNone | CpNoneAccepts => { return 0 - 1 }
+  }
+  0 - 1
 }
 
 ## #683 — the emit twins' USER-CONVERSION dispatch (Types §4.6 / TYP-6). The twins resolve a callee
@@ -15046,12 +15407,19 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
 ## `u64(c)` with an in-scope `@convert fn(c : Celsius) -> u64` — read the operand as a scalar: wasm
 ## answered the struct's ADDRESS. The twins' front end (`driver::d_desugar_convert`) renames such a
 ## call to the @convert's own name before emission; this answers WHICH decl, by x86_64's rules:
-##   * a NON-builtin target `T` resolves through `convert_callee_idx` (a brand or a builtin name never
-##     does), and only when no fn is itself named `T` — the regular callee wins, as on x86_64;
+##   * a NON-builtin target `T` resolves through `convert_callee_idx` (a builtin name never does), and
+##     only when no fn is itself named `T` — the regular callee wins, as on x86_64;
 ##   * a BUILTIN target resolves through `convert_callee_idx_incl_builtin`, and only for an operand
 ##     that is a provable AGGREGATE (`twin_operand_aggregate`), so `u64(5)` stays the scalar lattice.
 ## -1 = not a user conversion; the call is left exactly as it was.
-pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, a0 : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt))) -> i64 {
+## A BRAND target is NOT filtered out, and the mode is not consulted here: TYP-14 (§4.6, v1.8.0 l.338) —
+## "An in-scope `@convert` therefore precedes the brand crossing to a branded target", and l.345 selects
+## the step "checked or unchecked alike: `unchecked` drops the guard inside the operation the site denotes,
+## and never substitutes a different one". So `unchecked char(n)` denotes `to_char` too, and it is
+## `to_char`'s own body that is mode-dependent — its guard sits behind `comptime if verify.checked`, so
+## inside `unchecked` the body is the identity crossing and costs nothing (CT-11, Stdlib appendix §3.2).
+## A brand with no in-scope `@convert` that accepts the operand answers -1 and keeps today's crossing untouched.
+pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, a0 : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), self_fn : usize) -> i64 {
   ## null-ok: d_convert_expr passes a null `a0` for a call with no argument (see its `a0` binding)
   if nargs != 1 or unchecked bitcast(usize, a0) == 0 { return 0 - 1 }
   ## conv_kind answers a builtin-lattice INDEX, and -1 for "not a builtin"; its Option(i64) form belongs
@@ -15065,10 +15433,11 @@ pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
       if d.is_fn and lower_ctx::streq(src, d.name_start, d.name_len, cs, cl) { return 0 - 1 }
       i += 1
     }
-    return convert_callee_idx(decls, src, cs, cl)
+    ## `self_fn` is the decl whose body holds this call (Termination, `convert_callee_excl`).
+    return convert_callee_excl(decls, src, cs, cl, Option(ptr(Expr)).Some(a0), Option(usize).Some(self_fn))
   }
   if twin_operand_aggregate(a0, params_head, body_head, decls, src) == false { return 0 - 1 }
-  convert_callee_idx_incl_builtin(decls, src, cs, cl)
+  convert_callee_idx_incl_builtin(decls, src, cs, cl, Option(ptr(Expr)).Some(a0))
 }
 
 ## Is the type span `[ts, ts+tl)` a named struct/enum or a tuple? (The twins' aggregate operand test.)
@@ -15190,9 +15559,11 @@ ret_call_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   ## TYP-6): the callee is a TYPE name `T` with an in-scope `@convert fn(…) -> T`. Resolving to that
   ## fn's decl lets the `*_ret_call` classifiers (struct/enum/str/tuple) + `call_ret_*_span` size the
   ## `c := T(v)` binding by the @convert's RETURN type. Fires only when no same-name fn exists AND a
-  ## @convert matches — src/lib's `char(n)` (a brand) is filtered inside `convert_callee_idx` → neutral.
+  ## @convert matches. src/lib's `char(n)` (a brand) resolves here since TYP-14, so the binding is sized
+  ## by `to_char`'s RETURN type `char` — the same brand the site names (#364).
+  ## Every candidate returns `T`, so any one sizes the binding; the emitted call asks which (#1518).
   if res < 0 {
-    cvi := convert_callee_idx(decls, src, cs, cl)
+    cvi := convert_target_any(decls, src, cs, cl)
     if cvi >= 0 { return cvi }
   }
   res
@@ -20349,9 +20720,23 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## path for a float underlying). Resolve the brand's underlying, then reuse the scalar-conversion
       ## lowering below (an unknown underlying, e.g. `bitsN`, is an identity ck 0 — the bits already
       ## occupy the 64-bit word).
+      ## TYP-14 (§4.6, v1.8.0 l.338) narrows the peel: "An in-scope `@convert` therefore precedes the
+      ## brand crossing to a branded target: §4.2's "cost: zero" states what that crossing *costs*, and a
+      ## cost statement does not settle which operation a site denotes — where a conversion matches, the
+      ## site denotes the conversion". l.341 names this site: "So `char(n)` — `char` being a brand over
+      ## `u32` with the prelude's `@convert` in scope — runs that conversion, whose code-point validity
+      ## check is library code under `comptime if verify.checked` (§4.5, CT-11)". The mode is NOT consulted
+      ## here: l.345 selects step (2) "checked or unchecked alike: `unchecked` drops the guard inside the
+      ## operation the site denotes, and never substitutes a different one: each guarded operation takes
+      ## its hardware-defined behaviour, the same operation and never another (CG-7)" — inside `unchecked`
+      ## `to_char`'s guard is comptime-absent and its body is the identity crossing, so the value is the
+      ## same either way and no site silently loses a different operation (I1, I11). A brand with NO
+      ## in-scope `@convert` answers -1 at every site, so every other brand keeps today's zero-cost
+      ## crossing untouched. In the self-host build no `@convert` is declared and no `lib/` is injected,
+      ## so the extra lookup walks an empty candidate list.
       if ck < 0 {
         bu := brand_underlying(cx.decls, cx.src, cs, cl)
-        if bu.n != 0 {
+        if bu.n != 0 and convert_callee_at(cx, cs, cl, convert_operand(nargs, args_head, a)) < 0 {
           conv_target = str_at((cx.src + bu.s), bu.n)
           uk := conv_kind(conv_target)
           ck = if uk >= 0 { uk } else { 0 }
@@ -20395,7 +20780,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           if lower_ctx::streq(cx.src, vent.ns, vent.nl, vns.s, vns.n) and (vent.ek == 2 or vent.ek == 3 or vent.ek == 4 or vent.ek == 5) { agg_op = true }
         }
         if agg_op {
-          acvi := convert_callee_idx_incl_builtin(cx.decls, cx.src, cs, cl)
+          acvi := convert_callee_idx_incl_builtin(cx.decls, cx.src, cs, cl, Option(ptr(Expr)).Some(a0))
           if acvi >= 0 {
             ## Dispatch by the @convert's OWN mangled name (there is no fn named `u64`) — mirror the
             ## value-position user-conversion dispatch (emit_call_dispatch's cvi0 branch), which
@@ -20506,7 +20891,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## is ADDITIVE; a struct-RETURNING `c := T(v)` binding routes through the Stmt::Assign
       ## struct_ret_call path (register words stored into the local's slots), so THIS arm covers a bare
       ## value-position use (a scalar / 1-word result). Fixpoint-neutral (see `convert_callee_idx`).
-      cvci := convert_callee_idx(cx.decls, cx.src, cs, cl)
+      cvci := convert_callee_at(cx, cs, cl, convert_operand(nargs, args_head, a))
       if cvci >= 0 {
         emit_call_dispatch(cs, cl, nargs, args_head, sb, cx, a, nl)
         push_str(sb, "  pushq %rax\n")
@@ -28435,6 +28820,9 @@ pub PCtx := struct {
   inst : bool, its : usize, itl : usize,
   its2 : usize, itl2 : usize,
   its3 : usize, itl3 : usize,
+  ## `false` = this emission is a function's UNCHECKED instance (Comptime §7.5, CT-11); see
+  ## `LCtx.vinst`, which every constructor copies from here, and `emit_unchecked_instances`.
+  vinst : bool,
 }
 
 ## AGGREGATE-PARAM tier — bind a function parameter's slot. A struct/array parameter is passed
@@ -29133,7 +29521,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
       ir_inl_tmp = i64(ib) + i64(inl_reserve) - 1
     }
   }
-  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
+  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, vinst = p.vinst, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
   cxv.fn_id = di
   cxv.ctslots = ptr(ir_cts)
   cx := ptr(cxv)
@@ -29240,9 +29628,12 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   if mangled_symbol_is_global(cx.src, d) {
     push_str(sb, ".globl ")
     emit_mangled_def(sb, cx.src, d.mod_start, d.mod_len, d.name_start, d.name_len)
+    if p.vinst == false { emit_unchecked_instance_suffix(sb) }
     push_str(sb, "\n")
   }
   emit_mangled_def(sb, cx.src, d.mod_start, d.mod_len, d.name_start, d.name_len)
+  ## The UNCHECKED instance's label, as on the text path (`emit_fn_pool`).
+  if p.vinst == false { emit_unchecked_instance_suffix(sb) }
   push_str(sb, ":\n  pushq %rbp\n  movq %rsp, %rbp\n  subq $")
   push_int(sb, frame)
   push_str(sb, ", %rsp\n")
@@ -29825,7 +30216,9 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## Tooling §2.2: a wrapped raw entry's exact `@export` names the GENERATED WRAPPER (the driver emits
   ## it there and passes it to `ld -e`), so emitting the alias here too would define the symbol twice.
   exn := export_name(p.src, d.name_start, d.name_len)
-  if exn.n != 0 and entry_export_moved(d.mod_start, d.mod_len, d.name_start, d.name_len) == false {
+  ## The exact symbol names the ordinary definition only; an UNCHECKED instance (`p.vinst` false) is a
+  ## second body of the same fn and must not define it again.
+  if exn.n != 0 and p.vinst and entry_export_moved(d.mod_start, d.mod_len, d.name_start, d.name_len) == false {
     push_str(sb, ".global ")
     push_str(sb, str_at(p.src + exn.s, exn.n))
     push_str(sb, "\n")
@@ -29887,6 +30280,10 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
         emit_sig_suffix(sb, p.src, d, deref(p.mar))
       }
     }
+    ## An UNCHECKED instance (Comptime §7.5, CT-11) is a second definition of the same fn: its label
+    ## is the ordinary one plus `emit_unchecked_instance_suffix`, which `emit_convert_callee_label`
+    ## also writes at the selecting call.
+    if p.vinst == false { emit_unchecked_instance_suffix(sb) }
     if gpasses == 2 and gpass == 0 { push_str(sb, "\n") }
   }
   ## `@abi(naked)` (spec ch.80): a raw-asm fn — emit the label + the raw body ONLY, with NO
@@ -29897,7 +30294,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## this branch never fires for the self-host build (byte-identical → the TOOL-1 fixpoint holds).
   if fn_is_naked(p.src, d.name_start, d.name_len) {
     push_str(sb, ":\n")
-    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
+    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, vinst = p.vinst, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
     ncx.fn_id = di
     ncx.ctslots = ptr(ct_slots)
     emit_stmts(d.body_stmts, sb, ptr(ncx), nl)
@@ -30161,7 +30558,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## push/drain ops are skipped and the emitted tree gas stays byte-identical (the TOOL-1 fixpoint is
   ## neutral). `defer_sp` starts at 0: the fn body has NO frame, only nested blocks push.
   d_has_defer := stmts_have_defer(d.body_stmts, p.src, deref(p.mar))
-  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = i64(aggw), tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
+  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = i64(aggw), tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, vinst = p.vinst, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
   cx.fn_id = di
   cx.ctslots = ptr(ct_slots)
   emit_stmts(d.body_stmts, sb, ptr(cx), nl)
@@ -31122,18 +31519,14 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
       }
       ## USER CONVERSION-CONSTRUCTOR `T(v)` (Types §4.6 / TYP-6): the callee `T` names no fn, so
       ## `mark_name` marked nothing — but an in-scope `@convert fn(…) -> T` is the real callee. Mark it
-      ## reachable so DCE keeps it (the reachability fixpoint then walks its body). Neutral: every
-      ## `src/lib` call yields -1 here (`convert_callee_idx` filters builtin/brand) → reachable set unchanged.
-      cvm := convert_callee_idx(decls, src, cs, cl)
-      if cvm >= 0 { rb_set(rb, usize(cvm), 1) }
-      ## A `@convert` whose TARGET is a BUILTIN-conv name (`u64(structval)` → `@convert fn(U) -> u64`):
-      ## `convert_callee_idx` bailed above (builtin name), so mark it via the incl-builtin lookup — else
-      ## the aggregate-operand conversion routes to an un-emitted symbol (undefined ref at link). Neutral:
-      ## no `src/lib` @convert returns a builtin name, so this marks nothing extra on the self-host tree.
-      if cvm < 0 and conv_kind(str_at((src + cs), cl)) >= 0 {
-        acvm := convert_callee_idx_incl_builtin(decls, src, cs, cl)
-        if acvm >= 0 { rb_set(rb, usize(acvm), 1) }
-      }
+      ## reachable so DCE keeps it (the reachability fixpoint then walks its body). Which candidate the
+      ## site calls depends on the operand (#1518), asked where the call is emitted, so every one is
+      ## marked (`convert_mark_targets`) — a BUILTIN-conv target too (`u64(structval)` → `@convert fn(U)
+      ## -> u64`), else the aggregate-operand conversion routes to an un-emitted symbol. Since TYP-14 a
+      ## BRAND target is marked too (`char(n)` → `to_char`), so the guard's body exists in the emitted
+      ## program, in both modes (§4.6 l.345: step (2) "checked or unchecked alike"). The self-host
+      ## reachable set is unchanged: `src/` declares no `@convert` and the self-host build injects no `lib/`.
+      convert_mark_targets(rb, decls, src, cs, cl)
       ## §8.1 `@require(pred) T`: a construction `T(v)` of a require-typed alias emits a synthetic
       ## `call <pred>` in the checked trap (not present in the AST as a call), so the call-graph walk
       ## above did not mark the predicate fn — mark it here so DCE keeps it (else an undefined ref at
@@ -31999,6 +32392,28 @@ collect_program_into := fn(in out insts : IVec, decls : ptr(rt::Vec), src : ptr(
   }
 }
 
+## Emit every function recorded in `UNCHECKED_INSTANCES` once more, as its UNCHECKED instance
+## (`PCtx.vinst` false: `verify.checked` folds false, the label gains `emit_unchecked_instance_suffix`).
+## The list is re-read on every step because an instance's own body may record another — a `T(v)` its
+## author wrapped in `unchecked` — and each decl is recorded at most once, so the walk ends. Each body's
+## scratch is reclaimed back to `emit_hw`, as the ordinary emission loops do.
+emit_unchecked_instances := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : ptr(u8), mar : ptr(mut rt::Arena), in out nl : usize, emit_hw : usize) {
+  match UNCHECKED_INSTANCES {
+    Some(up) => {
+      upcx := PCtx(src = src, decls = decls, mar = mar, inst = false, its = 0, itl = 0, its2 = 0, itl2 = 0, its3 = 0, itl3 = 0, vinst = false)
+      mut k : usize = 0
+      while k < rt::vec_len(deref(up)) {
+        ui := rt::vec_get(deref(up), k)
+        ud := deref(lower_ctx::decl_get(decls, ui))
+        emit_fn(ud, ui, sb, ptr(upcx), nl)
+        mar.off = emit_hw
+        k += 1
+      }
+    }
+    None => {}
+  }
+}
+
 pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : ptr(u8), src_n : usize, mar : ptr(mut rt::Arena), a : rt::Arena, in out nl : usize, spanbase : usize, library_mode : bool) {
   ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
   ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
@@ -32191,7 +32606,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   }
   ## Aggregate scratch width is measured per emitted function; no declaration-wide maximum is carried
   ## through PCtx, so an unrelated function does not inherit a frame tax from a wide type elsewhere.
-  pcx := PCtx(src = src, decls = decls, mar = mar, inst = false, its = 0, itl = 0, its2 = 0, itl2 = 0, its3 = 0, itl3 = 0)
+  pcx := PCtx(src = src, decls = decls, mar = mar, inst = false, its = 0, itl = 0, its2 = 0, itl2 = 0, its3 = 0, itl3 = 0, vinst = true)
   ## TOOL-6 slice 1b-ii — the MERGED per-module BLOCK loop. For each module (a contiguous decl range) emit
   ## that module's `.rodata` string literals immediately followed by that module's reachable `.text` fn
   ## defs, so the module's rodata+text form ONE physically contiguous block delimited by its own `.section`
@@ -32261,6 +32676,18 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     mlb = lbase
   }
   ROD_SCAN = 0
+  ## The UNCHECKED-instance demand list (see `UNCHECKED_INSTANCES`), reserved before `emit_hw` so the
+  ## per-fn scratch reclaim never takes it back. One slot per `@convert` decl, the only callees recorded,
+  ## so `rt::vec_push` cannot overflow. A program with no `@convert` (the self-host build) reserves
+  ## nothing, and its arena layout and GAS stay byte-identical.
+  UNCHECKED_INSTANCES = Option.None
+  ucap := dcv_hi(cnt)
+  if ucap > 0 {
+    uoff := node_alloc(deref(mar), size(rt::Vec))
+    up := node_ptr(rt::Vec, deref(mar), uoff)
+    deref(up) = rt::Vec(data = rt::bump(deref(mar), ucap * 8), len = 0, cap = ucap)
+    UNCHECKED_INSTANCES = Option.Some(up)
+  }
   emit_hw := mar.off
   ## slice 1c-β span-table cursors: `sp_n` = spans recorded so far, `sp_prev` = the byte offset at which
   ## the CURRENT (not-yet-closed) span began. Each boundary closes the previous span (writes its len) and
@@ -32621,7 +33048,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     ## discard instances whose generic declaration did not survive the actual root/call-graph walk.
     ## Executable/test artifacts retain the historical collector/emitter pairing.
     if g_ok and (library_mode == false or rb_get(rb, e.gi) == 1) {
-      ipcx := PCtx(src = src, decls = decls, mar = mar, inst = true, its = e.ts, itl = e.tl, its2 = e.ts2, itl2 = e.tl2, its3 = e.ts3, itl3 = e.tl3)
+      ipcx := PCtx(src = src, decls = decls, mar = mar, inst = true, its = e.ts, itl = e.tl, its2 = e.ts2, itl2 = e.tl2, its3 = e.ts3, itl3 = e.tl3, vinst = true)
       ## docs/ir-slice-1.md §8.3–§8.4 — the instance's body is emitted in its record context: mono's
       ## index `i` IS the `InstId` sema re-checked the body under (`sema_inst_walk`), so a consumer
       ## asking `ir::sty_get_cur` here reads that instance's records. Census-only in e4: no emitted
@@ -32632,6 +33059,9 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
       mar.off = emit_hw                          ## reclaim this instance's dead per-fn scratch
     }
   }
+  ## The UNCHECKED instances the emission above selected (Comptime §7.5, CT-11): inside the instances
+  ## span, after every ordinary definition, so each recorded `@convert` already has its checked copy.
+  emit_unchecked_instances(decls, sb, src, mar, nl, emit_hw)
   ifree := 0
   ## slice 1c-β: close the final (instances) span at the end of the GAS and publish the span count.
   if spanbase != 0 {

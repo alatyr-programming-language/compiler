@@ -239,6 +239,8 @@ aarch64	test/issue354_vec_reserve_overflow.al	run/133	#1200
 aarch64	test/issue355_string_push_len.al	run/133	#1188
 aarch64	test/issue363_qualified_char_protocol.al	run/133	#1184
 aarch64	test/issue363_str_protocol_shadow_control.al	run/133	#1184
+aarch64	test/issue364_char_unchecked_crossing.al	run/133	#1517
+aarch64	test/issue364_unchecked_instance_one_level.al	run/133	#1197
 aarch64	test/issue369_aggregate_return.al	run/133	#1191
 aarch64	test/issue370_bitcast_scalar_arg.al	run/133	#551
 aarch64	test/issue372_generic_bitcast_target.al	run/133	#713
@@ -754,6 +756,8 @@ riscv64	test/issue354_vec_reserve_overflow.al	run/133	#1200
 riscv64	test/issue355_string_push_len.al	run/133	#1188
 riscv64	test/issue363_qualified_char_protocol.al	run/133	#1184
 riscv64	test/issue363_str_protocol_shadow_control.al	run/133	#1184
+riscv64	test/issue364_char_unchecked_crossing.al	run/133	#1517
+riscv64	test/issue364_unchecked_instance_one_level.al	run/133	#1197
 riscv64	test/issue369_aggregate_return.al	run/133	#1191
 riscv64	test/issue370_bitcast_scalar_arg.al	run/133	#551
 riscv64	test/issue372_generic_bitcast_target.al	run/133	#713
@@ -1271,6 +1275,8 @@ wasm	test/issue354_vec_reserve_overflow.al	run/134	#1186
 wasm	test/issue355_string_push_len.al	run/134	#1186
 wasm	test/issue363_qualified_char_protocol.al	run/134	#1184
 wasm	test/issue363_str_protocol_shadow_control.al	run/134	#1184
+wasm	test/issue364_char_unchecked_crossing.al	run/134	#1517
+wasm	test/issue364_unchecked_instance_one_level.al	run/134	#1197
 wasm	test/issue369_aggregate_return.al	run/134	#1205
 wasm	test/issue370_bitcast_scalar_arg.al	run/134	#1205
 wasm	test/issue372_generic_bitcast_target.al	run/134	#713
