@@ -12426,6 +12426,32 @@ emit_reject_has riscv64 issue1464_fnval_tuple_pos "a function value has no field
 emit_reject_has wat issue1464_fnval_field_store "a function value has no field to name at line 8 in issue1464_fnval_field_store"
 emit_reject_has aarch64 issue1464_fnval_field_store "a function value has no field to name at line 8 in issue1464_fnval_field_store"
 emit_reject_has riscv64 issue1464_fnval_field_store "a function value has no field to name at line 8 in issue1464_fnval_field_store"
+## The same refusal decided by the owner's DECLARED type rather than its spelling (#1469 review): a
+## parameter `h : fn() -> u64` (Functions §1.5 "passed") and a struct field `h : fn() -> u64` ("stored"),
+## read as `s.h.a` and written as `s.h.a = 4`. Parent verdicts (`origin/main` `f7011080`, native x86_64):
+## the parameter and field reads `check` 0, `build` 0, a fabricated 0; the nested store `check` 0 and a
+## build-time frame-slot refusal that names no owner kind.
+build_reject_has issue1464_fnval_param_field "a function value has no field to name at line 6 in issue1464_fnval_param_field"
+build_reject_has issue1464_fnval_struct_field "a function value has no field to name at line 9 in issue1464_fnval_struct_field"
+build_reject_has issue1464_fnval_struct_field_store "a function value has no field to name at line 9 in issue1464_fnval_struct_field_store"
+check_reject_has issue1464_fnval_param_field "a function value has no field to name at line 6 in issue1464_fnval_param_field"
+check_reject_has issue1464_fnval_struct_field "a function value has no field to name at line 9 in issue1464_fnval_struct_field"
+check_reject_has issue1464_fnval_struct_field_store "a function value has no field to name at line 9 in issue1464_fnval_struct_field_store"
+emit_reject_has wat issue1464_fnval_param_field "a function value has no field to name at line 6 in issue1464_fnval_param_field"
+emit_reject_has aarch64 issue1464_fnval_param_field "a function value has no field to name at line 6 in issue1464_fnval_param_field"
+emit_reject_has riscv64 issue1464_fnval_param_field "a function value has no field to name at line 6 in issue1464_fnval_param_field"
+emit_reject_has wat issue1464_fnval_struct_field "a function value has no field to name at line 9 in issue1464_fnval_struct_field"
+emit_reject_has aarch64 issue1464_fnval_struct_field "a function value has no field to name at line 9 in issue1464_fnval_struct_field"
+emit_reject_has riscv64 issue1464_fnval_struct_field "a function value has no field to name at line 9 in issue1464_fnval_struct_field"
+emit_reject_has wat issue1464_fnval_struct_field_store "a function value has no field to name at line 9 in issue1464_fnval_struct_field_store"
+emit_reject_has aarch64 issue1464_fnval_struct_field_store "a function value has no field to name at line 9 in issue1464_fnval_struct_field_store"
+emit_reject_has riscv64 issue1464_fnval_struct_field_store "a function value has no field to name at line 9 in issue1464_fnval_struct_field_store"
+## Its control: a UFCS call through a function-typed parameter (`h.apply()`, Modules §2), a direct call
+## of one, and a function-typed field bound then called keep compiling and answer 42 on the parent and
+## after, on x86_64. A refusal that fires here is over-broad. `run_x86`, as for the owner-kind control
+## below: every twin traps on an indirect call through a function value (`undefined/builtin callee h`,
+## #1196), so their cells are rows of scripts/known-deviations.tsv under #1196 and leave when it lands.
+run_x86 issue1464_fnval_typed_controls 42
 ## The control: the six owner kinds #1464 must leave ALONE, one row each of the #703 item-3 census —
 ## a struct field and a struct field through a pointer (Types §6.1), a raw union member (§6.3, which
 ## REQUIRES it stays accepted), and a slice view's, a fixed array's and a `str`'s length (§6.4/§7).

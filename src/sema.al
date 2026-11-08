@@ -6893,18 +6893,42 @@ sema_scalar_owner_tuple_pos_err := fn(base : ptr(Expr), decls : ptr(rt::Vec), up
 ## LAMBDA, a lifted reference to one (`FnRef`), the NAME of a function declaration, or a binding that
 ## holds one? EXHAUSTIVE and DECLARATION-ORDERED — the shape `lbv_lit_tag` documents as the one that
 ## dispatches reliably under the bootstrap seed — and every other variant answers FALSE, so this decides
-## one fact about code addresses and re-decides nothing else. `Field` answers FALSE on purpose: a
-## function-valued FIELD is legitimate (`callee_is_fn_valued_field`), and there the owner's own kind is
-## the struct's question, not this one.
-sema_expr_is_fn_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
+## one fact about code addresses and re-decides nothing else. A `Field` is a function value when its
+## DECLARED type is a function type (`s.h` with `h : fn() -> u64`, Functions §1.5 "stored (in a struct
+## …)"): the struct owner is the one `sema_struct_owner_span` already resolves for the field-name fence,
+## and the field's declared span decides (`sema_ty_span_is_fn`). An owner it cannot resolve decides
+## nothing. Calling such a field (`o.g(x)`, `callee_is_fn_valued_field`) is a `Call`, never asked here.
+sema_expr_is_fn_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> bool {
   match deref(e) {
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Bitcast | Expr::Loop => { false }
     Expr::Var(vs, vn) => { sema_name_owner_is_fn_value(decls, upto, src, locals, nloc, vs, vn) }
+    Expr::Field => { sema_field_is_fn_value(e, decls, upto, src, locals, nloc, a) }
     Expr::Lambda | Expr::FnRef => { true }
   }
+}
+## …the FIELD half: `<owner>.f` whose struct declares `f` with a function type.
+sema_field_is_fn_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> bool {
+  ## Asked only from the `Field` arm above, so the field span and its base are both present.
+  fs := expr_field_span(e)
+  if fs.n == 0 { return false }
+  owner := sema_struct_owner_span(expr_field_base(e), decls, upto, src, locals, nloc, a)
+  if owner.n == 0 { return false }
+  ann := sema_field_ann_span(decls, upto, src, owner.s, owner.n, fs.s, fs.n, a)
+  sema_ty_span_is_fn(src, ann.s, ann.n)
+}
+## Is the DECLARED type span `[s, s+n)` a function type (Functions §1.5)? This is the type question
+## itself: every function-value owner whose type is declared — a parameter, an annotated local or
+## global, a struct field — is decided here. (A named alias of a function type does not parse today:
+## `F := fn() -> u64` is refused as a signature without a body, so no alias step is owed.)
+sema_ty_span_is_fn := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if sema_ann_is_fn_type(src, s, n) { return true }
+  ## A PARAMETER's function type is captured as the bare keyword `fn` (parser.al, the FUNCTION-VALUE
+  ## parameter type: it consumes `(…) -> R` and keeps `pts`/`ptl` = "fn"). `fn` is reserved, so no
+  ## declared type is spelled that way and the keyword alone is the answer.
+  n == 2 and str_at((src + s), 2) == "fn"
 }
 ## …the DECLARATION half: a function declaration (`is_fn`), whose name in value position IS the code
 ## address (Functions §1.5). A QUALIFIED `z::n` fails open — Modules §2 sends it to module `z`'s item,
@@ -6917,7 +6941,10 @@ sema_decl_is_fn_value := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s
     if d.is_fn and name_matches(src, d.name_start, d.name_len, s, n) { return true }
     i += 1
   }
-  false
+  ## …or a module value whose ANNOTATION declares a function type (`G : fn() -> u64 = f`), resolved in
+  ## this module's scope as the scalar question resolves it (Modules §2).
+  gt := global_type_span_in_mod(decls, src, upto, s, n)
+  sema_ty_span_is_fn(src, gt.s, gt.n)
 }
 ## …and the NAME half: a LOCAL carries the fact in its provenance byte, set at its binding and carried
 ## across an alias by the same question; anything else is decided by the declaration its name resolves to.
@@ -6943,18 +6970,20 @@ sema_ann_is_fn_type := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ## `is_fn` declaration, a binding whose initializer or annotation proved a code address — never the
 ## checked type, which answers UNKNOWN for a code address and is why the read reached lower and
 ## fabricated a word.
-sema_fnval_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
+sema_fnval_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
   if is_prelude_ns_var(base, src) { return 0 }
-  if not sema_expr_is_fn_value(base, decls, upto, src, locals, nloc) { return 0 }
+  if not sema_expr_is_fn_value(base, decls, upto, src, locals, nloc, a) { return 0 }
   fnval_field_access_err(fs)
 }
 ## …and the TUPLE POSITION `g.N` on a function-value owner, told from the bracket `g[i]` by the `.` the
-## source holds right after the owner's name (Types §6.1 gives `.N` to tuples ONLY).
-sema_fnval_owner_tuple_pos_err := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
+## source holds right after the owner's name (Types §6.1 gives `.N` to tuples ONLY). The owner's last
+## name is a `Var`'s own span or, for a function-typed field `s.h.0`, the field's span.
+sema_fnval_owner_tuple_pos_err := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
   if is_prelude_ns_var(base, src) { return 0 }
-  bv := expr_var_span(base)
+  mut bv := expr_var_span(base)
+  if bv.n == 0 { bv = expr_field_span(base) }
   if bv.n == 0 or str_at((src + bv.s + bv.n), 1) != "." { return 0 }
-  if not sema_expr_is_fn_value(base, decls, upto, src, locals, nloc) { return 0 }
+  if not sema_expr_is_fn_value(base, decls, upto, src, locals, nloc, a) { return 0 }
   fnval_field_access_err(bv.s + bv.n + 1)
 }
 ## …the same question over a NAME place `[s, s+n)` — the read walkers above and the `v.a = x` store,
@@ -8583,7 +8612,7 @@ expr_statement_has_unbound_m := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
       if sfe != 0 { mark_failed(locals, sfe); bad = true }
       ## Issue #1464 — the FUNCTION-VALUE owner, the next row of the same owner-kind census (#703 item
       ## 3). Stands in this same arm, beside the scalar and enum fences.
-      fve := sema_fnval_owner_field_err(base, fs, decls, upto, src, locals, nloc)
+      fve := sema_fnval_owner_field_err(base, fs, decls, upto, src, locals, nloc, a)
       if fve != 0 { mark_failed(locals, fve); bad = true }
       efe := sema_enum_owner_field_err(base, fs, decls, upto, src, locals, nloc)
       if efe != 0 { mark_failed(locals, efe); bad = true }
@@ -8598,7 +8627,7 @@ expr_statement_has_unbound_m := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
       tpe := sema_scalar_owner_tuple_pos_err(base, decls, upto, src, locals, nloc)
       if tpe != 0 { mark_failed(locals, tpe) }
       ## Issue #1464 — the same position on a function-value owner.
-      fvpe := sema_fnval_owner_tuple_pos_err(base, decls, upto, src, locals, nloc)
+      fvpe := sema_fnval_owner_tuple_pos_err(base, decls, upto, src, locals, nloc, a)
       if fvpe != 0 { mark_failed(locals, fvpe) }
       tpe != 0 or fvpe != 0
     }
@@ -8791,7 +8820,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       if sfe != 0 { mark_failed(locals, sfe); bad = true }
       ## Issue #1464 — the FUNCTION-VALUE owner on the full walk too; both walks reach `Expr::Field`
       ## from different callers and neither subsumes the other (#693's note above).
-      fve := sema_fnval_owner_field_err(base, fs, decls, upto, src, locals, nloc)
+      fve := sema_fnval_owner_field_err(base, fs, decls, upto, src, locals, nloc, a)
       if fve != 0 { mark_failed(locals, fve); bad = true }
       efe := sema_enum_owner_field_err(base, fs, decls, upto, src, locals, nloc)
       if efe != 0 { mark_failed(locals, efe); bad = true }
@@ -8811,7 +8840,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       tpe := sema_scalar_owner_tuple_pos_err(base, decls, upto, src, locals, nloc)
       if tpe != 0 { mark_failed(locals, tpe); return true }
       ## Issue #1464 — the same position on a function-value owner.
-      fvpe := sema_fnval_owner_tuple_pos_err(base, decls, upto, src, locals, nloc)
+      fvpe := sema_fnval_owner_tuple_pos_err(base, decls, upto, src, locals, nloc, a)
       if fvpe != 0 { mark_failed(locals, fvpe); return true }
       expr_has_unbound(base, decls, upto, src, a, locals, nloc) or expr_has_unbound(idx, decls, upto, src, a, locals, nloc)
     }
@@ -15144,8 +15173,8 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
           ## code address, so without this the owner of `g.a` looks like an unknown aggregate and lower
           ## reads a fabricated word. Transitive by construction — `h := g` asks the same question of `g`
           ## and inherits the marker. An annotation spelling `fn(…) -> R` records it too.
-          if bind_prov == 0 and sema_ann_is_fn_type(src, ann.s, ann.n) { bind_prov = prov_fn_value() }
-          if bind_prov == 0 and sema_expr_is_fn_value(v, decls, upto, src, locals, cnt) { bind_prov = prov_fn_value() }
+          if bind_prov == 0 and sema_ty_span_is_fn(src, ann.s, ann.n) { bind_prov = prov_fn_value() }
+          if bind_prov == 0 and sema_expr_is_fn_value(v, decls, upto, src, locals, cnt, a) { bind_prov = prov_fn_value() }
           ## Preserve the homogeneous scalar element kind of an inferred array literal without
           ## pretending that Local carries a source type span. `prov_lit_array` records 0 for every
           ## unproven element kind, so this assignment leaves an undecided provenance undecided.
@@ -15438,6 +15467,11 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         pfs := expr_field_span(pl)
         if pbase.n != 0 and local_prov(locals, cnt, src, pbase.s, pbase.n) == prov_field_ptr() and pfs.n != 0 {
           return Result(usize, CheckErr).Err(located_err(pfs.s))
+        }
+        ## Issue #1464 — the nested write path for a FUNCTION-VALUE owner (`s.h.a = 4` with
+        ## `h : fn() -> u64`): `check` answered rc 0 and only the lower refused it, unlocated to the class.
+        if pfs.n != 0 and sema_expr_is_fn_value(expr_field_base(pl), decls, upto, src, locals, cnt, a) {
+          return Result(usize, CheckErr).Err(fnval_field_access_err(pfs.s))
         }
         cvp := check_expr_da(fpv, decls, upto, src, a, locals, cnt, da)?
         ## docs/ir.md §3.8 — the place the checker resolves itself (`sema_nested_field_leaf_ty`) is
@@ -17164,6 +17198,9 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         ## concepts happened to want the same answer from that one reader.
         mut pprov : u8 = 0
         if pm.pmode == 1 { pprov = prov_array_param() }
+        ## Issue #1464 — a parameter DECLARED with a function type holds a function value (Functions
+        ## §1.5: "passed"), so `h.a` on `h : fn() -> u64` is refused like `g.a` on `g := f`.
+        if pprov == 0 and sema_ty_span_is_fn(src, pm.ts, pm.tl) { pprov = prov_fn_value() }
         lvec_push(locals, Local(ns = pm.ns, nl = pm.nl, tag = pbyte, prov = pprov, tns = pt.ns, tnl = pt.nl))
         ## docs/ir.md §3.8 item 8 — a parameter's declared type, read by each use of it.
         if ir::sty_on() { sema_spell_bind(pm.ns, sema_spell_param(pm, src), decls, src) }
