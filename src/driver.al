@@ -2291,30 +2291,32 @@ d_elide_alloc_stmts := fn(head : Option(ptr(mut Stmt)), amb : usize, decls : rt:
 ## resolve a callee by NAME only, so they trapped at `Celsius(42)` and read `u64(c)` over a struct as
 ## a scalar (wasm answered the struct's address). This pass renames every such call, in place, to the
 ## @convert fn's own name; `lower::twin_convert_callee` decides which calls and which decl, by x86_64's
-## rules. It walks the same statement/expression shapes as `d_elide_alloc_*` above.
+## rules. It walks the same statement/expression shapes as `d_elide_alloc_*` above. `si` is the decl
+## whose body is being walked, so a conversion never renames a site inside its own body to itself
+## (Types §4.6 Termination; `lower::convert_callee_excl`).
 d_desugar_convert := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
   mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
-    if d.is_fn { d_convert_stmts(d.body_stmts, d.params_head, d.body_stmts, decls, na, src) }
+    if d.is_fn { d_convert_stmts(d.body_stmts, d.params_head, d.body_stmts, i, decls, na, src) }
     i = i + 1
   }
 }
-d_convert_expr := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), bh : Option(ptr(mut Stmt)), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+d_convert_expr := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), bh : Option(ptr(mut Stmt)), si : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
   match deref(e) {
-    Expr::Bin(op, l, r) => { d_convert_expr(l, ph, bh, decls, na, src); d_convert_expr(r, ph, bh, decls, na, src) }
-    Expr::Unchecked(inner) => { d_convert_expr(inner, ph, bh, decls, na, src) }
-    Expr::Try(inner) => { d_convert_expr(inner, ph, bh, decls, na, src) }
-    Expr::AddrOf(inner) => { d_convert_expr(inner, ph, bh, decls, na, src) }
-    Expr::If(c, th, el) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_expr(th, ph, bh, decls, na, src); d_convert_expr(el, ph, bh, decls, na, src) }
+    Expr::Bin(op, l, r) => { d_convert_expr(l, ph, bh, si, decls, na, src); d_convert_expr(r, ph, bh, si, decls, na, src) }
+    Expr::Unchecked(inner) => { d_convert_expr(inner, ph, bh, si, decls, na, src) }
+    Expr::Try(inner) => { d_convert_expr(inner, ph, bh, si, decls, na, src) }
+    Expr::AddrOf(inner) => { d_convert_expr(inner, ph, bh, si, decls, na, src) }
+    Expr::If(c, th, el) => { d_convert_expr(c, ph, bh, si, decls, na, src); d_convert_expr(th, ph, bh, si, decls, na, src); d_convert_expr(el, ph, bh, si, decls, na, src) }
     Expr::Call(cs, cl, nargs, ah) => {
       mut g : Option(ptr(mut Arg)) = ah
-      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_convert_expr(ga.e, ph, bh, decls, na, src); g = ga.next }; None => { break } } }
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_convert_expr(ga.e, ph, bh, si, decls, na, src); g = ga.next }; None => { break } } }
       ## null-ok: the call's first argument, or none — twin_convert_callee reads a null `a0` as "no operand"
       mut a0 := unchecked bitcast(ptr(Expr), 0)
       match ah { Some(ahq) => { a0 = deref(arg_p(ahq)).e }; None => {} }
       mut dv := decls
-      ci := lower::twin_convert_callee(ptr(dv), src, cs, cl, nargs, a0, ph, bh)
+      ci := lower::twin_convert_callee(ptr(dv), src, cs, cl, nargs, a0, ph, bh, si)
       if ci >= 0 {
         cd := deref(decl_at(Decl, rt::vec_get(decls, usize(ci))))
         ## The rename rewrites the AST node in place: `e` is the arena-owned Expr this walk reached through a
@@ -2328,24 +2330,24 @@ d_convert_expr := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), bh : Option(ptr
       | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_convert_stmts := fn(head : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), bh : Option(ptr(mut Stmt)), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+d_convert_stmts := fn(head : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), bh : Option(ptr(mut Stmt)), si : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
   mut st : Option(ptr(mut Stmt)) = head
   loop {
     match st {
       Some(stq) => {
         x := deref(stmt_p(Stmt, stq))
         match x {
-          Stmt::Assign(ns, nl, v, nx) => { d_convert_expr(v, ph, bh, decls, na, src) }
+          Stmt::Assign(ns, nl, v, nx) => { d_convert_expr(v, ph, bh, si, decls, na, src) }
           ## null-ok: a bare `return` carries a null value expression (ast.al)
-          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_convert_expr(rv, ph, bh, decls, na, src) } }
-          Stmt::ExprStmt(e, nx) => { d_convert_expr(e, ph, bh, decls, na, src) }
-          Stmt::If(c, th, el, nx) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_stmts(th, ph, bh, decls, na, src); d_convert_stmts(el, ph, bh, decls, na, src) }
-          Stmt::While(c, b, nx) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_stmts(b, ph, bh, decls, na, src) }
-          Stmt::Loop(b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_convert_expr(rv, ph, bh, si, decls, na, src) } }
+          Stmt::ExprStmt(e, nx) => { d_convert_expr(e, ph, bh, si, decls, na, src) }
+          Stmt::If(c, th, el, nx) => { d_convert_expr(c, ph, bh, si, decls, na, src); d_convert_stmts(th, ph, bh, si, decls, na, src); d_convert_stmts(el, ph, bh, si, decls, na, src) }
+          Stmt::While(c, b, nx) => { d_convert_expr(c, ph, bh, si, decls, na, src); d_convert_stmts(b, ph, bh, si, decls, na, src) }
+          Stmt::Loop(b, nx) => { d_convert_stmts(b, ph, bh, si, decls, na, src) }
           ## null-ok: an absent `For` bound is a null Expr link; every Stmt walker in this file guards lo/hi so
-          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_convert_expr(lo, ph, bh, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_convert_expr(hi, ph, bh, decls, na, src) }; d_convert_stmts(b, ph, bh, decls, na, src) }
-          Stmt::Unchecked(b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
-          Stmt::AllocWith(ae, b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_convert_expr(lo, ph, bh, si, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_convert_expr(hi, ph, bh, si, decls, na, src) }; d_convert_stmts(b, ph, bh, si, decls, na, src) }
+          Stmt::Unchecked(b, nx) => { d_convert_stmts(b, ph, bh, si, decls, na, src) }
+          Stmt::AllocWith(ae, b, nx) => { d_convert_stmts(b, ph, bh, si, decls, na, src) }
           Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
             | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
             | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}

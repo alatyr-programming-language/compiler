@@ -934,6 +934,13 @@ pub LCtx := struct {
   ## per-function state in a module global is a re-entrancy hazard independent of module scope, and
   ## `LCtx`'s constructors zero it by construction where `emit_fn` used to do it by hand.
   vchk : bool,
+  ## INSTANCE VERIFICATION MODE (Comptime §7.5, CT-11): `false` while emitting the UNCHECKED instance
+  ## of a mode-polymorphic function — the copy a call inside an `unchecked` scope selects — and `true`
+  ## for every other emission. It moves ONLY the `verify.checked` fold (`comptime_cond_eval` reads
+  ## `vchk and vinst`): the instance's own operation sites keep their lexical mode in `vchk`, because
+  ## `unchecked` reaches a callee only through what it reads, "one level deep" (§7.5, CG-7). Copied
+  ## from `PCtx.vinst` by every constructor; never written after.
+  vinst : bool,
   ## DEFER LEDGER (Control Flow §9.3 / Memory §5.8) — the pending `defer` cleanup actions of the
   ## function being emitted, in REGISTRATION order: each `__defer(<expr>)` marker stores the inner
   ## expr handle in `defer_inner[j]`; each `__deferblk()` block marker stores the block-head `Stmt`
