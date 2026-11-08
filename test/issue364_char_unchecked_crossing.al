@@ -18,9 +18,10 @@
 ## outside `unchecked`, or kept the guard inside it, this program answers 101/102/103 or dies, and says so.
 ##
 ## The block form `unchecked { … }` is the same grant in statement position (Grammar §3.7, `unchecked-region
-## ::= "unchecked" ( expr | block )`), so both spellings are exercised. Cross-backend: the twins reach this
-## path through `driver::d_convert_expr` → `lower::twin_convert_callee`, which likewise does not consult
-## the mode.
+## ::= "unchecked" ( expr | block )`), so both spellings are exercised. The guard is absent because each
+## `unchecked` site runs `to_char`'s UNCHECKED instance (Comptime §7.5, CT-11). The first version of the
+## fix called the one checked body from every site and this program died with "invalid code point" (exit 1).
+## The twins still do that (#1517).
 ch := base::char
 
 main := fn() -> u64 {
