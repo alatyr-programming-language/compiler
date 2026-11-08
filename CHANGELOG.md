@@ -143,6 +143,19 @@ Two numbers that are **not** the compiler's version: the specification revision 
   §4.2). `u64`/`usize` values at or above 2^63, such as `u64(0.75 * 2^64)`, now convert correctly on
   x86_64 where they used to answer a wrong value. Inside `unchecked` an out-of-range result stays
   hardware-defined; on wasm it now answers a value (the saturating conversion) instead of trapping.
+- **A `for` over a `Slice(T)` local bound *without* an annotation steps by `T`'s width (#1403).**
+  `r := pass(t[0..4])` where `pass : Slice(u8) -> Slice(u8)` carries no annotation at the binding site,
+  and the loop read the element's width from that annotation. Finding nothing, it kept the default word
+  and stepped 8 bytes per element over a `u8` run, so the folded sum came out wrong (the issue's
+  `r := pass(…); for x in r` row answered 1 where 42 was due). The width now also comes from the slot,
+  which names the instantiated `Slice(u8)` after the fix above — one answer shared with `r[i]`, not two.
+  Measured native x86_64 on omen: `u8`, `i8` (sign-extended) and a `Vec(u16|i16|u32|u8)` passed
+  through `as_slice` went from wrong to 42, and the `u64` control did not move. **Not fixed here:**
+  a slice over a fixed array that x86_64 lays out one word per element (`[u16; N]`, `[u32; N]`, an
+  inferred `[u8; N]`) points at 8-byte-spaced elements (#1514). With this loop now stepping at the
+  element's width, the bound-loop form of that slice answers wrong too, as its annotated and indexed
+  forms already did. Also still open on #1403: the fixed-array view rows, where `v := t[1..4]; for x in v`
+  over a `[u8; 4]` segfaults.
 
 ## 0.2.24 — 2026-11-07
 
