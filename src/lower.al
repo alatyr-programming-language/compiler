@@ -14941,7 +14941,7 @@ convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
 }
 ## `convert_callee_idx` with the conversion whose body is being compiled (`self_fn`) taken out of the
 ## candidates — see `convert_pick` (Termination).
-convert_callee_excl := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a0 : Option(ptr(Expr)), self_fn : Option(usize)) -> i64 {
+pub convert_callee_excl := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a0 : Option(ptr(Expr)), self_fn : Option(usize)) -> i64 {
   if conv_kind(str_at((src + cs), cl)) >= 0 { return 0 - 1 }
   pk := convert_pick(decls, src, cs, cl, a0, self_fn)
   match pk {
