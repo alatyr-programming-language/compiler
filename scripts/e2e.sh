@@ -9923,9 +9923,19 @@ run chariter_valid_utf8 42
 run_x86 issue364_char_convert_guard 1
 ## The CT-11 half of the same rule, which the fix must NOT overreach: §4.6 l.345 selects step (2)
 ## "checked or unchecked alike", so `unchecked char(n)` calls `to_char` too and only its guard is absent
-## (the body ends in `unchecked bitcast(char, n)` — "an identity crossing", l.344). Cross-backend: the
-## twins reach it through `driver::d_convert_expr` → `lower::twin_convert_callee`, mode-blind as well.
+## (the body ends in `unchecked bitcast(char, n)` — "an identity crossing", l.344). The guard is absent
+## because the site runs `to_char`'s UNCHECKED instance (Comptime §7.5, CT-11: "instantiated per the
+## verification mode of each call site"); x86_64 emits it as `base__char__to_char.unchecked`. Measured on
+## #1436's earlier head, which called the one checked body: exit 1 ("invalid code point"). The twins
+## still call the checked body and trap: rows under #1517 in scripts/known-deviations.tsv.
 run issue364_char_unchecked_crossing 42
+## Which instance of a mode-polymorphic conversion each `T(v)` site runs (Comptime §7.5, CT-11): a site
+## inside `unchecked` runs the unchecked instance, a call inside that instance runs at its own lexical
+## mode ("one level deep"), and `Lvl(n)` inside `to_lvl` is the brand crossing, not `to_lvl` again
+## (Types §4.6, Termination). Each instance appends a digit to a global, so no trap is needed. Measured on
+## native x86_64: 1 on the parent `ae3623d1` (no `@convert` ran) and 132 on #1436's earlier head (the
+## conversion re-selected itself until `SEEN * 10` overflowed).
+run issue364_unchecked_instance_one_level 42
 # Issue #402 / Control Flow §6 + Stdlib appendix §2.4 — `for` over a type that provides
 # `next(in out self) -> Opt` must DRIVE `next`, not count the backing view. The parent walked the
 # byte length (10 for four code points) and yielded garbage; `iter_for_split` is the same class on

@@ -1106,7 +1106,9 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
     Expr::Field(b, fs, fl) => {
       vn := var_name_span(b)
       if vn.n != 0 and str_at((src + vn.s), vn.n) == "verify" {
-        if cx.vchk { return 1 }
+        ## The lexical mode (`vchk`) AND the instance's mode (`vinst`, false only in an UNCHECKED
+        ## instance a call inside `unchecked` selected — Comptime §7.5, CT-11).
+        if cx.vchk and cx.vinst { return 1 }
         return 0
       }
       ## `comptime if build.<flag>` (Tooling §2.7) — the closed bool-flag fold shared with the twins.
