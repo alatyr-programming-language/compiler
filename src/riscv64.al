@@ -6413,6 +6413,12 @@ emit_rv_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, a
         match st {
           Stmt::Assign(ns, nl, v, nx) => {
             ## FLAT: a StructLit constructs fields; an EnumLit constructs {disc, payload…}; else scalar store.
+            ## #1502 — a DECLARATION inside a nested block (this list is not the function body) of a name that
+            ## is a module data binding would store into the binding's `.data` label (the paths below prefer
+            ## it to any frame slot), so every later read of it would answer the dead local. Fail loud instead.
+            if (not stmt_same(list_head, body_head)) and ast::assign_is_decl(src, ns, nl) and lower_ctx::names_module_data(decls, src, ns, nl) {
+              push_str(sb, "  ebreak # unsupported: block-local declaration shadowing a module binding (#1502)\n")
+            }
             isslit := expr_is_struct_lit(v)
             iselit := expr_is_enum_lit(v)
             isalit := ex_is_array_lit(v)

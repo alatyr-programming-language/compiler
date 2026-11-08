@@ -229,6 +229,7 @@ aarch64	test/issue1403_for_slice_bound_no_annotation.al	run/133	#1201
 aarch64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 aarch64	test/issue1464_fnval_typed_controls.al	run/133	#1196
 aarch64	test/issue1464_owner_kind_controls.al	run/133	#1489
+aarch64	test/issue1502_block_local_module_binding.al	run/133	#1502
 aarch64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 aarch64	test/issue169_wasm_nested_return.al	run/133	#1191
 aarch64	test/issue171_global_const_str.al	run/133	#1200
@@ -748,6 +749,7 @@ riscv64	test/issue1403_for_slice_bound_no_annotation.al	run/133	#1201
 riscv64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 riscv64	test/issue1464_fnval_typed_controls.al	run/133	#1196
 riscv64	test/issue1464_owner_kind_controls.al	run/133	#1489
+riscv64	test/issue1502_block_local_module_binding.al	run/133	#1502
 riscv64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200
@@ -1268,6 +1270,7 @@ wasm	test/issue1403_for_slice_bound_no_annotation.al	run/134	#1186
 wasm	test/issue1406_declared_sub_slice_ret.al	run/134	#1191
 wasm	test/issue1464_fnval_typed_controls.al	run/134	#1196
 wasm	test/issue1464_owner_kind_controls.al	run/134	#1489
+wasm	test/issue1502_block_local_module_binding.al	run/134	#1502
 wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
 wasm	test/issue169_wasm_array_write.al	run/134	#1194
 wasm	test/issue169_wasm_nested_return.al	run/134	#1191
