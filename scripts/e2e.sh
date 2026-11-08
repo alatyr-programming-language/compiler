@@ -6681,6 +6681,13 @@ run module_const_shadowed_name 99
 ## local) and two OVER-EAGERNESS controls (unshadowed first and second field). Fails on the parent at
 ## 2d6e05f41 with 11 = case 1, class 1: the constant's own field value.
 run issue597_shadowed_const_struct_field 99
+## #1495 / Declarations §5+§6.1+§7.2: a LOCAL named like a module CONST STRUCT, read in EXPRESSION position
+## (`C := S(k = 51, m = 0) ; return C.k`, an operand, a call argument, the second field). #597's fixture
+## covers a local only through `a : u64 = C.k` and expression position only through a parameter. A
+## regression pin for #1480's `emit_gas` `Expr::Field` guard, not a new fix: main 7621cdfe already answers 99
+## on all four backends; the pre-#1480 seed answers 11 = case 1, class 1, the constant's own field. #1495's
+## §7.2 ORDER rows are left to #1496 (they trap on wasm).
+run issue1495_local_shadow_const_struct_expr 99
 build_reject_has reject_typed_float_integer_f32 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_f64 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_u64 "check: type mismatch at line 2"
@@ -11873,6 +11880,7 @@ run_wat int_literal_float_unchecked 99
 run_wat int_literal_float_module_const 99
 run_wat module_const_shadowed_name 99
 run_wat issue597_shadowed_const_struct_field 99
+run_wat issue1495_local_shadow_const_struct_expr 99
 run_wat bitcast_cmp_signedness 99
 run_wat inline_call 42
 run_wat stack_args 42
@@ -11977,6 +11985,7 @@ run_a64 int_literal_float_unchecked 99
 run_a64 int_literal_float_module_const 99
 run_a64 module_const_shadowed_name 99
 run_a64 issue597_shadowed_const_struct_field 99
+run_a64 issue1495_local_shadow_const_struct_expr 99
 run_a64 bitcast_cmp_signedness 99
 ## I11/CG-7 scoping: `unchecked` drops the aarch64 div-by-zero guard → raw `sdiv x,x,0` = 0.
 run_a64 unchecked_div_zero 0
@@ -12059,6 +12068,7 @@ run_rv64 int_literal_float_unchecked 99
 run_rv64 int_literal_float_module_const 99
 run_rv64 module_const_shadowed_name 99
 run_rv64 issue597_shadowed_const_struct_field 99
+run_rv64 issue1495_local_shadow_const_struct_expr 99
 run_rv64 bitcast_cmp_signedness 99
 run_rv64 unchecked_udiv_zero 42
 run_rv64 unchecked_rem_zero 41

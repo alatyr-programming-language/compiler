@@ -4,7 +4,8 @@
 ## its body) is an inner scope of the module (§5); a declaration in an inner scope may shadow an outer name
 ## and "within the inner scope the inner name wins" (§6.1).
 ##
-## On the parent it did not, on ALL FOUR backends. `lower::const_struct_field` resolves the FIELD BASE
+## On the parent 2d6e05f41 it did not, on x86_64 (aarch64, riscv64 and wasm already answered 99; the
+## issue's all-four table was measured at 31ab74f). `lower::const_struct_field` resolves the FIELD BASE
 ## through `lower::module_const_value` on the NAME ALONE: it filters the DECLARATION (non-`fn`,
 ## `kind == 0`, `ret_tl == 0`, `arity == 0`, not `mut`) and never asks whether the function being emitted
 ## has a home for that name. Three sites asked it that way — `emit_st_assign`'s normalizer
@@ -13,11 +14,9 @@
 ## from a clean compile, exit 0, no diagnostic. #589 fixed the bare-`Var` scalar half and DECLINED this
 ## one on purpose: `var_name_span` of a `Field` is empty, so its guard never saw a `Field` base.
 ##
-## Unlike #589 this was never an x86_64-only column: all four backends answered the constant, so the
-## cross-target sweeps — which compare aarch64, riscv64 and wasm AGAINST x86_64 — had no divergence to
-## report and could not see it either. That is why this fixture carries rows on all four backends rather
-## than one: the fix must make them AGREE ON THE RIGHT ANSWER, and a row on x86_64 alone would leave the
-## other three unmeasured.
+## Like #589 it was an x86_64-only column at the parent, so the cross-target sweeps had a divergence to
+## see but no fixture to see it on. This fixture still carries rows on all four backends: the requirement
+## is that they AGREE ON THE RIGHT ANSWER, and a row on x86_64 alone would leave the other three unmeasured.
 ##
 ## Every case is CLASSIFIED rather than compared, because "not 3" is not evidence: `class` separates the
 ## correct INNER value (0) from the MODULE CONSTANT's own field value (1 — the defect this fixture exists
@@ -25,7 +24,7 @@
 ## case carries its OWN module constant with a field value NO other case produces, and each shadowing
 ## binding carries its OWN distinct value, so no case can pass by reading another's slot and no pair of
 ## wrong answers sums to a right one. The code returned is `10 * case + class` of the FIRST failing case;
-## 99 is returned only when all nine cases are correct. Failure codes run 11..93, 99 is not in that set,
+## 99 is returned only when all eight cases are correct. Failure codes run 11..83, 99 is not in that set,
 ## and every code is below 126 (#386), so wasm's `proc_exit` accepts them all.
 ##
 ## Cases 1 and 2 are the issue's own two reproducers, kept in their own shapes: a PARAMETER named `C`
@@ -50,12 +49,14 @@
 ## Deliberately NOT here: (a) a shadowed `str` or struct COPY binding (`s : str = M`, `p : S = C`) — that
 ## is #598, which refuses through `const_rhs_unshadowed`'s `const_scalar_lit` narrowing and has to move the
 ## frame-slot size with it; (b) the Declarations §7.2 ORDER control where a read of `C.k` precedes a LATER
-## local `C` of the same struct type. Measured on this tree, that spelling TRAPS on wasm (134) identically
-## on the parent and on the fix, while x86_64 answers it correctly (115) — a pre-existing wasm gap in the
-## struct-local-after-read path, not this defect and not made worse by it. It is reported to the integrator
-## rather than folded in here, because a fixture that traps on one backend needs a deviation row of its own;
-## the §7.2 order rule itself is already pinned on all four backends by `test/module_const_shadowed_name.al`
-## case 11.
+## local `C` of the same struct type. That spelling TRAPS on wasm (134) identically on the parent and on
+## the fix — a pre-existing wasm gap in the struct-local-after-read path, filed as #1496. On x86_64 the fix
+## answers it correctly (`a : u64 = C.k ; C := S(k = 50, m = 0) ; return a + C.k` gives 57 on main
+## 7621cdfe, as do aarch64 and riscv64); the parent, like the pre-#1480 seed, answers 14 there, which is
+## the figure #1495 reported. A fixture that traps on one backend needs a deviation row of its own, so it is
+## left to #1496; the §7.2 order rule itself is already pinned on all four backends by
+## `test/module_const_shadowed_name.al` case 11. A LOCAL read in EXPRESSION position, which cases 2 and 3
+## cover only separately, is pinned by `test/issue1495_local_shadow_const_struct_expr.al`.
 S := struct { k : u64, m : u64 }
 
 C1 := S(k = 101, m = 102)
