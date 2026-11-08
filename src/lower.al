@@ -11554,9 +11554,10 @@ call_ret_ty_span := fn(recv : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
       mut idx := generic_decl_of(decls, src, cs, cl, qms, qml, nargs, ah, a)
       if idx < 0 { idx = resolve_callee_idx(decls, src, cs, cl, qms, qml) }
       ## `T(v)` user CONVERSION-CONSTRUCTOR (Types §4.6): resolve the @convert fn so its declared
-      ## RETURN type `T` types the call result (field-type recovery, scalar bindings). Neutral — see
-      ## `convert_callee_idx` (filters builtin/brand, so src/lib's `char(n)` never resolves here).
-      if idx < 0 { idx = convert_callee_idx(decls, src, cs, cl) }
+      ## RETURN type `T` types the call result (field-type recovery, scalar bindings). Every candidate
+      ## returns `T`, so any one answers (`convert_target_any`; it filters builtin/brand as
+      ## `convert_callee_idx` does, so src/lib's `char(n)` never resolves here).
+      if idx < 0 { idx = convert_target_any(decls, src, cs, cl) }
       if idx < 0 { return CSpan(s = 0, n = 0) }
       d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(idx))))
       return CSpan(s = d.ret_ts, n = d.ret_tl)
@@ -11629,8 +11630,9 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Opti
   ## in-scope `@convert fn(…) -> T` — dispatch to that fn by ITS OWN (mangled) name, not `T` (there is
   ## no fn named `T`). The result is delivered in the return registers (%rax/%rdx…), matching the
   ## aggregate-return convention of this fn. Fixpoint-neutral: `convert_callee_idx` filters builtin/brand,
-  ## so no `src/lib` call resolves here (its only @convert `to_char` targets the brand `char`).
-  cvi0 := convert_callee_idx(cx.decls, cx.src, cs, cl)
+  ## so no `src/lib` call resolves here (its only @convert `to_char` targets the brand `char`). Which
+  ## conversion is asked of the operand (#1518, `convert_pick`).
+  cvi0 := convert_callee_idx(cx.decls, cx.src, cs, cl, convert_operand(nargs, args_head, a))
   if cvi0 >= 0 {
     cvd := deref(lower_ctx::decl_get(cx.decls, usize(cvi0)))
     cx.call_cidx = cvi0
@@ -14526,12 +14528,6 @@ fn_is_convert := fn(src : ptr(u8), name_s : usize, name_l : usize) -> bool {
   }
   str_at((src + p), 8) == "@convert"
 }
-## The decl index of the SINGLE in-scope `@convert` fn whose RETURN type's base name == the callee
-## `[cs, cl)` (Types §4.6 dispatch step 2 / TYP-6), else -1. Builtin lattice conversions (`conv_kind >=
-## 0`) and BRAND constructions (`brand_underlying`) keep PRIORITY — a `T(v)` that rides either is
-## short-circuited here, so it never resolves to a @convert (this is what makes `char(n)`, a brand,
-## stay the brand path → fixpoint-neutral: src/lib's only @convert `to_char` targets the brand `char`).
-## Two @convert to the same target are an AMBIGUITY error (fail-loud, no guessing).
 ## The §3 scope rank of a `@convert` declaration's module as seen from the module being lowered. A
 ## declaration in NO module (a single-file program, `mod_len == 0`) and a compile with no published
 ## module both rank 0, so every candidate ties there and the historical flat-ambiguity behaviour is
@@ -14543,38 +14539,322 @@ convert_scope_rank := fn(src : ptr(u8), as_ : usize, al : usize) -> i64 {
   callee_mod_rank(src, as_, al, lower_layout::type_ref_mod_s(), ml)
 }
 
-convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
-  if conv_kind(str_at((src + cs), cl)) >= 0 { return 0 - 1 }
-  bu := brand_underlying(decls, src, cs, cl)
-  if bu.n != 0 { return 0 - 1 }
+## Is decl `i` a `@convert` fn whose RETURN type's base name is the callee `[cs, cl)`? Its §3 scope rank
+## (`convert_scope_rank`) when it is, `None` otherwise. These are the CANDIDATES of Types §4.6 dispatch
+## step (2) before the parameter is asked; `convert_pick` asks it.
+## Modules §3 (TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE at a
+## construction is the same question a bare call asks — `callee_mod_rank` answers it (this module, then
+## its ancestors nearest-first, -1 for a sibling / a descendant / an unrelated module). Without the rank,
+## two `@convert` to the same target in unrelated modules were a flat AMBIGUITY even when §3 lets the
+## naming module see exactly ONE of them (measured: a child constructing through its ancestor's
+## `@convert` was rejected as ambiguous because a sibling declared one too).
+convert_target_rank := fn(decls : ptr(rt::Vec), src : ptr(u8), cnt : usize, i : usize, cs : usize, cl : usize) -> Option(i64) {
+  d := deref(lower_ctx::decl_get(decls, i))
+  mut isc := false
+  if dic_live(cnt) { isc = dic_is_convert(cnt, i) } else { if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { isc = true } }
+  if isc == false { return Option(i64).None }
+  rb := base_type_name(src, d.ret_ts, d.ret_tl)
+  if rb.n == 0 or lower_ctx::streq(src, rb.s, rb.n, cs, cl) == false { return Option(i64).None }
+  Option(i64).Some(convert_scope_rank(src, d.mod_start, d.mod_len))
+}
+
+## Does a `@convert`'s parameter accept the operand of a `T(v)` (Types §4.6 step (2), below)? `CaUnknown`
+## = the operand's type is not known at this site, so the question cannot be answered — never a yes.
+ConvAccept := enum { CaYes, CaNo, CaUnknown }
+convert_acc := fn(b : bool) -> ConvAccept { if b { ConvAccept.CaYes } else { ConvAccept.CaNo } }
+
+## A kernel integer type name's width and signedness; `bytes == 0` for every other name. `usize` and
+## `isize` are the 64-bit integers they expand to — "prelude aliases that compile-time-expand to the
+## kernel's pointer-width interpretation for the target" (Types §5) — read as `sema_vty_scalar` reads
+## them. `char` is NOT one: it is a brand over `u32` (Stdlib appendix §3.2), which no integer is
+## assignable to (§4.3: a brand crossing is always explicit).
+ConvInt := struct { bytes : u64, signed : bool }
+convert_kint := fn(t : str) -> ConvInt {
+  if t == "u8" { return ConvInt(bytes = 1, signed = false) }
+  if t == "u16" { return ConvInt(bytes = 2, signed = false) }
+  if t == "u32" { return ConvInt(bytes = 4, signed = false) }
+  if t == "u64" or t == "usize" { return ConvInt(bytes = 8, signed = false) }
+  if t == "i8" { return ConvInt(bytes = 1, signed = true) }
+  if t == "i16" { return ConvInt(bytes = 2, signed = true) }
+  if t == "i32" { return ConvInt(bytes = 4, signed = true) }
+  if t == "i64" or t == "isize" { return ConvInt(bytes = 8, signed = true) }
+  ConvInt(bytes = 0, signed = false)
+}
+## A float type name's width in bytes; 0 for every other name.
+convert_kfloat := fn(t : str) -> u64 {
+  if t == "f32" { return 4 }
+  if t == "f64" { return 8 }
+  0
+}
+## Is an integer of `o` assignable to the integer `p`? Equal, or a **widen** — "lossless size increase
+## within one numeric domain" (§4.2), the one implicit class (§4.3); a signedness change is **numeric**
+## and always explicit. `p.bytes == 0` (not an integer) answers false.
+convert_int_widens := fn(o : ConvInt, p : ConvInt) -> bool {
+  p.bytes != 0 and o.bytes != 0 and o.signed == p.signed and o.bytes <= p.bytes
+}
+## Is the integer literal `v` (a `Num` node: never negative, a value past `i64::MAX` held as its bit
+## pattern) representable in the integer `p`? Types §9.1: "its representability in that type is checked
+## at compile time".
+convert_lit_fits := fn(v : i64, p : ConvInt) -> bool {
+  if p.bytes == 8 { return p.signed == false or v >= 0 }
+  if v < 0 { return false }
+  mut bits : u64 = p.bytes * 8
+  if p.signed { bits = bits - 1 }
+  lim : u64 = shl(u64(1), bits)
+  u64(v) < lim
+}
+
+## #1518 — does `pm`, a `@convert`'s single parameter, ACCEPT the operand `a0`? Types §4.6 dispatch step
+## (2) (v1.8.0 l.332-333): "the **one** in-scope `@convert` whose return type is `T` and whose parameter
+## **accepts** `typeof(v)` — equal to it, or assignable to it per §4.3". Assignable is equal, or the
+## implicit **widen** (§4.3); an integer literal is "a compile-time number" whose type "is inferred from
+## context" and is assignable to any numeric type that represents it (§9.1) — so a parameter is a
+## context it can take.
+##
+## The operand's type is sema's record (D6, docs/ir.md §3.8: `ir::sty_get_cur` / `ir::sty_spell_get_cur`):
+## a literal by its shape first, then the SPELLING sema resolved (which tells a brand or a struct from
+## its representation), then the bare value type. Where none of them names the type the answer is
+## `CaUnknown`. Residual, said plainly: an array/tuple parameter (`pmode == 1` or a tuple) is matched by
+## the operand being an unnamed aggregate, not by its element types; a spelling is compared as text.
+convert_param_accepts := fn(src : ptr(u8), pq : ptr(mut Param), a0 : ptr(Expr)) -> ConvAccept {
+  pm := deref(param_p(pq))
+  if pm.pmode > 1 { return ConvAccept.CaNo }
+  pagg := pm.pmode == 1 or lower_layout::param_tuple_open_at(src, pm.ns, pm.nl) >= 0
+  pb := base_type_name(src, pm.ts, pm.tl)
+  if pb.n == 0 { return ConvAccept.CaUnknown }
+  pt := str_at((src + pb.s), pb.n)
+  pi := convert_kint(pt)
+  pf := convert_kfloat(pt)
+  pscalar := pi.bytes != 0 or pf != 0 or pt == "bool"
+  match deref(a0) {
+    Expr::Num(v, vs, vn) => {
+      if pagg { return ConvAccept.CaNo }
+      if pi.bytes != 0 { return convert_acc(convert_lit_fits(v, pi)) }
+      ## An integer literal in a float context: accepted exactly when exactly representable (§9.1).
+      ## Every integer up to the significand's reach is; past it the answer is not computed here.
+      if pf != 0 {
+        mut exact : u64 = shl(u64(1), 53)
+        if pf == 4 { exact = shl(u64(1), 24) }
+        if v >= 0 and u64(v) <= exact { return ConvAccept.CaYes }
+        return ConvAccept.CaUnknown
+      }
+      return ConvAccept.CaNo
+    }
+    Expr::BoolLit => { return convert_acc(pagg == false and pt == "bool") }
+    Expr::StrLit => { return convert_acc(pagg == false and pt == "str") }
+    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  vt : ir::VTy = ir::sty_get_cur(a0)
+  c : ir::VCls = vt.cls
+  ## A literal-only expression (`0 - 1`) no context typed: an integer of whatever type it lands in.
+  if ir::vcls_is_lit(c) {
+    if pi.bytes != 0 { return ConvAccept.CaYes }
+    if pf != 0 { return ConvAccept.CaUnknown }
+    return ConvAccept.CaNo
+  }
+  sp : ir::TySpell = ir::sty_spell_get_cur(a0)
+  f : ir::SpellForm = sp.form
+  if sp.layers == 0 and sp.ed == 0 {
+    match f {
+      SfText => { if sp.n != 0 { return convert_named_accepts(src, sp.s, sp.n, pm.ts, pm.tl, pagg, pb.s, pb.n) } }
+      SfBytesView => { return convert_acc(pagg == false and pt == "str") }
+      SfI64 => { return convert_acc(pagg == false and convert_int_widens(ConvInt(bytes = 8, signed = true), pi)) }
+      SfU8 => { return convert_acc(pagg == false and convert_int_widens(ConvInt(bytes = 1, signed = false), pi)) }
+    }
+  }
+  ## No spelling: the value type alone. It cannot tell a brand from its representation, so an integer,
+  ## `bool` or float value meets only a kernel parameter of that class.
+  g : ir::Sgn = vt.sg
+  osg := match g { SgS => { true }; SgU | SgNone => { false } }
+  match c {
+    VcInt => { return convert_acc(pagg == false and convert_int_widens(ConvInt(bytes = vt.bytes, signed = osg), pi)) }
+    VcBool => { return convert_acc(pagg == false and pt == "bool") }
+    VcFloat => { return convert_acc(pagg == false and pf != 0 and vt.bytes <= pf) }
+    VcAgg => {
+      if pagg { return ConvAccept.CaYes }
+      if pscalar { return ConvAccept.CaNo }
+      return ConvAccept.CaUnknown
+    }
+    VcPtr => {
+      if pagg or pscalar { return ConvAccept.CaNo }
+      return ConvAccept.CaUnknown
+    }
+    VcLit | VcAbsent | VcUnknown => { return ConvAccept.CaUnknown }
+  }
+}
+## `convert_param_accepts` for an operand whose type sema SPELLED as `[s, s+n)`: a tuple or array
+## spelling meets only an aggregate parameter; a kernel integer or float meets a kernel parameter it
+## widens to; any other named type (a struct, an enum, a brand such as `char`, `bool`, `str`) meets only
+## the same name — and, when either side carries type arguments (`Vec(u64)`), the same spelling.
+convert_named_accepts := fn(src : ptr(u8), s : usize, n : usize, pts : usize, ptl : usize, pagg : bool, pbs : usize, pbn : usize) -> ConvAccept {
+  h := str_at((src + s), 1)
+  if h == "(" or h == "[" { return convert_acc(pagg) }
+  if pagg { return ConvAccept.CaNo }
+  ob := base_type_name(src, s, n)
+  if ob.n == 0 { return ConvAccept.CaUnknown }
+  ot := str_at((src + ob.s), ob.n)
+  pt := str_at((src + pbs), pbn)
+  oi := convert_kint(ot)
+  pi := convert_kint(pt)
+  if oi.bytes != 0 { return convert_acc(convert_int_widens(oi, pi)) }
+  of := convert_kfloat(ot)
+  pf := convert_kfloat(pt)
+  if of != 0 { return convert_acc(pf != 0 and of <= pf) }
+  if pi.bytes != 0 or pf != 0 { return ConvAccept.CaNo }
+  if lower_ctx::streq(src, ob.s, ob.n, pbs, pbn) == false { return ConvAccept.CaNo }
+  if ob.n == n and pbn == ptl { return ConvAccept.CaYes }
+  convert_acc(lower_ctx::streq(src, s, n, pts, ptl))
+}
+## `convert_param_accepts` over the candidate declaration `i` (its first and only parameter).
+convert_accepts := fn(decls : ptr(rt::Vec), src : ptr(u8), i : usize, a0 : ptr(Expr)) -> ConvAccept {
+  d := deref(lower_ctx::decl_get(decls, i))
+  match d.params_head {
+    Some(pq) => { return convert_param_accepts(src, pq, a0) }
+    None => { return ConvAccept.CaNo }
+  }
+}
+
+## The operand of a `T(v)` call with `nargs` arguments at `args_head` (in the emit arena `a`): `None`
+## unless there is exactly one — §4.6: "The multi-argument and named forms … are aggregate construction".
+convert_operand := fn(nargs : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena) -> Option(ptr(Expr)) {
+  if nargs != 1 { return Option(ptr(Expr)).None }
+  Option(ptr(Expr)).Some(arg_expr_at(args_head, 0, a))
+}
+
+## What Types §4.6 step (2) found at a `T(v)` site: no `@convert` to `T` is in scope (`CpNone`), there
+## are some and none accepts the operand (`CpNoneAccepts`), or the one that does (`CpFn`, its decl).
+ConvPick := enum { CpNone, CpNoneAccepts, CpFn(usize) }
+
+## #1518 — Types §4.6 dispatch step (2): "the **one** in-scope `@convert` whose return type is `T` and
+## whose parameter **accepts** `typeof(v)`". A conversion is "keyed by its (**source parameter type**,
+## **return type**) … two conversions to the same target therefore coexist under distinct names"
+## (l.359-363), so the candidates to `T` are filtered by `convert_accepts` and only the accepting ones
+## compete. Before #1518 the parameter was never asked: the one conversion to `T` was called with an
+## operand its parameter does not accept (`P(42)` ran `from_bool`, answering 7), and two conversions from
+## different sources were refused as ambiguous.
+##
+## Refused, located at the site (no guessing, FND-3): two accepting candidates at the same best scope
+## rank — "Two in-scope `@convert`s matching the same (source, target) at a site are an ambiguity error"
+## (l.371-372), and two that accept one operand leave no "one" to select either — and an operand whose
+## type is unknown here while some candidate's answer depends on it (`CaUnknown`): selecting anyway is
+## exactly the guess this replaces. `a0` = the operand; `None` for a site that is not a one-argument
+## `T(v)` — "The multi-argument and named forms … are aggregate construction (§5), not conversion".
+convert_pick := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a0 : Option(ptr(Expr))) -> ConvPick {
+  match a0 {
+    Some(op) => { return convert_pick_op(decls, src, cs, cl, op) }
+    None => { return ConvPick.CpNone }
+  }
+}
+convert_pick_op := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, op : ptr(Expr)) -> ConvPick {
   cnt := rt::vec_len(deref(decls))
-  mut found := 0 - 1
-  ## Modules §3 (TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE
-  ## at this construction is the same question a bare call asks — `callee_mod_rank` answers it (this
-  ## module, then its ancestors nearest-first, -1 for a sibling / a descendant / an unrelated module).
-  ## Without the rank, two `@convert` to the same target in unrelated modules were a flat AMBIGUITY
-  ## even when §3 lets the naming module see exactly ONE of them (measured: a child constructing
-  ## through its ancestor's `@convert` was rejected as ambiguous because a sibling declared one too).
-  ## The fail-loud is PRESERVED for a genuine tie — two candidates at the SAME best rank.
-  mut bestr := 0 - 2                     ## below EVERY rank, including the -1 "not on the chain"
+  mut found : Option(usize) = Option(usize).None
+  mut bestr : i64 = 0 - 2               ## below EVERY rank, including the -1 "not on the chain"
+  mut tie := false
+  mut cands : usize = 0
+  mut unknown := false
   mut j : usize = 0
   je := dcv_hi(cnt)
   while j < je {
     i := dcv_at(cnt, j)
-    d := deref(lower_ctx::decl_get(decls, i))
-    mut isc := false
-    if dic_live(cnt) { isc = dic_is_convert(cnt, i) } else { if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { isc = true } }
-    if isc {
-      rb := base_type_name(src, d.ret_ts, d.ret_tl)
-      if rb.n != 0 and lower_ctx::streq(src, rb.s, rb.n, cs, cl) {
-        r := convert_scope_rank(src, d.mod_start, d.mod_len)
-        if found < 0 or r > bestr { bestr = r; found = i64(i) }
-        else if r == bestr { panic("selfhost: ambiguous @convert to target type (TYP-6)") }
+    rk : Option(i64) = convert_target_rank(decls, src, cnt, i, cs, cl)
+    match rk {
+      Some(r) => {
+        cands += 1
+        acc := convert_accepts(decls, src, i, op)
+        match acc {
+          CaYes => {
+            if r > bestr { bestr = r; found = Option(usize).Some(i); tie = false }
+            else if r == bestr { tie = true }
+          }
+          CaUnknown => { unknown = true }
+          CaNo => {}
+        }
       }
+      None => {}
+    }
+    j += 1
+  }
+  if tie {
+    lower_show_src_line(src, cs)
+    panic("selfhost: ambiguous @convert to target type (TYP-6): two in-scope conversions accept this operand's type (Types §4.6)")
+  }
+  if unknown {
+    lower_show_src_line(src, cs)
+    panic("selfhost: the operand's type is not known at this `T(v)`, so which in-scope @convert accepts it cannot be decided (Types §4.6 step 2) — bind the operand to an annotated local first")
+  }
+  match found {
+    Some(fi) => { return ConvPick.CpFn(fi) }
+    None => {}
+  }
+  if cands == 0 { return ConvPick.CpNone }
+  ConvPick.CpNoneAccepts
+}
+
+## Any `@convert` to `T` at its best scope rank, without asking the parameter — for the questions every
+## candidate answers alike because each returns `T`: the RESULT's type and size (`call_ret_ty_span`,
+## `ret_call_target`). Which one the site calls is `convert_pick`'s answer, asked where the call is
+## emitted; it refuses there what this does not. Builtin target names and brands are filtered as
+## `convert_callee_idx` filters them.
+convert_target_any := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
+  if conv_kind(str_at((src + cs), cl)) >= 0 { return 0 - 1 }
+  bu := brand_underlying(decls, src, cs, cl)
+  if bu.n != 0 { return 0 - 1 }
+  cnt := rt::vec_len(deref(decls))
+  mut found : i64 = 0 - 1
+  mut bestr : i64 = 0 - 2
+  mut j : usize = 0
+  je := dcv_hi(cnt)
+  while j < je {
+    i := dcv_at(cnt, j)
+    rk : Option(i64) = convert_target_rank(decls, src, cnt, i, cs, cl)
+    match rk {
+      Some(r) => { if r > bestr { bestr = r; found = i64(i) } }
+      None => {}
     }
     j += 1
   }
   found
+}
+## Mark every `@convert` to `T` reachable (DCE keeps it): reachability is asked before the operand's
+## site is emitted, and keeping one conversion too many costs only its body.
+convert_mark_targets := fn(rb : usize, decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) {
+  cnt := rt::vec_len(deref(decls))
+  mut j : usize = 0
+  je := dcv_hi(cnt)
+  while j < je {
+    i := dcv_at(cnt, j)
+    rk : Option(i64) = convert_target_rank(decls, src, cnt, i, cs, cl)
+    match rk {
+      Some(r) => { rb_set(rb, i, 1) }
+      None => {}
+    }
+    j += 1
+  }
+}
+
+## The decl index of the in-scope `@convert` a `T(v)` selects (`convert_pick`), else -1. Builtin lattice
+## conversions (`conv_kind >= 0`) and BRAND constructions (`brand_underlying`) keep PRIORITY — a `T(v)`
+## that rides either is short-circuited here, so it never resolves to a @convert (this is what makes
+## `char(n)`, a brand, stay the brand path → fixpoint-neutral: src/lib's only @convert `to_char` targets
+## the brand `char`). For any other target there is no step (3) to fall to, so candidates of which none
+## accepts the operand are refused here, located, where they used to call the one conversion anyway.
+convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a0 : Option(ptr(Expr))) -> i64 {
+  if conv_kind(str_at((src + cs), cl)) >= 0 { return 0 - 1 }
+  bu := brand_underlying(decls, src, cs, cl)
+  if bu.n != 0 { return 0 - 1 }
+  pk := convert_pick(decls, src, cs, cl, a0)
+  match pk {
+    CpFn(fi) => { return i64(fi) }
+    CpNone => { return 0 - 1 }
+    CpNoneAccepts => {
+      lower_show_src_line(src, cs)
+      panic("selfhost: no in-scope @convert to this target accepts the operand's type (Types §4.6 step 2: the parameter must accept typeof(v))")
+    }
+  }
+  0 - 1
 }
 
 ## Like `convert_callee_idx` but WITHOUT the builtin-conv-name bail — the in-scope `@convert fn(U) -> T`
@@ -14582,37 +14862,16 @@ convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
 ## Used ONLY when the conversion operand is a user AGGREGATE (struct/enum), where `u64(structval)` is a
 ## legitimate user conversion rather than the scalar-lattice identity. The brand bail stays (a brand
 ## `Id(v)` reinterprets, never dispatches). No self-host `@convert` returns a builtin name → neutral.
-convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
+## None accepting answers -1: every caller then refuses the aggregate operand itself, located.
+convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a0 : Option(ptr(Expr))) -> i64 {
   bu := brand_underlying(decls, src, cs, cl)
   if bu.n != 0 { return 0 - 1 }
-  cnt := rt::vec_len(deref(decls))
-  mut found := 0 - 1
-  ## Modules §3 (TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE
-  ## at this construction is the same question a bare call asks — `callee_mod_rank` answers it (this
-  ## module, then its ancestors nearest-first, -1 for a sibling / a descendant / an unrelated module).
-  ## Without the rank, two `@convert` to the same target in unrelated modules were a flat AMBIGUITY
-  ## even when §3 lets the naming module see exactly ONE of them (measured: a child constructing
-  ## through its ancestor's `@convert` was rejected as ambiguous because a sibling declared one too).
-  ## The fail-loud is PRESERVED for a genuine tie — two candidates at the SAME best rank.
-  mut bestr := 0 - 2                     ## below EVERY rank, including the -1 "not on the chain"
-  mut j : usize = 0
-  je := dcv_hi(cnt)
-  while j < je {
-    i := dcv_at(cnt, j)
-    d := deref(lower_ctx::decl_get(decls, i))
-    mut isc := false
-    if dic_live(cnt) { isc = dic_is_convert(cnt, i) } else { if d.is_fn and fn_is_convert(src, d.name_start, d.name_len) { isc = true } }
-    if isc {
-      rb := base_type_name(src, d.ret_ts, d.ret_tl)
-      if rb.n != 0 and lower_ctx::streq(src, rb.s, rb.n, cs, cl) {
-        r := convert_scope_rank(src, d.mod_start, d.mod_len)
-        if found < 0 or r > bestr { bestr = r; found = i64(i) }
-        else if r == bestr { panic("selfhost: ambiguous @convert to target type (TYP-6)") }
-      }
-    }
-    j += 1
+  pk := convert_pick(decls, src, cs, cl, a0)
+  match pk {
+    CpFn(fi) => { return i64(fi) }
+    CpNone | CpNoneAccepts => { return 0 - 1 }
   }
-  found
+  0 - 1
 }
 
 ## #683 — the emit twins' USER-CONVERSION dispatch (Types §4.6 / TYP-6). The twins resolve a callee
@@ -14640,10 +14899,10 @@ pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
       if d.is_fn and lower_ctx::streq(src, d.name_start, d.name_len, cs, cl) { return 0 - 1 }
       i += 1
     }
-    return convert_callee_idx(decls, src, cs, cl)
+    return convert_callee_idx(decls, src, cs, cl, Option(ptr(Expr)).Some(a0))
   }
   if twin_operand_aggregate(a0, params_head, body_head, decls, src) == false { return 0 - 1 }
-  convert_callee_idx_incl_builtin(decls, src, cs, cl)
+  convert_callee_idx_incl_builtin(decls, src, cs, cl, Option(ptr(Expr)).Some(a0))
 }
 
 ## Is the type span `[ts, ts+tl)` a named struct/enum or a tuple? (The twins' aggregate operand test.)
@@ -14765,9 +15024,10 @@ ret_call_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   ## TYP-6): the callee is a TYPE name `T` with an in-scope `@convert fn(…) -> T`. Resolving to that
   ## fn's decl lets the `*_ret_call` classifiers (struct/enum/str/tuple) + `call_ret_*_span` size the
   ## `c := T(v)` binding by the @convert's RETURN type. Fires only when no same-name fn exists AND a
-  ## @convert matches — src/lib's `char(n)` (a brand) is filtered inside `convert_callee_idx` → neutral.
+  ## @convert matches — src/lib's `char(n)` (a brand) is filtered inside `convert_target_any` → neutral.
+  ## Every candidate returns `T`, so any one sizes the binding; the emitted call asks which (#1518).
   if res < 0 {
-    cvi := convert_callee_idx(decls, src, cs, cl)
+    cvi := convert_target_any(decls, src, cs, cl)
     if cvi >= 0 { return cvi }
   }
   res
@@ -19957,7 +20217,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           if lower_ctx::streq(cx.src, vent.ns, vent.nl, vns.s, vns.n) and (vent.ek == 2 or vent.ek == 3 or vent.ek == 4 or vent.ek == 5) { agg_op = true }
         }
         if agg_op {
-          acvi := convert_callee_idx_incl_builtin(cx.decls, cx.src, cs, cl)
+          acvi := convert_callee_idx_incl_builtin(cx.decls, cx.src, cs, cl, Option(ptr(Expr)).Some(a0))
           if acvi >= 0 {
             ## Dispatch by the @convert's OWN mangled name (there is no fn named `u64`) — mirror the
             ## value-position user-conversion dispatch (emit_call_dispatch's cvi0 branch), which
@@ -20068,7 +20328,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## is ADDITIVE; a struct-RETURNING `c := T(v)` binding routes through the Stmt::Assign
       ## struct_ret_call path (register words stored into the local's slots), so THIS arm covers a bare
       ## value-position use (a scalar / 1-word result). Fixpoint-neutral (see `convert_callee_idx`).
-      cvci := convert_callee_idx(cx.decls, cx.src, cs, cl)
+      cvci := convert_callee_idx(cx.decls, cx.src, cs, cl, convert_operand(nargs, args_head, a))
       if cvci >= 0 {
         emit_call_dispatch(cs, cl, nargs, args_head, sb, cx, a, nl)
         push_str(sb, "  pushq %rax\n")
@@ -30674,18 +30934,13 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
       }
       ## USER CONVERSION-CONSTRUCTOR `T(v)` (Types §4.6 / TYP-6): the callee `T` names no fn, so
       ## `mark_name` marked nothing — but an in-scope `@convert fn(…) -> T` is the real callee. Mark it
-      ## reachable so DCE keeps it (the reachability fixpoint then walks its body). Neutral: every
-      ## `src/lib` call yields -1 here (`convert_callee_idx` filters builtin/brand) → reachable set unchanged.
-      cvm := convert_callee_idx(decls, src, cs, cl)
-      if cvm >= 0 { rb_set(rb, usize(cvm), 1) }
-      ## A `@convert` whose TARGET is a BUILTIN-conv name (`u64(structval)` → `@convert fn(U) -> u64`):
-      ## `convert_callee_idx` bailed above (builtin name), so mark it via the incl-builtin lookup — else
-      ## the aggregate-operand conversion routes to an un-emitted symbol (undefined ref at link). Neutral:
-      ## no `src/lib` @convert returns a builtin name, so this marks nothing extra on the self-host tree.
-      if cvm < 0 and conv_kind(str_at((src + cs), cl)) >= 0 {
-        acvm := convert_callee_idx_incl_builtin(decls, src, cs, cl)
-        if acvm >= 0 { rb_set(rb, usize(acvm), 1) }
-      }
+      ## reachable so DCE keeps it (the reachability fixpoint then walks its body). Which candidate the
+      ## site calls depends on the operand (#1518), asked where the call is emitted, so every one is
+      ## marked (`convert_mark_targets`) — a BUILTIN-conv target too (`u64(structval)` → `@convert fn(U)
+      ## -> u64`), else the aggregate-operand conversion routes to an un-emitted symbol. A BRAND target
+      ## is skipped, as `convert_callee_idx` skips it. Neutral: no `src/lib` @convert returns anything
+      ## but the brand `char`, so the self-host reachable set is unchanged.
+      if brand_underlying(decls, src, cs, cl).n == 0 { convert_mark_targets(rb, decls, src, cs, cl) }
       ## §8.1 `@require(pred) T`: a construction `T(v)` of a require-typed alias emits a synthetic
       ## `call <pred>` in the checked trap (not present in the AST as a call), so the call-graph walk
       ## above did not mark the predicate fn — mark it here so DCE keeps it (else an undefined ref at

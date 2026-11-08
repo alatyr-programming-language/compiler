@@ -6243,6 +6243,13 @@ run convert_to_builtin 42
 ## operand WITH an in-scope `@convert fn((i64,i64)) -> u64` routes to it (returns 42).
 build_reject_has convert_agg_reject "needs a scalar operand"
 build_reject_has convert_tuple_reject "needs a scalar operand"
+## #1518 — Types §4.6 step (2) asks the conversion's PARAMETER: two conversions to one target from
+## different sources coexist and the operand selects (literal, widened local, `bool`, and an aggregate
+## operand of a builtin target); one whose parameter does not accept the operand is never called, so a
+## struct target with no accepting conversion is refused; two from the same source stay ambiguous.
+run issue1518_convert_param_select 42
+build_reject_has issue1518_convert_param_refused "accepts the operand's type"
+build_reject_has issue1518_convert_same_source_ambiguous "ambiguous @convert"
 build_reject_has reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
 check_reject reject_p0_f32_zeroarg
 emit_reject_has wat reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
