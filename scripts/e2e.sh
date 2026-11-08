@@ -10942,6 +10942,9 @@ run comptime_min_mod_neg1_folds_zero 42
 ## `% -1` -> 0 shortcut does not apply to a `u64` divisor `2^64 - 1`. Measured on all four backends.
 run comptime_for_div_bound_signedness 42
 run comptime_for_umod_allones_divisor 42
+## #1233 acceptance 3, the control: a signed `/ -1` whose dividend is NOT the minimum still folds
+## (9 iterations), checked and under `unchecked`, on all four backends (measured on omen, 7621cdfe).
+run comptime_for_div_neg1_control 42
 ## #1234: a checked `+ - *` that overflows the operation's type in a range bound is a located
 ## diagnostic (Comptime §2.6), never a wrapped bound; the twins trap until #1232. Inside `unchecked`
 ## the wrap is defined and still folds.
