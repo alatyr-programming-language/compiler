@@ -2,7 +2,8 @@
 ## Inside `base::derive`, the enum arm's bare `hash(p)` matched the module's concrete one-parameter
 ## overload for a `str` by arity alone, so a `u64` payload was passed as a `{ptr, len}` view and hashed
 ## as bytes behind that address; a unit variant binds no payload at all. NON-VACUOUS: on the parent
-## `da18fef2` (x86_64) this program stops with SIGSEGV (rc 139). Each case must hash equal values alike.
+## `da18fef2` and on main `14b35475` (x86_64) this program stops with SIGSEGV (rc 139). Each case
+## must hash equal values alike.
 E0 := enum { Red, Green, Blue }
 EN := enum { A(u64), C }
 ES := enum { S(str), N }
