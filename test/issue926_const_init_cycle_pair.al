@@ -8,10 +8,10 @@
 ##
 ## The refusal lands on the first declaration of the cycle in source order, `A`, at line 15.
 ##
-## The chase that proves this is bounded (`sema::SEMA_CONST_CYCLE_DEPTH`, 8 const-to-const hops) and
-## answers NOT-A-CYCLE at the bound, so a refusal is always certain; a cycle LONGER than the bound is
-## the stated residual and still reaches the backend. A legal chain of any depth is unaffected — see
-## `issue926_const_chain_ok`.
+## The chase enters each module-level const at most once per checked declaration, so it terminates and
+## finds a cycle of any length (`issue926_const_init_cycle_long`); a legal chain of any depth is
+## unaffected — see `issue926_const_chain_ok`. Only a real cycle is refused, so a refusal is certain.
+##
 A := B + 1
 B := A + 1
 
