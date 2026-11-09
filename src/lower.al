@@ -7586,6 +7586,99 @@ emit_slice_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
   }
 }
 
+## #1514 — the Types §6.4 byte size of the scalar type `t` names, or None when the lower cannot name
+## it. A generic parameter takes the instance's substitution first, and a brand its underlying type (a
+## brand has its underlying's exact runtime representation, Types §5.4).
+scalar_elem_bytes := fn(t : CSpan, cx : ptr(LCtx)) -> Option(usize) {
+  mut ts := subst3_ty(cx.src, t.s, t.n, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l, cx.gp3_s, cx.gp3_l, cx.it3_s, cx.it3_l)
+  mut peel : usize = 0
+  while peel < 4 {
+    bu := brand_underlying(cx.decls, cx.src, ts.s, ts.n)
+    if bu.n == 0 { peel = 4 } else { ts = CSpan(s = bu.s, n = bu.n); peel += 1 }
+  }
+  if ts.n == 0 { return Option(usize).None }
+  sw := scalar_width::subword_bytes(cx.src, ts.s, ts.n)
+  if sw != 0 { return Option(usize).Some(sw) }
+  tx := str_at((cx.src + ts.s), ts.n)
+  if tx == "u64" or tx == "i64" or tx == "usize" or tx == "isize" or tx == "f64" or tx == "bits64" { return Option(usize).Some(8) }
+  if ts.n > 4 and str_at((cx.src + ts.s), 4) == "ptr(" { return Option(usize).Some(8) }
+  Option(usize).None
+}
+
+## #1514 — the Types §6.4 byte size of the element of an INFERRED array local `name := [e0, …]`, read
+## off the spelling of `e0`: a bare integer or float literal takes Types §9.1's default (the native
+## signed integer, or `f64`: 8 bytes either way), `true`/`false` is a `bool`, `T(…)` converts to `T`,
+## and a lone local name has the type its own declaration or slot records. None for anything else —
+## the caller refuses then, because an element it cannot name may be narrower than a word.
+inferred_array_elem_bytes := fn(aent : SlotEntry, cx : ptr(LCtx)) -> Option(usize) {
+  src := cx.src
+  end := LOWER_SRC_N
+  mut p := aent.ns + aent.nl
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
+  if lower_ctx::slice_scan_has(src, end, p, ":=") == false { return Option(usize).None }
+  p += 2
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
+  if lower_ctx::slice_scan_has(src, end, p, "[") == false { return Option(usize).None }
+  p += 1
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
+  if p >= end { return Option(usize).None }
+  if lower_ctx::slice_scan_has(src, end, p, "-") { p += 1 }
+  b0 := bytes(str_at((src + p), 1))[0]
+  if b0 >= 48 and b0 <= 57 { return Option(usize).Some(8) }
+  ts := p
+  while p < end and lower_layout::ll_ident_byte(src, p) { p += 1 }
+  if p == ts { return Option(usize).None }
+  tn := p - ts
+  word := str_at((src + ts), tn)
+  if word == "true" or word == "false" { return Option(usize).Some(1) }
+  if lower_ctx::slice_scan_has(src, end, p, "(") { return scalar_elem_bytes(CSpan(s = ts, n = tn), cx) }
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
+  if lower_ctx::slice_scan_has(src, end, p, ",") == false and lower_ctx::slice_scan_has(src, end, p, "]") == false { return Option(usize).None }
+  if slot_of(cx.slots, src, ts, tn) < 0 { return Option(usize).None }
+  vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, src, ts, tn)))
+  vlt := local_type_span(src, vent.ns, vent.nl)
+  if vlt.n != 0 { return scalar_elem_bytes(CSpan(s = vlt.s, n = vlt.n), cx) }
+  if vent.snl != 0 and vent.ek != 5 { return scalar_elem_bytes(CSpan(s = vent.sns, n = vent.snl), cx) }
+  Option(usize).None
+}
+
+## #1514 — refuse, at `at`, a range slice `arr[lo..hi]` over a fixed array the x86_64 lower lays out
+## one WORD per element (the historical word array ABI, `eek` 0 and the float twin 9) when the element
+## is narrower than a word, or of a type the lower cannot name. Types §6.4 makes a `Slice(T)`'s stride
+## `T`'s size rounded up to its alignment, and every other `Slice(T)` producer is packed at it; a view
+## over word-spaced elements reads the wrong bytes in any consumer that follows the rule (a `Slice(T)`
+## parameter, an annotated `for`, a struct field, a return). The packed byte arrays (`is_byte_array_eek`),
+## a `Slice(T)` parameter's data and a range-view local (checked where its own view was taken) pass.
+## The correct value needs these arrays laid out at the §6.4 stride on x86_64: #1559.
+reject_word_array_range := fn(aent : SlotEntry, at : usize, cx : ptr(LCtx)) {
+  if aent.ek != 5 or is_byte_array_eek(aent.eek) or slot_is_slice_param(aent, cx.src) { return }
+  if aent.eek != 0 and aent.eek != 9 { return }
+  if aent.is_ref and not aent.is_param { return }
+  lt := local_type_span(cx.src, aent.ns, aent.nl)
+  mut eb : Option(usize) = Option(usize).None
+  if lt.n == 0 { eb = inferred_array_elem_bytes(aent, cx) }
+  else {
+    mut es := array_elem_span(cx.src, lt.s, lt.n)
+    ## The parser also takes the `[N]T` spelling (`a : [4]u64`): the element type then follows `]`.
+    mut e0 : u8 = 0
+    if es.n != 0 { e0 = bytes(str_at((cx.src + es.s), 1))[0] }
+    if e0 >= 48 and e0 <= 57 {
+      mut q := es.s
+      while q < lt.s + lt.n and str_at((cx.src + q), 1) != "]" { q += 1 }
+      q += 1
+      es = CSpan(s = q, n = 0)
+      if q < lt.s + lt.n { es = CSpan(s = q, n = lt.s + lt.n - q) }
+    }
+    if es.n != 0 { eb = scalar_elem_bytes(es, cx) }
+  }
+  match eb {
+    Some(b) => { if b == 8 { return } }
+    None => {}
+  }
+  lower_show_src_line(cx.src, at)
+  panic("selfhost: a range slice of a fixed array whose element is narrower than a word (or of a type the x86_64 lower cannot name) is not supported on x86_64 (#1514, #1559): the array keeps one word per element, while a Slice(T) steps T's own size (Types §6.4); refused rather than silently miscompiled. A [u64; N], an annotated [u8; N] or an alloc::vec view can be sliced")
+}
+
 ## The element-0 address of a range slice's BASE `arr` in `arr[lo..hi]` → %rax, for both deliverers
 ## of a typed range view (`emit_arr_slice_pair` and `emit_array_slice_assign`), so they cannot
 ## disagree. A frame-local byte array starts at its first filler word; every other base goes through
@@ -7615,6 +7708,7 @@ emit_arr_slice_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LC
     Expr::Slice(arr, lo, hi) => {
       av := var_name_span(arr)
       aent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, av.s, av.n)))
+      reject_word_array_range(aent, av.s, cx)
       emit_range_base_elem0(aent, sb, cx)    ## &base element-0 → %rax
       push_str(sb, "  pushq %rax\n")
       emit_gas(lo, sb, cx, a, nl)             ## lo → stack
@@ -7652,6 +7746,7 @@ emit_array_slice_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::Str
     Expr::Slice(arr, lo, hi) => {
       av := var_name_span(arr)
       aent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, av.s, av.n)))
+      reject_word_array_range(aent, av.s, cx)
       emit_range_base_elem0(aent, sb, cx)    ## &base element-0 → %rax
       push_str(sb, "  pushq %rax\n")
       emit_gas(lo, sb, cx, a, nl)             ## lo → stack
