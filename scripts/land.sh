@@ -633,7 +633,7 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 ## whose twins stay at a trap or refusal listed under an open issue. The move is then N+P and M+R, and
 ## the commit message names each x86fix row with its issue, from the gate's `xbackend x86fix:` lines.
 XB_BASELINE=scripts/xbackend_diff.baseline
-XB_DIR='(run [0-9]+|trap|reject|accept)'   # an `## expect:` outcome as an x86fix row prints it
+XB_DIR='(run [0-9]+|trap|reject)'   # an `## expect:` outcome as an x86fix row prints it (never `accept`)
 xb_follow_gate_line() { # gate-log -> prints its one `xbackend diff: paths=` line; 1 none or several
   local n
   n="$(grep -c '^xbackend diff: paths=' "$1" 2>/dev/null)"
@@ -787,7 +787,7 @@ xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=152  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +6 #1526
+LAND_SELFTEST_EXPECTED=153  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -1257,6 +1257,7 @@ Not a bullet.
     "$g0" "$xfr" "$xfd" "$xfr" "$xfd" "$xfr" "$xfd" > "$st/xg-fix"
   # A row without the base -> head directive (the clause-5b review of #1527) is not well formed.
   sed 's/ expect: trap -> run 42$//' "$st/xg-fix" > "$st/xg-fix-nodir"
+  sed 's/ expect: trap -> run 42$/ expect: reject -> accept/' "$st/xg-fix" > "$st/xg-fix-accept"
   head -n 3 "$st/xg-fix" > "$st/xg-fix-short"
   { printf '%s new-paths=2 new-rows=6\n' "$g0"; tail -n 1 "$st/xg-fix"; } > "$st/xg-fix-orphan"
   [ "$(xb_follow_coverage "$(xb_follow_gate_line "$st/xg-fix")")" = "2 6 1 3" ]; _ck $? xb-follow-misread-the-x86fix-pair
@@ -1283,6 +1284,8 @@ Not a bullet.
   xb_follow "$xtop" "$st/xg-fix-short" 1389 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-moved-by-an-x86fix-count-its-named-rows-do-not-match
   xb_follow "$xtop" "$st/xg-fix-orphan" 1389 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-ignored-a-named-x86fix-row-under-a-line-without-the-pair
   xb_follow "$xtop" "$st/xg-fix-nodir" 1389 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-took-an-x86fix-row-without-its-base-and-head-directive
+  # `accept` states no value for the landing to check, so no x86fix row may end in it.
+  xb_follow "$xtop" "$st/xg-fix-accept" 1389 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-took-an-x86fix-row-whose-head-directive-is-accept
   # Zero coverage makes no commit.
   xo="$(xb_follow "$xtop" "$st/xg-zero" 1309)"
   [ "$(printf '%s\n' "$xo" | tail -n 1)" = 'xbackend-follow: none' ] && [ "$(git rev-parse HEAD)" = "$xtop" ]

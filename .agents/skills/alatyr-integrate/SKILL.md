@@ -583,7 +583,8 @@ coverage without it is refused. N = M = 0 makes no commit. Since #1526 the line 
 listed in `scripts/known-deviations.tsv` under an issue the table marks `rows`. They are held outside
 the ratchet like coverage; the commit moves by N+P and M+R and names each such row with its issue
 (the gate's `xbackend x86fix:` lines). A quiet twin answer or an unlisted row stays growth. A
-directive the change rewrote is held only from a base `trap` or `reject`; each row prints
+directive the change rewrote is held only from a base `trap` or `reject`, and never to `accept`
+(it states no value to check); each row prints
 `expect: <base> -> <head>` and the message lists every `directive changed:` — before landing, check
 that the new value is the one the specification gives.
 The queue's batch path runs the same step through the base's

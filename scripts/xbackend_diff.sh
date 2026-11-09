@@ -535,7 +535,8 @@ xb_split_counts() { # rows newpaths [fixpaths] -> "epaths erows npaths nrows fpa
 ##   5b. when the x86_64 directive (scoped, else unscoped) DIFFERS between the base and this tree, the
 ##      base one was `trap` or `reject`: a fail-loud registration replaced by the fixed value (#1389).
 ##      A rewritten stated value (`run N`) or `accept` holds nothing, or a change could rewrite the
-##      directive to its own wrong answer and get the disagreement held. A `trap` -> wrong `run M` is
+##      directive to its own wrong answer and get the disagreement held. `accept` never qualifies on
+##      this tree either, base `reject` or not: it states no value for the landing to check. A `trap` -> wrong `run M` is
 ##      still held, so every held row prints `expect: <base> -> <head>` and the landing names it.
 ## If the base agreement join itself fails, nothing is held and the gate stops (exit 3).
 ## Anything that fails a clause stays on the line and is growth, as before: a quiet wrong answer on a
@@ -579,7 +580,8 @@ xb_x86fix_current() { # rows manifest newpaths cur-root
       for (p in C) {
         if (p in MAL) continue
         o = ((p, "x86_64") in D) ? D[p, "x86_64"] : (((p, "*") in D) ? D[p, "*"] : "")
-        if (o == "" || !(("x86_64", p) in PH) || !sat(o, "x86_64", PH["x86_64", p], EX["x86_64", p])) continue
+        ## `accept` states no value: a head that only "compiles and runs" is never a fix (clause 5b).
+        if (o == "" || o == "accept" || !(("x86_64", p) in PH) || !sat(o, "x86_64", PH["x86_64", p], EX["x86_64", p])) continue
         n = split(R[p], bs, " "); ok = (n > 0); out = ""
         for (i = 1; i <= n; i++) {
           b = bs[i]; obs = PH[b, p] "/" EX[b, p]
@@ -976,6 +978,8 @@ if [ "$MODE" = selftest ]; then
   xf_tree 'run 7' 'run 42' "$LISTED" rows "x86_64 run/132 #1201;$LISTED"
   ok "x86fix: a rewritten stated value (run 42 -> run 7, x86_64 now 7) holds nothing" \
      "$(xf "$(fxq x86_64 run 7)" "$(fxq aarch64 run 133)" "$(fxq riscv64 run 133)" "$(fxq wasm run 134)")" ""
+  xf_tree accept 'reject' "$LISTED" rows
+  ok "x86fix: a base reject rewritten to accept (states no value) holds nothing" "$(xf "${FIXED_ROWS[@]}")" ""
   xf_tree 'run 42' 'reject' "$LISTED" rows
   ok "x86fix: a base reject replaced by the fixed value is a fail-loud registration: held" \
      "$(xf "${FIXED_ROWS[@]}")" "aarch64:run/133:#1201 riscv64:run/133:#1201 wasm:run/134:#1201"
