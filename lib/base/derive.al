@@ -9,12 +9,11 @@
 ## Componentwise structural equality (the default `Eq`, §2.6): a **struct** is
 ## equal field by field (`a.(f)`); an **enum** is equal iff the same variant with
 ## equal payloads — matched via the comptime variant pattern `T.(v)`, one
-## unrolled arm per variant, the whole payload bound and compared with `==` (a unit
-## variant's empty payload compares trivially equal); a scalar leaf compares
-## directly; a **`Pointer`** leaf compares its ADDRESS BITS, reached by the
-## `unchecked bitcast(usize, …)` §2.6 puts in the GENERATED body so the checked
-## call site needs no grant of its own. An aggregate recurses through the
-## per-field/-payload `==`.
+## unrolled arm per variant, the whole payload bound and compared by recursing (a unit
+## variant has no payload: the same variant is equal); a **tuple** is equal component by
+## component; a scalar leaf compares directly; a **`Pointer`** leaf compares its ADDRESS
+## BITS, reached by the `unchecked bitcast(usize, …)` §2.6 puts in the GENERATED body so the
+## checked call site needs no grant of its own.
 pub eq := fn(T : type, a : T, b : T) -> bool {
   comptime match typeinfo(T) {
     Struct(_) => {
@@ -33,20 +32,33 @@ pub eq := fn(T : type, a : T, b : T) -> bool {
     Enum(_) => {
       ## Match both operands DIRECTLY (no `aa := a` copy): a by-ref enum param is materialized into
       ## its own nested-match scratch level, so the inner `match b` never clobbers `a`'s payload.
-      ## The payload compare uses the bare `==` operator, which routes a MULTI-WORD aggregate payload
-      ## through this same structural `eq` (the bare-comparison -> `base::derive::eq` routing) so every
-      ## word is compared, and a scalar payload compares directly. (The former `eq(pa, pb)` IMPLICIT
-      ## type-arg recursion mis-inferred `T` as the payload VARIABLE NAME `pa` -> a bogus
-      ## `base__derive__eq__pa` with one arg -> wrong result; the bare operator resolves the payload
-      ## type from its slot, not a name.)
-      return match a {
+      ## #1369 — `comptime match v.payload` splits the two shapes. A UNIT variant has no payload to
+      ## compare: the same variant is equal (the bare `pa == pb` compared a payload word neither value
+      ## has). A payload recurses through `eq`, so a several-component payload (bound as a TUPLE,
+      ## Comptime §5.5) reaches the `Tuple` arm and compares every component; the bare `==` compared
+      ## its first word only. The call is spelled `eq(pb, pa)` (equality is symmetric): the implicit
+      ## type argument is read off the INNERMOST arm's payload binding, which here is `pb`.
+      match a {
         comptime for v in typeinfo(T).variants {
-          T.(v)(pa) => match b {
-            T.(v)(pb) => pa == pb
-            _ => false
+          T.(v)(pa) => {
+            comptime match v.payload {
+              Some(_) => {
+                match b {
+                  T.(v)(pb) => { return eq(pb, pa) }
+                  _ => { return false }
+                }
+              }
+              None => {
+                match b {
+                  T.(v)(pb) => { return true }
+                  _ => { return false }
+                }
+              }
+            }
           }
         }
       }
+      return false
     }
     Array(_) => {
       comptime for i in 0 .. typeinfo(T).n {
@@ -67,6 +79,13 @@ pub eq := fn(T : type, a : T, b : T) -> bool {
 ## The operands are `ptr(_)`; what is compared is ADDRESS BITS (cf. `option.al:41-48`).
 ## unchecked-ok: a pointer has no integer type to convert from; `bitcast(usize, _)` is the only legal reinterpret (Types §4.4)
       return unchecked bitcast(usize, a) == unchecked bitcast(usize, b)
+    }
+    Tuple(_) => {
+      ## A several-component enum payload is a tuple (#1369): compare every component, as a struct.
+      comptime for c in typeinfo(T).components {
+        if eq(c.type, a.(c), b.(c)) == false { return false }
+      }
+      return true
     }
     _ => { return a == b }
   }
@@ -184,43 +203,54 @@ hash_of := fn(T : type, v : T) -> u64 {
         }
         return h
       } else {
-        comptime if (match typeinfo(T) { Str(_) => true; _ => false }) {
-          ## `str` is the OPAQUE base view (§4.1 `TypeInfo.Str`): no fields to fold, and its two
-          ## `{ptr, len}` words are an ADDRESS, not the value. The derived `eq` for a `str` bottoms
-          ## out at its own `_` arm's `a == b`, which the lower compares by CONTENT — so §2.6's
-          ## "`Hash` consistent with `Eq`" REQUIRES the content hash here: two equal-content views
-          ## in distinct allocations must hash equally. Without this arm the fallthrough `u64(v)`
-          ## rejected the two-word view as a non-scalar conversion operand, so `HashMap(str, V)`
-          ## could not be instantiated at all — a valid program refused. This arm, not the concrete
-          ## `hash(s : str)` overload below, is the one that a generic container reaches: the
-          ## generic map's own `rehash` spells `hash(K, k)` EXPLICITLY, which can only ever select
-          ## the generic, so a fix that only re-routed the implicit `hash(key)` sites would make a
-          ## grown map hash differently from the one it grew out of.
-          return str_hash(v)
+        comptime if (match typeinfo(T) { Tuple(_) => true; _ => false }) {
+          ## A several-component enum payload is a tuple (#1369): fold every component like a
+          ## struct field, so the hash is the value's, consistent with `eq`'s `Tuple` arm.
+          mut h : u64 = 1469598103934665603
+          comptime for c in typeinfo(T).components {
+            ## unchecked-ok: the FNV fold wraps modulo 2^64 by design; an overflow trap would refuse a hash
+            h = unchecked (h * 1099511628211 + hash_of(c.type, v.(c)))
+          }
+          return h
         } else {
-          comptime if (match typeinfo(T) { Pointer(_) => true; _ => false }) {
-            ## The `hash` half of the `Pointer` leaf above, and it must agree with `eq` (§2.6: "equal
-            ## pointers hash alike, different pointers need not"). The address bits are reached by the
-            ## SAME spelled crossing §4.5 names — "the derive expands to library code that spells its
-            ## `Pointer` arm as `unchecked bitcast(usize, ...)`, so the crossing is named and granted
-            ## inside the generated body and the author's checked call site needs no grant of its own"
-            ## - never by `u64(v)`, which is the spelling this issue exists to remove (Types §4.4:
-            ## reading address bits out of a pointer is reinterpret, whose only form is `bitcast`).
-            ## The mix keeps the result a PURE FUNCTION OF THE ADDRESS, so consistency with `eq` is
-            ## exact: same address -> same value, always. It is not the raw address because the low bits
-            ## of an aligned address are always zero, and a map that buckets on them (`hash(key) % cap`,
-            ## `lib/alloc/hashmap.al:165`) would send every pointer key of a table to bucket 0 and turn
-            ## open addressing into a linear chain. Xoring the address down by its own alignment (3 =
-            ## log2 of the 8-byte word every key sits on) moves the bits that DO distinguish neighbouring
-            ## objects into the low bits; the multiply by the FNV prime used above spreads them upward.
-            ## Both are bijections on the address bits, so no two addresses collapse to one hash.
+          comptime if (match typeinfo(T) { Str(_) => true; _ => false }) {
+            ## `str` is the OPAQUE base view (§4.1 `TypeInfo.Str`): no fields to fold, and its two
+            ## `{ptr, len}` words are an ADDRESS, not the value. The derived `eq` for a `str` bottoms
+            ## out at its own `_` arm's `a == b`, which the lower compares by CONTENT — so §2.6's
+            ## "`Hash` consistent with `Eq`" REQUIRES the content hash here: two equal-content views
+            ## in distinct allocations must hash equally. Without this arm the fallthrough `u64(v)`
+            ## rejected the two-word view as a non-scalar conversion operand, so `HashMap(str, V)`
+            ## could not be instantiated at all — a valid program refused. This arm, not the concrete
+            ## `hash(s : str)` overload below, is the one that a generic container reaches: the
+            ## generic map's own `rehash` spells `hash(K, k)` EXPLICITLY, which can only ever select
+            ## the generic, so a fix that only re-routed the implicit `hash(key)` sites would make a
+            ## grown map hash differently from the one it grew out of.
+            return str_hash(v)
+          } else {
+            comptime if (match typeinfo(T) { Pointer(_) => true; _ => false }) {
+              ## The `hash` half of the `Pointer` leaf above, and it must agree with `eq` (§2.6: "equal
+              ## pointers hash alike, different pointers need not"). The address bits are reached by the
+              ## SAME spelled crossing §4.5 names — "the derive expands to library code that spells its
+              ## `Pointer` arm as `unchecked bitcast(usize, ...)`, so the crossing is named and granted
+              ## inside the generated body and the author's checked call site needs no grant of its own"
+              ## - never by `u64(v)`, which is the spelling this issue exists to remove (Types §4.4:
+              ## reading address bits out of a pointer is reinterpret, whose only form is `bitcast`).
+              ## The mix keeps the result a PURE FUNCTION OF THE ADDRESS, so consistency with `eq` is
+              ## exact: same address -> same value, always. It is not the raw address because the low bits
+              ## of an aligned address are always zero, and a map that buckets on them (`hash(key) % cap`,
+              ## `lib/alloc/hashmap.al:165`) would send every pointer key of a table to bucket 0 and turn
+              ## open addressing into a linear chain. Xoring the address down by its own alignment (3 =
+              ## log2 of the 8-byte word every key sits on) moves the bits that DO distinguish neighbouring
+              ## objects into the low bits; the multiply by the FNV prime used above spreads them upward.
+              ## Both are bijections on the address bits, so no two addresses collapse to one hash.
 ## The hash needs the address bits of the pointer as a `usize`.
 ## unchecked-ok: a pointer has no integer type; `bitcast(usize, _)` is the only legal reinterpret of address bits (Types §4.4)
-            bits : usize = unchecked bitcast(usize, v)
+              bits : usize = unchecked bitcast(usize, v)
 ## unchecked-ok: a hash is not a place a checked overflow would protect; the wrap IS the mixing
-            return u64(unchecked ((bits ^ bits.shr(3)) * 1099511628211))
-          } else {
-            return u64(v)
+              return u64(unchecked ((bits ^ bits.shr(3)) * 1099511628211))
+            } else {
+              return u64(v)
+            }
           }
         }
       }
