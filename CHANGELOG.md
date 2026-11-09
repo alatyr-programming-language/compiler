@@ -221,6 +221,15 @@ Two numbers that are **not** the compiler's version: the specification revision 
   the compiler reports the comparison with its source line and asks to bind the result to a local
   first, instead of answering wrongly. On wasm, where such a comparison compared two memory addresses
   and so read equal values as different, the program now stops with a trap at that comparison.
+- **Comparing a struct field, or an `if` or `match` expression, with a struct or enum value using `==`
+  or `!=` gives the right answer on x86_64 (#1396).** `h.e == E.T(4, 5)` and
+  `(if c { E.T(4, 5) } else { E.U }) == E.T(4, 5)` compared only the first word, so they answered
+  false for two equal values. A field or an `if`/`match` whose value is a struct or an enum of more than
+  one word now compares the whole value (Stdlib appendix §2.6), also when it is passed as an argument.
+  Binding `v := if c { mk(1) } else { E.U }`, where `mk` returns such an enum, copied the wrong value
+  and now copies the whole one. When an `if`/`match` operand's type cannot be worked out yet (its first
+  branch is a local), or both operands are `if`/`match`, the compiler reports the comparison with its
+  source line and asks to bind the operand to a local first, instead of answering wrongly.
 
 ## 0.2.24 — 2026-11-07
 

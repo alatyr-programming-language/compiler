@@ -230,6 +230,8 @@ aarch64	test/issue1364_deref_param_enum_payload.al	run/139	#1367
 aarch64	test/issue1369_enum_eq.al	link/1	#1380
 aarch64	test/issue1394_call_enum_eq.al	run/133	#1191
 aarch64	test/issue1394_generic_call_eq.al	run/133	#1191
+aarch64	test/issue1396_branch_operand_reject.al	run/133	#1191
+aarch64	test/issue1396_field_branch_enum_eq.al	run/133	#1191
 aarch64	test/issue1403_for_slice_bound_no_annotation.al	run/133	#1201
 aarch64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 aarch64	test/issue1464_fnval_typed_controls.al	run/133	#1196
@@ -760,6 +762,8 @@ riscv64	test/issue1364_deref_param_enum_payload.al	run/139	#1367
 riscv64	test/issue1369_enum_eq.al	link/1	#1380
 riscv64	test/issue1394_call_enum_eq.al	run/133	#1191
 riscv64	test/issue1394_generic_call_eq.al	run/133	#1191
+riscv64	test/issue1396_branch_operand_reject.al	run/133	#1191
+riscv64	test/issue1396_field_branch_enum_eq.al	run/133	#1191
 riscv64	test/issue1403_for_slice_bound_no_annotation.al	run/133	#1201
 riscv64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 riscv64	test/issue1464_fnval_typed_controls.al	run/133	#1196
@@ -1292,6 +1296,8 @@ wasm	test/issue1364_deref_param_enum_payload.al	run/134	#1188
 wasm	test/issue1369_enum_eq.al	run/134	#1200
 wasm	test/issue1394_call_enum_eq.al	run/134	#1192
 wasm	test/issue1394_generic_call_eq.al	run/134	#1192
+wasm	test/issue1396_branch_operand_reject.al	run/11	#511
+wasm	test/issue1396_field_branch_enum_eq.al	run/134	#1187
 wasm	test/issue1403_for_slice_bound_no_annotation.al	run/134	#1186
 wasm	test/issue1406_declared_sub_slice_ret.al	run/134	#1191
 wasm	test/issue1464_fnval_typed_controls.al	run/134	#1196
