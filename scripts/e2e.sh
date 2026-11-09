@@ -11284,6 +11284,10 @@ run issue1247_vec_set_str_binop_arg 42
 ## the parent `58a80376` (x86_64) both rejected fixtures BUILD — `check` rc 0, `build` rc 139.
 check_build_located issue926_const_init_self_ref 15 "COMPTIME INITIALIZER CYCLE"
 check_build_located issue926_const_init_cycle_pair 15 "COMPTIME INITIALIZER CYCLE"
+## #926 — a twelve-binding ring is a cycle too (§7.1 bounds no length). A hop-bounded chase (8 hops) missed
+## it: `check` rc 0, `build` rc 139 on omen for 10-, 11-, 12- and 20-binding rings. Sema enters each const once
+## per checked declaration, so the walk terminates and is complete; `B := A0 + A0` outside the ring is not refused.
+check_build_located issue926_const_init_cycle_long 15 "COMPTIME INITIALIZER CYCLE"
 run_x86 issue926_const_chain_ok 2
 run deref_view_pointee 42
 ## Types §7 — a `[T]`/`str` view IS its two-word {ptr,len} pair wherever it appears. A view ARGUMENT that is
