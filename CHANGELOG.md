@@ -146,6 +146,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   x86_64 lowering took any annotated name for one: `xs[0].b`, `xs[1]`, `xs[1..2]` and `for p in xs`
   dereferenced the view's data pointer once more and crashed (SIGSEGV). Parameter-ness is now recorded
   where parameters are bound, so the annotated local reads exactly like `xs := t[0..2]`.
+- **`for p in f(…)` over a `Slice(T)` of structs, enums or `str` that a call returned binds the right
+  elements on x86_64 (#1211).** A local bound from the call (`r := f(…)`) took the nominal two-word
+  `Slice` struct, and a call iterated directly knew only a `str` element, so the loop variable was one
+  word and the program read zeros. Every `for` over `alloc::vec::as_slice` of a struct was affected.
 - **A float-to-integer conversion traps on NaN and on an out-of-range value, on every backend (#997,
   #1374).** `T(f)` used to be a bare truncating conversion with no check. `u64(1.0e30)` answered 2^63,
   `u8(300.0)` answered 44, `i64(NaN)` answered the integer-indefinite value, and `u64(-1.0)` answered
