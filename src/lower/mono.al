@@ -266,6 +266,16 @@ collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
   ## canonicalization below tags it exactly as a local of that type.
   cr := agg_call_ret_span(e, decls, src, a)
   if cr.n != 0 { ts = cr.s; tl = cr.n }
+  ## #1396 — an `if`/`match` operand (`agg_branch_operand_span`, the emit gate's own classifier) and a
+  ## FIELD operand (its declared field type, the base resolved as a `Var` is below).
+  if tl == 0 {
+    bs := agg_branch_operand_span(e, decls, src, a)
+    if bs.n != 0 { ts = bs.s; tl = bs.n }
+  }
+  if tl == 0 {
+    fs := collect_field_operand_type(e, decls, src, a, penv)
+    if fs.n != 0 { ts = fs.s; tl = fs.n }
+  }
   vn := var_name_span(e)
   if vn.n == 0 and tl == 0 { return CSpan(s = 0, n = 0) }
   if tl == 0 and stmt_any(COLLECT_BODY) {
@@ -303,6 +313,86 @@ collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
     return CSpan(s = 0, n = 0)
   }
   CSpan(s = 0, n = 0)
+}
+## #1396 — the STRUCT type span of a field-read BASE in the mono PRE-PASS (no frame slots): a `Var`
+## typed from the enclosing body's declaring `Assign` or the fn's params, `deref(p)` / a `ptr(S)` var
+## through its pointee, or a nested field `b.f` by recursion. A non-generic struct answers its decl
+## name span (so a struct-literal binding's trailing `(f = …)` is never read as type arguments); a
+## generic instance keeps its full span so `field_type_span` substitutes its type arguments. 0/0 when
+## unresolvable — the caller then registers nothing and the emit gate's same-type proof still holds.
+collect_field_base_type := fn(base : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) -> CSpan {
+  mut ts := 0
+  mut tl := 0
+  match deref(base) {
+    Expr::Field(ib, ifs, ifl) => {
+      ibt := collect_field_base_type(ib, decls, src, a, penv)
+      if ibt.n != 0 {
+        ift := field_type_span(decls, src, ibt.s, ibt.n, ifs, ifl, a)
+        ts = ift.s
+        tl = ift.n
+      }
+    }
+    Expr::Deref(inner) => {
+      ivt := collect_var_decl_type(inner, decls, src, a, penv)
+      ts = ivt.s
+      tl = ivt.n
+    }
+    Expr::Var(vs, vl) => {
+      vvt := collect_var_decl_type(base, decls, src, a, penv)
+      ts = vvt.s
+      tl = vvt.n
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  if tl == 0 { return CSpan(s = 0, n = 0) }
+  pp := ptr_pointee_struct_span(src, ts, tl, decls, a)
+  if pp.n != 0 { ts = pp.s; tl = pp.n }
+  bn := base_type_name(src, ts, tl)
+  sdi := struct_decl_of(decls, src, bn.s, bn.n)
+  if sdi < 0 { return CSpan(s = 0, n = 0) }
+  sd := deref(lower_ctx::decl_get(decls, usize(sdi)))
+  if sd.is_generic { return CSpan(s = ts, n = tl) }
+  CSpan(s = sd.name_start, n = sd.name_len)
+}
+## The declared type span of a `Var` in the pre-pass: the enclosing body's declaring `Assign`, else
+## the fn's params. 0/0 for anything else.
+collect_var_decl_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) -> CSpan {
+  vn := var_name_span(e)
+  if vn.n == 0 { return CSpan(s = 0, n = 0) }
+  if stmt_any(COLLECT_BODY) {
+    ltp := block_decl_type(COLLECT_BODY, vn.s, vn.n, src, decls, a)
+    if ltp.n != 0 { return CSpan(s = ltp.s, n = ltp.n) }
+  }
+  param_type_of(vn.s, vn.n, penv, src, a)
+}
+## #1396 — True IFF `e` is a field read whose BASE type this pre-pass cannot resolve at all.
+collect_field_unknown := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) -> bool {
+  match deref(e) {
+    Expr::Field(base, fs, fl) => { collect_field_base_type(base, decls, src, a, penv).n == 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+## #1396 — the declared FIELD type span of a field-read operand `b.f` in the pre-pass, else 0/0. The
+## emit gate classifies the same operand through `agg_field_operand_span` (frame slots); the
+## canonicalization in `collect_agg_operand_type` tags both alike.
+collect_field_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) -> CSpan {
+  match deref(e) {
+    Expr::Field(base, fs, fl) => {
+      bt := collect_field_base_type(base, decls, src, a, penv)
+      if bt.n == 0 { return CSpan(s = 0, n = 0) }
+      field_type_span(decls, src, bt.s, bt.n, fs, fl, a)
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CSpan(s = 0, n = 0) }
+  }
 }
 ## The BASE type name of a call's receiver (arg 0) in the mono PRE-PASS — a Var resolved against the
 ## enclosing fn body (`COLLECT_BODY`/`block_decl_type`) or its params (`penv`). Mirrors the emit
@@ -363,6 +453,11 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
         ## instance would be an unreferenced body in every such program.
         if lty.n == 0 and rty.n != 0 and collect_agg_lit_type(r, decls, src, a).n != 0 and collect_operand_type_unknown(l, decls, src, a, penv) { lty = rty }
         if rty.n == 0 and lty.n != 0 and collect_agg_lit_type(l, decls, src, a).n != 0 and collect_operand_type_unknown(r, decls, src, a, penv) { rty = lty }
+        ## #1396 — the same asymmetry for a FIELD operand whose base this pass cannot type (`g.e` with
+        ## `g := w.h`): the emit side reads the base's slot, proves the two operands name one type, and
+        ## routes, so the other operand's resolved type is the instance.
+        if lty.n == 0 and rty.n != 0 and collect_field_unknown(l, decls, src, a, penv) { lty = rty }
+        if rty.n == 0 and lty.n != 0 and collect_field_unknown(r, decls, src, a, penv) { rty = lty }
         ## Skip a type that has a user / `@inline` / GENERIC comparison OPERATOR for this glyph
         ## (`operator_decl_idx >= 0` — e.g. the prelude `u128 ≡ uint(128)` OP-1 operators; it
         ## alias-resolves `u128`→`uint(128)`): the EMIT site routes such a compare through that operator

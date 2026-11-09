@@ -310,9 +310,13 @@ pub scan_agg_width_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
       ## result overwrote the first. `agg_value_call_words` is 0 for every non-call operand.
       if ex_is_cmp_op(op) { m = imax(m, imax(agg_value_call_words(l, decls, src, a), agg_value_call_words(r, decls, src, a))) }
     }
-    Expr::If(c, t, f) => { m = imax(m, imax(scan_agg_width_expr(c, decls, src, a), imax(scan_agg_width_expr(t, decls, src, a), scan_agg_width_expr(f, decls, src, a)))) }
+    ## #1396 — an `if`/`match` yielding a multi-word aggregate is materialized WHOLE into one pool block
+    ## when it is an argument or a comparison operand (`emit_arg`), so the block must be as wide as the
+    ## value. Its branches alone do not say so when every branch is a register-returned enum call
+    ## (`arg_is_agg_value` does not count one): `agg_value_branch_words` does.
+    Expr::If(c, t, f) => { m = imax(m, imax(agg_value_branch_words(e, decls, src, a), imax(scan_agg_width_expr(c, decls, src, a), imax(scan_agg_width_expr(t, decls, src, a), scan_agg_width_expr(f, decls, src, a))))) }
     Expr::Match(scrut, head) => {
-      m = imax(m, scan_agg_width_expr(scrut, decls, src, a))
+      m = imax(m, imax(agg_value_branch_words(e, decls, src, a), scan_agg_width_expr(scrut, decls, src, a)))
       mut arm : Option(ptr(mut Arm)) = head
       loop { match arm { Some(armq) => { am := deref(arm_p(armq)); m = imax(m, scan_agg_width_expr(am.body, decls, src, a)); m = imax(m, scan_agg_width_stmts(am.body_stmts, decls, src, a)); arm = am.next }; None => { break } } }
     }
@@ -413,15 +417,18 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
       ## the two-`Var` shape that was routed before this change keeps its exact frame.
       ## #1394 — a CALL operand returning a multi-word struct/enum by value is routed the same way and
       ## is materialized the same way (the callee's result lands in a pool block passed by reference),
-      ## so it takes its own block too.
+      ## so it takes its own block too. #1396 — so does an `if`/`match` operand yielding one (`emit_arg`
+      ## delivers its branches into a fresh block). A FIELD operand is a place and passes its address.
       mut own : usize = 0
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
         if struct_lit_info(l).is_s or enum_lit_info(l).is_e {
           if agg_value_words(l, decls, src, a) > 1 { own = own + 1 }
         } else if agg_value_call_words(l, decls, src, a) > 1 { own = own + 1 }
+        else if agg_value_branch_words(l, decls, src, a) > 1 { own = own + 1 }
         if struct_lit_info(r).is_s or enum_lit_info(r).is_e {
           if agg_value_words(r, decls, src, a) > 1 { own = own + 1 }
         } else if agg_value_call_words(r, decls, src, a) > 1 { own = own + 1 }
+        else if agg_value_branch_words(r, decls, src, a) > 1 { own = own + 1 }
       }
       m = own + deepest
     }

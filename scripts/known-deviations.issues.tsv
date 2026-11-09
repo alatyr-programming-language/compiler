@@ -7,6 +7,7 @@
 # reached). Every issue here must be open: scripts/land.sh PHASE 2 refuses a closed one, and
 # `scripts/fixture_expect.sh --issues-open` asks `gh` by hand. The gate holds the rest without network.
 3	Manifest appendix §3.2 (TOOL-12): a path naming no declaration is a Codegen-stage diagnostic raised before the linker	aarch64/riscv64: a program with no entry declaration is emitted and fails at link on the undefined entry symbol; wasm fails at assemble (x86_64 reaches `ld` too, inside the compiler)	rows
+511	Stdlib appendix §2.6; Comptime §5.5 (CT-9: componentwise equality)	wasm: `==` against a constructor operand compares the addresses of two scratch blocks and answers false for equal values	rows
 550	Overview §6 (code consistent with the normative lowering rules, per selected target); Memory §4.1	aarch64/riscv64: a deref store through a 1-byte pointee needs the @repr/sub-word byte image, and traps	rows
 551	Overview §6 (code consistent with the normative lowering rules, per selected target); Types §4.4	aarch64/riscv64: `bitcast` to a bare user aggregate has no lowering, and traps	rows
 577	Overview §6 (code consistent with the normative lowering rules, per selected target)	aarch64/riscv64: a statement-position `match` traps (fail-loud stub `unsupported match statement`)	rows
