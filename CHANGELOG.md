@@ -126,6 +126,16 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A range slice over a fixed array whose element is narrower than a word is refused on x86_64
+  instead of answering wrong (#1514).** x86_64 lays out `[u16|i16|u32|i32|f32|char|bool; N]` and an
+  inferred `[u8|i8; N]` (`t := [u8(1), u8(2)]`) one word per element, so `a16[0..3]` handed out a
+  `Slice(u16)` whose elements were 8 bytes apart, while Types §6.4 steps 2. A `Slice(T)` parameter,
+  an annotated `for` and every other consumer that follows the rule read the wrong bytes, with no
+  diagnostic. The build now stops at the slice's source line. A silent wrong value turned loud, but
+  also a valid program refused: a range whose consumer happened to step a word too (indexing a local
+  view, a `.len`) used to answer right and is refused as well, until those arrays are laid out at the
+  §6.4 stride (#1559). A `[u64; N]`, an annotated `[u8|i8|bits8; N]` and an `alloc::vec` view slice
+  as before. aarch64, riscv64 and wasm are unchanged.
 - **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
   `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
   bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead
