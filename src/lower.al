@@ -28157,6 +28157,8 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             ## branch already read correctly.
             mut elem_w : usize = 8
             mut elem_sg := false
+            mut byte_signed := false  ## an `[i8; N]` parameter's element: sign-extended (`movsbq`)
+            mut arr_param_n : usize = 0 ## #1287 — a fixed-array parameter's static N (0: not one)
             vslot := slot_of(cx.slots, cx.src, fns, fnl)
             ## The hidden loop index: `collect_slots` reserves it as the ONE entry pushed right after the loop
             ## var, whatever the var's width. An aggregate var's base is the TOP of its block (its fillers
@@ -28342,6 +28344,20 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 agg_stride = bent.estride
                 if bent.is_param == false or bent_slice_param_elem.n == 0 { b_is_ref = false }
               }
+              ## #1287 — a fixed-array PARAMETER `xs : [T; N]` (`bind_param`'s array shape: ek 5, is_ref).
+              ## Its slot holds the caller's element-0 pointer itself, not a pointer to a `{ptr, len}`
+              ## block, and it has no length word at all: its length is the static N of its type. Read as
+              ## a Slice parameter, the loop dereferenced the elements once more (a word element
+              ## segfaulted) and took its bound from a frame word it does not own (a struct element
+              ## trapped). So: the element pointer by value, and N as the bound. A `str` element is the
+              ## str-view read (eek 4, two words), and a byte element (`[u8; N]`, `[i8; N]`) the byte read.
+              if bent.is_param and bent.ek == 5 {
+                arr_param_n = fixed_array_param_len(bent.ns, bent.nl, EMIT_PARAMS, cx.src)
+                if arr_param_n > 0 {
+                  b_is_ref = false
+                  if is_byte_array_eek(bent.eek) { byte_elem = true; byte_signed = bent.eek == 10 }
+                }
+              }
             }
             ## `s` is a Slice `{ptr, len}`. A by-VALUE local holds ptr @ slot `B`, len @ slot `B+1`. A by-REF
             ## struct PARAM (`is_ref`) holds a POINTER `P` @ slot `B` to the caller's Slice, whose fields ride
@@ -28366,6 +28382,11 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## array: the static element count is `snl` (recorded by bind_array_slot)
               push_str(sb, "  movq $")
               push_int(sb, i64(b_snl))
+              push_str(sb, ", %rbx\n")
+            } else if arr_param_n > 0 {
+              ## #1287 — a fixed-array parameter: the static N of its `[T; N]` type
+              push_str(sb, "  movq $")
+              push_int(sb, i64(arr_param_n))
               push_str(sb, ", %rbx\n")
             } else if is_agg_slice {
               ## struct/enum-element slice: local VIEW stores len in frame word 1; PARAM stores a pointer to
@@ -28555,8 +28576,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             push_str(sb, "  movq -")
             push_int(sb, i64((islot + 1) * 8))
             if byte_elem {
-              ## x = *(u8*)(dataptr + __i)  — byte element, stride 1, zero-extended
-              push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,1), %rax\n  movzbq (%rax), %rax\n  movq %rax, -")
+              ## x = *(u8*)(dataptr + __i)  — byte element, stride 1, zero-extended (an `i8` sign-extended)
+              push_str(sb, "(%rbp), %rcx\n  leaq (%rax,%rcx,1), %rax\n")
+              if byte_signed { push_str(sb, "  movsbq (%rax), %rax\n  movq %rax, -") } else { push_str(sb, "  movzbq (%rax), %rax\n  movq %rax, -") }
             } else if elem_w != 8 {
               ## #1238 — x = *(T*)(dataptr + __i * sizeof(T)): the element's OWN stride and load width
               ## (`movzwq`/`movswq`/`movl`/`movslq` through the one `emit_deref_load` home). A word
@@ -29012,6 +29034,11 @@ bind_param_shape := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : p
       estride = struct_words(decls, src, bs, bl, a); eek = 2; ess = bs; esl = bl
     } else if edi >= 0 or is_niche_folded(src, bs, bl) {
       estride = enum_elem_words(decls, src, bs, bl, a); eek = 3; ess = bs; esl = bl
+    } else if str_at((src + bs), bl) == "str" {
+      ## #1287 — a `str` element is the two-word `{ptr, len}` view (Types §7), as in a `[str; N]` local
+      ## (`AElem` eek 4, stride 2). As a word element (eek 0, stride 1) `for s in xs` read the pointer
+      ## words of two consecutive strings as one string each.
+      estride = 2; eek = 4
     } else if type_is_float(decls, src, bs, bl) {
       ## FLOAT-element array / uniform float-tuple param (`a : [f64; N]`, `t : (f64, f64)` — a tuple
       ## param reaches this branch as a `pmode == 1` array of its first component). One word per
