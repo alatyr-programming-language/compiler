@@ -7371,18 +7371,48 @@ sema_global_init_call_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -
 ## `A := B + 1` / `B := A + 1` each exit 139 with no diagnostic on `58a80376` (measured, omen), while
 ## `check` answers rc 0. `check` refuses the declaration here, before any backend can emit it.
 ##
-## The chase is bounded by `SEMA_CONST_CYCLE_DEPTH` and answers NOT-A-CYCLE at the bound: a refusal
-## must be CERTAIN, and §7.1 explicitly allows an initializer to reference another binding's comptime
-## value, so a deep-but-finite chain is legal. Every cycle contains the binding it is checked from, so
-## the bound misses only cycles LONGER than it — a residual, stated, not a silent pass.
-SEMA_CONST_CYCLE_DEPTH : i64 = 8
+## The chase is COMPLETE and terminates on every program. Each module-level const is entered at most
+## once per checked declaration: `SCC_MARK` holds one word per declaration, and a declaration whose word
+## already equals the current `SCC_EPOCH` has been explored from this start without reaching it, so
+## exploring it again cannot reach it either. The walk is therefore linear in the initializers it reads,
+## and a cycle of ANY length is found from every binding inside it (a fixed hop bound missed a cycle of
+## 10 bindings: `check` rc 0, `build` rc 139, measured on omen). `depth` is a backstop only, for a
+## declaration table that grew after the marks were built (`SCC_N != cnt`); there it answers
+## NOT-A-CYCLE past the table's length, which no simple cycle can exceed, so a refusal stays CERTAIN.
+mut SCC_MARK : usize = 0
+mut SCC_N : usize = 0
+mut SCC_EPOCH : usize = 0
+build_sema_cycle_marks := fn(decls : ptr(rt::Vec), in out a : rt::Arena) {
+  cnt := rt::vec_len(deref(decls))
+  base := rt::bump(a, cnt * 8 + 8)
+  mut i : usize = 0
+  while i < cnt {
+    ## unchecked-ok: arena word table addressed as `rt::rec_set` takes it, the `SDNH` idiom (#926)
+    rt::rec_set(unchecked bitcast(ptr(mut u8), base), i, 0)
+    i = i + 1
+  }
+  SCC_MARK = base
+  SCC_N = cnt
+  SCC_EPOCH = 0
+}
+## Enter declaration `i` for the current epoch: `true` the first time, `false` when it was already
+## explored from this start. Without live marks every entry is a first one and `depth` bounds the walk.
+scc_enter := fn(decls : ptr(rt::Vec), i : usize) -> bool {
+  if SCC_MARK == 0 or SCC_N != rt::vec_len(deref(decls)) or i >= SCC_N { return true }
+  ## unchecked-ok: arena word table addressed as `rt::rec_get` takes it, the `SDNH` idiom (#926)
+  if rt::rec_get(unchecked bitcast(ptr(mut u8), SCC_MARK), i) == SCC_EPOCH { return false }
+  ## unchecked-ok: arena word table addressed as `rt::rec_set` takes it, the `SDNH` idiom (#926)
+  rt::rec_set(unchecked bitcast(ptr(mut u8), SCC_MARK), i, SCC_EPOCH)
+  true
+}
 
-## The initializer of the module-level CONST data binding named `[s, s+n)` — the comptime value a
+## The module-level CONST data binding named `[s, s+n)` — the declaration whose initializer a
 ## reference to that name is folded into. A `mut` global is excluded (its `.data` is runtime storage,
-## not a comptime value), as are functions, types and every other declaration kind. `None` means no
-## such const: the name is a local, a parameter, a function, or unbound.
-sema_const_init_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> Option(ptr(Expr)) {
-  mut r : Option(ptr(Expr)) = Option.None
+## not a comptime value), as are functions, types and every other declaration kind, and so is a binding
+## with no initializer. `None` means no such const: the name is a local, a parameter, a function, or
+## unbound. The last match wins, as in every other sema name walk.
+sema_const_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> Option(usize) {
+  mut r : Option(usize) = Option.None
   cnt := rt::vec_len(deref(decls))
   th := sema_name_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
@@ -7390,13 +7420,14 @@ sema_const_init_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   while jc < jce {
     i := sni_at(cnt, jc)
     jc = jc + 1
+    ## unchecked-ok: the `SDNH` name-hash table, read as every sema name walk reads it
     if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
       d := deref(decl_get(decls, i))
       if d.kind == 0 and not d.is_fn and d.arity == 0 and not local_is_mut(src, d.name_start) and streq(src, d.name_start, d.name_len, s, n) {
         ## null-ok: blocked by #789 — `ir::expr_present` is the same test and is not `pub`, and
         ## matching an `Option(ptr(Expr))` then dereferencing its payload SIGSEGVs on x86_64, so
         ## presence is asked of the handle here and the payload is read only on the non-null path.
-        if unchecked bitcast(usize, d.value) != 0 { r = Option.Some(d.value) }
+        if unchecked bitcast(usize, d.value) != 0 { r = Option.Some(i) }
       }
     }
   }
@@ -7404,19 +7435,24 @@ sema_const_init_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
 }
 
 ## Does `[e]` reach the name `[os, on)` through module-level const initializers? `depth` counts
-## const-to-const hops. The AST walk covers every child that can carry a value except the forms the
+## const-to-const hops (the backstop above; the marks are what bound the walk). The AST walk covers every child that can carry a value except the forms the
 ## existing `expr_mentions_var` also omits (`Match`, `EnumLit`, `CompField`, `Lambda`, `FnRef`,
 ## `Loop`): an omitted form is a conservative FALSE, never a false refusal, and the backend's own
 ## bound remains the backstop there.
-sema_const_cycle_hit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), os : usize, on : usize, depth : i64) -> bool {
-  if depth > SEMA_CONST_CYCLE_DEPTH { return false }
+sema_const_cycle_hit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), os : usize, on : usize, depth : usize) -> bool {
+  if depth > rt::vec_len(deref(decls)) { return false }
   match deref(e) {
     Expr::Var(s, n) => {
       if streq(src, s, n, os, on) { return true }
       mut hit := false
-      iv := sema_const_init_of(decls, src, s, n)
+      iv := sema_const_decl_of(decls, src, s, n)
       match iv {
-        Some(ivp) => { if sema_const_cycle_hit(ivp, decls, src, os, on, depth + 1) { hit = true } }
+        Some(di) => {
+          if scc_enter(decls, di) {
+            dv := deref(decl_get(decls, di))
+            if sema_const_cycle_hit(dv.value, decls, src, os, on, depth + 1) { hit = true }
+          }
+        }
         None => { }
       }
       hit
@@ -7463,6 +7499,7 @@ sema_global_init_cycle_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) 
   ## null-ok: blocked by #789 — Decl.value is null when a declaration carries no initializer
   ## (ast.al); this asks only "is there one" and never dereferences the null path.
   if unchecked bitcast(usize, d.value) == 0 { return false }
+  SCC_EPOCH = SCC_EPOCH + 1
   sema_const_cycle_hit(d.value, decls, src, d.name_start, d.name_len, 0)
 }
 
@@ -21679,6 +21716,7 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   ir::pack_reset()
   ## PERF: build the per-decl name-hash pre-filter for the O(cnt) `name_matches` resolution scans.
   build_sema_dnh(decls, src, deref(a))
+  build_sema_cycle_marks(decls, deref(a))
   ## #299 census bookkeeping. One O(decls) scan decides whether the instrument has anything to look
   ## at; `src/` and `lib/` declare no brand of their own, so this answers 0 and every hook returns
   ## immediately — the self-build pays one scan and emits the same bytes.
