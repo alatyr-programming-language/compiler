@@ -5641,24 +5641,115 @@ reject_cmp_generic_call := fn(ce : ptr(Expr), src : ptr(u8)) {
   if ci.n != 0 { lower_show_src_line(src, ci.s) }
   panic("selfhost: a bare comparison of a GENERIC call's result with a multi-word struct/enum value is not yet supported (the source line above; the call's result type is resolved only per instance); bind the call's result to a local first (`v := f(…)` then `v == …`)")
 }
+## #1396 — the WORD SIZE of the by-value struct or enum a type span `[s, s+n)` names, else 0. A raw
+## union and a niche-folded `Option(ptr(T))` answer 0: neither has the word image the structural
+## `base::derive::eq` walks (no discriminant word; one folded word).
+agg_ty_span_words := fn(s : usize, n : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+  if n == 0 { return 0 }
+  if is_niche_folded(src, s, n) { return 0 }
+  bn := base_type_name(src, s, n)
+  if is_union_decl(decls, src, bn.s, bn.n) { return 0 }
+  if enum_decl_of(decls, src, bn.s, bn.n) >= 0 { return 1 + enum_inst_words(decls, src, s, n, a) }
+  if struct_decl_of(decls, src, bn.s, bn.n) >= 0 { return struct_words(decls, src, s, n, a) }
+  0
+}
+## #1396 — the declared TYPE span of a FIELD operand `b.f` whose field is a MULTI-WORD struct or enum
+## that `emit_arg` passes by address (`agg_field_of`: a frame-local, by-reference or pointer-rooted
+## base), else 0/0. The FIELD dual of `agg_call_ret_span`: a field read is neither a `Var` nor a
+## constructor nor a call, so the bare-comparison routing declined it and `h.e == E.T(4, 5)` fell to
+## the scalar `cmpq` of the field's word 0 against the `$0` a multi-word constructor materializes as.
+agg_field_operand_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  match deref(e) {
+    Expr::Field(base, fs, fl) => {
+      bt := agg_base_struct_span(base, cx)
+      if bt.n == 0 { return CSpan(s = 0, n = 0) }
+      ft := field_type_span(cx.decls, cx.src, bt.s, bt.n, fs, fl, deref(cx.mar))
+      if agg_ty_span_words(ft.s, ft.n, cx.decls, cx.src, deref(cx.mar)) <= 1 { return CSpan(s = 0, n = 0) }
+      if agg_field_of(base, fs, fl, cx).ok == false { return CSpan(s = 0, n = 0) }
+      ft
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CSpan(s = 0, n = 0) }
+  }
+}
+## #1396 — the TYPE span of an `if` / `match` EXPRESSION operand that yields a MULTI-WORD struct or
+## enum, classified by `match_if_agg_kind` (its first value body), else 0/0. Such a value has no frame
+## home; `emit_arg` materializes it into an agg-temp block through `emit_val_if/match_to_local`, the
+## path a `v := if … { … }` binding takes. Takes `decls`/`src` (no `cx`) so the emit gate, the mono
+## pre-pass and the agg-temp pool scan classify the operand identically.
+agg_branch_operand_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  if match_info(e).is_m == false and if_info(e).is_if == false { return CSpan(s = 0, n = 0) }
+  mak := match_if_agg_kind(e, decls, src, a)
+  if mak.kind != AGG_KIND_STRUCT and mak.kind != AGG_KIND_ENUM { return CSpan(s = 0, n = 0) }
+  if agg_ty_span_words(mak.s, mak.n, decls, src, a) <= 1 { return CSpan(s = 0, n = 0) }
+  CSpan(s = mak.s, n = mak.n)
+}
+## The WORD SIZE of a branch operand classified by `agg_branch_operand_span`, else 0.
+agg_value_branch_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+  bs := agg_branch_operand_span(e, decls, src, a)
+  agg_ty_span_words(bs.s, bs.n, decls, src, a)
+}
+## The WORD SIZE of a field operand classified by `agg_field_operand_span`, else 0.
+agg_value_field_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
+  fs := agg_field_operand_span(e, cx)
+  agg_ty_span_words(fs.s, fs.n, cx.decls, cx.src, deref(cx.mar))
+}
+## True IFF `e` is a field read, an `if` or a `match` that the classification above does NOT route:
+## beside a multi-word aggregate it has that aggregate's type, so the scalar fallthrough would compare
+## word 0 alone (#1396). The gate refuses it, located, rather than answer wrongly.
+agg_cmp_shape_unrouted := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> bool {
+  if agg_cmp_operand_words(e, cx, a) != 0 { return false }
+  match deref(e) {
+    Expr::Field | Expr::If | Expr::Match => { true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::Call | Expr::StructLit | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+## The LOCATED reject for that shape: the operand's source line (a field's name, an `if`'s condition,
+## a `match`'s scrutinee) to stderr, then the refusal.
+reject_cmp_operand_shape := fn(e : ptr(Expr), src : ptr(u8)) {
+  mut off := comptime_cond_src_off(e)
+  ii := if_info(e)
+  if ii.is_if { off = comptime_cond_src_off(ii.cond) }
+  if off != 0 { lower_show_src_line(src, off) }
+  panic("selfhost: a bare comparison of this field, `if` or `match` operand with a multi-word struct/enum value is not yet supported (the source line above; its value is not classified as that aggregate here, or both operands are `if`/`match` expressions); bind the operand to a local first (`v := …` then `v == …`)")
+}
 ## The comparison-operand classification the structural routing gate asks: the operand's MULTI-WORD
 ## by-value aggregate WIDTH, whether the operand is spelled as a `Var` (a frame slot), as a
 ## CONSTRUCTOR EXPRESSION, or as a CALL returning the aggregate by value (#1394). 0 for every other
 ## shape — a scalar, a pointer-to-aggregate (`ek == 7`, `p != 0`), a single-word aggregate, a
-## tuple/array block (its own arms above), an index read.
+## tuple/array block (its own arms above), an index read. #1396 adds a FIELD read of such an aggregate
+## and an `if` / `match` EXPRESSION yielding one.
 agg_cmp_operand_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
   w := agg_value_var_words(e, cx, a)
   if w != 0 { return w }
   lw := agg_value_lit_words(e, cx, a)
   if lw != 0 { return lw }
-  agg_value_call_words(e, cx.decls, cx.src, deref(cx.mar))
+  cw := agg_value_call_words(e, cx.decls, cx.src, deref(cx.mar))
+  if cw != 0 { return cw }
+  fw := agg_value_field_words(e, cx)
+  if fw != 0 { return fw }
+  agg_value_branch_words(e, cx.decls, cx.src, deref(cx.mar))
 }
 ## The ENUM half of that classification, for the ordering fail-loud.
 agg_cmp_operand_is_enum := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   if agg_value_var_is_enum(e, cx) { return true }
   if agg_value_lit_is_enum(e, cx) { return true }
   cr := agg_call_ret_span(e, cx.decls, cx.src, deref(cx.mar))
-  cr.n != 0 and enum_decl_of(cx.decls, cx.src, cr.s, cr.n) >= 0
+  if cr.n != 0 and enum_decl_of(cx.decls, cx.src, cr.s, cr.n) >= 0 { return true }
+  fs := agg_field_operand_span(e, cx)
+  if fs.n != 0 {
+    fbn := base_type_name(cx.src, fs.s, fs.n)
+    if enum_decl_of(cx.decls, cx.src, fbn.s, fbn.n) >= 0 { return true }
+  }
+  bs := agg_branch_operand_span(e, cx.decls, cx.src, deref(cx.mar))
+  if bs.n == 0 { return false }
+  bbn := base_type_name(cx.src, bs.s, bs.n)
+  enum_decl_of(cx.decls, cx.src, bbn.s, bbn.n) >= 0
 }
 ## True IFF at least one operand of the comparison is an aggregate CONSTRUCTOR EXPRESSION, i.e. the
 ## routing reaches the derive through the newly classified shape rather than the two-`Var` shape that
@@ -5670,7 +5761,10 @@ agg_cmp_has_lit_operand := fn(l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx), a : 
   if agg_value_lit_words(l, cx, a) > 1 { return true }
   if agg_value_lit_words(r, cx, a) > 1 { return true }
   if agg_value_call_words(l, cx.decls, cx.src, deref(cx.mar)) > 1 { return true }
-  agg_value_call_words(r, cx.decls, cx.src, deref(cx.mar)) > 1
+  if agg_value_call_words(r, cx.decls, cx.src, deref(cx.mar)) > 1 { return true }
+  ## #1396 — a FIELD and an `if`/`match` operand take the same proof: each names its type exactly.
+  if agg_value_field_words(l, cx) > 1 or agg_value_field_words(r, cx) > 1 { return true }
+  agg_value_branch_words(l, cx.decls, cx.src, deref(cx.mar)) > 1 or agg_value_branch_words(r, cx.decls, cx.src, deref(cx.mar)) > 1
 }
 ## The DECL-NAME span of a comparison operand's aggregate type — a `Var`'s slot type name or a
 ## constructor expression's own type name, both canonicalized through `type_lit_tag`. `base::derive`
@@ -5686,6 +5780,17 @@ agg_cmp_operand_tag := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   if cr.n != 0 {
     cbn := base_type_name(cx.src, cr.s, cr.n)
     return type_lit_tag(cx.decls, cx.src, cbn.s, cbn.n)
+  }
+  ## #1396 — a FIELD operand's declared field type, an `if`/`match` operand's classified value type.
+  fs := agg_field_operand_span(e, cx)
+  if fs.n != 0 {
+    fbn := base_type_name(cx.src, fs.s, fs.n)
+    return type_lit_tag(cx.decls, cx.src, fbn.s, fbn.n)
+  }
+  bs := agg_branch_operand_span(e, cx.decls, cx.src, deref(cx.mar))
+  if bs.n != 0 {
+    bbn := base_type_name(cx.src, bs.s, bs.n)
+    return type_lit_tag(cx.decls, cx.src, bbn.s, bbn.n)
   }
   vn := var_name_span(e)
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
@@ -20251,6 +20356,14 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## not classified above and would compare by word 0. Refuse it rather than answer wrongly.
         if agg_cmp_operand_words(l, cx, a) > 1 and agg_cmp_call_unresolved(r, cx) { reject_cmp_generic_call(r, cx.src) }
         if agg_cmp_call_unresolved(l, cx) and agg_cmp_operand_words(r, cx, a) > 1 { reject_cmp_generic_call(l, cx.src) }
+        ## #1396 — a field, `if` or `match` operand is routed below when `agg_cmp_operand_words`
+        ## classifies it. One it does not classify, beside a multi-word aggregate, has that aggregate's
+        ## type and would compare by word 0: refuse it rather than answer wrongly.
+        if agg_cmp_operand_words(l, cx, a) > 1 and agg_cmp_shape_unrouted(r, cx, a) { reject_cmp_operand_shape(r, cx.src) }
+        if agg_cmp_shape_unrouted(l, cx, a) and agg_cmp_operand_words(r, cx, a) > 1 { reject_cmp_operand_shape(l, cx.src) }
+        ## Two `if`/`match` operands: the derive's `T` is inferred from an argument's type, and neither
+        ## branch operand carries one (`infer_implicit_targ`), so the call below could not be typed.
+        if agg_value_branch_words(l, cx.decls, cx.src, deref(cx.mar)) > 1 and agg_value_branch_words(r, cx.decls, cx.src, deref(cx.mar)) > 1 { reject_cmp_operand_shape(r, cx.src) }
         if agg_cmp_operand_words(l, cx, a) > 1 and agg_cmp_operand_words(r, cx, a) > 1 {
           use_lt := op == 24 or op == 25 or op == 26 or op == 27       ## ordering ops call `lt`; `==`/`!=` call `eq`
           ## SAME-TYPE PROOF, for the newly classified constructor shape only. `base::derive::eq`/`lt`
@@ -26171,6 +26284,10 @@ match_if_first_body := fn(v : ptr(Expr), a : rt::Arena) -> ptr(Expr) {
 ## (+ type span), 3 enum (+ type span), 5 tuple/array (+ element count `nel` and elem-list `ehead`),
 ## 4 str, 0 none (a scalar). Classifies a match arm / if branch body.
 AggKind := struct { kind : u8, s : usize, n : usize, nel : usize, ehead : Option(ptr(mut Arg)) }
+## The struct and enum codes of `AggKind.kind` by name, for new readers (#1396); the older sites still
+## spell the numbers.
+AGG_KIND_STRUCT : u8 = 2
+AGG_KIND_ENUM : u8 = 3
 agg_kind_of := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> AggKind {
   si := struct_lit_info(e)
   if si.is_s { return AggKind(kind = 2, s = si.ss, n = si.sl, nel = 0, ehead = Option.None) }
@@ -26187,6 +26304,21 @@ agg_kind_of := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
   if struct_ret_call(e, decls, src, a) {
     csp := call_ret_struct_span(e, decls, src, a)
     if csp.n != 0 { return AggKind(kind = 2, s = csp.s, n = csp.n, nel = 0, ehead = Option.None) }
+  }
+  ## #1396 — the ENUM dual: a CALL returning a MULTI-WORD enum in registers as a branch VALUE
+  ## (`if c { mk(1) } else { E.U }`). It fell to kind 0, so `x := if c { mk(1) } else { … }` bound ONE
+  ## scalar slot and kept the tag alone, and the same `if` as a call argument or comparison operand
+  ## passed that tag as a by-reference block pointer. `emit_arm_val_store` already delivers such a
+  ## call branch (`emit_enum_place_words_at`), so classifying it is the whole fix. A single-word enum,
+  ## a raw union and a niche-folded `Option(ptr(T))` keep kind 0: their scalar path is the right one.
+  if enum_ret_call_d(e, decls, src, a) {
+    ces := call_ret_enum_span_d(e, decls, src, a)
+    if ces.n != 0 and is_niche_folded(src, ces.s, ces.n) == false {
+      cbn := base_type_name(src, ces.s, ces.n)
+      if enum_decl_of(decls, src, cbn.s, cbn.n) >= 0 and is_union_decl(decls, src, cbn.s, cbn.n) == false and 1 + enum_inst_words(decls, src, ces.s, ces.n, a) > 1 {
+        return AggKind(kind = 3, s = ces.s, n = ces.n, nel = 0, ehead = Option.None)
+      }
+    }
   }
   if expr_is_str_val(e, decls, src, a) { return AggKind(kind = 4, s = 0, n = 0, nel = 0, ehead = Option.None) }
   AggKind(kind = 0, s = 0, n = 0, nel = 0, ehead = Option.None)
