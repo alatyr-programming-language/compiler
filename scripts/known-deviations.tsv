@@ -144,6 +144,7 @@ aarch64	test/enum_sret_wide.al	run/133	#1191
 aarch64	test/enum_sret_wide_match_call.al	run/133	#577
 aarch64	test/enum_str_payload.al	run/133	#1203
 aarch64	test/enum_struct_payload.al	run/133	#1191
+aarch64	test/fixed_array_copy_local_wide.al	run/133	#1191
 aarch64	test/fixed_array_len.al	run/133	#1187
 aarch64	test/fn_value_bound_callee.al	run/133	#1189
 aarch64	test/fn_value_enum_ret.al	run/133	#1189
@@ -675,6 +676,7 @@ riscv64	test/enum_sret_wide.al	run/133	#1191
 riscv64	test/enum_sret_wide_match_call.al	run/133	#577
 riscv64	test/enum_str_payload.al	run/133	#1203
 riscv64	test/enum_struct_payload.al	run/133	#1191
+riscv64	test/fixed_array_copy_local_wide.al	run/133	#1191
 riscv64	test/fixed_array_len.al	run/133	#1187
 riscv64	test/fn_value_bound_callee.al	run/133	#1189
 riscv64	test/fn_value_enum_ret.al	run/133	#1189
