@@ -32,9 +32,11 @@
 #   conflict with the member that landed takes the solo path.
 # - The composed object is gated once by `full.sh`. Green: it is pushed exactly, with
 #   `--force-with-lease` on the base it was built on, and every member gets an acceptance comment.
-#   When the gate's `xbackend diff:` line reports `new-paths=N new-rows=M` above zero, the pushed object
-#   is the gated one plus ONE commit moving scripts/xbackend_diff.baseline by exactly N and M, made and
-#   checked by the base's `land.sh --xbackend-follow` (its PHASE 6c, #1383) and naming every member;
+#   When the gate's `xbackend diff:` line reports `new-paths=N new-rows=M` or `x86fix-paths=P
+#   x86fix-rows=R` above zero (#1526: an x86_64 fix whose twins stay at a listed trap), the pushed object
+#   is the gated one plus ONE commit moving scripts/xbackend_diff.baseline by exactly N+P and M+R, made
+#   by the base's `land.sh --xbackend-follow` (its PHASE 6c, #1383), naming every member and each x86fix
+#   row with its issue, and checked again here against the gate's own line;
 #   without it every next gate on main would be red on the ratchet alone. Zero coverage, no commit.
 #   A refused baseline commit pushes nothing and labels every member `queue-failed` (#1386).
 #   Red: the set is bisected — its first half is gated alone, recursively — so a red PR is isolated
@@ -213,7 +215,7 @@ queue_drive() { # PR...
   done
 }
 
-QUEUE_SELFTEST_EXPECTED=71  # the exact count run, compared with -ne like land.sh's; 49, +6 #1383, +7 #1386, +9 #1423
+QUEUE_SELFTEST_EXPECTED=73  # the exact count run, compared with -ne like land.sh's; 49, +6 #1383, +7 #1386, +9 #1423, +2 #1526
 queue_self_test() {
   local k=0 bad="" log t
   _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
@@ -301,12 +303,20 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
     xtwo="$(git commit-tree "$xp" -p "$xg" -p "$xe" -m two)" &&
     printf 'y\n' > other && git add -A && xfile="$(git commit-tree "$(git write-tree)" -p "$xg" -m file)" ||
     { cd "$here"; return 1; }
+  xgl() { printf 'xbackend diff: paths=1 rows=1 sources=9 hw-defined=0 raw-escape=0 target-na=0 quiet=0 attributed=0 unexplained=0 %s\n' "$1" > "$t/gate.log"; }
+  xgl 'new-paths=2 new-rows=6'
   queue_follow_run() { echo run >> "$t/ran"; printf 'xbackend-follow: commit %s paths+2 rows+6\n' "${QF_C:-}"; }
   qf() { QF_C="$1" DRY=0 BUILT="$xg" GATE_LOG="$t/gate.log"; queue_follow 1309 2>/dev/null; } # commit -> what the queue would publish
   [ "$(qf "$xok")" = "$xok" ]; _ck $? follow-refused-the-one-child-moving-the-baseline-alone
   [ "$(qf "$xpar")" = "" ] && [ "$(qf "$xpar" >/dev/null; echo $?)" = 1 ]; _ck $? follow-took-a-commit-on-another-parent
   [ "$(qf "$xtwo")" = "" ] && [ "$(qf "$xtwo" >/dev/null; echo $?)" = 1 ]; _ck $? follow-took-a-two-parent-commit
   [ "$(qf "$xfile")" = "" ] && [ "$(qf "$xfile" >/dev/null; echo $?)" = 1 ]; _ck $? follow-took-a-commit-changing-a-second-file
+  # #1526: the move is the gate's new + x86fix figures, read from the gate's own line, never land.sh's word.
+  xgl 'new-paths=1 new-rows=2 x86fix-paths=1 x86fix-rows=4'
+  [ "$(qf "$xok")" = "$xok" ]; _ck $? follow-refused-a-move-by-new-plus-x86fix
+  xgl 'new-paths=2 new-rows=5 x86fix-paths=0 x86fix-rows=0'
+  [ "$(qf "$xok")" = "" ] && [ "$(qf "$xok" >/dev/null; echo $?)" = 1 ]; _ck $? follow-took-a-move-the-gate-line-does-not-hold
+  xgl 'new-paths=2 new-rows=6'
   rm -f "$t/ran"; [ "$(DRY=screen; BUILT="$xg"; queue_follow 1309 2>/dev/null)" = "$xg" ] && [ ! -e "$t/ran" ]
   _ck $? follow-under-dry-screen-ran-land-or-published-another-object
   # A refused baseline commit after a green batch labels every member once; it cannot start, nothing.
@@ -321,7 +331,7 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   queue_follow_run() { return 2; }; : > "$t/ql"
   queue_land 1 3 > "$t/qland.out" 2>/dev/null; lt=$?
   [ "$lt" = 1 ] && [ ! -s "$t/ql" ]; _ck $? "follow-that-could-not-start-labelled-or-published($(tr '\n' ';' < "$t/ql"))"
-  unset -f qf comment relabel queue_publish queue_accept queue_follow_run; unset 'HEAD[1]' 'HEAD[3]' QF_C
+  unset -f qf xgl comment relabel queue_publish queue_accept queue_follow_run; unset 'HEAD[1]' 'HEAD[3]' QF_C
   DRY="$qd" BUILT="$qb" BUILT_BASE="$qbb" BUILT_FOR="$qbf" GATE_LOG="$qgl"
   unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
   cd "$here"; rm -rf "$t"
@@ -494,7 +504,7 @@ queue_accept() { # how object base log PR...
 - reviewed head: \`${HEAD[$pr]}\` (the \`queue-head\` marker; the object gated)
 - members: $(prs_h "$@"), composed onto \`$base\`; \`main\` is now \`$obj\`
 - gate on omen, on that exact object: \`$(gate_line "$log")\` (log \`$(basename "$log")\` under \`target/queue/\` on omen)
-$(git diff --quiet "$obj^" "$obj" -- scripts/xbackend_diff.baseline 2>/dev/null || echo "- xbackend baseline: \`$obj\` moves it by the gate's newly covered paths and rows, alone, on the gated object (#1383)")
+$(git diff --quiet "$obj^" "$obj" -- scripts/xbackend_diff.baseline 2>/dev/null || echo "- xbackend baseline: \`$obj\` moves it by the gate's newly covered and x86_64-fixed paths and rows (#1526), alone, on the gated object (#1383)")
 - check: \`git merge-base --is-ancestor $obj origin/main\`
 ${LINK[$pr]:+- issue: ${LINK[$pr]}}"
     relabel "$pr" "" queue
@@ -524,12 +534,30 @@ queue_follow_run() { # PR...
   return 0
 }
 ## The queue's own check of the commit land.sh made, independent of land.sh's: its ONE parent is the
-## gated object and the baseline is the only file it changes. Same-shape refusals as land.sh's
-## xb_follow_commit_check, so a base whose land.sh lost one still cannot publish a wrong object.
-queue_follow_commit_ok() { # gated commit -> 0 ok, 1 not
+## gated object, the baseline is the only file it changes, and its paths=/rows= move by exactly what the
+## gate's own `xbackend diff:` line holds outside the ratchet: new-paths+x86fix-paths and
+## new-rows+x86fix-rows (#1526; a line from before #1526 has no x86fix pair and reads it as 0). Same
+## refusals as land.sh's xb_follow_commit_check, so a base whose land.sh lost one still cannot publish
+## a wrong object.
+queue_follow_gate_move() { # gate-log -> "paths rows" the baseline must move by; 1 unreadable
+  local line
+  [ "$(grep -c '^xbackend diff: paths=' "$1" 2>/dev/null)" = 1 ] || return 1
+  line="$(grep '^xbackend diff: paths=' "$1")"
+  printf '%s\n' "$line" | sed -n \
+    -e 's/^xbackend diff: paths=[0-9][0-9]* .* new-paths=\([0-9][0-9]*\) new-rows=\([0-9][0-9]*\) x86fix-paths=\([0-9][0-9]*\) x86fix-rows=\([0-9][0-9]*\)$/\1 \2 \3 \4/p' \
+    -e 's/^xbackend diff: paths=[0-9][0-9]* .* new-paths=\([0-9][0-9]*\) new-rows=\([0-9][0-9]*\)$/\1 \2 0 0/p' |
+    awk 'NR == 1 { print $1 + $3, $2 + $4; f = 1 } END { exit !f }'
+}
+queue_follow_commit_ok() { # gated commit gate-log -> 0 ok, 1 not
+  local want got o
   [ "$(git rev-list --parents -n 1 "$2" 2>/dev/null | wc -w | tr -d ' ')" = 2 ] &&
     [ "$(git rev-parse "$2^" 2>/dev/null)" = "$1" ] &&
-    [ "$(git diff --name-only "$1" "$2" 2>/dev/null)" = scripts/xbackend_diff.baseline ]
+    [ "$(git diff --name-only "$1" "$2" 2>/dev/null)" = scripts/xbackend_diff.baseline ] || return 1
+  want="$(queue_follow_gate_move "$3")" || return 1
+  got="$(for o in "$1" "$2"; do git show "$o:scripts/xbackend_diff.baseline" 2>/dev/null |
+           awk -F= '$1 == "paths" { p = $2 } $1 == "rows" { r = $2 } END { print p + 0, r + 0 }'; done |
+         awk 'NR == 1 { p = $1; r = $2 } NR == 2 { print $1 - p, $2 - r }')"
+  [ -n "$got" ] && [ "$got" = "$want" ]
 }
 ## Prints the object to publish: BUILT (no coverage, or DRY=screen, which gated nothing) or its checked
 ## baseline commit. 1 = refused: the same inputs would refuse again, so the caller labels the members
@@ -543,8 +571,8 @@ queue_follow() { # PR...
   printf '%s\n' "$out" | sed 's/^/  /' >&2
   obj="$(queue_follow_object "$out" "$BUILT")" || return 1
   if [ "$obj" != "$BUILT" ]; then
-    queue_follow_commit_ok "$BUILT" "$obj" ||
-      { echo "queue: $obj is not one commit on $BUILT changing scripts/xbackend_diff.baseline alone" >> "$GATE_LOG.follow"; return 1; }
+    queue_follow_commit_ok "$BUILT" "$obj" "$GATE_LOG" ||
+      { echo "queue: $obj is not one commit on $BUILT changing scripts/xbackend_diff.baseline alone, by the gate's new + x86fix figures" >> "$GATE_LOG.follow"; return 1; }
   fi
   echo "$obj"
 }

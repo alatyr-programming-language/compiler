@@ -577,9 +577,16 @@ every next gate on `main` red on the ratchet alone (#1309 did). So land.sh, orac
 parent's file: `paths` and `rows` move by exactly N and M, every other line holds, and a lower
 measurement is never folded in. `xb_follow_commit_check` refuses it unless the only file is the
 baseline, the parent is the gated object and the numbers are the gate line's; a publish that carries
-coverage without it is refused. N = M = 0 makes no commit. The queue's batch path runs the same step
-through the base's `scripts/land.sh --xbackend-follow <gated sha> <gate log> <PR>...`, one commit for
-the batch's total naming each member, and re-checks its one parent and its one file before the push.
+coverage without it is refused. N = M = 0 makes no commit. Since #1526 the line also carries
+`x86fix-paths=P x86fix-rows=R`: rows on an existing path where x86_64 now meets the fixture's
+`## expect:` (and did not at the base, where all four agreed) and every twin row is a trap or refusal
+listed in `scripts/known-deviations.tsv` under an issue the table marks `rows`. They are held outside
+the ratchet like coverage; the commit moves by N+P and M+R and names each such row with its issue
+(the gate's `xbackend x86fix:` lines). A quiet twin answer or an unlisted row stays growth.
+The queue's batch path runs the same step through the base's
+`scripts/land.sh --xbackend-follow <gated sha> <gate log> <PR>...`, one commit for
+the batch's total naming each member, and re-checks its one parent, its one file and its move
+against the gate's own line before the push.
 When that commit is refused after a green batch gate, nothing is pushed and every member is labelled
 `queue-failed` with a comment and a `refused at follow` queue.log line (#1386): the same inputs would
 refuse again, so the batch is not re-gated every pass. A hand
