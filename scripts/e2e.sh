@@ -10917,6 +10917,12 @@ run issue1369_enum_eq 42
 ## shape, both orders, wide hidden-result returns, a fn-value call). NON-VACUOUS: on the parent
 ## `ea6651db` (x86_64) the fixture exits 11: `mk(2) == E.A(7)` compared the returned tag with `$0`.
 run issue1394_call_enum_eq 42
+## #1396 — `==` / `!=` with a FIELD, `if` or `match` operand whose value is a multi-word enum or struct,
+## and the `v := if c { mk(1) } else { … }` binding and argument of the same branch shape. NON-VACUOUS:
+## on the parent `17cb8c1e` (x86_64) the fixture exits 11: `h.e == E.T(4, 5)` compared word 0 with `$0`.
+run issue1396_field_branch_enum_eq 42
+## #1396 — an `if` operand the routing does not classify (first branch a local) is refused, located.
+build_reject_has issue1396_branch_operand_reject "operand with a multi-word struct/enum value is not yet supported"
 run comptime_enum_eq 42
 run agg_compare_fields 42
 run nested_match_agg 42
