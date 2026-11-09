@@ -7423,10 +7423,8 @@ sema_const_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
     ## unchecked-ok: the `SDNH` name-hash table, read as every sema name walk reads it
     if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
       d := deref(decl_get(decls, i))
-      if d.kind == 0 and not d.is_fn and d.arity == 0 and not local_is_mut(src, d.name_start) and streq(src, d.name_start, d.name_len, s, n) {
-        ## null-ok: blocked by #789 — `ir::expr_present` is the same test and is not `pub`, and
-        ## matching an `Option(ptr(Expr))` then dereferencing its payload SIGSEGVs on x86_64, so
-        ## presence is asked of the handle here and the payload is read only on the non-null path.
+      if d.kind == lower_layout::DECL_KIND_VALUE and not d.is_fn and d.arity == 0 and not local_is_mut(src, d.name_start) and streq(src, d.name_start, d.name_len, s, n) {
+        ## null-ok: #1069 — `Decl.value` spells "no initializer" as a null ptr(Expr); guarded, never dereferenced.
         if unchecked bitcast(usize, d.value) != 0 { r = Option.Some(i) }
       }
     }
@@ -7494,10 +7492,9 @@ sema_const_cycle_hit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), o
 ## value binding with an initializer — widened to carry a type ANNOTATION, because `A : u64 = A + 1`
 ## crashes the backend exactly as the inferred form does (measured on `58a80376`).
 sema_global_init_cycle_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
-  if d.is_fn or d.kind != 0 or d.arity != 0 { return false }
+  if d.is_fn or d.kind != lower_layout::DECL_KIND_VALUE or d.arity != 0 { return false }
   if local_is_mut(src, d.name_start) { return false }
-  ## null-ok: blocked by #789 — Decl.value is null when a declaration carries no initializer
-  ## (ast.al); this asks only "is there one" and never dereferences the null path.
+  ## null-ok: #1069 — `Decl.value` spells "no initializer" as a null ptr(Expr); guarded, never dereferenced.
   if unchecked bitcast(usize, d.value) == 0 { return false }
   SCC_EPOCH = SCC_EPOCH + 1
   sema_const_cycle_hit(d.value, decls, src, d.name_start, d.name_len, 0)
