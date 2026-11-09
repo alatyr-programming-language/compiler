@@ -231,6 +231,7 @@ aarch64	test/issue1369_enum_eq.al	link/1	#1380
 aarch64	test/issue1394_call_enum_eq.al	run/133	#1191
 aarch64	test/issue1394_generic_call_eq.al	run/133	#1191
 aarch64	test/issue1403_for_slice_bound_no_annotation.al	run/133	#1201
+aarch64	test/issue1405_slice_param_forward.al	run/133	#1187
 aarch64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 aarch64	test/issue1464_fnval_typed_controls.al	run/133	#1196
 aarch64	test/issue1464_owner_kind_controls.al	run/133	#1489
@@ -762,6 +763,7 @@ riscv64	test/issue1369_enum_eq.al	link/1	#1380
 riscv64	test/issue1394_call_enum_eq.al	run/133	#1191
 riscv64	test/issue1394_generic_call_eq.al	run/133	#1191
 riscv64	test/issue1403_for_slice_bound_no_annotation.al	run/133	#1201
+riscv64	test/issue1405_slice_param_forward.al	run/133	#1187
 riscv64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 riscv64	test/issue1464_fnval_typed_controls.al	run/133	#1196
 riscv64	test/issue1464_owner_kind_controls.al	run/133	#1489

@@ -4969,7 +4969,12 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
         Some(vei) => { ent = deref(svec_at(SlotEntry, cx.slots, usize(vei))) }
         None => {}
       }
-      if ent.ek == 5 and ent.is_ref and (ent.eek == 2 or ent.eek == 3) {
+      ## A struct/enum-element slice view LOCAL holds its {ptr, len} pair in its own two words, so its
+      ## ADDRESS is the pair's address: `leaq` it. A `Slice(P)` PARAMETER (`is_param`,
+      ## #1182) holds a POINTER to the caller's block and forwards that pointer through
+      ## `emit_agg_base_addr` below; `leaq` there passed the address of the pointer slot, so the callee
+      ## read the pointer as the data word and a stale frame word as the length (#1405).
+      if ent.ek == 5 and ent.is_ref and (ent.eek == 2 or ent.eek == 3) and ent.is_param == false {
         push_str(sb, "  leaq -")
         push_int(sb, (i64(ent.off) + 1) * 8)
         push_str(sb, "(%rbp), %rax\n  pushq %rax\n")

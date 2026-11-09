@@ -137,6 +137,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
   the representation of the type it brands (Types §5.4) and a scalar has no fields (§6.1), so these are
   now refused with the #703 diagnostic, also through a brand over a brand and a brand over `bitsN`. A
   brand over a struct keeps its fields. A program that stops compiling here was relying on a bug.
+- **A struct- or enum-element `Slice(P)` parameter passed on to another call keeps its length on
+  x86_64 (#1405).** `twice := fn(s : Slice(P)) -> Slice(P) { r := pass(s); r }` handed `pass` the
+  address of `s`'s own frame slot instead of the pointer to the caller's `{ptr, len}` pair it holds,
+  so `pass` read that pointer as the data word and a stale frame word as the length: the issue's
+  program answered 88 from build-then-run and 232 from `alatyr run` where 43 was due. A parameter
+  forwarded to a callee that reads it (`fwd(s) { sum(s) }`) got the same wrong pair. A slice view
+  *local* still passes the address of its own pair. Measured on native x86_64.
 - **A `u64` `/` or `%` in a `comptime for` range bound divides unsigned (#1493).** The fold divided the
   bound's `i64` patterns signed whatever the type: with `D : u64 = 2^64 - 1`, `0 .. D / 2^62` and
   `0 .. D % 10` unrolled zero times instead of 3 and 5, `5 % D` took the signed `% -1` shortcut and
