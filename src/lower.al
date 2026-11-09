@@ -5601,12 +5601,13 @@ agg_value_lit_is_enum := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
 ## a call operand is neither a `Var` nor a constructor, so the bare-comparison routing declined it and
 ## `mk(2) == E.A(7)` fell to the scalar `cmpq`, comparing the returned tag in `%rax` with the `$0` a
 ## multi-word constructor materializes as there (#469's class, left open for a call operand). A
-## generic callee answers 0/0: its declared return names its own type parameters, which only the
-## emit-side instance resolves; `agg_cmp_call_unresolved` refuses that shape instead. A union return
+## generic callee's declared return names its own type parameters: #1397 resolves a `-> T` callee
+## through the call's type argument (`agg_gen_call_ret_span`); any other generic shape answers 0/0 and
+## `agg_cmp_call_unresolved` refuses it instead. A union return
 ## is not an enum value with a structural `eq` and answers 0/0. Takes `decls`/`src` (no `cx`) so the
 ## emit gate, the mono pre-pass and the agg-temp pool scan classify the operand identically.
 agg_call_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
-  if agg_call_is_generic(e, decls, src, a) { return CSpan(s = 0, n = 0) }
+  if agg_call_is_generic(e, decls, src, a) { return agg_gen_call_ret_span(e, decls, src, a) }
   if enum_ret_call_d(e, decls, src, a) or enum_sret_ret_call(e, decls, src, a) {
     es := call_ret_enum_span_d(e, decls, src, a)
     if es.n == 0 or enum_decl_of(decls, src, es.s, es.n) < 0 or is_union_decl(decls, src, es.s, es.n) { return CSpan(s = 0, n = 0) }
@@ -5634,17 +5635,71 @@ agg_call_is_generic := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a 
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
-## The WORD SIZE of a call operand classified by `agg_call_ret_span`, else 0.
+## #1397 — the result type of a GENERIC call whose declared return IS its type parameter (`id(T, v) -> T`
+## called `id(E, x)` → `E`, `id(Option(u64), o)` → `Option(u64)`), IFF that type is a multi-word struct
+## or enum, else 0/0. The same resolvers type the binding `v := id(E, x)` and stage the call as a
+## by-reference argument (`emit_arg`, #1256), so the derive call the routing builds receives the whole
+## value. A type argument that is itself a type parameter of an enclosing generic (`id(T, a)` in a
+## generic body), and every other generic return (`-> Option(T)`), answers 0/0 and stays refused.
+agg_gen_call_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  ges := gen_ret_enum_span(e, decls, src, a)
+  if ges.n != 0 {
+    if agg_ty_span_words(ges.s, ges.n, decls, src, a) > 1 { return ges }
+    return CSpan(s = 0, n = 0)
+  }
+  mut gss := gen_ret_struct_span(e, decls, src, a)
+  if gss.n == 0 { gss = gen_ret_sret_span(e, decls, src, a) }
+  if gss.n != 0 and agg_ty_span_words(gss.s, gss.n, decls, src, a) > 1 { return gss }
+  CSpan(s = 0, n = 0)
+}
+## The WORD SIZE of a call operand classified by `agg_call_ret_span`, else 0. Sized by the type's
+## base name, so a generic-instance result (`Option(u64)`, #1397) sizes as its enum.
 agg_value_call_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
   cr := agg_call_ret_span(e, decls, src, a)
   if cr.n == 0 { return 0 }
-  if enum_decl_of(decls, src, cr.s, cr.n) >= 0 { return 1 + enum_inst_words(decls, src, cr.s, cr.n, a) }
-  struct_words(decls, src, cr.s, cr.n, a)
+  agg_ty_span_words(cr.s, cr.n, decls, src, a)
 }
-## True IFF `e` is a call to a GENERIC fn: the routing cannot type its result here, so a comparison
-## of it against a multi-word aggregate is refused rather than compared by word 0 (#1394).
+## True IFF `e` is a call to a GENERIC fn whose result the routing cannot type here (#1397 types the
+## `-> T` shape), so a comparison of it against a multi-word aggregate is refused rather than compared
+## by word 0 (#1394).
 agg_cmp_call_unresolved := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
-  agg_call_is_generic(e, cx.decls, cx.src, deref(cx.mar))
+  if agg_call_is_generic(e, cx.decls, cx.src, deref(cx.mar)) == false { return false }
+  agg_call_ret_span(e, cx.decls, cx.src, deref(cx.mar)).n == 0
+}
+## #1397 — the WORD SIZE of an unresolved generic call's result IN THIS INSTANCE, for the refusal only
+## (0 = not a multi-word struct/enum, or not known to be one). `agg_call_ret_span` must stay `cx`-free so
+## the mono pre-pass and the pool scan agree with it, which leaves out a type argument naming an
+## enclosing type parameter (`id(T, a)` in a generic body), an inferred one, and a generic aggregate
+## return (`-> Option(T)`). Such a comparison, generic call against generic call included, was compared
+## by word 0 (`id(T, a) == id(T, b)` at `T = E` read `T(4,5)` equal to `T(4,6)`). The emit side holds
+## the instance substitution, so it can say whether the result is a multi-word aggregate, and refuse.
+agg_gen_call_inst_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
+  match deref(e) {
+    Expr::Call(cs, cl, nargs, ah) => {
+      gi := ret_call_target(cx.decls, cx.src, cs, cl, nargs, ah, a)
+      if gi < 0 { return 0 }
+      d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
+      if d.is_generic == false or d.ret_tl == 0 { return 0 }
+      pp := callee_param_pos(cx.decls, usize(gi), cx.src, d.ret_ts, d.ret_tl, a)
+      if pp >= 0 {
+        ## `-> T`: the call's type argument at T's position, or the inferred one when it is omitted.
+        mut ta := CSpan(s = 0, n = 0)
+        if nargs == d.arity and usize(pp) < nargs { ta = type_arg_full_at(ah, usize(pp), cx.decls, cx.src, a) }
+        else { ta = infer_implicit_targ(gi, ah, cx, a) }
+        if ta.n == 0 { return 0 }
+        it := inst_tparam_cx(ta.s, ta.n, cx)
+        return agg_ty_span_words(it.s, it.n, cx.decls, cx.src, a)
+      }
+      ## `-> G(…T…)`: substitute the call's type arguments and the instance's, as a binding does.
+      sub := subst_enum_ret_span(e, cx.decls, cx.src, a, cx.mar, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l)
+      if sub.n != 0 { return agg_ty_span_words(sub.s, sub.n, cx.decls, cx.src, a) }
+      agg_ty_span_words(d.ret_ts, d.ret_tl, cx.decls, cx.src, a)
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
+  }
 }
 ## The LOCATED reject for that shape: the call's source line to stderr, then the refusal.
 reject_cmp_generic_call := fn(ce : ptr(Expr), src : ptr(u8)) {
@@ -5751,7 +5806,10 @@ agg_cmp_operand_is_enum := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   if agg_value_var_is_enum(e, cx) { return true }
   if agg_value_lit_is_enum(e, cx) { return true }
   cr := agg_call_ret_span(e, cx.decls, cx.src, deref(cx.mar))
-  if cr.n != 0 and enum_decl_of(cx.decls, cx.src, cr.s, cr.n) >= 0 { return true }
+  if cr.n != 0 {
+    crb := base_type_name(cx.src, cr.s, cr.n)   ## a generic-instance result (`Option(u64)`, #1397)
+    if enum_decl_of(cx.decls, cx.src, crb.s, crb.n) >= 0 { return true }
+  }
   fs := agg_field_operand_span(e, cx)
   if fs.n != 0 {
     fbn := base_type_name(cx.src, fs.s, fs.n)
@@ -18481,6 +18539,10 @@ expr_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       ## the type. This is the first strand of scalar type tracking: it lets `is_signed_expr` classify
       ## `i64(x)` / `u64(x)` correctly (Verification §, the signedness prerequisite).
       if conv_kind(str_at((cx.src + cs), cl)) >= 0 { return CSpan(s = cs, n = cl) }
+      ## #1397 — a generic `-> T` call at a multi-word struct/enum has the type its type argument names,
+      ## not the callee's own `T`: the derive call a comparison routes it to infers its `T` from here.
+      gcr := agg_gen_call_ret_span(e, cx.decls, cx.src, deref(cx.mar))
+      if gcr.n != 0 { return gcr }
       return call_ret_ty_span(e, cx.decls, cx.src, deref(cx.mar))
     }
     ## A preserved bare narrow scalar bitcast yields the target representation. Pointer and aggregate
@@ -20383,6 +20445,11 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## not classified above and would compare by word 0. Refuse it rather than answer wrongly.
         if agg_cmp_operand_words(l, cx, a) > 1 and agg_cmp_call_unresolved(r, cx) { reject_cmp_generic_call(r, cx.src) }
         if agg_cmp_call_unresolved(l, cx) and agg_cmp_operand_words(r, cx, a) > 1 { reject_cmp_generic_call(l, cx.src) }
+        ## #1397 — a `-> T` generic call is typed by `agg_call_ret_span` and routed below. One it cannot
+        ## type whose instance result is a multi-word aggregate is refused whatever the other operand
+        ## is: beside another such call neither side is classified, and both compared by word 0.
+        if agg_cmp_call_unresolved(l, cx) and agg_gen_call_inst_words(l, cx, a) > 1 { reject_cmp_generic_call(l, cx.src) }
+        if agg_cmp_call_unresolved(r, cx) and agg_gen_call_inst_words(r, cx, a) > 1 { reject_cmp_generic_call(r, cx.src) }
         ## #1396 — a field, `if` or `match` operand is routed below when `agg_cmp_operand_words`
         ## classifies it. One it does not classify, beside a multi-word aggregate, has that aggregate's
         ## type and would compare by word 0: refuse it rather than answer wrongly.

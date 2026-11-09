@@ -235,6 +235,9 @@ aarch64	test/issue1394_call_enum_eq.al	run/133	#1191
 aarch64	test/issue1394_generic_call_eq.al	run/133	#1191
 aarch64	test/issue1396_branch_operand_reject.al	run/133	#1191
 aarch64	test/issue1396_field_branch_enum_eq.al	run/133	#1191
+aarch64	test/issue1397_generic_body_call_reject.al	run/12	#1399
+aarch64	test/issue1397_generic_call_enum_eq.al	run/133	#1191
+aarch64	test/issue1397_generic_option_ret_reject.al	run/12	#1399
 aarch64	test/issue1403_for_slice_bound_no_annotation.al	run/133	#1201
 aarch64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 aarch64	test/issue1464_fnval_typed_controls.al	run/133	#1196
@@ -770,6 +773,9 @@ riscv64	test/issue1394_call_enum_eq.al	run/133	#1191
 riscv64	test/issue1394_generic_call_eq.al	run/133	#1191
 riscv64	test/issue1396_branch_operand_reject.al	run/133	#1191
 riscv64	test/issue1396_field_branch_enum_eq.al	run/133	#1191
+riscv64	test/issue1397_generic_body_call_reject.al	run/12	#1399
+riscv64	test/issue1397_generic_call_enum_eq.al	run/133	#1191
+riscv64	test/issue1397_generic_option_ret_reject.al	run/12	#1399
 riscv64	test/issue1403_for_slice_bound_no_annotation.al	run/133	#1201
 riscv64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
 riscv64	test/issue1464_fnval_typed_controls.al	run/133	#1196
@@ -1307,6 +1313,9 @@ wasm	test/issue1394_call_enum_eq.al	run/134	#1192
 wasm	test/issue1394_generic_call_eq.al	run/134	#1192
 wasm	test/issue1396_branch_operand_reject.al	run/11	#511
 wasm	test/issue1396_field_branch_enum_eq.al	run/134	#1187
+wasm	test/issue1397_generic_body_call_reject.al	run/13	#1399
+wasm	test/issue1397_generic_call_enum_eq.al	run/134	#1192
+wasm	test/issue1397_generic_option_ret_reject.al	run/134	#1192
 wasm	test/issue1403_for_slice_bound_no_annotation.al	run/134	#1186
 wasm	test/issue1406_declared_sub_slice_ret.al	run/134	#1191
 wasm	test/issue1464_fnval_typed_controls.al	run/134	#1196
@@ -1609,5 +1618,4 @@ wasm	test/word_layout_struct_by_value_control.al	run/134	#1187
 wasm	test/zst_and_empty_ctor.al	run/134	#713
 x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
-x86_64	test/issue1394_generic_call_eq.al	compile/1	#1397
 x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
