@@ -126,6 +126,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A field access on a brand over a scalar is a compile error (#1416).** With `Id := brand(u64)`, an
+  annotated local, parameter or module global typed `Id` accepted `i.a`, `i.0` and the store `i.a = 4`:
+  the read answered a fabricated 0 and the store was dropped (the program read back 3). A brand keeps
+  the representation of the type it brands (Types §5.4) and a scalar has no fields (§6.1), so these are
+  now refused with the #703 diagnostic, also through a brand over a brand and a brand over `bitsN`. A
+  brand over a struct keeps its fields. A program that stops compiling here was relying on a bug.
 - **A `u64` `/` or `%` in a `comptime for` range bound divides unsigned (#1493).** The fold divided the
   bound's `i64` patterns signed whatever the type: with `D : u64 = 2^64 - 1`, `0 .. D / 2^62` and
   `0 .. D % 10` unrolled zero times instead of 3 and 5, `5 % D` took the signed `% -1` shortcut and

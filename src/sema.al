@@ -7016,7 +7016,34 @@ sema_name_owner_is_scalar := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
     ## No annotation (`G := 5`): the value type of the binding Modules §3 resolves the name to.
     if tl == 0 { return sema_owner_vty_is_scalar(sema_vty_global(decls, src, s, n)) }
   }
-  tl != 0 and sema_is_scalar_name(str_at((src + ts), tl))
+  tl != 0 and sema_ty_span_names_scalar(decls, upto, src, ts, tl)
+}
+## Issue #1416 / Types §5.4 + §6.1 — does the DECLARED type span `[s, s+n)` name a SCALAR, directly or
+## through user brands? A brand changes identity, never representation (§5.4), so `Id := brand(u64)` has
+## no field for `.` to name, exactly as `u64` has none (§6.1). Measured on the parent (879c02eb): an
+## annotated local, parameter or module global typed `Id` compiled `i.a` at rc 0 and answered a fabricated
+## 0, and `i.a = 4` dropped the store. The answer is about what the brand NAMES: the walk follows
+## `brand(U)` declarations (`sema_brand_underlying`) and stops at the first name that is not a brand. It
+## answers TRUE only when that name is a builtin scalar or a kernel block `bitsN` (§2), so a brand over a
+## struct, a pointer or anything it cannot resolve keeps its own field rules (the #1416 control). The
+## prelude brands `bool`/`char`/`f32`/`f64` are scalar names and answer at the first step, never through
+## their `bitsN`. The walk is bounded, so a malformed brand cycle answers FALSE rather than looping.
+sema_ty_span_names_scalar := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize) -> bool {
+  mut cs := s
+  mut cn := n
+  mut depth : usize = 0
+  while depth < 16 {
+    nm := str_at((src + cs), cn)
+    if sema_is_scalar_name(nm) { return true }
+    u := sema_brand_underlying(decls, upto, src, cs, cn)
+    ## Past the first step, `sema_ty_is_scalar`'s list adds the `bitsN` blocks; its `ptr` is no scalar
+    ## here (`p.x` reaches the pointee's field, §6.1).
+    if u.n == 0 { return depth != 0 and nm != "ptr" and sema_ty_is_scalar(src, cs, cn) }
+    cs = u.s
+    cn = u.n
+    depth += 1
+  }
+  false
 }
 ## Is `t`, an owner's recorded value type, a single-word SCALAR: an integer, `bool`, float, or an untyped
 ## literal's default (Types §9.1)? A pointer is not (`p.x` reaches the pointee's field, §6.1), nor an
