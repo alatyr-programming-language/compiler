@@ -126,6 +126,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
+- **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
+  `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
+  bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead
+  of the data, and ran on with wrong elements and no diagnostic. Both range deliverers now load the
+  data pointer from the block, through the same `slot_is_slice_param` question an element read asks.
 - **A `u64` `/` or `%` in a `comptime for` range bound divides unsigned (#1493).** The fold divided the
   bound's `i64` patterns signed whatever the type: with `D : u64 = 2^64 - 1`, `0 .. D / 2^62` and
   `0 .. D % 10` unrolled zero times instead of 3 and 5, `5 % D` took the signed `% -1` shortcut and
