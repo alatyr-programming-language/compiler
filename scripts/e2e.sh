@@ -12617,6 +12617,37 @@ run_x86 issue1464_owner_kind_controls 135
 ## plus `check_accept`) and `callfield_ptr_ret` (106). All four are already registered in this table
 ## and all four are pinned per backend by the corpus oracle, so no row is added here: a duplicate
 ## would assert nothing the existing rows do not, and the oracle is the stronger record.
+## Issue #1416 — the same #703 refusal for an owner whose DECLARED type is a user `brand` over a scalar
+## (`Id := brand(u64)`, a brand over a brand over `u64`, a brand over `bits64`): a brand keeps the
+## representation it brands (Types §5.4) and a scalar has no field (§6.1). Parent verdicts (main
+## 879c02eb, native x86_64, read outside a pipeline): check 0 on all seven rows; the reads answered the
+## fabricated 0, the store answered 3 with the write dropped, the chain row ran (7), and the tuple row
+## built only up to a non-located lower message. A census of `check` over all 2119 `test/*.al` files,
+## parent against fix, flips exactly these seven.
+build_reject_has issue1416_brand_field_tail "a scalar has no field to name at line 8 in issue1416_brand_field_tail"
+build_reject_has issue1416_brand_field_store "a scalar has no field to name at line 8 in issue1416_brand_field_store"
+build_reject_has issue1416_brand_tuple_pos "a scalar has no field to name at line 8 in issue1416_brand_tuple_pos"
+build_reject_has issue1416_brand_field_param "a scalar has no field to name at line 7 in issue1416_brand_field_param"
+build_reject_has issue1416_brand_field_global "a scalar has no field to name at line 8 in issue1416_brand_field_global"
+build_reject_has issue1416_brand_field_bits "a scalar has no field to name at line 8 in issue1416_brand_field_bits"
+build_reject_has issue1416_brand_field_chain "a scalar has no field to name at line 7 in issue1416_brand_field_chain"
+check_reject_has issue1416_brand_field_tail "a scalar has no field to name at line 8 in issue1416_brand_field_tail"
+check_reject_has issue1416_brand_field_store "a scalar has no field to name at line 8 in issue1416_brand_field_store"
+check_reject_has issue1416_brand_tuple_pos "a scalar has no field to name at line 8 in issue1416_brand_tuple_pos"
+check_reject_has issue1416_brand_field_param "a scalar has no field to name at line 7 in issue1416_brand_field_param"
+check_reject_has issue1416_brand_field_global "a scalar has no field to name at line 8 in issue1416_brand_field_global"
+check_reject_has issue1416_brand_field_bits "a scalar has no field to name at line 8 in issue1416_brand_field_bits"
+check_reject_has issue1416_brand_field_chain "a scalar has no field to name at line 7 in issue1416_brand_field_chain"
+emit_reject_has wat issue1416_brand_field_store "a scalar has no field to name at line 8 in issue1416_brand_field_store"
+emit_reject_has aarch64 issue1416_brand_field_store "a scalar has no field to name at line 8 in issue1416_brand_field_store"
+emit_reject_has riscv64 issue1416_brand_field_store "a scalar has no field to name at line 8 in issue1416_brand_field_store"
+emit_reject_has wat issue1416_brand_tuple_pos "a scalar has no field to name at line 8 in issue1416_brand_tuple_pos"
+emit_reject_has aarch64 issue1416_brand_tuple_pos "a scalar has no field to name at line 8 in issue1416_brand_tuple_pos"
+emit_reject_has riscv64 issue1416_brand_tuple_pos "a scalar has no field to name at line 8 in issue1416_brand_tuple_pos"
+## Its control: a brand over a STRUCT keeps its fields — a parameter `q : Q` with `Q := brand(P)` reads
+## `q.a + q.b` and the program answers 21 on the parent and after. A refusal that fires here is the
+## over-reach the issue warns about (resolving a brand must not decide by the underlying's kind alone).
+run issue1416_brand_field_control 21
 ## #912/#913 — a struct literal with a struct-typed field, delivered by value (returned in registers
 ## or carried as an enum payload). x86_64 built it one pushed word per FIELD, so a one-word nested
 ## struct pushed the `$0` placeholder (w.k.ty read 0, #913) and a wider one read past the field list
