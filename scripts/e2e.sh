@@ -11520,8 +11520,20 @@ run slice_struct_local_arg 42
 ## #1182: an ANNOTATED struct-element view local `xs : Slice(P) = t[0..2]` reads as a local, not a param
 run issue1182_annotated_view_local 42
 ## its review row: a struct-element fixed-array PARAMETER keeps the by-value read (139 on the PR's first
-## head f9a2e2d4; 132 on the parent e313f2aa and here). Due 42 once #1287 is fixed.
-run issue1182_for_array_param_agg 132
+## head f9a2e2d4; 132 before #1287, which bounds the loop by the static N).
+run issue1182_for_array_param_agg 42
+## #1287: `for` over a fixed-array PARAMETER of every element kind (str, word, struct, enum, u8, i8, f64)
+run issue1287_for_array_param 42
+## its review's blocking row: the same parameters indexed. #1287 gave a `str` element the two-word
+## view kind (eek 4) and left the enum (eek 3, #1404), non-plain-scalar struct and float (eek 9)
+## parameters with no bounds block at all, so `xs[i]` past the static N read the caller's memory and
+## answered a word of it where the word, byte and plain-struct kinds trapped 132. One block now
+## compares the raw index against `fixed_array_param_len` for every element kind of a `[T; N]`
+## parameter; each unchecked kind owns a row here. The in-bounds control runs first in each fixture.
+run_x86_trap issue1287_param_str_index_oob 132
+run_x86_trap issue1287_param_enum_index_oob 132
+run_x86_trap issue1287_param_struct_index_oob 132
+run_x86_trap issue1287_param_f64_index_oob 132
 run slice_enum_param 42
 ## the .len FIELD (vs the .len() method) on a slice PARAM: must double-deref the caller's {ptr,len}
 ## block (was reading a garbage slot word). Scalar + str element.
