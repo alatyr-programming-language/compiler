@@ -532,6 +532,12 @@ xb_split_counts() { # rows newpaths [fixpaths] -> "epaths erows npaths nrows fpa
 ##      is UNKNOWN, and unknown holds nothing. Agreement is decided by `xb_rows` itself on those base
 ##      outcomes, so "agreed" means exactly what the ratchet means by it. A path that already disagreed
 ##      at the base is in the baseline already, and holding it out again would count it twice.
+##   5b. when the x86_64 directive (scoped, else unscoped) DIFFERS between the base and this tree, the
+##      base one was `trap` or `reject`: a fail-loud registration replaced by the fixed value (#1389).
+##      A rewritten stated value (`run N`) or `accept` holds nothing, or a change could rewrite the
+##      directive to its own wrong answer and get the disagreement held. A `trap` -> wrong `run M` is
+##      still held, so every held row prints `expect: <base> -> <head>` and the landing names it.
+## If the base agreement join itself fails, nothing is held and the gate stops (exit 3).
 ## Anything that fails a clause stays on the line and is growth, as before: a quiet wrong answer on a
 ## twin, an unlisted twin row, a listed row whose observation moved, a row under an issue marked
 ## `none`, an x86_64 that still misses its directive.
@@ -589,9 +595,10 @@ xb_x86fix_current() { # rows manifest newpaths cur-root
 
 ## xb_x86fix_base: clause 5, against a base tree materialised at base-root (test/<path> for each
 ## candidate, scripts/known-deviations.tsv, scripts/corpus.manifest; any of them may be missing).
-## Input: xb_x86fix_current's output. Output: the held rows, path TAB backend TAB observed TAB #issue.
+## Input: xb_x86fix_current's output. Output: the held rows, path TAB backend TAB observed TAB #issue
+## TAB `expect: <base> -> <head>` (the x86_64 directive at the base and now, as written in the fixture).
 xb_x86fix_base() { # current-out manifest base-root
-  local w rc=0 p held
+  local w rc=0 p held dis
   [ -n "$1" ] && [ -d "$3" ] || return 0
   mkdir -p "$ROOT/target" && w="$(mktemp -d "$ROOT/target/xb-x86fix-base.XXXXXX")" || return 2
   printf '%s\n' "$1" > "$w/cur"
@@ -601,7 +608,7 @@ xb_x86fix_base() { # current-out manifest base-root
   if [ -f "$3/scripts/corpus.manifest" ]; then cp "$3/scripts/corpus.manifest" "$w/bman"; else : > "$w/bman"; fi
   ## The base outcomes as a manifest of their own (quiet stderr), for xb_rows to judge; a path with any
   ## unknown outcome, or whose x86_64 already met today's directive, is not written at all.
-  [ "$rc" = 0 ] && awk -F'\t' -v OFS='\t' -v E="$SHA_EMPTY" '
+  [ "$rc" = 0 ] && awk -F'\t' -v OFS='\t' -v E="$SHA_EMPTY" -v BXF="$w/bx" '
     function trapst(b) { return b == "x86_64" ? 132 : (b == "wasm" ? 134 : 133) }
     function sat(o, b, ph, ex) {
       if (o ~ /^run:/)   return ph == "run" && ex == substr(o, 5)
@@ -628,22 +635,34 @@ xb_x86fix_base() { # current-out manifest base-root
     END {
       print "columns=backend\tpath\tphase\texit\tstdout_sha256\tstderr_sha256"
       for (p in C) {
+        ## Clause 5b: the x86_64 directive the base stated. A rewritten directive is held only when the
+        ## base one registered a loud failure (`trap`, `reject`); a stated value or `accept` never is.
+        bx = (p in MAL) ? "!" : (((p, "x86_64") in D) ? D[p, "x86_64"] : (((p, "*") in D) ? D[p, "*"] : ""))
+        if (bx != X[p] && bx != "trap" && bx != "reject") continue
         n = split(HAS[p], bs, " "); ok = 0; out = ""
         for (i = 1; i <= n; i++) {
           s = base(bs[i], p); if (s == "") { ok = -1; break }
           if (bs[i] == "x86_64") { split(s, xe, "\t"); ok = sat(X[p], "x86_64", xe[1], xe[2] + 0) ? -1 : 1 }
           out = out bs[i] OFS p OFS s OFS E OFS E "\n"
         }
-        if (ok == 1) printf "%s", out
+        if (ok == 1) { printf "%s", out; print p, bx > BXF }
       }
     }' "$w/cur" "$w/dirs" "$w/devs" "$w/bman" "$2" > "$w/base.manifest" || rc=2
   if [ "$rc" = 0 ]; then
     held="$(awk -F'\t' '!/^columns=/ { print $2 }' "$w/base.manifest" | sort -u)"
     ## Agreement at the base, judged by the join itself with no documented class: strictest reading.
-    held="$(printf '%s\n' "$held" | grep -vxF -f <(xb_rows "$w/base.manifest" 1 "" "" "" | cut -f3 | sort -u; echo '//none//'))"
+    ## Fail closed: if the join itself fails, nothing is held and the caller stops the gate.
+    if [ -n "$held" ] && ! dis="$(xb_rows "$w/base.manifest" 1 "" "" "")"; then
+      echo "xbackend diff: the base agreement check failed; no x86fix row is held (#1526)" >&2
+      rm -rf "$w"; return 2
+    fi
+    [ -n "$held" ] && held="$(printf '%s\n' "$held" | grep -vxF -f <(printf '%s\n' "$dis" | cut -f3 | sort -u; echo '//none//'))"
+    ## Each held row carries the x86_64 directive at the base and now, so a landing names what changed.
     [ -n "$held" ] && printf '%s\n' "$1" | awk -F'\t' -v OFS='\t' -v h="$held" '
+      function disp(o) { return o ~ /^run:/ ? "run " substr(o, 5) : o }
       BEGIN { n = split(h, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") H[a[i]] = 1 }
-      ($1 in H) { print $1, $2, $3, $4 }'
+      FILENAME == ARGV[1] { BX[$1] = $2; next }
+      ($1 in H) { print $1, $2, $3, $4, "expect: " disp(BX[$1]) " -> " disp($5) }' "$w/bx" -
   fi
   rm -rf "$w"
   return "$rc"
@@ -952,6 +971,28 @@ if [ "$MODE" = selftest ]; then
   ok "x86fix: x86_64 wrong at the base while the twins trapped (already a disagreement): nothing" "$(xf "${FIXED_ROWS[@]}")" ""
   xf_tree 'run 42' trap "$LISTED" rows
   ok "x86fix: a path this change ADDS is new coverage, never an x86_64 fix" "$(NEWX=test/fx.al xf "${FIXED_ROWS[@]}")" ""
+  ## Clause 5b (review of #1527): the probe. At the base `## expect: run 42`, all four trapped and each
+  ## row was listed; the change makes x86_64 answer 7 and rewrites the directive to `run 7`. Growth.
+  xf_tree 'run 7' 'run 42' "$LISTED" rows "x86_64 run/132 #1201;$LISTED"
+  ok "x86fix: a rewritten stated value (run 42 -> run 7, x86_64 now 7) holds nothing" \
+     "$(xf "$(fxq x86_64 run 7)" "$(fxq aarch64 run 133)" "$(fxq riscv64 run 133)" "$(fxq wasm run 134)")" ""
+  xf_tree 'run 42' 'reject' "$LISTED" rows
+  ok "x86fix: a base reject replaced by the fixed value is a fail-loud registration: held" \
+     "$(xf "${FIXED_ROWS[@]}")" "aarch64:run/133:#1201 riscv64:run/133:#1201 wasm:run/134:#1201"
+  ## Every held row names the x86_64 directive at the base and now, for whoever lands it.
+  xfd() { printf '%s\n' "$H" "$@" > "$T/xfm"; local r c; r="$(xb_rows "$T/xfm" 0 "" "" "")"
+          c="$(xb_x86fix_current "$r" "$T/xfm" "" "$XC")" && xb_x86fix_base "$c" "$T/xfm" "$XB" | cut -f5 | sort -u; }
+  xf_tree 'run 42' trap "$LISTED" rows
+  ok "x86fix: a base trap -> stated value (#1389's shape) is held and names the change" \
+     "$(xfd "${FIXED_ROWS[@]}")" "expect: trap -> run 42"
+  xf_tree 'run 42' 'run 42' "$LISTED" rows "x86_64 run/132 #1201;$LISTED"
+  ok "x86fix: an unchanged directive is held and named as such" "$(xfd "${FIXED_ROWS[@]}")" "expect: run 42 -> run 42"
+  ## Fail closed: the base agreement join fails; nothing is held and the step reports failure.
+  xf_tree 'run 42' trap "$LISTED" rows
+  printf '%s\n' "$H" "${FIXED_ROWS[@]}" > "$T/xfm"
+  XF_C="$(xb_x86fix_current "$(xb_rows "$T/xfm" 0 "" "" "")" "$T/xfm" "" "$XC")"
+  ok "x86fix: a failing base agreement step holds nothing and fails (rc=2)" \
+     "$(xb_rows() { return 1; }; o="$(xb_x86fix_base "$XF_C" "$T/xfm" "$XB" 2>/dev/null)"; echo "rc=$? [$o]")" "rc=2 []"
   rm -f "$XB/test/fx.al"
   ok "x86fix: no fixture at the base holds nothing" "$(xf "${FIXED_ROWS[@]}")" ""
   if [ "$fails" = 0 ]; then echo "xbackend_diff self-test: $ran/$ran ok"; exit 0; fi
@@ -1145,8 +1186,8 @@ if [ "$nfixpaths" -gt 0 ] || [ "$nfixrows" -gt 0 ]; then
   echo "  X86_64 FIXED $nfixpaths path(s), $nfixrows row(s) — x86_64 now meets the fixture's ## expect: and did"
   echo "    not at the base, where all backends agreed; every twin row is a listed trap or refusal under an"
   echo "    open issue. Held outside the ratchet line; the baseline moves by paths+$nfixpaths rows+$nfixrows for them."
-  printf '%s\n' "$X86FIX" | while IFS=$'\t' read -r xp xb xo xi; do
-    [ -n "$xp" ] && printf 'xbackend x86fix: %s %s %s %s\n' "$xp" "$xb" "$xo" "$xi"; done
+  printf '%s\n' "$X86FIX" | while IFS=$'\t' read -r xp xb xo xi xd; do
+    [ -n "$xp" ] && printf 'xbackend x86fix: %s %s %s %s %s\n' "$xp" "$xb" "$xo" "$xi" "$xd"; done
 fi
 if [ "$RATCHET_WRITE" = 1 ]; then
   ## Writing the baseline is a deliberate, reviewable act: it moves the line the gate holds. The
