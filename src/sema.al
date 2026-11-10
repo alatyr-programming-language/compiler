@@ -7406,6 +7406,13 @@ sema_global_init_call_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -
 ## 10 bindings: `check` rc 0, `build` rc 139, measured on omen). `depth` is a backstop only, for a
 ## declaration table that grew after the marks were built (`SCC_N != cnt`); there it answers
 ## NOT-A-CYCLE past the table's length, which no simple cycle can exceed, so a refusal stays CERTAIN.
+## When `depth` is the ONLY bound (no live marks) the walk still terminates but is EXPONENTIAL in the
+## depth of a shared sub-DAG, because a const reached along two paths is explored once per path.
+##
+## A reference is resolved to its BINDING — the declaration's index — never compared by name: two
+## modules may each declare an `X`, and `X : u64 = m::X + 1` is no cycle (Modules §2/§3). Each
+## initializer is walked from its OWN declaration's module, so a bare name inside `m`'s initializer
+## resolves in `m` and its ancestors, exactly as `lower::global_ref_candidate` selects the owner.
 mut SCC_MARK : usize = 0
 mut SCC_N : usize = 0
 mut SCC_EPOCH : usize = 0
@@ -7433,15 +7440,25 @@ scc_enter := fn(decls : ptr(rt::Vec), i : usize) -> bool {
   true
 }
 
-## The module-level CONST data binding named `[s, s+n)` — the declaration whose initializer a
-## reference to that name is folded into. A `mut` global is excluded (its `.data` is runtime storage,
-## not a comptime value), as are functions, types and every other declaration kind, and so is a binding
-## with no initializer. `None` means no such const: the name is a local, a parameter, a function, or
-## unbound. The last match wins, as in every other sema name walk.
-sema_const_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> Option(usize) {
+## Is declaration `d` a module-level CONST data binding — the kind whose initializer a reference is
+## folded into? A `mut` global is excluded (its `.data` is runtime storage, not a comptime value), as are
+## functions, types, alias/projection bindings (`ret_tl != 0`: a compile-time name, no value) and a
+## binding with no initializer — the filter `lower::module_const_value` applies.
+sema_is_const_binding := fn(d : Decl, src : ptr(u8)) -> bool {
+  if d.is_fn or d.kind != lower_layout::DECL_KIND_VALUE or d.arity != 0 or d.ret_tl != 0 { return false }
+  if local_is_mut(src, d.name_start) { return false }
+  ## null-ok: #1069 — `Decl.value` spells "no initializer" as a null ptr(Expr); guarded, never dereferenced.
+  unchecked bitcast(usize, d.value) != 0
+}
+
+## The const named `[ns, nl)` that module `[cs, cl)` reaches. `qual`: it must live in module `[hs, hl)`
+## and be visible from `[cs, cl)` (Modules §2/§3). Bare: the NEAREST declaring module on `[cs, cl)`'s
+## own/ancestor chain wins (Modules §3), the rank `lower::gref_best_rank` uses. The last match wins a tie.
+sema_const_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, qual : bool, hs : usize, hl : usize, cs : usize, cl : usize) -> Option(usize) {
   mut r : Option(usize) = Option.None
+  mut best : i64 = 0 - 1
   cnt := rt::vec_len(deref(decls))
-  th := sema_name_hash(src, s, n)
+  th := sema_name_hash(src, ns, nl)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
   while jc < jce {
@@ -7450,81 +7467,166 @@ sema_const_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
     ## unchecked-ok: the `SDNH` name-hash table, read as every sema name walk reads it
     if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
       d := deref(decl_get(decls, i))
-      if d.kind == lower_layout::DECL_KIND_VALUE and not d.is_fn and d.arity == 0 and not local_is_mut(src, d.name_start) and streq(src, d.name_start, d.name_len, s, n) {
-        ## null-ok: #1069 — `Decl.value` spells "no initializer" as a null ptr(Expr); guarded, never dereferenced.
-        if unchecked bitcast(usize, d.value) != 0 { r = Option.Some(i) }
+      if streq(src, d.name_start, d.name_len, ns, nl) and sema_is_const_binding(d, src) {
+        if qual {
+          if sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl) and sema_decl_visible_from(src, d, cs, cl) { r = Option.Some(i) }
+        } else {
+          rk := sema_mod_anc_rank(src, d.mod_start, d.mod_len, cs, cl)
+          if rk >= 0 and rk >= best {
+            best = rk
+            r = Option.Some(i)
+          }
+        }
       }
     }
   }
   r
 }
 
-## Does `[e]` reach the name `[os, on)` through module-level const initializers? `depth` counts
-## const-to-const hops (the backstop above; the marks are what bound the walk). The AST walk covers every child that can carry a value except the forms the
-## existing `expr_mentions_var` also omits (`Match`, `EnumLit`, `CompField`, `Lambda`, `FnRef`,
-## `Loop`): an omitted form is a conservative FALSE, never a false refusal, and the backend's own
-## bound remains the backstop there.
-sema_const_cycle_hit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), os : usize, on : usize, depth : usize) -> bool {
+## The module a §4.1/§4.1.1 binding in module `[cs, cl)` gives the bare name `[ns, nl)`, with the TAIL
+## name it binds to there (`Z := m::Y` binds `Z` to `Y` in `m`; `(Y) := m` binds `Y` in `m`) — the
+## answer `lower::binding_head_span` gives. `qual == false`: no such binding.
+sema_const_binding_head := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, cs : usize, cl : usize) -> SemaGRef {
+  mut r := SemaGRef(ms = 0, ml = 0, ns = 0, nl = 0, qual = false)
+  if nl == 0 or cl == 0 { return r }
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    b := deref(decl_get(decls, i))
+    if not b.is_fn and b.kind == lower_layout::DECL_KIND_VALUE and b.arity == 0 and b.ret_tl != 0 and sema_mod_seg_eq(src, b.mod_start, b.mod_len, cs, cl) {
+      if b.name_len == 0 {
+        ph := sema_projection_head_for(src, b.ret_ts, b.ret_tl, ns, nl)
+        ## A multi-segment head comes back split (`geo::sub` as `geo` + `sub`); the module is the whole path.
+        if ph.qual and ph.nl != 0 { r = SemaGRef(ms = ph.ms, ml = ph.ns + ph.nl - ph.ms, ns = ns, nl = nl, qual = true) }
+        else if ph.qual { r = SemaGRef(ms = ph.ms, ml = ph.ml, ns = ns, nl = nl, qual = true) }
+      } else if streq(src, b.name_start, b.name_len, ns, nl) {
+        g := sema_gref_split(src, b.ret_ts, b.ret_tl)
+        if g.qual { r = g }
+      }
+    }
+    i += 1
+  }
+  r
+}
+
+## The module-level CONST BINDING a reference `[s, s+n)` spelled in module `[cs, cl)` denotes — its
+## declaration index, the identity a cycle is judged by. A qualified `m::X` names `m`'s `X`; a bare `X`
+## resolves in `[cs, cl)` and up its ancestor chain, then through a binding in `[cs, cl)`. `None`: no
+## const — a local, a parameter, a function, an unresolved or invisible name.
+sema_const_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, cs : usize, cl : usize) -> Option(usize) {
+  g := sema_gref_split(src, s, n)
+  if g.nl == 0 { return Option.None }
+  if g.qual { return sema_const_scan(decls, src, g.ns, g.nl, true, g.ms, g.ml, cs, cl) }
+  own := sema_const_scan(decls, src, g.ns, g.nl, false, 0, 0, cs, cl)
+  match own {
+    Some(oi) => { return own }
+    None => { }
+  }
+  bh := sema_const_binding_head(decls, src, g.ns, g.nl, cs, cl)
+  if not bh.qual { return Option.None }
+  sema_const_scan(decls, src, bh.ns, bh.nl, true, bh.ms, bh.ml, cs, cl)
+}
+
+## Does `[e]`, spelled in module `[cs, cl)`, reach the const declared at name offset `os` through
+## module-level const initializers? `depth` counts const-to-const hops (the backstop above; the marks
+## are what bound the walk). Every form that can carry a value in a comptime initializer is walked,
+## including an enum literal's payload, a slice's operands and a `match` scrutinee. Not walked, as a
+## conservative FALSE that never refuses a valid program: a `match` arm with pattern BINDERS or a block
+## body (a binder may shadow the const's name), `CompField`, and the bodies a `Lambda`/`FnRef`/`Loop`
+## defers, which evaluating the initializer never runs.
+sema_const_cycle_hit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, os : usize, depth : usize) -> bool {
   if depth > rt::vec_len(deref(decls)) { return false }
   match deref(e) {
     Expr::Var(s, n) => {
-      if streq(src, s, n, os, on) { return true }
       mut hit := false
-      iv := sema_const_decl_of(decls, src, s, n)
+      iv := sema_const_decl_of(decls, src, s, n, cs, cl)
       match iv {
         Some(di) => {
-          if scc_enter(decls, di) {
-            dv := deref(decl_get(decls, di))
-            if sema_const_cycle_hit(dv.value, decls, src, os, on, depth + 1) { hit = true }
+          dv := deref(decl_get(decls, di))
+          if dv.name_start == os { hit = true }
+          else if scc_enter(decls, di) {
+            if sema_const_cycle_hit(dv.value, decls, src, dv.mod_start, dv.mod_len, os, depth + 1) { hit = true }
           }
         }
         None => { }
       }
       hit
     }
-    Expr::Bin(op, l, rr) => { sema_const_cycle_hit(l, decls, src, os, on, depth) or sema_const_cycle_hit(rr, decls, src, os, on, depth) }
-    Expr::If(c, t, f) => { sema_const_cycle_hit(c, decls, src, os, on, depth) or sema_const_cycle_hit(t, decls, src, os, on, depth) or sema_const_cycle_hit(f, decls, src, os, on, depth) }
-    Expr::Field(b, fs, fl) => { sema_const_cycle_hit(b, decls, src, os, on, depth) }
-    Expr::Deref(p) => { sema_const_cycle_hit(p, decls, src, os, on, depth) }
-    Expr::AddrOf(p) => { sema_const_cycle_hit(p, decls, src, os, on, depth) }
-    Expr::Try(p) => { sema_const_cycle_hit(p, decls, src, os, on, depth) }
-    Expr::Unchecked(p) => { sema_const_cycle_hit(p, decls, src, os, on, depth) }
-    Expr::Bitcast(p, bs, bn) => { sema_const_cycle_hit(p, decls, src, os, on, depth) }
-    Expr::Index(b, ix) => { sema_const_cycle_hit(b, decls, src, os, on, depth) or sema_const_cycle_hit(ix, decls, src, os, on, depth) }
-    Expr::Call(cs, cl, na, ah) => {
-      mut r := false
-      mut g : Option(ptr(mut Arg)) = ah
-      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); if sema_const_cycle_hit(ga.e, decls, src, os, on, depth) { r = true }; g = ga.next }; None => { break } } }
+    Expr::Bin(op, l, rr) => { sema_const_cycle_hit(l, decls, src, cs, cl, os, depth) or sema_const_cycle_hit(rr, decls, src, cs, cl, os, depth) }
+    Expr::If(c, t, f) => { sema_const_cycle_hit(c, decls, src, cs, cl, os, depth) or sema_const_cycle_hit(t, decls, src, cs, cl, os, depth) or sema_const_cycle_hit(f, decls, src, cs, cl, os, depth) }
+    Expr::Field(b, fs, fl) => { sema_const_cycle_hit(b, decls, src, cs, cl, os, depth) }
+    Expr::Deref(p) => { sema_const_cycle_hit(p, decls, src, cs, cl, os, depth) }
+    Expr::AddrOf(p) => { sema_const_cycle_hit(p, decls, src, cs, cl, os, depth) }
+    Expr::Try(p) => { sema_const_cycle_hit(p, decls, src, cs, cl, os, depth) }
+    Expr::Unchecked(p) => { sema_const_cycle_hit(p, decls, src, cs, cl, os, depth) }
+    Expr::Bitcast(p, bs, bn) => { sema_const_cycle_hit(p, decls, src, cs, cl, os, depth) }
+    Expr::Index(b, ix) => { sema_const_cycle_hit(b, decls, src, cs, cl, os, depth) or sema_const_cycle_hit(ix, decls, src, cs, cl, os, depth) }
+    Expr::Slice(b, lo, hi) => { sema_const_cycle_hit(b, decls, src, cs, cl, os, depth) or sema_const_cycle_hit(lo, decls, src, cs, cl, os, depth) or sema_const_cycle_hit(hi, decls, src, cs, cl, os, depth) }
+    Expr::Call(fs, fl, na, ah) => { sema_const_cycle_args(ah, decls, src, cs, cl, os, depth) }
+    Expr::StructLit(ns, nl, nf, fh) => { sema_const_cycle_args(fh, decls, src, cs, cl, os, depth) }
+    Expr::ArrayLit(nel, eh) => { sema_const_cycle_args(eh, decls, src, cs, cl, os, depth) }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { sema_const_cycle_args(ph, decls, src, cs, cl, os, depth) }
+    Expr::Match(sc, ah) => {
+      mut r := sema_const_cycle_hit(sc, decls, src, cs, cl, os, depth)
+      mut arm : Option(ptr(mut Arm)) = ah
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            if sema_const_cycle_arm_plain(am) and sema_const_cycle_hit(am.body, decls, src, cs, cl, os, depth) { r = true }
+            arm = am.next
+          }
+          None => { break }
+        }
+      }
       r
     }
-    Expr::StructLit(ns, nl, nf, fh) => {
-      mut r := false
-      mut g : Option(ptr(mut Arg)) = fh
-      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); if sema_const_cycle_hit(ga.e, decls, src, os, on, depth) { r = true }; g = ga.next }; None => { break } } }
-      r
-    }
-    Expr::ArrayLit(nel, eh) => {
-      mut r := false
-      mut g : Option(ptr(mut Arg)) = eh
-      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); if sema_const_cycle_hit(ga.e, decls, src, os, on, depth) { r = true }; g = ga.next }; None => { break } } }
-      r
-    }
-    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::Match | Expr::EnumLit
-      | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { false }
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { false }
   }
 }
 
-## Is this declaration a module-level CONST data binding whose initializer names itself, directly or
-## through a chain? The shape is the one `sema_global_init_call_bad` fences — a non-`fn`, non-`mut`
-## value binding with an initializer — widened to carry a type ANNOTATION, because `A : u64 = A + 1`
-## crashes the backend exactly as the inferred form does (measured on `58a80376`).
+## A `match` arm whose body is one expression in the enclosing scope: no pattern binder and no block
+## body, so no name in it can be shadowed and `sema_const_cycle_hit` may walk it.
+sema_const_cycle_arm_plain := fn(am : Arm) -> bool {
+  mut plain := true
+  match am.binds_head {
+    Some(bq) => { plain = false }
+    None => { }
+  }
+  match am.body_stmts {
+    Some(sq) => { plain = false }
+    None => { }
+  }
+  ## null-ok: #1069 — an arm with a block body may leave `body` a null ptr(Expr); guarded, never dereferenced.
+  plain and unchecked bitcast(usize, am.body) != 0
+}
+
+## The argument list of a call, struct literal, array literal or enum payload: does any element reach
+## the start? (`sema_const_cycle_hit`'s one list walk.)
+sema_const_cycle_args := fn(h : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, os : usize, depth : usize) -> bool {
+  mut r := false
+  mut g : Option(ptr(mut Arg)) = h
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if sema_const_cycle_hit(ga.e, decls, src, cs, cl, os, depth) { r = true }
+        g = ga.next
+      }
+      None => { break }
+    }
+  }
+  r
+}
+
+## Is this declaration a module-level CONST data binding whose initializer reaches its own BINDING,
+## directly or through a chain? The shape is the one `sema_global_init_call_bad` fences — a non-`fn`,
+## non-`mut` value binding with an initializer — widened to carry a type ANNOTATION, because
+## `A : u64 = A + 1` crashes the backend exactly as the inferred form does (measured on `58a80376`).
 sema_global_init_cycle_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
-  if d.is_fn or d.kind != lower_layout::DECL_KIND_VALUE or d.arity != 0 { return false }
-  if local_is_mut(src, d.name_start) { return false }
-  ## null-ok: #1069 — `Decl.value` spells "no initializer" as a null ptr(Expr); guarded, never dereferenced.
-  if unchecked bitcast(usize, d.value) == 0 { return false }
+  if not sema_is_const_binding(d, src) { return false }
   SCC_EPOCH = SCC_EPOCH + 1
-  sema_const_cycle_hit(d.value, decls, src, d.name_start, d.name_len, 0)
+  sema_const_cycle_hit(d.value, decls, src, d.mod_start, d.mod_len, d.name_start, 0)
 }
 
 ## Types §4.2/§4.4 — a string value has no value-conversion path into an integer. The lower treats
