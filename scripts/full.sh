@@ -161,6 +161,11 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/agents_size_check.sh" --self-test
   _full_agents_size_self_test_rc=$?
   [ "$_full_agents_size_self_test_rc" = 0 ] || exit "$_full_agents_size_self_test_rc"
+  # The changelog-fragment decider (#1566): on a tree that adds no Unreleased line it never reaches its
+  # refusal, so planted names, bodies and additions must fail and five controls must stay green.
+  bash "$ROOT/scripts/changelog_fragments.sh" --self-test > /dev/null
+  _full_changelog_fragments_self_test_rc=$?
+  [ "$_full_changelog_fragments_self_test_rc" = 0 ] || exit "$_full_changelog_fragments_self_test_rc"
   # The scripted seed promotion's deciders (#1129): the version order, the label normalization, the
   # convergence verdict, the bump, the owed-marker and atomic-set refusals and the cadence. Measured:
   # a convergence check that ignores the binary, or a cadence that reads gh's silence as "not due",
@@ -269,6 +274,22 @@ fi
 # and like the pin check it does not stop the gate.
 echo '### AGENTS.md SIZE (rules only, at most 150 lines) ###'
 if ! bash scripts/agents_size_check.sh; then fail=1; fi
+
+# CHANGELOG FRAGMENTS (#1566): a new entry is its own file `changelog.d/<issue>-<slug>.md`, so no two
+# PRs edit one anchor; a line ADDED under CHANGELOG.md's `## Unreleased` against the merge base is
+# refused, like the strict forms. A text scan, well under a second; it does not stop the gate.
+echo '### CHANGELOG FRAGMENTS (one entry, one new file; nothing added under ## Unreleased) ###'
+CF_LOG="$LOGDIR/full_changelog_fragments.log"
+bash scripts/changelog_fragments.sh --check > "$CF_LOG" 2>&1
+cf_rc=$?
+grep -E "^(changelog fragments|\*\*\* changelog fragments|    \+ )" "$CF_LOG"
+cf_cover="$(grep -E "^changelog fragments: base=" "$CF_LOG" | tail -1 | sed 's/^changelog fragments: //')"
+[ "$cf_rc" = 0 ] || fail=1
+if [ -z "$cf_cover" ]; then
+  echo "  (scripts/changelog_fragments.sh printed no 'base=' coverage line — what it checked is unknown,"
+  echo "   treating as a failure)"
+  fail=1; cf_cover="UNKNOWN — no coverage line"
+fi
 
 # The WILDCARD-ARM check (issue #658). A pure source scan like the idiom gate — no compiler, ~8 s —
 # and it runs here, before the six minutes of building, because the author of a new `_ =>` arm should
@@ -940,6 +961,7 @@ elif [ "$sw_status" = "RAN" ]; then
   echo "    spec pin:        $sp_cover"
   echo "    wildcard arms:   $wa_cover"
   echo "    strict forms:    $sf_cover"
+  echo "    changelog frags: $cf_cover"
   echo "    strict typed:    $st_cover"
   echo "    seed forms:      $sfr_cover"
   echo "    ir verifier:     $irv_cover"
@@ -958,6 +980,7 @@ else
   echo "    spec pin:        $sp_cover"
   echo "    wildcard arms:   $wa_cover"
   echo "    strict forms:    $sf_cover"
+  echo "    changelog frags: $cf_cover"
   echo "    strict typed:    $st_cover"
   echo "    seed forms:      $sfr_cover"
   echo "    ir verifier:     $irv_cover"
