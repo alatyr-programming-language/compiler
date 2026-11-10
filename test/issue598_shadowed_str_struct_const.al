@@ -2,7 +2,7 @@
 ## CONSTANT owns that name inside its scope, so binding from it copies the INNER value, not the constant's.
 ## Scope is lexical and block-structured and a function (its parameters and its body) is an inner scope of the
 ## module (§5); a declaration in an inner scope may shadow an outer name and "within the inner scope the inner
-## name wins" (§6.1). DECIDED at the pinned revision 1.8.0 (tag v1.8.0, commit 8da0372).
+## name wins" (§6.1). DECIDED at the pinned revision 1.9.0 (tag v1.9.0, commit 60bf006).
 ##
 ## On the parent it did not. `lower::assign::const_rhs_unshadowed` — #589's shadow guard — asked the right
 ## question and then DECLINED to answer it for anything but a one-word scalar: its second act was
@@ -16,18 +16,23 @@
 ## its OWN `const_rhs` call". For `str` and struct that turns out not to bind: checked sema has already
 ## forced the binding's type and the constant's type to agree, so a `str` RHS is a two-word {ptr,len} view
 ## whichever value it is given and a struct RHS is that struct's own word block either way — `collect_slots`
-## reserves the same words and needs no matching edit. An ARRAY is the real exception and stays DECLINED: a
-## module const array takes `.data` storage under a label (`const_array_value`, `global_needs_storage`) while
-## a local array lives in frame words, so there declining WOULD change the shape and not just the value. Case
-## 9 below is that exception, pinned: it must STILL answer the constant's element.
+## reserves the same words and needs no matching edit. An ARRAY or ENUM constant is NOT widened here: a module
+## const array takes `.data` storage under a label (`const_array_value`, `global_needs_storage`) while a local
+## array lives in frame words, so declining there would change the shape as well as the value. A shadowed array
+## or enum constant still answers the constant, which §6.1 makes a wrong value; it is filed as #1565 and is
+## not pinned here. Case 9 is only the UNSHADOWED array arrival.
+##
+## The same guard is asked at the CALL-ARGUMENT position (`emit_arg`'s `str`-constant arm): a shadowing `str`
+## parameter or local passed straight into a call (`f := fn(M : str) -> u64 { return g(M) }`) sent the
+## constant there too. Cases 10–12.
 ##
 ## Every case is CLASSIFIED rather than compared, because "not 3" is not evidence: `class` separates the
 ## correct INNER value (0) from the MODULE CONSTANT's own value (1 — the defect this fixture exists for), from
 ## a zero or lost read (2), and from any other value including a neighbouring case's (3). Each case carries its
 ## OWN constant with a value NO other case produces, and each shadowing binding carries its OWN distinct
 ## value, so no case can pass by reading another's slot. The code returned is `10 * case + class` of the
-## FIRST failing case; 99 only when all nine are correct. Failure codes run 11..93, 99 is outside that set,
-## and every code is below 126 (#386).
+## FIRST failing case; 99 only when all twelve are correct. Failure codes run 11..93 and 101..123, 99 is
+## outside that set, and every code is below 126 (#386).
 ##
 ## REGISTERED ON x86_64 ONLY (`run_x86`), deliberately. Measured on this tree, the `str` rows TRAP on all
 ## three twins in BOTH spellings — shadowed (`s : str = M` from a parameter: aarch64 133, riscv64 133, wasm
@@ -51,6 +56,9 @@ C4 := S(k = 107, m = 108)
 C6 := S(k = 109, m = 110)
 C8 := S(k = 113, m = 114)
 A9 := [10, 20, 30]
+M10 := "abcd"
+M11 := "abcdefghi"
+M12 := "abcdefghijk"
 
 ## `got == want` FIRST, so a control whose correct answer IS its constant classifies as correct.
 classify := fn(got : u64, want : u64, konst : u64) -> u64 {
@@ -85,10 +93,23 @@ case7 := fn() -> u64 { s : str = M7 ; return u64(s.len) }
 ## 8 — control: UNSHADOWED struct constant arrival. Must STILL resolve the constant.
 case8 := fn() -> u64 { p : S = C8 ; return p.k }
 
-## 9 — control, the exception that keeps the guard narrowed: an ARRAY constant. A const array takes `.data`
-## storage under a label while a local array lives in frame words, so this shape stays DECLINED and must keep
-## answering the constant's element.
+## 9 — control: UNSHADOWED array constant arrival, no binding named `A9` anywhere. Must STILL answer the
+## constant's element. It pins only that arrival; a SHADOWED array (or enum) constant is a separate silent
+## wrong value, filed as #1565, and nothing here claims the constant is the right answer there.
 case9 := fn() -> u64 { return A9[1] }
+
+## The CALL-ARGUMENT position: `emit_arg` resolved a bare `str` name through the module table before the
+## binding forms were ever consulted, so a shadowing name passed straight into a call still sent the constant.
+len10 := fn(s : str) -> u64 { return u64(s.len) }
+
+## 10 — a `str` PARAMETER named `M10` passed straight as a call argument.
+case10 := fn(M10 : str) -> u64 { return len10(M10) }
+
+## 11 — a `str` LOCAL named `M11` passed straight as a call argument.
+case11 := fn() -> u64 { M11 := "abcdefg" ; return len10(M11) }
+
+## 12 — control: the UNSHADOWED `str` constant passed as a call argument. Must STILL resolve the constant.
+case12 := fn() -> u64 { return len10(M12) }
 
 main := fn() -> u64 {
   k1 := classify(case1("abcdefgh"), 8, 3)
@@ -109,6 +130,12 @@ main := fn() -> u64 {
   if k8 != 0 { return 80 + k8 }
   k9 := classify(case9(), 20, 20)
   if k9 != 0 { return 90 + k9 }
+  k10 := classify(case10("abcdefghij"), 10, 4)
+  if k10 != 0 { return 100 + k10 }
+  k11 := classify(case11(), 7, 9)
+  if k11 != 0 { return 110 + k11 }
+  k12 := classify(case12(), 11, 11)
+  if k12 != 0 { return 120 + k12 }
   99
 }
 ## expect: run 99

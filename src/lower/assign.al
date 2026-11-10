@@ -2429,7 +2429,8 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
 ## type to agree, `collect_slots` reserves the same words whichever value it is given — so again no second
 ## edit is owed. An ARRAY and an ENUM stay DECLINED: a const array takes `.data` storage under a label while a
 ## local array lives in frame words, and a variant's payload width comes from the literal's variant, so for
-## those two the resolution and the shape are not independent questions.
+## those two the resolution and the shape are not independent questions. Declining them here is NOT correct
+## behaviour: a shadowed array or enum constant still answers the constant, a wrong value filed as #1565.
 ##
 ## The `Expr::Field` const-struct-field arm is a separate position and is guarded in `const_struct_field`
 ## itself (#597): `var_name_span` of a `Field` is empty, so this guard never sees a field base.
@@ -2476,7 +2477,8 @@ const_scalar_lit := fn(e : ptr(Expr)) -> bool {
 ## STORAGE under a label (`const_array_value`, `global_needs_storage`) while a local array lives in frame
 ## words, so there declining WOULD change the shape, not just the value. `EnumLit` stays declined for the
 ## same reason in miniature — a variant's payload word count comes from the literal's variant, and this guard
-## has no business re-deciding it. Every other variant is declined because `const_rhs` never returns one.
+## has no business re-deciding it (both still answer the constant when shadowed: #1565). Every other variant
+## is declined because `const_rhs` never returns one.
 const_shadow_declinable := fn(e : ptr(Expr)) -> bool {
   if const_scalar_lit(e) { return true }
   mut ok := false
