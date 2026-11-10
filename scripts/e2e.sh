@@ -11107,6 +11107,7 @@ run_x86 comptime_typeinfo_field_mutable 42
 ## evaluator. Anything still unfoldable is now a LOCATED reject (the lower had no diagnostic channel before).
 run comptime_arch_ne 42
 run comptime_target_facets 42
+run issue1578_twin_target_model 42
 run comptime_if_facts 42
 run comptime_typeinfo_arg 42
 run comptime_resolves_args 42

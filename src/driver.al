@@ -6999,7 +6999,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## and the duplicate-label guard below look at the decls. A per-target table (`std::sysno`, owner
   ## decision D3) then keeps exactly its own row. Each emitter applies the same fold again (idempotent).
   if backend == 0 { lower_layout::apply_when_guards(ptr(decls), base, wat::wat_target_arch()) }
-  if backend == 1 { lower_layout::apply_when_guards(ptr(decls), base, aarch64::a64_target_arch()) }
+  if backend == 1 { lower_layout::apply_when_guards(ptr(decls), base, lower::ctfold::target_arch_name()) }
   if backend == 2 { lower_layout::apply_when_guards(ptr(decls), base, riscv64::rv_target_arch()) }
   ## Resolve `mod::fn` / `alias::fn` callees to the target decl's BARE name and prune the injected
   ## `lib/` closure to what the program reaches — without this the module-unaware backends cannot use

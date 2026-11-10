@@ -696,6 +696,20 @@ target_model_rhs_code := fn(base : str, value : str) -> usize {
   99
 }
 
+## The published `target.arch` as the `Arch` variant name, the inverse of the `Arch` rows above (#1578).
+## A twin emitter folds its `when` guards with this instead of a private constant, so the emitted
+## machine and every `target.*` reader answer from the one published model (Tooling §2.7). A code
+## outside the six v1 arches names no `Arch` variant, so it answers `<none>`, which equals no name.
+pub target_arch_name := fn() -> str {
+  if TARGET_ARCH == 0 { return "x86_64" }
+  if TARGET_ARCH == 1 { return "i386" }
+  if TARGET_ARCH == 2 { return "aarch64" }
+  if TARGET_ARCH == 3 { return "aarch32" }
+  if TARGET_ARCH == 4 { return "riscv32" }
+  if TARGET_ARCH == 5 { return "riscv64" }
+  "<none>"
+}
+
 target_model_current_code := fn(facet : str) -> usize {
   if facet == "arch" { return TARGET_ARCH }
   if facet == "os" { return TARGET_OS }

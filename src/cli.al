@@ -2855,6 +2855,27 @@ manifest_target_model := fn(in out a : rt::Arena, pkg_al : str) {
   if ctok.len != 0 { CLI_TARGET_CONTAINER = manifest_container_code(ctok) }
 }
 
+## #1578 — the Machine model a twin emit verb publishes (Tooling §2.7: `target.*` is the selected
+## Target, and the verb selects the machine it emits for). `twin` is `CLI_TWIN_PKG`'s code (2 = the
+## `aarch64` verb). A bare file list publishes `Machine.Linux(arch = Arch.aarch64)` with that variant's
+## projections from the per-arch appendix §1 row: os linux, container elf, startup raw, subsystem
+## console, and env gnu. The row allows gnu or musl, the variant's `‹arch-default›` is the
+## implementation's (Manifest §3.1), and gnu is what `manifest_target_model` resolves for a manifest
+## that writes this variant without an env. Over a package (`keep_manifest`) the verb keeps the
+## manifest's resolved Linux projections (`manifest_target_command_reject` refuses every other os for
+## it) and replaces only the arch.
+cli_twin_target_model := fn(twin : usize, keep_manifest : bool) -> i64 {
+  if not keep_manifest {
+    CLI_TARGET_OS = 0
+    CLI_TARGET_ENV = 0
+    CLI_TARGET_CONTAINER = 0
+    CLI_TARGET_STARTUP = 0
+    CLI_TARGET_SUBSYSTEM = 0
+  }
+  if twin == 2 { CLI_TARGET_ARCH = 2 }
+  driver::set_target_model(CLI_TARGET_ARCH, CLI_TARGET_OS, CLI_TARGET_ENV, CLI_TARGET_CONTAINER, CLI_TARGET_STARTUP, CLI_TARGET_SUBSYSTEM)
+}
+
 ## Canonical text for the four target projections used by TOOL-20's fixed meta records. Defaults are
 ## the host-shaped target currently implemented by this compiler; an unknown explicit token remains
 ## `invalid` so plan can fail closed instead of describing a target it did not resolve.
@@ -5796,6 +5817,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     ## Bind the path to a local first (inline str-returning call as a str arg drops its length).
     if n < 3 { return 40 }
     apath := arg_at(cmd, fi)
+    ## #1578 — publish this verb's machine before sema and lowering read `target.*` (TOOL-18).
+    atm := cli_twin_target_model(2, false)
     ## TYPE-CHECK BEFORE EMITTING (I11 correct-or-trap). Without this the three emit-to-stdout
     ## surfaces handed the user code for a program the compiler already knows is ill-typed: the
     ## `-o` build path rejects it with a located `alatyr: check: …` and exit 1, while these three
@@ -6101,7 +6124,10 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   ## TOOL-18 — publish one complete Machine model after target selection and before any semantic or
   ## lowering pass. A bare file list keeps the established host-shaped defaults; a package never
   ## publishes an arch without the projections that belong to the same variant.
-  if is_pkg {
+  if is_pkg and CLI_TWIN_PKG == 2 {
+    manifest_target_model(a, pkg_arg)
+    ttm := cli_twin_target_model(CLI_TWIN_PKG, true)
+  } else if is_pkg {
     manifest_target_model(a, pkg_arg)
     model_arch := CLI_TARGET_ARCH
     model_os := CLI_TARGET_OS
