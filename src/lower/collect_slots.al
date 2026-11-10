@@ -718,6 +718,16 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               va := var_agg_info(v, ptr(slots), src)
               mx := enum_inst_words(decls, src, va.s, va.n, a)
               bind_enum_slot(slots, decls, src, ns, nl, va.s, va.n, 1 + mx)
+            } else if fixed_arr_copy_len(v, ptr(slots), src, ns, nl, local_type_span(src, ns, nl).s, local_type_span(src, ns, nl).n) > 0 {
+              ## #937 — `ys : [T; N] = xs` (and `ys = xs`): reserve `ys` as the WHOLE `N`-element block,
+              ## taking the element kind / type span / stride from the SOURCE slot, which Types §4.1 makes
+              ## the same `[T; N]`. Without this the binding fell through to the SCALAR slot: `ys` owned ONE
+              ## word, its element addresses ran up into `xs`'s block, and `ys[i]` answered `xs[i-1]` —
+              ## MEASURED 12 where `[5,7,9]` owes 16. A `Var` source only: a LITERAL is bound by the
+              ## `ai.is_a` branch above, and an unannotated `ys := xs` keeps its located refusal.
+              cvsn := var_name_span(v)
+              csent := deref(svec_at(SlotEntry, ptr(slots), entry_of(ptr(slots), src, cvsn.s, cvsn.n)))
+              bind_array_slot(slots, src, ns, nl, usize(fixed_arr_copy_len(v, ptr(slots), src, ns, nl, local_type_span(src, ns, nl).s, local_type_span(src, ns, nl).n)), AElem(eek = csent.eek, ess = csent.sns, esl = csent.snl, stride = csent.estride))
             } else if view_var_kind(v, ptr(slots), src) == 4 {
               ## Types §9.4 — `t := <str var>`: a `str` is a 2-word `{ptr, len}` VIEW, so reserve `t` as a
               ## str LOCAL (both words) exactly like a `t := "…"` / `t := sub(…)` binding. Without this it

@@ -10431,6 +10431,16 @@ run fixed_array_len 42
 ## `fixed_arr_len`, which sees only a `Var` base) while `r.u[i]` read the right element — a SILENT
 ## WRONG VALUE, and a backend disagreement: aarch64/riscv64/wasm already answered 3.
 run fixed_array_field_len 42
+## Types §6.4 + Memory §5.9 — copying a FIXED array by value moves the WHOLE `N`-element block.
+## #937: x86_64 reserved the destination as ONE scalar word and stored ONE word, so its element
+## addresses ran up into the source's frame block and `ys[i]` answered `xs[i-1]` — c1d gave **12**
+## where `[5,7,9]` owes 16 and c1c gave **5** after `xs[1] = 1`; the reassignment form `dst = wr`
+## was wrong the same way. aarch64/riscv64/wasm already answered 42, so the backends disagreed on
+## one source (I11). The AGGREGATE- and BYTE-element rows of the same rule are x86_64-only today:
+## aarch64/riscv64 trap (`run/133`, the #1191 by-value-aggregate stub, measured unchanged by this
+## fix) while wasm answers 42 — so the row stays `run_x86` until #1191 closes.
+run fixed_array_copy_local 42
+run_x86 fixed_array_copy_local_wide 42
 ## Grammar §2/§3: newline is an array item separator, not only a source whitespace byte.
 run array_literal_newline_separator 42
 ## Types §6.4 — `size([T; N])` ARRAY-TYPE literal as a comptime builtin argument (direct + UFCS,
