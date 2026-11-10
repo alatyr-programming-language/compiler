@@ -22,7 +22,8 @@ reclassification that lands in the same class is invisible. Five batches over th
 landed this way, on one gate each instead of thirteen. The screening is where the safety lives: no
 candidate touches an oracle, each carries exactly one line-initial relation marker, the candidates
 are checked pairwise with `git merge-tree` before anything is merged, and only **additive**
-conflicts are resolved — `CHANGELOG.md`'s `## Unreleased`, fixture registration in `scripts/e2e.sh`
+conflicts are resolved — `CHANGELOG.md`'s `## Unreleased` (for a PR that predates `changelog.d/`
+fragments, #1566, which made a new entry a file of its own), fixture registration in `scripts/e2e.sh`
 and `scripts/package_cli_test.sh` — and only where the two sides do not overlap line for line. One
 oracle commit per oracle **file** covers the whole batch, and one acceptance per PR carries the
 batch verdict so that each PR's record stands alone.

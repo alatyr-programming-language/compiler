@@ -94,21 +94,32 @@ bump() {
     && rm -f "$d/scripts/package_cli_test.sh.bak"
 }
 
-## changelog_release FILE NEW DATE -> stdout: FILE with its one `## Unreleased` heading become
+## changelog_release FILE NEW DATE [FRAGMENTS] -> stdout: FILE with its one `## Unreleased` heading become
 ## `## NEW — DATE` and a fresh empty `## Unreleased` opened above it (CHANGELOG.md, "When the version
-## moves", step 6), so the accumulated entries are released with the version. A released section with
-## no entry gets a PROMOTE-OWED line, because a release that says nothing is a judgement left unmade.
+## moves", step 6), so the accumulated entries are released with the version. FRAGMENTS, when given, is
+## the text `scripts/changelog_fragments.sh --assemble` printed (#1566): it is released after the
+## section's own entries, before the blank lines that close it. A released section with no entry and no
+## fragment gets a PROMOTE-OWED line, because a release that says nothing is a judgement left unmade.
 ## 2 when the heading is not there exactly once.
 changelog_release() {
   local n; n="$(grep -c '^## Unreleased[[:space:]]*$' "$1")"
   [ "$n" = 1 ] || { echo "promote: CHANGELOG.md has $n '## Unreleased' headings, want 1" >&2; return 2; }
-  awk -v v="$2" -v d="$3" -v o="$OWED" '
-    function flush() { if (open && !entries) { print "- " o " — what this generation carries, and its version class."; print "" } open = 0 }
-    /^## Unreleased[[:space:]]*$/ { print; print ""; print "## " v " — " d; open = 1; entries = 0; next }
+  awk -v v="$2" -v d="$3" -v o="$OWED" -v fr="${4:-}" '
+    BEGIN { nf = 0; if (fr != "") while ((getline x < fr) > 0) F[++nf] = x }
+    function flush(eof,  i) {
+      if (!open) return
+      for (i = 1; i <= nf; i++) print F[i]
+      if (nf) { entries = 1; if (!blanks && !eof) blanks = 1 }
+      if (!entries) { print "- " o " — what this generation carries, and its version class."; print ""; blanks = 0 }
+      for (; blanks > 0; blanks--) print ""
+      open = 0 }
+    /^## Unreleased[[:space:]]*$/ { print; print ""; print "## " v " — " d; open = 1; entries = 0; blanks = 0; started = 0; next }
     open && /^## / { flush() }
+    open && /^[[:space:]]*$/ { if (started || entries) blanks++; else print; next }
+    open { for (; blanks > 0; blanks--) print ""; started = 1 }
     open && /^- / { entries = 1 }
     { print }
-    END { flush() }' "$1"
+    END { flush(1) }' "$1"
 }
 
 ## history_append FILE ENTRY -> stdout: FILE with ENTRY appended inside its fenced block, after one blank
@@ -139,10 +150,20 @@ owed_left() {
   } | grep .
 }
 
-## atomic_set_ok CHANGED-FILES -> 0 when the changed paths are exactly $ATOMIC
+## fragment_paths DIR -> stdout: the tracked changelog fragments of the worktree DIR (README.md excluded)
+fragment_paths() {
+  git -C "$1" ls-files -- 'changelog.d/*.md' | grep -Ev '^changelog\.d/README\.md$'
+}
+
+## atomic_set_ok CHANGED-FILES [DELETED-FILES] -> 0 when the changed paths are exactly $ATOMIC, plus
+## changelog fragments that are DELETED (the release consumed them, #1566) and nothing else
 atomic_set_ok() {
-  local want got
+  local want got extra
   want="$(printf '%s\n' $ATOMIC | sort)"; got="$(printf '%s\n' "$1" | grep -v '^$' | sort -u)"
+  extra="$(printf '%s\n' "$got" | grep -E '^changelog\.d/[^/]+\.md$' | grep -vx 'changelog.d/README.md')"
+  if [ -n "$extra" ] && [ -z "$(comm -23 <(printf '%s\n' "$extra") <(printf '%s\n' "${2:-}" | grep -v '^$' | sort -u))" ]; then
+    got="$(printf '%s\n' "$got" | grep -vxF -f <(printf '%s\n' "$extra"))"
+  fi
   [ "$want" = "$got" ] && return 0
   echo "  changed:  $(printf '%s' "$got" | tr '\n' ' ')"; echo "  required: $(printf '%s' "$want" | tr '\n' ' ')"
   return 1
@@ -266,8 +287,14 @@ cmd_prepare() {
   } > "$entry"
   history_append seed/HISTORY.md "$entry" > "$P/HISTORY.md" || die "seed/HISTORY.md has no closing fence"
   cp "$P/HISTORY.md" seed/HISTORY.md
-  changelog_release CHANGELOG.md "$new" "$today" > "$P/CHANGELOG.md" || die "CHANGELOG.md cannot be released (above)"
+  ## The fragments (#1566) are released with the section and deleted: each entry is then in CHANGELOG.md
+  ## exactly once, under the version that carries it.
+  bash scripts/changelog_fragments.sh --check HEAD > "$P/fragments_check.log" 2>&1 \
+    || { cat "$P/fragments_check.log" >&2; die "changelog.d/ does not hold well-formed fragments (above)"; }
+  bash scripts/changelog_fragments.sh --assemble "$PWD/changelog.d" > "$P/fragments" || die "the fragments cannot be assembled"
+  changelog_release CHANGELOG.md "$new" "$today" "$P/fragments" > "$P/CHANGELOG.md" || die "CHANGELOG.md cannot be released (above)"
   cp "$P/CHANGELOG.md" CHANGELOG.md
+  fragment_paths . | while IFS= read -r f; do git rm -q -- "$f" || exit 1; done || die "the released fragments cannot be deleted"
   {
     echo "chore(seed): promote $old -> $new — $OWED one line on what the seed now carries"
     echo
@@ -296,11 +323,12 @@ cmd_commit() {
   cd "$wt" || die "cd $wt"
   if owed_left "$wt"; then die "the lines above still say $OWED: the delta sentence and the why are a person's"; fi
   atomic_set_ok "$(git status --porcelain --untracked-files=all | grep -v ' target/' | cut -c4-)" \
+    "$(git status --porcelain | grep -E '^(D |  D| D)' | cut -c4-)" \
     || die "the changed files are not the atomic promotion set (AGENTS.md, Reproducibility)"
   # shellcheck source=attribution.sh
   . "$ROOT/scripts/attribution.sh"
   attribution_trailer_check "the promotion message" "$(cat target/promote/COMMIT_MSG)" || die "remove the trailer from target/promote/COMMIT_MSG"
-  git add -- $ATOMIC && git commit -q -F target/promote/COMMIT_MSG || die "git commit failed"
+  git add -- $ATOMIC && git add -A -- changelog.d && git commit -q -F target/promote/COMMIT_MSG || die "git commit failed"
   echo "promote: COMMITTED $(git rev-parse HEAD) in $wt — not pushed. Next: scripts/promote.sh gate $wt"
 }
 
@@ -364,6 +392,22 @@ self_test() {
   got="$(changelog_release "$d/cl" 0.2.18 2026-10-30 | tr '\n' '|')"
   chk "an empty release is owed a line, not shipped silent" "$got" \
     "## Unreleased||## 0.2.18 — 2026-10-30||- $OWED — what this generation carries, and its version class.||## 0.2.17 — 2026-10-24|"
+  printf -- '- **Frag (#7).** Two\n  lines.\n- **Frag (#9).** One.\n' > "$d/fr"
+  printf '# Changelog\n\n## Unreleased\n\n- **A fix (#1).** It moves.\n\n## 0.2.17 — 2026-10-24\n\n- old\n' > "$d/cl"
+  got="$(changelog_release "$d/cl" 0.2.18 2026-10-30 "$d/fr" | tr '\n' '|')"
+  chk "the fragments are released after the section's own entries, before the blank that closes it" "$got" \
+    "# Changelog||## Unreleased||## 0.2.18 — 2026-10-30||- **A fix (#1).** It moves.|- **Frag (#7).** Two|  lines.|- **Frag (#9).** One.||## 0.2.17 — 2026-10-24||- old|"
+  printf '## Unreleased\n\n## 0.2.17 — 2026-10-24\n' > "$d/cl"
+  got="$(changelog_release "$d/cl" 0.2.18 2026-10-30 "$d/fr" | tr '\n' '|')"
+  chk "a release made of fragments alone owes no line" "$got" \
+    "## Unreleased||## 0.2.18 — 2026-10-30||- **Frag (#7).** Two|  lines.|- **Frag (#9).** One.||## 0.2.17 — 2026-10-24|"
+  printf '## Unreleased\n\n- a\n' > "$d/cl"
+  got="$(changelog_release "$d/cl" 0.2.18 2026-10-30 "$d/fr" | tr '\n' '|')"
+  chk "a section that ends the file still releases its fragments" "$got" \
+    "## Unreleased||## 0.2.18 — 2026-10-30||- a|- **Frag (#7).** Two|  lines.|- **Frag (#9).** One.|"
+  : > "$d/fr0"; printf '## Unreleased\n\n- a\n\n## 0.1.0\n' > "$d/cl"
+  got="$(changelog_release "$d/cl" 0.2.18 2026-10-30 "$d/fr0" | tr '\n' '|')"
+  chk "an empty fragment text changes nothing" "$got" "## Unreleased||## 0.2.18 — 2026-10-30||- a||## 0.1.0|"
   printf '## Unreleased\n\n## Unreleased\n' > "$d/cl"; changelog_release "$d/cl" 0.2.18 2026-10-30 > /dev/null 2>&1
   chk "two Unreleased headings are refused, not both released" "$?" "2"
   printf '# a\n```\n# e1\n```\n' > "$d/h"; printf '# e2\n' > "$d/e"
@@ -387,6 +431,12 @@ self_test() {
   atomic_set_ok "$(printf '%s\n' $ATOMIC)" > /dev/null; chk "exactly the atomic set is accepted" "$?" "0"
   atomic_set_ok "$(printf '%s\n' $ATOMIC src/cli.al)" > /dev/null; chk "a source file in the promotion commit is refused" "$?" "1"
   atomic_set_ok "$(printf '%s\n' $ATOMIC | grep -v CHANGELOG)" > /dev/null; chk "a promotion without its CHANGELOG entry is refused" "$?" "1"
+  atomic_set_ok "$(printf '%s\n' $ATOMIC changelog.d/12-a.md changelog.d/9-b.md)" "$(printf '%s\n' changelog.d/12-a.md changelog.d/9-b.md)" > /dev/null
+  chk "the atomic set plus the DELETED fragments it released is accepted" "$?" "0"
+  atomic_set_ok "$(printf '%s\n' $ATOMIC changelog.d/12-a.md)" "" > /dev/null
+  chk "a fragment ADDED or edited in the promotion commit is refused" "$?" "1"
+  atomic_set_ok "$(printf '%s\n' $ATOMIC changelog.d/README.md)" "changelog.d/README.md" > /dev/null
+  chk "deleting changelog.d/README.md is refused" "$?" "1"
   is_due 1 0 2026-10-29 2026-10-30 > /dev/null; got=$?; is_due 0 2 2026-10-29 2026-10-30 > /dev/null; got="$got$?"; is_due 0 0 2026-10-23 2026-10-30 > /dev/null; got="$got$?"
   chk "due on an owed issue, on a live seed row, and after a week" "$got" "000"
   is_due 0 0 2026-10-24 2026-10-30 > /dev/null; chk "not due: nothing owed, six days" "$?" "1"
