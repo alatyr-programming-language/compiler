@@ -1,16 +1,27 @@
-# The authoritative full gate, run on a GitHub-hosted x86_64 runner (AGENTS.md "Gates").
+# The authoritative full gate, run on GitHub-hosted x86_64 runners (AGENTS.md "Gates").
 #
 # It is a REMOTE GATE MACHINE, not a landing bot: it runs `scripts/full.sh --force-sweeps` on the
 # exact commit pushed to a `gate/**` branch and publishes the evidence. Merging, the oracle commit and
 # the leased push to `main` stay with the integrator (`alatyr-integrate`), who reads these artifacts.
-# The job holds no write token: the code under test is the pushed tree, so it runs with read-only
-# contents permission and never sees a secret.
+# The jobs hold no write token: the code under test is the pushed tree, so they run with read-only
+# contents permission and never see a secret.
+#
+# PARTS (#1568). Run one after another on one 4-core runner, the stages took 82 minutes (run
+# 42653954256), and only the first 18 of those, FIXPOINT, were on a path the others needed. So the
+# `part` jobs run `full.sh` once per part of its table (`scripts/full.sh --parts`, ALATYR_FULL_PART),
+# in parallel, each with its own fixpoint, and the `verdict` job turns their logs into the gate's ONE
+# verdict with `scripts/full_parts.sh --aggregate`. A part that is missing, cancelled, red, or that ran
+# other stages than its own reads as red. The run's log carries exactly one `*** FULL GATE` line, the
+# verdict job's, and exactly one `xbackend diff:` line, the corpus part's. Each part prints
+# `*** FULL GATE PART <part>: …`, which is not a gate verdict.
 #
 # Artifacts, for every run including a red one:
-#   gate.log            the complete full.sh output (its verdict is the last `*** FULL GATE` line)
-#   target/*.log        the per-stage logs full.sh writes
-#   corpus.manifest     the manifest this run GENERATED (byte-for-byte what `--write` would commit)
-#   explain.txt         `corpus_manifest.sh --explain` of the committed manifest against it
+#   gate-<sha>          gate.log: every part's full.sh output in table order, then the aggregate
+#                       verdict (its last `*** FULL GATE` line), plus the corpus part's manifest files
+#   gate-<sha>-<part>   that part's full.sh output and its per-stage target/*.log
+#   in gate-<sha>:
+#     corpus.manifest   the manifest this run GENERATED (byte-for-byte what `--write` would commit)
+#     explain.txt       `corpus_manifest.sh --explain` of the committed manifest against it
 name: gate
 
 on:
@@ -26,9 +37,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  full:
+  part:
     runs-on: ubuntu-latest
     timeout-minutes: 330
+    strategy:
+      # Every part runs to its own verdict: a red part must not cancel the others, or the run would
+      # report one cause where there are several. The aggregate is red either way.
+      fail-fast: false
+      matrix:
+        # The parts of scripts/full.sh's FULL_PART_TABLE. The verdict job compares this set with the
+        # table, so a part added there and not here is a red gate, not a silent skip.
+        part: [e2e, corpus, ir, sweeps]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,8 +68,9 @@ jobs:
       - name: Build the dev shell
         run: nix develop -c true
 
-      - name: Full gate
+      - name: Full gate, one part
         env:
+          ALATYR_FULL_PART: ${{ matrix.part }}
           # The e2e runtime ceiling bounds a child that does not terminate; it is not a stopwatch
           # (scripts/e2e.sh, #537). This 4-core runner runs `fmt_large_input`'s 1.77 s child (on the
           # 12-core gate machine) past 10 s on both attempts, so the ceiling is scaled here — it still
@@ -59,18 +79,63 @@ jobs:
         run: |
           ulimit -c 0
           set -o pipefail
-          echo "gate object: $(git rev-parse HEAD)  base: $(git merge-base origin/main HEAD)  runner: $(nproc) cpu"
-          nix develop -c bash scripts/full.sh --force-sweeps 2>&1 | tee gate.log
+          mkdir -p parts
+          { echo "gate object: $(git rev-parse HEAD)  base: $(git merge-base origin/main HEAD)  runner: $(nproc) cpu  part: $ALATYR_FULL_PART"
+            nix develop -c bash scripts/full.sh --force-sweeps; } 2>&1 | tee "parts/$ALATYR_FULL_PART.log"
 
       - name: Explain the corpus manifest
-        if: always()
+        if: always() && matrix.part == 'corpus'
         run: |
           if [ -f target/corpus-manifest/corpus.manifest ]; then
             cp target/corpus-manifest/corpus.manifest corpus.manifest
             nix develop -c bash scripts/corpus_manifest.sh --explain scripts/corpus.manifest corpus.manifest > explain.txt 2>&1 || true
             { echo '### corpus manifest'; echo '```'; head -c 60000 explain.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           fi
-          grep -E '^\*\*\*' gate.log >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-${{ github.sha }}-${{ matrix.part }}
+          path: |
+            parts/*.log
+            explain.txt
+            corpus.manifest
+            target/*.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  verdict:
+    needs: part
+    # Always, so a red or cancelled part still yields a red verdict rather than no verdict at all.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gate-${{ github.sha }}-*
+          path: downloaded
+
+      - name: The gate's verdict
+        run: |
+          set -o pipefail
+          mkdir -p parts
+          for p in $(bash scripts/full.sh --parts | awk '{ print $1 }' | uniq); do
+            f="downloaded/gate-${{ github.sha }}-$p/parts/$p.log"
+            [ -f "$f" ] && cp "$f" "parts/$p.log"
+            [ -f "parts/$p.log" ] && cat "parts/$p.log" >> gate.log
+          done
+          for f in corpus.manifest explain.txt; do
+            [ -f "downloaded/gate-${{ github.sha }}-corpus/$f" ] && cp "downloaded/gate-${{ github.sha }}-corpus/$f" .
+          done
+          rc=0
+          bash scripts/full_parts.sh --aggregate parts "$(git rev-parse HEAD)" > verdict.txt 2>&1 || rc=$?
+          cat verdict.txt
+          cat verdict.txt >> gate.log
+          grep -E '^\*\*\*' verdict.txt >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -80,6 +145,5 @@ jobs:
             gate.log
             explain.txt
             corpus.manifest
-            target/*.log
           if-no-files-found: warn
           retention-days: 30

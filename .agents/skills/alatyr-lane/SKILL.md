@@ -469,8 +469,13 @@ and every lane share):
 ```sh
 git diff --exit-code && git diff --cached --exit-code # the gate runs the commit, not your worktree
 git push origin HEAD:refs/heads/gate/<your-branch>    # full.sh --force-sweeps; must print GREEN (sweeps RAN)
-gh run download <run-id> -D target/gate-<run-id>      # the verdict is the `*** FULL GATE` line of gate.log
+gh run download <run-id> -n gate-<sha> -D target/gate-<run-id>  # the verdict: the `*** FULL GATE` line of gate.log
 ```
+
+The workflow runs the gate as four parallel parts (#1568, `scripts/full.sh --parts`), each with its own
+fixpoint, and its `verdict` job aggregates them (`scripts/full_parts.sh`). `gate.log` holds every part's
+output and then that one verdict. A part's own `*** FULL GATE PART <part>:` line is not a verdict, and
+the `gate-<sha>-<part>` artifacts hold each part's per-stage logs.
 
 The gate's first stage is `scripts/corpus_enum_check.sh`, and it refuses in about a second when the
 git index and the worktree do not name the same `.al` corpus — an unstaged new fixture, or a
