@@ -6459,20 +6459,24 @@ check_accept accept_issue304_inferred_pointer_field_type
 run_x86 accept_issue304_inferred_pointer_field_type 42
 check_build_located reject_issue304_slice_local_type 5 "type mismatch"
 check_build_located reject_issue304_slice_param_type 3 "type mismatch"
-## #1514 — the valid `Slice(bool)` controls of these rejections (accept_issue304_{slice,
-## inferred_slice,inferred_literal_slice,slice_field,aliased_slice_field,nested_slice_field}
-## _element_type, accept_issue623_nested_slice_field_store) take a range of a `[bool; N]`, which
-## x86_64 lays out one word per element; it now refuses that range at build time until #1559 packs
-## the array, so they left this table. Each fixture's `## expect: run 42` still judges all four
-## backends in the corpus walk, with the x86_64 refusal a known deviation under #1559.
+check_accept accept_issue304_slice_element_type
+run accept_issue304_slice_element_type 42
 check_build_located reject_issue304_inferred_slice_scalar_type 5 "type mismatch"
 check_build_located reject_issue304_inferred_slice_struct_type 5 "type mismatch"
+check_accept accept_issue304_inferred_slice_element_type
+run accept_issue304_inferred_slice_element_type 42
 check_build_located reject_issue304_inferred_literal_slice_scalar_type 5 "type mismatch"
 check_build_located reject_issue304_inferred_literal_slice_bool_type 5 "type mismatch"
+check_accept accept_issue304_inferred_literal_slice_element_type
+run accept_issue304_inferred_literal_slice_element_type 42
 check_build_located reject_issue304_slice_field_scalar_type 7 "type mismatch"
 check_build_located reject_issue304_slice_field_bool_type 7 "type mismatch"
+check_accept accept_issue304_slice_field_element_type
+run accept_issue304_slice_field_element_type 42
 check_build_located reject_issue304_aliased_slice_field_scalar_type 8 "type mismatch"
 check_build_located reject_issue304_aliased_slice_field_bool_type 8 "type mismatch"
+check_accept accept_issue304_aliased_slice_field_element_type
+run accept_issue304_aliased_slice_field_element_type 42
 ## Issue #304 — the same `Slice(T)` element store reached through a field path of TWO or THREE
 ## owners. `sema_direct_slice_field_elem_ty` already resolved its owner with the recursive
 ## `s3a_struct_span`; a guard demanding a bare local root sat in front of that call and left the
@@ -6483,11 +6487,13 @@ check_build_located reject_issue304_nested_slice_field_scalar_type 12 "type mism
 check_build_located reject_issue304_nested_slice_field_bool_type 11 "type mismatch"
 check_build_located reject_issue304_nested_slice_field_aggregate_type 12 "type mismatch"
 check_build_located reject_issue304_deep_slice_field_scalar_type 11 "type mismatch"
-## The valid control (accept_issue304_nested_slice_field_element_type, walked by the corpus only,
-## see #1514 above) keeps its store in a checked dead branch: a LIVE nested `Slice(T)` field access
-## traps 133/133/134 on AArch64, RISC-V64 and Wasm under the independent #621. The executing proof
-## for this statement form stays with the fixed-array carrier accept_issue623_nested_array_field_store
-## below.
+## The valid controls keep their stores in a checked dead branch: a LIVE nested `Slice(T)` field
+## access traps 133/133/134 on AArch64, RISC-V64 and Wasm under the independent #621, and the
+## per-file corpus row would freeze those exits. `run` therefore records 42 on all four backends
+## without executing the store; the executing proof for this statement form stays with the
+## fixed-array carrier accept_issue623_nested_array_field_store below.
+check_accept accept_issue304_nested_slice_field_element_type
+run accept_issue304_nested_slice_field_element_type 42
 ## Issue #623 — an element store through a field path with TWO owners. `stmt_starts` and `p_stmt`
 ## demanded the `[` immediately after the FIRST field, so `outer.leaf.arr[0] = 42` was not an
 ## assignment statement at all and the store was emitted on no backend, with exit 0 and no
@@ -6502,6 +6508,8 @@ run_wat accept_issue623_nested_array_field_store 42
 ## needs reachable. Backend write execution stays in a checked dead branch: a Slice(T) struct field
 ## still traps on AArch64, RISC-V64 and Wasm under #621, and recording those exits here would freeze
 ## a defect the oracle then has to unlearn.
+check_accept accept_issue623_nested_slice_field_store
+run accept_issue623_nested_slice_field_store 42
 ## The recovered statement form must still obey the write-permission rule, and say where. On the
 ## parent both entry points exited 0 on this program and discarded the store silently.
 check_build_located reject_issue623_nested_field_immutable_owner 12 "immutable binding"

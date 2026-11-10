@@ -1606,13 +1606,6 @@ wasm	test/wat_hof_note_wellformed.al	run/134	#1195
 wasm	test/when_guard_arch.al	run/134	#1200
 wasm	test/word_layout_struct_by_value_control.al	run/134	#1187
 wasm	test/zst_and_empty_ctor.al	run/134	#713
-x86_64	test/accept_issue304_aliased_slice_field_element_type.al	compile/1	#1559
-x86_64	test/accept_issue304_inferred_literal_slice_element_type.al	compile/1	#1559
-x86_64	test/accept_issue304_inferred_slice_element_type.al	compile/1	#1559
-x86_64	test/accept_issue304_nested_slice_field_element_type.al	compile/1	#1559
-x86_64	test/accept_issue304_slice_element_type.al	compile/1	#1559
-x86_64	test/accept_issue304_slice_field_element_type.al	compile/1	#1559
-x86_64	test/accept_issue623_nested_slice_field_store.al	compile/1	#1559
 x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
 x86_64	test/issue1394_generic_call_eq.al	compile/1	#1397
