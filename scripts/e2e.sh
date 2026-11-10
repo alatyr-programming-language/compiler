@@ -11289,6 +11289,16 @@ check_build_located issue926_const_init_cycle_pair 15 "COMPTIME INITIALIZER CYCL
 ## per checked declaration, so the walk terminates and is complete; `B := A0 + A0` outside the ring is not refused.
 check_build_located issue926_const_init_cycle_long 15 "COMPTIME INITIALIZER CYCLE"
 run_x86 issue926_const_chain_ok 2
+## #926 — a cycle through an enum payload, a slice bound or a `match` arm is a cycle too. NON-VACUOUS: on the
+## parent `2188fa95` (x86_64) the enum one builds and runs 7, the slice one builds and runs 0, the `match`
+## one builds rc 139; `check` rc 0 for all three.
+check_build_located issue926_const_init_cycle_enum 16 "COMPTIME INITIALIZER CYCLE"
+check_build_located issue926_const_init_cycle_slice 16 "COMPTIME INITIALIZER CYCLE"
+check_build_located issue926_const_init_cycle_match 16 "COMPTIME INITIALIZER CYCLE"
+## #926 — `X : u64 = m::X + 1` names ANOTHER module's `X`: no cycle, and `check` accepts it. NON-VACUOUS: the
+## name-comparing first revision (`0534ff1b`) refused it as a cycle. Its value, 2, is not asserted here: x86_64
+## crashes on the name collision in the backend, on `main` too (#1567, rows in known-deviations.tsv).
+check_accept issue926_const_qualified_same_name_ok
 run deref_view_pointee 42
 ## Types §7 — a `[T]`/`str` view IS its two-word {ptr,len} pair wherever it appears. A view ARGUMENT that is
 ## not a plain local (a struct FIELD at any depth, a `sub(…)`/range sub-view, a `[str;N]` element, a str field

@@ -297,6 +297,7 @@ aarch64	test/issue804_default_int_array_ok.al	run/133	#1194
 aarch64	test/issue805_exhaustive_controls.al	run/133	#577
 aarch64	test/issue913_struct_lit_nested_field.al	run/133	#577
 aarch64	test/issue926_const_chain_ok.al	run/133	#1189
+aarch64	test/issue926_const_qualified_same_name_ok.al	run/1	#1567
 aarch64	test/issue986_expect_call_receiver.al	run/133	#1200
 aarch64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
 aarch64	test/issue987_vec_index_ops.al	run/133	#1200
@@ -833,6 +834,7 @@ riscv64	test/issue804_default_int_array_ok.al	run/133	#1194
 riscv64	test/issue805_exhaustive_controls.al	run/133	#577
 riscv64	test/issue913_struct_lit_nested_field.al	run/133	#577
 riscv64	test/issue926_const_chain_ok.al	run/133	#1189
+riscv64	test/issue926_const_qualified_same_name_ok.al	run/1	#1567
 riscv64	test/issue986_expect_call_receiver.al	run/133	#1200
 riscv64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
 riscv64	test/issue987_vec_index_ops.al	run/133	#1200
@@ -1368,6 +1370,7 @@ wasm	test/issue804_default_int_array_ok.al	run/134	#1194
 wasm	test/issue805_exhaustive_controls.al	run/134	#1190
 wasm	test/issue913_struct_lit_nested_field.al	run/134	#1190
 wasm	test/issue926_const_chain_ok.al	run/134	#1204
+wasm	test/issue926_const_qualified_same_name_ok.al	run/1	#1567
 wasm	test/issue986_expect_call_receiver.al	run/134	#1200
 wasm	test/issue986_expect_multiword_value_reject.al	run/134	#1200
 wasm	test/issue987_vec_index_ops.al	run/134	#1186
@@ -1611,4 +1614,5 @@ wasm	test/zst_and_empty_ctor.al	run/134	#713
 x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
 x86_64	test/issue1394_generic_call_eq.al	compile/1	#1397
+x86_64	test/issue926_const_qualified_same_name_ok.al	compile/139	#1567
 x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
