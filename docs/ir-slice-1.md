@@ -246,9 +246,13 @@ interns each one into its own table, with a brand `InstId := distinct u32`, and 
 body). There is no reserved id 0 and no sentinel. The record table grows a **second key word**:
 every slot holds `(key, inst)`, where `inst` is the `InstId` plus one, stored in its own word array
 next to `STY_KEYS`. The one non-instance key word is 0, which is written by the typed constructor
-`sty_key(k, Option(InstId))` and is never read back as an id. Binding keys (`bind_key`) and spelling
-keys get the same second word. Bits are not packed into the address: the address keeps its meaning,
-and the scheme does not depend on the address width.
+`sty_key(k, Option(InstId))` and is never read back as an id. Binding keys and spelling keys get the
+same second word. Bits are not packed into the address: the address keeps its meaning, and the scheme
+does not depend on the address width. The same holds for the record space (#1108): node, node
+spelling, binding and binding spelling are a `StySpace` stored in a key word of its own, because a
+binding's key is its name offset, and a desugar-synthesized offset (`ast::span_is_synthetic`) wraps
+modularly and can carry any bit — the earlier `| 1<<63` / `| 1<<62` tags made a binding's value type
+and its spelling one key.
 The API is `sty_put_in(e, Option(InstId), t)` / `sty_get_in(e, Option(InstId))` (plus the `bind_`
 and `spell_` forms). Today's `sty_put`/`sty_get` stay, as the `None` case.
 

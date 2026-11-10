@@ -2553,8 +2553,22 @@ pub vty_int := fn(bytes : u64, sg : Sgn) -> VTy { VTy(cls = VCls.VcInt, bytes = 
 ## The recorded type's class, read through a copy (#792).
 pub vty_cls := fn(t : VTy) -> VCls { t.cls }
 
+## The four record spaces of the one table (#1108). A node's VTy and its spelling are keyed by the
+## node's address, a binding's VTy and its spelling by its declaration's name offset — and that offset is
+## a `src`-relative handle, which for a desugar-synthesized name (`ast::span_is_synthetic`) wraps
+## modularly and may carry ANY bit pattern. So the space is a key word of its own, compared and hashed
+## like the instance and iteration words, never a bit OR-ed into a key that can already hold it: the old
+## `ns | 1<<63` binding key and its `| 1<<62` spelling key were the same word for such an offset, and a
+## binding's spelling overwrote its VTy.
+StySpace := enum { SsNode, SsNodeSpell, SsBind, SsBindSpell }
+## The space's key word, as stored in `STY_SPACES`.
+sty_space_word := fn(sp : StySpace) -> usize {
+  match sp { SsNode => { 0 }; SsNodeSpell => { 1 }; SsBind => { 2 }; SsBindSpell => { 3 } }
+}
+
 mut STY_ON : bool = true
-mut STY_KEYS : usize = 0    ## address of the key array (node addresses)
+mut STY_SPACES : usize = 0  ## address of the record-space key word array (`sty_space_word`)
+mut STY_KEYS : usize = 0    ## address of the key array (node addresses, binding name offsets)
 mut STY_INSTS : usize = 0   ## address of the second key word array (the instance id + 1; 0 = not an instance)
 mut STY_ITERS : usize = 0   ## address of the third key word array (the iteration id + 1; 0 = not in an iteration)
 mut STY_USED : usize = 0    ## address of the occupancy array (1 = the slot holds a key)
@@ -2586,10 +2600,13 @@ sty_word := fn(base : usize, i : usize) -> ptr(mut usize) {
 ## The slot a key hashes to: multiplicative hashing of the node address (nodes are 8-byte aligned).
 ## The second key word (the instance id + 1, or 0) is mixed in with a different odd constant so that
 ## the same node under two instances lands in different slots (docs/ir-slice-1.md §8.2). The third key
-## word (the iteration id + 1, or 0) is mixed in the same way with a third constant (§8.4, step e4).
-sty_home := fn(k : usize, iw : usize, tw : usize, cap : usize) -> usize {
+## word (the iteration id + 1, or 0) is mixed in the same way with a third constant (§8.4, step e4), and
+## the record-space word (#1108) with a fourth.
+sty_home := fn(sw : usize, k : usize, iw : usize, tw : usize, cap : usize) -> usize {
   ## unchecked-ok: a hash is modular by intent; the products' overflow is the mixing, not an error.
   mut h : usize = unchecked { shr(k, 3) * 2654435761 }
+  ## unchecked-ok: modular hash mixing of the record-space word, as below.
+  h = unchecked { h + sw * 668265263 }
   ## A hash is modular by intent; adding the second key word's product is the mixing, and a wrap
   ## still leaves a valid slot index for the `% cap` below.
   ## unchecked-ok: modular hash mixing, as above — the overflow is the point, not an error.
@@ -2601,13 +2618,14 @@ sty_home := fn(k : usize, iw : usize, tw : usize, cap : usize) -> usize {
 ## Is slot `i` of the occupancy array at `used` taken? Occupancy is its own array, so no key value is
 ## reserved to mean "free".
 sty_taken := fn(used : usize, i : usize) -> bool { deref(sty_word(used, i)) == 1 }
-## Insert or overwrite `(k, iw, tw) -> v` in the arrays at (keys, insts, iters, vals, used) of `cap`
-## slots, WITHOUT growing. Answers whether a new slot was taken.
-sty_place := fn(keys : usize, insts : usize, iters : usize, vals : usize, used : usize, cap : usize, k : usize, iw : usize, tw : usize, v : usize) -> bool {
-  mut i := sty_home(k, iw, tw, cap)
+## Insert or overwrite `(sw, k, iw, tw) -> v` in the arrays at (spaces, keys, insts, iters, vals, used)
+## of `cap` slots, WITHOUT growing. Answers whether a new slot was taken.
+sty_place := fn(spaces : usize, keys : usize, insts : usize, iters : usize, vals : usize, used : usize, cap : usize, sw : usize, k : usize, iw : usize, tw : usize, v : usize) -> bool {
+  mut i := sty_home(sw, k, iw, tw, cap)
   mut probes : usize = 0
   while probes < cap {
     if not sty_taken(used, i) {
+      deref(sty_word(spaces, i)) = sw
       deref(sty_word(keys, i)) = k
       deref(sty_word(insts, i)) = iw
       deref(sty_word(iters, i)) = tw
@@ -2615,7 +2633,7 @@ sty_place := fn(keys : usize, insts : usize, iters : usize, vals : usize, used :
       deref(sty_word(used, i)) = 1
       return true
     }
-    if deref(sty_word(keys, i)) == k and deref(sty_word(insts, i)) == iw and deref(sty_word(iters, i)) == tw { deref(sty_word(vals, i)) = v; return false }
+    if deref(sty_word(spaces, i)) == sw and deref(sty_word(keys, i)) == k and deref(sty_word(insts, i)) == iw and deref(sty_word(iters, i)) == tw { deref(sty_word(vals, i)) = v; return false }
     i = (i + 1) % cap
     probes = probes + 1
   }
@@ -2626,6 +2644,7 @@ sty_place := fn(keys : usize, insts : usize, iters : usize, vals : usize, used :
 sty_grow := fn() {
   mut nc : usize = STY_CAP * 2
   if nc == 0 { nc = 65536 }
+  ns := sty_map(nc * 8)
   nk := sty_map(nc * 8)
   ni := sty_map(nc * 8)
   nt := sty_map(nc * 8)
@@ -2633,9 +2652,10 @@ sty_grow := fn() {
   nu := sty_map(nc * 8)
   mut i : usize = 0
   while i < STY_CAP {
-    if sty_taken(STY_USED, i) { fresh := sty_place(nk, ni, nt, nv, nu, nc, deref(sty_word(STY_KEYS, i)), deref(sty_word(STY_INSTS, i)), deref(sty_word(STY_ITERS, i)), deref(sty_word(STY_VALS, i))) }
+    if sty_taken(STY_USED, i) { fresh := sty_place(ns, nk, ni, nt, nv, nu, nc, deref(sty_word(STY_SPACES, i)), deref(sty_word(STY_KEYS, i)), deref(sty_word(STY_INSTS, i)), deref(sty_word(STY_ITERS, i)), deref(sty_word(STY_VALS, i))) }
     i = i + 1
   }
+  STY_SPACES = ns
   STY_KEYS = nk
   STY_INSTS = ni
   STY_ITERS = nt
@@ -2663,7 +2683,7 @@ sty_record := fn() -> usize {
 pub sty_put := fn(e : ptr(Expr), t : VTy) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_put_key(k, 0, 0, t)
+  sty_put_key(StySpace.SsNode, k, 0, 0, t)
 }
 ## Record (or re-record) the value type of the node at `e` in the context (`inst`, `iter`): `Some(id)`
 ## for a monomorphization instance's body (`None` for the generic pass or a non-generic body), and the
@@ -2672,7 +2692,7 @@ pub sty_put := fn(e : ptr(Expr), t : VTy) {
 pub sty_put_at := fn(e : ptr(Expr), inst : Option(InstId), iter : Option(IterId), t : VTy) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_put_key(k, sty_inst_word(inst), sty_iter_word(iter), t)
+  sty_put_key(StySpace.SsNode, k, sty_inst_word(inst), sty_iter_word(iter), t)
 }
 ## The second key word for an instance: `usize(id) + 1`, or 0 for `None`.
 sty_inst_word := fn(opt : Option(InstId)) -> usize {
@@ -2684,20 +2704,19 @@ sty_iter_word := fn(opt : Option(IterId)) -> usize {
 }
 ## docs/ir-slice-1.md §2 — the value type of a BINDING, keyed by its declaration's name offset: an
 ## unannotated local's type is known only where it is declared, and each use of it reads it here. The
-## key is the offset with the top bit set, a value no node address (an arena address) takes, so binding
-## keys and node keys share the one growing table without meeting.
-bind_key := fn(ns : usize) -> usize { ns | shl(usize(1), 63) }
-pub sty_bind_put := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), 0, 0, t) }
-pub sty_bind_get := fn(ns : usize) -> VTy { sty_get_key(bind_key(ns), 0, 0) }
+## binding spaces (`SsBind`, `SsBindSpell`) keep binding keys and node keys apart in the one growing
+## table, whatever bits the offset carries (#1108).
+pub sty_bind_put := fn(ns : usize, t : VTy) { sty_put_key(StySpace.SsBind, ns, 0, 0, t) }
+pub sty_bind_get := fn(ns : usize) -> VTy { sty_get_key(StySpace.SsBind, ns, 0, 0) }
 ## The binding record in the context (`inst`, `iter`) (a generic body's local, checked per instance;
 ## a `comptime for` variable, bound per iteration).
-pub sty_bind_put_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId), t : VTy) { sty_put_key(bind_key(ns), sty_inst_word(inst), sty_iter_word(iter), t) }
-pub sty_bind_get_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId)) -> VTy { sty_get_key(bind_key(ns), sty_inst_word(inst), sty_iter_word(iter)) }
-sty_put_key := fn(k : usize, iw : usize, tw : usize, t : VTy) {
+pub sty_bind_put_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId), t : VTy) { sty_put_key(StySpace.SsBind, ns, sty_inst_word(inst), sty_iter_word(iter), t) }
+pub sty_bind_get_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId)) -> VTy { sty_get_key(StySpace.SsBind, ns, sty_inst_word(inst), sty_iter_word(iter)) }
+sty_put_key := fn(sp : StySpace, k : usize, iw : usize, tw : usize, t : VTy) {
   if STY_N * 2 >= STY_CAP { sty_grow() }
   ## An existing record is overwritten in place, so a context that refines a literal reaches every
   ## reader of the node.
-  ex := sty_find(k, iw, tw)
+  ex := sty_find(sp, k, iw, tw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word is a record address `sty_record` handed out.
@@ -2709,18 +2728,19 @@ sty_put_key := fn(k : usize, iw : usize, tw : usize, t : VTy) {
       ## unchecked-ok: `sty_record` answered a fresh slot of a live mapping, at least `size(VTy)` bytes.
       rp2 : ptr(mut VTy) = unchecked bitcast(ptr(mut VTy), ra)
       deref(rp2) = t
-      if sty_place(STY_KEYS, STY_INSTS, STY_ITERS, STY_VALS, STY_USED, STY_CAP, k, iw, tw, ra) { STY_N = STY_N + 1 }
+      if sty_place(STY_SPACES, STY_KEYS, STY_INSTS, STY_ITERS, STY_VALS, STY_USED, STY_CAP, sty_space_word(sp), k, iw, tw, ra) { STY_N = STY_N + 1 }
     }
   }
 }
-## The record address stored for key `(k, iw, tw)`, if any.
-sty_find := fn(k : usize, iw : usize, tw : usize) -> Option(u64) {
+## The record address stored for key `(sp, k, iw, tw)`, if any.
+sty_find := fn(sp : StySpace, k : usize, iw : usize, tw : usize) -> Option(u64) {
   if STY_CAP == 0 { return Option(u64).None }
-  mut i := sty_home(k, iw, tw, STY_CAP)
+  sw := sty_space_word(sp)
+  mut i := sty_home(sw, k, iw, tw, STY_CAP)
   mut probes : usize = 0
   while probes < STY_CAP {
     if not sty_taken(STY_USED, i) { return Option(u64).None }
-    if deref(sty_word(STY_KEYS, i)) == k and deref(sty_word(STY_INSTS, i)) == iw and deref(sty_word(STY_ITERS, i)) == tw { return Option(u64).Some(u64(deref(sty_word(STY_VALS, i)))) }
+    if deref(sty_word(STY_SPACES, i)) == sw and deref(sty_word(STY_KEYS, i)) == k and deref(sty_word(STY_INSTS, i)) == iw and deref(sty_word(STY_ITERS, i)) == tw { return Option(u64).Some(u64(deref(sty_word(STY_VALS, i)))) }
     i = (i + 1) % STY_CAP
     probes = probes + 1
   }
@@ -2731,17 +2751,17 @@ sty_find := fn(k : usize, iw : usize, tw : usize) -> Option(u64) {
 pub sty_get := fn(e : ptr(Expr)) -> VTy {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_get_key(k, 0, 0)
+  sty_get_key(StySpace.SsNode, k, 0, 0)
 }
 ## The value type recorded for the node at `e` in the context (`inst`, `iter`). No context falls back
 ## to another: a node with no record in exactly this context is `VcAbsent` (§3.8.4, never a default).
 pub sty_get_at := fn(e : ptr(Expr), inst : Option(InstId), iter : Option(IterId)) -> VTy {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_get_key(k, sty_inst_word(inst), sty_iter_word(iter))
+  sty_get_key(StySpace.SsNode, k, sty_inst_word(inst), sty_iter_word(iter))
 }
-sty_get_key := fn(k : usize, iw : usize, tw : usize) -> VTy {
-  ex := sty_find(k, iw, tw)
+sty_get_key := fn(sp : StySpace, k : usize, iw : usize, tw : usize) -> VTy {
+  ex := sty_find(sp, k, iw, tw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word is a record address `sty_record` handed out.
@@ -2758,8 +2778,8 @@ sty_get_key := fn(k : usize, iw : usize, tw : usize) -> VTy {
 ## callee's `-> R`, a pointer's pointee inside `ptr(…)`), `n == 0` when sema resolved none. It is the
 ## recorder's own companion, never read by a builder: a value type (`VTy`) is enough to emit a scalar,
 ## but reaching the scalar a field, a `deref` or an element holds needs the aggregate or pointer it is
-## read from, and only its spelling names that. Same table, own key space (bit 62), so a spelling key
-## meets neither a node key (an arena address) nor a binding key (bit 63 alone). `SfBytesView` marks the
+## read from, and only its spelling names that. Same table, own record space (`StySpace`, #1108), so a
+## spelling key meets neither a node key nor a binding key whatever bits its word carries. `SfBytesView` marks the
 ## one type a builtin produces that no declaration spells: a byte view — `str`, which is `[u8]` (Types
 ## §7) — answered by `str_at`/`bytes` or a string literal; `s`/`n` are then 0.
 ## `SfArrayOf` marks an array whose ELEMENT is spelled `[s, s+n)`: an unannotated `[e0, e1, …]` has no text
@@ -2790,36 +2810,35 @@ pub spell_view_layer := fn(sp : TySpell) -> bool { sp.layers % 4 == 3 }
 ## Is `sp` the native signed integer of an unannotated literal (no wrapper)?
 pub spell_i64 := fn(sp : TySpell) -> bool { f : SpellForm = sp.form; match f { SfI64 => { sp.layers == 0 }; SfText | SfBytesView | SfU8 => { false } } }
 pub spell_u8 := fn(sp : TySpell) -> bool { f : SpellForm = sp.form; match f { SfU8 => { sp.layers == 0 }; SfText | SfBytesView | SfI64 => { false } } }
-spell_key := fn(k : usize) -> usize { k | shl(usize(1), 62) }
 pub sty_spell_put := fn(e : ptr(Expr), t : TySpell) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_spell_put_key(spell_key(k), 0, 0, t)
+  sty_spell_put_key(StySpace.SsNodeSpell, k, 0, 0, t)
 }
 pub sty_spell_get := fn(e : ptr(Expr)) -> TySpell {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_spell_get_key(spell_key(k), 0, 0)
+  sty_spell_get_key(StySpace.SsNodeSpell, k, 0, 0)
 }
 ## The spelling record in the context (`inst`, `iter`) (a generic body's node, checked per instance;
 ## a `comptime for` body's node, checked per iteration).
 pub sty_spell_put_at := fn(e : ptr(Expr), inst : Option(InstId), iter : Option(IterId), t : TySpell) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_spell_put_key(spell_key(k), sty_inst_word(inst), sty_iter_word(iter), t)
+  sty_spell_put_key(StySpace.SsNodeSpell, k, sty_inst_word(inst), sty_iter_word(iter), t)
 }
 pub sty_spell_get_at := fn(e : ptr(Expr), inst : Option(InstId), iter : Option(IterId)) -> TySpell {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_spell_get_key(spell_key(k), sty_inst_word(inst), sty_iter_word(iter))
+  sty_spell_get_key(StySpace.SsNodeSpell, k, sty_inst_word(inst), sty_iter_word(iter))
 }
-pub sty_bind_spell_put := fn(ns : usize, t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), 0, 0, t) }
-pub sty_bind_spell_get := fn(ns : usize) -> TySpell { sty_spell_get_key(spell_key(bind_key(ns)), 0, 0) }
-pub sty_bind_spell_put_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId), t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), sty_inst_word(inst), sty_iter_word(iter), t) }
-pub sty_bind_spell_get_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId)) -> TySpell { sty_spell_get_key(spell_key(bind_key(ns)), sty_inst_word(inst), sty_iter_word(iter)) }
-sty_spell_put_key := fn(k : usize, iw : usize, tw : usize, t : TySpell) {
+pub sty_bind_spell_put := fn(ns : usize, t : TySpell) { sty_spell_put_key(StySpace.SsBindSpell, ns, 0, 0, t) }
+pub sty_bind_spell_get := fn(ns : usize) -> TySpell { sty_spell_get_key(StySpace.SsBindSpell, ns, 0, 0) }
+pub sty_bind_spell_put_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId), t : TySpell) { sty_spell_put_key(StySpace.SsBindSpell, ns, sty_inst_word(inst), sty_iter_word(iter), t) }
+pub sty_bind_spell_get_at := fn(ns : usize, inst : Option(InstId), iter : Option(IterId)) -> TySpell { sty_spell_get_key(StySpace.SsBindSpell, ns, sty_inst_word(inst), sty_iter_word(iter)) }
+sty_spell_put_key := fn(sp : StySpace, k : usize, iw : usize, tw : usize, t : TySpell) {
   if STY_N * 2 >= STY_CAP { sty_grow() }
-  ex := sty_find(k, iw, tw)
+  ex := sty_find(sp, k, iw, tw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word under a spelling key is a record address `sty_record` handed out.
@@ -2831,12 +2850,12 @@ sty_spell_put_key := fn(k : usize, iw : usize, tw : usize, t : TySpell) {
       ## unchecked-ok: `sty_record` answered a fresh slot of a live mapping, at least `size(TySpell)` bytes.
       rp2 : ptr(mut TySpell) = unchecked bitcast(ptr(mut TySpell), ra)
       deref(rp2) = t
-      if sty_place(STY_KEYS, STY_INSTS, STY_ITERS, STY_VALS, STY_USED, STY_CAP, k, iw, tw, ra) { STY_N = STY_N + 1 }
+      if sty_place(STY_SPACES, STY_KEYS, STY_INSTS, STY_ITERS, STY_VALS, STY_USED, STY_CAP, sty_space_word(sp), k, iw, tw, ra) { STY_N = STY_N + 1 }
     }
   }
 }
-sty_spell_get_key := fn(k : usize, iw : usize, tw : usize) -> TySpell {
-  ex := sty_find(k, iw, tw)
+sty_spell_get_key := fn(sp : StySpace, k : usize, iw : usize, tw : usize) -> TySpell {
+  ex := sty_find(sp, k, iw, tw)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word under a spelling key is a record address `sty_record` handed out.
@@ -2944,12 +2963,12 @@ pub rec_iter := fn() -> Option(IterId) {
 pub sty_put_cur := fn(e : ptr(Expr), t : VTy) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_put_key(k, rec_inst_word(), rec_iter_word(), t)
+  sty_put_key(StySpace.SsNode, k, rec_inst_word(), rec_iter_word(), t)
 }
 pub sty_get_cur := fn(e : ptr(Expr)) -> VTy {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_get_key(k, rec_inst_word(), rec_iter_word())
+  sty_get_key(StySpace.SsNode, k, rec_inst_word(), rec_iter_word())
 }
 ## docs/ir-slice-1.md §8.3 (e3), docs/ir.md §3.8 — THE answer to "which signedness does this integer
 ## value carry", read from sema's record in the CURRENT context (instance + iteration). x86's legacy
@@ -3131,18 +3150,18 @@ pub pair_sg_soft := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> ValSg {
   ValSg.VsNotInt
 }
 pub vs_unsigned := fn(v : ValSg) -> bool { match v { VsUnsigned => { true }; VsSigned | VsNotInt => { false } } }
-pub sty_bind_put_cur := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), rec_inst_word(), rec_iter_word(), t) }
+pub sty_bind_put_cur := fn(ns : usize, t : VTy) { sty_put_key(StySpace.SsBind, ns, rec_inst_word(), rec_iter_word(), t) }
 ## A BINDING's records are written in the context it is declared in, and a use reads them there. A
 ## binding declared outside an unrolled loop (a parameter, a local before the loop) is the same binding
 ## in every iteration, so a lookup that finds nothing at the current iteration path continues at the
 ## path's parent, and so on up to the frame with no iteration — lexical scope, not a fallback to another
 ## answer: a binding declared INSIDE the body is re-recorded at each iteration and found first. The
 ## instance word is kept: a binding is never read across instances.
-sty_bind_find_cur := fn(k : usize) -> Option(u64) {
+sty_bind_find_cur := fn(sp : StySpace, ns : usize) -> Option(u64) {
   iw := rec_inst_word()
   mut tw := rec_iter_word()
   loop {
-    r := sty_find(k, iw, tw)
+    r := sty_find(sp, ns, iw, tw)
     match r { Some(x) => { return Option(u64).Some(x) }; None => {} }
     if tw == 0 { return Option(u64).None }
     tw = iter_parent_word(tw)
@@ -3150,7 +3169,7 @@ sty_bind_find_cur := fn(k : usize) -> Option(u64) {
   Option(u64).None
 }
 pub sty_bind_get_cur := fn(ns : usize) -> VTy {
-  ex := sty_bind_find_cur(bind_key(ns))
+  ex := sty_bind_find_cur(StySpace.SsBind, ns)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word is a record address `sty_record` handed out.
@@ -3165,17 +3184,17 @@ pub sty_bind_get_cur := fn(ns : usize) -> VTy {
 pub sty_spell_put_cur := fn(e : ptr(Expr), t : TySpell) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
-  sty_spell_put_key(spell_key(k), rec_inst_word(), rec_iter_word(), t)
+  sty_spell_put_key(StySpace.SsNodeSpell, k, rec_inst_word(), rec_iter_word(), t)
 }
 pub sty_spell_get_cur := fn(e : ptr(Expr)) -> TySpell {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
-  sty_spell_get_key(spell_key(k), rec_inst_word(), rec_iter_word())
+  sty_spell_get_key(StySpace.SsNodeSpell, k, rec_inst_word(), rec_iter_word())
 }
-pub sty_bind_spell_put_cur := fn(ns : usize, t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), rec_inst_word(), rec_iter_word(), t) }
+pub sty_bind_spell_put_cur := fn(ns : usize, t : TySpell) { sty_spell_put_key(StySpace.SsBindSpell, ns, rec_inst_word(), rec_iter_word(), t) }
 ## A binding's spelling, read in its declaration's context (as `sty_bind_get_cur`).
 pub sty_bind_spell_get_cur := fn(ns : usize) -> TySpell {
-  ex := sty_bind_find_cur(spell_key(bind_key(ns)))
+  ex := sty_bind_find_cur(StySpace.SsBindSpell, ns)
   match ex {
     Some(rw) => {
       ## unchecked-ok: every value word under a spelling key is a record address `sty_record` handed out.
@@ -3445,9 +3464,9 @@ put_rec := fn(in out sb : rt::StrBuf, t : VTy) {
 }
 put_rec_pair := fn(in out sb : rt::StrBuf, kl : usize, kr : usize, iw : usize, tw : usize) {
   put(sb, " ")
-  put_rec(sb, sty_get_key(kl, iw, tw))
+  put_rec(sb, sty_get_key(StySpace.SsNode, kl, iw, tw))
   put(sb, ",")
-  put_rec(sb, sty_get_key(kr, iw, tw))
+  put_rec(sb, sty_get_key(StySpace.SsNode, kr, iw, tw))
 }
 pub sign_rec_row := fn(op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) {
   if not sign_open() { return }
