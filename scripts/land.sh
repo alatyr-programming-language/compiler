@@ -599,7 +599,7 @@ source "$ROOT/scripts/attribution.sh"
 ##   3  an integrator tail commit — keep walking to its first parent
 ##   1  anything else — refuse
 LAND_TAIL_ORACLE_RE='^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline|scripts/xbackend_diff\.baseline)$'
-LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scripts/package_cli_test\.sh|CHANGELOG\.md)$'
+LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scripts/package_cli_test\.sh|CHANGELOG\.md|changelog\.d/[1-9][0-9]*-[a-z0-9-]+\.md)$'
 main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
   if [ "$1" -ge 2 ]; then
     [ "$2" = yes ] && return 0
@@ -787,7 +787,7 @@ xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=153  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526
+LAND_SELFTEST_EXPECTED=155  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -1223,6 +1223,10 @@ Not a bullet.
   [ $? = 3 ]; _ck $? provenance-stopped-at-a-manifest-plus-ratchet-commit
   main_provenance_step 1 - "$(printf '%s\n' package.al seed/alatyr seed/VERSION seed/HISTORY.md scripts/package_cli_test.sh CHANGELOG.md)" r1 >/dev/null 2>&1
   [ $? = 3 ]; _ck $? provenance-stopped-at-a-reseed-commit
+  main_provenance_step 1 - "$(printf '%s\n' package.al seed/alatyr seed/VERSION seed/HISTORY.md scripts/package_cli_test.sh CHANGELOG.md changelog.d/12-a-fix.md)" r2 >/dev/null 2>&1
+  [ $? = 3 ]; _ck $? provenance-stopped-at-a-reseed-that-released-fragments
+  main_provenance_step 1 - "$(printf '%s\n' CHANGELOG.md changelog.d/12-a-fix.md)" c2 >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? provenance-allowed-a-direct-fragment-push-as-a-reseed
   main_provenance_step 1 - CHANGELOG.md c1 >/dev/null 2>&1
   [ $? = 1 ]; _ck $? provenance-allowed-a-direct-CHANGELOG-push-as-a-reseed
   main_provenance_step 1 - "$(printf '%s\n%s' scripts/corpus.manifest src/lower.al)" x1 >/dev/null 2>&1

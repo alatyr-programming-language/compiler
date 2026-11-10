@@ -124,6 +124,14 @@ Two numbers that are **not** the compiler's version: the specification revision 
 `README.md` carries the badge) and the seed lineage in `seed/HISTORY.md`. The specification's own tags
 (`v1.0.0`, `v1.1.0`, …) live in the sibling repository; a `v1.1.0` here would mean something else entirely.
 
+## Where a new entry goes
+
+A new entry is a file of its own, `changelog.d/<issue>-<slug>.md` (`changelog.d/README.md` gives the
+shape), never a line added under `## Unreleased` below (#1566). Every PR appending at that one anchor
+made any two of them conflict. `scripts/promote.sh` releases the fragments with the version, after the
+section's own entries, and deletes them. `scripts/changelog_fragments.sh --check` refuses a line added
+under `## Unreleased`. The entries already there stay until the next release.
+
 ## Unreleased
 
 - **A generic call's struct or enum result can be passed straight on (#1256).** `same(mk(S1, x), y)`

@@ -120,7 +120,9 @@ looks. Everything else is triaged by what it blocks.
 - **Keep needle strings out of fixture comments.** The gate's `*_has` helpers grep the whole file, so
   a header that quotes the string its own assertion searches for makes that assertion pass on an
   unfixed compiler. This has happened twice.
-- **A user-visible change carries its `## Unreleased` line in the same commit.** Same reasoning as the
+- **A user-visible change carries its changelog entry in the same commit**, as a new file
+  `changelog.d/<issue>-<slug>.md` (`changelog.d/README.md`), never as a line under `CHANGELOG.md`'s
+  `## Unreleased`, which the gate refuses (#1566). Same reasoning as the
   fixture: written while you still know what you measured, not reconstructed at release time from a
   log. Whether yours is user-visible is already decided by the PR's **Kind** block — the first four
   boxes are, the last two (`gate or tooling only`, `refactor with no behaviour change`) are not, and
@@ -233,7 +235,7 @@ Three things follow from how the delta is checked:
       a contributor's, and it needs three-stage evidence.
 - [ ] The manifest either matches, or the PR carries a `scripts/corpus.expected-delta` emitted
       against the current `main` and `--check-delta` exits 0 on it (never the manifest itself).
-- [ ] User-visible? Then `CHANGELOG.md`'s `## Unreleased` gained its line, in this same commit.
+- [ ] User-visible? Then `changelog.d/<issue>-<slug>.md` holds its entry, in this same commit.
 
 ## How your change lands
 
