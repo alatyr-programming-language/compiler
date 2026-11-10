@@ -87,8 +87,9 @@ EOF
   echo "ok   full gate self-test: the red-gate stage summary skips dump-failed=/verify-failed= counters (#1491)"
 }
 
-## PARTS (#1568). The stages after FIXPOINT fall into four parts that share nothing but the compiler the
-## fixpoint builds, so `.github/workflows/gate.yml` runs them as four parallel jobs, each on its own
+## PARTS (#1568). The stages after FIXPOINT fall into four parts that share nothing but the compiler
+## under test (Stage1 built by the seed, which each part without E2E rebuilds after FIXPOINT, as E2E does
+## for the serial run), so `.github/workflows/gate.yml` runs them as four parallel jobs, each on its own
 ## runner, and the authoritative verdict is `scripts/full_parts.sh --aggregate`: GREEN only when every
 ## part ran exactly its stages and went GREEN. With ALATYR_FULL_PART unset (the merge queue on omen, a
 ## lane's own run) every stage runs in order, as before. Every part runs the cheap pre-build stages and
@@ -121,6 +122,12 @@ FULL_PART_RAN=""
 
 ## full_part_runs STAGE -> 0 when STAGE runs in this invocation (every stage when no part is chosen), and
 ## records that it ran. A stage the table does not name sets fail and does not run.
+## full_refused / full_refused_end -> the head and tail of a refusal before any stage ran. In part mode a
+## refusal is that part's verdict, `--- full part <p>: REFUSED … ---`, so the run keeps one `*** FULL GATE`
+## line (the aggregate's) even when every part refuses (#1570 review N4).
+full_refused() { if [ -n "$FULL_PART" ]; then printf -- '--- full part %s: REFUSED' "$FULL_PART"; else printf '*** FULL GATE: REFUSED'; fi; }
+full_refused_end() { if [ -n "$FULL_PART" ]; then printf -- '---'; else printf '***'; fi; }
+
 full_part_runs() {
   local owner
   owner="$(printf '%s\n' "$FULL_PART_TABLE" | awk -v s="$1" '$2 == s { print $1 }')"
@@ -130,7 +137,20 @@ full_part_runs() {
   fi
   [ -z "$FULL_PART" ] || [ "$owner" = "$FULL_PART" ] || return 1
   FULL_PART_RAN="${FULL_PART_RAN:+$FULL_PART_RAN,}$1"
+  [ -z "$FULL_PART" ] || full_part_mark "$1"
   return 0
+}
+
+## full_part_mark [NEXT] -> in part mode, name the stage that just ended in FULL_PART_RED when it set
+## `fail`, then start NEXT clean. Only the verdicts read `fail`, so clearing it between stages changes
+## nothing but the attribution; FULL_PART_ANY keeps the OR. A red before the first part stage (the
+## pre-build stages, FIXPOINT) is named `before-parts`. Several stages print only a parenthetical on
+## stdout, so without this a red part could not name its cause (#1570 review N2).
+full_part_mark() {
+  if [ "$fail" != 0 ]; then
+    FULL_PART_RED="${FULL_PART_RED:+$FULL_PART_RED,}${_fp_cur:-before-parts}"; FULL_PART_ANY=1
+  fi
+  fail=0; _fp_cur="${1:-}"
 }
 
 ## full_failed_stages -> stdout: the first failure-shaped line of each stage log THIS run wrote. `fail=1`
@@ -152,20 +172,24 @@ full_failed_stages() {
   return 0
 }
 
-## full_part_verdict -> the verdict of ONE part, then exit. It never prints a `*** FULL GATE:` line, which
-## only the aggregate may print (scripts/full_parts.sh), so a part's green cannot be read as the gate's.
+## full_part_verdict -> the verdict of ONE part, then exit. It prints `--- full part <p>: …` and never a line
+## containing `*** FULL GATE`, which only the aggregate may print (scripts/full_parts.sh): every reader takes
+## the one `*** FULL GATE` line, so a part's green cannot be read as the gate's.
 full_part_verdict() {
   local v n
+  full_part_mark
+  fail="${FULL_PART_ANY:-0}"
   echo "full part: $FULL_PART ran=$FULL_PART_RAN"
+  echo "full part: $FULL_PART red=${FULL_PART_RED:-}"
   [ "$FULL_PART" = sweeps ] && echo "full part: sweeps STATUS=${sw_status:-UNKNOWN}"
   for v in ce_cover sp_cover wa_cover sf_cover cm_cover fc_line ig_line sfr_cover irv_cover st_cover ird_cover pg_cover cmx_cover pl_cover; do
     n="${!v:-}"; [ -n "$n" ] && printf 'full part cover: %s %s\n' "${v%_*}" "$n"
   done
   if [ "$fail" != 0 ]; then
-    echo "*** FULL GATE PART $FULL_PART: FAILURES ***"
+    echo "--- full part $FULL_PART: FAILURES ---"
     full_failed_stages
   else
-    echo "*** FULL GATE PART $FULL_PART: GREEN ***"
+    echo "--- full part $FULL_PART: GREEN ---"
   fi
   exit "$fail"
 }
@@ -256,8 +280,10 @@ if [ "${1:-}" = "--self-test" ]; then
   [ "$_full_changelog_fragments_self_test_rc" = 0 ] || exit "$_full_changelog_fragments_self_test_rc"
   # The parts' aggregate (#1568): a missing, red, partial or doubled part must read red, and every stage
   # guard of this file must name exactly one table stage. Planted part logs drive it; controls stay green.
-  bash "$ROOT/scripts/full_parts.sh" --self-test > /dev/null
+  _full_parts_self_test_out="$(bash "$ROOT/scripts/full_parts.sh" --self-test 2>&1)"
   _full_parts_self_test_rc=$?
+  [ "$_full_parts_self_test_rc" = 0 ] || printf '%s\n' "$_full_parts_self_test_out" | grep -E '^(FAIL|full parts self-test)'
+  [ "$_full_parts_self_test_rc" = 0 ] && printf '%s\n' "$_full_parts_self_test_out" | tail -1
   [ "$_full_parts_self_test_rc" = 0 ] || exit "$_full_parts_self_test_rc"
   # The scripted seed promotion's deciders (#1129): the version order, the label normalization, the
   # convergence verdict, the bump, the owed-marker and atomic-set refusals and the cadence. Measured:
@@ -324,15 +350,15 @@ ce_rc=$?
 cat "$CE_LOG"
 ce_cover="$(grep -E "^corpus enum: index=" "$CE_LOG" | tail -1 | sed 's/^corpus enum: //')"
 if [ "$ce_rc" != 0 ]; then
-  echo "*** FULL GATE: REFUSED before any stage ran — the git index and the worktree do not name the"
+  echo "$(full_refused) before any stage ran — the git index and the worktree do not name the"
   echo "    same .al corpus (see above). The oracle stages and the executing stages would describe"
-  echo "    different trees, and a GREEN verdict from this run would be meaningless. ***"
+  echo "    different trees, and a GREEN verdict from this run would be meaningless. $(full_refused_end)"
   exit 1
 fi
 # A check that printed no counts cannot be told apart from one that enumerated nothing.
 if [ -z "$ce_cover" ]; then
-  echo "*** FULL GATE: REFUSED — scripts/corpus_enum_check.sh printed no 'index=' coverage line, so"
-  echo "    what it compared is unknown. ***"
+  echo "$(full_refused) — scripts/corpus_enum_check.sh printed no 'index=' coverage line, so"
+  echo "    what it compared is unknown. $(full_refused_end)"
   exit 1
 fi
 
@@ -434,6 +460,21 @@ echo "### FIXPOINT ###"
 bash scripts/fixpoint.sh > "$FP_LOG" 2>&1
 grep -iE "TOOL-1 FIXPOINT|FAIL" "$FP_LOG"
 grep -q "TOOL-1 FIXPOINT: seed == Stage1 == Stage2" "$FP_LOG" || { echo "  (fixpoint NOT green — a reseed change needs the 3-stage check; see \"Reproducibility\" in AGENTS.md and docs/rationale/reproducibility.md)"; fail=1; }
+
+# Run in order, E2E rebuilds Stage1 from the seed into target/debug/alatyr and every later stage measures
+# that binary; FIXPOINT leaves Stage2 there. A part without E2E rebuilds Stage1 the same way here, so it
+# measures the compiler the serial gate measures, also on a FIXPOINT-red tree, where the two binaries
+# differ (#1570 review N1). The rule follows the table, not part names.
+if [ -n "$FULL_PART" ] && ! printf '%s\n' "$FULL_PART_TABLE" | awk -v p="$FULL_PART" '$1 == p && $2 == "e2e" { f = 1 } END { exit !f }'; then
+  echo "### PART $FULL_PART: Stage1 from the seed (what E2E leaves for the serial gate's later stages) ###"
+  rm -f target/alatyr target/alatyr.s target/alatyr.o target/debug/alatyr target/debug/alatyr.s target/debug/alatyr.o
+  seed/alatyr build package.al > "$LOGDIR/full_part_stage1.log" 2>&1
+  _fp_s1_rc=$?
+  if [ "$_fp_s1_rc" != 0 ] || [ ! -x target/debug/alatyr ]; then
+    echo "  FAIL part $FULL_PART: the seed did not build Stage1 into target/debug/alatyr (rc=$_fp_s1_rc, $LOGDIR/full_part_stage1.log)"
+    fail=1
+  fi
+fi
 
 if full_part_runs e2e; then
 echo "### E2E ###"

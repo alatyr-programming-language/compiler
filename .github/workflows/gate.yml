@@ -13,7 +13,7 @@
 # verdict with `scripts/full_parts.sh --aggregate`. A part that is missing, cancelled, red, or that ran
 # other stages than its own reads as red. The run's log carries exactly one `*** FULL GATE` line, the
 # verdict job's, and exactly one `xbackend diff:` line, the corpus part's. Each part prints
-# `*** FULL GATE PART <part>: …`, which is not a gate verdict.
+# `--- full part <part>: …`, which is not a gate verdict and contains no `*** FULL GATE`.
 #
 # Artifacts, for every run including a red one:
 #   gate-<sha>          gate.log: every part's full.sh output in table order, then the aggregate
@@ -45,8 +45,9 @@ jobs:
       # report one cause where there are several. The aggregate is red either way.
       fail-fast: false
       matrix:
-        # The parts of scripts/full.sh's FULL_PART_TABLE. The verdict job compares this set with the
-        # table, so a part added there and not here is a red gate, not a silent skip.
+        # The parts of scripts/full.sh's FULL_PART_TABLE. The verdict job compares the part logs with
+        # the table, so a part added there and not here is a red gate, not a silent skip, and a part
+        # here that the table does not name is red too.
         part: [e2e, corpus, ir, sweeps]
     steps:
       - uses: actions/checkout@v4
@@ -106,8 +107,10 @@ jobs:
 
   verdict:
     needs: part
-    # Always, so a red or cancelled part still yields a red verdict rather than no verdict at all.
-    if: always()
+    # Whenever the run itself was not cancelled, so a red, timed-out or cancelled part still yields a red
+    # verdict rather than no verdict at all. A run superseded by a new push gets none: it is not a verdict
+    # on anything, and a FAILURES line there would read as a cause.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

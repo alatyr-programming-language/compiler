@@ -15,8 +15,8 @@
 # ## What GREEN means here
 #
 #   - every part of the table left a log, and each log names this gate object;
-#   - each log carries exactly one `*** FULL GATE PART <part>: GREEN ***` and no `*** FULL GATE:` line
-#     (only this script may print one);
+#   - each log carries exactly one `--- full part <part>: GREEN ---` and no line containing
+#     `*** FULL GATE` (only this script prints one, so a run and its gate.log hold exactly one);
 #   - each log's `full part: <part> ran=` list is exactly the table's stages for that part, so every
 #     stage ran exactly once over the whole run;
 #   - exactly one `xbackend diff: paths=` line across all the logs;
@@ -31,7 +31,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ## aggregate TABLE DIR OBJECT -> stdout: the verdict; 0 GREEN, 1 anything else
 aggregate() {
-  local table="$1" dir="$2" obj="$3" bad=0 p want got log n sw="" xb=0 reasons=""
+  local table="$1" dir="$2" obj="$3" bad=0 p want got log n red sw="" xb=0 reasons=""
   why() { reasons="${reasons}    $*"$'\n'; bad=1; }
   [ -n "$obj" ] || why "no gate object was named"
   for p in $(printf '%s\n' "$table" | awk '{ print $1 }' | uniq); do
@@ -39,12 +39,14 @@ aggregate() {
     if [ ! -s "$log" ]; then why "part $p: no log (the job did not run, was cancelled, or uploaded nothing)"; continue; fi
     n="$(grep -c "^gate object: $obj " "$log")"
     [ "$n" = 1 ] || why "part $p: its log names gate object $obj $n time(s), want 1"
-    [ "$(grep -c '^\*\*\* FULL GATE:' "$log")" = 0 ] || why "part $p: carries a whole-gate verdict line, which only the aggregate prints"
-    n="$(grep -cE '^\*\*\* FULL GATE PART [a-z0-9-]+: (GREEN|FAILURES) \*\*\*$' "$log")"
+    [ "$(grep -c '\*\*\* FULL GATE' "$log")" = 0 ] || why "part $p: carries a whole-gate verdict line, which only the aggregate prints"
+    n="$(grep -cE '^--- full part [a-z0-9-]+: (GREEN|FAILURES|REFUSED)' "$log")"
     if [ "$n" != 1 ]; then why "part $p: $n part verdict lines, want 1 (the job stopped before its verdict?)"
-    elif ! grep -qx "\*\*\* FULL GATE PART $p: GREEN \*\*\*" "$log"; then
-      why "part $p: $(grep -E '^\*\*\* FULL GATE PART ' "$log")"
-      grep -A12 -E '^\*\*\* FULL GATE PART ' "$log" | grep -E '^    [a-z_0-9-]+ ' | head -8 | sed 's/^/  /' > "$dir/.why"
+    elif ! grep -qx -- "--- full part $p: GREEN ---" "$log"; then
+      why "part $p: $(grep -E '^--- full part ' "$log")"
+      red="$(grep -E "^full part: $p red=" "$log" | tail -1 | sed "s/^full part: $p red=//")"
+      [ -z "$red" ] || why "  red stages: $red"
+      grep -A12 -E '^--- full part ' "$log" | grep -E '^    full_[a-z_0-9-]+ ' | head -8 | sed 's/^/  /' > "$dir/.why"
       while IFS= read -r n; do reasons="${reasons}    $n"$'\n'; done < "$dir/.why"; rm -f "$dir/.why"
     fi
     want="$(printf '%s\n' "$table" | awk -v p="$p" '$1 == p { print $2 }' | sort | tr '\n' ',')"
@@ -54,6 +56,11 @@ aggregate() {
     elif [ "$want" != "$got" ]; then why "part $p: ran {${got%,}}, its stages are {${want%,}}"; fi
     xb=$((xb + $(grep -c '^xbackend diff: paths=' "$log")))
     [ "$p" = sweeps ] && sw="$(grep -E '^full part: sweeps STATUS=' "$log" | tail -1 | sed 's/^full part: sweeps STATUS=//')"
+  done
+  for log in "$dir"/*.log; do
+    [ -e "$log" ] || continue
+    p="$(basename "$log" .log)"
+    printf '%s\n' "$table" | awk -v p="$p" '$1 == p { f = 1 } END { exit !f }' || why "part $p: a log for a part the table does not name (gate.yml's matrix and the table differ)"
   done
   [ "$xb" = 1 ] || why "$xb 'xbackend diff: paths=' lines across the parts, want exactly 1"
   if printf '%s\n' "$table" | awk '$1 == "sweeps"' | grep -q . && [ -z "$sw" ]; then why "the sweeps part reported no STATUS"; fi
@@ -103,27 +110,31 @@ sweeps sweeps'
       echo "full part: $p ran=$r"; [ "$p" = sweeps ] && echo "full part: sweeps STATUS=RAN"
       [ "$p" = corpus ] && echo "xbackend diff: paths=9 rows=9"
       echo "full part cover: $p covered"; for x in "$@"; do echo "$x"; done
-      echo "*** FULL GATE PART $p: GREEN ***"; } > "$d/r/$p.log"
+      echo "--- full part $p: GREEN ---"; } > "$d/r/$p.log"
   }
   green() { rm -rf "$d/r"; mkdir -p "$d/r"; part a s1,s2; part corpus xb; part sweeps sweeps; }
-  run() { aggregate "$T" "$d/r" "${1-$O}" > "$d/out" 2>&1; echo "$?:$(grep -c '^\*\*\* FULL GATE' "$d/out")"; }
+  run() { aggregate "$T" "$d/r" "${1-$O}" > "$d/out" 2>&1; echo "$?:$(grep -c '\*\*\* FULL GATE' "$d/out")"; }
 
   green; chk "control: every part green and complete is GREEN, with exactly one verdict line" "$(run)" "0:1"
   chk "control: the green verdict says the sweeps ran" "$(grep -c '^\*\*\* FULL GATE: GREEN (sweeps RAN) \*\*\*$' "$d/out")" "1"
   chk "control: the green verdict carries each part's coverage" "$(grep -c '^    \[[a-z]*\] ' "$d/out")" "3"
   green; rm "$d/r/corpus.log"; chk "plant: a missing part (cancelled, skipped) is red" "$(run)" "1:1"
   green; : > "$d/r/a.log"; chk "plant: an empty part log is red" "$(run)" "1:1"
-  green; sed -i.b 's/: GREEN \*\*\*$/: FAILURES ***/' "$d/r/a.log"; chk "plant: a red part is red" "$(run)" "1:1"
-  green; sed -i.b '/^\*\*\* FULL GATE PART/d' "$d/r/a.log"; chk "plant: a part that stopped before its verdict is red" "$(run)" "1:1"
-  green; sed -i.b 's/^\*\*\* FULL GATE PART a: GREEN/*** FULL GATE PART corpus: GREEN/' "$d/r/a.log"
+  green; sed -i.b 's/: GREEN ---$/: FAILURES ---/' "$d/r/a.log"; echo "full part: a red=s2" >> "$d/r/a.log"; chk "plant: a red part is red" "$(run)" "1:1"
+  chk "control: a red part's verdict names its red stage" "$(grep -c 'red stages: s2' "$d/out")" "1"
+  green; sed -i.b 's/^--- full part a: GREEN ---$/--- full part a: REFUSED before any stage ran ---/' "$d/r/a.log"; chk "plant: a refused part is red" "$(run)" "1:1"
+  green; sed -i.b '/^--- full part/d' "$d/r/a.log"; chk "plant: a part that stopped before its verdict is red" "$(run)" "1:1"
+  green; sed -i.b 's/^--- full part a: GREEN/--- full part corpus: GREEN/' "$d/r/a.log"
   chk "plant: a part log carrying ANOTHER part's green is red" "$(run)" "1:1"
   green; part a s1; chk "plant: a part that skipped one of its stages is red" "$(run)" "1:1"
   green; part a s1,s2,xb; chk "plant: a part that ran another part's stage is red" "$(run)" "1:1"
   green; part a s1,s1,s2; chk "plant: a stage that ran twice in its part is red" "$(run)" "1:1"
   green; echo "full part: a ran=s1" >> "$d/r/a.log"; chk "plant: two ran lines in one part are red" "$(run)" "1:1"
   green; echo "*** FULL GATE: GREEN (sweeps RAN) ***" >> "$d/r/a.log"; chk "plant: a part carrying a whole-gate verdict is red" "$(run)" "1:1"
+  green; echo "x *** FULL GATE PART a: GREEN ***" >> "$d/r/a.log"; chk "plant: a part carrying any '*** FULL GATE' text is red" "$(run)" "1:1"
   green; part a s1,s2 "xbackend diff: paths=9 rows=9"; chk "plant: two xbackend diff lines are red" "$(run)" "1:1"
   green; sed -i.b '/^xbackend diff/d' "$d/r/corpus.log"; chk "plant: no xbackend diff line is red" "$(run)" "1:1"
+  green; part extra s9; chk "plant: a part the table does not name is red" "$(run)" "1:1"
   green; chk "plant: a log naming another gate object is red" "$(run fedcba98)" "1:1"
   green; chk "plant: no gate object named is red" "$(run '')" "1:1"
   green; sed -i.b 's/STATUS=RAN/STATUS=SKIPPED/' "$d/r/sweeps.log"; run > /dev/null
