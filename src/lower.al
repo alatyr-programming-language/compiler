@@ -7641,77 +7641,76 @@ emit_slice_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
   }
 }
 
-## #1514 — the Types §6.4 byte size of the scalar type `t` names, or None when the lower cannot name
-## it. A generic parameter takes the instance's substitution first, and a brand its underlying type (a
-## brand has its underlying's exact runtime representation, Types §5.4).
-scalar_elem_bytes := fn(t : CSpan, cx : ptr(LCtx)) -> Option(usize) {
+## #1514 — whether the scalar type `t` names is one of the word-layout elements #1514 measures wrong on
+## x86_64: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`. A generic parameter takes the instance's substitution
+## first, and a brand its underlying type (a brand has its underlying's exact runtime representation,
+## Types §5.4). Every other element answers false and is sliced as before, so the integrator's
+## decision on PR #1564 holds: `bool`, `char`, `f32` and an element the lower cannot name stay a
+## tracked silent wrong value under #1559 rather than turning existing programs into refusals.
+word_array_elem_refused := fn(t : CSpan, cx : ptr(LCtx)) -> bool {
   mut ts := subst3_ty(cx.src, t.s, t.n, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l, cx.gp3_s, cx.gp3_l, cx.it3_s, cx.it3_l)
   mut peel : usize = 0
   while peel < 4 {
     bu := brand_underlying(cx.decls, cx.src, ts.s, ts.n)
     if bu.n == 0 { peel = 4 } else { ts = CSpan(s = bu.s, n = bu.n); peel += 1 }
   }
-  if ts.n == 0 { return Option(usize).None }
-  sw := scalar_width::subword_bytes(cx.src, ts.s, ts.n)
-  if sw != 0 { return Option(usize).Some(sw) }
+  if ts.n == 0 { return false }
   tx := str_at((cx.src + ts.s), ts.n)
-  if tx == "u64" or tx == "i64" or tx == "usize" or tx == "isize" or tx == "f64" or tx == "bits64" { return Option(usize).Some(8) }
-  if ts.n > 4 and str_at((cx.src + ts.s), 4) == "ptr(" { return Option(usize).Some(8) }
-  Option(usize).None
+  tx == "u8" or tx == "i8" or tx == "u16" or tx == "i16" or tx == "u32" or tx == "i32"
 }
 
-## #1514 — the Types §6.4 byte size of the element of an INFERRED array local `name := [e0, …]`, read
+## #1514 — `word_array_elem_refused` for the element of an INFERRED array local `name := [e0, …]`, read
 ## off the spelling of `e0`: a bare integer or float literal takes Types §9.1's default (the native
-## signed integer, or `f64`: 8 bytes either way), `true`/`false` is a `bool`, `T(…)` converts to `T`,
-## and a lone local name has the type its own declaration or slot records. None for anything else —
-## the caller refuses then, because an element it cannot name may be narrower than a word.
-inferred_array_elem_bytes := fn(aent : SlotEntry, cx : ptr(LCtx)) -> Option(usize) {
+## signed integer, or `f64`: a word either way), `true`/`false` is a `bool`, `T(…)` converts to `T`,
+## and a lone local name has the type its own declaration or slot records. Anything else answers
+## false, as on the parent.
+inferred_array_elem_refused := fn(aent : SlotEntry, cx : ptr(LCtx)) -> bool {
   src := cx.src
   end := LOWER_SRC_N
   mut p := aent.ns + aent.nl
   while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
-  if lower_ctx::slice_scan_has(src, end, p, ":=") == false { return Option(usize).None }
+  if lower_ctx::slice_scan_has(src, end, p, ":=") == false { return false }
   p += 2
   while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
-  if lower_ctx::slice_scan_has(src, end, p, "[") == false { return Option(usize).None }
+  if lower_ctx::slice_scan_has(src, end, p, "[") == false { return false }
   p += 1
   while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
-  if p >= end { return Option(usize).None }
+  if p >= end { return false }
   if lower_ctx::slice_scan_has(src, end, p, "-") { p += 1 }
   b0 := bytes(str_at((src + p), 1))[0]
-  if b0 >= 48 and b0 <= 57 { return Option(usize).Some(8) }
+  if b0 >= 48 and b0 <= 57 { return false }
   ts := p
   while p < end and lower_layout::ll_ident_byte(src, p) { p += 1 }
-  if p == ts { return Option(usize).None }
+  if p == ts { return false }
   tn := p - ts
-  word := str_at((src + ts), tn)
-  if word == "true" or word == "false" { return Option(usize).Some(1) }
-  if lower_ctx::slice_scan_has(src, end, p, "(") { return scalar_elem_bytes(CSpan(s = ts, n = tn), cx) }
+  if lower_ctx::slice_scan_has(src, end, p, "(") { return word_array_elem_refused(CSpan(s = ts, n = tn), cx) }
   while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
-  if lower_ctx::slice_scan_has(src, end, p, ",") == false and lower_ctx::slice_scan_has(src, end, p, "]") == false { return Option(usize).None }
-  if slot_of(cx.slots, src, ts, tn) < 0 { return Option(usize).None }
+  if lower_ctx::slice_scan_has(src, end, p, ",") == false and lower_ctx::slice_scan_has(src, end, p, "]") == false { return false }
+  if slot_of(cx.slots, src, ts, tn) < 0 { return false }
   vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, src, ts, tn)))
   vlt := local_type_span(src, vent.ns, vent.nl)
-  if vlt.n != 0 { return scalar_elem_bytes(CSpan(s = vlt.s, n = vlt.n), cx) }
-  if vent.snl != 0 and vent.ek != 5 { return scalar_elem_bytes(CSpan(s = vent.sns, n = vent.snl), cx) }
-  Option(usize).None
+  if vlt.n != 0 { return word_array_elem_refused(CSpan(s = vlt.s, n = vlt.n), cx) }
+  if vent.snl != 0 and vent.ek != 5 { return word_array_elem_refused(CSpan(s = vent.sns, n = vent.snl), cx) }
+  false
 }
 
 ## #1514 — refuse, at `at`, a range slice `arr[lo..hi]` over a fixed array the x86_64 lower lays out
 ## one WORD per element (the historical word array ABI, `eek` 0 and the float twin 9) when the element
-## is narrower than a word, or of a type the lower cannot name. Types §6.4 makes a `Slice(T)`'s stride
-## `T`'s size rounded up to its alignment, and every other `Slice(T)` producer is packed at it; a view
-## over word-spaced elements reads the wrong bytes in any consumer that follows the rule (a `Slice(T)`
-## parameter, an annotated `for`, a struct field, a return). The packed byte arrays (`is_byte_array_eek`),
-## a `Slice(T)` parameter's data and a range-view local (checked where its own view was taken) pass.
-## The correct value needs these arrays laid out at the §6.4 stride on x86_64: #1559.
+## is `u8`, `i8`, `u16`, `i16`, `u32` or `i32`. Types §6.4 makes a `Slice(T)`'s stride `T`'s size
+## rounded up to its alignment, and every other `Slice(T)` producer is packed at it; a view over
+## word-spaced elements reads the wrong bytes in any consumer that follows the rule (a `Slice(T)`
+## parameter, an annotated `for`, a struct field, a return). The packed byte arrays
+## (`is_byte_array_eek`), a `Slice(T)` parameter's data and a range-view local (checked where its own
+## view was taken) pass. A `[bool|char|f32; N]` range is NOT refused (PR #1564's decision: existing
+## `Slice(bool)` programs keep building); it stays a silent wrong value tracked by #1559, which lays
+## these arrays out at the §6.4 stride on x86_64.
 reject_word_array_range := fn(aent : SlotEntry, at : usize, cx : ptr(LCtx)) {
   if aent.ek != 5 or is_byte_array_eek(aent.eek) or slot_is_slice_param(aent, cx.src) { return }
   if aent.eek != 0 and aent.eek != 9 { return }
   if aent.is_ref and not aent.is_param { return }
   lt := local_type_span(cx.src, aent.ns, aent.nl)
-  mut eb : Option(usize) = Option(usize).None
-  if lt.n == 0 { eb = inferred_array_elem_bytes(aent, cx) }
+  mut refused := false
+  if lt.n == 0 { refused = inferred_array_elem_refused(aent, cx) }
   else {
     mut es := array_elem_span(cx.src, lt.s, lt.n)
     ## The parser also takes the `[N]T` spelling (`a : [4]u64`): the element type then follows `]`.
@@ -7724,14 +7723,11 @@ reject_word_array_range := fn(aent : SlotEntry, at : usize, cx : ptr(LCtx)) {
       es = CSpan(s = q, n = 0)
       if q < lt.s + lt.n { es = CSpan(s = q, n = lt.s + lt.n - q) }
     }
-    if es.n != 0 { eb = scalar_elem_bytes(es, cx) }
+    if es.n != 0 { refused = word_array_elem_refused(es, cx) }
   }
-  match eb {
-    Some(b) => { if b == 8 { return } }
-    None => {}
-  }
+  if not refused { return }
   lower_show_src_line(cx.src, at)
-  panic("selfhost: a range slice of a fixed array whose element is narrower than a word (or of a type the x86_64 lower cannot name) is not supported on x86_64 (#1514, #1559): the array keeps one word per element, while a Slice(T) steps T's own size (Types §6.4); refused rather than silently miscompiled. A [u64; N], an annotated [u8; N] or an alloc::vec view can be sliced")
+  panic("selfhost: a range slice of a fixed array of u8, i8, u16, i16, u32 or i32 elements laid out one word per element is not supported on x86_64 (#1514, #1559): the array keeps one word per element, while a Slice(T) steps T's own size (Types §6.4); refused rather than silently miscompiled. A [u64; N], an annotated [u8; N] or an alloc::vec view can be sliced")
 }
 
 ## The element-0 address of a range slice's BASE `arr` in `arr[lo..hi]` → %rax, for both deliverers
