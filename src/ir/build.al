@@ -394,7 +394,7 @@ ib_wrap_to := fn(bp : ptr(mut IbB), in out a : rt::Arena, x : VRegId, to : IbKS)
 ## `BdRef`: a struct VALUE held by reference — an aggregate parameter, whose address the caller passed
 ## (docs/ir.md §3.7: the address of a caller-owned copy; slice 3d). Its fields are places through that
 ## pointer, exactly like `deref(p).f`; the value itself is never read or written whole here.
-IbBind := enum { BdNone, BdVal(VRegId, usize, usize), BdAgg(FrameId, usize, usize, usize), BdMem(FrameId, usize), BdArr(FrameId, usize, usize), BdRef(VRegId, usize, usize, usize) }
+IbBind := enum { BdNone, BdVal(VRegId, usize, usize), BdAgg(FrameId, usize, usize, usize), BdMem(FrameId, usize), BdArr(FrameId, usize, usize), BdRef(VRegId, usize, usize, usize), BdView(FrameId, usize, usize) }
 
 ib_bind_push := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, w : usize, agg : usize, mem : usize, arr : usize, sd : usize, ts : usize, tn : usize) {
   bv : IbB = deref(bp)
@@ -432,6 +432,10 @@ ib_bind_mem := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize,
 ib_bind_arr := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, fr : FrameId, ts : usize, tn : usize) {
   ib_bind_push(bp, a, s, n, usize(fr), 0, 0, 1, 0, ts, tn)
 }
+## Bind `[s, s+n)` to the slice view local in frame object `fr`, of element type `[es, es+en)` (#1576).
+ib_bind_view := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, fr : FrameId, es : usize, en : usize) {
+  ib_bind_push(bp, a, s, n, usize(fr), 0, 0, 2, 0, es, en)
+}
 ## The innermost binding of the name `[s, s+n)`.
 ib_lookup := fn(bp : ptr(mut IbB), s : usize, n : usize) -> IbBind {
   bv : IbB = deref(bp)
@@ -444,6 +448,7 @@ ib_lookup := fn(bp : ptr(mut IbB), s : usize, n : usize) -> IbBind {
       if wb_get(bv.bagg, i) == 2 { return IbBind.BdRef(VRegId(w), wb_get(bv.bsd, i), wb_get(bv.bts, i), wb_get(bv.btn, i)) }
       if wb_get(bv.bmem, i) == 1 { return IbBind.BdMem(FrameId(w), wb_get(bv.bsd, i)) }
       if wb_get(bv.barr, i) == 1 { return IbBind.BdArr(FrameId(w), wb_get(bv.bts, i), wb_get(bv.btn, i)) }
+      if wb_get(bv.barr, i) == 2 { return IbBind.BdView(FrameId(w), wb_get(bv.bts, i), wb_get(bv.btn, i)) }
       return IbBind.BdVal(VRegId(w), wb_get(bv.bts, i), wb_get(bv.btn, i))
     }
   }
@@ -778,6 +783,8 @@ ib_bx_var := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s : usiz
     ## A fixed array local is memory too: only an index, `.len` or a copy reads it (slice 3c).
     BdArr(af, ats, atn) => { return ib_no(bp, e, NyWhy.NwOutside) }
     BdRef(rv, rsd, rts, rtn) => { return ib_no(bp, e, NyWhy.NwOutside) }
+    ## A slice view local is memory too: only an index, `.len` or a copy reads it (#1576).
+    BdView(wf, wes, wen) => { return ib_no(bp, e, NyWhy.NwOutside) }
     BdNone => {}
   }
   ib_bx_global(bp, a, e, s, n)
@@ -1955,6 +1962,7 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
         BdMem(mf, mns) => {}
         BdArr(af, ats, atn) => {}
         BdRef(rv, rsd, rts, rtn) => { return ib_agg_bound(bp, a, rsd, rts, rtn) }
+        BdView(wf, wes, wen) => {}
         BdNone => {}
       }
     }
@@ -2033,6 +2041,7 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
           ib_copy_into(bp, a, cfr, orv, st.size)
           return Option(IbObj).Some(IbObj(fr = cfr, fresh = true))
         }
+        BdView(wf, wes, wen) => {}
         BdNone => {}
       }
     }
@@ -2309,6 +2318,8 @@ ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
         | Expr::Loop => {}
     }
   }
+  ## #1576: a slice view local (`[T]` / `Slice(T)`, or a range slice / copy of one).
+  if ib_bs_view_decl(bp, a, h, ns, nl, IbSpan(s = lts.s, n = lts.n), v) { return }
   mut sto : Option(IbSt) = Option(IbSt).None
   if lts.n != 0 { sto = ib_agg_named(bp, a, lts.s, lts.n) } else { sto = ib_agg_type_of(bp, a, v) }
   match sto {
@@ -3050,6 +3061,7 @@ ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
     BdMem(mf, mns) => {}
     BdArr(af, ats, atn) => {}
     BdRef(rv, rsd, rts, rtn) => { return Option(IbPlace).Some(IbPlace(bk = OpndK.OkVReg, bv = i64(usize(rv)), di = rsd, s = rts, n = rtn, off = 0)) }
+    BdView(wf, wes, wen) => {}
     BdNone => {}
   }
   Option(IbPlace).None
@@ -3069,6 +3081,7 @@ ib_place_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Opt
             BdMem(mf, mns) => {}
             BdArr(af, ats, atn) => {}
             BdRef(rv, rsd, rts, rtn) => {}
+            BdView(wf, wes, wen) => {}
             BdNone => {}
           }
         }
@@ -3218,6 +3231,8 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
   ## `xs.len` / `r.u.len` of an array the builder lays out is its comptime length `N` (Types §6.4,
   ## slice 3c). x86_64 answers 0 for the field form (#936); the IR answers the spec's value, as it does
   ## for #909.
+  vwo : Option(IbView) = ib_view_place(bp, a, b)
+  match vwo { Some(vw) => { return ib_bx_view_field(bp, a, e, vw, fs, fl) }; None => {} }
   apo : Option(IbArrAt) = ib_arr_place(bp, a, b)
   match apo {
     Some(ap) => {
@@ -3376,6 +3391,7 @@ ib_arr_local := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(IbSpan) {
   match bd {
     BdArr(af, ats, atn) => { return Option(IbSpan).Some(IbSpan(s = ats, n = atn)) }
     BdRef(rv, rsd, rts, rtn) => {}
+    BdView(wf, wes, wen) => {}
     BdNone => {}
     BdVal(v, vts, vtn) => {}
     BdAgg(fr, sd, ts, tn) => {}
@@ -3397,6 +3413,7 @@ ib_arr_place := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Op
           match ro { Some(r) => { return Option(IbArrAt).Some(ib_arr_at(af, ByteOff(0), r)) }; None => {} }
         }
         BdRef(rv, rsd, rts, rtn) => {}
+        BdView(wf, wes, wen) => {}
         BdNone => {}
         BdVal(v, vts, vtn) => {}
         BdAgg(fr, sd, ts, tn) => {}
@@ -3414,6 +3431,7 @@ ib_arr_place := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Op
               match sto { Some(st) => { return ib_arr_field(bp, a, fr, st, fs, fl) }; None => {} }
             }
             BdRef(rv, rsd, rts, rtn) => {}
+            BdView(wf, wes, wen) => {}
             BdNone => {}
             BdVal(v, vts, vtn) => {}
             BdMem(mf, mns) => {}
@@ -3566,7 +3584,240 @@ ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
     }
     None => {}
   }
+  vwo : Option(IbView) = ib_view_place(bp, a, b)
+  match vwo { Some(vw) => { return ib_bx_view_index(bp, a, e, vw, ix) }; None => {} }
   ib_bx_index_global(bp, a, e, b, ix)
+}
+
+## ── slice views (#1576 step 1) ──
+##
+## A `Slice(T)` / `[T]` local holds the two-word pair itself (Types §7, the views paragraph: pointer +
+## length, 16 bytes on a 64-bit target, aligned as a pointer), laid out as the library struct Stdlib
+## appendix §3.5 declares — `struct { ptr : ptr(T), len : usize }` — so `ptr` at byte 0 and `len` at
+## byte 8 (Types §6.1: declaration order). Like an array local it is a frame object (§3.2), never an IR
+## value.
+##
+## Why the layout and the element stride are the IR's own here (Q4, rule 7.1.1): a view built in this
+## step never meets legacy code. It points only into a fixed array local of THIS function (laid out by
+## the IR, `ib_arr_of`), and passing one to a call, returning one or taking its address stays refused —
+## the legacy emitters lay an array out as one 8-byte cell per element (`emit_arr_slice_pair`'s
+## `stride * 8`), so a view handed across that boundary would disagree for any element narrower than a
+## word. Crossing it needs the measured agreement of a later step.
+##
+## Built here: a local initialised by `xs[lo..hi]` of a fixed array local `xs` with LITERAL bounds
+## `0 <= lo <= hi <= N` — proved in range, so no sub-slice check is owed (Stdlib appendix §3.5:
+## sub-slicing is bounds-checked; a runtime bound is refused, not built unchecked) — or by a copy of
+## another view local. Read: `s[i]`, checked against the runtime `len` word by `bound` in a checked
+## scope and unchecked inside `unchecked` (Types §6.4), and `s.len`. A `str` is not built
+## here: its values come from literals and globals the IR does not address yet.
+
+## A view's frame object and its element layout (`n` unused: a view's length is its runtime `len`).
+IbView := struct { fr : FrameId, ty : Kty, sg : Sgn, stride : usize, es : usize, en : usize }
+ib_view_st := fn() -> IbSt { IbSt(di = 0, s = 0, n = 0, size = 16, align = 8) }
+ib_view_ptr_fld := fn() -> IbFld { IbFld(off = ByteOff(0), ty = Kty.KPtr, sg = Sgn.SgNone, be = false) }
+ib_view_len_fld := fn() -> IbFld { IbFld(off = ByteOff(8), ty = Kty.KI64, sg = Sgn.SgU, be = false) }
+
+## `[ts, ts+tn)` without its leading and trailing spaces.
+ib_span_trim := fn(src : ptr(u8), ts : usize, tn : usize) -> IbSpan {
+  mut s := ts
+  mut e := ts + tn
+  while s < e and str_at((src + s), 1) == " " { s = s + 1 }
+  while e > s and str_at((src + e - 1), 1) == " " { e = e - 1 }
+  IbSpan(s = s, n = e - s)
+}
+## The element type spelled inside a view annotation `[T]` or `Slice(T)`; `None` for any other type.
+ib_view_elem_span := fn(src : ptr(u8), ts : usize, tn : usize) -> Option(IbSpan) {
+  if tn > 2 and str_at((src + ts), 1) == "[" and str_at((src + ts + tn - 1), 1) == "]" and lower_layout::is_view_type(src, ts, tn) {
+    return Option(IbSpan).Some(ib_span_trim(src, ts + 1, tn - 2))
+  }
+  if tn > 7 and str_at((src + ts), 6) == "Slice(" and str_at((src + ts + tn - 1), 1) == ")" { return Option(IbSpan).Some(ib_span_trim(src, ts + 6, tn - 7)) }
+  Option(IbSpan).None
+}
+## The element layout of a view of `[es, es+en)`: a kernel scalar whose stride is its own width (the
+## same narrowness as `ib_arr_of`; `[mut T]` and an aggregate element are not built).
+ib_view_elem := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId, es : usize, en : usize) -> Option(IbView) {
+  bv : IbB = deref(bp)
+  if en == 0 { return Option(IbView).None }
+  ko : Option(IbKS) = ib_name_ks(bv.src, es, en)
+  mut k : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+  match ko { Some(x) => { k = x }; None => { return Option(IbView).None } }
+  stride := lower_layout::layout_elem_stride_bytes(bv.decls, bv.src, es, en, a)
+  if stride != usize(kty_bytes(k.ty)) { return Option(IbView).None }
+  Option(IbView).Some(IbView(fr = fr, ty = k.ty, sg = k.sg, stride = stride, es = es, en = en))
+}
+## The view local an index or field base names (`s[i]`, `s.len`). Answers `None` without refusing.
+ib_view_place := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Option(IbView) {
+  match deref(b) {
+    Expr::Var(s, n) => {
+      if ib_names_global(bp, s, n) { return Option(IbView).None }
+      bd : IbBind = ib_lookup(bp, s, n)
+      match bd {
+        BdView(wf, wes, wen) => { return ib_view_elem(bp, a, wf, wes, wen) }
+        BdArr(af, ats, atn) => {}
+        BdRef(rv, rsd, rts, rtn) => {}
+        BdNone => {}
+        BdVal(v, vts, vtn) => {}
+        BdAgg(fr, sd, ts, tn) => {}
+        BdMem(mf, mns) => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  Option(IbView).None
+}
+
+## A view local's declaration. Answers false when `[ns, ns+nl)` is not a view (the caller goes on to
+## the struct path); true when it is one — built, or refused at the statement.
+ib_bs_view_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, lts : IbSpan, v : ptr(Expr)) -> bool {
+  src := ib_b_src(bp)
+  ## `ann`: the annotation's element type; `None` for an unannotated local. An annotation that names no
+  ## view is not this path's (the caller goes on to the struct path).
+  mut ann : Option(IbSpan) = Option(IbSpan).None
+  if lts.n != 0 {
+    ann = ib_view_elem_span(src, lts.s, lts.n)
+    match ann { Some(an0) => {}; None => { return false } }
+  }
+  match deref(v) {
+    Expr::Slice(sb, lo, hi) => {
+      apo : Option(IbArrAt) = ib_arr_place(bp, a, sb)
+      match apo {
+        Some(ap) => {
+          ## Only a whole array local: a field's run lives in a struct `lower_layout` lays out.
+          if lower_layout::ex_var_nl(sb) == 0 { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return true }
+          ## Both bounds literal and `0 <= lo <= hi <= N`: proved in range, so no sub-slice check is owed.
+          lov : Option(i64) = ib_num_value(lo)
+          hiv : Option(i64) = ib_num_value(hi)
+          mut inr := false
+          mut l : i64 = 0
+          mut u : i64 = 0
+          match lov {
+            Some(lx) => { match hiv { Some(hy) => { l = lx; u = hy; inr = lx >= 0 and hy >= lx and usize(hy) <= ap.n }; None => {} } }
+            None => {}
+          }
+          if not inr { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return true }
+          ## The element type: the annotation's when there is one (checked against the array's below),
+          ## else the array local's own.
+          mut es : Option(IbSpan) = ann
+          match ann {
+            Some(an1) => {}
+            None => {
+              ao : Option(IbSpan) = ib_arr_local(bp, lower_layout::ex_var_ns(sb), lower_layout::ex_var_nl(sb))
+              match ao { Some(sp) => { es = Option(IbSpan).Some(lower_layout::arr_field_elem_span(src, sp.s, sp.n)) }; None => {} }
+            }
+          }
+          mut vwo : Option(IbView) = Option(IbView).None
+          fr := ib_new_obj(bp, a, ib_view_st())
+          match es { Some(sp) => { vwo = ib_view_elem(bp, a, fr, sp.s, sp.n) }; None => {} }
+          match vwo {
+            Some(vw) => {
+              if not kty_eq(vw.ty, ap.ty) or not sgn_eq(vw.sg, ap.sg) or vw.stride != ap.stride { ib_refuse_stmt(bp, h, NyWhy.NwDisagree); return true }
+              base := ib_addr_obj(bp, a, ap.fr)
+              po := ib_ptr_plus(bp, a, base, usize(ap.off) + usize(l) * ap.stride)
+              ## `ib_ptr_plus` answers a vreg operand (the base itself at offset 0, else a `gep`).
+              pv := VRegId(usize(po.v))
+              ib_store_field(bp, a, fr, ib_view_ptr_fld(), pv)
+              lv := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), u - l)
+              ib_store_field(bp, a, fr, ib_view_len_fld(), lv)
+              ib_bind_view(bp, a, ns, nl, fr, vw.es, vw.en)
+            }
+            None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+          }
+          return true
+        }
+        None => {}
+      }
+      ib_refuse_stmt(bp, h, NyWhy.NwOutside)
+      return true
+    }
+    Expr::Var(vs, vn) => {
+      wo : Option(IbView) = ib_view_place(bp, a, v)
+      match wo {
+        Some(w) => {
+          match ann {
+            Some(sp) => {
+              eo : Option(IbView) = ib_view_elem(bp, a, w.fr, sp.s, sp.n)
+              mut same := false
+              match eo { Some(ev) => { same = kty_eq(ev.ty, w.ty) and sgn_eq(ev.sg, w.sg) and ev.stride == w.stride }; None => {} }
+              if not same { ib_refuse_stmt(bp, h, NyWhy.NwDisagree); return true }
+            }
+            None => {}
+          }
+          fr := ib_new_obj(bp, a, ib_view_st())
+          ib_copy_obj(bp, a, fr, w.fr, 16)
+          ib_bind_view(bp, a, ns, nl, fr, w.es, w.en)
+          return true
+        }
+        None => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  match ann { Some(an2) => { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return true }; None => {} }
+  false
+}
+
+## `s[i]` of a view local: `bound i, len` (checked scope only), then a `load T` at `ptr + i * stride`.
+ib_bx_view_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), vw : IbView, ix : ptr(Expr)) -> Option(VRegId) {
+  k := ib_ty(bp, e)?
+  if not ib_ks_eq(k, IbKS(ty = vw.ty, sg = vw.sg)) { return ib_no(bp, e, NyWhy.NwDisagree) }
+  mut iv : VRegId = VRegId(0)
+  io : Option(i64) = ib_num_value(ix)
+  match io {
+    Some(x) => {
+      if x < 0 { return ib_no(bp, ix, NyWhy.NwOutside) }
+      iv = ib_konst(bp, a, ib_ks_i64(Sgn.SgU), x)
+    }
+    None => {
+      v0 := ib_bx(bp, a, ix)?
+      ik : IbKS = ib_vreg_ks(ib_b_f(bp), v0)
+      if not kty_is_int(ik.ty) or not sgn_eq(ik.sg, Sgn.SgU) { return ib_no(bp, ix, NyWhy.NwOutside) }
+      iv = ib_ext_to(bp, a, v0, ib_ks_i64(Sgn.SgU))
+    }
+  }
+  if not ib_b_unch(bp) {
+    nv := ib_load_field(bp, a, vw.fr, ib_view_len_fld())
+    mut bi := inst0(Op.OpBound)
+    oi := o_vreg(iv)
+    on := o_vreg(nv)
+    set_a(bi, oi)
+    set_b(bi, on)
+    bi.tk = TrapKind.TkBounds
+    set_span(bi, ib_span_of(bp, e))
+    k1 := emit(ib_b_f(bp), a, bi)
+  }
+  pv := ib_load_field(bp, a, vw.fr, ib_view_ptr_fld())
+  q := ib_fresh(bp, a, IbKS(ty = Kty.KPtr, sg = Sgn.SgNone))
+  mut gi := inst0(Op.OpGep)
+  gi.ty = Kty.KPtr
+  set_dst(gi, q)
+  ob := o_vreg(pv)
+  oi2 := o_vreg(iv)
+  set_a(gi, ob)
+  set_b(gi, oi2)
+  gi.off = i64(vw.stride)
+  k2 := emit(ib_b_f(bp), a, gi)
+  oq := o_vreg(q)
+  lv := ib_load_at(bp, a, oq, IbFld(off = ByteOff(0), ty = vw.ty, sg = vw.sg, be = false))
+  Option(VRegId).Some(lv)
+}
+
+## `s.len` of a view local: a `load` of its length word, at sema's type of the read.
+ib_bx_view_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), vw : IbView, fs : usize, fl : usize) -> Option(VRegId) {
+  src := ib_b_src(bp)
+  k := ib_ty(bp, e)?
+  if fl == 3 and str_at((src + fs), 3) == "len" {
+    if not ib_ks_eq(k, ib_ks_i64(Sgn.SgU)) { return ib_no(bp, e, NyWhy.NwDisagree) }
+    return Option(VRegId).Some(ib_load_field(bp, a, vw.fr, ib_view_len_fld()))
+  }
+  ## `s.ptr` stays refused: it would hand an element address of an IR-laid-out array to code whose
+  ## stride agreement is not proved (the boundary this step keeps closed).
+  ib_no(bp, e, NyWhy.NwOutside)
 }
 ## `E[i] = v` (IndexAssign) into an array local or field. The order is the spec's: `a[i] = v` is
 ## `index_set(a, i, v)` (Types §4.5), whose arguments are evaluated left to right (Functions §5.4) —
@@ -3667,6 +3918,7 @@ ib_arr_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : ptr(Expr), r : I
             match so { Some(sr) => { if ib_arr_same(sr, r) { return Option(FrameId).Some(af) } }; None => {} }
           }
           BdRef(rv, rsd, rts, rtn) => {}
+          BdView(wf, wes, wen) => {}
           BdNone => {}
           BdVal(bv2, vts, vtn) => {}
           BdAgg(fr2, sd, ts, tn) => {}
@@ -3787,6 +4039,7 @@ ib_ptr_pointee_ks := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> Option(IbKS) {
         BdMem(mf, mns) => {}
         BdArr(af, ats, atn) => {}
         BdRef(rv, rsd, rts, rtn) => {}
+        BdView(wf, wes, wen) => {}
         BdNone => {}
       }
     }
@@ -3818,6 +4071,7 @@ ib_bx_addr_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pl :
         BdArr(af, ats, atn) => {}
         BdVal(v, vts, vtn) => {}
         BdRef(rv, rsd, rts, rtn) => {}
+        BdView(wf, wes, wen) => {}
         BdNone => {}
       }
     }
@@ -4107,7 +4361,7 @@ ib_bx_layout_q := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), q :
   match deref(ae) {
     Expr::Var(s, n) => {
       bd : IbBind = ib_lookup(bp, s, n)
-      match bd { BdNone => {}; BdRef(rv, rsd, rts, rtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdVal(v, vts, vtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdMem(mf, mns) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdArr(af, ats, atn) => { return ib_no(bp, e, NyWhy.NwOutside) } }
+      match bd { BdNone => {}; BdRef(rv, rsd, rts, rtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdVal(v, vts, vtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdMem(mf, mns) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdArr(af, ats, atn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdView(wf, wes, wen) => { return ib_no(bp, e, NyWhy.NwOutside) } }
       src := ib_b_src(bp)
       mut bytes : usize = 0
       ko : Option(IbKS) = ib_name_ks(src, s, n)
@@ -4390,6 +4644,8 @@ ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), n
     BdMem(mf, mns) => { ib_bs_mem_assign(bp, a, h, mf, mns, v) }
     BdArr(af, ats, atn) => { ib_bs_arr_assign(bp, a, h, af, ats, atn, v) }
     BdRef(rv, rsd, rts, rtn) => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    ## Re-pointing a view local is not built yet (#1576 step 1 builds a view only at its declaration).
+    BdView(wf, wes, wen) => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
     BdNone => { ib_bs_global_assign(bp, a, h, ns, nl, v) }
   }
 }
