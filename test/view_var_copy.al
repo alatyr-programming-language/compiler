@@ -69,10 +69,10 @@ main := fn() -> u64 {
   if w[2] != 30 { return 6 }
   ## (5) a `Slice(u64)` PARAM copy
   if len64(a[0..3]) != 3 { return 7 }
-  ## (6) the NARROW element widths — correct BEFORE the fix, must stay correct. The `Slice(u32)` row
-  ## (`len32(b[0..3])` over `b : [u32; 3]`) left with #1514: x86_64 refuses a range of a word-layout
-  ## `[u32; N]` until #1559; `len32` stays as the declaration it documents.
+  ## (6) the NARROW element widths — correct BEFORE the fix, must stay correct
+  b : [3]u32 = [1, 2, 3]
   c : [u8; 2] = [1, 2]
+  if len32(b[0..3]) != 3 { return 8 }
   if len8(c[0..2]) != 2 { return 9 }
   ## (7) the FIELD-sourced copy `h := g.v` has its OWN dedicated path — it was already correct
   g := B(v = "hello")

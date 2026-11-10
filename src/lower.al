@@ -7642,11 +7642,12 @@ emit_slice_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
 }
 
 ## #1514 — whether the scalar type `t` names is one of the word-layout elements #1514 measures wrong on
-## x86_64: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`. A generic parameter takes the instance's substitution
-## first, and a brand its underlying type (a brand has its underlying's exact runtime representation,
-## Types §5.4). Every other element answers false and is sliced as before, so the integrator's
-## decision on PR #1564 holds: `bool`, `char`, `f32` and an element the lower cannot name stay a
-## tracked silent wrong value under #1559 rather than turning existing programs into refusals.
+## x86_64: `u8`, `i8`, `u16`, `i16`. A generic parameter takes the instance's substitution first, and
+## a brand its underlying type (a brand has its underlying's exact runtime representation, Types §5.4).
+## Every other element answers false and is sliced as before, so the integrator's decisions on PR #1564
+## hold: `u32`, `i32`, `bool`, `char`, `f32` and an element the lower cannot name stay a tracked silent
+## wrong value under #1559 rather than turning existing programs (a generic `Slice(T)` helper over a
+## `[u32; N]`, the `Slice(bool)` controls) into refusals.
 word_array_elem_refused := fn(t : CSpan, cx : ptr(LCtx)) -> bool {
   mut ts := subst3_ty(cx.src, t.s, t.n, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l, cx.gp3_s, cx.gp3_l, cx.it3_s, cx.it3_l)
   mut peel : usize = 0
@@ -7656,7 +7657,7 @@ word_array_elem_refused := fn(t : CSpan, cx : ptr(LCtx)) -> bool {
   }
   if ts.n == 0 { return false }
   tx := str_at((cx.src + ts.s), ts.n)
-  tx == "u8" or tx == "i8" or tx == "u16" or tx == "i16" or tx == "u32" or tx == "i32"
+  tx == "u8" or tx == "i8" or tx == "u16" or tx == "i16"
 }
 
 ## #1514 — `word_array_elem_refused` for the element of an INFERRED array local `name := [e0, …]`, read
@@ -7696,14 +7697,14 @@ inferred_array_elem_refused := fn(aent : SlotEntry, cx : ptr(LCtx)) -> bool {
 
 ## #1514 — refuse, at `at`, a range slice `arr[lo..hi]` over a fixed array the x86_64 lower lays out
 ## one WORD per element (the historical word array ABI, `eek` 0 and the float twin 9) when the element
-## is `u8`, `i8`, `u16`, `i16`, `u32` or `i32`. Types §6.4 makes a `Slice(T)`'s stride `T`'s size
+## is `u8`, `i8`, `u16` or `i16`. Types §6.4 makes a `Slice(T)`'s stride `T`'s size
 ## rounded up to its alignment, and every other `Slice(T)` producer is packed at it; a view over
 ## word-spaced elements reads the wrong bytes in any consumer that follows the rule (a `Slice(T)`
 ## parameter, an annotated `for`, a struct field, a return). The packed byte arrays
 ## (`is_byte_array_eek`), a `Slice(T)` parameter's data and a range-view local (checked where its own
-## view was taken) pass. A `[bool|char|f32; N]` range is NOT refused (PR #1564's decision: existing
-## `Slice(bool)` programs keep building); it stays a silent wrong value tracked by #1559, which lays
-## these arrays out at the §6.4 stride on x86_64.
+## view was taken) pass. A `[u32|i32|bool|char|f32; N]` range is NOT refused (PR #1564's decisions:
+## existing programs over those arrays keep building); it stays a silent wrong value tracked by #1559,
+## which lays these arrays out at the §6.4 stride on x86_64.
 reject_word_array_range := fn(aent : SlotEntry, at : usize, cx : ptr(LCtx)) {
   if aent.ek != 5 or is_byte_array_eek(aent.eek) or slot_is_slice_param(aent, cx.src) { return }
   if aent.eek != 0 and aent.eek != 9 { return }
@@ -7727,7 +7728,7 @@ reject_word_array_range := fn(aent : SlotEntry, at : usize, cx : ptr(LCtx)) {
   }
   if not refused { return }
   lower_show_src_line(cx.src, at)
-  panic("selfhost: a range slice of a fixed array of u8, i8, u16, i16, u32 or i32 elements laid out one word per element is not supported on x86_64 (#1514, #1559): the array keeps one word per element, while a Slice(T) steps T's own size (Types §6.4); refused rather than silently miscompiled. A [u64; N], an annotated [u8; N] or an alloc::vec view can be sliced")
+  panic("selfhost: a range slice of a fixed array of u8, i8, u16 or i16 elements laid out one word per element is not supported on x86_64 (#1514, #1559): the array keeps one word per element, while a Slice(T) steps T's own size (Types §6.4); refused rather than silently miscompiled. A [u64; N], an annotated [u8; N] or an alloc::vec view can be sliced")
 }
 
 ## The element-0 address of a range slice's BASE `arr` in `arr[lo..hi]` → %rax, for both deliverers

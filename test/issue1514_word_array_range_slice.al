@@ -6,10 +6,10 @@
 ## `[u8|i8|bits8; N]` local is packed), and its range-slice producers handed out a view over those
 ## word-spaced elements: any consumer that follows §6.4 (a `Slice(T)` parameter, an annotated `for`)
 ## read the wrong bytes. Until the arrays are packed (#1559), x86_64 refuses the range slice over a
-## `u16|i16|u32|i32` or inferred `u8|i8` array at its source line instead of answering wrong. The
-## `[bool; N]` check (6) is NOT refused (PR #1564's decision keeps the existing `Slice(bool)` programs
-## building): on x86_64 it is a silent wrong value tracked by #1559, and this fixture still stops
-## at check 1's range.
+## `u16|i16` or inferred `u8|i8` array at its source line instead of answering wrong. The `[u32; N]`
+## check (4) and the `[bool; N]` check (6) are NOT refused (PR #1564's decisions keep the existing
+## programs over those arrays building): on x86_64 they are silent wrong values tracked by #1559, and
+## this fixture still stops at check 1's range.
 ##
 ## Each check owns a code from 1 up; 42 means all held.
 ##
