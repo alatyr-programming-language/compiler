@@ -255,14 +255,11 @@ a64_match_arms_simple := fn(head : Option(ptr(mut Arm))) -> bool {
 
 
 
-## THIS BACKEND'S OWN ARCH IDENTITY (Tooling §2.7). `target.*` is the RESOLVED SELECTED machine model —
-## the machine being compiled FOR — so when this emitter runs, `target.arch` IS `Arch.aarch64`. It used
-## to fold as `x86_64` "so the sweep compares like-for-like", which made `target.arch == Arch.x86_64`
-## TRUE while emitting aarch64 instructions: a conformance defect that also made every library arch gate
-## inert. ONE accessor so the `comptime if` fold and the `when`-guard fold can never drift apart.
-pub a64_target_arch := fn() -> str { "aarch64" }
-
-
+## THIS BACKEND'S ARCH IDENTITY (Tooling §2.7). `target.*` is the RESOLVED SELECTED machine model — the
+## machine being compiled FOR. Every command that reaches this emitter publishes an aarch64 model first
+## (`cli.al`, #1578), so the `comptime if` fold and the `when`-guard fold both read that one published
+## model (`lower::ctfold`), the same one sema checked against. A private "aarch64" constant here used
+## to answer while sema read x86_64.
 a64_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
   ## slice 0b — the closed `build.*` profile-flag predicates fold with x86's own function.
   bcf := lower::ctfold::closed_cond_fold(cond, src)
@@ -270,9 +267,17 @@ a64_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
   mut r := 0 - 1
   match deref(cond) {
     Expr::Bin(op, l, rr) => {
+      ## #1578 — `target.<facet> ==/!= <Enum>.<v>` for every published facet (arch, os, env, container,
+      ## kind, code_size) folds with the x86 lowering's own reader. Only `arch` folded here before, so
+      ## `comptime if target.os == Os.linux` was a fail-loud `brk`.
+      tfe := lower::ctfold::target_facet_eq(l, rr, src)
+      if tfe >= 0 {
+        if op == 20 { r = tfe }
+        if op == 28 { r = 1 - tfe }
+      }
       an := arch_rhs_span(rr, src)
-      if an.n != 0 {
-        eq := str_at((src + an.s), an.n) == a64_target_arch()
+      if an.n != 0 and tfe < 0 {
+        eq := str_at((src + an.s), an.n) == lower::ctfold::target_arch_name()
         if op == 20 { if eq { r = 1 } else { r = 0 } }
         if op == 28 { if eq { r = 0 } else { r = 1 } }
       }
@@ -9287,7 +9292,7 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any callee resolution or emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on another arch is neutered to an
   ## as-if-absent no-op here, so an arch-gated raw-`asm` body (`lib/std/thread.al`) never reaches `as`.
-  apply_when_guards(decls, src, a64_target_arch())
+  apply_when_guards(decls, src, lower::ctfold::target_arch_name())
   cnt := rt::vec_len(deref(decls))
   if A64_TEST_MODE { a64_emit_test_runner(decls, sb, src, a) }
   if not A64_TEST_MODE {
