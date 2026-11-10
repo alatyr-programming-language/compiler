@@ -77,7 +77,14 @@ check_tree() {
       why="$(frag_body_ok "$f")" || { echo "changelog fragments: FAIL $FRAG_DIR_REL/$(basename "$f"): $why"; bad=1; }
     done
   fi
-  added="$(unreleased_added "$basefile" "$root/CHANGELOG.md")"
+  ## The rule reads one section, so a tree that renamed, doubled or dropped it would answer "nothing
+  ## added" while adding: fail closed. A promotion keeps exactly one heading.
+  if [ ! -f "$root/CHANGELOG.md" ]; then
+    echo "changelog fragments: FAIL CHANGELOG.md does not exist"; bad=1
+  elif [ "$(grep -c '^## Unreleased[[:space:]]*$' "$root/CHANGELOG.md")" != 1 ]; then
+    echo "changelog fragments: FAIL CHANGELOG.md has $(grep -c '^## Unreleased[[:space:]]*$' "$root/CHANGELOG.md") '## Unreleased' headings, want exactly 1"; bad=1
+  fi
+  added="$(unreleased_added "$basefile" "$root/CHANGELOG.md" 2>/dev/null)"
   na=0; [ -n "$added" ] && na="$(printf '%s\n' "$added" | wc -l | tr -d ' ')"
   if [ "$na" != 0 ]; then
     echo "changelog fragments: FAIL CHANGELOG.md gains $na line(s) under ## Unreleased; write the entry as"
@@ -161,6 +168,9 @@ self_test() {
   chk "plant: a fragment with no final newline is refused" "$(run)" "1:1"
   mk; printf -- '- x\n' > "$d/t/$FRAG_DIR_REL/12-fix.md"; mkdir "$d/t/$FRAG_DIR_REL/13-dir.md"
   chk "plant: a directory in changelog.d is refused" "$(run)" "1:1"
+  mk; sed -i.b 's/^## Unreleased$/## Unreleased (next)/' "$d/t/CHANGELOG.md"; printf -- '- **New (#2).** Added.\n' >> "$d/t/CHANGELOG.md"
+  chk "plant: a renamed Unreleased heading (the rule would read no section) is refused" "$(run)" "1:1"
+  mk; rm "$d/t/CHANGELOG.md"; chk "plant: a deleted CHANGELOG.md is refused, not read as nothing added" "$(run)" "1:1"
   mk; chk "the coverage line names the base and both counts" \
     "$(check_tree "$d/t" "$d/base" planted | grep -c '^changelog fragments: base=planted fragments=0 unreleased-added=0$')" "1"
 

@@ -65,7 +65,8 @@ text, with the reasons, measurements and history. Line citations are as of the m
   that split: both fields agreed at `0.2.1` over a seed answering `0.1.0` and the seed-identity check
   passed, because only its digest side is checked against the artifact while its version side
   compares one claim to another. So the promotion commit stays atomic — bump,
-  `scripts/package_cli_test.sh`, seed, `current-seed-sha256`, the appended entry, `CHANGELOG.md` —
+  `scripts/package_cli_test.sh`, seed, `current-seed-sha256`, the appended entry, `CHANGELOG.md`
+  with the released `changelog.d/` fragments deleted (#1566) —
   and the intermediate state is never committed on its own. #586's next step closed the hole by
   comparing `./seed/alatyr --version`, and it landed after the first promotion built in this order: the
   seed answers `alatyr 0.2.16` and `current-seed-version` records `0.2.16`, so the claim is now checked

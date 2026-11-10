@@ -306,7 +306,8 @@ The screening is where the safety lives, and all of it happens before anything i
    dedicated integration worktree in a fixed order, stopping at the first conflict rather than
    resolving it.
 3. Resolve **only additive** conflicts — `CHANGELOG.md`'s `## Unreleased` (only in a PR that predates
-   `changelog.d/`, #1566; a new entry is a fragment and cannot conflict), fixture registration in
+   `changelog.d/`, #1566: settling it composes the merge, but the gate then refuses the added line, so
+   move the bullet into a fragment first; a new entry cannot conflict), fixture registration in
    `scripts/e2e.sh` and `scripts/package_cli_test.sh` — and only where the two sides do not overlap
    line for line.
 4. Gate once on the composed object. One oracle commit per oracle **file** covers the whole batch,

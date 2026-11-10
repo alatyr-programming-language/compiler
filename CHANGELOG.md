@@ -86,8 +86,8 @@ Reproducibility section and `.agents/skills/alatyr-integrate/SKILL.md` §3 requi
 5. `seed/VERSION` — `current-seed-sha256` moves to the promoted digest, and the entry with the three
    stage hashes and the **read** delta is appended to `seed/HISTORY.md` (#1130). The entry is the reviewable part: it lands in the
    promotion PR, where a human can read the delta before it becomes history.
-6. This file — `## Unreleased` becomes `## <version> — <date>`, and a fresh empty `## Unreleased`
-   opens above it.
+6. This file — `## Unreleased` becomes `## <version> — <date>`, the `changelog.d/` fragments are
+   released after its own entries and deleted (#1566), and a fresh empty `## Unreleased` opens above it.
 
 All six land in **one commit**. Between step 1 and step 4 the working copy carries a version the
 committed seed does not answer, and `seed/VERSION`'s two CURRENT SEED lines describe two different

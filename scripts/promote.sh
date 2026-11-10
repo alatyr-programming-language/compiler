@@ -155,6 +155,14 @@ fragment_paths() {
   git -C "$1" ls-files -- 'changelog.d/*.md' | grep -Ev '^changelog\.d/README\.md$'
 }
 
+## fragments_left DIR -> stdout: every file under DIR/changelog.d but its README, tracked or not. After a
+## release it must print nothing: a fragment restored or written back would be committed as an edit, or
+## released twice (#1566).
+fragments_left() {
+  [ -d "$1/changelog.d" ] || return 0
+  find "$1/changelog.d" -mindepth 1 ! -path "$1/changelog.d/README.md" | sed "s|^$1/||" | sort
+}
+
 ## atomic_set_ok CHANGED-FILES [DELETED-FILES] -> 0 when the changed paths are exactly $ATOMIC, plus
 ## changelog fragments that are DELETED (the release consumed them, #1566) and nothing else
 atomic_set_ok() {
@@ -210,6 +218,10 @@ cmd_prepare() {
   echo "promote: $old -> $new in $wt (base $(git rev-parse --short HEAD))"
   bump "$wt" "$new" || die "the bump failed"
   echo "promote: bumped package.al, seed/VERSION, scripts/package_cli_test.sh"
+
+  ## A malformed fragment is refused here, in seconds, not after three compiler builds (#1566).
+  bash scripts/changelog_fragments.sh --check HEAD > "$P/fragments_check.log" 2>&1 \
+    || { cat "$P/fragments_check.log" >&2; die "changelog.d/ does not hold well-formed fragments (above)"; }
 
   ## the stages: each compiler builds the tree into target/debug/alatyr, kept as target/stageN. Exactly
   ## where fixpoint.sh keeps them: a compiler finds lib/ relative to itself (AGENTS.md), and one copied
@@ -289,8 +301,6 @@ cmd_prepare() {
   cp "$P/HISTORY.md" seed/HISTORY.md
   ## The fragments (#1566) are released with the section and deleted: each entry is then in CHANGELOG.md
   ## exactly once, under the version that carries it.
-  bash scripts/changelog_fragments.sh --check HEAD > "$P/fragments_check.log" 2>&1 \
-    || { cat "$P/fragments_check.log" >&2; die "changelog.d/ does not hold well-formed fragments (above)"; }
   bash scripts/changelog_fragments.sh --assemble "$PWD/changelog.d" > "$P/fragments" || die "the fragments cannot be assembled"
   changelog_release CHANGELOG.md "$new" "$today" "$P/fragments" > "$P/CHANGELOG.md" || die "CHANGELOG.md cannot be released (above)"
   cp "$P/CHANGELOG.md" CHANGELOG.md
@@ -322,13 +332,14 @@ cmd_commit() {
   local wt="${1:-}"; [ -d "$wt/.git" ] || [ -f "$wt/.git" ] || die "commit needs the prepared worktree"
   cd "$wt" || die "cd $wt"
   if owed_left "$wt"; then die "the lines above still say $OWED: the delta sentence and the why are a person's"; fi
+  [ -z "$(fragments_left .)" ] || die "changelog.d/ still holds $(fragments_left . | tr '\n' ' ')— a released fragment is deleted, never kept or rewritten (#1566)"
   atomic_set_ok "$(git status --porcelain --untracked-files=all | grep -v ' target/' | cut -c4-)" \
-    "$(git status --porcelain | grep -E '^(D |  D| D)' | cut -c4-)" \
+    "$(git diff --cached --name-only --diff-filter=D -- changelog.d)" \
     || die "the changed files are not the atomic promotion set (AGENTS.md, Reproducibility)"
   # shellcheck source=attribution.sh
   . "$ROOT/scripts/attribution.sh"
   attribution_trailer_check "the promotion message" "$(cat target/promote/COMMIT_MSG)" || die "remove the trailer from target/promote/COMMIT_MSG"
-  git add -- $ATOMIC && git add -A -- changelog.d && git commit -q -F target/promote/COMMIT_MSG || die "git commit failed"
+  git add -- $ATOMIC && git commit -q -F target/promote/COMMIT_MSG || die "git commit failed"
   echo "promote: COMMITTED $(git rev-parse HEAD) in $wt — not pushed. Next: scripts/promote.sh gate $wt"
 }
 
@@ -437,6 +448,16 @@ self_test() {
   chk "a fragment ADDED or edited in the promotion commit is refused" "$?" "1"
   atomic_set_ok "$(printf '%s\n' $ATOMIC changelog.d/README.md)" "changelog.d/README.md" > /dev/null
   chk "deleting changelog.d/README.md is refused" "$?" "1"
+  mkdir -p "$d/f/changelog.d"; printf 'r\n' > "$d/f/changelog.d/README.md"
+  chk "no fragment left beside the README is nothing left" "$(fragments_left "$d/f")" ""
+  printf -- '- x\n' > "$d/f/changelog.d/12-a.md"
+  chk "a fragment written back after its release is left, tracked or not" "$(fragments_left "$d/f")" "changelog.d/12-a.md"
+  mkdir -p "$d/g/changelog.d"; git -C "$d/g" init -q; printf -- '- x\n' > "$d/g/changelog.d/12-a.md"; printf 'r\n' > "$d/g/changelog.d/README.md"
+  git -C "$d/g" add -A && git -C "$d/g" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --no-verify -m f
+  git -C "$d/g" rm -q changelog.d/12-a.md; printf -- '- x, edited\n' > "$d/g/changelog.d/12-a.md"
+  chk "a deleted-then-rewritten fragment (D and ?? at once) is caught as left" "$(fragments_left "$d/g")" "changelog.d/12-a.md"
+  chk "the deleted list comes from the index: the rewritten fragment is still a staged deletion" \
+    "$(git -C "$d/g" diff --cached --name-only --diff-filter=D -- changelog.d)" "changelog.d/12-a.md"
   is_due 1 0 2026-10-29 2026-10-30 > /dev/null; got=$?; is_due 0 2 2026-10-29 2026-10-30 > /dev/null; got="$got$?"; is_due 0 0 2026-10-23 2026-10-30 > /dev/null; got="$got$?"
   chk "due on an owed issue, on a live seed row, and after a week" "$got" "000"
   is_due 0 0 2026-10-24 2026-10-30 > /dev/null; chk "not due: nothing owed, six days" "$?" "1"
