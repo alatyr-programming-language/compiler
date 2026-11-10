@@ -154,6 +154,11 @@ Two numbers that are **not** the compiler's version: the specification revision 
   `alatyr x86-ir -o` died with SIGILL on `for c in chars(s)`, `split` iterators and protocol
   shadowing; the default build carried the wrong record on silently, with no change to what it emits.
   Each record space now has its own key word.
+- **`==` and `!=` compare a generic `-> T` call's enum or struct result structurally on x86_64
+  (#1397).** `id(E, x) == E.T(4, 5)` compared only the returned tag and answered *not equal*. A call
+  with an explicit type argument is now typed through it and compared by the structural `eq`. The
+  shapes it cannot yet type, among them a type argument naming an enclosing type parameter, a
+  `-> Option(T)` return and an inferred type argument, are refused at the comparison's line (#1557).
 - **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
   `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
   bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead

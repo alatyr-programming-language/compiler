@@ -5798,11 +5798,13 @@ agg_gen_call_inst_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> u
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
-## The LOCATED reject for that shape: the call's source line to stderr, then the refusal.
+## The LOCATED reject for that shape: the call's source line to stderr, then the refusal. It names no
+## workaround: binding the result to a local first answers wrongly or fails to link for these shapes
+## (#1557 and the issues it links), so the refusal points at the tracking issue instead.
 reject_cmp_generic_call := fn(ce : ptr(Expr), src : ptr(u8)) {
   ci := call_callee_span(ce)
   if ci.n != 0 { lower_show_src_line(src, ci.s) }
-  panic("selfhost: a bare comparison of a GENERIC call's result with a multi-word struct/enum value is not yet supported (the source line above; the call's result type is resolved only per instance); bind the call's result to a local first (`v := f(…)` then `v == …`)")
+  panic("selfhost: a bare comparison of a GENERIC call's result with a multi-word struct/enum value is not yet supported (the source line above; the call's result type is resolved only per instance, and this call's type is not routed to the structural `eq` yet; #1557)")
 }
 ## #1396 — the WORD SIZE of the by-value struct or enum a type span `[s, s+n)` names, else 0. A raw
 ## union and a niche-folded `Option(ptr(T))` answer 0: neither has the word image the structural
