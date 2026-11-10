@@ -131,6 +131,9 @@ RATCHET_FILE="$ROOT/scripts/xbackend_diff.baseline"
 ## queue shrink only by deleting tests, which is backwards. They are counted beside the line, never
 ## silently: `new-paths=`/`new-rows=`. `unexplained` is NOT split — a new fixture that answers
 ## quietly and differently still fails, so the teeth stay on the only counter criterion 3 names.
+## The base answers a second question too (#1526): on an existing path, did x86_64 just come to meet
+## the fixture's `## expect:` while the twins stay at a listed trap? Those rows are counted beside the
+## line as `x86fix-paths=`/`x86fix-rows=` (the clauses are at xb_x86fix_current).
 BASE_REV="${ALATYR_XB_BASE:-}"
 NEWPATHS_FILE=""
 while [ "$#" -gt 0 ]; do
@@ -489,12 +492,182 @@ wat_site_info() { # k < in.wat — prints "comment TAB function" for the k-th si
 ## differences, counted beside it); a path added by this change leaves the LINE but is reported.
 ## Defined above the self-test because the self-test branch ends in `exit` and a function defined
 ## after it would never exist when the checks call it.
-xb_split_counts() { # rows newpaths -> "epaths erows npaths nrows"
-  printf '%s\n' "$1" | awk -F'\t' -v new="$2" '
-    BEGIN{if(new!=""){n=split(new,a,"\n");for(i=1;i<=n;i++) if(a[i]!="")N[a[i]]=1}}
+## The third argument is the set of paths `xb_x86fix_base` held (#1526): their rows leave the line
+## like new coverage and are counted beside it, so the echo has six numbers: ... fpaths frows.
+xb_split_counts() { # rows newpaths [fixpaths] -> "epaths erows npaths nrows fpaths frows"
+  printf '%s\n' "$1" | awk -F'\t' -v new="$2" -v fix="${3:-}" '
+    BEGIN{if(new!=""){n=split(new,a,"\n");for(i=1;i<=n;i++) if(a[i]!="")N[a[i]]=1}
+          if(fix!=""){n=split(fix,a,"\n");for(i=1;i<=n;i++) if(a[i]!="")F[a[i]]=1}}
     $1=="HW-DEFINED"||$1=="RAW-ESCAPE"||$1=="N/A-TARGET"{next}
-    { if ($3 in N) { nr++; NP[$3]=1 } else { er++; EP[$3]=1 } }
-    END{ printf "%d %d %d %d\n", length(EP)+0, er+0, length(NP)+0, nr+0 }'
+    NF<3{next}
+    { if ($3 in N) { nr++; NP[$3]=1 } else if ($3 in F) { fr++; FP[$3]=1 } else { er++; EP[$3]=1 } }
+    END{ printf "%d %d %d %d %d %d\n", length(EP)+0, er+0, length(NP)+0, nr+0, length(FP)+0, fr+0 }'
+}
+
+## ── an x86_64 fix on an existing path whose twins stay at a LISTED trap (#1526) ─────────────────
+## The ratchet counts a disagreement that appears on a path that already had a test as growth. One
+## such appearance is not a regression at all: x86_64 is FIXED — it now meets the fixture's
+## `## expect:` and did not at the base — while the twins stay where they were, at a trap or a refusal
+## the corpus already records as theirs. Before the fix all four backends agreed (on x86_64's wrong
+## answer, or on a trap), so the path was no disagreement; after it, the twins' unimplemented lowering
+## becomes visible. Refusing that would hold an x86_64 correctness fix hostage to a twin feature
+## (#1389: #1287 fixed, `test/issue1182_for_array_param_agg.al` 132 -> 42, the twins still at the
+## for-in stub #1201).
+##
+## A path is held, ALL its rows or none, only when every clause holds:
+##   1. it existed at the base (an added path is new coverage, counted there);
+##   2. every disagreeing row on it judges a TWIN against x86_64 (no `ref=`) and is TRAP or REFUSED —
+##      a trap or a refusal, never a quiet or loud normal exit, a crash or a timeout;
+##   3. the fixture carries a well-formed `## expect:` for x86_64 (its scoped line, else the unscoped
+##      one) and x86_64's observation in this walk MEETS it (fixture_expect.sh's `sat`, needles aside);
+##   4. each such twin row is a row of scripts/known-deviations.tsv whose `observed` is exactly this
+##      walk's and whose issue scripts/known-deviations.issues.tsv marks `rows`. "Open" is that table:
+##      the gate runs without credentials, and land.sh PHASE 2 runs `fixture_expect.sh --issues-open`,
+##      which refuses a table naming a closed issue (a fix deletes its own rows, #1126);
+##   5. at the base, x86_64 did NOT meet that directive, and the four backends AGREED on the path.
+##      The base's outcome per backend is read from the base tree, never re-run: its known-deviations
+##      row when it has one (fixture_expect.sh --gate held main to "met, or listed with exactly this
+##      observation"), else what its directive states (run N, trap, reject), else its committed
+##      corpus.manifest row. Anything else (`accept`, which states no value; no row at all; no base)
+##      is UNKNOWN, and unknown holds nothing. Agreement is decided by `xb_rows` itself on those base
+##      outcomes, so "agreed" means exactly what the ratchet means by it. A path that already disagreed
+##      at the base is in the baseline already, and holding it out again would count it twice.
+##   5b. when the x86_64 directive (scoped, else unscoped) DIFFERS between the base and this tree, the
+##      base one was `trap` or `reject`: a fail-loud registration replaced by the fixed value (#1389).
+##      A rewritten stated value (`run N`) or `accept` holds nothing, or a change could rewrite the
+##      directive to its own wrong answer and get the disagreement held. `accept` never qualifies on
+##      this tree either, base `reject` or not: it states no value for the landing to check. A `trap` -> wrong `run M` is
+##      still held, so every held row prints `expect: <base> -> <head>` and the landing names it.
+## If the base agreement join itself fails, nothing is held and the gate stops (exit 3).
+## Anything that fails a clause stays on the line and is growth, as before: a quiet wrong answer on a
+## twin, an unlisted twin row, a listed row whose observation moved, a row under an issue marked
+## `none`, an x86_64 that still misses its directive.
+##
+## xb_x86fix_current: clauses 1–4, on this tree. Output per held twin row:
+##   path TAB backend TAB observed TAB #issue TAB x86-directive
+xb_x86fix_current() { # rows manifest newpaths cur-root
+  local cands w rc=0 p
+  cands="$(printf '%s\n' "$1" | awk -F'\t' -v new="$3" '
+    BEGIN { n = split(new, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") N[a[i]] = 1 }
+    NF < 6 { next }
+    { P[$3] = 1
+      if (($3 in N) || $2 == "x86_64" || $6 ~ /ref=/ || ($1 != "TRAP" && $1 != "REFUSED")) BAD[$3] = 1 }
+    END { for (p in P) if (!(p in BAD)) print p }' | LC_ALL=C sort)"
+  [ -n "$cands" ] || return 0
+  mkdir -p "$ROOT/target" && w="$(mktemp -d "$ROOT/target/xb-x86fix.XXXXXX")" || return 2
+  ( cd "$4" || exit 2; set --; while IFS= read -r p; do [ -f "$p" ] && set -- "$@" "$p"; done <<< "$cands"
+    [ "$#" = 0 ] || expect_scan "$@" ) > "$w/dirs" || rc=2
+  printf '%s\n' "$cands" > "$w/cands"; printf '%s\n' "$1" > "$w/rows"
+  for p in scripts/known-deviations.tsv scripts/known-deviations.issues.tsv; do
+    if [ -f "$4/$p" ]; then cp "$4/$p" "$w/${p##*/}"; else : > "$w/${p##*/}"; fi
+  done
+  [ "$rc" = 0 ] && awk -F'\t' -v OFS='\t' '
+    function trapst(b) { return b == "x86_64" ? 132 : (b == "wasm" ? 134 : 133) }
+    function sat(o, b, ph, ex) {
+      if (o ~ /^run:/)   return ph == "run" && ex == substr(o, 5)
+      if (o == "trap")   return ph == "run" && ex == trapst(b)
+      if (o == "accept") return ph == "run"
+      if (o == "reject") return ph == "compile"
+      return 0
+    }
+    FILENAME == ARGV[1] { C[$1] = 1; next }
+    FILENAME == ARGV[2] { if ($2 == "!") MAL[$1] = 1; else D[$1, $2] = $3; next }
+    FILENAME == ARGV[3] { if ($0 ~ /^#/ || NF < 6) next; PH[$1, $2] = $3; EX[$1, $2] = $4 + 0; next }
+    FILENAME == ARGV[4] { if ($0 ~ /^#/ || NF < 4) next; i = $4; sub(/^#/, "", i); DV[$1, $2] = $3; DI[$1, $2] = i; next }
+    FILENAME == ARGV[5] { if ($0 ~ /^#/ || NF < 4) next; ISS[$1] = $4; next }
+    FILENAME == ARGV[6] { if (NF >= 6 && ($3 in C)) { R[$3] = R[$3] " " $2 } ; next }
+    END {
+      for (p in C) {
+        if (p in MAL) continue
+        o = ((p, "x86_64") in D) ? D[p, "x86_64"] : (((p, "*") in D) ? D[p, "*"] : "")
+        ## `accept` states no value: a head that only "compiles and runs" is never a fix (clause 5b).
+        if (o == "" || o == "accept" || !(("x86_64", p) in PH) || !sat(o, "x86_64", PH["x86_64", p], EX["x86_64", p])) continue
+        n = split(R[p], bs, " "); ok = (n > 0); out = ""
+        for (i = 1; i <= n; i++) {
+          b = bs[i]; obs = PH[b, p] "/" EX[b, p]
+          if (!((b, p) in DV) || DV[b, p] != obs || ISS[DI[b, p]] != "rows") { ok = 0; break }
+          out = out p OFS b OFS obs OFS "#" DI[b, p] OFS o "\n"
+        }
+        if (ok) printf "%s", out
+      }
+    }' "$w/cands" "$w/dirs" "$2" "$w/known-deviations.tsv" "$w/known-deviations.issues.tsv" "$w/rows" | LC_ALL=C sort || rc=2
+  rm -rf "$w"
+  return "$rc"
+}
+
+## xb_x86fix_base: clause 5, against a base tree materialised at base-root (test/<path> for each
+## candidate, scripts/known-deviations.tsv, scripts/corpus.manifest; any of them may be missing).
+## Input: xb_x86fix_current's output. Output: the held rows, path TAB backend TAB observed TAB #issue
+## TAB `expect: <base> -> <head>` (the x86_64 directive at the base and now, as written in the fixture).
+xb_x86fix_base() { # current-out manifest base-root
+  local w rc=0 p held dis
+  [ -n "$1" ] && [ -d "$3" ] || return 0
+  mkdir -p "$ROOT/target" && w="$(mktemp -d "$ROOT/target/xb-x86fix-base.XXXXXX")" || return 2
+  printf '%s\n' "$1" > "$w/cur"
+  ( cd "$3" || exit 2; set --; while IFS= read -r p; do [ -f "$p" ] && set -- "$@" "$p"; done <<< "$(cut -f1 "$w/cur" | sort -u)"
+    [ "$#" = 0 ] || expect_scan "$@" ) > "$w/dirs" || rc=2
+  if [ -f "$3/scripts/known-deviations.tsv" ]; then cp "$3/scripts/known-deviations.tsv" "$w/devs"; else : > "$w/devs"; fi
+  if [ -f "$3/scripts/corpus.manifest" ]; then cp "$3/scripts/corpus.manifest" "$w/bman"; else : > "$w/bman"; fi
+  ## The base outcomes as a manifest of their own (quiet stderr), for xb_rows to judge; a path with any
+  ## unknown outcome, or whose x86_64 already met today's directive, is not written at all.
+  [ "$rc" = 0 ] && awk -F'\t' -v OFS='\t' -v E="$SHA_EMPTY" -v BXF="$w/bx" '
+    function trapst(b) { return b == "x86_64" ? 132 : (b == "wasm" ? 134 : 133) }
+    function sat(o, b, ph, ex) {
+      if (o ~ /^run:/)   return ph == "run" && ex == substr(o, 5)
+      if (o == "trap")   return ph == "run" && ex == trapst(b)
+      if (o == "accept") return ph == "run"
+      if (o == "reject") return ph == "compile"
+      return 0
+    }
+    function base(b, p,   o, s) {          # "phase TAB exit" at the base, or "" when unknown
+      if ((b, p) in DV) { s = DV[b, p]; sub(/\//, "\t", s); return s }
+      if ((p in MAL)) return ""
+      o = ((p, b) in D) ? D[p, b] : (((p, "*") in D) ? D[p, "*"] : "")
+      if (o ~ /^run:/)   return "run\t" substr(o, 5)
+      if (o == "trap")   return "run\t" trapst(b)
+      if (o == "reject") return "compile\t1"
+      if (o != "")       return ""
+      return ((b, p) in BM) ? BM[b, p] : ""
+    }
+    FILENAME == ARGV[1] { C[$1] = 1; X[$1] = $5; next }
+    FILENAME == ARGV[2] { if ($2 == "!") MAL[$1] = 1; else D[$1, $2] = $3; next }
+    FILENAME == ARGV[3] { if ($0 ~ /^#/ || NF < 4) next; DV[$1, $2] = $3; next }
+    FILENAME == ARGV[4] { if ($0 ~ /^#/ || NF < 6) next; BM[$1, $2] = $3 "\t" $4; next }
+    FILENAME == ARGV[5] { if ($0 ~ /^#/ || NF < 6 || !($2 in C)) next; HAS[$2] = HAS[$2] " " $1; next }
+    END {
+      print "columns=backend\tpath\tphase\texit\tstdout_sha256\tstderr_sha256"
+      for (p in C) {
+        ## Clause 5b: the x86_64 directive the base stated. A rewritten directive is held only when the
+        ## base one registered a loud failure (`trap`, `reject`); a stated value or `accept` never is.
+        bx = (p in MAL) ? "!" : (((p, "x86_64") in D) ? D[p, "x86_64"] : (((p, "*") in D) ? D[p, "*"] : ""))
+        if (bx != X[p] && bx != "trap" && bx != "reject") continue
+        n = split(HAS[p], bs, " "); ok = 0; out = ""
+        for (i = 1; i <= n; i++) {
+          s = base(bs[i], p); if (s == "") { ok = -1; break }
+          if (bs[i] == "x86_64") { split(s, xe, "\t"); ok = sat(X[p], "x86_64", xe[1], xe[2] + 0) ? -1 : 1 }
+          out = out bs[i] OFS p OFS s OFS E OFS E "\n"
+        }
+        if (ok == 1) { printf "%s", out; print p, bx > BXF }
+      }
+    }' "$w/cur" "$w/dirs" "$w/devs" "$w/bman" "$2" > "$w/base.manifest" || rc=2
+  if [ "$rc" = 0 ]; then
+    held="$(awk -F'\t' '!/^columns=/ { print $2 }' "$w/base.manifest" | sort -u)"
+    ## Agreement at the base, judged by the join itself with no documented class: strictest reading.
+    ## Fail closed: if the join itself fails, nothing is held and the caller stops the gate.
+    if [ -n "$held" ] && ! dis="$(xb_rows "$w/base.manifest" 1 "" "" "")"; then
+      echo "xbackend diff: the base agreement check failed; no x86fix row is held (#1526)" >&2
+      rm -rf "$w"; return 2
+    fi
+    [ -n "$held" ] && held="$(printf '%s\n' "$held" | grep -vxF -f <(printf '%s\n' "$dis" | cut -f3 | sort -u; echo '//none//'))"
+    ## Each held row carries the x86_64 directive at the base and now, so a landing names what changed.
+    [ -n "$held" ] && printf '%s\n' "$1" | awk -F'\t' -v OFS='\t' -v h="$held" '
+      function disp(o) { return o ~ /^run:/ ? "run " substr(o, 5) : o }
+      BEGIN { n = split(h, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") H[a[i]] = 1 }
+      FILENAME == ARGV[1] { BX[$1] = $2; next }
+      ($1 in H) { print $1, $2, $3, $4, "expect: " disp(BX[$1]) " -> " disp($5) }' "$w/bx" -
+  fi
+  rm -rf "$w"
+  return "$rc"
 }
 
 if [ "$MODE" = selftest ]; then
@@ -724,9 +897,9 @@ if [ "$MODE" = selftest ]; then
     "HW-DEFINED	x86_64	test/new.al	run/trap	-	hw")"
   printf 'test/new.al\n' > "$T/newp"
   ok "split: existing paths stay on the line, the added path leaves it" \
-     "$(xb_split_counts "$SPLIT_ROWS" "$(cat "$T/newp")")" "2 3 1 3"
+     "$(xb_split_counts "$SPLIT_ROWS" "$(cat "$T/newp")")" "2 3 1 3 0 0"
   ok "split: no base means nothing is new, every row counts (the strict reading)" \
-     "$(xb_split_counts "$SPLIT_ROWS" "")" "3 6 0 0"
+     "$(xb_split_counts "$SPLIT_ROWS" "")" "3 6 0 0 0 0"
   ## A baseline of the split's own size, so these two checks measure the split and not the 10/20
   ## baseline the ratchet checks above share: 2 paths / 3 rows is exactly what remains on the line
   ## once the added path is held out.
@@ -737,9 +910,95 @@ if [ "$MODE" = selftest ]; then
      "$(xb_ratchet "$T/sbase" 2 3 0 0 0 0 >/dev/null 2>&1; echo $?)" 0
   ## Non-vacuity: if the split were a no-op, the two ratchet checks above would agree. They do not.
   ok "split: HW-DEFINED on the added path is excluded from both sides" \
-     "$(xb_split_counts "HW-DEFINED	x86_64	test/new.al	run/trap	-	hw" "test/new.al")" "0 0 0 0"
+     "$(xb_split_counts "HW-DEFINED	x86_64	test/new.al	run/trap	-	hw" "test/new.al")" "0 0 0 0 0 0"
   ok "split: an unknown path in the new set invents no rows" \
-     "$(xb_split_counts "TRAP	aarch64	test/old_a.al	run/trap	-	quiet" "test/absent.al")" "1 1 0 0"
+     "$(xb_split_counts "TRAP	aarch64	test/old_a.al	run/trap	-	quiet" "test/absent.al")" "1 1 0 0 0 0"
+
+  ## ── #1526: an x86_64 fix on an existing path whose twins stay at a LISTED trap. ──
+  ## The planted #1389 shape: at the base `test/fx.al` says `## expect: trap` and all four backends trap;
+  ## the change fixes x86_64 to the stated 42 (`## expect: run 42`) and the three twins still trap, each
+  ## listed under the open #1201. `xf` runs both halves of the split on a planted tree and a planted base
+  ## and prints the held rows as `backend:observed:#issue`, space-separated.
+  XC="$T/xf-cur"; XB="$T/xf-base"; mkdir -p "$XC/test" "$XC/scripts" "$XB/test" "$XB/scripts"
+  fxq() { printf '%s\t%s\t%s\t%s\t%s\t%s' "$1" test/fx.al "$2" "$3" "$E" "$E"; }
+  xf_tree() { # cur-expect base-expect devs-rows(;-separated, backend obs issue) issue-mark base-devs-rows
+    printf 'int main() {}\n## expect: %s\n' "$1" > "$XC/test/fx.al"
+    printf 'int main() {}\n## expect: %s\n' "$2" > "$XB/test/fx.al"
+    { echo '# devs'; printf '%s' "$3" | tr ';' '\n' | awk 'NF == 3 { printf "%s\ttest/fx.al\t%s\t%s\n", $1, $2, $3 }'; } > "$XC/scripts/known-deviations.tsv"
+    printf '# issues\n1201\trule\tdiff\t%s\n' "$4" > "$XC/scripts/known-deviations.issues.tsv"
+    { echo '# devs'; printf '%s' "${5:-}" | tr ';' '\n' | awk 'NF == 3 { printf "%s\ttest/fx.al\t%s\t%s\n", $1, $2, $3 }'; } > "$XB/scripts/known-deviations.tsv"
+  }
+  xf() { # manifest-rows... -> held rows; NEWX names the paths added by the change
+    printf '%s\n' "$H" "$@" > "$T/xfm"
+    local r c; r="$(xb_rows "$T/xfm" 0 "" "" "")"
+    c="$(xb_x86fix_current "$r" "$T/xfm" "${NEWX:-}" "$XC")" || { echo "current-rc=$?"; return; }
+    xb_x86fix_base "$c" "$T/xfm" "$XB" | awk -F'\t' '{ printf "%s%s:%s:%s", (NR > 1 ? " " : ""), $2, $3, $4 }'
+  }
+  LISTED='aarch64 run/133 #1201;riscv64 run/133 #1201;wasm run/134 #1201'
+  FIXED_ROWS=("$(fxq x86_64 run 42)" "$(fxq aarch64 run 133)" "$(fxq riscv64 run 133)" "$(fxq wasm run 134)")
+  xf_tree 'run 42' trap "$LISTED" rows
+  ok "x86fix: an x86_64 fix whose twins stay at a listed trap is held, every row named with its issue" \
+     "$(xf "${FIXED_ROWS[@]}")" "aarch64:run/133:#1201 riscv64:run/133:#1201 wasm:run/134:#1201"
+  printf '%s\n' "$H" "${FIXED_ROWS[@]}" > "$T/xfm"
+  ok "x86fix: ... its rows leave the line and are counted beside it" \
+     "$(xb_split_counts "$(xb_rows "$T/xfm" 0 "" "" "")" "" "test/fx.al")" "0 0 0 0 1 3"
+  printf 'paths=0\nrows=0\nhw-defined=0\nraw-escape=0\nunexplained=0\ntarget-na=0\n' > "$T/xfbase"
+  ok "x86fix: ... so the ratchet HOLDS at a baseline that never had the path" \
+     "$(xb_ratchet "$T/xfbase" 0 0 0 0 0 0 >/dev/null 2>&1; echo $?)" 0
+  ok "x86fix: ... while the same rows left on the line GROW it (the case is not vacuous)" \
+     "$(xb_ratchet "$T/xfbase" 1 3 0 0 0 0 >/dev/null 2>&1; echo $?)" 1
+  xf_tree 'run 42' trap 'aarch64 run/133 #1201;riscv64 run/133 #1201' rows
+  ok "x86fix: one UNLISTED twin row holds nothing — the whole path stays growth" "$(xf "${FIXED_ROWS[@]}")" ""
+  xf_tree 'run 42' trap "$LISTED;aarch64 run/7 #1201" rows
+  ok "x86fix: a QUIET twin answer holds nothing, listed or not" \
+     "$(xf "$(fxq x86_64 run 42)" "$(fxq aarch64 run 7)" "$(fxq riscv64 run 133)" "$(fxq wasm run 134)")" ""
+  xf_tree 'run 42' trap "$LISTED" none
+  ok "x86fix: a row under an issue the table marks none (no open issue with rows) holds nothing" "$(xf "${FIXED_ROWS[@]}")" ""
+  xf_tree 'run 42' trap 'aarch64 run/133 #1201;riscv64 run/133 #1201;wasm run/1 #1201' rows
+  ok "x86fix: a listed row whose observation moved holds nothing" "$(xf "${FIXED_ROWS[@]}")" ""
+  xf_tree 'run 41' trap "$LISTED" rows
+  ok "x86fix: an x86_64 that still misses its directive holds nothing" "$(xf "${FIXED_ROWS[@]}")" ""
+  xf_tree 'run 42' 'run 42' "$LISTED" rows "$LISTED"
+  ok "x86fix: x86_64 already met the directive at the base (the path disagreed then): nothing" "$(xf "${FIXED_ROWS[@]}")" ""
+  ## The clause that x86_64 MOVED: here all four answered 42 at the base and the change breaks the twins,
+  ## listing the new traps itself. That is a twin regression, not an x86_64 fix, and it stays growth.
+  xf_tree 'run 42' 'run 42' "$LISTED" rows
+  ok "x86fix: twins newly trapping (rows added by the change) while x86_64 did not move: nothing" "$(xf "${FIXED_ROWS[@]}")" ""
+  xf_tree 'run 42' accept "$LISTED" rows
+  ok "x86fix: a base outcome that is unknown (accept states no value) holds nothing" "$(xf "${FIXED_ROWS[@]}")" ""
+  xf_tree 'run 42' 'run 42' "$LISTED" rows "x86_64 run/132 #1201;$LISTED"
+  ok "x86fix: same directive, x86_64 listed at the base and fixed now, twins agreed then: held" \
+     "$(xf "${FIXED_ROWS[@]}")" "aarch64:run/133:#1201 riscv64:run/133:#1201 wasm:run/134:#1201"
+  xf_tree 'run 42' 'run 42' "$LISTED" rows "x86_64 run/7 #1201;$LISTED"
+  ok "x86fix: x86_64 wrong at the base while the twins trapped (already a disagreement): nothing" "$(xf "${FIXED_ROWS[@]}")" ""
+  xf_tree 'run 42' trap "$LISTED" rows
+  ok "x86fix: a path this change ADDS is new coverage, never an x86_64 fix" "$(NEWX=test/fx.al xf "${FIXED_ROWS[@]}")" ""
+  ## Clause 5b (review of #1527): the probe. At the base `## expect: run 42`, all four trapped and each
+  ## row was listed; the change makes x86_64 answer 7 and rewrites the directive to `run 7`. Growth.
+  xf_tree 'run 7' 'run 42' "$LISTED" rows "x86_64 run/132 #1201;$LISTED"
+  ok "x86fix: a rewritten stated value (run 42 -> run 7, x86_64 now 7) holds nothing" \
+     "$(xf "$(fxq x86_64 run 7)" "$(fxq aarch64 run 133)" "$(fxq riscv64 run 133)" "$(fxq wasm run 134)")" ""
+  xf_tree accept 'reject' "$LISTED" rows
+  ok "x86fix: a base reject rewritten to accept (states no value) holds nothing" "$(xf "${FIXED_ROWS[@]}")" ""
+  xf_tree 'run 42' 'reject' "$LISTED" rows
+  ok "x86fix: a base reject replaced by the fixed value is a fail-loud registration: held" \
+     "$(xf "${FIXED_ROWS[@]}")" "aarch64:run/133:#1201 riscv64:run/133:#1201 wasm:run/134:#1201"
+  ## Every held row names the x86_64 directive at the base and now, for whoever lands it.
+  xfd() { printf '%s\n' "$H" "$@" > "$T/xfm"; local r c; r="$(xb_rows "$T/xfm" 0 "" "" "")"
+          c="$(xb_x86fix_current "$r" "$T/xfm" "" "$XC")" && xb_x86fix_base "$c" "$T/xfm" "$XB" | cut -f5 | sort -u; }
+  xf_tree 'run 42' trap "$LISTED" rows
+  ok "x86fix: a base trap -> stated value (#1389's shape) is held and names the change" \
+     "$(xfd "${FIXED_ROWS[@]}")" "expect: trap -> run 42"
+  xf_tree 'run 42' 'run 42' "$LISTED" rows "x86_64 run/132 #1201;$LISTED"
+  ok "x86fix: an unchanged directive is held and named as such" "$(xfd "${FIXED_ROWS[@]}")" "expect: run 42 -> run 42"
+  ## Fail closed: the base agreement join fails; nothing is held and the step reports failure.
+  xf_tree 'run 42' trap "$LISTED" rows
+  printf '%s\n' "$H" "${FIXED_ROWS[@]}" > "$T/xfm"
+  XF_C="$(xb_x86fix_current "$(xb_rows "$T/xfm" 0 "" "" "")" "$T/xfm" "" "$XC")"
+  ok "x86fix: a failing base agreement step holds nothing and fails (rc=2)" \
+     "$(xb_rows() { return 1; }; o="$(xb_x86fix_base "$XF_C" "$T/xfm" "$XB" 2>/dev/null)"; echo "rc=$? [$o]")" "rc=2 []"
+  rm -f "$XB/test/fx.al"
+  ok "x86fix: no fixture at the base holds nothing" "$(xf "${FIXED_ROWS[@]}")" ""
   if [ "$fails" = 0 ]; then echo "xbackend_diff self-test: $ran/$ran ok"; exit 0; fi
   echo "xbackend_diff self-test: $fails of $ran check(s) FAILED — this script's output proves nothing"
   exit 3
@@ -852,10 +1111,33 @@ else
            || git -C "$ROOT" merge-base main HEAD 2>/dev/null || true)"
   [ -n "$BASE_REV" ] && NEWPATHS="$(git -C "$ROOT" diff --diff-filter=A --name-only "$BASE_REV"...HEAD -- 'test/*.al' 2>/dev/null)"
 fi
+## Which existing paths does an x86_64 fix newly disagree on, with every twin row a listed trap or
+## refusal (#1526, the clauses at xb_x86fix_current)? Needs a base commit: without one, nothing is held.
+X86FIX=""; nfixpaths=0; nfixrows=0
+if [ -n "$ROWS" ] && [ -n "$BASE_REV" ] && git -C "$ROOT" rev-parse -q --verify "$BASE_REV^{commit}" >/dev/null 2>&1; then
+  XF_CUR="$(xb_x86fix_current "$ROWS" "$MANIFEST" "$NEWPATHS" "$ROOT")" ||
+    { echo "xbackend diff: FAIL — the x86-fix split could not read this tree (#1526)" >&2; exit 3; }
+  if [ -n "$XF_CUR" ]; then
+    mkdir -p "$ROOT/target" && XF_B="$(mktemp -d "$ROOT/target/xb-x86fix-tree.XXXXXX")" || exit 3
+    mkdir -p "$XF_B/scripts"
+    git -C "$ROOT" show "$BASE_REV:scripts/known-deviations.tsv" > "$XF_B/scripts/known-deviations.tsv" 2>/dev/null ||
+      rm -f "$XF_B/scripts/known-deviations.tsv"
+    git -C "$ROOT" show "$BASE_REV:scripts/corpus.manifest" > "$XF_B/scripts/corpus.manifest" 2>/dev/null ||
+      rm -f "$XF_B/scripts/corpus.manifest"
+    while IFS= read -r xp; do
+      mkdir -p "$XF_B/$(dirname "$xp")"
+      git -C "$ROOT" show "$BASE_REV:$xp" > "$XF_B/$xp" 2>/dev/null || rm -f "$XF_B/$xp"
+    done <<< "$(printf '%s\n' "$XF_CUR" | cut -f1 | sort -u)"
+    X86FIX="$(xb_x86fix_base "$XF_CUR" "$MANIFEST" "$XF_B")" ||
+      { rm -rf "$XF_B"; echo "xbackend diff: FAIL — the x86-fix split could not read the base $BASE_REV (#1526)" >&2; exit 3; }
+    rm -rf "$XF_B"
+  fi
+fi
 if [ -n "$ROWS" ]; then
   ## The headline counts what #683 must drive to zero; the documented hardware-defined and raw-escape
   ## rows are counted beside it, never silently dropped.
-  read -r npaths nrows nnewpaths nnewrows <<< "$(xb_split_counts "$ROWS" "$NEWPATHS")"
+  read -r npaths nrows nnewpaths nnewrows nfixpaths nfixrows <<< \
+    "$(xb_split_counts "$ROWS" "$NEWPATHS" "$(printf '%s\n' "$X86FIX" | cut -f1 | sort -u)")"
   nhw="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "HW-DEFINED"' | wc -l | tr -d ' ')"
   nraw="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "RAW-ESCAPE"' | wc -l | tr -d ' ')"
   ntna="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "N/A-TARGET"' | wc -l | tr -d ' ')"
@@ -890,16 +1172,26 @@ if [ -n "$ROWS" ]; then
     fi
   done <<< "$ROWS"
 fi
-echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw raw-escape=$nraw target-na=$ntna quiet=$nquiet attributed=$nattrib unexplained=$nunexpl new-paths=$nnewpaths new-rows=$nnewrows"
-## The new-path line is printed only when there is something to say, and it says who owns the number:
-## a row on a path this change adds is coverage of a difference already in the compiler, so it is
-## reported here and excluded from the ratchet above. The baseline must move by exactly these figures
-## at landing, and by nothing else — a PR that moves it by more is not adding coverage, it is blessing
-## a disagreement on a path that already had a test.
+echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw raw-escape=$nraw target-na=$ntna quiet=$nquiet attributed=$nattrib unexplained=$nunexpl new-paths=$nnewpaths new-rows=$nnewrows x86fix-paths=$nfixpaths x86fix-rows=$nfixrows"
+## Two figures leave the ratchet line, each printed only when there is something to say, and each says
+## who owns the number. `new-` is coverage: a row on a path this change adds is a difference already in
+## the compiler. `x86fix-` is an x86_64 fix on an existing path whose twins stay at a trap or refusal
+## listed under an open issue (#1526, the clauses at xb_x86fix_current); each of its rows is printed
+## by name with its issue, on a `xbackend x86fix:` line full.sh copies into the gate log, so the landing
+## can name them. The baseline moves at landing by exactly new + x86fix, and by nothing else — a PR that
+## moves it by more is blessing a disagreement nothing here explains: a quiet wrong answer, an unlisted
+## twin row, or a disagreement this change introduced on a path that already had a test.
 if [ "$nnewpaths" -gt 0 ] || [ "$nnewrows" -gt 0 ]; then
   echo "  NEWLY COVERED $nnewpaths path(s), $nnewrows row(s) — added by this change, held outside the"
-  echo "    ratchet line; the baseline moves by exactly paths+$nnewpaths rows+$nnewrows at landing."
+  echo "    ratchet line; the baseline moves by paths+$nnewpaths rows+$nnewrows for them at landing."
   printf '%s\n' "$NEWPATHS" | while IFS= read -r np; do [ -n "$np" ] && printf '      %s\n' "$np"; done
+fi
+if [ "$nfixpaths" -gt 0 ] || [ "$nfixrows" -gt 0 ]; then
+  echo "  X86_64 FIXED $nfixpaths path(s), $nfixrows row(s) — x86_64 now meets the fixture's ## expect: and did"
+  echo "    not at the base, where all backends agreed; every twin row is a listed trap or refusal under an"
+  echo "    open issue. Held outside the ratchet line; the baseline moves by paths+$nfixpaths rows+$nfixrows for them."
+  printf '%s\n' "$X86FIX" | while IFS=$'\t' read -r xp xb xo xi xd; do
+    [ -n "$xp" ] && printf 'xbackend x86fix: %s %s %s %s %s\n' "$xp" "$xb" "$xo" "$xi" "$xd"; done
 fi
 if [ "$RATCHET_WRITE" = 1 ]; then
   ## Writing the baseline is a deliberate, reviewable act: it moves the line the gate holds. The
@@ -908,10 +1200,10 @@ if [ "$RATCHET_WRITE" = 1 ]; then
   ## The written number is the FULL total, existing plus newly covered: the baseline describes the
   ## tree as it stands AFTER this lands, and a path added by this change is an existing path to the
   ## next PR. The CHECK compares existing-only, which is what makes the two consistent — a PR never
-  ## moves the line by its own number; only the landing does, and only by coverage.
-  printf 'paths=%s\nrows=%s\nhw-defined=%s\nraw-escape=%s\ntarget-na=%s\nunexplained=%s\n' "$((npaths + nnewpaths))" "$((nrows + nnewrows))" "$nhw" "$nraw" "$ntna" "$nunexpl" > "$RATCHET_FILE" || exit 2
-  echo "xbackend ratchet: WROTE $RATCHET_FILE (paths=$((npaths + nnewpaths)) rows=$((nrows + nnewrows)) hw-defined=$nhw raw-escape=$nraw)"
-  echo "  newly covered by this change paths+$nnewpaths rows+$nnewrows; already on the line $npaths/$nrows"
+  ## moves the line by its own number; only the landing does, and only by coverage and x86_64 fixes.
+  printf 'paths=%s\nrows=%s\nhw-defined=%s\nraw-escape=%s\ntarget-na=%s\nunexplained=%s\n' "$((npaths + nnewpaths + nfixpaths))" "$((nrows + nnewrows + nfixrows))" "$nhw" "$nraw" "$ntna" "$nunexpl" > "$RATCHET_FILE" || exit 2
+  echo "xbackend ratchet: WROTE $RATCHET_FILE (paths=$((npaths + nnewpaths + nfixpaths)) rows=$((nrows + nnewrows + nfixrows)) hw-defined=$nhw raw-escape=$nraw)"
+  echo "  newly covered by this change paths+$nnewpaths rows+$nnewrows; x86_64 fixed paths+$nfixpaths rows+$nfixrows; already on the line $npaths/$nrows"
   exit 0
 fi
 if [ "$RATCHET" = 1 ]; then

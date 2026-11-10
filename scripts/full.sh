@@ -658,7 +658,9 @@ bash scripts/xbackend_diff.sh --self-test >> "$XB_LOG" 2>&1
 xd_st_rc=$?
 bash scripts/xbackend_diff.sh --ratchet "$ROOT/target/corpus-manifest/observed.manifest" >> "$XB_LOG" 2>&1
 xd_rc=$?
-grep -E "^(xbackend_diff self-test:|xbackend diff:|xbackend ratchet:)" "$XB_LOG"
+## `xbackend x86fix:` names each row the x86fix figure holds outside the line (#1526), so the gate log
+## the queue and a hand landing read (`land.sh --xbackend-follow`) can name them in the baseline commit.
+grep -E "^(xbackend_diff self-test:|xbackend diff:|xbackend ratchet:|xbackend x86fix:)" "$XB_LOG"
 if [ "$xd_st_rc" != 0 ] || [ "$xd_rc" != 0 ] || [ "$(grep -cE '^xbackend diff: paths=' "$XB_LOG")" != 1 ]; then
   echo "  scripts/xbackend_diff.sh failed its self-test or its RATCHET (the disagreement count grew"
   echo "  past scripts/xbackend_diff.baseline, or the baseline is missing/malformed), or printed no"

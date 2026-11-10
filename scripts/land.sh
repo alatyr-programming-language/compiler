@@ -38,8 +38,9 @@
 #   scripts/land.sh --self-test          exercise the PR-shape, provenance and oracle-commit deciders
 #                                        without GitHub or a merge
 #   scripts/land.sh --xbackend-follow <gated-sha> <gate-log> <PR>...
-#       PHASE 6c alone (#1383): when the gate log's `xbackend diff:` line reports new-paths/new-rows,
-#       make and check the one-file baseline commit on <gated-sha> and print it; `none` otherwise.
+#       PHASE 6c alone (#1383): when the gate log's `xbackend diff:` line reports new-paths/new-rows
+#       or x86fix-paths/x86fix-rows (#1526), make and check the one-file baseline commit on
+#       <gated-sha>, moved by their sum, and print it; `none` otherwise.
 #       The queue's batch path and a hand landing publish that commit, never the gated object alone.
 #
 #   ALATYR_LAND_ACCEPT_BASE=<sha>  acknowledge, for this one run, that origin/main's tip <sha> did NOT
@@ -628,7 +629,11 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 ## the gate measured less, and lowering is a reviewed follow-up of its own (alatyr-integrate §4). The
 ## gate's verdict covers the parent; the commit changes one file the gate does not build from, and
 ## xb_follow_commit_check proves that shape before anything publishes it. N=M=0 makes no commit.
+## #1526 adds the line's second pair, `x86fix-paths=P x86fix-rows=R`: an x86_64 fix on an existing path
+## whose twins stay at a trap or refusal listed under an open issue. The move is then N+P and M+R, and
+## the commit message names each x86fix row with its issue, from the gate's `xbackend x86fix:` lines.
 XB_BASELINE=scripts/xbackend_diff.baseline
+XB_DIR='(run [0-9]+|trap|reject)'   # an `## expect:` outcome as an x86fix row prints it (never `accept`)
 xb_follow_gate_line() { # gate-log -> prints its one `xbackend diff: paths=` line; 1 none or several
   local n
   n="$(grep -c '^xbackend diff: paths=' "$1" 2>/dev/null)"
@@ -637,11 +642,34 @@ xb_follow_gate_line() { # gate-log -> prints its one `xbackend diff: paths=` lin
   echo "          landing newly covered is unknown, and an unknown is not zero."
   return 1
 }
-xb_follow_coverage() { # gate-line -> "N M"; 1 when the line does not end in new-paths=N new-rows=M
+## Since #1526 the line ends in a second pair, `x86fix-paths=P x86fix-rows=R`: rows on an EXISTING path
+## where x86_64 now meets the fixture's `## expect:` and every twin row is a trap or refusal listed under
+## an open issue (xbackend_diff.sh, xb_x86fix_current). They leave the ratchet line like coverage, so
+## the baseline follows them too. A line from before #1526 carries no such pair and reads as P=R=0.
+xb_follow_coverage() { # gate-line -> "N M P R"; 1 when the line does not end in new-paths=N new-rows=M [x86fix-paths=P x86fix-rows=R]
   local c
-  c="$(printf '%s\n' "$1" | sed -n 's/^xbackend diff: paths=[0-9][0-9]* .* new-paths=\([0-9][0-9]*\) new-rows=\([0-9][0-9]*\)$/\1 \2/p')"
+  c="$(printf '%s\n' "$1" | sed -n 's/^xbackend diff: paths=[0-9][0-9]* .* new-paths=\([0-9][0-9]*\) new-rows=\([0-9][0-9]*\) x86fix-paths=\([0-9][0-9]*\) x86fix-rows=\([0-9][0-9]*\)$/\1 \2 \3 \4/p')"
+  [ -n "$c" ] || c="$(printf '%s\n' "$1" | sed -n 's/^xbackend diff: paths=[0-9][0-9]* .* new-paths=\([0-9][0-9]*\) new-rows=\([0-9][0-9]*\)$/\1 \2 0 0/p')"
   [ -n "$c" ] || return 1
   echo "$c"
+}
+## The x86fix rows, by name, from the same log:
+## `xbackend x86fix: <path> <backend> <phase/exit> #<issue> expect: <base> -> <head>`, the last part the
+## fixture's x86_64 directive at the base and at the gated object (xbackend_diff.sh clause 5b).
+## Their number must be the line's R and their distinct paths its P, or what the baseline would bless
+## is not what the gate named: refused, never guessed.
+xb_follow_x86fix_rows() { # gate-log P R -> the rows, one per line; 1 REFUSE
+  local rows n np
+  rows="$(grep '^xbackend x86fix: ' "$1" 2>/dev/null | sed 's/^xbackend x86fix: //')"
+  n="$(printf '%s' "$rows" | grep -c .)"
+  np="$(printf '%s\n' "$rows" | awk 'NF { print $1 }' | sort -u | grep -c .)"
+  if [ "$n" != "$3" ] || [ "$np" != "$2" ] ||
+     { [ -n "$rows" ] && printf '%s\n' "$rows" | grep -vqE "^test/[^ ]+\\.al (aarch64|riscv64|wasm) [a-z_]+/[0-9]+ #[0-9]+ expect: $XB_DIR -> $XB_DIR\$"; }; then
+    echo "  REFUSE: the gate reported x86fix-paths=$2 x86fix-rows=$3 but named $np path(s) in $n well-formed"
+    echo "          'xbackend x86fix:' row(s); what the baseline would bless is not what the gate named."
+    return 1
+  fi
+  [ -z "$rows" ] || printf '%s\n' "$rows"
 }
 xb_follow_baseline_text() { # parent-baseline-text N M -> that text with paths+N rows+M; 1 malformed
   printf '%s\n' "$1" | awk -F= -v np="$2" -v nr="$3" '
@@ -650,8 +678,9 @@ xb_follow_baseline_text() { # parent-baseline-text N M -> that text with paths+N
     { print }
     END { if (p != 1 || r != 1 || bad) exit 1 }'
 }
-xb_follow_message() { # gate-object gate-line N M old-paths old-rows PR... -> the commit message
-  local obj="$1" line="$2" np="$3" nr="$4" op="$5" orow="$6" prs; shift 6
+xb_follow_message() { # gate-object gate-line N M P R x86fix-rows old-paths old-rows PR... -> the commit message
+  local obj="$1" line="$2" np="$3" nr="$4" fp="$5" fr="$6" fixrows="$7" op="$8" orow="$9" prs tp tr changed; shift 9
+  tp=$((np + fp)); tr=$((nr + fr))
   prs="$(printf '#%s, ' "$@" | sed 's/, $//')"
   printf 'chore(gates): xbackend baseline follows the landing of %s\n\n' "$prs"
   if [ "$#" -gt 1 ]; then
@@ -661,13 +690,31 @@ xb_follow_message() { # gate-object gate-line N M old-paths old-rows PR... -> th
   fi
   printf 'xbackend ratchet on the paths and rows that already had a test, and reported %s path(s)\n' "$np"
   printf 'and %s row(s) as NEWLY COVERED: fixtures this landing adds, whose cross-backend difference was\n' "$nr"
-  printf 'already in the compiler with no test on it. After the push those paths are existing, so the\n'
-  printf 'line moves by exactly that coverage and by nothing else: paths %s -> %s, rows %s -> %s, every\n' \
-    "$op" "$((op + np))" "$orow" "$((orow + nr))"
-  printf 'other line unchanged (#1383).\n\nThe gate'"'"'s line, verbatim:\n\n  %s\n\n' "$line"
+  printf 'already in the compiler with no test on it.'
+  if [ "$fp" != 0 ] || [ "$fr" != 0 ]; then
+    printf ' It also reported %s path(s) and %s row(s) as X86_64 FIXED:\n' "$fp" "$fr"
+    printf 'existing paths where x86_64 now meets the fixture'"'"'s expect: and did not at the base, while every\n'
+    printf 'twin row is a trap or refusal listed in scripts/known-deviations.tsv under an open issue (#1526):\n\n'
+    printf '%s\n' "$fixrows" | sed 's/^/  /'
+    printf '\n'
+    printf 'Each row ends in the x86_64 `## expect:` at the base and at the gated object.\n'
+    changed="$(printf '%s\n' "$fixrows" | awk '{ p = $1; sub(/.* expect: /, ""); split($0, d, " -> ") } d[1] != d[2] { print p ": " $0 }' | sort -u)"
+    if [ -n "$changed" ]; then
+      printf 'Where they differ, the base registered a trap or a reject and this landing states the value\n'
+      printf 'the fix now meets; check that value against the specification:\n\n'
+      printf '%s\n' "$changed" | sed 's/^/  directive changed: /'
+    fi
+    printf '\n'
+  else
+    printf '\n'
+  fi
+  printf 'After the push those paths are existing, so the line moves by exactly those figures and by nothing\n'
+  printf 'else: paths %s -> %s, rows %s -> %s, every other line unchanged (#1383, #1526).\n' \
+    "$op" "$((op + tp))" "$orow" "$((orow + tr))"
+  printf '\nThe gate'"'"'s line, verbatim:\n\n  %s\n\n' "$line"
   printf 'Checked before publishing (scripts/land.sh xb_follow_commit_check): the only file is\n'
   printf '%s, the parent is the gated object %s, and the file is the\n' "$XB_BASELINE" "$(git rev-parse --short "$obj")"
-  printf 'parent'"'"'s baseline with paths+%s rows+%s. A PR never edits this file (land.sh PHASE 2, #1019).\n' "$np" "$nr"
+  printf 'parent'"'"'s baseline with paths+%s rows+%s. A PR never edits this file (land.sh PHASE 2, #1019).\n' "$tp" "$tr"
 }
 ## Does commit C sit on PARENT and move the baseline by exactly N/M? Prints each refusal.
 xb_follow_commit_check() { # parent commit N M -> 0 ok, 1 REFUSE
@@ -692,16 +739,19 @@ xb_follow_commit_check() { # parent commit N M -> 0 ok, 1 REFUSE
 ## run it beside the tree it gated. Last line `xbackend-follow: none` (no coverage, no commit) or
 ## `xbackend-follow: commit <sha> paths+N rows+M`; anything it refuses exits 1 with the reasons.
 xb_follow() { # top gate-log PR...
-  local top="$1" log="$2" line cov np nr text blob idx tree mode c op orow trc; shift 2
+  local top="$1" log="$2" line cov np nr fp fr tp tr fixrows text blob idx tree mode c op orow trc; shift 2
   line="$(xb_follow_gate_line "$log")" || { printf '%s\n' "$line"; return 1; }
   cov="$(xb_follow_coverage "$line")" ||
     { echo "  REFUSE: the gate's line names no new-paths=/new-rows= pair: $line"; return 1; }
-  read -r np nr <<< "$cov"
+  read -r np nr fp fr <<< "$cov"
+  fixrows="$(xb_follow_x86fix_rows "$log" "$fp" "$fr")" || { printf '%s\n' "$fixrows"; return 1; }
+  tp=$((np + fp)); tr=$((nr + fr))
   echo "  the gate: $line"
-  if [ "$np" = 0 ] && [ "$nr" = 0 ]; then echo "xbackend-follow: none"; return 0; fi
+  [ -z "$fixrows" ] || printf '%s\n' "$fixrows" | sed 's/^/  x86_64 fixed, twin listed: /'
+  if [ "$tp" = 0 ] && [ "$tr" = 0 ]; then echo "xbackend-follow: none"; return 0; fi
   text="$(git show "$top:$XB_BASELINE" 2>/dev/null)"
   op="$(printf '%s\n' "$text" | sed -n 's/^paths=//p')"; orow="$(printf '%s\n' "$text" | sed -n 's/^rows=//p')"
-  text="$(xb_follow_baseline_text "$text" "$np" "$nr")" ||
+  text="$(xb_follow_baseline_text "$text" "$tp" "$tr")" ||
     { echo "  REFUSE: $XB_BASELINE in $top is malformed"; return 1; }
   mode="$(git ls-tree "$top" -- "$XB_BASELINE" | cut -d' ' -f1)"
   blob="$(printf '%s\n' "$text" | git hash-object -w --stdin)" || return 1
@@ -711,12 +761,12 @@ xb_follow() { # top gate-log PR...
     tree="$(GIT_INDEX_FILE="$idx" git write-tree)"; trc=$?
   rm -f "$idx"
   [ "$trc" = 0 ] || { echo "  REFUSE: could not build the baseline commit's tree"; return 1; }
-  c="$(xb_follow_message "$top" "$line" "$np" "$nr" "$op" "$orow" "$@" | git commit-tree "$tree" -p "$top")" ||
+  c="$(xb_follow_message "$top" "$line" "$np" "$nr" "$fp" "$fr" "$fixrows" "$op" "$orow" "$@" | git commit-tree "$tree" -p "$top")" ||
     { echo "  REFUSE: git commit-tree failed"; return 1; }
   message_shape_check "baseline commit $c" "$(git log -1 --format=%b "$c")" || return 1
   attribution_trailer_check "baseline commit $c" "$(git log -1 --format=%B "$c")" || return 1
-  xb_follow_commit_check "$top" "$c" "$np" "$nr" || return 1
-  echo "xbackend-follow: commit $c paths+$np rows+$nr"
+  xb_follow_commit_check "$top" "$c" "$tp" "$tr" || return 1
+  echo "xbackend-follow: commit $c paths+$tp rows+$tr"
 }
 ## The publish rule, PHASE 6c's last word before the GREEN verdict: coverage means the object to publish
 ## is a commit whose parent is the gated object; none means the gated object itself. PHASE 6c builds its
@@ -737,7 +787,7 @@ xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=146  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386
+LAND_SELFTEST_EXPECTED=153  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -1186,7 +1236,7 @@ Not a bullet.
 
   # ---- 9 · the xbackend baseline follows every landing that added coverage (#1383). ---------
   #      A throwaway repository with a real baseline; the gate lines are #1309's batch gate.
-  local xr="$st/xr" here="$PWD" g0 g1 xtop xc xo
+  local xr="$st/xr" here="$PWD" g0 g1 xtop xc xo xf
   g0='xbackend diff: paths=906 rows=2487 sources=2383 hw-defined=8 raw-escape=0 target-na=6 quiet=0 attributed=0 unexplained=0'
   printf '%s new-paths=2 new-rows=6\n' "$g0" > "$st/xg-cov"
   printf 'stuff\n%s new-paths=0 new-rows=0\n*** FULL GATE: GREEN (sweeps RAN) ***\n' "$g0" > "$st/xg-zero"
@@ -1197,7 +1247,20 @@ Not a bullet.
     printf 'paths=906\nrows=2487\nhw-defined=8\nraw-escape=0\ntarget-na=6\nunexplained=0\n' > "$XB_BASELINE" &&
     printf 'x\n' > other && git add -A && git commit -q -m 'chore: base' -m 'body' && xtop="$(git rev-parse HEAD)" ||
     { cd "$here"; echo "land self-test: cannot build the baseline fixture repository" >&2; return 1; }
-  [ "$(xb_follow_coverage "$(xb_follow_gate_line "$st/xg-cov")")" = "2 6" ]; _ck $? xb-follow-misread-the-gate-line
+  [ "$(xb_follow_coverage "$(xb_follow_gate_line "$st/xg-cov")")" = "2 6 0 0" ]; _ck $? xb-follow-misread-the-gate-line
+  # #1526: the x86fix pair moves the baseline too, and every row it counts is named in the log with
+  # its issue (#1389's shape: one path, three twin rows under #1201). A count the named rows do not
+  # match — fewer rows, or rows under a line that claims none — is refused, never guessed.
+  local xfr='test/issue1182_for_array_param_agg.al'
+  local xfd='expect: trap -> run 42'
+  printf '%s new-paths=2 new-rows=6 x86fix-paths=1 x86fix-rows=3\nxbackend x86fix: %s aarch64 run/133 #1201 %s\nxbackend x86fix: %s riscv64 run/133 #1201 %s\nxbackend x86fix: %s wasm run/134 #1201 %s\n' \
+    "$g0" "$xfr" "$xfd" "$xfr" "$xfd" "$xfr" "$xfd" > "$st/xg-fix"
+  # A row without the base -> head directive (the clause-5b review of #1527) is not well formed.
+  sed 's/ expect: trap -> run 42$//' "$st/xg-fix" > "$st/xg-fix-nodir"
+  sed 's/ expect: trap -> run 42$/ expect: reject -> accept/' "$st/xg-fix" > "$st/xg-fix-accept"
+  head -n 3 "$st/xg-fix" > "$st/xg-fix-short"
+  { printf '%s new-paths=2 new-rows=6\n' "$g0"; tail -n 1 "$st/xg-fix"; } > "$st/xg-fix-orphan"
+  [ "$(xb_follow_coverage "$(xb_follow_gate_line "$st/xg-fix")")" = "2 6 1 3" ]; _ck $? xb-follow-misread-the-x86fix-pair
   xb_follow_gate_line "$st/xg-none" >/dev/null; [ $? = 1 ]; _ck $? xb-follow-took-a-gate-log-with-no-coverage-line-as-zero
   xb_follow_gate_line "$st/xg-two" >/dev/null; [ $? = 1 ]; _ck $? xb-follow-took-a-gate-log-with-two-coverage-lines
   # Coverage moves the baseline by exactly N/M, alone, on the gated object; every other line holds.
@@ -1209,6 +1272,20 @@ Not a bullet.
   [ -n "$xc" ] && git log -1 --format=%B "$xc" | grep -qxF "  $g0 new-paths=2 new-rows=6" &&
     git log -1 --format=%s "$xc" | grep -qxF 'chore(gates): xbackend baseline follows the landing of #1309, #1320'
   _ck $? xb-follow-message-lacks-the-verbatim-gate-line-or-a-batch-member
+  xo="$(xb_follow "$xtop" "$st/xg-fix" 1389)"
+  xf="$(printf '%s\n' "$xo" | sed -n 's/^xbackend-follow: commit \([0-9a-f]\{40\}\) paths+3 rows+9$/\1/p')"
+  [ -n "$xf" ] && [ "$(git show "$xf:$XB_BASELINE" | tr '\n' ' ')" = 'paths=909 rows=2496 hw-defined=8 raw-escape=0 target-na=6 unexplained=0 ' ] &&
+    xb_follow_commit_check "$xtop" "$xf" 3 9 >/dev/null
+  _ck $? "xb-follow-did-not-move-the-baseline-by-new-plus-x86fix($(printf '%s' "$xo" | tail -n 3 | tr '\n' ' '))"
+  [ -n "$xf" ] && git log -1 --format=%B "$xf" | grep -qxF "  $xfr wasm run/134 #1201 $xfd" &&
+    git log -1 --format=%B "$xf" | grep -qxF "  directive changed: $xfr: trap -> run 42" &&
+    git log -1 --format=%B "$xf" | grep -qF 'paths 906 -> 909, rows 2487 -> 2496'
+  _ck $? xb-follow-message-does-not-name-the-x86fix-rows-with-their-issue-and-directive-change
+  xb_follow "$xtop" "$st/xg-fix-short" 1389 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-moved-by-an-x86fix-count-its-named-rows-do-not-match
+  xb_follow "$xtop" "$st/xg-fix-orphan" 1389 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-ignored-a-named-x86fix-row-under-a-line-without-the-pair
+  xb_follow "$xtop" "$st/xg-fix-nodir" 1389 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-took-an-x86fix-row-without-its-base-and-head-directive
+  # `accept` states no value for the landing to check, so no x86fix row may end in it.
+  xb_follow "$xtop" "$st/xg-fix-accept" 1389 >/dev/null; [ $? = 1 ]; _ck $? xb-follow-took-an-x86fix-row-whose-head-directive-is-accept
   # Zero coverage makes no commit.
   xo="$(xb_follow "$xtop" "$st/xg-zero" 1309)"
   [ "$(printf '%s\n' "$xo" | tail -n 1)" = 'xbackend-follow: none' ] && [ "$(git rev-parse HEAD)" = "$xtop" ]
@@ -1718,7 +1795,7 @@ if [ -n "$XB_C" ]; then
 else
   XB_PARENT=""
 fi
-XB_COV="$(xb_follow_coverage "$(xb_follow_gate_line "$XB_GATE_LOG")")"
+XB_COV="$(xb_follow_coverage "$(xb_follow_gate_line "$XB_GATE_LOG")" | awk '{ print $1 + $3, $2 + $4 }')"
 xb_follow_publish_ok ${XB_COV% *} ${XB_COV#* } "${XB_PARENT:-$PUBLISH}" "$PUBLISH" "$(git rev-parse "$PUBLISH^" 2>/dev/null)" ||
   { verdict "NOT LANDABLE — the object to publish does not carry the gate's coverage"; exit 1; }
 
