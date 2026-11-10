@@ -365,6 +365,33 @@ check_inline_value() { # name, callee-symbol
   echo "ok   $1(inline): substituted call"
 }
 
+## #1074 — the same rule on every backend that emits from the shared IR: the `x86-ir` dump and the aarch64,
+## riscv64 and wasm text hold no call to any `@inline` callee named after the fixture (a bare, mangled or
+## `$`-prefixed symbol). The `x86-ir` leg also requires the caller `main`, or `exported` where the fixture
+## has one, to be selected from the IR, so a declined function cannot pass by the legacy emitter's own
+## substitution. `check_inline_value` stays the legacy x86 path's row.
+check_inline_subst_ir() { # name, inline-callee...
+  local name="$1" caller="main" b s re cal
+  shift
+  src="$E2E_TEST/$name.al"
+  [ -f "$src" ] || { echo "MISS $name: no $src"; fail=1; return; }
+  re="$(printf '%s|' "$@")"; re="${re%|}"
+  grep -q '^exported := ' "$src" && caller="exported"
+  for b in x86-ir aarch64 riscv64 wat; do
+    s="$T/e2e_${name}_subst.$b"
+    "$CC" "$b" "$src" > "$s" 2>/dev/null || { echo "FAIL $name(inline-ir): $b emit"; fail=1; return; }
+    if grep -Eq "^[[:space:]]*(call|bl)[[:space:]]+\\\$?([A-Za-z0-9_]*__)?($re)([[:space:]]|\$)" "$s"; then
+      cal="$(grep -Em1 "^[[:space:]]*(call|bl)[[:space:]]+\\\$?([A-Za-z0-9_]*__)?($re)([[:space:]]|\$)" "$s" | sed 's/^[[:space:]]*//')"
+      echo "FAIL $name(inline-ir): $b emitted \`$cal\` to an @inline callee"; fail=1; return
+    fi
+  done
+  ## Selected: a marker comes after the previous function's last `ret` and before the caller's label.
+  if ! awk -v c="${name}__${caller}:" '/^# ir: selected from the shared IR$/ { s = 1 } /^[[:space:]]*ret$/ { s = 0 } $0 == c { f = s } END { exit !f }' "$T/e2e_${name}_subst.x86-ir"; then
+    echo "FAIL $name(inline-ir): x86-ir did not select $caller from the IR"; fail=1; return
+  fi
+  echo "ok   $name(inline-ir): no call to an @inline callee on x86-ir, aarch64, riscv64, wasm"
+}
+
 # x86_64-ONLY build+run (same as run, but NOT matched by the sweeps' `^run [a-z]` grep — for raw-asm
 # fixtures whose register/syscall surface is x86_64-specific; other-arch register surfaces are follow-ups).
 run_x86() { # name, want
@@ -8301,6 +8328,12 @@ run value_position_attrs 42
 check_accept value_position_attrs
 check_export value_position_attrs 42 value_export
 check_inline_value value_position_attrs value_position_attrs__add
+## #1074: the same substitution on every backend that emits from the shared IR. Measured on the parent
+## `cdcecb5c`: each of the four emitted a call to `add` (x86-ir and riscv64 `call`, aarch64 `bl`, wasm `call $`),
+## and each of `inline_subst_ir`'s four callees was called the same way on all three twins.
+check_inline_subst_ir value_position_attrs add
+run inline_subst_ir 42
+check_inline_subst_ir inline_subst_ir sum3 twice flip wrapadd
 ## MOD §6.3 on the WAT backend (the fourth backend): @export emits a WASM `(export "name" (func $f))`
 ## entry — the module still runs to 42 under wasmtime, and the export entry is present in the WAT.
 run_wat export_symbol 42
