@@ -862,7 +862,7 @@ fi
 # program with a selected function does: "found nothing" must be told apart from "compared nothing".
 fi
 if full_part_runs ir-diff; then
-echo "### IR DIFF (x86 vs x86-via-IR: the disagree count is RATCHETED by scripts/ir_diff.baseline) ###"
+echo "### IR DIFF (x86 IR selector vs legacy emitter: the disagree count is RATCHETED by scripts/ir_diff.baseline) ###"
 IRD_LOG="$LOGDIR/full_ir_diff.log"
 bash scripts/ir_diff.sh --self-test > "$IRD_LOG" 2>&1
 ird_st_rc=$?

@@ -1196,6 +1196,13 @@ one sentence ("functions of family F are now emitted by the IR selector"). Byte-
 x86 output is **not** a goal: `ir.al`'s register-allocated output already differs from the text path
 for the same functions.
 
+**Landed as one step (#980).** `X86_IR_SELECT` defaults on: every function the builder builds, the
+verifier accepts and the selector selects is emitted from the IR, the rest by `emit_fn`, on every x86
+surface — the self-build included. `alatyr x86-legacy <file>` is the escape verb (D5) and `alatyr
+x86-ir <file>` the explicit spelling of the default. `scripts/ir_diff.sh` now compares the default (IR)
+with `x86-legacy`; `scripts/ir_selfhost.sh` builds seed → Stage1 → Stage2 → Stage3 without a promotion,
+which is how the flipped compiler's own correctness (#1108) is measured before the promotion it owes.
+
 ---
 
 ## 8. Decisions for the owner
@@ -1239,7 +1246,8 @@ for the same functions.
   *Decided as verbs, and landed: `alatyr ir <file>` (the builder's answer) and `alatyr x86-ir <file>`
   (the x86-via-IR differential) are CLI verbs, and `src/cli.al` states the rule at its verb table —
   "a dev surface is a CLI verb listed here, never an env var" (#786). `ALATYR_RA=0` survives only as
-  the pre-existing OFF escape hatch of `lower.al`, not as the IR's dev surface.*
+  the pre-existing OFF escape hatch of `lower.al`, not as the IR's dev surface. At the flip (§7.4,
+  #980) the selector became the default and `alatyr x86-legacy <file>` the verb that turns it off.*
 - **D6 — where types come from.** This design has sema record the type it already synthesizes for every
   expression, and the builder resolve it to a kernel type through `lower_layout`. The alternative — a
   new type synthesis inside the builder — would be a fifth copy. Sema's `Ty` today is a tag plus a name
