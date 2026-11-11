@@ -41,12 +41,7 @@ run := fn(a : ptr(mut Arena)) -> u64 {
   argv := std::os::args(a)
   mut sel := Select(lines = false, words = false, bytes = false)
   mut names : usize = 0
-  ## blocked-by: #1211 — `argv` is a `Slice(str)` bound from a call, and a `for` over it (or over
-  ## `argv[1..argv.len]`) yields wrong `str`s, so both walks over the arguments index the slice.
-  mut i : usize = 1
-  while i < argv.len {
-    arg := argv[i]
-    i += 1
+  for arg in argv[1..argv.len] {
     if arg == "-l" {
       sel.lines = true
     } else if arg == "-w" {
@@ -70,10 +65,7 @@ run := fn(a : ptr(mut Arena)) -> u64 {
   }
   mut rc : u64 = 0
   mut total := count::counter()
-  i = 1
-  while i < argv.len {
-    arg := argv[i]
-    i += 1
+  for arg in argv[1..argv.len] {
     if arg == "-l" or arg == "-w" or arg == "-c" { continue }
     mut k := count::counter()
     match count_path(arg, k) {

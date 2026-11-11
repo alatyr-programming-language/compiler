@@ -91,7 +91,6 @@ run := fn(a : ptr(mut Arena)) -> u64 {
   mut queue := std::channel::channel(u64, a, 8)
   mut total := std::sync::new(u64, 0)
   job := Job(input = input, queue = ptr(mut queue), total = ptr(mut total))
-  ## blocked-by: #1211 — a `for` over a `Vec(Thread)`'s slice yields wrong handles, and
   ## blocked-by: #1212 — `alloc::vec::get` returns a wrong `Thread`, so the handles live in a fixed
   ## array whose unused value is overwritten before any join.
   ## blocked-by: #1213 — `[v; WORKERS]` is refused, so the count is written out.
