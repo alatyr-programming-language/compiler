@@ -1,9 +1,9 @@
-## build_reject — a multi-word STRUCT-VAR source into a struct field (`o.mid.inner = r`) must FAIL LOUD,
-## never a silent word-0-only store. The naive per-word copy loop, when placed in the shared field-store
-## helper, is mis-lowered by the self-host seed to a SINGLE iteration (dropping word 1+); rather than
-## emit that silent miscompile the compiler refuses the struct-VAR field source. Workaround: a struct
-## literal `S(a = r.a, b = r.b)` or an if/match value (both delivered correctly). Applies to the
-## single-hop `o.f = r` and this deep-chain `o.mid.inner = r` alike.
+## A multi-word STRUCT-VAR source into a deep-chain struct field (`o.mid.inner = r`) answers 12 + 30.
+## The legacy x86 emitter's per-word copy in the shared field-store helper was mis-lowered by the seed to
+## a SINGLE iteration (dropping word 1+), so it refused the struct-VAR field source rather than store
+## word 0 alone. aarch64, riscv64 and wasm answer 42 (#1022). Since the slice-9 flip (#980) x86_64
+## emits `main` from the shared IR and answers 42 too; `alatyr x86-legacy` still refuses it. The name
+## keeps the refusal's history.
 Rec := struct { a : i64, b : i64 }
 Mid := struct { inner : Rec, x : i64 }
 Outer := struct { mid : Mid, tag : i64 }
@@ -13,3 +13,4 @@ main := fn() -> u64 {
   o.mid.inner = r
   return u64(o.mid.inner.a + o.mid.inner.b)
 }
+## expect: run 42
