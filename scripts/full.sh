@@ -182,7 +182,7 @@ full_part_verdict() {
   echo "full part: $FULL_PART ran=$FULL_PART_RAN"
   echo "full part: $FULL_PART red=${FULL_PART_RED:-}"
   [ "$FULL_PART" = sweeps ] && echo "full part: sweeps STATUS=${sw_status:-UNKNOWN}"
-  for v in ce_cover sp_cover wa_cover sf_cover cm_cover fc_line ig_line sfr_cover irv_cover st_cover ird_cover pg_cover cmx_cover pl_cover; do
+  for v in ce_cover sp_cover wa_cover cf_cover sf_cover cm_cover fc_line ig_line sfr_cover irv_cover st_cover ird_cover pg_cover cmx_cover pl_cover; do
     n="${!v:-}"; [ -n "$n" ] && printf 'full part cover: %s %s\n' "${v%_*}" "$n"
   done
   if [ "$fail" != 0 ]; then
