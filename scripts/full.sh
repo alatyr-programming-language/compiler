@@ -699,7 +699,7 @@ fi
 # #872's narrowing, the signedness family), so a single row does not set `fail`; the COUNT of them is
 # ratcheted below by scripts/ir_diff.baseline, and growth does. A broken self-test, an unreadable run, or a proof line that walked no
 # program with a selected function does: "found nothing" must be told apart from "compared nothing".
-echo "### IR DIFF (x86 vs x86-via-IR: the disagree count is RATCHETED by scripts/ir_diff.baseline) ###"
+echo "### IR DIFF (x86 IR selector vs legacy emitter: the disagree count is RATCHETED by scripts/ir_diff.baseline) ###"
 IRD_LOG="$LOGDIR/full_ir_diff.log"
 bash scripts/ir_diff.sh --self-test > "$IRD_LOG" 2>&1
 ird_st_rc=$?
