@@ -86,8 +86,8 @@ Reproducibility section and `.agents/skills/alatyr-integrate/SKILL.md` §3 requi
 5. `seed/VERSION` — `current-seed-sha256` moves to the promoted digest, and the entry with the three
    stage hashes and the **read** delta is appended to `seed/HISTORY.md` (#1130). The entry is the reviewable part: it lands in the
    promotion PR, where a human can read the delta before it becomes history.
-6. This file — `## Unreleased` becomes `## <version> — <date>`, and a fresh empty `## Unreleased`
-   opens above it.
+6. This file — `## Unreleased` becomes `## <version> — <date>`, the `changelog.d/` fragments are
+   released after its own entries and deleted (#1566), and a fresh empty `## Unreleased` opens above it.
 
 All six land in **one commit**. Between step 1 and step 4 the working copy carries a version the
 committed seed does not answer, and `seed/VERSION`'s two CURRENT SEED lines describe two different
@@ -123,6 +123,14 @@ it, and a tag can be moved with a force-push — so it is navigation, not the re
 Two numbers that are **not** the compiler's version: the specification revision (this build cites it,
 `README.md` carries the badge) and the seed lineage in `seed/HISTORY.md`. The specification's own tags
 (`v1.0.0`, `v1.1.0`, …) live in the sibling repository; a `v1.1.0` here would mean something else entirely.
+
+## Where a new entry goes
+
+A new entry is a file of its own, `changelog.d/<issue>-<slug>.md` (`changelog.d/README.md` gives the
+shape), never a line added under `## Unreleased` below (#1566). Every PR appending at that one anchor
+made any two of them conflict. `scripts/promote.sh` releases the fragments with the version, after the
+section's own entries, and deletes them. `scripts/changelog_fragments.sh --check` refuses a line added
+under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 

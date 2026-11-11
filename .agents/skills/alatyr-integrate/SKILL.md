@@ -305,7 +305,9 @@ The screening is where the safety lives, and all of it happens before anything i
 2. Run `git merge-tree` pairwise across the candidates, then merge them one at a time into the
    dedicated integration worktree in a fixed order, stopping at the first conflict rather than
    resolving it.
-3. Resolve **only additive** conflicts — `CHANGELOG.md`'s `## Unreleased`, fixture registration in
+3. Resolve **only additive** conflicts — `CHANGELOG.md`'s `## Unreleased` (only in a PR that predates
+   `changelog.d/`, #1566: settling it composes the merge, but the gate then refuses the added line, so
+   move the bullet into a fragment first; a new entry cannot conflict), fixture registration in
    `scripts/e2e.sh` and `scripts/package_cli_test.sh` — and only where the two sides do not overlap
    line for line.
 4. Gate once on the composed object. One oracle commit per oracle **file** covers the whole batch,
@@ -393,7 +395,8 @@ and `CHANGELOG.md` on either side.
 | `seed/alatyr` | the promoted Stage2 binary | after the build |
 | `seed/VERSION` | the CURRENT SEED block's `current-seed-sha256` moves to the promoted digest | after the build |
 | `seed/HISTORY.md` | the entry (three stage hashes + the **read** delta) is appended at the end (#1130) | after the build |
-| `CHANGELOG.md` | `## Unreleased` becomes `## <version> — <date>`; a fresh empty `## Unreleased` opens above it | either |
+| `CHANGELOG.md` | `## Unreleased` becomes `## <version> — <date>`, with every `changelog.d/` fragment released after its own entries; a fresh empty `## Unreleased` opens above it | either |
+| `changelog.d/<issue>-<slug>.md` | each released fragment is deleted, the only change outside the set the commit may carry (#1566) | either |
 
 `src/cli.al`'s `cli_version` answers `app.version`, which TOOL-15 injects as a compile-time constant,
 so a compiler reports the version of the tree it was **compiled from**. Bump first and the frozen
@@ -545,7 +548,9 @@ Then run `scripts/land.sh <pr>`. Every step is a check that stops on failure:
   or the PR version) and any other conflicted path is `LAND REFUSED (the merge conflicts)`. The merge
   message records the resolution, and the gate runs on that merge. The queue sends a PR that
   conflicts with main only there through this solo path (`land.sh --screen` reports `solo=yes`)
-  instead of back to its author.
+  instead of back to its author. This CHANGELOG half is transitional (#1566): a new entry is a
+  `changelog.d/` fragment, which never conflicts, and the full gate refuses a line added under
+  `## Unreleased`. Once no open PR adds one, the settling and the solo route are removed.
 - **PHASE 3b**, for a rebased delta only: the rebase is a hypothesis about `main`'s code, which can
   change what the PR's own fixtures do without moving a manifest row (#1215). land.sh builds the merge
   and walks the corpus alone (~15 min with the two self-builds); a walk that does not realise the rebased delta is

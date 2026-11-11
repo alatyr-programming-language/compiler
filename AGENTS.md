@@ -31,7 +31,7 @@ procedures in `.agents/skills/`. At most 150 lines (`scripts/agents_size_check.s
   host that cannot run the seed that last check skips out loud, and a skip is not a pass. The spec pin
   is a separate number and never moves with the version.
 - The promotion commit is atomic: bump, `scripts/package_cli_test.sh`, seed, `current-seed-sha256`,
-  the appended entry, `CHANGELOG.md`. Never commit the intermediate state.
+  the entry, `CHANGELOG.md` (its `changelog.d/` fragments deleted). Never commit the intermediate state.
 
 ## Workspace invariants
 
