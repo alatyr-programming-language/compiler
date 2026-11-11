@@ -147,6 +147,13 @@ Two numbers that are **not** the compiler's version: the specification revision 
   a parameter or local `C` copied as `p : S = C` gave the constant's fields. All of these compiled
   cleanly and ran on with the wrong value. The inner name now wins, as Declarations §6.1 requires. A
   shadowed array or enum constant still answers the constant; that is #1565.
+- **A compiler built through the shared IR no longer crashes on a `for` over an iterator (#1108).**
+  The type table sema keeps for the IR keyed a binding's type and its spelling with two tag bits, and
+  the `for` desugar's synthesized names can carry both bits already, so for those bindings the two
+  records were one and the type read back was the spelling's bytes. A compiler built with
+  `alatyr x86-ir -o` died with SIGILL on `for c in chars(s)`, `split` iterators and protocol
+  shadowing; the default build carried the wrong record on silently, with no change to what it emits.
+  Each record space now has its own key word.
 - **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
   `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
   bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead
