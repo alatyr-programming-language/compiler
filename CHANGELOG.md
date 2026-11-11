@@ -130,6 +130,10 @@ Two numbers that are **not** the compiler's version: the specification revision 
   is a `TRAP`; a segfault, any other signal, a timeout or a stray exit code is now `CRASH <rc>`, held
   like `WRONG`. At main `cf159743` this exposes 17 crash cells, all segfaults, now rows under #987
   (10), #1256 (5) and #1608 (2); a planted segfault is proved to turn the gate red.
+- **The container matrix covers every container #1124 names (#1278).** It adds `omap` (key and value),
+  `oset`, `map`, `strmap`, `string` and `strbuf`: 50 cells, 428 in all. At main `cf159743`
+  the 8 new cells that fail are rows under #1244 (5), #1250 (1) and #1308 (2), and the self-test fails
+  if a named container has no cells.
 - **A generic call's struct or enum result can be passed straight on (#1256).** `same(mk(S1, x), y)`
   and `same(vec::at(S1, ptr(v), i), y)` crashed: the first returned word was handed over as the
   argument's address. The result is now staged in a block and its address passed. A `-> T` instance at
