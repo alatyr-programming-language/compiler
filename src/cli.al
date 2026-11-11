@@ -1992,6 +1992,15 @@ manifest_machine_error := fn(in out a : rt::Arena, pkg_al : str, msg : str, off 
   manifest_located_error_at(a, msg, pkg_al, off)
 }
 
+## The env column of the per-arch appendix §1 `Machine.Linux` rows this compiler accepts: gnu or musl,
+## and gnu alone on riscv64. Asked by the manifest validation and by a twin emit verb, whose composed
+## target replaces the manifest's arch (#1578).
+manifest_linux_env_supported := fn(arch : usize, env : usize) -> bool {
+  if env > 1 { return false }
+  if arch == 5 and env != 0 { return false }
+  true
+}
+
 manifest_machine_validate := fn(in out a : rt::Arena, pkg_al : str, expr : str, off : usize) {
   variant := manifest_machine_variant(expr)
   if manifest_machine_variant_known(variant) == false {
@@ -2023,7 +2032,7 @@ manifest_machine_validate := fn(in out a : rt::Arena, pkg_al : str, expr : str, 
     if a3.len != 0 { manifest_machine_error(a, pkg_al, "config: Machine.Linux has too many arguments", off) ; return }
     mut env := 0
     if a1.len != 0 { env = manifest_env_code(a1) }
-    if env > 1 or (arch == 5 and env != 0) {
+    if not manifest_linux_env_supported(arch, env) {
       manifest_machine_error(a, pkg_al, "config: Machine.Linux has an unsupported Env for this Arch", off)
       return
     }
@@ -2859,6 +2868,7 @@ manifest_target_model := fn(in out a : rt::Arena, pkg_al : str) {
 ## that is no twin with an `Arch` identity (wat has none, Tooling §2.7, and its leg waits on spec#143).
 cli_twin_arch := fn(twin : usize) -> str {
   if twin == 2 { return "Arch.aarch64" }
+  if twin == 3 { return "Arch.riscv64" }
   ""
 }
 
@@ -2866,8 +2876,9 @@ cli_twin_arch := fn(twin : usize) -> str {
 ## Target, and the verb selects the machine it emits for). A bare file list publishes
 ## `Machine.Linux(arch = <arch>)` with the projections of its per-arch appendix §1 row: os linux,
 ## container elf, startup raw (the variant's default), subsystem console. The env column of the
-## aarch64 row is gnu or musl, and the variant's default `‹arch-default›` (Manifest appendix §3.1) is a
-## metavariable for an implementation-derived value (the `‹…›` convention, Manifest appendix §3.7).
+## riscv64 row is gnu alone; that of the aarch64 row is gnu or musl, and the variant's default
+## `‹arch-default›` (Manifest appendix §3.1) is a metavariable for an implementation-derived value
+## (the `‹…›` convention, Manifest appendix §3.7).
 ## This compiler's is gnu, the env `manifest_target_model` already resolves for a manifest that
 ## writes `Machine.Linux` without one (`CLI_TARGET_ENV`'s reset value), so both agree. Over a package
 ## (`keep_manifest`) the verb keeps the manifest's resolved Linux projections
@@ -5849,6 +5860,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     ## (riscv64): emit a RISC-V64 GAS program for a SINGLE `.al` file to stdout.
     if n < 3 { return 40 }
     rpath := arg_at(cmd, fi)
+    ## #1578 — publish this verb's machine before sema and lowering read `target.*` (TOOL-18).
+    rtm := cli_twin_target_model("Arch.riscv64", false)
     ## TYPE-CHECK BEFORE EMITTING (I11 correct-or-trap). Without this the three emit-to-stdout
     ## surfaces handed the user code for a program the compiler already knows is ill-typed: the
     ## `-o` build path rejects it with a located `alatyr: check: …` and exit 1, while these three
@@ -6136,6 +6149,15 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   twin_arch := cli_twin_arch(CLI_TWIN_PKG)
   if is_pkg and twin_arch.len != 0 {
     manifest_target_model(a, pkg_arg)
+    ## The verb keeps the manifest's Linux env and replaces its arch, so the composed target must still
+    ## be a per-arch appendix §1 row; one outside the set is a Config diagnostic (Manifest appendix §3.1).
+    if not manifest_linux_env_supported(manifest_arch_code(twin_arch), CLI_TARGET_ENV) {
+      mut env_anchor := "env"
+      trec := manifest_target_record(a, pkg_arg)
+      if manifest_target_field_value(trec, "machine") { env_anchor = "machine" }
+      manifest_located_error(a, "config: Machine.Linux has an unsupported Env for this Arch", pkg_arg, env_anchor)
+      return 1
+    }
     ttm := cli_twin_target_model(twin_arch, true)
   } else if is_pkg {
     manifest_target_model(a, pkg_arg)
