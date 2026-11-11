@@ -4152,7 +4152,8 @@ cli_help := fn(in out a : rt::Arena, fd : usize, status : usize) -> usize {
   kq := rt::push_str(b, "Developer commands:\n")
   kw := rt::push_str(b, "  wat | aarch64 | riscv64 <file.al>  emit that backend's output to stdout\n")
   k9 := rt::push_str(b, "  ir       report the shared IR builder's answer per function\n")
-  ka := rt::push_str(b, "  x86-ir   emit x86_64 with IR-built functions selected from the shared IR\n\n")
+  ka := rt::push_str(b, "  x86-ir   emit x86_64 selecting from the shared IR each function it builds (the default; this verb spells it out)\n")
+  kb := rt::push_str(b, "  x86-legacy  emit x86_64 with the legacy emitter alone, never selecting from the shared IR\n\n")
   k8 := rt::push_str(b, "Run program arguments after `--`: alatyr run <program> -- <args>\n")
   kf := diag_flush(b, fd)
   if kf != 0 { return kf }
@@ -5684,17 +5685,31 @@ cli_drop_arg := fn(in out a : rt::Arena, cmd : str, i : usize) -> str {
 pub run_cli := fn(in out a : rt::Arena) -> usize {
   mut cmd := read_cmdline(a)
   mut n := arg_count(cmd)
-  ## IR slice 1d (`docs/ir-slice-1.md` §5 item 4): the x86-via-IR dev verb. `alatyr x86-ir <file.al>`
+  ## IR slice 1d (`docs/ir-slice-1.md` §5 item 4): the x86-via-IR verb. `alatyr x86-ir <file.al>`
   ## is the x86 GAS dump and `alatyr x86-ir -o <exe> <file.al>` the x86 build, each with every function
   ## the shared IR builds, verifies and selects emitted by `src/lower/isel.al` instead of the legacy
-  ## emitter. A verb, never an environment switch (owner decision D5, Codegen §3.1): it sets the
-  ## selection flag and drops itself from the argument list, so the rest of the invocation is the
-  ## default surface's own, front half, peephole and link included.
+  ## emitter. Since the slice-9 flip (#980) that is the default x86 surface, and this verb is its
+  ## explicit spelling, kept so scripts that name it keep working. A verb, never an environment switch
+  ## (owner decision D5, Codegen §3.1): it sets the selection flag and drops itself from the argument
+  ## list, so the rest of the invocation is the default surface's own, front half, peephole and link
+  ## included.
   mut x86ir := false
+  mut x86legacy := false
   if n >= 2 and arg_at(cmd, 1) == "x86-ir" {
     if n < 3 { return cli_config_diag(a, "x86-ir requires a source file, or -o <exe> and a source file") }
     x86ir = true
     lower::set_x86_ir_select()
+    cmd = cli_drop_arg(a, cmd, 1)
+    n = n - 1
+  }
+  ## IR slice 9 (`docs/ir.md` §7.4): the OFF side of the flip. The IR selector is the DEFAULT now, so
+  ## this verb is what turns it OFF — the surface whose question is "what does the legacy emitter do with
+  ## this program". A verb, never an environment switch (owner decision D5, Codegen §3.1), and the
+  ## argument shape is `x86-ir`'s own so the two verbs stay interchangeable in a script.
+  if n >= 2 and arg_at(cmd, 1) == "x86-legacy" {
+    if n < 3 { return cli_config_diag(a, "x86-legacy requires a source file, or -o <exe> and a source file") }
+    x86legacy = true
+    lower::clear_x86_ir_select()
     cmd = cli_drop_arg(a, cmd, 1)
     n = n - 1
   }
@@ -5745,6 +5760,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     if arg_at(cmd, 1) == "-o" { mode = 1; oi = 2; fi = 3 }
   }
   if x86ir and mode != 0 and mode != 1 { return cli_config_diag(a, "x86-ir accepts a source file, or -o <exe> and a source file") }
+  if x86legacy and mode != 0 and mode != 1 { return cli_config_diag(a, "x86-legacy accepts a source file, or -o <exe> and a source file") }
   ## TOOL-14 — mode 0 is the legacy direct-source/GAS surface, so retain an existing source path (and
   ## the established `-o` spelling) but do not reinterpret a missing non-source first argument as a
   ## file. A typo such as `biuld package.al` is an unrecognized command, not a source-path failure.
@@ -6268,6 +6284,9 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     kto := driver::set_test_options(test_jobs, test_keep_going)
     mut cross_test := false
     mut tsb := driver::compile_files_test_with_options(paths, a, test_keep_going, lim_ceiling)
+    ## The x86 test runner selects from the shared IR too since the slice-9 flip (#980), so a function
+    ## the verifier refused is the same located internal error as on the build surface below.
+    if lower::x86_ir_select_on() and ir::verify_failures() != 0 { return 70 }
     if target_backend != 0 {
       ## The x86 front end remains the canonical type/limits check. Cross-target backends are
       ## emitters, not a second semantic implementation; reject before assembling anything.
@@ -6355,9 +6374,10 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   mut spb := 0
   if mode != 0 and osplit_on(a) { spb = rt::bump(a, 262144) }
   mut sb := driver::compile_files_target(paths, a, entry_sym, lim_ceiling, spb, artifact_kind == "object" or artifact_kind == "static_lib" or artifact_kind == "shared_lib")
-  ## IR slice 1d: under `x86-ir`, a built function the verifier refused is a located internal error,
-  ## never emitted or linked (docs/ir.md §5).
-  if x86ir and ir::verify_failures() != 0 { return 70 }
+  ## IR slice 1d: whenever x86 selects from the shared IR (the default since the slice-9 flip, #980, and
+  ## `x86-ir`), a built function the verifier refused is a located internal error, never emitted or
+  ## linked (docs/ir.md §5). `x86-legacy` never builds IR for x86, so it never counts a refusal.
+  if lower::x86_ir_select_on() and ir::verify_failures() != 0 { return 70 }
   ## The driver has already resolved a non-default package entry against the package declaration
   ## graph before emitting GAS. Use that linker symbol (not the manifest path) for the subsequent
   ## assembler/linker step; empty preserves the established `_start` compatibility path.
