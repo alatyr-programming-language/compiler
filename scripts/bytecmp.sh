@@ -10,9 +10,14 @@ same=0; diff_=0; fail=0
 # worktrees differ there for a reason that is not behaviour.
 REFDIR=$(cd "$(dirname "$REF")" && pwd -P)
 BASEDIR=$(cd "$(dirname ./target/debug/alatyr)" && pwd -P)
+# Since the slice-9 flip (#980) the bare x86 surface is the IR selector, the same as `x86-ir`; the
+# legacy emitter is reached by `x86-legacy`, compared when BOTH compilers list that verb.
+BACKENDS="x86 x86-ir aarch64 riscv64 wat"
+"$REF" --help 2>/dev/null | grep -q '^  x86-legacy ' && ./target/debug/alatyr --help 2>/dev/null | grep -q '^  x86-legacy ' \
+  && BACKENDS="x86 x86-ir x86-legacy aarch64 riscv64 wat"
 cd "$SRC" || exit 1
 for f in $(ls test/*.al | grep -E "$FILT" | sort); do
-  for b in x86 x86-ir aarch64 riscv64 wat; do
+  for b in $BACKENDS; do
     case "$b" in
       x86)     a=$(timeout 60 "$REF" "$f" 2>/dev/null); ra=$?
                c=$(timeout 60 ./target/debug/alatyr "$f" 2>/dev/null); rc=$? ;;
