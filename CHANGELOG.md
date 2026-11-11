@@ -126,21 +126,24 @@ Two numbers that are **not** the compiler's version: the specification revision 
 
 ## Unreleased
 
-- **A range slice over a fixed array of `u16` or `i16` elements, or an inferred `[u8|i8; N]`, is
-  refused on x86_64 instead of answering wrong (#1514).** x86_64 lays those arrays out one word per
-  element (an inferred one is `t := [u8(1), u8(2)]`), so `a16[0..3]` handed out a `Slice(u16)` whose
-  elements were 8 bytes apart, while Types §6.4 steps 2. A `Slice(T)` parameter, an annotated `for`
-  and every other consumer that follows the rule read the wrong bytes, with no diagnostic. The build
-  now stops at the slice's source line. A silent wrong value turned loud, but also a valid program
-  refused: a range whose consumer happened to step a word too (indexing a local view, a `.len`) used
-  to answer right and is refused as well, until those arrays are laid out at the §6.4 stride (#1559).
-  **Not fixed:** a range over a `[u32|i32; N]` or a `[bool; N]` (and `[char|f32; N]`, laid out the
-  same way) still builds, and on x86_64 a consumer that steps the element's own size still reads
-  wrong bytes with no diagnostic (`pass32(a32[1..3])` over a `[u32; 3] = [7, 8, 9]` does not read
-  `8, 9`). They are left alone so that the existing programs over those arrays (a generic
-  `Slice(T)` helper over a `[u32; N]`, the `Slice(bool)` controls) keep building, and #1559 tracks
-  them as silent wrong values. A `[u64; N]`, an annotated `[u8|i8|bits8; N]` and an `alloc::vec`
-  view slice as before. aarch64, riscv64 and wasm are unchanged.
+- **A range slice over a fixed array of `u16` or `i16` elements, or a legacy-spelled `[N]u8|i8` or
+  inferred `[u8|i8; N]` one, is refused on x86_64 when the view reaches a reader that would read it
+  wrong (#1514).** x86_64 lays those arrays out one word per element (an inferred one is
+  `t := [u8(1), u8(2)]`), so `a16[0..3]` handed out a `Slice(u16)` whose elements were 8 bytes apart,
+  while Types §6.4 steps 2. The build now stops at the array's name when the view goes to a reader
+  that steps the element's own size: a non-generic `Slice(T)` parameter whose function reads its
+  elements, returns it or hands it on (passed straight, `f(a16[0..3])`, or through a local), or the
+  `for` loop of a local annotated `s : Slice(u16) = a16[0..3]`. Every row of #1514's table is refused.
+  A view whose readers step the word the array really has still builds and answers as before: its
+  `.len`, an index of the local view (annotated or not), an unannotated local's `for`, a generic
+  `Slice(T)` function, and a `Slice(T)` struct field's index. **Not fixed, still silent wrong values
+  on x86_64, tracked by #1559:** a range over a `[u32|i32; N]` or a `[bool; N]` (and `[char|f32; N]`,
+  laid out the same way), left alone so that the existing programs over those arrays (a generic
+  `Slice(T)` helper over a `[u32; N]`, the `Slice(bool)` controls) keep building
+  (`pass32(a32[1..3])` over a `[u32; 3] = [7, 8, 9]` does not read `8, 9`); and a view stored in a
+  `Slice(T)` struct field and then handed to a `Slice(T)` parameter (#1561). A `[u64; N]`, an
+  annotated `[u8|i8|bits8; N]` and an `alloc::vec` view slice as before. aarch64, riscv64 and wasm
+  are unchanged.
 - **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
   `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
   bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead

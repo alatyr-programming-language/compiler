@@ -4,16 +4,18 @@
 ## `Slice(T)` over it reads element `i` at `ptr + i × stride`. So every check below holds, on every
 ## backend. x86_64 keeps these arrays one WORD per element (the word array ABI; only an annotated
 ## `[u8|i8|bits8; N]` local is packed), and its range-slice producers handed out a view over those
-## word-spaced elements: any consumer that follows §6.4 (a `Slice(T)` parameter, an annotated `for`)
-## read the wrong bytes. Until the arrays are packed (#1559), x86_64 refuses the range slice over a
-## `u16|i16` or inferred `u8|i8` array at its source line instead of answering wrong. The `[u32; N]`
+## word-spaced elements: a reader that steps `T`'s own size (a `Slice(T)` parameter that reads its
+## elements, an annotated local's `for`) read the wrong bytes. Until the arrays are packed (#1559),
+## x86_64 refuses such a range over a `u16|i16` or legacy/inferred `u8|i8` array at the array's name
+## when the view reaches one of those readers, instead of answering wrong; a reader that steps the
+## word the array really has (an index of a local view, `.len`) still builds, as on main. The `[u32; N]`
 ## check (4) and the `[bool; N]` check (6) are NOT refused (PR #1564's decisions keep the existing
 ## programs over those arrays building): on x86_64 they are silent wrong values tracked by #1559, and
 ## this fixture still stops at check 1's range.
 ##
 ## Each check owns a code from 1 up; 42 means all held.
 ##
-## Parent `5a2426cc` (x86_64, omen): built rc 0, ran to 1 where 42 was due — the annotated `for` over
+## Parent `cdcecb5c` (x86_64, omen): built rc 0, ran to 1 where 42 was due — the annotated `for` over
 ## `a16[0..3]` read 1000, then the zero high bytes of element 0.
 pass16 := fn(s : Slice(u16)) -> Slice(u16) { s }
 pass32 := fn(s : Slice(u32)) -> Slice(u32) { s }
