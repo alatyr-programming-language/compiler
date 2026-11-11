@@ -1074,7 +1074,14 @@ ib_zero_left_no_member := fn(b : AstBin, l : ptr(Expr), signed : bool) -> bool {
 }
 
 ## Bitwise `& | ^` on canonical operands is canonical at any width (V3), so it is emitted at its type.
+## A literal-only one is a comptime number (Types §2.3) and folds exactly as in `ib_bx_arith`: without
+## this, `a : u64 = 40 & 2` was built as a runtime `and` and x86_64 selected `andq $2` (#1611).
 ib_bx_bits := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  fo : Option(i64) = ib_lit_fold(e)
+  match fo {
+    Some(v) => { return ib_lit_const(bp, a, e, v) }
+    None => {}
+  }
   pr := ib_int_operands(bp, a, e, l, r)?
   k := IbKS(ty = pr.ty, sg = pr.sg)
   d := ib_fresh(bp, a, k)
