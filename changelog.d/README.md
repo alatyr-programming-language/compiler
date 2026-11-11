@@ -6,9 +6,9 @@ entry cannot conflict at a rebase or in the merge queue.
 
 - **Name:** `<issue>-<slug>.md`, for example `1416-brand-scalar-field.md`. The issue is the one the entry
   cites first. The slug uses lower-case letters, digits and single hyphens.
-- **Body:** one or more bullets in `CHANGELOG.md`'s style, each continuation line indented two spaces.
-  No blank line, no heading. What goes in an entry, and whether a change needs one, is `CHANGELOG.md`'s
-  versioning policy.
+- **Body:** one or more bullets in `CHANGELOG.md`'s style, each continuation line indented two spaces or
+  more (a nested item and its continuation go deeper). No blank line, no heading. What goes in an
+  entry, and whether a change needs one, is `CHANGELOG.md`'s versioning policy.
 - **To correct an entry** that is already under `## Unreleased`, delete it there and write the new
   text here.
 - **Release:** `scripts/promote.sh` releases the fragments in issue order, after the section's own
