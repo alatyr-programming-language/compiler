@@ -5622,6 +5622,34 @@ check_ra_imm64_widen() {
   if [ "$got" = 42 ]; then echo "ok   ra_imm64_widen: widened GAS assembles, run == build, fallback 42"; else echo "FAIL ra_imm64_widen: fallback got $got want 42"; fail=1; fi
 }
 
+## The same imm32 boundary on the shared-IR selector (`alatyr x86-ir`, #1073). The legacy assertions above
+## never read this path, so they stay green whatever it emits. The boundary helpers must be ones the selector
+## TOOK (a `# ir: selected` marker before their label): a helper the selector declines is emitted the legacy
+## way and would satisfy the greps without the IR path being measured at all.
+check_ra_imm64_widen_ir() {
+  src="$E2E_TEST/ra_imm64_widen.al"
+  asm="$T/e2e_ra_imm64_widen_ir.s"
+  out="$T/e2e_ra_imm64_widen_ir.out"
+  "$CC" x86-ir "$src" > "$asm" 2>/dev/null || { echo "FAIL ra_imm64_widen(x86-ir): emit"; fail=1; return; }
+  local sel
+  sel="$(awk '/^# ir: selected from the shared IR$/ { s = 1; next } /^ra_imm64_widen__[a-z]+:$/ { if (s) print substr($0, 17, length($0) - 17); s = 0 }' "$asm" | tr '\n' ' ')"
+  case " $sel" in *" bfit "*) ;; *) echo "FAIL ra_imm64_widen(x86-ir): bfit not selected from the IR (selected: $sel)"; fail=1; return ;; esac
+  case " $sel" in *" bneg "*) ;; *) echo "FAIL ra_imm64_widen(x86-ir): bneg not selected from the IR (selected: $sel)"; fail=1; return ;; esac
+  if grep -Eq '^[[:space:]]*(addq|subq|imulq|andq|orq|xorq|cmpq) \$(4294967296|4294967295|2147483648),' "$asm"; then
+    echo "FAIL ra_imm64_widen(x86-ir): an out-of-imm32 literal was folded into an ALU/compare operand"; fail=1; return
+  fi
+  if ! grep -Eq '^[[:space:]]*addq \$2147483647,' "$asm"; then
+    echo "FAIL ra_imm64_widen(x86-ir): the in-range boundary literal 2^31-1 was not folded"; fail=1; return
+  fi
+  if ! grep -Eq '^[[:space:]]*andq \$-1,' "$asm"; then
+    echo "FAIL ra_imm64_widen(x86-ir): the u64::MAX mask (imm32 -1) was not folded"; fail=1; return
+  fi
+  "$CC" x86-ir -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL ra_imm64_widen(x86-ir): build (as rejected the text)"; fail=1; return; }
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "ra_imm64_widen(x86-ir)" "$got"; then return; fi
+  if [ "$got" = 42 ]; then echo "ok   ra_imm64_widen(x86-ir): imm32 folded on the IR path, wider literals materialized, 42"; else echo "FAIL ra_imm64_widen(x86-ir): got $got want 42"; fail=1; fi
+}
+
 # An external test SCRIPT that belongs to this suite (`scripts/<name>.sh`, driven with `ALATYR=$CC`).
 # These were four inline `if … fi` blocks; as a helper they become ordinary ROWS, which is what lets
 # them be SCHEDULED — `ext_test env_size_test` is the single most expensive row in the gate (measured
@@ -9277,6 +9305,10 @@ check_ra_shift_const_fold
 ## folded `$-1` (it sign-extends from imm32), while `$2147483648` / `$4294967295` / `$4294967296` must not.
 run_x86 ra_imm64_widen 42
 check_ra_imm64_widen
+## #1073 — the same boundaries through the shared-IR selector (`alatyr x86-ir`). Parent: every helper selected,
+## `bfit` emitted as a `movq` of 2147483647 into %rax plus a register `addq`, `bneg` as `movq` of -1 plus a register
+## `andq`, so neither folded form appeared; the build ran to 42.
+check_ra_imm64_widen_ir
 ## The widening must not displace a checked guard: the materializing move goes BEFORE the flag-producing
 ## instruction, so the `jcc`/`ud2` pair stays adjacent to it. 5 - 2^32 underflows u64 -> the CG-13 trap (132).
 run_x86_trap ra_imm64_checked_trap 132
