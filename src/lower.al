@@ -5287,6 +5287,7 @@ emit_byte_array_lit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : pt
 ## argument the shape-driven `emit_arg`.
 emit_param_arg := fn(e : ptr(Expr), cidx : i64, pidx : usize, tmp_off : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   reject_scalar_str_elem_arg(e, cx, cidx, pidx)
+  reject_word_view_arg(e, cidx, pidx, cx)
   if callee_out_scalar(cx.decls, cx.src, a, cidx, pidx) {
     emit_out_scalar_arg(e, sb, cx, a, nl)
   } else if callee_folded_arg(e, cidx, pidx, cx, a) {
@@ -7653,6 +7654,466 @@ emit_slice_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { push_str(sb, "  pushq $0\n  pushq $0\n") }
+  }
+}
+
+## #1514 — whether the scalar type `t` names is one of the word-layout elements #1514 measures wrong on
+## x86_64: `u8`, `i8`, `u16`, `i16`. A generic parameter takes the instance's substitution first, and
+## a brand its underlying type (a brand has its underlying's exact runtime representation, Types §5.4).
+## Every other element answers false and is sliced as before, so the integrator's decisions on PR #1564
+## hold: `u32`, `i32`, `bool`, `char`, `f32` and an element the lower cannot name stay a tracked silent
+## wrong value under #1559 rather than turning existing programs (a generic `Slice(T)` helper over a
+## `[u32; N]`, the `Slice(bool)` controls) into refusals.
+word_array_elem_refused := fn(t : CSpan, cx : ptr(LCtx)) -> bool {
+  mut ts := subst3_ty(cx.src, t.s, t.n, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l, cx.gp3_s, cx.gp3_l, cx.it3_s, cx.it3_l)
+  mut peel : usize = 0
+  while peel < 4 {
+    bu := brand_underlying(cx.decls, cx.src, ts.s, ts.n)
+    if bu.n == 0 { peel = 4 } else { ts = CSpan(s = bu.s, n = bu.n); peel += 1 }
+  }
+  if ts.n == 0 { return false }
+  tx := str_at((cx.src + ts.s), ts.n)
+  tx == "u8" or tx == "i8" or tx == "u16" or tx == "i16"
+}
+
+## #1514 — `word_array_elem_refused` for the element of an INFERRED array local `name := [e0, …]`, read
+## off the spelling of `e0`: a bare integer or float literal takes Types §9.1's default (the native
+## signed integer, or `f64`: a word either way), `true`/`false` is a `bool`, `T(…)` converts to `T`,
+## and a lone local name has the type its own declaration or slot records. Anything else answers
+## false, as on the parent.
+inferred_array_elem_refused := fn(aent : SlotEntry, cx : ptr(LCtx)) -> bool {
+  src := cx.src
+  end := LOWER_SRC_N
+  mut p := aent.ns + aent.nl
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
+  if lower_ctx::slice_scan_has(src, end, p, ":=") == false { return false }
+  p += 2
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
+  if lower_ctx::slice_scan_has(src, end, p, "[") == false { return false }
+  p += 1
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
+  if p >= end { return false }
+  if lower_ctx::slice_scan_has(src, end, p, "-") { p += 1 }
+  b0 := bytes(str_at((src + p), 1))[0]
+  if b0 >= 48 and b0 <= 57 { return false }
+  ts := p
+  while p < end and lower_layout::ll_ident_byte(src, p) { p += 1 }
+  if p == ts { return false }
+  tn := p - ts
+  if lower_ctx::slice_scan_has(src, end, p, "(") { return word_array_elem_refused(CSpan(s = ts, n = tn), cx) }
+  while p < end and lower_ctx::slice_scan_ws(src, end, p) { p += 1 }
+  if lower_ctx::slice_scan_has(src, end, p, ",") == false and lower_ctx::slice_scan_has(src, end, p, "]") == false { return false }
+  if slot_of(cx.slots, src, ts, tn) < 0 { return false }
+  vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, src, ts, tn)))
+  vlt := local_type_span(src, vent.ns, vent.nl)
+  if vlt.n != 0 { return word_array_elem_refused(CSpan(s = vlt.s, n = vlt.n), cx) }
+  if vent.snl != 0 and vent.ek != 5 { return word_array_elem_refused(CSpan(s = vent.sns, n = vent.snl), cx) }
+  false
+}
+
+## #1514 — whether the array local `aent` is one the x86_64 lower lays out one WORD per element (the
+## historical word array ABI, `eek` 0 and the float twin 9) with a `u8`, `i8`, `u16` or `i16` element:
+## an annotated `[u16|i16; N]`, the legacy `[N]u8|i8|u16|i16` spelling, or an inferred literal of
+## them. A range slice `arr[lo..hi]` over such an array is a view whose elements sit 8 bytes apart,
+## while Types §6.4 makes a `Slice(T)`'s stride `T`'s size rounded up to its alignment. The packed
+## byte arrays (`is_byte_array_eek`), a `Slice(T)` parameter's data and a range-view local pass, and so
+## does every other element: a `[u32|i32|bool|char|f32; N]` range stays a silent wrong value tracked by
+## #1559 (PR #1564's decisions keep the existing programs over those arrays building).
+word_array_range_narrow := fn(aent : SlotEntry, cx : ptr(LCtx)) -> bool {
+  if aent.ek != 5 or is_byte_array_eek(aent.eek) or slot_is_slice_param(aent, cx.src) { return false }
+  if aent.eek != 0 and aent.eek != 9 { return false }
+  if aent.is_ref and not aent.is_param { return false }
+  lt := local_type_span(cx.src, aent.ns, aent.nl)
+  if lt.n == 0 { return inferred_array_elem_refused(aent, cx) }
+  mut es := array_elem_span(cx.src, lt.s, lt.n)
+  ## The parser also takes the `[N]T` spelling (`a : [4]u16`): the element type then follows `]`.
+  mut e0 : u8 = 0
+  if es.n != 0 { e0 = bytes(str_at((cx.src + es.s), 1))[0] }
+  if e0 >= 48 and e0 <= 57 {
+    mut q := es.s
+    while q < lt.s + lt.n and str_at((cx.src + q), 1) != "]" { q += 1 }
+    q += 1
+    es = CSpan(s = q, n = 0)
+    if q < lt.s + lt.n { es = CSpan(s = q, n = lt.s + lt.n - q) }
+  }
+  if es.n == 0 { return false }
+  word_array_elem_refused(es, cx)
+}
+
+## #1514 — the source offset of `arr` when `e` is a range slice `arr[lo..hi]` over an array
+## `word_array_range_narrow` accepts, else None.
+word_array_range_base := fn(e : ptr(Expr), cx : ptr(LCtx)) -> Option(u64) {
+  ## null-ok: #1069 — a bare `return`, a value-less `break` and an `if` without `else` carry a null value expression (ast.al).
+  if unchecked bitcast(usize, e) == 0 { return Option(u64).None }
+  match deref(e) {
+    Expr::Slice(arr, lo, hi) => {
+      if slice_arr_stride(e, cx.slots, cx.src) == 0 { return Option(u64).None }
+      av := var_name_span(arr)
+      if av.n == 0 or slot_of(cx.slots, cx.src, av.s, av.n) < 0 { return Option(u64).None }
+      aent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, av.s, av.n)))
+      if word_array_range_narrow(aent, cx) { return Option(u64).Some(u64(av.s)) }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  Option(u64).None
+}
+
+## #1514 — how a name holding such a word-strided view is read, which decides which of its uses still
+## answer right on x86_64. Measured on main `cdcecb5c`: every consumer the lower lowers against the
+## view's own slot steps the word the array really has (an index read or write, `.len`, an unannotated
+## local's `for`, a `Slice(T)` struct field's index, a generic `Slice(T)` callee, which reads a type
+## parameter's element one word apart, #1561). The consumers that step `T`'s own size read the wrong
+## bytes: a non-generic `Slice(T)` parameter that reads its elements (indexed, iterated or handed on),
+## and the `for` of a local annotated `Slice(T)`, whose element width comes from the annotation (#1238).
+##   Param — a non-generic callee's `Slice(T)` parameter: only `.len` is right.
+##   Annot — a local annotated `s : Slice(T)`: `.len` and an index are right, its `for` is not.
+##   Local — an unannotated local `s := …`: `.len`, an index and its `for` are right.
+## A use none of the rules below can show right (a return, an enum payload, a method receiver, a store
+## into a place) answers false, so the walk refuses rather than guesses.
+WordViewUse := enum { Param, Annot, Local }
+
+word_view_indexes := fn(m : WordViewUse) -> bool {
+  match m {
+    WordViewUse.Param => { false }
+    WordViewUse.Annot => { true }
+    WordViewUse.Local => { true }
+  }
+}
+
+word_view_iterates := fn(m : WordViewUse) -> bool {
+  match m {
+    WordViewUse.Param => { false }
+    WordViewUse.Annot => { false }
+    WordViewUse.Local => { true }
+  }
+}
+
+## The use of a copy `t := x` (`t : Slice(T) = x` when `annotated`): a callee's copy reads like its
+## parameter; a local's copy reads by its own annotation.
+word_view_copy_use := fn(m : WordViewUse, annotated : bool) -> WordViewUse {
+  match m {
+    WordViewUse.Param => { WordViewUse.Param }
+    WordViewUse.Annot => { if annotated { WordViewUse.Annot } else { WordViewUse.Local } }
+    WordViewUse.Local => { if annotated { WordViewUse.Annot } else { WordViewUse.Local } }
+  }
+}
+
+word_view_is := fn(e : ptr(Expr), xs : usize, xl : usize, src : ptr(u8)) -> bool {
+  v := var_name_span(e)
+  v.n != 0 and lower_ctx::streq(src, v.s, v.n, xs, xl)
+}
+
+## Is `e` the view `x` itself, or one re-slice of it (`x[lo..hi]`)? A re-slice of a view keeps its
+## word-spaced elements and is read like a copy of it (measured on main `0c55e3e4`: `t := s[1..3]`
+## answers `t[0]`, `t.len` and an unannotated `t`'s `for` right). A re-slice of a re-slice
+## (`s[1..4][1..3]`) is not: main answers its `t[0]` wrong, so it is walked and refused. Structural
+## only: the bounds are walked by `word_view_alias_bounds_ok`, never here, so a caller may `or` this
+## with another walk.
+word_view_alias_is := fn(e : ptr(Expr), xs : usize, xl : usize, src : ptr(u8)) -> bool {
+  ## null-ok: #1069 — an open slice bound and an absent value expression are null (ast.al).
+  if unchecked bitcast(usize, e) == 0 { return false }
+  if word_view_is(e, xs, xl, src) { return true }
+  match deref(e) {
+    Expr::Slice(b, lo, hi) => { word_view_is(b, xs, xl, src) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+
+## The bounds of the re-slice in an `e` that `word_view_alias_is` accepted.
+word_view_alias_bounds_ok := fn(e : ptr(Expr), xs : usize, xl : usize, m : WordViewUse, ms : usize, ml : usize, cx : ptr(LCtx)) -> bool {
+  if word_view_is(e, xs, xl, cx.src) { return true }
+  match deref(e) {
+    Expr::Slice(b, lo, hi) => { word_view_expr_ok(lo, xs, xl, m, ms, ml, cx) and word_view_expr_ok(hi, xs, xl, m, ms, ml, cx) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+
+## A value stored into a `Slice(T)` struct field, whose index steps a word (#1561): a struct literal's
+## field, `h.f = v`, `h.a.f = v` and `hs[i].f = v` (measured on main `0c55e3e4`: each reads back
+## right). The view or a re-slice of it may go there, as `H(f = s)` always could; any other value is
+## walked. A store into an array element (`vs[i] = s`) is not one of these: main reads it back wrong
+## for an inferred `[u8; N]` view, so `Stmt::IndexAssign` walks its value and refuses the view.
+word_view_stored_ok := fn(e : ptr(Expr), xs : usize, xl : usize, m : WordViewUse, ms : usize, ml : usize, cx : ptr(LCtx)) -> bool {
+  if word_view_alias_is(e, xs, xl, cx.src) { return word_view_alias_bounds_ok(e, xs, xl, m, ms, ml, cx) }
+  word_view_expr_ok(e, xs, xl, m, ms, ml, cx)
+}
+
+## The (callee, parameter) pairs the current refusal query has already walked, as `cidx * 65536 +
+## pidx`. Every answer of the walk is a conjunction, so a pair met again (a recursive or mutually
+## recursive callee, or a second call of the same one) answers true: if its walk finds a wrong use, that
+## false already decides the query. Each query (`reject_word_view_arg`, `reject_word_view_binding`)
+## starts it empty; a walk that would need more than 64 pairs answers false.
+mut WORD_VIEW_SEEN : [u64; 64] = [0; 64]
+mut WORD_VIEW_SEEN_N : usize = 0
+
+## Is every use of the view `x` = `[xs, xs+xl)` inside `e` right under `m`? `ms/ml` is the module of the
+## function `e` belongs to (a call in it resolves there).
+word_view_expr_ok := fn(e : ptr(Expr), xs : usize, xl : usize, m : WordViewUse, ms : usize, ml : usize, cx : ptr(LCtx)) -> bool {
+  src := cx.src
+  ## null-ok: #1069 — Arm.body — an arm with a statement body carries a null value expression (ast.al); so do a bare `return`, a value-less `break`, an `if` without `else` and an open slice bound.
+  if unchecked bitcast(usize, e) == 0 { return true }
+  match deref(e) {
+    Expr::Var(s, n) => { not lower_ctx::streq(src, s, n, xs, xl) }
+    Expr::Field(b, fs, fl) => {
+      if word_view_alias_is(b, xs, xl, src) { return str_at((src + fs), fl) == "len" and word_view_alias_bounds_ok(b, xs, xl, m, ms, ml, cx) }
+      word_view_expr_ok(b, xs, xl, m, ms, ml, cx)
+    }
+    Expr::Index(b, i) => {
+      if word_view_alias_is(b, xs, xl, src) { return word_view_indexes(m) and word_view_alias_bounds_ok(b, xs, xl, m, ms, ml, cx) and word_view_expr_ok(i, xs, xl, m, ms, ml, cx) }
+      word_view_expr_ok(b, xs, xl, m, ms, ml, cx) and word_view_expr_ok(i, xs, xl, m, ms, ml, cx)
+    }
+    Expr::Call(cs, cl, na, ah) => {
+      mut ok := true
+      mut k : usize = 0
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if word_view_alias_is(ga.e, xs, xl, src) {
+              if not word_view_alias_bounds_ok(ga.e, xs, xl, m, ms, ml, cx) { ok = false }
+              if not word_view_callee_ok(resolve_callee_idx(cx.decls, src, cs, cl, ms, ml), k, cx) { ok = false }
+            } else if not word_view_expr_ok(ga.e, xs, xl, m, ms, ml, cx) { ok = false }
+            k += 1
+            g = ga.next
+          }
+          None => { break }
+        }
+      }
+      ok
+    }
+    ## A `Slice(T)` struct field's index steps a word too (#1561), so the view may be stored in one
+    ## (`word_view_stored_ok`).
+    Expr::StructLit(ns, nl, nf, fh) => {
+      mut ok := true
+      mut g : Option(ptr(mut Arg)) = fh
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if not word_view_stored_ok(ga.e, xs, xl, m, ms, ml, cx) { ok = false }
+            g = ga.next
+          }
+          None => { break }
+        }
+      }
+      ok
+    }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => {
+      ## a method call `x.f(…)` parses with the receiver's name here
+      if lower_ctx::streq(src, es, el, xs, xl) { return false }
+      word_view_args_ok(ph, xs, xl, m, ms, ml, cx)
+    }
+    Expr::ArrayLit(ne, eh) => { word_view_args_ok(eh, xs, xl, m, ms, ml, cx) }
+    Expr::Bin(op, l, r) => { word_view_expr_ok(l, xs, xl, m, ms, ml, cx) and word_view_expr_ok(r, xs, xl, m, ms, ml, cx) }
+    Expr::If(c, t, f) => { word_view_expr_ok(c, xs, xl, m, ms, ml, cx) and word_view_expr_ok(t, xs, xl, m, ms, ml, cx) and word_view_expr_ok(f, xs, xl, m, ms, ml, cx) }
+    Expr::Match(sc, ah) => { word_view_expr_ok(sc, xs, xl, m, ms, ml, cx) and word_view_arms_ok(ah, xs, xl, m, ms, ml, cx) }
+    Expr::AddrOf(p) => { word_view_expr_ok(p, xs, xl, m, ms, ml, cx) }
+    Expr::Deref(p) => { word_view_expr_ok(p, xs, xl, m, ms, ml, cx) }
+    Expr::Try(p) => { word_view_expr_ok(p, xs, xl, m, ms, ml, cx) }
+    Expr::Unchecked(p) => { word_view_expr_ok(p, xs, xl, m, ms, ml, cx) }
+    Expr::Bitcast(p, bs, bl) => { word_view_expr_ok(p, xs, xl, m, ms, ml, cx) }
+    Expr::Slice(b, lo, hi) => { word_view_expr_ok(b, xs, xl, m, ms, ml, cx) and word_view_expr_ok(lo, xs, xl, m, ms, ml, cx) and word_view_expr_ok(hi, xs, xl, m, ms, ml, cx) }
+    Expr::CompField(b, i) => { word_view_expr_ok(b, xs, xl, m, ms, ml, cx) and word_view_expr_ok(i, xs, xl, m, ms, ml, cx) }
+    Expr::Lambda(pos, ph, rts, rtl, bh, val) => { word_view_stmts_ok(bh, xs, xl, m, ms, ml, cx) and word_view_expr_ok(val, xs, xl, m, ms, ml, cx) }
+    Expr::Loop(lb) => { word_view_stmts_ok(lb, xs, xl, m, ms, ml, cx) }
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::FnRef => { true }
+  }
+}
+
+word_view_args_ok := fn(head : Option(ptr(mut Arg)), xs : usize, xl : usize, m : WordViewUse, ms : usize, ml : usize, cx : ptr(LCtx)) -> bool {
+  mut g : Option(ptr(mut Arg)) = head
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if not word_view_expr_ok(ga.e, xs, xl, m, ms, ml, cx) { return false }
+        g = ga.next
+      }
+      None => { break }
+    }
+  }
+  true
+}
+
+word_view_arms_ok := fn(head : Option(ptr(mut Arm)), xs : usize, xl : usize, m : WordViewUse, ms : usize, ml : usize, cx : ptr(LCtx)) -> bool {
+  mut arm : Option(ptr(mut Arm)) = head
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        if not word_view_expr_ok(am.body, xs, xl, m, ms, ml, cx) { return false }
+        if not word_view_stmts_ok(am.body_stmts, xs, xl, m, ms, ml, cx) { return false }
+        arm = am.next
+      }
+      None => { break }
+    }
+  }
+  true
+}
+
+## Every statement of a list; a copy `t := x` binds a second name whose uses in the rest of the list
+## are walked under `word_view_copy_use`.
+word_view_stmts_ok := fn(head : Option(ptr(mut Stmt)), xs : usize, xl : usize, m : WordViewUse, ms : usize, ml : usize, cx : ptr(LCtx)) -> bool {
+  mut cur : Option(ptr(mut Stmt)) = head
+  loop {
+    match cur {
+      Some(curq) => {
+        if not word_view_stmt_ok(curq, xs, xl, m, ms, ml, cx) { return false }
+        cur = stmt_next(curq)
+      }
+      None => { break }
+    }
+  }
+  true
+}
+
+word_view_stmt_ok := fn(h : ptr(mut Stmt), xs : usize, xl : usize, m : WordViewUse, ms : usize, ml : usize, cx : ptr(LCtx)) -> bool {
+  src := cx.src
+  st := deref(stmt_p(Stmt, h))
+  match st {
+    Stmt::Assign(ns, nl, v, nx) => {
+      if word_view_alias_is(v, xs, xl, src) {
+        if not word_view_alias_bounds_ok(v, xs, xl, m, ms, ml, cx) { return false }
+        if lower_ctx::streq(src, ns, nl, xs, xl) { return true }
+        cm := word_view_copy_use(m, local_type_span(src, ns, nl).n != 0)
+        return word_view_stmts_ok(nx, ns, nl, cm, ms, ml, cx)
+      }
+      word_view_expr_ok(v, xs, xl, m, ms, ml, cx)
+    }
+    Stmt::ExprStmt(e, nx) => { word_view_expr_ok(e, xs, xl, m, ms, ml, cx) }
+    Stmt::Return(rv, nx) => { word_view_expr_ok(rv, xs, xl, m, ms, ml, cx) }
+    Stmt::Break(bv, bl, nx) => { word_view_expr_ok(bv, xs, xl, m, ms, ml, cx) }
+    Stmt::Continue(cl, nx) => { true }
+    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { not lower_ctx::streq(src, bns, bnl, xs, xl) and word_view_stored_ok(fv, xs, xl, m, ms, ml, cx) }
+    Stmt::DerefAssign(p, v, nx) => { word_view_expr_ok(p, xs, xl, m, ms, ml, cx) and word_view_expr_ok(v, xs, xl, m, ms, ml, cx) }
+    Stmt::IndexAssign(b, i, v, nx) => {
+      if word_view_is(b, xs, xl, src) { return word_view_indexes(m) and word_view_expr_ok(i, xs, xl, m, ms, ml, cx) and word_view_expr_ok(v, xs, xl, m, ms, ml, cx) }
+      word_view_expr_ok(b, xs, xl, m, ms, ml, cx) and word_view_expr_ok(i, xs, xl, m, ms, ml, cx) and word_view_expr_ok(v, xs, xl, m, ms, ml, cx)
+    }
+    Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { word_view_expr_ok(b, xs, xl, m, ms, ml, cx) and word_view_expr_ok(i, xs, xl, m, ms, ml, cx) and word_view_stored_ok(v, xs, xl, m, ms, ml, cx) }
+    Stmt::FieldPathAssign(pl, v, nx) => { word_view_expr_ok(pl, xs, xl, m, ms, ml, cx) and word_view_stored_ok(v, xs, xl, m, ms, ml, cx) }
+    Stmt::If(c, th, el, nx) => { word_view_expr_ok(c, xs, xl, m, ms, ml, cx) and word_view_stmts_ok(th, xs, xl, m, ms, ml, cx) and word_view_stmts_ok(el, xs, xl, m, ms, ml, cx) }
+    Stmt::While(c, b, nx) => { word_view_expr_ok(c, xs, xl, m, ms, ml, cx) and word_view_stmts_ok(b, xs, xl, m, ms, ml, cx) }
+    Stmt::Loop(b, nx) => { word_view_stmts_ok(b, xs, xl, m, ms, ml, cx) }
+    Stmt::Unchecked(b, nx) => { word_view_stmts_ok(b, xs, xl, m, ms, ml, cx) }
+    Stmt::AllocWith(ae, b, nx) => { word_view_expr_ok(ae, xs, xl, m, ms, ml, cx) and word_view_stmts_ok(b, xs, xl, m, ms, ml, cx) }
+    Stmt::For(fns, fnl, lo, hi, b, nx) => {
+      ## `for x in s[a..b]` iterates a re-slice, which main answers right for an annotated `s` too
+      ## (measured on `0c55e3e4`); only a `Slice(T)` parameter's re-slice stays refused.
+      if word_view_is(lo, xs, xl, src) {
+        if not word_view_iterates(m) { return false }
+      } else if word_view_alias_is(lo, xs, xl, src) {
+        if not word_view_indexes(m) or not word_view_alias_bounds_ok(lo, xs, xl, m, ms, ml, cx) { return false }
+      } else if not word_view_expr_ok(lo, xs, xl, m, ms, ml, cx) { return false }
+      word_view_expr_ok(hi, xs, xl, m, ms, ml, cx) and word_view_stmts_ok(b, xs, xl, m, ms, ml, cx)
+    }
+    Stmt::Match(sc, ah, nx) => { word_view_expr_ok(sc, xs, xl, m, ms, ml, cx) and word_view_arms_ok(ah, xs, xl, m, ms, ml, cx) }
+    Stmt::CompIf(c, th, el, nx) => { word_view_expr_ok(c, xs, xl, m, ms, ml, cx) and word_view_stmts_ok(th, xs, xl, m, ms, ml, cx) and word_view_stmts_ok(el, xs, xl, m, ms, ml, cx) }
+    Stmt::CompFor(ns, nl, iv, b, nx) => { word_view_stmts_ok(b, xs, xl, m, ms, ml, cx) }
+    Stmt::CompForRange(ns, nl, lo, hi, b, nx) => { word_view_expr_ok(lo, xs, xl, m, ms, ml, cx) and word_view_expr_ok(hi, xs, xl, m, ms, ml, cx) and word_view_stmts_ok(b, xs, xl, m, ms, ml, cx) }
+    Stmt::CompMatch(sc, ah, nx) => { word_view_expr_ok(sc, xs, xl, m, ms, ml, cx) and word_view_arms_ok(ah, xs, xl, m, ms, ml, cx) }
+  }
+}
+
+## Does parameter `pidx` of the callee at `cidx` read a word-strided view right? A generic callee whose
+## parameter is a `Slice(T)` of its own type parameter reads it one word per element (#1561); any other
+## callee only when its body uses the parameter for `.len` alone. An unknown callee and one with no body
+## answer false; a pair this query already walked answers true (`WORD_VIEW_SEEN`).
+word_view_callee_ok := fn(cidx : i64, pidx : usize, cx : ptr(LCtx)) -> bool {
+  if cidx < 0 { return false }
+  key : u64 = u64(cidx) * 65536 + u64(pidx)
+  for q in 0..WORD_VIEW_SEEN_N {
+    if WORD_VIEW_SEEN[q] == key { return true }
+  }
+  if WORD_VIEW_SEEN_N >= 64 { return false }
+  WORD_VIEW_SEEN[WORD_VIEW_SEEN_N] = key
+  WORD_VIEW_SEEN_N += 1
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), usize(cidx))))
+  if not d.is_fn { return false }
+  mut pp := d.params_head
+  mut k : usize = 0
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if k == pidx {
+          if d.is_generic and word_view_param_elem_generic(d, pm, cx.src) { return true }
+          mut has_body := false
+          match d.body_stmts { Some(bq) => { has_body = true } None => {} }
+          ## null-ok: #1069 — Decl.value, a fn's trailing value expression, is null when absent (ast.al).
+          if unchecked bitcast(usize, d.value) != 0 { has_body = true }
+          if not has_body { return false }
+          return word_view_stmts_ok(d.body_stmts, pm.ns, pm.nl, WordViewUse.Param, d.mod_start, d.mod_len, cx) and word_view_expr_ok(d.value, pm.ns, pm.nl, WordViewUse.Param, d.mod_start, d.mod_len, cx)
+        }
+        k += 1
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+
+## Is parameter `pm` of the generic `d` a `Slice(T)` whose `T` is one of `d`'s own type parameters?
+word_view_param_elem_generic := fn(d : Decl, pm : Param, src : ptr(u8)) -> bool {
+  ea := typearg_at(src, pm.ts, pm.tl, 0)
+  if ea.n == 0 { return false }
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(ppq) => {
+        tp := deref(param_p(ppq))
+        if lower_ctx::streq(src, tp.ns, tp.nl, ea.s, ea.n) and str_at((src + tp.ts), tp.tl) == "type" { return true }
+        pp = tp.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+
+## #1514 — refuse, at the array's name, a word-strided view that reaches a consumer stepping `T`'s size.
+refuse_word_view := fn(at : u64, cx : ptr(LCtx)) {
+  lower_show_src_line(cx.src, usize(at))
+  panic("selfhost: a range slice of a fixed array of u8, i8, u16 or i16 elements, which x86_64 lays out one word per element, reaches a reader that steps the element's own size (a Slice(T) parameter that reads its elements, or the for loop of an annotated Slice(T) local) (#1514, #1559): Types §6.4 makes a Slice(T) step T's own size; refused rather than silently miscompiled. A [u64; N], an annotated [u8; N] or an alloc::vec view can be sliced")
+}
+
+## #1514 — a range slice passed straight to parameter `pidx` of the callee at `cidx` (`f(a16[0..3])`).
+reject_word_view_arg := fn(e : ptr(Expr), cidx : i64, pidx : usize, cx : ptr(LCtx)) {
+  match word_array_range_base(e, cx) {
+    Some(at) => {
+      WORD_VIEW_SEEN_N = 0
+      if not word_view_callee_ok(cidx, pidx, cx) { refuse_word_view(at, cx) }
+    }
+    None => {}
+  }
+}
+
+## #1514 — a range slice bound to a local (`s : Slice(u16) = a16[0..3]`, `s := a16[0..3]`): walk the
+## rest of its block `nx` and, for a binding at the top of the function, its trailing value.
+reject_word_view_binding := fn(ns : usize, nl : usize, v : ptr(Expr), nx : Option(ptr(mut Stmt)), cx : ptr(LCtx)) {
+  match word_array_range_base(v, cx) {
+    Some(at) => {
+      WORD_VIEW_SEEN_N = 0
+      m := word_view_copy_use(WordViewUse.Local, local_type_span(cx.src, ns, nl).n != 0)
+      mut ok := word_view_stmts_ok(nx, ns, nl, m, cx.mod_s, cx.mod_l, cx)
+      if ok and cx.fn_id < rt::vec_len(deref(cx.decls)) {
+        fd := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(cx.decls), cx.fn_id)))
+        if fd.is_fn { ok = word_view_expr_ok(fd.value, ns, nl, m, cx.mod_s, cx.mod_l, cx) }
+      }
+      if not ok { refuse_word_view(at, cx) }
+    }
+    None => {}
   }
 }
 
@@ -28212,6 +28673,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
         st := deref(stmt_p(Stmt, sq))
         match st {
           Stmt::Assign(ns, nl2, v, nx) => {
+            reject_word_view_binding(ns, nl2, v, nx, cx)
             emit_st_assign(ns, nl2, v, sb, cx, a, nl)
             s = nx
           }
