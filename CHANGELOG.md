@@ -159,6 +159,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   with an explicit type argument is now typed through it and compared by the structural `eq`. The
   shapes it cannot yet type, among them a type argument naming an enclosing type parameter, a
   `-> Option(T)` return and an inferred type argument, are refused at the comparison's line (#1557).
+- **A simple `@inline` callee is substituted on AArch64, RISC-V64 and wasm (#1074).** A direct call
+  to an `@inline` function whose body is one expression over scalar parameters, such as
+  `add := @inline fn(a : u64, b : u64) -> u64 { return a + b }`, emitted `bl`/`call` to the
+  callee on the three cross backends, where Codegen §3.5 requires the body in place of the call. Those
+  calls are now replaced by the body. Statement bodies, aggregate parameters or results, generic
+  callees and call sites inside `unchecked` still emit a call, and #1074 stays open for them.
 - **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
   `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
   bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead

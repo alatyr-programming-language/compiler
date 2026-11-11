@@ -1408,6 +1408,18 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
       None => { break }
     }
   }
+  ## #1074: an `@inline` callee is substituted, never called (Codegen §3.5 item 3; Declarations §2.3
+  ## classes the marker Semantic). Substituting here, before any target sees the call, is what keeps the
+  ## rule in one place: no backend can emit a `call` the IR does not contain.
+  match agg {
+    Some(ist) => {}
+    None => {
+      if lower_attrs::fn_is_inline(src, d.name_start, d.name_len) {
+        sub : Option(CallOut) = ib_inline_subst(bp, a, d, args, res)
+        match sub { Some(co) => { return co }; None => {} }
+      }
+    }
+  }
   f := ib_b_f(bp)
   mut it := inst0(Op.OpCall)
   dnm := str_at((src + d.name_start), d.name_len)
@@ -1441,6 +1453,143 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
   }
   i0 := emit(f, a, it)
   CallOut.CoVoid
+}
+## #1074, step 1 of the sequencing recorded on the issue: substitute the `@inline` callee `d` at this call
+## site. `args` holds the argument vregs, already built left to right at each parameter's declared type, so
+## each argument is evaluated exactly once and before the body, as for a call. `res` is the call's result.
+## `None` when this is not a shape the step substitutes: the call is then built as before, so no function
+## the builder built before is refused now. The shape: a non-generic callee with a kernel result and
+## kernel by-value parameters, whose body is ONE expression (a tail, or a lone `return e`) made only of
+## literals, its own parameters, operators and `unchecked` (`ib_inline_expr_ok`). Such a body has no
+## binding, no control transfer and no name but a parameter, so it cannot reach the caller's locals or
+## return from the caller. It is built at the callee's own lexical mode (checked unless it writes
+## `unchecked`). A call site inside the caller's `unchecked` region is not substituted: a checked body there
+## is not expressible in the IR (V10 refuses a checked op in an unchecked region), so it stays a call.
+ib_inline_subst := fn(bp : ptr(mut IbB), in out a : rt::Arena, d : Decl, args : ptr(mut WBuf), res : Option(IbKS)) -> Option(CallOut) {
+  if d.is_generic or ib_b_unch(bp) { return Option(CallOut).None }
+  mut kr : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+  match res { Some(k) => { kr = k }; None => { return Option(CallOut).None } }
+  bo : Option(ptr(Expr)) = ib_inline_body(d)
+  match bo {
+    Some(be) => {
+      if not ib_inline_params_ok(bp, d) or not ib_inline_expr_ok(bp, d, be) { return Option(CallOut).None }
+      mark := ib_scope_mark(bp)
+      mut pp := d.params_head
+      mut j : usize = 0
+      loop {
+        match pp {
+          Some(pq) => {
+            pm := deref(param_p(pq))
+            ib_bind_typed(bp, a, pm.ns, pm.nl, VRegId(wb_get(args, j)), pm.ts, pm.tl)
+            j = j + 1
+            pp = pm.next
+          }
+          None => { break }
+        }
+      }
+      vo : Option(VRegId) = ib_bx(bp, a, be)
+      ib_scope_drop(bp, mark)
+      match vo {
+        Some(v) => {
+          cv : Option(VRegId) = ib_coerce(bp, a, v, kr, be)
+          return Option(CallOut).Some(ib_call_out(cv))
+        }
+        None => { return Option(CallOut).Some(CallOut.CoRefused) }
+      }
+    }
+    None => {}
+  }
+  Option(CallOut).None
+}
+## The one expression an `@inline` body consists of: its tail with no statement before it, or the value of
+## a lone `return`.
+ib_inline_body := fn(d : Decl) -> Option(ptr(Expr)) {
+  has_tail := expr_present(d.value) and not lower_layout::ex_is_no_tail(d.value)
+  match d.body_stmts {
+    None => {
+      if has_tail { return Option(ptr(Expr)).Some(d.value) }
+      Option(ptr(Expr)).None
+    }
+    Some(h) => {
+      if has_tail { return Option(ptr(Expr)).None }
+      st := deref(stmt_p(Stmt, h))
+      match st {
+        Stmt::Return(rv, nx) => {
+          match nx { Some(n2) => { return Option(ptr(Expr)).None }; None => {} }
+          if expr_present(rv) { return Option(ptr(Expr)).Some(rv) }
+          Option(ptr(Expr)).None
+        }
+        Stmt::Assign | Stmt::ExprStmt | Stmt::If | Stmt::While | Stmt::Loop | Stmt::For | Stmt::Break | Stmt::Continue
+          | Stmt::Unchecked | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::FieldPathAssign | Stmt::IndexAssign
+          | Stmt::Match | Stmt::IndexFieldAssign | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange
+          | Stmt::AllocWith => { Option(ptr(Expr)).None }
+      }
+    }
+  }
+}
+## Every parameter of `d` is a by-value kernel scalar whose address the body cannot take.
+ib_inline_params_ok := fn(bp : ptr(mut IbB), d : Decl) -> bool {
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if pm.pmode != 0 { return false }
+        pk : Option(IbKS) = ib_type_ks(ib_b_decls(bp), ib_b_src(bp), pm.ts, pm.tl)
+        match pk { Some(k) => {}; None => { return false } }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  true
+}
+## Whether `e`, in the body of `@inline` callee `d`, is built from literals, `d`'s own parameters, the
+## operators and `unchecked` alone, each node carrying a kernel type sema recorded (what `ib_bx` builds it
+## from, so an expression this accepts is not refused for a missing type).
+ib_inline_expr_ok := fn(bp : ptr(mut IbB), d : Decl, e : ptr(Expr)) -> bool {
+  t : VTy = sty_get(e)
+  ko : Option(IbKS) = ib_vty_ks(t)
+  match ko { Some(k) => {}; None => { return false } }
+  match deref(e) {
+    Expr::Num(v, s, n) => { true }
+    Expr::BoolLit(v) => { true }
+    Expr::Var(s, n) => { ib_is_param_of(ib_b_src(bp), d, s, n) }
+    Expr::Bin(op, l, r) => {
+      bo : Option(AstBin) = ib_bin_of(op)
+      match bo {
+        ## `not x` is `Bin(not, x, _)`: the right operand is the parser's placeholder.
+        Some(b) => {
+          match b {
+            BNot => { ib_inline_expr_ok(bp, d, l) }
+            BAdd | BSub | BMul | BDiv | BRem | BBand | BBor | BBxor | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr => {
+              ib_inline_expr_ok(bp, d, l) and ib_inline_expr_ok(bp, d, r)
+            }
+          }
+        }
+        None => { false }
+      }
+    }
+    Expr::Unchecked(inner) => { ib_inline_expr_ok(bp, d, inner) }
+    Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+## Whether the name `[s, s+n)` is one of `d`'s parameters.
+ib_is_param_of := fn(src : ptr(u8), d : Decl, s : usize, n : usize) -> bool {
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if pm.nl == n and streq(src, pm.ns, n, s, n) { return true }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
 }
 ## The kernel result of callee `d`, which must be sema's record of the call `e`.
 ib_call_result := fn(bp : ptr(mut IbB), e : ptr(Expr), d : Decl) -> Option(IbKS) {
