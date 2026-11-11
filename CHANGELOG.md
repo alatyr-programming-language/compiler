@@ -132,6 +132,15 @@ Two numbers that are **not** the compiler's version: the specification revision 
   a generic enum such as `Option(u64)` also returns its payload now, not the discriminant alone. Such a
   call at an enum wider than seven words (`mk(Option(S9), …)`) returned a wrong value or crashed; it is
   now refused at the call until it gets a hidden result pointer (#1324).
+- **A cycle among module-level comptime initializers is a compile error (#926).** `A := A + 1`, the
+  pair `A := B + 1` / `B := A + 1`, and a ring of any length, also through a struct field, an array
+  element, an `if`, a conversion or an enum payload (`A := S(e = E.X(A.k), k = 7)`), were accepted by
+  `check`. The x86_64 backend then crashed (SIGSEGV, no diagnostic) or, for some forms, built a
+  program from a value with no evaluation order. Declarations §7.1 makes the cycle a compile error,
+  and `check` and `build` now refuse it with one located diagnostic at the declaration. A reference
+  is judged by the binding it names, so `X : u64 = m::X + 1` beside a module `m` that declares its own
+  `X` is not a cycle and is not refused. An invalid program that used to crash or build is now
+  rejected; a program that stops compiling here was relying on a bug.
 - **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
   `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
   bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead

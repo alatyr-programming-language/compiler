@@ -11276,6 +11276,30 @@ run issue1245_match_call_binop_arg 42
 ## alias present — #1414's condition). NON-VACUOUS: on the parent `58a80376` (x86_64) the BUILD itself
 ## dies — rc 139 SIGSEGV, no diagnostic — and with only `:4780` fixed it still dies at `:6942`.
 run issue1247_vec_set_str_binop_arg 42
+## #926 — a cycle among comptime initializers is a compile error (Declarations §7.1). `check` accepted
+## it (rc 0) and the x86_64 backend then died in `global_init_value`, which recursed into the
+## initializer with no cycle guard: rc 139 SIGSEGV, no diagnostic. `check` and `build` now refuse at
+## the declaration with one located diagnostic, for the self-reference and for the mutual pair. The
+## third row is the control that keeps the refusal honest: a legal chain still folds. NON-VACUOUS: on
+## the parent `58a80376` (x86_64) both rejected fixtures BUILD — `check` rc 0, `build` rc 139.
+check_build_located issue926_const_init_self_ref 15 "COMPTIME INITIALIZER CYCLE"
+check_build_located issue926_const_init_cycle_pair 15 "COMPTIME INITIALIZER CYCLE"
+## #926 — a twelve-binding ring is a cycle too (§7.1 bounds no length). A hop-bounded chase (8 hops) missed
+## it: `check` rc 0, `build` rc 139 on omen for 10-, 11-, 12- and 20-binding rings. Sema enters each const once
+## per checked declaration, so the walk terminates and is complete; `B := A0 + A0` outside the ring is not refused.
+check_build_located issue926_const_init_cycle_long 15 "COMPTIME INITIALIZER CYCLE"
+run_x86 issue926_const_chain_ok 2
+## #926 — a cycle through an enum payload, a slice bound or a `match` arm is a cycle too. NON-VACUOUS: on the
+## parent `2188fa95` (x86_64) the enum one builds and runs 7, the slice one builds and runs 0, the `match`
+## one builds rc 139; `check` rc 0 for all three.
+check_build_located issue926_const_init_cycle_enum 16 "COMPTIME INITIALIZER CYCLE"
+check_build_located issue926_const_init_cycle_slice 16 "COMPTIME INITIALIZER CYCLE"
+check_build_located issue926_const_init_cycle_match 16 "COMPTIME INITIALIZER CYCLE"
+## #926 — `issue926_const_qualified_same_name_ok` (`X : u64 = m::X + 1`, another module's `X`: no cycle) has
+## NO row here on purpose. Its header states the correct value, `## expect: run 2`, which no backend reaches
+## yet (#1567). An e2e `check_accept` row would register `accept` against that header, and fixture_expect.sh
+## (a) refuses the disagreement (gate run 42860859827). Its known-deviations.tsv rows hold it instead, by exact
+## observation: x86_64 `compile/139` is the backend crash past `check`; a false cycle (`compile/1`) reads CHANGED.
 run deref_view_pointee 42
 ## Types §7 — a `[T]`/`str` view IS its two-word {ptr,len} pair wherever it appears. A view ARGUMENT that is
 ## not a plain local (a struct FIELD at any depth, a `sub(…)`/range sub-view, a `[str;N]` element, a str field
