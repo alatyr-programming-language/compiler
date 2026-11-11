@@ -1109,6 +1109,29 @@ check_twin_package() {
   done
 }
 
+# #1578 — a twin emit verb over a package keeps the manifest's Linux env and replaces its arch. A musl
+# x86_64 manifest therefore composes a supported aarch64 target (that row admits musl) and an
+# unsupported riscv64 one (that row is gnu alone, per-arch appendix §1). The riscv64 verb must refuse
+# with the located Config diagnostic and emit nothing; the aarch64 verb is the control and must emit.
+check_twin_package_env() {
+  local pkg="$E2E_TEST/package/issue1578_twin_rv64_musl/package.al" d="$T/twin_pkg_env" rc
+  mkdir -p "$d"
+  [ -f "$pkg" ] || { echo "MISS twin_package_env: no $pkg"; fail=1; return; }
+  "$CC" riscv64 "$pkg" > "$d/rv.s" 2> "$d/rv.err"; rc=$?
+  # located at the manifest's `env = …` field (line 18), not at the file's first line
+  if [ "$rc" != 0 ] && [ ! -s "$d/rv.s" ] && grep -q "has an unsupported Env for this Arch at line 18 " "$d/rv.err"; then
+    echo "ok   twin_package_env(rv64): refused rc=$rc"
+  else
+    echo "FAIL twin_package_env(rv64): rc=$rc, stdout $(wc -c < "$d/rv.s") bytes, due a refusal"; sed 's/^/     /' "$d/rv.err" | head -4; fail=1
+  fi
+  "$CC" aarch64 "$pkg" > "$d/a64.s" 2> "$d/a64.err"; rc=$?
+  if [ "$rc" = 0 ] && [ -s "$d/a64.s" ]; then
+    echo "ok   twin_package_env(a64): emitted"
+  else
+    echo "FAIL twin_package_env(a64): rc=$rc, due an emitted program"; sed 's/^/     /' "$d/a64.err" | head -4; fail=1
+  fi
+}
+
 # `docs/ir.md` slice 0b — the twins fold a `comptime if build.<flag>` with x86's own function
 # (`lower::ctfold::closed_cond_fold`), so a flag the selected profile does not carry is refused alike on
 # every backend; before, the twins left the `comptime if` unfolded and trapped at run time.
@@ -12154,6 +12177,7 @@ check_sema_lib_bodies
 check_sema_ct_records
 check_sema_spell_records
 check_twin_package
+check_twin_package_env
 check_twin_build_flag
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,

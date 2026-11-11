@@ -17,7 +17,8 @@
 ## PARENT (cf159743), measured on native x86_64: `alatyr aarch64` emitted, assembled and linked with
 ## rc 0, and the program ran under qemu-aarch64 to exit 133 (SIGTRAP) where 42 was due, because the
 ## twin's `comptime if` could not fold `target.os` / `target.env`. `alatyr riscv64` the same, 133
-## under qemu-riscv64 (its leg of #1578 follows this one). x86_64 (`alatyr run`) and wat ran to 42.
+## under qemu-riscv64, and still 133 on the parent of the riscv64 leg (696f9b12, the aarch64 leg).
+## x86_64 (`alatyr run`) and wat ran to 42.
 part := fn() -> u64 when target.arch == Arch.aarch64 { return 20 }
 part := fn() -> u64 when target.arch != Arch.aarch64 { return 20 }
 

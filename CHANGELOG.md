@@ -308,6 +308,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   publishes `Machine.Linux(arch = Arch.aarch64)` with env gnu, and a `when`-alternative selected for
   aarch64 is checked like any other declaration, so a program whose aarch64 alternative names an
   undefined function now stops compiling. riscv64 follows; wasm waits on the spec.
+- **`alatyr riscv64` compiles for the riscv64 machine model it emits (#1578).** The same defect and
+  fix as the aarch64 verb above: the verb publishes `Machine.Linux(arch = Arch.riscv64)` (env gnu, the
+  only env of that row), and its `comptime if` folds every `target.*` facet from that model instead of
+  trapping on `target.os` and `target.env`. Over a package the verb replaces the manifest's arch, so a
+  manifest whose env riscv64 does not support (`Env.musl`) is now a located Config error instead of a
+  riscv64/musl build no supported target describes.
 
 ## 0.2.24 — 2026-11-07
 
