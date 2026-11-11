@@ -6695,6 +6695,21 @@ run issue597_shadowed_const_struct_field 99
 ## on all four backends; the pre-#1480 seed answers 11 = case 1, class 1, the constant's own field. #1495's
 ## §7.2 ORDER rows are left to #1496 (they trap on wasm).
 run issue1495_local_shadow_const_struct_expr 99
+## #598 / Declarations §5+§6.1: a PARAMETER or LOCAL named like a module `str` or STRUCT constant still lost
+## to it. #589's shadow guard asked the right question and then declined any answer that was not a one-word
+## scalar (`if const_scalar_lit(r) == false { return r }`), so a `StrLit` or `StructLit` constant came back
+## before the shadow question was reached: `f := fn(M : str) -> u64 { s : str = M }` called with "abcdefgh"
+## bound "abc". Widened to `const_shadow_declinable` (scalars + `StrLit` + `StructLit`); the slot SIZE does
+## not move because checked sema already equates the binding's type with the constant's, so `collect_slots`
+## needs no matching edit. The same guard now also covers `emit_arg`'s `str`-constant arm, so a shadowing name
+## passed straight as a call argument (`return g(M)`) sends the inner value (cases 10-12). A shadowed ARRAY or
+## ENUM constant is still wrong and is #1565; case 9 is only the unshadowed array arrival. Twelve classified
+## cases, four of them controls.
+## REGISTERED x86_64 ONLY: the `str` rows trap on all three twins in BOTH the shadowed and the unshadowed
+## spelling (aarch64 133, riscv64 133, wasm 134), so a cross-backend row would fold a separate pre-existing
+## backend gap into this issue; the struct rows do run on all four. Fails on main 2d6e05f41 with 11 = case 1
+## class 1, the constant's own value.
+run_x86 issue598_shadowed_str_struct_const 99
 build_reject_has reject_typed_float_integer_f32 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_f64 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_u64 "check: type mismatch at line 2"

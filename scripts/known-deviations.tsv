@@ -280,6 +280,7 @@ aarch64	test/issue557_exhaustive_six_shapes.al	run/133	#577
 aarch64	test/issue557_or_pattern_six_shapes.al	run/133	#577
 aarch64	test/issue557_wildcard_six_shapes.al	run/133	#577
 aarch64	test/issue567_wasm_overload_pair.al	run/133	#1200
+aarch64	test/issue598_shadowed_str_struct_const.al	run/133	#1184
 aarch64	test/issue660_exhaustive_generic.al	run/133	#577
 aarch64	test/issue693_union_member_control.al	run/133	#1187
 aarch64	test/issue703_scalar_owner_controls.al	run/133	#1188
@@ -822,6 +823,7 @@ riscv64	test/issue557_exhaustive_six_shapes.al	run/133	#577
 riscv64	test/issue557_or_pattern_six_shapes.al	run/133	#577
 riscv64	test/issue557_wildcard_six_shapes.al	run/133	#577
 riscv64	test/issue567_wasm_overload_pair.al	run/133	#1200
+riscv64	test/issue598_shadowed_str_struct_const.al	run/133	#1184
 riscv64	test/issue660_exhaustive_generic.al	run/133	#577
 riscv64	test/issue693_union_member_control.al	run/133	#1187
 riscv64	test/issue703_scalar_owner_controls.al	run/133	#1188
@@ -1364,6 +1366,7 @@ wasm	test/issue506_deref_ptr_byref_field.al	run/134	#1187
 wasm	test/issue557_exhaustive_six_shapes.al	run/134	#1188
 wasm	test/issue557_or_pattern_six_shapes.al	run/134	#1188
 wasm	test/issue557_wildcard_six_shapes.al	run/134	#1188
+wasm	test/issue598_shadowed_str_struct_const.al	run/134	#1184
 wasm	test/issue693_union_member_control.al	run/134	#1187
 wasm	test/issue703_scalar_owner_controls.al	run/134	#1188
 wasm	test/issue703_vty_owner_controls.al	run/134	#1184

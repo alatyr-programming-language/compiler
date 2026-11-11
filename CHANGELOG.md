@@ -141,6 +141,12 @@ Two numbers that are **not** the compiler's version: the specification revision 
   is judged by the binding it names, so `X : u64 = m::X + 1` beside a module `m` that declares its own
   `X` is not a cycle and is not refused. An invalid program that used to crash or build is now
   rejected; a program that stops compiling here was relying on a bug.
+- **A parameter or local named like a module `str` or struct constant now wins over it on x86_64
+  (#598).** With `M := "abc"`, `f := fn(M : str) -> u64 { s : str = M ; ... }` bound `"abc"` instead
+  of the argument. So did `return g(M)`, which passed the constant to `g`. With `C := S(k = 3, m = 4)`,
+  a parameter or local `C` copied as `p : S = C` gave the constant's fields. All of these compiled
+  cleanly and ran on with the wrong value. The inner name now wins, as Declarations §6.1 requires. A
+  shadowed array or enum constant still answers the constant; that is #1565.
 - **A range slice of a `Slice(T)` parameter holds the parameter's elements on x86_64 (#1180).**
   `ys := xs[1..xs.len]` over a `Slice(u64)`, `Slice(str)` or struct-element `Slice(P)` parameter,
   bound, indexed or iterated with `for`, took its range over the caller's `{ptr, len}` block instead

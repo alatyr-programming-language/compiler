@@ -4434,12 +4434,16 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   ## A str-CONSTANT `Var` (`MSG := "…"` at module level) as an argument — resolve it to its `StrLit`
   ## value and materialize THAT (a str is a 2-word {ptr,len} passed by-ref; the plain Var path would
   ## push only its word-0). An int/other scalar const is handled by the Var value path (emit_gas).
+  ## #598: only when no parameter or local of that name is visible here (Declarations §6.1, the inner
+  ## name wins); `f := fn(M : str) -> u64 { return g(M) }` passed the constant before this guard.
   scvn := var_name_span(e)
   if scvn.n != 0 {
-    scmcv := module_const_value(cx.decls, cx.src, scvn.s, scvn.n)
-    if unchecked bitcast(usize, scmcv) != 0 and str_lit_info(scmcv).is_s {
-      emit_arg(scmcv, sb, cx, a, nl, tmp_off)
-      return
+    if name_shadowed(cx.slots, cx.ctslots, cx.src, scvn.s, scvn.n, scvn.s) == false {
+      scmcv := module_const_value(cx.decls, cx.src, scvn.s, scvn.n)
+      if unchecked bitcast(usize, scmcv) != 0 and str_lit_info(scmcv).is_s {
+        emit_arg(scmcv, sb, cx, a, nl, tmp_off)
+        return
+      }
     }
     ## a mutable STRUCT or ARRAY GLOBAL argument — MATERIALIZE it into the agg-temp (a down-growing
     ## local), then pass that block's word-0 ADDRESS by reference. The global's `.data` is ASCENDING
