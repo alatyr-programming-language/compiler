@@ -14,6 +14,11 @@ cd "$(dirname "$0")/.." || exit 1   # the repo root: $PWD/target/debug/alatyr re
 BIN=${ALATYR:-$PWD/target/debug/alatyr}
 [ -x "$BIN" ] || { echo "corroboration: no compiler at $BIN (build it first)" >&2; exit 2; }
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
+# The legacy x86 column. Since the slice-9 flip (#980) the default x86 surface IS the IR selector and
+# `x86-legacy` is the verb for the legacy emitter; a compiler from before the flip has no such verb and
+# its default is legacy. `--help` lists the verb in the line shape scripts/ir_diff.sh reads too.
+LEGACY=()
+"$BIN" --help 2>/dev/null | grep -q '^  x86-legacy ' && LEGACY=(x86-legacy)
 
 norm() { # <rc> — RUN<n> or TRAP(<sig>)
   local rc="$1"
@@ -33,9 +38,9 @@ for t in "$@"; do
   for b in x86 x86-ir aarch64 riscv64 wat; do
     case "$b" in
       x86)
-        # the x86 path has no verb of its own: `alatyr -o exe prog.al` is the default emitter and
-        # `x86-ir` the dev verb — that is how ir_diff invokes them.
-        if timeout 60 "$BIN" -o "$W/p.x86" "$t" >"$W/b.log" 2>&1 </dev/null; then
+        # the legacy emitter: `x86-legacy` after the flip, the bare default before it (see LEGACY);
+        # `x86-ir` is the IR selector on both sides of the flip.
+        if timeout 60 "$BIN" "${LEGACY[@]}" -o "$W/p.x86" "$t" >"$W/b.log" 2>&1 </dev/null; then
           run "$W/p.x86"; printf '%s=%-9s ' "$b" "$(norm $RC)"
         else printf '%s=REFUSE    ' "$b"; fi ;;
       x86-ir)
