@@ -5,11 +5,13 @@
 # A TRAP (the checked-failure `ud2`, rc 132) is a recorded outcome and has no row; any other signal, a
 # timeout or a stray exit code is a CRASH and is held (#1277). The verdict holds a WRONG's check code, a
 # CRASH's rc and only the kind of a refusal (its message carries absolute paths). Measured at main
-# cf159743 on omen, native x86_64, compiler built from this tree: 378 cells, OK=310 WRONG=0 TRAP=3
-# CRASH=17 REFUSED=48. 65 rows under 7 open issues: 48 REFUSED (20 #1244, 19 #1250, 8 #1280, 1 #1249)
-# and 17 CRASH 139 (10 #987: `v[i]` and `v[a..b]` over a struct or enum element; 5 #1256: UFCS
-# `v.at(i)`; 2 #1608: an `Option` element of `vec::iter`'s slice). The 3 TRAP 132 cells,
-# hashmap.key.{i8,i64,enumN}, are all #1304: the structural hash's checked `u64(v)` of a negative leaf.
+# cf159743 on omen, native x86_64, compiler built from this tree: 428 cells, OK=352 WRONG=0 TRAP=3
+# CRASH=19 REFUSED=54. 73 rows under 8 open issues: 54 REFUSED (25 #1244, 20 #1250, 8 #1280, 1 #1249)
+# and 19 CRASH 139 (10 #987: `v[i]` and `v[a..b]` over a struct or enum element; 5 #1256: UFCS
+# `v.at(i)`; 2 #1608: an `Option` element of `vec::iter`'s slice; 2 #1308: a grown OMap of `Option`
+# values). The omap, oset, map, strmap, string and strbuf cells (#1278) add 8 of the rows. The 3
+# TRAP 132 cells, hashmap.key.{i8,i64,enumN}, are all #1304: the structural hash's checked `u64(v)` of
+# a negative leaf.
 x86_64	deque.front_back.array3	REFUSED	#1250
 x86_64	deque.front_back.char	REFUSED	#1244
 x86_64	deque.pop_back.array3	REFUSED	#1250
@@ -26,6 +28,14 @@ x86_64	hashmap.value.char	REFUSED	#1244
 x86_64	none.control.array3	REFUSED	#1250
 x86_64	none.control.char	REFUSED	#1244
 x86_64	none.control.option_u64	REFUSED	#1249
+x86_64	omap.key.char	REFUSED	#1244
+x86_64	omap.value.array3	REFUSED	#1250
+x86_64	omap.value.char	REFUSED	#1244
+x86_64	omap.value.option_ptr	CRASH 139	#1308
+x86_64	omap.value.option_u64	CRASH 139	#1308
+x86_64	oset.insert_contains.char	REFUSED	#1244
+x86_64	strbuf.push_char.char	REFUSED	#1244
+x86_64	string.push.char	REFUSED	#1244
 x86_64	vec.for_in.array3	REFUSED	#1250
 x86_64	vec.for_in.char	REFUSED	#1244
 x86_64	vec.for_in.option_ptr	CRASH 139	#1608
