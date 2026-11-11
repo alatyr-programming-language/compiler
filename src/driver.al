@@ -5548,9 +5548,9 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## re-parse. sema accepts the whole self-host src/ tree, so this returns 0 for the TOOL-1 self-build →
   ## identical emission → GAS byte-identical → fixpoint unaffected; the emit-site aggregate→scalar
   ## fail-loud nets are RETAINED (sema does not yet reject those sinks). `d_sema_reject` aborts fail-loud.
-  ## IR slice 1d: under the `x86-ir` verb sema also RECORDS each expression's type (`ir::sty_*`, slice
-  ## 1a) over these very nodes, which the shared IR's builder reads. Recording moves no verdict; every
-  ## other surface leaves it off, as before.
+  ## IR slice 1d: whenever x86 selects from the shared IR (the default since the slice-9 flip, #980;
+  ## off under `x86-legacy`) sema also RECORDS each expression's type (`ir::sty_*`, slice 1a) over
+  ## these very nodes, which the shared IR's builder reads. Recording moves no verdict.
   ## IR prerequisite e1 (docs/ir-slice-1.md §8.1): mono's instance set is collected once, here, after
   ## parsing and before sema (which will check each generic body per instance, e2); `emit_program`
   ## reads this list instead of collecting its own.
@@ -5895,7 +5895,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## field workaround while scalar `in out` write-back was unimplemented.)
   mut nl := 0
   zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), n)
-  ## IR slice 1d: the `x86-ir` verb's selector locates each trap it emits (`docs/ir.md` §3.6); inert otherwise.
+  ## IR slice 1d: the x86 IR selector locates each trap it emits (`docs/ir.md` §3.6); inert under `x86-legacy`.
   ir::set_source_map(ptr(pv), ptr(src_off), ptr(src_len))
   lower::emit_program(ptr(decls), gas, base, strbuf::buf_len(bld), ptr(na), na, nl, spanbase, library_mode)
   ## TOOL-6 1c-γ: when a span buffer was supplied (the build path), peephole PER SPAN and rewrite the
