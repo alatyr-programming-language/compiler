@@ -977,6 +977,14 @@ check_ir_dev_verb() {
   "$CC" help > "$rep" 2>&1; rc=$?
   if [ "$rc" = 0 ] && grep -q '^  ir       ' "$rep"; then echo "ok   help: lists the \`ir\` dev verb (D5, TOOL-21)"
   else echo "FAIL help: no \`ir\` line"; fail=1; fi
+  # The slice-9 flip (#980): help names which x86 path is the default, and lists the escape verb in
+  # the line shape `scripts/ir_diff.sh` reads to decide its sides.
+  if grep -q '^  x86-ir   .*(the default' "$rep" && grep -q '^  x86-legacy ' "$rep"; then
+    echo "ok   help: x86-ir is named the default and x86-legacy is listed (#980, D5)"
+  else echo "FAIL help: x86-ir not named the default, or no x86-legacy line"; fail=1; fi
+  "$CC" x86-legacy > "$rep" 2>&1; rc=$?
+  if [ "$rc" = 40 ] && grep -q '^alatyr: config: x86-legacy requires' "$rep"; then echo "ok   x86-legacy (no operand): invocation-level Config diagnostic, rc 40"
+  else echo "FAIL x86-legacy (no operand): rc=$rc"; fail=1; fi
 }
 
 # `docs/ir.md` slice 0a — every trap a twin emits names what it traps on: the construct a catch-all arm
