@@ -249,6 +249,7 @@ aarch64	test/issue1464_fnval_typed_controls.al	run/133	#1196
 aarch64	test/issue1464_owner_kind_controls.al	run/133	#1489
 aarch64	test/issue1497_block_scoped_shadow_const.al	run/133	#1502
 aarch64	test/issue1502_block_local_module_binding.al	run/133	#1502
+aarch64	test/issue1514_word_array_range_slice.al	run/133	#1288
 aarch64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 aarch64	test/issue169_wasm_nested_return.al	run/133	#1191
 aarch64	test/issue171_global_const_str.al	run/133	#1200
@@ -796,6 +797,7 @@ riscv64	test/issue1464_fnval_typed_controls.al	run/133	#1196
 riscv64	test/issue1464_owner_kind_controls.al	run/133	#1489
 riscv64	test/issue1497_block_scoped_shadow_const.al	run/133	#1502
 riscv64	test/issue1502_block_local_module_binding.al	run/133	#1502
+riscv64	test/issue1514_word_array_range_slice.al	run/133	#1288
 riscv64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200
@@ -1343,6 +1345,7 @@ wasm	test/issue1464_fnval_typed_controls.al	run/134	#1196
 wasm	test/issue1464_owner_kind_controls.al	run/134	#1489
 wasm	test/issue1497_block_scoped_shadow_const.al	run/134	#1502
 wasm	test/issue1502_block_local_module_binding.al	run/134	#1502
+wasm	test/issue1514_word_array_range_slice.al	run/134	#1288
 wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
 wasm	test/issue169_wasm_array_write.al	run/134	#1194
 wasm	test/issue169_wasm_nested_return.al	run/134	#1191
@@ -1644,5 +1647,6 @@ wasm	test/zst_and_empty_ctor.al	run/134	#713
 x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
 x86_64	test/issue1394_generic_call_eq.al	compile/1	#1397
+x86_64	test/issue1514_word_array_range_slice.al	compile/1	#1559
 x86_64	test/issue926_const_qualified_same_name_ok.al	compile/139	#1567
 x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
