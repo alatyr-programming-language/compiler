@@ -206,7 +206,7 @@ fixpoint_verdict() { # mid-promotion(0|1) gas-seed gas1 gas2
   echo "  (seed != Stage1 means the committed seed/alatyr is STALE vs src/. The recovery is a SELF-PROMOTE,"
   echo "   not a rebuild from the frozen Rust ancestor — that ancestor can no longer parse the current src/."
   echo "   Build Stage1, let it build Stage2 and Stage3. Require Stage1 == Stage2 == Stage3 in the emitted GAS,"
-  echo "   normalizing .L<N> and .Lra<N>_<k> first. In the BINARY require only Stage2 == Stage3: Stage1 was"
+  echo "   normalizing .L<N>, .Lra<N>_<k> and .Lxir<N>_<k> first. In the BINARY require only Stage2 == Stage3: Stage1 was"
   echo "   assembled by the stale seed, so its binary differs by construction. Read that normalized"
   echo "   seed->Stage1 delta line by line, copy STAGE2 — not Stage1 — over seed/alatyr, append the evidence"
   echo "   to seed/HISTORY.md, and re-run this script on the promoted tree. Why Stage2, and what a readable"
