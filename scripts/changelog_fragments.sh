@@ -40,6 +40,7 @@ frag_name_ok() {
 frag_body_ok() {
   [ -s "$1" ] || { echo "empty"; return 1; }
   [ "$(tail -c 1 "$1" | od -An -c | tr -d ' ')" = '\n' ] || { echo "no final newline"; return 1; }
+  ! grep -q "$(printf '\r')" "$1" || { echo "carries a carriage return (CRLF line ends)"; return 1; }
   awk 'NR == 1 && !/^- [^ ]/ { print "line 1 does not open a `- ` bullet"; bad = 1; exit }
        /^(<<<<<<<|=======|>>>>>>>|\|\|\|\|\|\|\|)/ { print "line " NR " is a conflict marker"; bad = 1; exit }
        /^[[:space:]]*$/ { print "line " NR " is blank"; bad = 1; exit }
@@ -66,7 +67,9 @@ unreleased_added() {
 check_tree() {
   local root="$1" basefile="$2" label="$3" f n=0 bad=0 why added na
   if [ -d "$root/$FRAG_DIR_REL" ]; then
-    for f in "$root/$FRAG_DIR_REL"/*; do
+    ## `.[!.]*` too: a hidden file is neither checked nor assembled, yet promote.sh deletes every
+    ## tracked file here, so its text would vanish without a word.
+    for f in "$root/$FRAG_DIR_REL"/* "$root/$FRAG_DIR_REL"/.[!.]*; do
       [ -e "$f" ] || continue
       case "$(basename "$f")" in README.md) continue ;; esac
       n=$((n + 1))
@@ -168,6 +171,10 @@ self_test() {
   chk "plant: a fragment with no final newline is refused" "$(run)" "1:1"
   mk; printf -- '- x\n' > "$d/t/$FRAG_DIR_REL/12-fix.md"; mkdir "$d/t/$FRAG_DIR_REL/13-dir.md"
   chk "plant: a directory in changelog.d is refused" "$(run)" "1:1"
+  mk; printf -- '- x\n' > "$d/t/$FRAG_DIR_REL/.12-fix.md"
+  chk "plant: a hidden file in changelog.d is refused" "$(run)" "1:1"
+  mk; printf -- '- x\r\n' > "$d/t/$FRAG_DIR_REL/12-fix.md"
+  chk "plant: CRLF line ends in a fragment are refused" "$(run)" "1:1"
   mk; sed -i.b 's/^## Unreleased$/## Unreleased (next)/' "$d/t/CHANGELOG.md"; printf -- '- **New (#2).** Added.\n' >> "$d/t/CHANGELOG.md"
   chk "plant: a renamed Unreleased heading (the rule would read no section) is refused" "$(run)" "1:1"
   mk; rm "$d/t/CHANGELOG.md"; chk "plant: a deleted CHANGELOG.md is refused, not read as nothing added" "$(run)" "1:1"
