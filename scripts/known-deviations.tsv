@@ -648,7 +648,6 @@ riscv64	test/compiles_type_mismatch.al	run/133	#1193
 riscv64	test/compound_assign_place_deep.al	run/133	#1191
 riscv64	test/comptime_if_facts.al	run/133	#1193
 riscv64	test/comptime_resolves_args.al	run/133	#1193
-riscv64	test/comptime_target_facets.al	run/133	#1193
 riscv64	test/comptime_typeinfo_arg.al	run/133	#1189
 riscv64	test/deep_arr_field_agg_elem.al	run/133	#1191
 riscv64	test/deep_arr_field_global.al	run/133	#1194
@@ -801,7 +800,6 @@ riscv64	test/issue1464_fnval_typed_controls.al	run/133	#1196
 riscv64	test/issue1464_owner_kind_controls.al	run/133	#1489
 riscv64	test/issue1497_block_scoped_shadow_const.al	run/133	#1502
 riscv64	test/issue1502_block_local_module_binding.al	run/133	#1502
-riscv64	test/issue1578_twin_target_model.al	run/133	#1578
 riscv64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200

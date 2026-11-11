@@ -138,18 +138,17 @@ rv_next_label := fn() -> i64 { r := RV_NL ; RV_NL = RV_NL + 1 ; r }
 
 ## --- struct support (shared StructLit accessors are imported from lower_ctx) ---
 
-## THIS BACKEND'S OWN ARCH IDENTITY (Tooling §2.7). `target.*` is the RESOLVED SELECTED machine model —
-## the machine being compiled FOR — so when this emitter runs, `target.arch` IS `Arch.riscv64`. It used
-## to fold as `x86_64` "so the sweep compares like-for-like", which made `target.arch == Arch.x86_64`
-## TRUE while emitting RISC-V instructions: a conformance defect that also made every library arch gate
-## inert. ONE accessor so the `comptime if` fold and the `when`-guard fold can never drift apart.
-pub rv_target_arch := fn() -> str { "riscv64" }
+## THIS BACKEND'S ARCH IDENTITY (Tooling §2.7). `target.*` is the RESOLVED SELECTED machine model — the
+## machine being compiled FOR. Every command that reaches this emitter publishes a riscv64 model first
+## (`cli.al`, #1578), so the `comptime if` fold and the `when`-guard fold both read that one published
+## model (`lower::ctfold`), the same one sema checked against. A private "riscv64" constant here used
+## to answer while sema read x86_64.
 
 ## Fold a `comptime if <cond>` predicate at emit time — the rv64 dual of the x86 lower's `decl_guard_fold`.
 ## 1 = TRUE (emit the then-branch), 0 = FALSE (emit the else-branch), -1 = cannot fold (a typeinfo /
 ## type-param predicate — emit NEITHER; deferred, it needs the monomorphization context the rv64 path
-## lacks). Same SHAPE as `decl_guard_fold`/`comptime_cond_eval` on the x86 path, folded against THIS
-## target: `target.arch == Arch.riscv64` folds TRUE and any other arch FALSE (`rv_target_arch()`),
+## lacks). Same SHAPE as `decl_guard_fold`/`comptime_cond_eval` on the x86 path, folded against the
+## published model: `target.<facet> ==/!= <Enum>.<v>` with `lower::ctfold::target_facet_eq`,
 ## composed with `and`/`or`/`not` (op codes 40/41/42). A `verify.checked`
 ## / `match typeinfo(T)` predicate is unfoldable here (-1). FLAT ifs + self-recursion (no nested match).
 rv_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
@@ -159,9 +158,17 @@ rv_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
   mut r := 0 - 1
   match deref(cond) {
     Expr::Bin(op, l, rr) => {
+      ## #1578 — `target.<facet> ==/!= <Enum>.<v>` for every published facet (arch, os, env, container,
+      ## kind, code_size) folds with the x86 lowering's own reader. Only `arch` folded here before, so
+      ## `comptime if target.os == Os.linux` was a fail-loud trap.
+      tfe := lower::ctfold::target_facet_eq(l, rr, src)
+      if tfe >= 0 {
+        if op == 20 { r = tfe }
+        if op == 28 { r = 1 - tfe }
+      }
       an := arch_rhs_span(rr, src)
-      if an.n != 0 {
-        eq := str_at((src + an.s), an.n) == rv_target_arch()
+      if an.n != 0 and tfe < 0 {
+        eq := str_at((src + an.s), an.n) == lower::ctfold::target_arch_name()
         if op == 20 { if eq { r = 1 } else { r = 0 } }
         if op == 28 { if eq { r = 0 } else { r = 1 } }
       }
@@ -8275,7 +8282,7 @@ pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : pt
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any callee resolution or emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on another arch is neutered to an
   ## as-if-absent no-op here, so an arch-gated raw-`asm` body (`lib/std/thread.al`) never reaches `as`.
-  apply_when_guards(decls, src, rv_target_arch())
+  apply_when_guards(decls, src, lower::ctfold::target_arch_name())
   ## Each program emission gets a fresh deterministic label namespace. Within it, rv_next_label remains
   ## monotonic across functions, nested control flow, and generic re-emission.
   RV_NL = 0
