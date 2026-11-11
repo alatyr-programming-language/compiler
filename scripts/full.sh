@@ -670,13 +670,15 @@ if [ "$xd_st_rc" != 0 ] || [ "$xd_rc" != 0 ] || [ "$(grep -cE '^xbackend diff: p
 fi
 
 # The x86 DIFFERENTIAL of the shared IR (`docs/ir.md` §7.1 rule 5, IR slice 1d). Every corpus program
-# with a function the IR builds and `src/lower/isel.al` selects is built and run through the default x86
-# path and through the `alatyr x86-ir` dev verb, and the two exits and stdouts are compared. Each
+# with a function the IR builds and `src/lower/isel.al` selects is built and run through both x86 paths
+# — since the slice-9 flip (#980) the default is the IR selector and `alatyr x86-legacy` the legacy
+# emitter; `scripts/ir_diff.sh` asks the compiler which side is which — and the two exits and stdouts
+# are compared. Each
 # disagreement is a triage item (an IR bug, or a legacy x86 bug the IR answers per the specification —
 # #872's narrowing, the signedness family), so a single row does not set `fail`; the COUNT of them is
 # ratcheted below by scripts/ir_diff.baseline, and growth does. A broken self-test, an unreadable run, or a proof line that walked no
 # program with a selected function does: "found nothing" must be told apart from "compared nothing".
-echo "### IR DIFF (x86 vs x86-via-IR: the disagree count is RATCHETED by scripts/ir_diff.baseline) ###"
+echo "### IR DIFF (x86 IR selector vs legacy emitter: the disagree count is RATCHETED by scripts/ir_diff.baseline) ###"
 IRD_LOG="$LOGDIR/full_ir_diff.log"
 bash scripts/ir_diff.sh --self-test > "$IRD_LOG" 2>&1
 ird_st_rc=$?
