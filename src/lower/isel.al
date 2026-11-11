@@ -1,7 +1,7 @@
 ## selfhost::lower::isel — the x86_64 instruction selector over the shared IR (`docs/ir.md` §6,
-## `docs/ir-slice-1.md` §4, slice 1d). DEV ONLY: it is reached through the `alatyr x86-ir` verb alone
-## (owner decision D5, Codegen §3.1), never by the default x86 emission, which is unchanged until the
-## flip (`docs/ir.md` §7.4, slice 9).
+## `docs/ir-slice-1.md` §4, slice 1d). Since the slice-9 flip (`docs/ir.md` §7.4, #980) it is the
+## DEFAULT x86 emission; `alatyr x86-legacy` bypasses it and `alatyr x86-ir` spells it out (owner
+## decision D5, Codegen §3.1: a verb, never an environment switch).
 ##
 ## A function the IR builder BUILT and the verifier accepted is emitted from its IR here instead of by
 ## `emit_fn`; every other function keeps its legacy emission (owner decision D7). The selector is
@@ -853,8 +853,8 @@ sx_fn := fn(in out sb : rt::StrBuf, x : SxX, d : Decl, in out a : rt::Arena) -> 
   true
 }
 
-## The hook in `emit_program`'s declaration loop, reached only when the `x86-ir` verb asked for IR
-## selection (`lower::set_x86_ir_select`): emit declaration `di` from the shared IR when the builder builds it, the verifier accepts it and this selector selects
+## The hook in `emit_program`'s declaration loop, reached whenever IR selection is on (the default since
+## the slice-9 flip; `alatyr x86-legacy` clears it, `lower::clear_x86_ir_select`): emit declaration `di` from the shared IR when the builder builds it, the verifier accepts it and this selector selects
 ## every op. Answers whether it did; on false nothing was written and the caller emits the declaration
 ## the legacy way.
 pub x86_isel_try := fn(decls : ptr(rt::Vec), di : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) -> bool {
