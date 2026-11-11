@@ -691,8 +691,10 @@ if [ "$xd_st_rc" != 0 ] || [ "$xd_rc" != 0 ] || [ "$(grep -cE '^xbackend diff: p
 fi
 
 # The x86 DIFFERENTIAL of the shared IR (`docs/ir.md` §7.1 rule 5, IR slice 1d). Every corpus program
-# with a function the IR builds and `src/lower/isel.al` selects is built and run through the default x86
-# path and through the `alatyr x86-ir` dev verb, and the two exits and stdouts are compared. Each
+# with a function the IR builds and `src/lower/isel.al` selects is built and run through the legacy x86
+# emitter and through the IR selector — the default path and a dev verb, `x86-ir` before the x86 flip
+# and `x86-legacy` after it; ir_diff.sh asks the compiler which, and refuses a side that is not what
+# its name says — and the two exits and stdouts are compared. Each
 # disagreement is a triage item (an IR bug, or a legacy x86 bug the IR answers per the specification —
 # #872's narrowing, the signedness family), so a single row does not set `fail`; the COUNT of them is
 # ratcheted below by scripts/ir_diff.baseline, and growth does. A broken self-test, an unreadable run, or a proof line that walked no

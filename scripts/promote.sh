@@ -5,8 +5,9 @@
 #
 # A promotion is the AGENTS.md "Reproducibility" procedure: bump the version FIRST, build Stage1 (the
 # committed seed builds the tree), Stage2 (Stage1 builds it), Stage3 (Stage2 builds it), require the
-# three to emit the same GAS once the `.L<N>` and `.Lra<N>_<k>` labels are normalized and Stage2 ==
-# Stage3 in the binary, read the normalized seed-to-Stage1 delta, copy STAGE2 over seed/alatyr, append
+# three to emit the same GAS once the compiler-numbered labels (`.L<N>`, `.Lra<N>_<k>`, `.Lxir<N>_<k>`;
+# scripts/gas_normalize.sh) are normalized and Stage2 == Stage3 in the binary, read the normalized
+# seed-to-Stage1 delta, copy STAGE2 over seed/alatyr, append
 # the evidence to seed/HISTORY.md, re-run scripts/fixpoint.sh on the promoted tree, and commit the
 # whole thing atomically. It was done by hand, eleven times in two weeks and then not at all: five
 # `reseed-owed` issues waited, and the hand-kept CURRENT SEED block of seed/VERSION still says
@@ -63,8 +64,9 @@ version_after() {
     exit 1 }'
 }
 
-## normalize_gas < GAS -> GAS with the two label families renumbered away (`.Lra` first: it is also a `.L`)
-normalize_gas() { sed -E -e 's/\.Lra[0-9]+_[0-9]+/.LraN_K/g' -e 's/\.L[0-9]+/.LN/g'; }
+## normalize_gas < GAS -> GAS with the compiler-numbered label families (`.L<N>`, `.Lra<N>_<k>`,
+## `.Lxir<N>_<k>`) renumbered away. One implementation, shared with every other GAS comparison.
+. "$ROOT/scripts/gas_normalize.sh"
 
 ## converged G1 G2 G3 B2 B3 -> 0 when Stage1 == Stage2 == Stage3 in normalized GAS and Stage2 == Stage3
 ## in the binary; else 1, naming what differs. Stage1's BINARY is not compared: the stale seed assembled
@@ -249,7 +251,7 @@ cmd_prepare() {
   local hunks add del
   hunks="$(grep -c '^@@' "$P/delta.diff")"; add="$(grep -c '^+[^+]' "$P/delta.diff")"; del="$(grep -c '^-[^-]' "$P/delta.diff")"
   {
-    echo "seed -> Stage1 delta, normalized (.L<N>, .Lra<N>_<k>): $hunks hunks, $add added, $del removed"
+    echo "seed -> Stage1 delta, normalized (.L<N>, .Lra<N>_<k>, .Lxir<N>_<k>): $hunks hunks, $add added, $del removed"
     echo "line shapes (digits folded), most frequent first:"
     grep -E '^[+-][^+-]' "$P/delta.diff" | sed -E 's/[0-9]+/N/g' | sort | uniq -c | sort -rn | head -n 20
   } > "$P/delta.txt"
@@ -278,7 +280,7 @@ cmd_prepare() {
     echo "#"
     echo "# WHY: $OWED — the change whose emission the seed must carry, with its issue."
     echo "#"
-    echo "# THE DELTA (normalized .L<N> / .Lra<N>_<k>): $hunks hunks, $add added, $del removed. One sentence:"
+    echo "# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k>): $hunks hunks, $add added, $del removed. One sentence:"
     echo "# $OWED — read target/promote/delta.txt and delta.diff; a delta that resists one sentence is the"
     echo "# signal to STOP."
     echo "#"
@@ -382,6 +384,12 @@ self_test() {
   version_after 0.2.17 v0.2.18; chk "a malformed version is refused, not ordered" "$?" "2"
   got="$(printf '.L12:\n\tjmp .L7\n.Lra3_14:\n\tcall .Lra10_2\n\tmovq $123, %%rax\n' | normalize_gas | tr '\n' '|')"
   chk "normalization folds both label families and leaves other numbers" "$got" ".LN:|	jmp .LN|.LraN_K:|	call .LraN_K|	movq \$123, %rax|"
+  got="$(printf '.Lxir3_14:\n\tjne .Lxir3_2\n\tjmp .Lxir12_ret\n.Lxir12_ret:\n\tleaq .Lstr0_5(%%rip), %%rax\n\tmovq $77, %%rcx\n' | normalize_gas | tr '\n' '|')"
+  chk "normalization folds the IR selector's .Lxir labels and leaves the pool labels and immediates" "$got" ".LxirN_K:|	jne .LxirN_K|	jmp .LxirN_ret|.LxirN_ret:|	leaq .Lstr0_5(%rip), %rax|	movq \$77, %rcx|"
+  printf 'f:\n.Lxir1_4:\n\tjmp .Lxir1_ret\n' > "$d/x1"; printf 'f:\n.Lxir9_7:\n\tjmp .Lxir9_ret\n' > "$d/x2"
+  cmp -s <(normalize_gas < "$d/x1") <(normalize_gas < "$d/x2"); chk "two GAS files differing only in .Lxir numbering are the same" "$?" "0"
+  printf 'f:\n.Lxir9_7:\n\tjne .Lxir9_ret\n' > "$d/x2"
+  cmp -s <(normalize_gas < "$d/x1") <(normalize_gas < "$d/x2"); chk "a changed instruction beside .Lxir labels is still a difference" "$?" "1"
   printf 'a\n.L1:\n' > "$d/g1"; printf 'a\n.L9:\n' > "$d/g2"; printf 'a\n.L4:\n' > "$d/g3"; printf 'B' > "$d/b2"; printf 'B' > "$d/b3"
   converged "$d/g1" "$d/g2" "$d/g3" "$d/b2" "$d/b3" > /dev/null; chk "converged: the same GAS up to labels and the same Stage2/3 binary" "$?" "0"
   printf 'b\n.L1:\n' > "$d/g3"; got="$(converged "$d/g1" "$d/g2" "$d/g3" "$d/b2" "$d/b3")"; chk "Stage3 GAS that differs beyond labels is no convergence" "$?:$got" "1:  Stage2 and Stage3 GAS differ (normalized)"
