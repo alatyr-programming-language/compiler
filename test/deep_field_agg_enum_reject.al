@@ -1,8 +1,9 @@
-## build_reject — a deep-chain ENUM final field whole-assign (`o.mid.c = Col.G(42)`) must FAIL LOUD.
-## The nested str/enum FINAL-field access is unsupported END-TO-END — even the READ (`match o.mid.c`)
-## is not lowered by the self-host lower — so a whole-assign here can only produce garbage; the compiler
-## refuses it loudly rather than emit a silent (word-0-only / mis-staged) store. Flatten to a single hop
-## or bind the inner struct to a local. (The single-hop enum field write `s.c = Col.G(v)` works.)
+## A deep-chain ENUM final field whole-assign (`o.mid.c = Col.G(42)`) keeps its payload over both hops:
+## the `match` takes `Col.G(v)` and answers 42. The legacy x86 emitter lowered neither the store nor the
+## nested read (`match o.mid.c`), so it refused the program. aarch64, riscv64 and wasm answer 42
+## (#1022). Since the slice-9 flip (#980) x86_64 emits `main` from the shared IR and answers 42 too;
+## `alatyr x86-legacy` still refuses it. (`deep_field_agg_str_reject`, the str final field, stays a
+## refusal on both paths.) The name keeps the refusal's history.
 Col := enum { R(i64), G(i64) }
 Mid := struct { c : Col, x : i64 }
 Outer := struct { mid : Mid, tag : i64 }
@@ -11,3 +12,4 @@ main := fn() -> u64 {
   o.mid.c = Col.G(42)
   match o.mid.c { Col.R(v) => { return 0 }  Col.G(v) => { return u64(v) } }
 }
+## expect: run 42
