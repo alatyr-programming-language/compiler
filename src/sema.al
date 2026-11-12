@@ -11315,10 +11315,13 @@ sema_is_typeinfo_call := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
   }
   res
 }
-## Is `fb` the base of a comptime MEMBER COUNT — `typeinfo(T).n`, or `.len` of the `typeinfo(T).fields`
-## / `typeinfo(T).variants` table? #1260.
-sema_is_typeinfo_count := fn(fb : ptr(Expr), src : ptr(u8)) -> bool {
-  if sema_is_typeinfo_call(fb, src) { return true }
+## Is member `fname` of `fb` a comptime MEMBER COUNT? Exactly two shapes (#1260): `n` read directly
+## on `typeinfo(T)` (the `Array{elem, n : usize}` case, Stdlib appendix), and `len` of the
+## `typeinfo(T).fields` / `typeinfo(T).variants` table (a slice, `len : usize`). Nothing else —
+## `typeinfo(T).len` and `typeinfo(T).fields.n` are not counts and get no record here.
+sema_is_typeinfo_count := fn(fb : ptr(Expr), fname : str, src : ptr(u8)) -> bool {
+  if fname == "n" { return sema_is_typeinfo_call(fb, src) }
+  if fname != "len" { return false }
   match deref(fb) {
     Expr::Field(gb, gfs, gfl) => {
       gn := str_at((src + gfs), gfl)
@@ -11346,7 +11349,7 @@ sema_vty_builtin := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir
       ## reached the range-bound folder with no width, could not be judged (Comptime §2.6 owes a
       ## located diagnostic for a checked operation that fails), and folded `-1` as a signed word —
       ## an empty range, silently. D6: one source of types; `lower_layout::ct_bound_w` reads it back.
-      if (fname == "len" or fname == "n") and sema_is_typeinfo_count(fb, src) { return ir::vty_u(8) }
+      if sema_is_typeinfo_count(fb, fname, src) { return ir::vty_u(8) }
       if ir::spell_array(bsp) or (sema_spell_text(bsp) and lower_layout::arr_field_elem_span(src, bsp.s, bsp.n).n != 0) {
         if fname == "len" { return ir::vty_u(8) }
         return ir::vty_unknown()
