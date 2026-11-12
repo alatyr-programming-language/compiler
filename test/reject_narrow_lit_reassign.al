@@ -3,7 +3,7 @@
 ## was already refused; `x = 300` into the same `u8` place was ACCEPTED and the place then held 300 -
 ## "a literal outside the target type's range is a compile error (I11), never a silent wrap". Located at
 ## the assignment (line 10). Measured on main `aab6ce1a`: check rc 0, run rc 5 (`y == 300` held).
-main := fn() -> i64 {
+main := fn() -> u64 {
   mut x : u8 = 1
   x = 200
   if u64(x) != 200 { return 1 }

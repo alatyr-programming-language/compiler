@@ -3,7 +3,7 @@
 ## does. Measured on main `aab6ce1a`: check rc 0, run rc 7 - the field held 44.
 S := struct { f : u8 }
 
-main := fn() -> i64 {
+main := fn() -> u64 {
   mut s := S(f = 1)
   s.f = 200 + 100
   u64(s.f)
