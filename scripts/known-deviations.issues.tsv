@@ -3,8 +3,9 @@
 #
 # Columns, TAB-separated: issue number, rule not met (spec chapter and section, or decision ID),
 # observable difference, and `rows` when scripts/known-deviations.tsv names it or `none` when the
-# deviation has no fixture row (no program-visible value differs: the defect is in how the result is
-# reached). Every issue here must be open: scripts/land.sh PHASE 2 refuses a closed one, and
+# deviation has no fixture row: no program-visible value differs (the defect is in how the result is
+# reached), or the pinned revision's rule is not implemented yet and its issue carries the reproduction.
+# Every issue here must be open: scripts/land.sh PHASE 2 refuses a closed one, and
 # `scripts/fixture_expect.sh --issues-open` asks `gh` by hand. The gate holds the rest without network.
 3	Manifest appendix §3.2 (TOOL-12): a path naming no declaration is a Codegen-stage diagnostic raised before the linker	aarch64/riscv64: a program with no entry declaration is emitted and fails at link on the undefined entry symbol; wasm fails at assemble (x86_64 reaches `ld` too, inside the compiler)	rows
 511	Stdlib appendix §2.6; Comptime §5.5 (CT-9: componentwise equality)	wasm: `==` against a constructor operand compares the addresses of two scratch blocks and answers false for equal values	rows
@@ -51,3 +52,6 @@
 1380	Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: a module-local `@abi(syscall)` callee after a prelude `eq` call is emitted unqualified (`bl sys_mmap`), so the link fails	rows
 1567	Modules §2/§3; Declarations §7.1 (an initializer is evaluated with its own module's bindings)	a reference to a module const that shares its name with a const in another module folds the other binding: x86_64 crashes (SIGSEGV) on `X : u64 = m::X + 1` and answers 82 for 43; aarch64/riscv64/wasm answer 1 for 2	rows
 1399	Stdlib appendix §2.6; Comptime §5.5 (CT-9: componentwise equality); Overview §6 (code consistent with the normative lowering rules, per selected target)	twins: `==` with a call operand returning a multi-word enum by value answers wrongly (wasm: equal reads not equal; aarch64/riscv64: call against call compares the tag only)	rows
+1595	Grammar §4; Control Flow §8.1, §11 (SYN-11: `not` is a unary prefix at level 2)	`not a < b` parses as `not (a < b)`, so a numeric `not 255 < x` compiles and runs instead of being refused; `alatyr fmt` strips the parentheses of `not (a < b)`	none
+1610	Tooling §2.7 (TOOL-27: on a non-ISA backend `target.os`/`target.env` match no variant)	wat: `target.os` answers `linux` and `target.env` `gnu`, so `when target.os == Os.linux` folds true and a `match` without a default arm is accepted	none
+1634	Comptime §5.1; Stdlib appendix §4.1 (STD-12: `typeinfo(T).owning`)	`comptime if typeinfo(T).owning` is refused ("cannot fold this comptime condition"); the `Vec` release check is not guarded by it	none
