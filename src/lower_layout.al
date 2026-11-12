@@ -136,6 +136,184 @@ pub local_decl_assign := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : us
   r
 }
 
+## #1633 — a whole-value assignment `p = v` to an `out` / `in out` STRUCT or ENUM parameter. No legacy
+## emitter writes it back to the caller's place: aarch64, riscv64 and wasm answered the caller's old value
+## (2 where 42 is due), and x86_64 refused it only by accident (`require_reservation`'s slot-width
+## check). The shared IR declines it (`stmt Assign`), so every function holding one reaches a legacy
+## emitter, and each calls `refuse_inout_agg_whole_assign` at its entry: one located refusal, never a
+## wrong value (I11). The IR building the store lifts it. The match is by NAME, so a same-named local or
+## match binding that shadows the parameter is refused too: a refusal of a valid program, not a wrong value.
+## A parameter whose type is a type parameter (`in out p : T`) names no struct or enum here.
+pub refuse_inout_agg_whole_assign := fn(d : Decl, src : ptr(u8), decls : ptr(rt::Vec)) {
+  if not wa_any_agg_param(d.params_head, src, decls) { return }
+  mut at : Option(usize) = wa_stmts(d.body_stmts, d.params_head, src, decls)
+  match at {
+    Some(o) => {}
+    None => { if ir::expr_present(d.value) { at = wa_expr(d.value, d.params_head, src, decls) } }
+  }
+  match at {
+    Some(o) => {
+      ll_show_src_line(src, o)
+      panic("selfhost: a whole-value assignment to an `out` / `in out` struct or enum parameter is not lowered yet (the source line above): the backend would not write it back to the caller's place, so it is refused rather than answer the caller's old value (#1633). Assign its fields one by one.")
+    }
+    None => {}
+  }
+}
+## Does the list hold an `out` / `in out` parameter of a struct or enum type?
+wa_any_agg_param := fn(ph : Option(ptr(mut Param)), src : ptr(u8), decls : ptr(rt::Vec)) -> bool {
+  mut p := ph
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if wa_agg_by_place(pm, src, decls) { return true }
+        p = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+wa_agg_by_place := fn(pm : Param, src : ptr(u8), decls : ptr(rt::Vec)) -> bool {
+  ast::param_by_place(pm) and (struct_decl_of(decls, src, pm.ts, pm.tl) >= 0 or enum_decl_of(decls, src, pm.ts, pm.tl) >= 0)
+}
+## Is `[s, s+n)` the name of such a parameter?
+wa_names_agg_param := fn(ph : Option(ptr(mut Param)), src : ptr(u8), decls : ptr(rt::Vec), s : usize, n : usize) -> bool {
+  mut p := ph
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, s, n) { return wa_agg_by_place(pm, src, decls) }
+        p = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+## The name offset of the first such assignment in statement list `h`, nested lists and the statement
+## lists inside expressions included.
+wa_stmts := fn(h : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), src : ptr(u8), decls : ptr(rt::Vec)) -> Option(usize) {
+  mut s : Option(ptr(mut Stmt)) = h
+  loop {
+    match s {
+      Some(sq) => {
+        r : Option(usize) = wa_stmt(sq, ph, src, decls)
+        match r {
+          Some(o) => { return r }
+          None => {}
+        }
+        s = ast::stmt_next(sq)
+      }
+      None => { break }
+    }
+  }
+  Option(usize).None
+}
+## The first of two answers that is present.
+wa_or := fn(x : Option(usize), y : Option(usize)) -> Option(usize) {
+  match x {
+    Some(o) => { x }
+    None => { y }
+  }
+}
+wa_opt := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), src : ptr(u8), decls : ptr(rt::Vec)) -> Option(usize) {
+  if ir::expr_present(e) { return wa_expr(e, ph, src, decls) }
+  Option(usize).None
+}
+wa_stmt := fn(h : ptr(mut Stmt), ph : Option(ptr(mut Param)), src : ptr(u8), decls : ptr(rt::Vec)) -> Option(usize) {
+  st := deref(stmt_p(Stmt, h))
+  match st {
+    Stmt::Assign(ns, nl, v, nx) => {
+      if ast::assign_is_reassign(src, ns, nl) and wa_names_agg_param(ph, src, decls, ns, nl) { return Option(usize).Some(ns) }
+      return wa_expr(v, ph, src, decls)
+    }
+    Stmt::While(c, b, nx) => { return wa_or(wa_expr(c, ph, src, decls), wa_stmts(b, ph, src, decls)) }
+    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { return wa_expr(fv, ph, src, decls) }
+    Stmt::Return(rv, nx) => { return wa_opt(rv, ph, src, decls) }
+    Stmt::If(c, th, el, nx) => { return wa_or(wa_expr(c, ph, src, decls), wa_or(wa_stmts(th, ph, src, decls), wa_stmts(el, ph, src, decls))) }
+    Stmt::Match(c, ah, nx) => { return wa_or(wa_expr(c, ph, src, decls), wa_arms(ah, ph, src, decls)) }
+    Stmt::For(fns, fnl, flo, fhi, fb, nx) => { return wa_or(wa_expr(flo, ph, src, decls), wa_or(wa_opt(fhi, ph, src, decls), wa_stmts(fb, ph, src, decls))) }
+    Stmt::DerefAssign(dpe, dval, nx) => { return wa_or(wa_expr(dpe, ph, src, decls), wa_expr(dval, ph, src, decls)) }
+    Stmt::IndexAssign(iab, iai, iav, nx) => { return wa_or(wa_expr(iab, ph, src, decls), wa_or(wa_expr(iai, ph, src, decls), wa_expr(iav, ph, src, decls))) }
+    Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, nx) => { return wa_or(wa_expr(ifb, ph, src, decls), wa_or(wa_expr(ifi, ph, src, decls), wa_expr(ifv, ph, src, decls))) }
+    Stmt::FieldPathAssign(fpp, fpv, nx) => { return wa_or(wa_expr(fpp, ph, src, decls), wa_expr(fpv, ph, src, decls)) }
+    Stmt::Loop(lb, nx) => { return wa_stmts(lb, ph, src, decls) }
+    Stmt::Break(bv, bd, nx) => { return wa_opt(bv, ph, src, decls) }
+    Stmt::Continue(cd, nx) => {}
+    Stmt::ExprStmt(e, nx) => { return wa_expr(e, ph, src, decls) }
+    Stmt::CompIf(cc, th, el, nx) => { return wa_or(wa_stmts(th, ph, src, decls), wa_stmts(el, ph, src, decls)) }
+    Stmt::CompFor(cvs, cvl, cisv, cb, nx) => { return wa_stmts(cb, ph, src, decls) }
+    Stmt::CompMatch(cm, ah, nx) => { return wa_arms(ah, ph, src, decls) }
+    Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { return wa_stmts(rb, ph, src, decls) }
+    Stmt::Unchecked(ub, nx) => { return wa_stmts(ub, ph, src, decls) }
+    Stmt::AllocWith(aa, ab, nx) => { return wa_or(wa_expr(aa, ph, src, decls), wa_stmts(ab, ph, src, decls)) }
+  }
+  Option(usize).None
+}
+wa_arms := fn(h : Option(ptr(mut Arm)), ph : Option(ptr(mut Param)), src : ptr(u8), decls : ptr(rt::Vec)) -> Option(usize) {
+  mut g : Option(ptr(mut Arm)) = h
+  loop {
+    match g {
+      Some(gq) => {
+        arm := deref(arm_p(gq))
+        mut r : Option(usize) = wa_stmts(arm.body_stmts, ph, src, decls)
+        if not ast::stmt_any(arm.body_stmts) { r = wa_opt(arm.body, ph, src, decls) }
+        match r {
+          Some(o) => { return r }
+          None => {}
+        }
+        g = arm.next
+      }
+      None => { break }
+    }
+  }
+  Option(usize).None
+}
+wa_args := fn(h : Option(ptr(mut Arg)), ph : Option(ptr(mut Param)), src : ptr(u8), decls : ptr(rt::Vec)) -> Option(usize) {
+  mut g : Option(ptr(mut Arg)) = h
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        r : Option(usize) = wa_expr(ga.e, ph, src, decls)
+        match r {
+          Some(o) => { return r }
+          None => {}
+        }
+        g = ga.next
+      }
+      None => { break }
+    }
+  }
+  Option(usize).None
+}
+wa_expr := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), src : ptr(u8), decls : ptr(rt::Vec)) -> Option(usize) {
+  match deref(e) {
+    Expr::Bin(op, l, r) => { return wa_or(wa_expr(l, ph, src, decls), wa_expr(r, ph, src, decls)) }
+    Expr::If(c, t, f) => { return wa_or(wa_expr(c, ph, src, decls), wa_or(wa_expr(t, ph, src, decls), wa_expr(f, ph, src, decls))) }
+    Expr::Match(c, ah) => { return wa_or(wa_expr(c, ph, src, decls), wa_arms(ah, ph, src, decls)) }
+    Expr::Call(cs, cl, na, ah) => { return wa_args(ah, ph, src, decls) }
+    Expr::StructLit(ss, sl, nf, fh) => { return wa_args(fh, ph, src, decls) }
+    Expr::EnumLit(es, el, vs, vl, np, eh) => { return wa_args(eh, ph, src, decls) }
+    Expr::ArrayLit(nel, ah) => { return wa_args(ah, ph, src, decls) }
+    Expr::Field(b, fs, fl) => { return wa_expr(b, ph, src, decls) }
+    Expr::AddrOf(p) => { return wa_expr(p, ph, src, decls) }
+    Expr::Deref(p) => { return wa_expr(p, ph, src, decls) }
+    Expr::Index(b, i) => { return wa_or(wa_expr(b, ph, src, decls), wa_expr(i, ph, src, decls)) }
+    Expr::Try(p) => { return wa_expr(p, ph, src, decls) }
+    Expr::Slice(b, lo, hi) => { return wa_or(wa_expr(b, ph, src, decls), wa_or(wa_opt(lo, ph, src, decls), wa_opt(hi, ph, src, decls))) }
+    Expr::Unchecked(p) => { return wa_expr(p, ph, src, decls) }
+    Expr::Bitcast(p, ts, tl) => { return wa_expr(p, ph, src, decls) }
+    Expr::Loop(lb) => { return wa_stmts(lb, ph, src, decls) }
+    ## A lambda's body is its own function, but it may name the parameter it captures, so it is walked.
+    Expr::Lambda(lk, lph, lrs, lrl, lb, lv) => { return wa_or(wa_stmts(lb, ph, src, decls), wa_opt(lv, ph, src, decls)) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::CompField | Expr::FnRef => {}
+  }
+  Option(usize).None
+}
+
 ## A typed pointer to the `Decl` record at rt-arena address `h` (the decls handle = the
 ## down-growing top-of-block slot `dnode` returns). Mirrors `lower::decl_at` (a 1-line leaf
 ## duplicated so this module is self-contained, like `streq` above). The decls vector now holds
