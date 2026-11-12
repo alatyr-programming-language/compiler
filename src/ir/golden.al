@@ -77,11 +77,14 @@ g_call_want := fn() -> str {
 
 ## Literal-only arithmetic is a comptime number (Types §2.3): folded exactly, then given the type its
 ## context gave the expression — never built literal by literal at that type (`128` is not an `i8`).
+## A result the type cannot hold is not folded, in any mode: `unchecked` does not change a constant
+## expression (Comptime §1.1). Sema does not reject `wrapped` yet (tracked separately), so it is built as
+## written, and the golden pins that the builder makes no wrapped constant of it.
 g_litfold_src := fn() -> str {
-  "## a literal-only `+ - *` is a comptime number: folded exactly, then typed by its context\nlow := fn() -> i8 { 0 - 128 }\nspan := fn() -> u64 { 3 * 7 + 21 }\n## inside `unchecked` it wraps at the context type\nwrapped := fn() -> u8 { unchecked (0 - 1) }\n"
+  "## a literal-only `+ - *` is a comptime number: folded exactly, then typed by its context\nlow := fn() -> i8 { 0 - 128 }\nspan := fn() -> u64 { 3 * 7 + 21 }\n## a result its type cannot hold is never folded, inside `unchecked` too: built as written\nwrapped := fn() -> u8 { unchecked (0 - 1) }\n"
 }
 g_litfold_want := fn() -> str {
-  "fn ig_litfold::low Built\nfn low() -> i8 s {\n  %0 = const.s i8 -128\n  ret %0\n}\nfn ig_litfold::span Built\nfn span() -> i64 u {\n  %0 = const.u i64 42\n  ret %0\n}\nfn ig_litfold::wrapped Built\nfn wrapped() -> i8 u {\n  unchecked {\n    %0 = const.u i8 255\n  }\n  ret %0\n}\nir: functions=3 built=3 notyet=0 sema_gaps=0 verify_failed=0\n"
+  "fn ig_litfold::low Built\nfn low() -> i8 s {\n  %0 = const.s i8 -128\n  ret %0\n}\nfn ig_litfold::span Built\nfn span() -> i64 u {\n  %0 = const.u i64 42\n  ret %0\n}\nfn ig_litfold::wrapped Built\nfn wrapped() -> i8 u {\n  unchecked {\n    %0 = const.u i8 0\n    %1 = const.u i8 1\n    %2 = ext.u i64 <- i8 %0\n    %3 = ext.u i64 <- i8 %1\n    %4 = sub.wrap.u i64 %2, %3\n    %5 = ext.u i8 <- i64 %4\n  }\n  ret %5\n}\nir: functions=3 built=3 notyet=0 sema_gaps=0 verify_failed=0\n"
 }
 
 ## Slice 2a (`docs/ir-slice-2.md`): a bodyless `@abi(syscall)` declaration is a trampoline of one
