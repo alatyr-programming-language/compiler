@@ -648,7 +648,7 @@ ib_bx_callv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : u
 ## (§3.8.4: never a default). A source literal is never negative; a negative one is a parser desugar
 ## (`~x` is `x ^ -1`) and takes its canonical form at the type. A source literal the type cannot hold
 ## is refused as a sema gap rather than wrapped (it can only arise inside a literal-only expression
-## `ib_lit_fold` could not fold).
+## `ib_lit_fold` could not fold, or a bitwise one whose value its type cannot hold, `ib_bx_bits`).
 ib_bx_num := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), v : i64) -> Option(VRegId) {
   k := ib_ty(bp, e)?
   cv := ib_canon(v, k)
@@ -729,9 +729,9 @@ ib_lit_step := fn(b : AstBin, x : i64, y : i64) -> Option(i64) {
       if x > IB_MUL_SAFE or x < 0 - IB_MUL_SAFE or y > IB_MUL_SAFE or y < 0 - IB_MUL_SAFE { return Option(i64).None }
       Option(i64).Some(x * y)
     }
-    ## Bitwise over two constants is EXACT in i64 — no overflow is possible, so no guard is needed and
-    ## the folded value is the value the operation produces at any width (`ib_canon` maps it to the
-    ## position's width afterwards, and `~x` = `x ^ -1` relies on exactly this). They were not folded, so
+    ## Bitwise over two constants is EXACT in i64 — no overflow is possible, so no guard is needed; each
+    ## caller decides whether its type holds the result (`ib_fold_fits`). `~x` (`x ^ -1`) never reaches this
+    ## step: `ib_lit_fold` refuses the desugar's negative `Num`. They were not folded, so
     ## `unchecked (10 | 0)` in a struct-literal field never folded and the function fell back to legacy
     ## (#966 pg5; see `ib_lit_fold`'s `Unchecked` arm).
     BBand => { Option(i64).Some(x & y) }
@@ -740,14 +740,22 @@ ib_lit_step := fn(b : AstBin, x : i64, y : i64) -> Option(i64) {
     BDiv | BRem | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { Option(i64).None }
   }
 }
-## The folded value `v` of the literal-only expression `e` as a constant of sema's type for `e`. In a
-## checked scope a value the type cannot hold is refused (sema accepts only one that fits, so this is a
-## gap); inside `unchecked` it wraps to the type's width (CG-7).
+## Does type `k` hold the exact value `v` of a FOLDED literal-only expression? A negative `v` fits only
+## a signed `k`, at 64 bits too. Not `ib_lit_fits`, which asks it of a `match` arm's literal and takes
+## any 64-bit pattern (a `u64` literal above `i64`'s range is carried negative).
+ib_fold_fits := fn(v : i64, k : IbKS) -> bool {
+  ib_canon(v, k) == v and (v >= 0 or sgn_eq(k.sg, Sgn.SgS))
+}
+## The folded value `v` of the literal-only `+ - *` expression `e` as a constant of sema's type for `e`.
+## In a checked scope a value the type cannot hold is refused (sema accepts only one that fits, so this
+## is a gap); inside `unchecked` it wraps to the type's width. That wrap is not conforming: Comptime §1.1
+## makes such a result a compile error, which sema does not report yet (#1627). It stays until then,
+## because refusing here sends the function to a fallback that stores the value unwrapped, outside its
+## type's range (#1612). The bitwise fold does not wrap (`ib_bx_bits`).
 ib_lit_const := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), v : i64) -> Option(VRegId) {
   k := ib_int_ty(bp, e)?
   cv := ib_canon(v, k)
-  fits := cv == v and (v >= 0 or sgn_eq(k.sg, Sgn.SgS))
-  if not fits and not ib_b_unch(bp) { return ib_no(bp, e, NyWhy.NwLit) }
+  if not ib_fold_fits(v, k) and not ib_b_unch(bp) { return ib_no(bp, e, NyWhy.NwLit) }
   d := ib_konst(bp, a, k, cv)
   Option(VRegId).Some(d)
 }
@@ -1084,12 +1092,19 @@ ib_zero_left_no_member := fn(b : AstBin, l : ptr(Expr), signed : bool) -> bool {
 }
 
 ## Bitwise `& | ^` on canonical operands is canonical at any width (V3), so it is emitted at its type.
-## A literal-only one is a comptime number (Types §2.3) and folds exactly as in `ib_bx_arith`: without
-## this, `a : u64 = 40 & 2` was built as a runtime `and` and x86_64 selected `andq $2` (#1611).
+## A literal-only one is a comptime number (Types §2.3) folded exactly: without this, `a : u64 = 40 & 2`
+## was built as a runtime `and` and x86_64 selected `andq $2` (#1611). Unlike `ib_lit_const` it never
+## wraps, inside `unchecked` too (Comptime §1.1): a value the type cannot hold is not folded, and the
+## expression is built as written by the code below, which is what ran before this fold existed. Such a
+## result needs an operand outside the type's range too (`& | ^` of in-range values stays in range).
+## Sema should reject it (#1627).
 ib_bx_bits := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
   fo : Option(i64) = ib_lit_fold(e)
   match fo {
-    Some(v) => { return ib_lit_const(bp, a, e, v) }
+    Some(v) => {
+      fk := ib_int_ty(bp, e)?
+      if ib_fold_fits(v, fk) { fd := ib_konst(bp, a, fk, v); return Option(VRegId).Some(fd) }
+    }
     None => {}
   }
   pr := ib_int_operands(bp, a, e, l, r)?
@@ -4311,7 +4326,8 @@ ib_global_addr := fn(bp : ptr(mut IbB), in out a : rt::Arena, di : usize, d : De
 ## context typed (`VcLit`: sema gives a call argument its parameter's type, not yet a struct literal's
 ## initializer its field's) takes the field's DECLARED type, the context Types §2.3 names: its exact
 ## value as a constant at `k`, refused in a checked scope when `k` cannot hold it (sema accepts only
-## one that fits) and wrapped inside `unchecked`. Anything else is `ib_value_at`.
+## one that fits) and wrapped inside `unchecked`, as `ib_lit_const` does and for the same reason
+## (#1627). Anything else is `ib_value_at`.
 ib_value_ctx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), k : IbKS) -> Option(VRegId) {
   t : VTy = sty_get(e)
   if vty_is_lit(t) and kty_is_int(k.ty) {
@@ -4329,9 +4345,8 @@ ib_value_ctx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), k : I
     fo : Option(i64) = ib_lit_fold(e)
     match fo {
       Some(v) => {
+        if not ib_fold_fits(v, k) and not ib_b_unch(bp) { return ib_no(bp, e, NyWhy.NwLit) }
         cv := ib_canon(v, k)
-        fits := cv == v and (v >= 0 or sgn_eq(k.sg, Sgn.SgS))
-        if not fits and not ib_b_unch(bp) { return ib_no(bp, e, NyWhy.NwLit) }
         d := ib_konst(bp, a, k, cv)
         return Option(VRegId).Some(d)
       }

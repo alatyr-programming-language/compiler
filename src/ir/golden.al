@@ -77,6 +77,8 @@ g_call_want := fn() -> str {
 
 ## Literal-only arithmetic is a comptime number (Types §2.3): folded exactly, then given the type its
 ## context gave the expression — never built literal by literal at that type (`128` is not an `i8`).
+## `wrapped` pins the builder's current wrap inside `unchecked`, which is not conforming: Comptime §1.1
+## makes that program a compile error. Once sema rejects it (#1627) this golden becomes a refusal.
 g_litfold_src := fn() -> str {
   "## a literal-only `+ - *` is a comptime number: folded exactly, then typed by its context\nlow := fn() -> i8 { 0 - 128 }\nspan := fn() -> u64 { 3 * 7 + 21 }\n## inside `unchecked` it wraps at the context type\nwrapped := fn() -> u8 { unchecked (0 - 1) }\n"
 }
