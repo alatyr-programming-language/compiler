@@ -8739,6 +8739,8 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   ## (a call to it is routed to the external symbol by `a64_emit_bl_target`). Skipping the body also
   ## avoids a bogus local label colliding with the external symbol at link.
   if extern_symbol(src, d.name_start, d.name_len).n != 0 { return }
+  ## #1633: a whole `p = v` into an `out` / `in out` struct or enum parameter is refused, never dropped.
+  lower_layout::refuse_inout_agg_whole_assign(d, src, decls)
   fname := str_at((src + d.name_start), d.name_len)
   isgen := a64_fn_is_generic(d.params_head, src, a)
   ## GENERICS (§8 mono): a generic fn emits NO standalone body — each instance is emitted separately.
