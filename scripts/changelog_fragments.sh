@@ -14,7 +14,8 @@
 #   - a fragment's NAME is `<issue>-<slug>.md`: the issue number the entry cites first, then a slug of
 #     lower-case letters, digits and single hyphens. changelog.d/README.md is the one other file;
 #   - a fragment's BODY is one or more `- ` bullets in CHANGELOG.md's style, each continuation line
-#     indented two spaces: no blank line, no heading, no conflict marker, a final newline;
+#     indented two spaces or more (a nested list item and its own continuation go deeper, as in the
+#     released sections): no blank line, no heading, no conflict marker, a final newline;
 #   - an ADDITION rule against the merge base, like the strict forms: a line the tree adds inside
 #     CHANGELOG.md's `## Unreleased` is refused. A deletion passes, and so does a promotion, which
 #     empties the section. A rewritten Unreleased bullet is an added line too: delete the old one and
@@ -45,7 +46,7 @@ frag_body_ok() {
        /^(<<<<<<<|=======|>>>>>>>|\|\|\|\|\|\|\|)/ { print "line " NR " is a conflict marker"; bad = 1; exit }
        /^[[:space:]]*$/ { print "line " NR " is blank"; bad = 1; exit }
        /^#/ { print "line " NR " is a heading"; bad = 1; exit }
-       !/^- [^ ]/ && !/^  [^ ]/ { print "line " NR " is neither a `- ` bullet nor a two-space continuation"; bad = 1; exit }
+       !/^- [^ ]/ && !/^  +[^ ]/ { print "line " NR " is neither a `- ` bullet nor a continuation indented two spaces or more"; bad = 1; exit }
        END { exit bad }' "$1"
 }
 
@@ -167,6 +168,12 @@ self_test() {
   chk "plant: a conflict marker in a fragment is refused" "$(run)" "1:1"
   mk; printf -- '- x\ncontinued flush\n' > "$d/t/$FRAG_DIR_REL/12-fix.md"
   chk "plant: an unindented continuation is refused" "$(run)" "1:1"
+  mk; printf -- '- x\n   three spaces is a continuation too\n' > "$d/t/$FRAG_DIR_REL/12-fix.md"
+  chk "control: a three-space continuation is still a continuation" "$(run)" "0:0"
+  mk; printf -- ' - x\n' > "$d/t/$FRAG_DIR_REL/12-fix.md"
+  chk "plant: a fragment that opens indented is refused" "$(run)" "1:1"
+  mk; printf -- '- **A (#12).** It:\n  - one level;\n    - two levels,\n      continued.\n' > "$d/t/$FRAG_DIR_REL/12-fix.md"
+  chk "control: a list nested two levels deep, with its continuation, is clean" "$(run)" "0:0"
   mk; printf -- '- x' > "$d/t/$FRAG_DIR_REL/12-fix.md"
   chk "plant: a fragment with no final newline is refused" "$(run)" "1:1"
   mk; printf -- '- x\n' > "$d/t/$FRAG_DIR_REL/12-fix.md"; mkdir "$d/t/$FRAG_DIR_REL/13-dir.md"
