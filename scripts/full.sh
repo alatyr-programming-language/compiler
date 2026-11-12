@@ -87,7 +87,119 @@ EOF
   echo "ok   full gate self-test: the red-gate stage summary skips dump-failed=/verify-failed= counters (#1491)"
 }
 
+## PARTS (#1568). The stages after FIXPOINT fall into four parts that share nothing but the compiler
+## under test (Stage1 built by the seed, which each part without E2E rebuilds after FIXPOINT, as E2E does
+## for the serial run), so `.github/workflows/gate.yml` runs them as four parallel jobs, each on its own
+## runner, and the authoritative verdict is `scripts/full_parts.sh --aggregate`: GREEN only when every
+## part ran exactly its stages and went GREEN. With ALATYR_FULL_PART unset (the merge queue on omen, a
+## lane's own run) every stage runs in order, as before. Every part runs the cheap pre-build stages and
+## FIXPOINT itself: fixpoint is on the critical path either way, and a compiler built in another job
+## would be an input this job never gated. This table is the ONE place that says which stage belongs to
+## which part. A stage it does not name refuses the gate, and the aggregate refuses a stage that ran
+## twice or not at all. Dependencies decide the grouping: fmt-corpus uses e2e's Stage1 snapshot, and
+## fixture-expect and xbackend read the corpus manifest's observed walk.
+FULL_PART_TABLE='e2e e2e
+e2e fmt-corpus
+e2e idiom
+e2e pilots
+corpus corpus-manifest
+corpus fixture-expect
+corpus axis
+corpus xbackend
+corpus brand-census
+corpus ptrint-census
+corpus ptrint-gate
+corpus seed-forms
+ir ir-verifier
+ir sign-census
+ir strict-typed
+ir ir-diff
+sweeps sweeps
+sweeps progen
+sweeps container-matrix'
+FULL_PART="${ALATYR_FULL_PART:-}"
+FULL_PART_RAN=""
+
+## full_part_runs STAGE -> 0 when STAGE runs in this invocation (every stage when no part is chosen), and
+## records that it ran. A stage the table does not name sets fail and does not run.
+## full_refused / full_refused_end -> the head and tail of a refusal before any stage ran. In part mode a
+## refusal is that part's verdict, `--- full part <p>: REFUSED … ---`, so the run keeps one `*** FULL GATE`
+## line (the aggregate's) even when every part refuses (#1570 review N4).
+full_refused() { if [ -n "$FULL_PART" ]; then printf -- '--- full part %s: REFUSED' "$FULL_PART"; else printf '*** FULL GATE: REFUSED'; fi; }
+full_refused_end() { if [ -n "$FULL_PART" ]; then printf -- '---'; else printf '***'; fi; }
+
+full_part_runs() {
+  local owner
+  owner="$(printf '%s\n' "$FULL_PART_TABLE" | awk -v s="$1" '$2 == s { print $1 }')"
+  if [ -z "$owner" ]; then
+    echo "  FAIL full parts: stage '$1' is in no part of FULL_PART_TABLE (scripts/full.sh, #1568)"
+    fail=1; return 1
+  fi
+  [ -z "$FULL_PART" ] || [ "$owner" = "$FULL_PART" ] || return 1
+  FULL_PART_RAN="${FULL_PART_RAN:+$FULL_PART_RAN,}$1"
+  [ -z "$FULL_PART" ] || full_part_mark "$1"
+  return 0
+}
+
+## full_part_mark [NEXT] -> in part mode, name the stage that just ended in FULL_PART_RED when it set
+## `fail`, then start NEXT clean. Only the verdicts read `fail`, so clearing it between stages changes
+## nothing but the attribution; FULL_PART_ANY keeps the OR. A red before the first part stage (the
+## pre-build stages, FIXPOINT) is named `before-parts`. Several stages print only a parenthetical on
+## stdout, so without this a red part could not name its cause (#1570 review N2).
+full_part_mark() {
+  if [ "$fail" != 0 ]; then
+    FULL_PART_RED="${FULL_PART_RED:+$FULL_PART_RED,}${_fp_cur:-before-parts}"; FULL_PART_ANY=1
+  fi
+  fail=0; _fp_cur="${1:-}"
+}
+
+## full_failed_stages -> stdout: the first failure-shaped line of each stage log THIS run wrote. `fail=1`
+## is set at ~60 sites and most print only a parenthetical note, so a red gate was undiagnosable from its
+## own log: five PRs were refused overnight on one base with every echoed stage clean and no cause named
+## (#1447). A line beginning `ok` is a planted negative test reporting itself, so it stays out.
+full_failed_stages() {
+  local found=0 slog off
+  echo "  stages that failed (from the per-stage logs of this run):"
+  while IFS= read -r slog; do
+    [ -n "$slog" ] || continue
+    off=$(grep -E "$_FULL_STAGE_FAIL_RE" "$slog" 2>/dev/null | grep -vE '^[[:space:]]*ok[[:space:]]' | head -1)
+    [ -n "$off" ] || continue
+    printf '    %-28s %s\n' "$(basename "$slog" .log)" "${off:0:150}"
+    found=$((found + 1))
+  done < <(find "$LOGDIR" -maxdepth 1 -name 'full_*.log' -newermt "@$gate_started_epoch" 2>/dev/null | sort)
+  [ "$found" = 0 ] && echo "    NO per-stage log carries a failure line — the cause is in this script's"
+  [ "$found" = 0 ] && echo "    own output above, or a stage wrote no log at all."
+  return 0
+}
+
+## full_part_verdict -> the verdict of ONE part, then exit. It prints `--- full part <p>: …` and never a line
+## containing `*** FULL GATE`, which only the aggregate may print (scripts/full_parts.sh): every reader takes
+## the one `*** FULL GATE` line, so a part's green cannot be read as the gate's.
+full_part_verdict() {
+  local v n
+  full_part_mark
+  fail="${FULL_PART_ANY:-0}"
+  echo "full part: $FULL_PART ran=$FULL_PART_RAN"
+  echo "full part: $FULL_PART red=${FULL_PART_RED:-}"
+  [ "$FULL_PART" = sweeps ] && echo "full part: sweeps STATUS=${sw_status:-UNKNOWN}"
+  for v in ce_cover sp_cover wa_cover cf_cover sf_cover cm_cover fc_line ig_line sfr_cover irv_cover st_cover ird_cover pg_cover cmx_cover pl_cover; do
+    n="${!v:-}"; [ -n "$n" ] && printf 'full part cover: %s %s\n' "${v%_*}" "$n"
+  done
+  if [ "$fail" != 0 ]; then
+    echo "--- full part $FULL_PART: FAILURES ---"
+    full_failed_stages
+  else
+    echo "--- full part $FULL_PART: GREEN ---"
+  fi
+  exit "$fail"
+}
+
+if [ "${1:-}" = "--parts" ]; then printf '%s\n' "$FULL_PART_TABLE"; exit 0; fi
 _full_gate_filter_guard || exit $?
+if [ -n "$FULL_PART" ] && ! printf '%s\n' "$FULL_PART_TABLE" | awk -v p="$FULL_PART" '$1 == p { f = 1 } END { exit !f }'; then
+  echo "FAIL: ALATYR_FULL_PART='$FULL_PART' names no part of FULL_PART_TABLE (scripts/full.sh --parts)" >&2
+  exit 2
+fi
 if [ "${1:-}" = "--self-test" ]; then
   _full_gate_filter_self_test
   _full_gate_filter_self_test_rc=$?
@@ -166,6 +278,13 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/changelog_fragments.sh" --self-test > /dev/null
   _full_changelog_fragments_self_test_rc=$?
   [ "$_full_changelog_fragments_self_test_rc" = 0 ] || exit "$_full_changelog_fragments_self_test_rc"
+  # The parts' aggregate (#1568): a missing, red, partial or doubled part must read red, and every stage
+  # guard of this file must name exactly one table stage. Planted part logs drive it; controls stay green.
+  _full_parts_self_test_out="$(bash "$ROOT/scripts/full_parts.sh" --self-test 2>&1)"
+  _full_parts_self_test_rc=$?
+  [ "$_full_parts_self_test_rc" = 0 ] || printf '%s\n' "$_full_parts_self_test_out" | grep -E '^(FAIL|full parts self-test)'
+  [ "$_full_parts_self_test_rc" = 0 ] && printf '%s\n' "$_full_parts_self_test_out" | tail -1
+  [ "$_full_parts_self_test_rc" = 0 ] || exit "$_full_parts_self_test_rc"
   # The scripted seed promotion's deciders (#1129): the version order, the label normalization, the
   # convergence verdict, the bump, the owed-marker and atomic-set refusals and the cadence. Measured:
   # a convergence check that ignores the binary, or a cadence that reads gh's silence as "not due",
@@ -231,15 +350,15 @@ ce_rc=$?
 cat "$CE_LOG"
 ce_cover="$(grep -E "^corpus enum: index=" "$CE_LOG" | tail -1 | sed 's/^corpus enum: //')"
 if [ "$ce_rc" != 0 ]; then
-  echo "*** FULL GATE: REFUSED before any stage ran — the git index and the worktree do not name the"
+  echo "$(full_refused) before any stage ran — the git index and the worktree do not name the"
   echo "    same .al corpus (see above). The oracle stages and the executing stages would describe"
-  echo "    different trees, and a GREEN verdict from this run would be meaningless. ***"
+  echo "    different trees, and a GREEN verdict from this run would be meaningless. $(full_refused_end)"
   exit 1
 fi
 # A check that printed no counts cannot be told apart from one that enumerated nothing.
 if [ -z "$ce_cover" ]; then
-  echo "*** FULL GATE: REFUSED — scripts/corpus_enum_check.sh printed no 'index=' coverage line, so"
-  echo "    what it compared is unknown. ***"
+  echo "$(full_refused) — scripts/corpus_enum_check.sh printed no 'index=' coverage line, so"
+  echo "    what it compared is unknown. $(full_refused_end)"
   exit 1
 fi
 
@@ -342,6 +461,22 @@ bash scripts/fixpoint.sh > "$FP_LOG" 2>&1
 grep -iE "TOOL-1 FIXPOINT|FAIL" "$FP_LOG"
 grep -q "TOOL-1 FIXPOINT: seed == Stage1 == Stage2" "$FP_LOG" || { echo "  (fixpoint NOT green — a reseed change needs the 3-stage check; see \"Reproducibility\" in AGENTS.md and docs/rationale/reproducibility.md)"; fail=1; }
 
+# Run in order, E2E rebuilds Stage1 from the seed into target/debug/alatyr and every later stage measures
+# that binary; FIXPOINT leaves Stage2 there. A part without E2E rebuilds Stage1 the same way here, so it
+# measures the compiler the serial gate measures, also on a FIXPOINT-red tree, where the two binaries
+# differ (#1570 review N1). The rule follows the table, not part names.
+if [ -n "$FULL_PART" ] && ! printf '%s\n' "$FULL_PART_TABLE" | awk -v p="$FULL_PART" '$1 == p && $2 == "e2e" { f = 1 } END { exit !f }'; then
+  echo "### PART $FULL_PART: Stage1 from the seed (what E2E leaves for the serial gate's later stages) ###"
+  rm -f target/alatyr target/alatyr.s target/alatyr.o target/debug/alatyr target/debug/alatyr.s target/debug/alatyr.o
+  seed/alatyr build package.al > "$LOGDIR/full_part_stage1.log" 2>&1
+  _fp_s1_rc=$?
+  if [ "$_fp_s1_rc" != 0 ] || [ ! -x target/debug/alatyr ]; then
+    echo "  FAIL part $FULL_PART: the seed did not build Stage1 into target/debug/alatyr (rc=$_fp_s1_rc, $LOGDIR/full_part_stage1.log)"
+    fail=1
+  fi
+fi
+
+if full_part_runs e2e; then
 echo "### E2E ###"
 bash scripts/e2e.sh > "$E2E_LOG" 2>&1
 grep -iE "\*\*\* e2e" "$E2E_LOG"
@@ -352,6 +487,8 @@ grep -q "\*\*\* e2e: all green \*\*\*" "$E2E_LOG" || { echo "  FAILURES:"; grep 
 # whose x86_64 column is exactly what an x86 emitter refactor moves. It reuses the compiler this gate
 # already built (fixpoint.sh leaves Stage2 in target/debug/alatyr, and the script refuses one older than
 # src/|lib/), logs into this checkout's own target/, and prints its own gate-of-the-gate.
+fi
+if full_part_runs corpus-manifest; then
 echo "### CORPUS MANIFEST ###"
 bash scripts/corpus_manifest.sh --check > "$CM_LOG" 2>&1
 cm_rc=$?
@@ -380,6 +517,8 @@ fi
 # ORDER-DEPENDENT on the E2E step: fmt_corpus.sh honours $ALATYR and fails loud when it is absent
 # (it falls back to target/debug/alatyr only when $ALATYR is unset), so a reordering breaks visibly
 # rather than measuring a different compiler than the one the row counts above belong to.
+fi
+if full_part_runs fmt-corpus; then
 echo "### FMT CORPUS (fmt arbiter: test/ programs + src/ & lib/ modules) ###"
 FC_LOG="$LOGDIR/full_fmt_corpus.log"
 ALATYR="$ROOT/target/e2e/cc/bin/alatyr" bash scripts/fmt_corpus.sh --jobs 8 > "$FC_LOG" 2>&1
@@ -407,6 +546,8 @@ fi
 # scripts/idiom.baseline, and it runs its own gate-of-the-gate first (five planted defects that every
 # rule must fire on, and a clean twin that none may fire on) — so a green here means the detector was
 # alive when it said so.
+fi
+if full_part_runs idiom; then
 echo "### IDIOM (duplicate-decision detector: a decision outside scripts/idiom.baseline fails) ###"
 IG_LOG="$LOGDIR/full_idiom.log"
 bash scripts/idiom_gate.sh > "$IG_LOG" 2>&1
@@ -440,6 +581,8 @@ fi
 # stage cannot see: the gate runs with no GitHub credentials (queue.sh strips them), so
 # `scripts/land.sh` PHASE 2 asks `gh` before a landing and refuses a closed one. Its self-test runs
 # under `full.sh --self-test`.
+fi
+if full_part_runs fixture-expect; then
 echo "### FIXTURE EXPECT (directive vs this walk and known deviations; registration) ###"
 FE_LOG="$LOGDIR/full_fixture_expect.log"
 bash scripts/fixture_expect.sh --gate --observed "$ROOT/target/corpus-manifest/observed.manifest" > "$FE_LOG" 2>&1
@@ -453,6 +596,8 @@ fi
 # The AXIS gate (#1128: no report-only stage). A ratchet over scripts/axis.baseline in both directions:
 # an empty coverage cell not in the baseline, or a baseline line whose cell is filled, fails. Its
 # self-test (a planted fixture fills one empty cell and is removed) runs first. No compiler needed.
+fi
+if full_part_runs axis; then
 echo "### AXIS (coverage cells: an empty cell outside scripts/axis.baseline, or a stale line, fails) ###"
 AX_LOG="$LOGDIR/full_axis.log"
 { bash scripts/axis_gate.sh --self-test && bash scripts/axis_gate.sh; } > "$AX_LOG" 2>&1
@@ -469,6 +614,8 @@ fi
 # which must produce rows of the named class, and legal programs, which must produce none while
 # proving by their `sinks=` count that they were visited. It uses the Stage2 compiler the fixpoint
 # step leaves at target/debug/alatyr and writes only under target/brand_census.
+fi
+if full_part_runs brand-census; then
 echo "### BRAND CENSUS (planted: crossings must count, legal programs must not) ###"
 BC_LOG="$LOGDIR/full_brand_census.log"
 bash scripts/brand_census.sh planted > "$BC_LOG" 2>&1
@@ -492,6 +639,8 @@ fi
 # `planted` must fire in both directions on a program built to trip it, put exactly one row inside a
 # grant, and give ZERO rows on the explicit twin. Same Stage2 compiler, writes only under
 # target/ptrint_census.
+fi
+if full_part_runs ptrint-census; then
 echo "### PTRINT CENSUS (planted: seam crossings must count, explicit bitcasts must not) ###"
 PC_LOG="$LOGDIR/full_ptrint_census.log"
 bash scripts/ptrint_census.sh planted > "$PC_LOG" 2>&1
@@ -513,6 +662,8 @@ fi
 # against scripts/ptrint_census.baseline, and prints `op-cmp=UNMEASURED` while the OP-CMP hook is
 # unproven — a zero from a hook that has never fired is silence, and this line must not let it read as
 # cleanliness. Same Stage2 compiler; writes only under target/ptrint_census. ~5 min at jobs=8.
+fi
+if full_part_runs ptrint-gate; then
 echo "### PTRINT CENSUS GATE (places and blind-lib ratcheted; unproven classes reported UNMEASURED) ###"
 # Prove the ratchet can refuse BEFORE trusting it to hold: a ratchet nobody has seen fail is a ratchet
 # that has never been checked, and this stage's whole claim is that growth becomes impossible.
@@ -538,6 +689,8 @@ fi
 # fixes a form turns this stage red, with the workaround sites to clean up, and the entry retires. A
 # `tree` row is a tree defect that a workaround comment blamed on the seed. It must still fail in the
 # tree, so the fix that lands for it has to move the row to `seed`.
+fi
+if full_part_runs seed-forms; then
 echo "### SEED FORMS (registry: the seed must still miscompile each form, the tree must not) ###"
 SFR_LOG="$LOGDIR/full_seed_forms.log"
 SEED_FORMS_TREE="$ROOT/target/debug/alatyr" bash scripts/seed_forms_check.sh > "$SFR_LOG" 2>&1
@@ -562,6 +715,8 @@ fi
 # directories (a clean one that must pass, one per failure class that must fail by name), and the
 # census refuses to count anything until `alatyr ir --self-test` has shown every verifier rule refusing
 # its planted violation. Inert: nothing emitted depends on the IR before slice 1c.
+fi
+if full_part_runs ir-verifier; then
 echo "### IR VERIFIER (every built function of test/, lib/, src/ must verify; planted refusals must fail) ###"
 IRV_LOG="$LOGDIR/full_ir_verify.log"
 bash scripts/ir_census.sh --self-test > "$IRV_LOG" 2>&1
@@ -595,6 +750,8 @@ fi
 # itself only reports, but the record keys it reads are what 1e will switch x86's queries onto, so its
 # planted programs run here: a generic instance's operand is unknown with no context and typed in its
 # instance; a `comptime for` member's and a pack element's are typed only in their own iteration.
+fi
+if full_part_runs sign-census; then
 echo "### SIGN CENSUS (self-test, then the corpus ratchet: signedness from sema, not from shape) ###"
 SC_LOG="$LOGDIR/full_sign_census_selftest.log"
 ALATYR="$ROOT/target/debug/alatyr" bash scripts/sign_census.sh --self-test > "$SC_LOG" 2>&1
@@ -633,6 +790,8 @@ fi
 # extraction, with the compiler copied into its target/ so it reads the base lib/) and refuses a new
 # implicit crossing, or a new null sentinel counting explicit and implicit forms together. Its planted
 # proof runs first: a new `p != 0` must add a row and its explicit twin must not, or the count is blind.
+fi
+if full_part_runs strict-typed; then
 echo "### STRICT FORMS (typed: implicit pointer crossings and null sentinels) ###"
 ST_LOG="$LOGDIR/full_strict_typed.log"
 bash scripts/strict_forms_check.sh --typed-self-test > "$ST_LOG" 2>&1
@@ -663,6 +822,8 @@ fi
 # row shape only the report used to show was a quiet answer on a HW-DEFINED or RAW-ESCAPE path,
 # which leaves every other count; the ratchet now holds `hw-defined=` and `raw-escape=` on their own
 # (a wasm `unchecked_div_zero` trap turned quiet 7: report exit 0, old ratchet exit 0, now FAIL 8 -> 9).
+fi
+if full_part_runs xbackend; then
 echo "### CROSS-BACKEND (xbackend_diff: RATCHET, growth gates) ###"
 XB_LOG="$LOGDIR/full_xbackend.log"
 : > "$XB_LOG"
@@ -699,6 +860,8 @@ fi
 # #872's narrowing, the signedness family), so a single row does not set `fail`; the COUNT of them is
 # ratcheted below by scripts/ir_diff.baseline, and growth does. A broken self-test, an unreadable run, or a proof line that walked no
 # program with a selected function does: "found nothing" must be told apart from "compared nothing".
+fi
+if full_part_runs ir-diff; then
 echo "### IR DIFF (x86 vs x86-via-IR: the disagree count is RATCHETED by scripts/ir_diff.baseline) ###"
 IRD_LOG="$LOGDIR/full_ir_diff.log"
 bash scripts/ir_diff.sh --self-test > "$IRD_LOG" 2>&1
@@ -767,6 +930,8 @@ else
   fi
 fi
 
+fi
+if full_part_runs sweeps; then
 echo "### SWEEPS (conditional) ###"
 bash scripts/sweeps.sh "${SWEEP_ARGS[@]}" 2>&1 | tee "$LOGDIR/full_sweeps.log"
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
@@ -794,6 +959,8 @@ fi
 # the criterion it holds. It does NOT exit non-zero on HANG, so the summary is read here too: a
 # backend that hangs is not a green night either. No summary line means nothing ran — unknown, so a
 # failure, by the same rule as every other coverage line in this script.
+fi
+if full_part_runs progen; then
 echo "### PROGEN (seeded generator: one program, four backends, no expected value needed) ###"
 PG_LOG="$LOGDIR/full_progen.log"
 python3 scripts/progen.py self-test > "$PG_LOG" 2>&1
@@ -883,6 +1050,8 @@ fi
 # rows. A TRAP (the checked-failure `ud2`, rc 132) is a recorded outcome; a segfault, another signal or
 # a timeout is a CRASH (#1277). The self-test runs first: a planted wrong read must come out WRONG and a
 # planted segfault CRASH, each turning the rule red, or a green matrix below would mean nothing.
+fi
+if full_part_runs container-matrix; then
 echo "### CONTAINER MATRIX (x86_64: WRONG/CRASH/REFUSED held by scripts/container-matrix.deviations.tsv) ###"
 CMX_LOG="$LOGDIR/full_container_matrix.log"
 cmx_cover="NOT RUN"
@@ -921,6 +1090,8 @@ fi
 # the tree compiler, runs a library's `alatyr test` (every `@test` must report ok) and a program to
 # its stated exit value. Its self-test plants a wrong check first: a stage that cannot fail is not
 # evidence.
+fi
+if full_part_runs pilots; then
 echo "### PILOTS (pilot packages: library tests and programs, x86_64) ###"
 PL_LOG="$LOGDIR/full_pilots.log"
 ALATYR="$ROOT/target/debug/alatyr" bash scripts/pilots.sh --self-test > "$PL_LOG" 2>&1
@@ -940,24 +1111,13 @@ else
 fi
 [ "$pl_rc" = 0 ] || { echo "  FAIL pilots: rc=$pl_rc (log: $PL_LOG)"; fail=1; }
 
+fi
+
+[ -z "$FULL_PART" ] || full_part_verdict  # a part prints its own verdict and exits (#1568)
+
 if [ "$fail" != 0 ]; then
   echo "*** FULL GATE: FAILURES ***"
-  # Name the stage. `fail=1` is set at ~60 sites here and most print only a parenthetical note,
-  # so a red gate was undiagnosable from its own log: five PRs were refused overnight on one base
-  # with every echoed stage clean and no cause named (#1447). The evidence already exists — each
-  # stage writes $LOGDIR/full_<stage>.log. Scan THIS run's logs and print the first offending line
-  # of each. A line beginning `ok` is a planted negative test reporting itself, so it stays out.
-  echo "  stages that failed (from the per-stage logs of this run):"
-  found=0
-  while IFS= read -r slog; do
-    [ -n "$slog" ] || continue
-    off=$(grep -E "$_FULL_STAGE_FAIL_RE" "$slog" 2>/dev/null | grep -vE '^[[:space:]]*ok[[:space:]]' | head -1)
-    [ -n "$off" ] || continue
-    printf '    %-28s %s\n' "$(basename "$slog" .log)" "${off:0:150}"
-    found=$((found + 1))
-  done < <(find "$LOGDIR" -maxdepth 1 -name 'full_*.log' -newermt "@$gate_started_epoch" 2>/dev/null | sort)
-  [ "$found" = 0 ] && echo "    NO per-stage log carries a failure line — the cause is in this script's"
-  [ "$found" = 0 ] && echo "    own output above, or a stage wrote no log at all."
+  full_failed_stages
 elif [ "$sw_status" = "RAN" ]; then
   echo "*** FULL GATE: GREEN (sweeps RAN) ***"
   echo "    corpus enum:     $ce_cover"

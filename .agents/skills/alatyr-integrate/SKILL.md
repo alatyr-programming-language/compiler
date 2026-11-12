@@ -495,8 +495,9 @@ fi
 ```
 
 The same gate may run remotely: push the merged object (and later the object with its oracle commit)
-to a `gate/<name>` branch and `.github/workflows/gate.yml` runs `scripts/full.sh --force-sweeps` on a
-GitHub-hosted x86_64 runner. Read its `gate.log` artifact — the verdict is the `*** FULL GATE` line
+to a `gate/<name>` branch and `.github/workflows/gate.yml` runs `scripts/full.sh --force-sweeps` on
+GitHub-hosted x86_64 runners, as four parallel parts aggregated into one verdict (#1568). Read its
+`gate-<sha>` artifact's `gate.log` — the verdict is the `*** FULL GATE` line
 for that exact commit, never the check's colour — and `explain.txt` for the joined transitions. When
 they are the predicted ones, the run's `corpus.manifest` artifact IS the regenerated oracle. With a
 predicted delta, the hand-run PHASE 6a below makes it the oracle commit with no second run. Without
