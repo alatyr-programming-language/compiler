@@ -11037,9 +11037,16 @@ check_accept comptime_for_range
 ## `-1` as a signed word: the loop unrolled ZERO times and the program answered 40 silently (measured
 ## on main d13a1a98: compile rc 0, run rc 40). The control is the same fold that stays in range and
 ## must still unroll — it answers 42 on both trees, so a guard that fires there is a wrong reject.
-build_reject_has issue1260_comptime_bound_underflow "overflows its type"
+## The controls use only spec-defined members: a struct's `fields.len`, and `n` on an array's
+## TypeInfo (`Array{elem, n : usize}` is the only case with an `n`, Stdlib appendix).
+build_reject_has issue1260_comptime_bound_underflow 'this range bound overflows its type'
+build_reject_has issue1260_comptime_bound_underflow 'for the wrap. at line 11 in '
 run issue1260_comptime_bound_controls 42
 check_accept issue1260_comptime_bound_controls
+## The `unchecked (…)` spelling of the same underflow is the defined wrap, 2^64 − 1 (Comptime §2.6):
+## not the overflow reject but the unroll-budget refusal (Comptime §2.2), never an empty loop.
+build_reject_has issue1260_comptime_bound_unchecked_wrap 'budget exhausted'
+build_reject_has issue1260_comptime_bound_unchecked_wrap 'never a silent partial result. at line 10 in '
 ## #672 CONTROL — the NEIGHBOURING bound spellings. This fixture's bounds are a literal (`0 .. 6`,
 ## `2 .. 5`) and a bare module const (`0 .. N`); both already answered 42 on all four backends before
 ## the const-arithmetic fold landed and still do, which is what makes the four-backend rows of
