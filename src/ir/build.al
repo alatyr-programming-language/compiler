@@ -1616,13 +1616,13 @@ ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param,
       ## #1026: an `out` / `in out` aggregate parameter is bound by a PLACE argument and passed the
       ## address of that place itself, never a copy (Functions §2.3, §4.1): a struct or enum local, a
       ## field of one, a place through a pointer (`deref(q)`), or an aggregate parameter passed on by
-      ## reference. Sema has already required the argument to be a mutable place of the parameter's type.
-      if ib_param_by_place(pm) {
+      ## reference (`ib_by_place_arg`). Anything else is refused below, never copied.
+      if ast::param_by_place(pm) {
         pso : Option(IbSt) = ib_agg_named(bp, a, pm.ts, pm.tl)
         match pso {
           Some(pst) => {
             if ib_st_is_enum(bp, pst) or ib_struct_word(bp, a, pst) {
-              plo : Option(IbPlace) = ib_place_of(bp, a, ae)
+              plo : Option(IbPlace) = ib_by_place_arg(bp, a, ae)
               match plo {
                 Some(pl) => { if pl.di == pst.di { return Option(VRegId).Some(ib_place_ptr(bp, a, pl)) } }
                 None => {}
@@ -1659,9 +1659,34 @@ ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param,
   }
   ib_no(bp, e, NyWhy.NwOutside)
 }
-## Whether parameter `pm` is `out` / `in out` (`ast::Param.pmode` 2): bound to the caller's place by
-## reference (Functions §2.1). The builder takes it for an aggregate type only; a scalar one stays refused.
-ib_param_by_place := fn(pm : Param) -> bool { pm.pmode == 2 }
+## The place an `out` / `in out` aggregate argument `ae` names: a struct or enum local, a by-reference
+## parameter passed on, `deref(q)`, or a field of one of those. A bare POINTER name is not a place of the
+## parameter's type (Functions §2.3: "a mutable place of the matching type"; the one-level auto-deref of
+## Types §4.5 belongs to a receiver, a field and an index, not to a plain argument), so it answers None
+## and the call is refused rather than silently dereferenced (#1026 review N2; the checker's acceptance is
+## #1635). A UFCS receiver `q.m()`, where that auto-deref is due, is refused too: the legacy path takes it.
+ib_by_place_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, ae : ptr(Expr)) -> Option(IbPlace) {
+  match deref(ae) {
+    Expr::Var(s, n) => {
+      bd : IbBind = ib_lookup(bp, s, n)
+      match bd {
+        BdAgg(fr, sd, ts, tn) => { return ib_place_name(bp, a, s, n) }
+        BdRef(rv, rsd, rts, rtn) => { return ib_place_name(bp, a, s, n) }
+        BdVal(v, vts, vtn) => {}
+        BdMem(mf, mns) => {}
+        BdArr(af, ats, atn) => {}
+        BdNone => {}
+      }
+    }
+    Expr::Deref(pe) => { return ib_place_of(bp, a, ae) }
+    Expr::Field(fb, ffs, ffl) => { return ib_place_of(bp, a, ae) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  Option(IbPlace).None
+}
 ## The address of place `pl`, as a `ptr` vreg.
 ib_place_ptr := fn(bp : ptr(mut IbB), in out a : rt::Arena, pl : IbPlace) -> VRegId {
   base : VRegId = if opndk_is_frame(pl.bk) { ib_addr_obj(bp, a, FrameId(usize(pl.bv))) } else { VRegId(usize(pl.bv)) }
@@ -4691,7 +4716,7 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
             sto : Option(IbSt) = ib_agg_named(bp, a, pm.ts, pm.tl)
             match sto {
               Some(st) => {
-                if pm.pmode != 0 and not ib_param_by_place(pm) { why.c = Construct.CSigParamMode; return BuildOut.Refused }
+                if pm.pmode != 0 and not ast::param_by_place(pm) { why.c = Construct.CSigParamMode; return BuildOut.Refused }
                 if ib_is_taken(bp, pm.ns, pm.nl) { why.c = Construct.CSigParamTaken; return BuildOut.Refused }
                 if not ib_st_is_enum(bp, st) {
                   wo : Option(Construct) = ib_struct_word_why(bp, a, st)

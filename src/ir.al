@@ -1710,7 +1710,7 @@ pub construct_name := fn(c : Construct) -> str {
 ## spells that null. It cannot yet be written as a `match` over `Option(ptr(T))`: matching such a parameter
 ## or local and dereferencing its payload SIGSEGVs on x86_64 today, on `main` and on the frozen seed (#789).
 ## null-ok: blocked by #789 — Decl.value, Stmt::Return's and Stmt::Break's value are null when absent.
-expr_present := fn(e : ptr(Expr)) -> bool { unchecked bitcast(usize, e) != 0 }
+pub expr_present := fn(e : ptr(Expr)) -> bool { unchecked bitcast(usize, e) != 0 }
 
 ## A source offset, unless it names no source position (a span a desugar synthesized, #523).
 real_span := fn(s : usize) -> Option(u64) {

@@ -8156,6 +8156,8 @@ emit_wat_str_data_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : rt::StrB
 emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), decls : ptr(rt::Vec)) {
   is_ext := wat_extern_symbol(src, d.name_start, d.name_len).n != 0
   if is_ext { return }
+  ## #1633: a whole `p = v` into an `out` / `in out` struct or enum parameter is refused, never dropped.
+  lower_layout::refuse_inout_agg_whole_assign(d, src, decls)
   isgen := wat_fn_is_generic(d.params_head, src, a)
   WAT_SUB_GPS = 0
   WAT_SUB_GPL = 0

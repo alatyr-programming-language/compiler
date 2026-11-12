@@ -7771,6 +7771,8 @@ rv_emit_call_target := fn(in out sb : rt::StrBuf, decls : ptr(rt::Vec), src : pt
 emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), decls : ptr(rt::Vec)) {
   ## an `@extern` fn (Modules §7.2) is a bodyless import — emit nothing (calls route to the external symbol).
   if extern_symbol(src, d.name_start, d.name_len).n != 0 { return }
+  ## #1633: a whole `p = v` into an `out` / `in out` struct or enum parameter is refused, never dropped.
+  lower_layout::refuse_inout_agg_whole_assign(d, src, decls)
   fname := str_at((src + d.name_start), d.name_len)
   isgen := rv_fn_is_generic(d.params_head, src, a)
   ## GENERICS (§8 mono): a generic fn emits NO standalone body — each instance is emitted separately.
