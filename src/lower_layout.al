@@ -993,13 +993,17 @@ pub field_index := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize,
 pub arr_field_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
   if tl < 2 { return LSpan(s = 0, n = 0) }
   if str_at((src + ts), 1) != "[" { return LSpan(s = 0, n = 0) }
-  mut es := ts + 1
-  while es < ts + tl and str_at((src + es), 1) == " " { es = es + 1 }
-  mut ee := es
+  mut ee := ts + 1
   while ee < ts + tl and str_at((src + ee), 1) != ";" and str_at((src + ee), 1) != "]" { ee = ee + 1 }
-  mut et := ee
-  while et > es and str_at((src + et - 1), 1) == " " { et = et - 1 }
-  LSpan(s = es, n = et - es)
+  span_trim(src, ts + 1, ee)
+}
+## `[s, e)` without its leading and trailing spaces.
+span_trim := fn(src : ptr(u8), s : usize, e : usize) -> LSpan {
+  mut b := s
+  while b < e and str_at((src + b), 1) == " " { b = b + 1 }
+  mut t := e
+  while t > b and str_at((src + t - 1), 1) == " " { t = t - 1 }
+  LSpan(s = b, n = t - b)
 }
 
 ## ─── docs/ir-slice-1.md §8.4 (e4): the `comptime for` header and array-length scans ──────────
@@ -4346,6 +4350,13 @@ pub is_view_type := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
     i = i + 1
   }
   true
+}
+## The element type written in a slice view annotation, `[T]` or `Slice(T)`, trimmed of spaces.
+## `{0,0}` for any other type, `str` included: its element is not spelled (#1576).
+pub view_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
+  if tl > 2 and str_at((src + ts + tl - 1), 1) == "]" and is_view_type(src, ts, tl) { return arr_field_elem_span(src, ts, tl) }
+  if tl > 7 and str_at((src + ts), 6) == "Slice(" and str_at((src + ts + tl - 1), 1) == ")" { return span_trim(src, ts + 6, ts + tl - 1) }
+  LSpan(s = 0, n = 0)
 }
 
 ## The BYTE SIZE of a TYPE spelled `[ts, ts+tl)` — the scalar widths PLUS the §7 view pair (16).
