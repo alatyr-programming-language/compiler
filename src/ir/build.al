@@ -660,7 +660,13 @@ ib_bx_num := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), v : i64)
 ## The exact value of a literal-only `+ - *` expression, when it and every step of it fit `i64` (a
 ## comptime number is exact, Types §2.3; a value this cannot represent is not folded, and its literals
 ## are then built at their own types, where `ib_bx_num` refuses one that does not fit).
-ib_lit_fold := fn(e : ptr(Expr)) -> Option(i64) {
+ib_lit_fold := fn(e : ptr(Expr)) -> Option(i64) { ib_lit_fold_in(e, false) }
+## `ib_lit_fold`, which with `bits_nonneg` also refuses a bitwise step over a negative operand anywhere
+## in the tree, nested ones too (`((0 - 1) & 255) | 0`). What `& | ^` give over a negative operand is
+## open (Comptime §1.1, spec#91), so the bitwise fold (`ib_bx_bits`) must not choose a value for it: the
+## expression is built as written, as before that fold existed (#1612). Without the flag the step keeps
+## its two's-complement reading, which the `+ - *` fold over a bitwise operand already used (#1627).
+ib_lit_fold_in := fn(e : ptr(Expr), bits_nonneg : bool) -> Option(i64) {
   match deref(e) {
     Expr::Num(v, s, n) => {
       if v < 0 { return Option(i64).None }
@@ -670,10 +676,10 @@ ib_lit_fold := fn(e : ptr(Expr)) -> Option(i64) {
       bo : Option(AstBin) = ib_bin_of(op)
       match bo {
         Some(b) => {
-          lo : Option(i64) = ib_lit_fold(l)
-          ro : Option(i64) = ib_lit_fold(r)
+          lo : Option(i64) = ib_lit_fold_in(l, bits_nonneg)
+          ro : Option(i64) = ib_lit_fold_in(r, bits_nonneg)
           match lo {
-            Some(x) => { match ro { Some(y) => { ib_lit_step(b, x, y) }; None => { Option(i64).None } } }
+            Some(x) => { match ro { Some(y) => { ib_lit_step_in(b, x, y, bits_nonneg) }; None => { Option(i64).None } } }
             None => { Option(i64).None }
           }
         }
@@ -687,7 +693,7 @@ ib_lit_fold := fn(e : ptr(Expr)) -> Option(i64) {
     ## block and asked each `Num` its OWN type — which is `VcLit`, no context having reached it — and the
     ## function was refused as `sema-gap literal` and fell back to the legacy emitter, which carries its
     ## own silent wrong value (#967; progen seeds 2074802946 and 2074803225, #966).
-    Expr::Unchecked(inner) => { ib_lit_fold(inner) }
+    Expr::Unchecked(inner) => { ib_lit_fold_in(inner, bits_nonneg) }
     Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf
       | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
       | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Call | Expr::Bitcast | Expr::Loop => { Option(i64).None }
@@ -739,6 +745,15 @@ ib_lit_step := fn(b : AstBin, x : i64, y : i64) -> Option(i64) {
     BBxor => { Option(i64).Some(x ^ y) }
     BDiv | BRem | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { Option(i64).None }
   }
+}
+## `ib_lit_step`, refusing with `bits_nonneg` a bitwise step over a negative operand (`ib_lit_fold_in`).
+ib_lit_step_in := fn(b : AstBin, x : i64, y : i64, bits_nonneg : bool) -> Option(i64) {
+  bk : AstBinK = ib_bin_kind(b)
+  match bk {
+    BkBits => { if bits_nonneg and (x < 0 or y < 0) { return Option(i64).None } }
+    BkLogic | BkCmp | BkArith => {}
+  }
+  ib_lit_step(b, x, y)
 }
 ## Does type `k` hold the exact value `v` of a FOLDED literal-only expression? A negative `v` fits only
 ## a signed `k`, at 64 bits too. Not `ib_lit_fits`, which asks it of a `match` arm's literal and takes
@@ -1097,9 +1112,11 @@ ib_zero_left_no_member := fn(b : AstBin, l : ptr(Expr), signed : bool) -> bool {
 ## wraps, inside `unchecked` too (Comptime §1.1): a value the type cannot hold is not folded, and the
 ## expression is built as written by the code below, which is what ran before this fold existed. Such a
 ## result needs an operand outside the type's range too (`& | ^` of in-range values stays in range).
-## Sema should reject it (#1627).
+## Sema should reject it (#1627). Nor does it fold a tree with a bitwise step over a negative operand,
+## whose value the spec leaves open (Comptime §1.1, spec#91; `ib_lit_fold_in`): that too is built as
+## written, as before.
 ib_bx_bits := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
-  fo : Option(i64) = ib_lit_fold(e)
+  fo : Option(i64) = ib_lit_fold_in(e, true)
   match fo {
     Some(v) => {
       fk := ib_int_ty(bp, e)?
