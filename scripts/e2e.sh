@@ -5563,6 +5563,12 @@ check_ra_const_fold() {
   if grep -Eq '^[[:space:]]*(andq|orq|xorq) ' "$asm"; then
     echo "FAIL ra_const_fold: immediate bitwise op survived scalar-IR folding"; fail=1; return
   fi
+  ## The shared-IR selection folds a literal-only `& | ^` too (Types §2.3, #1611): the x86_64 flip
+  ## (#980) makes this the default emission.
+  "$CC" x86-ir "$src" > "$asm" 2>/dev/null || { echo "FAIL ra_const_fold: x86-ir emit"; fail=1; return; }
+  if grep -Eq '^[[:space:]]*(andq|orq|xorq) ' "$asm"; then
+    echo "FAIL ra_const_fold: immediate bitwise op survived the shared-IR selection (x86-ir)"; fail=1; return
+  fi
   "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL ra_const_fold: build"; fail=1; return; }
   _e2e_exec "$out" >/dev/null 2>&1; got=$?
   if _e2e_runtime_failure "ra_const_fold" "$got"; then return; fi
