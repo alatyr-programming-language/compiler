@@ -1506,7 +1506,6 @@ wasm	test/query_unselected_branch.al	run/134	#1193
 wasm	test/ra_agg_parent_slice.al	run/134	#1188
 wasm	test/ra_codec_next_usize.al	run/134	#1188
 wasm	test/ra_codec_slice_cast.al	run/134	#1188
-wasm	test/random_prng.al	run/134	#1190
 wasm	test/range_int_match.al	run/134	#1190
 wasm	test/reject_agg_compare.al	run/134	#1192
 wasm	test/reject_comptime_for_budget_const.al	run/134	#1232
