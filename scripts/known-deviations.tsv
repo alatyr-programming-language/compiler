@@ -223,6 +223,8 @@ aarch64	test/issue1254_deque_subword_call_deref.al	run/133	#1200
 aarch64	test/issue1254_deque_subword_slot.al	run/133	#1200
 aarch64	test/issue1255_hashmap_subword_growth.al	run/133	#1200
 aarch64	test/issue1256_generic_ret_arg.al	run/133	#1193
+aarch64	test/issue1260_comptime_bound_unchecked_wrap.al	run/133	#1232
+aarch64	test/issue1260_comptime_bound_underflow.al	run/133	#1232
 aarch64	test/issue1274_view_in_range.al	run/133	#1187
 aarch64	test/issue1287_for_array_param.al	run/133	#1203
 aarch64	test/issue1302_container_elem_enum.al	run/133	#1200
@@ -772,6 +774,8 @@ riscv64	test/issue1254_deque_subword_call_deref.al	run/133	#1200
 riscv64	test/issue1254_deque_subword_slot.al	run/133	#1200
 riscv64	test/issue1255_hashmap_subword_growth.al	run/133	#1200
 riscv64	test/issue1256_generic_ret_arg.al	run/133	#1193
+riscv64	test/issue1260_comptime_bound_unchecked_wrap.al	run/133	#1232
+riscv64	test/issue1260_comptime_bound_underflow.al	run/133	#1232
 riscv64	test/issue1274_view_in_range.al	run/133	#1187
 riscv64	test/issue1287_for_array_param.al	run/133	#1184
 riscv64	test/issue1302_container_elem_enum.al	run/133	#1200
@@ -1323,6 +1327,8 @@ wasm	test/issue1254_deque_subword_call_deref.al	run/134	#1186
 wasm	test/issue1254_deque_subword_slot.al	run/134	#1186
 wasm	test/issue1255_hashmap_subword_growth.al	run/134	#1186
 wasm	test/issue1256_generic_ret_arg.al	run/134	#1193
+wasm	test/issue1260_comptime_bound_unchecked_wrap.al	run/134	#1232
+wasm	test/issue1260_comptime_bound_underflow.al	run/134	#1232
 wasm	test/issue1274_view_in_range.al	run/134	#1190
 wasm	test/issue1287_for_array_param.al	run/134	#1184
 wasm	test/issue1302_container_elem_enum.al	run/134	#1186

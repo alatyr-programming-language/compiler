@@ -11302,6 +11302,38 @@ sema_spell_arm_binds := fn(sc : ptr(Expr), am : Arm, decls : ptr(rt::Vec), src :
     }
   }
 }
+## Does `e` call the comptime type query `typeinfo(T)`? The one answer to that question in sema, so a
+## caller never re-spells the callee text.
+sema_is_typeinfo_call := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+  mut res := false
+  match deref(e) {
+    Expr::Call(cs, cl, na, ah) => { if na >= 1 and str_at((src + cs), cl) == "typeinfo" { res = true } }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  res
+}
+## Is member `fname` of `fb` a comptime MEMBER COUNT? Exactly two shapes (#1260): `n` read directly
+## on `typeinfo(T)` (the `Array{elem, n : usize}` case, Stdlib appendix), and `len` of the
+## `typeinfo(T).fields` / `typeinfo(T).variants` table (a slice, `len : usize`). Nothing else —
+## `typeinfo(T).len` and `typeinfo(T).fields.n` are not counts and get no record here.
+sema_is_typeinfo_count := fn(fb : ptr(Expr), fname : str, src : ptr(u8)) -> bool {
+  if fname == "n" { return sema_is_typeinfo_call(fb, src) }
+  if fname != "len" { return false }
+  match deref(fb) {
+    Expr::Field(gb, gfs, gfl) => {
+      gn := str_at((src + gfs), gfl)
+      if (gn == "fields" or gn == "variants") and sema_is_typeinfo_call(gb, src) { return true }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Call | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  false
+}
 ## The value types of the builtin parts no declaration spells: a view's `len` is a `usize` and its
 ## `ptr` a pointer (the `Slice(T)` pair, Stdlib appendix §3.5), an array's `len` a `usize`, an element
 ## of a byte view a `u8` (`str` is `[u8]`, Types §7), and `size(T)` / `align(T)` a `usize` (Types
@@ -11311,6 +11343,13 @@ sema_vty_builtin := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir
     Expr::Field(fb, fs, fl) => {
       bsp : ir::TySpell = sema_spell_norm(sema_sty_spell_get(fb), decls, src)
       fname := str_at((src + fs), fl)
+      ## #1260 — `typeinfo(T).n` and the `.len` of `typeinfo(T).fields` / `.variants` are a `usize`:
+      ## the Stdlib appendix types a slice's `len` as `usize` and `n` counts the same table. Sema
+      ## recorded NONE of them, so a `comptime for` bound such as `0 .. typeinfo(P).fields.len - 4`
+      ## reached the range-bound folder with no width, could not be judged (Comptime §2.6 owes a
+      ## located diagnostic for a checked operation that fails), and folded `-1` as a signed word —
+      ## an empty range, silently. D6: one source of types; `lower_layout::ct_bound_w` reads it back.
+      if sema_is_typeinfo_count(fb, fname, src) { return ir::vty_u(8) }
       if ir::spell_array(bsp) or (sema_spell_text(bsp) and lower_layout::arr_field_elem_span(src, bsp.s, bsp.n).n != 0) {
         if fname == "len" { return ir::vty_u(8) }
         return ir::vty_unknown()
