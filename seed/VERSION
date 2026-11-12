@@ -54,7 +54,7 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 current-seed-sha256: b4a30699ba1b33a23ecb027862bc4ee49a4b10897c9c6bd3871e80fc20726df9
 current-seed-version: 0.2.24
 #
-# spec-pin: 1.9.0 (tag v1.9.0, spec commit 60bf006)
+# spec-pin: 1.10.0 (tag v1.10.0, spec commit 624f476)
 #
 # `spec-pin` is the SPECIFICATION revision this tree is answerable to — a DIFFERENT axis from
 # `current-seed-version` above, which is the compiler's own version and moves on a seed promotion and
