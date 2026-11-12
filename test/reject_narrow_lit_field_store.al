@@ -4,7 +4,7 @@
 ## main `aab6ce1a`: check rc 0, run rc 7 (`s.f == 44` held).
 S := struct { f : u8 }
 
-main := fn() -> i64 {
+main := fn() -> u64 {
   mut s := S(f = 1)
   s.f = 255
   if u64(s.f) != 255 { return 1 }
