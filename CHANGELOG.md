@@ -134,6 +134,8 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.3.0 — 2026-11-13
+
 - **A generic call's struct or enum result can be passed straight on (#1256).** `same(mk(S1, x), y)`
   and `same(vec::at(S1, ptr(v), i), y)` crashed: the first returned word was handed over as the
   argument's address. The result is now staged in a block and its address passed. A `-> T` instance at
@@ -315,6 +317,73 @@ under `## Unreleased`. The entries already there stay until the next release.
   instead of answering wrongly. Two operands neither of which is classified (two `if`s whose branches
   are locals, two call-result fields) still compare the first word only, and some valid shapes are now
   refused; both are tracked in #1558.
+- **x86_64 emits from the shared IR by default (#980).** Every function the IR builder builds, the
+  verifier accepts and the selector selects is now emitted from the IR on every x86 surface, the
+  compiler's own build included; the rest keep the legacy emitter. The twins already did. Programs the
+  legacy emitter refused or answered wrongly now run and answer what aarch64, riscv64 and wasm answer:
+  a struct variable or enum stored into a deep field (42), a `@packed` struct inside a plain one (20),
+  two same-named locals of different types in different scopes (109, #406). A `match` whose value is
+  no variant now traps instead of yielding -1 (#1579). Functions the builder does not yet build keep
+  the legacy emitter and its answers: an array copied from a by-value array parameter or a struct's
+  array field (#937), and range slices over `[u16; N]`-style arrays handed to a callee (#1514).
+  `alatyr x86-legacy <file>` emits with the legacy emitter alone; `alatyr x86-ir` still works and
+  spells out the default. A function the IR verifier refuses is a located internal error (exit 70) on
+  the default surface, as it was under `x86-ir`.
+- **A `comptime for` bound that subtracts past zero from a `typeinfo` member count is refused (#1260).**
+  `comptime for i in 0 .. typeinfo(P).fields.len - 4` with three fields unrolled **zero** times and the
+  program ran on, answering 40 where a diagnostic was due. `typeinfo(P).fields` is `[Field]` and a
+  slice's `len` is `usize` (Stdlib appendix), so `3 - 4` is a checked unsigned subtraction that
+  overflows, and Comptime §2.6 makes a checked operation that fails during comptime evaluation a located
+  compile-time diagnostic that never materializes a wrapped value. Sema recorded no type for the member
+  count, so the range-bound folder could not judge the operation and folded `-1` as a signed word. Sema
+  now records `usize` for `typeinfo(T).n` and for the `len` of `typeinfo(T).fields` and
+  `typeinfo(T).variants`, and the folder judges the bound through it. The program is refused with
+  `this range bound overflows its type … at line 11`; spell the wrap `unchecked (…)` to get it.
+  Measured: on `main` the fixture compiles and answers 40; with the fix it is refused, while the
+  in-range controls (`0 .. typeinfo(P).fields.len - 1` unrolling twice, `0 .. typeinfo(P).fields.len`
+  three times, and an array instance's `typeinfo(T).n - 1` twice) answer 42 on both trees — a guard
+  that fired there would be a wrong reject. The `unchecked (typeinfo(P).fields.len - 4)` spelling folds
+  to the wrapped 2^64 − 1 and is refused by the unroll budget (Comptime §2.2); on `main` it too unrolled
+  zero times and answered 40. Sema types exactly these two shapes: `n` read directly on `typeinfo(T)`,
+  and `len` of its `fields` / `variants` table.
+- **The container matrix tells a crash from a trap (#1277).** Only the checked-failure `ud2` (rc 132)
+  is a `TRAP`; a segfault, any other signal, a timeout or a stray exit code is now `CRASH <rc>`, held
+  like `WRONG`. At main `cf159743` this exposes 17 crash cells, all segfaults, now rows under #987
+  (10), #1256 (5) and #1608 (2); a planted segfault is proved to turn the gate red.
+- **The container matrix covers every container #1124 names (#1278).** It adds `omap` (key and value),
+  `oset`, `map`, `strmap`, `string` and `strbuf`: 50 cells, 428 in all. At main `cf159743`
+  the 8 new cells that fail are rows under #1244 (5), #1250 (1) and #1308 (2), and the self-test fails
+  if a named container has no cells.
+- **A changelog entry is a file of its own, `changelog.d/<issue>-<slug>.md` (#1566).** Contributors
+  no longer add a line under `## Unreleased`. Each entry is a new file, so two PRs never conflict over
+  this file, and `scripts/promote.sh` releases the fragments with the version. The full gate now
+  refuses a line added under `## Unreleased`: a PR opened before this change moves its bullet into
+  a fragment at its next rebase. No compiler behaviour changes.
+- **The GitHub gate runs as four parallel parts with one verdict (#1568).** A `gate/**` push now
+  runs `scripts/full.sh` once per part (`full.sh --parts`), each with its own fixpoint, and a
+  `verdict` job aggregates them with `scripts/full_parts.sh`. The run log and the `gate-<sha>`
+  artifact's `gate.log` still carry exactly one gate verdict line and one `xbackend diff:` line;
+  a part prints `--- full part <part>: … ---`, which is not a verdict. Download `gate-<sha>` for the
+  verdict and `gate-<sha>-<part>` for a part's per-stage logs. The omen merge queue and a plain
+  `full.sh` run are unchanged. No compiler behaviour changes.
+- **aarch64, riscv64 and wasm run a slice view local taken from a fixed array (#1576, first step).**
+  `s : Slice(u64) = xs[1..4]` over a fixed-array local, with literal bounds, then `t := s`, `t.len` and
+  `t[i]`, trapped on the three non-x86 backends. The shared IR now
+  builds such a view as the two-word `{ptr, len}` pair (Types §7) and checks every index against the
+  runtime length. Passing a view to a call, returning one, a runtime bound, and `str` still fall back.
+- **`alatyr aarch64` compiles for the aarch64 machine model it emits (#1578).** The verb published no
+  model, so `target.*` in sema and in `comptime if` answered x86_64 while the emitter wrote aarch64: a
+  `when target.arch == Arch.aarch64` declaration was checked as absent but emitted, and a
+  `comptime if` on `target.os` or `target.env` ran into a `brk #0` trap (exit 133). The verb now
+  publishes `Machine.Linux(arch = Arch.aarch64)` with env gnu, and a `when`-alternative selected for
+  aarch64 is checked like any other declaration, so a program whose aarch64 alternative names an
+  undefined function now stops compiling. riscv64 follows; wasm waits on the spec.
+- **`alatyr riscv64` compiles for the riscv64 machine model it emits (#1578).** The same defect and
+  fix as for `alatyr aarch64`: the verb publishes `Machine.Linux(arch = Arch.riscv64)` (env gnu, the
+  only env of that row), and its `comptime if` folds every `target.*` facet from that model instead of
+  trapping on `target.os` and `target.env`. Over a package the verb replaces the manifest's arch, so a
+  manifest whose env riscv64 does not support (`Env.musl`) is now a located Config error instead of a
+  riscv64/musl build no supported target describes.
 
 ## 0.2.24 — 2026-11-07
 

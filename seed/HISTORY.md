@@ -1973,4 +1973,27 @@ The original reading note, verbatim:
 #
 # VERSION 0.2.23 -> 0.2.24, PATCH: wrong values and a crash on x86_64 became the correct values or the due trap; no surface changes.
 # The specification pin (spec 1.8.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.24 -> 0.3.0   promoted 2026-11-13   seed/alatyr := Stage2
+#
+# WHY: #1604 (Refs #980) makes the shared IR the default x86_64 emitter, and the compiler's own build is an x86 surface, so the frozen seed must carry the IR emission or TOOL-1 cannot hold (gate run 43318713113 on the PR head: full_fp DIFFER seed=1664556 gas1=gas2=1691550).
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k>): 6567 hunks, 61393 added, 34399 removed. One sentence:
+# The 464 compiler functions the IR builder builds, verifies and selects are now emitted from the shared IR (each marked `# ir: selected from the shared IR`, each ending in one `.Lxir<N>_ret` epilogue; the 297 that branch take `.Lxir<N>_<k>` block labels, pass values through frame slots instead of `pushq`-staged operands, and materialize a condition with `cmpq`/`sete`/`movzbl` then test it with `testq`/`jz` where legacy fused `cmpq`/`je`), while the other 5197 of the 5661 global symbols (4505 of the 4969 functions, and all 692 data symbols) are byte-identical once labels are normalized.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1691550 lines.
+# GAS SHA-256 (Stage2): 7e508d5e9a16c5498357120f632af35b069bf64985b24bfcdce3b3706eb7e862.
+# Stage2 == Stage3 BINARY SHA-256:
+# b50504a7cf085c6a160feab3d77d44fa91961537cd2836803f46c6a26ac20817 (6494000 B).
+# All three answer `alatyr 0.3.0, spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.2.24) SHA-256:
+# b4a30699ba1b33a23ecb027862bc4ee49a4b10897c9c6bd3871e80fc20726df9.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1691550 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.2.24 -> 0.3.0, MINOR: new surface by CHANGELOG.md "Versioning policy": the `alatyr x86-legacy` verb appears, and x86_64 programs the legacy emitter refused now compile and run (#980, #406). Not MAJOR, a judgement at the edge of the policy: the one entry that stops a valid program is #1502's fail-loud stub on aarch64/riscv64/wasm, which also traps a typed constant's block-local shadow that answered correctly. Those cases were miscompiled all the same (the declaration stored into the constant's own `.data` cell / `global`; only the folded reads hid it), so the change turns a miscompile into a loud failure, the policy's PATCH rule; the residual stays published as the open #1502 in scripts/known-deviations.issues.tsv until a block-local declaration gets a slot of its own. Every other entry is a PATCH.
+# The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
