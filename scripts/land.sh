@@ -683,7 +683,7 @@ if [ "${1:-}" = '--settle-append-only' ]; then
   git rev-parse -q --verify MERGE_HEAD >/dev/null || die "no merge in progress to settle"
   for ap_path in "$@"; do
     case "$ap_path" in scripts/e2e.sh) ;; *)
-      printf '  %s: not a file the append-only settle covers (#1390): its rows are counted or sorted, so keeping both sides is a decision, not an addition\n' "$ap_path" >&2
+      printf '  %s: not a file the append-only settle covers (#1390): only scripts/e2e.sh is, so keeping both sides here is a decision, not an addition\n' "$ap_path" >&2
       exit 1 ;;
     esac
   done

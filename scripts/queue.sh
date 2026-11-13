@@ -571,6 +571,7 @@ queue_merge_member() { # ref msg
   while IFS= read -r p; do [ -n "$p" ] && un+=("$p"); done < <(git diff --name-only --diff-filter=U)
   { [ "${#un[@]}" -gt 0 ] && git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; } || return 2
   note="$(queue_land_sh "${un[@]}" 2>&1)"; rc=$?   # land.sh names the hunk it refused on stderr
+  QUEUE_MERGE_NOTE="$note"          # on a refusal, the hunk land.sh refused, for the caller to print
   [ "$rc" = 0 ] || return "$rc"     # 1 refused, 2 could not run: both leave the merge untouched
   git commit --quiet --no-verify -m "$msg
 
@@ -781,10 +782,12 @@ queue_compose_screen() { # PR...
       continue
     fi
     git merge --abort 2>/dev/null
-    [ "$rc" = 2 ] && { say "git could not compose #$pr onto the batch; it waits for the next pass"; continue; }
+    # rc 2 still asks merge-tree: a PR that conflicts with main goes back to its author even when the
+    # settle could not run, as before #1390.
     git merge-tree --write-tree "$base" "refs/remotes/pr/$pr" >/dev/null 2>&1; mt=$?
     case "$mt" in
-      0) say "#$pr conflicts with an earlier member of this batch in a shape the settle does not cover; it waits for the next pass" ;;
+      0) if [ "$rc" = 2 ]; then say "git could not compose #$pr onto the batch; it waits for the next pass"
+         else say "#$pr conflicts with an earlier member of this batch in a shape the settle does not cover; it waits for the next pass"; fi ;;
       1) refused "$pr" compose "${HEAD[$pr]}" "conflicts with main $base"
          comment "$pr" "**Merge queue: conflicts with main** on head \`${HEAD[$pr]}\`. Rebase onto \`$base\` and re-enqueue after review. The append-only settle (#1390) covers a conflict confined to \`scripts/e2e.sh\` where both sides only add lines at one anchor; this conflict is not that."
          relabel "$pr" queue-failed queue ;;
