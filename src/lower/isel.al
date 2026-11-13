@@ -450,15 +450,22 @@ sx_cmp := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool 
     None => { false }
   }
 }
+## The index of the declaration a symbol operand names.
+sx_sym_di := fn(x : SxX, ip : ptr(mut ir::IrInst)) -> Option(u64) {
+  match ir::i_ak(ip) {
+    OkSym => { Option(u64).Some(u64(ir::sym_decl(x.p, ir::SymId(usize(ir::i_av(ip)))))) }
+    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel => { Option(u64).None }
+  }
+}
 ## The declaration a symbol operand names.
 sx_sym_decl := fn(x : SxX, ip : ptr(mut ir::IrInst)) -> Option(Decl) {
-  match ir::i_ak(ip) {
-    OkSym => {
-      di := ir::sym_decl(x.p, ir::SymId(usize(ir::i_av(ip))))
-      d : Decl = deref(lower_ctx::decl_get(x.decls, di))
+  dio : Option(u64) = sx_sym_di(x, ip)
+  match dio {
+    Some(di) => {
+      d : Decl = deref(lower_ctx::decl_get(x.decls, usize(di)))
       Option(Decl).Some(d)
     }
-    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel => { Option(Decl).None }
+    None => { Option(Decl).None }
   }
 }
 ## `addr @g` of a module scalar: the address of the `.data` cell `emit_program` gives it, under the
@@ -597,10 +604,15 @@ sx_agg_ret := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> b
 sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
   n := ir::i_n(ip)
   if n > SX_MAX_ARGS { return false }
-  cdo : Option(Decl) = sx_sym_decl(x, ip)
-  match cdo {
-    Some(cd) => {
+  cio : Option(u64) = sx_sym_di(x, ip)
+  match cio {
+    Some(ci) => {
+      cd : Decl = deref(lower_ctx::decl_get(x.decls, usize(ci)))
       if not sx_plain_label(x, cd) { return false }
+      ## #1622: a callee with a narrow-element view in its signature is called only at its IR-built
+      ## copy, and only when the plan emits one (`x86_isel_plan`); its legacy label is never named here.
+      nvw := ir::sig_has_narrow_view(x.src, cd)
+      if nvw and not sx_nv_in(usize(ci)) { return false }
       mut j : usize = 0
       while j < n {
         av := sx_slot(ir::pool_get(x.f, ir::i_pool(ip) + j))
@@ -609,7 +621,7 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
         j = j + 1
       }
       sx_put(sb, "  call ")
-      emit_mangled_def(sb, x.src, cd.mod_start, cd.mod_len, cd.name_start, cd.name_len)
+      if nvw { sx_nv_label(sb, x.src, cd) } else { emit_mangled_def(sb, x.src, cd.mod_start, cd.mod_len, cd.name_start, cd.name_len) }
       sx_put(sb, "\n")
       ## Slice 3d: an aggregate result arrives in %rax (and %rdx) — x86_64's legacy convention for a
       ## struct of up to two words — and is stored into its frame object.
@@ -807,27 +819,38 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
 ## written; the caller rewinds it — when the function is refused. The labels are the ones `emit_fn`
 ## writes for a plain function: an `@export` alias, the mangled label, `.globl` where the legacy
 ## emitter makes it global. A `_start` (the process entry, not a function) is left to `emit_fn`.
-sx_fn := fn(in out sb : rt::StrBuf, x : SxX, d : Decl, in out a : rt::Arena) -> bool {
+## `nvc`: select the IR-built copy of a function whose signature holds a narrow-element view, under
+## the label `sx_nv_label` spells instead (no export alias: a foreign caller reaches the legacy one).
+sx_fn := fn(in out sb : rt::StrBuf, x : SxX, d : Decl, in out a : rt::Arena, nvc : bool) -> bool {
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > SX_MAX_ARGS or not sx_plain_label(x, d) { return false }
   if str_at((x.src + d.name_start), d.name_len) == "_start" { return false }
   frame := x.ftop
   sx_put(sb, "# ir: selected from the shared IR\n")
-  exn := export_name(x.src, d.name_start, d.name_len)
-  if exn.n != 0 and entry_export_moved(d.mod_start, d.mod_len, d.name_start, d.name_len) == false {
-    sx_put(sb, ".global ")
-    sx_put(sb, str_at(x.src + exn.s, exn.n))
-    sx_put(sb, "\n")
-    sx_put(sb, str_at(x.src + exn.s, exn.n))
-    sx_put(sb, ":\n")
-  }
-  if mangled_symbol_is_global(x.src, d) {
-    sx_put(sb, ".globl ")
+  if nvc {
+    if mangled_symbol_is_global(x.src, d) {
+      sx_put(sb, ".globl ")
+      sx_nv_label(sb, x.src, d)
+      sx_put(sb, "\n")
+    }
+    sx_nv_label(sb, x.src, d)
+  } else {
+    exn := export_name(x.src, d.name_start, d.name_len)
+    if exn.n != 0 and entry_export_moved(d.mod_start, d.mod_len, d.name_start, d.name_len) == false {
+      sx_put(sb, ".global ")
+      sx_put(sb, str_at(x.src + exn.s, exn.n))
+      sx_put(sb, "\n")
+      sx_put(sb, str_at(x.src + exn.s, exn.n))
+      sx_put(sb, ":\n")
+    }
+    if mangled_symbol_is_global(x.src, d) {
+      sx_put(sb, ".globl ")
+      emit_mangled_def(sb, x.src, d.mod_start, d.mod_len, d.name_start, d.name_len)
+      sx_put(sb, "\n")
+    }
     emit_mangled_def(sb, x.src, d.mod_start, d.mod_len, d.name_start, d.name_len)
-    sx_put(sb, "\n")
   }
-  emit_mangled_def(sb, x.src, d.mod_start, d.mod_len, d.name_start, d.name_len)
   sx_put(sb, ":\n  pushq %rbp\n  movq %rsp, %rbp\n")
   if frame != 0 { sx_put(sb, "  subq $"); sx_int(sb, frame); sx_put(sb, ", %rsp\n") }
   mut pi : usize = 0
@@ -857,7 +880,101 @@ sx_fn := fn(in out sb : rt::StrBuf, x : SxX, d : Decl, in out a : rt::Arena) -> 
 ## the slice-9 flip; `alatyr x86-legacy` clears it, `lower::clear_x86_ir_select`): emit declaration `di` from the shared IR when the builder builds it, the verifier accepts it and this selector selects
 ## every op. Answers whether it did; on false nothing was written and the caller emits the declaration
 ## the legacy way.
+##
+## A function whose signature holds a narrow-element view (`ir::sig_has_narrow_view`) always answers
+## false here: its own label stays legacy for its legacy callers. When the plan admits it
+## (`x86_isel_plan`), its IR-built copy is written first, under `sx_nv_label`, for its IR-built callers.
 pub x86_isel_try := fn(decls : ptr(rt::Vec), di : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) -> bool {
+  d : Decl = deref(lower_ctx::decl_get(decls, di))
+  if d.is_fn and ir::sig_has_narrow_view(src, d) {
+    if sx_nv_in(di) {
+      if not sx_sel(decls, di, sb, src, a, true) { panic("selfhost: x86 isel — the plan admitted an IR-built copy (#1622) the selector then refused") }
+    }
+    return false
+  }
+  sx_sel(decls, di, sb, src, a, false)
+}
+
+## #1622, the narrow-view boundary on x86_64. The IR lays an array of a narrow element at the element's
+## own stride (Types §6.4) and steps a view over it so; the legacy emitter keeps one word per element,
+## and its readers of a narrow view disagree among themselves (`s[i]` steps the element, a re-slice of a
+## view parameter steps the word: #1651's review, B1). So a narrow-element view never crosses between
+## an IR-built and a legacy-emitted function, as an argument or as a result:
+##   - a function whose signature holds one keeps its legacy emission under its own label, which every
+##     legacy caller (and any foreign one) names, exactly as with the IR off;
+##   - its IR-built copy is emitted under `sx_nv_label`, which only an IR-built caller names;
+##   - an IR-built caller of such a function is refused (it falls back to legacy) unless that copy
+##     exists, so a view an IR-built function makes reaches only IR-built code.
+## Which copies exist is a greatest fixpoint: start from every such function, drop each whose copy the
+## selector refuses (a callee of its own without a copy refuses it), and repeat until nothing drops.
+## A program without such a function reserves nothing, and its output is unchanged.
+##
+## Word `i` of the table is 1 when declaration `i` has an IR-built copy.
+mut SX_NV : Option(ptr(mut ir::WBuf)) = Option(ptr(mut ir::WBuf)).None
+## Whether declaration `di` has an IR-built copy.
+sx_nv_in := fn(di : usize) -> bool {
+  match SX_NV { Some(w) => { ir::wb_get(w, di) == 1 }; None => { false } }
+}
+## The label of a function's IR-built copy: its mangled label and `.irv`, a suffix no Alatyr name spells.
+sx_nv_label := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
+  emit_mangled_def(sb, src, d.mod_start, d.mod_len, d.name_start, d.name_len)
+  sx_put(sb, ".irv")
+}
+## Whether declaration `i` may have an IR-built copy: a function under the plain label convention whose
+## signature holds a narrow-element view.
+sx_nv_cand := fn(decls : ptr(rt::Vec), src : ptr(u8), i : usize) -> bool {
+  d : Decl = deref(lower_ctx::decl_get(decls, i))
+  x86_plain_label(decls, src, d) and ir::sig_has_narrow_view(src, d)
+}
+## Plan the copies (see `SX_NV`), once per program before `emit_program`'s declaration loop. The table is
+## reserved from `mar`, below the loop's scratch high-water mark; each trial selection runs in a scratch
+## copy of `mar` above it and is rewound from `sb`.
+pub x86_isel_plan := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), mar : ptr(mut rt::Arena)) {
+  SX_NV = Option(ptr(mut ir::WBuf)).None
+  cnt := rt::vec_len(deref(decls))
+  mut any := false
+  mut i : usize = 0
+  while i < cnt and not any {
+    any = sx_nv_cand(decls, src, i)
+    i = i + 1
+  }
+  if not any { return }
+  mut m : rt::Arena = deref(mar)
+  w := ir::wb_new(m, cnt)
+  i = 0
+  while i < cnt {
+    mut v : usize = 0
+    if sx_nv_cand(decls, src, i) { v = 1 }
+    k := ir::wb_push(w, m, v)
+    i = i + 1
+  }
+  mar.off = m.off
+  SX_NV = Option(ptr(mut ir::WBuf)).Some(w)
+  mut changed := true
+  while changed {
+    changed = false
+    i = 0
+    while i < cnt {
+      if ir::wb_get(w, i) == 1 {
+        sa : rt::Arena = deref(mar)
+        fn0 := SX_FN
+        mark := sb.len
+        ok := sx_sel(decls, i, sb, src, sa, true)
+        sb.len = mark
+        SX_FN = fn0
+        if not ok {
+          q := ir::wb_set(w, i, 0)
+          changed = true
+        }
+      }
+      i = i + 1
+    }
+  }
+}
+
+## Build, verify and select declaration `di` into `sb` (`nvc`: as its IR-built copy, see `sx_fn`).
+## Answers whether it did; on false nothing was written.
+sx_sel := fn(decls : ptr(rt::Vec), di : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, nvc : bool) -> bool {
   mut ia := a
   p := ir::prog_new(ia)
   si : ir::SelIn = ir::select_input(p, decls, src, di, ia)
@@ -871,7 +988,7 @@ pub x86_isel_try := fn(decls : ptr(rt::Vec), di : usize, in out sb : rt::StrBuf,
       if ob % 16 != 0 { ob = ob + (16 - ob % 16) }
       x := SxX(f = f, p = p, src = src, decls = decls, fid = SX_FN, fspan = d.name_start, stk = ir::wb_new(ia, 16), fobj = fo, ftop = vb + ob)
       mark := sb.len
-      if sx_fn(sb, x, d, ia) {
+      if sx_fn(sb, x, d, ia, nvc) {
         SX_FN = SX_FN + 1
         return true
       }

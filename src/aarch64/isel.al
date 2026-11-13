@@ -504,6 +504,9 @@ sa_call := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool
   match cdo {
     Some(cd) => {
       if not cd.is_fn or cd.name_len == 0 { return false }
+      ## A view result (legacy returns its address, the IR its two words) or a narrow-element view (legacy
+      ## steps it by the word): `ir::ret_is_view`, `ir::sig_has_narrow_view` (#1622).
+      if ir::ret_is_view(x.src, cd) or ir::sig_has_narrow_view(x.src, cd) { return false }
       sa_args(sb, x, ip)
       sa_put(sb, "  bl ")
       a64_emit_fn_label(sb, x.src, cd)
@@ -749,6 +752,9 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
 ## Select function `f` (declaration `d`) into `sb`. Answers false — with `sb` possibly partly
 ## written; the caller rewinds it — when the function is refused.
 sa_fn := fn(in out sb : rt::StrBuf, x : SaX, d : Decl, in out a : rt::Arena) -> bool {
+  ## A view result (legacy callers expect its address, the IR returns its two words) or a narrow-element
+  ## view (legacy steps it by the word): `ir::ret_is_view`, `ir::sig_has_narrow_view` (#1622).
+  if ir::ret_is_view(x.src, d) or ir::sig_has_narrow_view(x.src, d) { return false }
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > 8 or nv > SA_MAX_VREGS { return false }

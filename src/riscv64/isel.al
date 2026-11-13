@@ -517,6 +517,9 @@ sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool
   match cdo {
     Some(cd) => {
       if not cd.is_fn or cd.name_len == 0 { return false }
+      ## A view result (legacy returns its address, the IR its two words) or a narrow-element view (legacy
+      ## steps it by the word): `ir::ret_is_view`, `ir::sig_has_narrow_view` (#1622).
+      if ir::ret_is_view(x.src, cd) or ir::sig_has_narrow_view(x.src, cd) { return false }
       sr_args(sb, x, ip)
       sr_put(sb, "  call ")
       sr_put_label(sb, x.src, cd)
@@ -730,6 +733,9 @@ sr_put_label := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
 }
 ## Select function `f` (declaration `d`) into `sb`. Answers false when the function is refused.
 sr_fn := fn(in out sb : rt::StrBuf, x : SrX, d : Decl, in out a : rt::Arena) -> bool {
+  ## A view result (legacy callers expect its address, the IR returns its two words) or a narrow-element
+  ## view (legacy steps it by the word): `ir::ret_is_view`, `ir::sig_has_narrow_view` (#1622).
+  if ir::ret_is_view(x.src, d) or ir::sig_has_narrow_view(x.src, d) { return false }
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > 8 { return false }
