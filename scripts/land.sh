@@ -607,7 +607,9 @@ LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scr
 ## program. Paths alone say only that it COULD be one (return 4); `seed_retirement_shape_ok` checks the
 ## shape and `provenance_tail_order_ok` that a reseed sits under it. A workaround comment in src/ or
 ## lib/ is not part of it: the check does not require its removal, so the rewrite is a later PR's.
-## What the shape cannot see is WHICH row the promoted seed answers: any `seed` row may go, with its
+## A `tree` row never retires this way: it tracks a tree defect, which no promotion answers, so its
+## removal in a tail is refused. What the shape cannot see is WHICH `seed` row the promoted seed
+## answers: any of them may go, with its
 ## tree-regression guard, while a reseed sits under it in a tail no landing has walked yet. That trust
 ## is the reseed's own: the integrator's tail, gated as the promotion before it is pushed.
 LAND_TAIL_RETIRE_RE='^(scripts/seed_forms\.tsv|scripts/seed_forms/[a-z0-9_]+\.al)$'
@@ -650,6 +652,8 @@ seed_retirement_shape_ok() { # name-status-lines tsv-diff-lines -> 0 ok, 1 not (
   for n in $(printf '%s\n' "$2" | sed -n 's/^-\([a-z0-9_][a-z0-9_]*\)\t.*$/\1/p'); do
     printf '%s' "$gone" | grep -qx "$n" || why="$why it removes row $n but keeps its program;"
   done
+  printf '%s\n' "$2" | grep -E '^-[a-z0-9_]+'$'\t' | awk -F'\t' '$2 != "seed"' | grep -q . &&
+    why="$why it removes a row whose state is not seed (a tree defect no promotion answers);"
   n="$(printf '%s\n' "$2" | grep -c '^+')"
   [ "$n" -le 1 ] && ! printf '%s\n' "$2" | grep '^+' | grep -Evq '^\+# live-rows: [0-9]+$' ||
     why="$why it adds registry lines other than the live-rows count;"
@@ -844,7 +848,7 @@ xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=171  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566, +16 #1648
+LAND_SELFTEST_EXPECTED=172  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566, +17 #1648
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -1314,6 +1318,8 @@ Not a bullet.
   _ck $? retirement-allowed-a-registry-edit-that-deletes-no-program
   seed_retirement_shape_ok "$rt_ns" "$(printf '%s\n-store_call\tseed\t7\t#9\tsrc/x.al:f' "$rt_d")" >/dev/null; [ $? = 1 ]
   _ck $? retirement-allowed-a-row-removed-while-its-program-stays
+  seed_retirement_shape_ok "$rt_ns" "$(printf '%s' "$rt_d" | sed 's/\tseed\t/\ttree\t/')" >/dev/null; [ $? = 1 ]
+  _ck $? retirement-allowed-a-tree-row
   provenance_tail_order_ok oracle oracle retire reseed >/dev/null; _ck $? tail-order-refused-the-0.3.0-tail
   provenance_tail_order_ok oracle retire >/dev/null; [ $? = 1 ]; _ck $? tail-order-allowed-a-retirement-with-no-reseed
   provenance_tail_order_ok reseed retire >/dev/null; [ $? = 1 ]; _ck $? tail-order-allowed-a-retirement-under-the-reseed

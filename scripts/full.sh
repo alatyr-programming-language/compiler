@@ -236,10 +236,10 @@ if [ "${1:-}" = "--self-test" ]; then
   # The SEED-FORMS registry's gate-of-the-gate (strict_forms.md §8, the #600 rule). On a tree whose
   # seed still miscompiles every registered form, the check never reaches its own failure verdicts:
   # a form regressed in the tree, the seed now handling a form (the retirement signal), or the tree
-  # now handling a `tree` row. So thirteen planted registries drive it with a fake compiler, and three
+  # now handling a `tree` row. So fifteen planted registries drive it with a fake compiler, and four
   # of them are CONTROLS that must stay green. Measured: an always-OK decider loses the three verdict
-  # plants, an always-failing decider loses the three controls, and dropping the orphan walk loses
-  # the orphan plant.
+  # plants, an always-failing decider loses the three controls that reach it (the fourth declares an
+  # empty registry), and dropping the orphan walk loses the orphan plant.
   bash "$ROOT/scripts/seed_forms_check.sh" --self-test
   _full_seed_forms_self_test_rc=$?
   [ "$_full_seed_forms_self_test_rc" = 0 ] || exit "$_full_seed_forms_self_test_rc"
