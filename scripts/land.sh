@@ -607,6 +607,9 @@ LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scr
 ## program. Paths alone say only that it COULD be one (return 4); `seed_retirement_shape_ok` checks the
 ## shape and `provenance_tail_order_ok` that a reseed sits under it. A workaround comment in src/ or
 ## lib/ is not part of it: the check does not require its removal, so the rewrite is a later PR's.
+## What the shape cannot see is WHICH row the promoted seed answers: any `seed` row may go, with its
+## tree-regression guard, while a reseed sits under it in a tail no landing has walked yet. That trust
+## is the reseed's own: the integrator's tail, gated as the promotion before it is pushed.
 LAND_TAIL_RETIRE_RE='^(scripts/seed_forms\.tsv|scripts/seed_forms/[a-z0-9_]+\.al)$'
 main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
   if [ "$1" -ge 2 ]; then
@@ -629,21 +632,24 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
 }
 ## Is a return-4 commit a retirement in fact? Input: its `git diff-tree --name-status -r` lines and the
 ## +/- lines of its scripts/seed_forms.tsv diff. It modifies the registry, deletes at least one planted
-## program and adds none; every deleted program's row is a removed row; and the registry gains no line
-## but its `# live-rows:` count — so no row was added, re-dated or rewritten under a promotion's name.
+## program and adds none; the removed rows are exactly the deleted programs; and the registry gains no
+## line but its `# live-rows:` count — so no row was added, re-dated or rewritten under a promotion's name.
 seed_retirement_shape_ok() { # name-status-lines tsv-diff-lines -> 0 ok, 1 not (says why)
-  local st p n del=0 why=""
+  local st p n del=0 why="" gone=""
   while IFS=$'\t' read -r st p; do
     [ -n "$st" ] || continue
     case "$st:$p" in
       M:scripts/seed_forms.tsv) ;;
       D:scripts/seed_forms/*.al)
-        del=$((del + 1)); n="$(basename "$p" .al)"
+        del=$((del + 1)); n="$(basename "$p" .al)"; gone="$gone$n"$'\n'
         printf '%s\n' "$2" | grep -q "^-$n"$'\t' || why="$why its deleted $p has no removed row;" ;;
       *) why="$why it ${st} $p;" ;;
     esac
   done <<< "$1"
   [ "$del" -gt 0 ] || why="$why it deletes no planted program;"
+  for n in $(printf '%s\n' "$2" | sed -n 's/^-\([a-z0-9_][a-z0-9_]*\)\t.*$/\1/p'); do
+    printf '%s' "$gone" | grep -qx "$n" || why="$why it removes row $n but keeps its program;"
+  done
   n="$(printf '%s\n' "$2" | grep -c '^+')"
   [ "$n" -le 1 ] && ! printf '%s\n' "$2" | grep '^+' | grep -Evq '^\+# live-rows: [0-9]+$' ||
     why="$why it adds registry lines other than the live-rows count;"
@@ -653,7 +659,8 @@ seed_retirement_shape_ok() { # name-status-lines tsv-diff-lines -> 0 ok, 1 not (
 }
 seed_retirement_commit_ok() { # commit — the shape, read from git
   seed_retirement_shape_ok "$(git diff-tree --no-commit-id --name-status -r "$1")" \
-    "$(git diff "$1^" "$1" -- scripts/seed_forms.tsv | sed -n '/^@@/,$p' | grep -E '^[+-]')"
+    "$(git diff-tree -p --no-color --no-ext-diff --no-textconv "$1^" "$1" -- scripts/seed_forms.tsv |
+       sed -n '/^@@/,$p' | grep -E '^[+-]')"
 }
 ## The tail's kinds from main's tip down to the PR merge (oracle, reseed, retire): a retirement counts
 ## only above a reseed, the promotion that answers its form. One pushed alone is a row dropped ungated.
@@ -837,7 +844,7 @@ xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=170  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566, +15 #1648
+LAND_SELFTEST_EXPECTED=171  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566, +16 #1648
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -1305,13 +1312,15 @@ Not a bullet.
   _ck $? retirement-allowed-a-deleted-program-whose-row-stayed
   seed_retirement_shape_ok "$(printf 'M\tscripts/seed_forms.tsv')" "$rt_d" >/dev/null; [ $? = 1 ]
   _ck $? retirement-allowed-a-registry-edit-that-deletes-no-program
+  seed_retirement_shape_ok "$rt_ns" "$(printf '%s\n-store_call\tseed\t7\t#9\tsrc/x.al:f' "$rt_d")" >/dev/null; [ $? = 1 ]
+  _ck $? retirement-allowed-a-row-removed-while-its-program-stays
   provenance_tail_order_ok oracle oracle retire reseed >/dev/null; _ck $? tail-order-refused-the-0.3.0-tail
   provenance_tail_order_ok oracle retire >/dev/null; [ $? = 1 ]; _ck $? tail-order-allowed-a-retirement-with-no-reseed
   provenance_tail_order_ok reseed retire >/dev/null; [ $? = 1 ]; _ck $? tail-order-allowed-a-retirement-under-the-reseed
   provenance_tail_order_ok >/dev/null; _ck $? tail-order-refused-an-empty-tail
   # The same shape read from git, in a planted repository: the retirement, then one that also edits src/.
   ( set -e; mkdir -p "$st/rt/scripts/seed_forms" "$st/rt/src"; cd "$st/rt"; git init -q -b main .
-    git config user.email r@x; git config user.name r
+    git config user.email r@x; git config user.name r; git config commit.gpgsign false; git config core.hooksPath /dev/null
     printf '# live-rows: 1\nstore_call_aggregate\tseed\t42\t#1237\tsrc/driver.al:d\n' > scripts/seed_forms.tsv
     echo 'fn main() -> i32 { return 42 }' > scripts/seed_forms/store_call_aggregate.al; echo '// works around #1237' > src/driver.al
     git add -A; git commit -qm base
@@ -1319,7 +1328,8 @@ Not a bullet.
     git commit -qam retire; git tag retire
     echo '// fixed' > src/driver.al; git commit -qam comment; git reset -q --soft HEAD~2; git commit -qm both; git tag both ) >/dev/null 2>&1
   ( cd "$st/rt" && seed_retirement_commit_ok retire ) >/dev/null 2>&1; _ck $? retirement-read-from-git-was-refused
-  ( cd "$st/rt" && seed_retirement_commit_ok both ) >/dev/null 2>&1; [ $? = 1 ]; _ck $? retirement-read-from-git-allowed-a-source-change
+  ( cd "$st/rt" && git rev-parse -q --verify both >/dev/null && ! seed_retirement_commit_ok both ) >/dev/null 2>&1
+  _ck $? retirement-read-from-git-allowed-a-source-change
 
   # ---- 8 · the predicted-delta decider in corpus_manifest.sh, which PHASE 6a relies on. ------
   bash "$ROOT/scripts/corpus_manifest.sh" --delta-self-test >"$st/delta.out" 2>&1

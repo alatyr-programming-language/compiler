@@ -69,7 +69,8 @@ around it.
 8. **Do not write the forms the frozen seed miscompiles.** Each one is a row of `scripts/seed_forms.tsv`
    with a planted program the seed must still miscompile and the tree must run correctly, and a
    comment at its workaround site. A new workaround adds a row. Held by `scripts/seed_forms_check.sh`,
-   which fails when a promotion fixes a form so its row and workarounds retire.
+   which fails when a promotion fixes a form, so its row retires in the promotion's tail and its
+   workaround comments in a PR after it (#1648).
 9. **An AST handle has its node's own type**, never `usize` or a sibling node's pointer (#760 fixed 12
    walkers). **Partly held by the checker, review-only for the rest — and the two halves must not be
    conflated.** Where both operand types are known, the checker does discriminate pointee names:

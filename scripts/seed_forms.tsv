@@ -6,7 +6,8 @@
 #   name     the planted program is scripts/seed_forms/<name>.al (outside the `test/*.al` corpus)
 #   state    `seed`: the frozen seed miscompiles the form and the tree compiler runs it correctly.
 #              The check needs tree == due (else the form regressed in the tree) and seed != due
-#              (else the seed now handles it: retire the row and remove its workarounds at <sites>).
+#              (else the seed now handles it: retire the row and its program in the promotion's
+#              tail, and its workarounds at <sites> in a PR after it, #1648).
 #            `tree`: the tree compiler miscompiles it too. That is a tree defect with its own issue,
 #              and a seed limitation only in the comments that blamed the seed. The check needs
 #              tree != due. When the fix lands, the check refuses until the row moves to `seed`.

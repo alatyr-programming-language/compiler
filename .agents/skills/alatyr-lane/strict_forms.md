@@ -32,7 +32,7 @@ issue in the marker's reason. Do not quietly route around it.
 | 5 | width and signedness are spelled, never inferred from a form | #546, #608, #707, #764–#766 | signedness: `sign_census.sh --gate` (4/0/0/0 measured on `fdc40f6`); width: review until slices 3 and 6 |
 | 6 | `unchecked` is explicit and justified; no implicit `usize` ↔ `ptr` | #529, #610 | `strict_forms_check.sh` `unchecked`, `ptrint`; the count by `ptrint_census.sh gate` (`op-cmp=0`, held only while `planted` proves the hook fires) |
 | 7 | bind a `?` before using its value | #752 | `strict_forms_check.sh` `try-inline` |
-| 8 | do not write the forms the frozen seed miscompiles | no live rows; seven retired by 0.2.5, two (#790, #791) by 0.2.7 | `seed_forms_check.sh` (the registry, `scripts/seed_forms.tsv`); a comment at every workaround |
+| 8 | do not write the forms the frozen seed miscompiles | no live rows; seven retired by 0.2.5, two (#790, #791) by 0.2.7, `call_field_subword` (#1228) by 0.2.22, `store_call_aggregate` (#1237) by 0.3.0 | `seed_forms_check.sh` (the registry, `scripts/seed_forms.tsv`); a comment at every workaround |
 | 9 | an AST handle has its node's own type | #760 (12 walkers), the `usize` pass-plumbing | partly: `ty_compat` compares pointee names where BOTH operand types are known (`sema.al:502-511`) — NOT at a `deref` (`:11360-11363`, `TyUnknown`) nor at an argument (`:11231-11237`, kind only); the rest is review, §9 has the proposal |
 | 10 | a quantity with an identity is a `brand`, not a bare number | #167 (word offset used as a byte offset), #760, #299 | the checker refuses a sibling or raw mix (since #299); *choosing* a brand is held by review |
 | 11 | a field a reader turns into a value type is not a place to put metadata | #1097 (six rows trapped on three backends), #1099 | review until a registry exists: `sema_vty_record` (`sema.al:8740`) reads the span **before** the `TyPtr` kind, so a carried pointee name records the address as `VcInt`; no lexical rule can *derive* which fields are codegen-bearing, though once audited it is registry-holdable the way form 8 is — §11 |
@@ -584,12 +584,14 @@ too, it is a tree defect: file it and add the row as `tree`.
 
 **Check.** `scripts/seed_forms_check.sh`, a full-gate stage after the build. A `seed` row fails if
 the tree compiler does not answer the due value, because the form regressed in the tree. It also
-fails if the seed does, with "the seed now handles <form>: retire this entry and remove its
-workaround comments at <sites>". So a promotion that fixes a form turns the gate red until the row
-and its workarounds are gone. A `tree` row fails once the tree answers the due value, with "change
+fails if the seed does, with "the seed now handles <form>. Retire this entry and its planted program
+in the promotion's tail, and its workaround comments in a PR after it". So a promotion that fixes a
+form turns the gate red until the row and its program are gone; that retirement is one commit above
+the reseed, and `land.sh` walks past it only in that shape (#1648). The workaround comments at
+`<sites>` go in a PR of their own after the landing. A `tree` row fails once the tree answers the due value, with "change
 its state to 'seed'". The registry and `scripts/seed_forms/` must match both ways. Its
-`--self-test`, in `full.sh --self-test`, drives the decider through thirteen planted registries with
-a fake compiler: three controls stay green and ten plants are refused by name. Writing a *new* seed
+`--self-test`, in `full.sh --self-test`, drives the decider through fifteen planted registries with
+a fake compiler: four controls stay green and eleven plants are refused by name. Writing a *new* seed
 workaround without a row is held by review.
 
 ## 9 · An AST handle has its node's own type

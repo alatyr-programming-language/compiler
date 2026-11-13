@@ -12,9 +12,10 @@
 # and the program's correct exit value, and this check runs every program with both compilers:
 #
 #   state `seed`  tree == due   else FAIL: the form REGRESSED in the tree
-#                 seed != due   else FAIL: the seed now handles it. Retire the row and remove the
-#                               workaround comments at its sites. That is how the registry retires
-#                               itself after a promotion: the promotion makes this check go red.
+#                 seed != due   else FAIL: the seed now handles it. Retire the row and its program
+#                               in the promotion's tail (#1648), and the workaround comments at its
+#                               sites in a PR after it. That is how the registry retires itself after
+#                               a promotion: the promotion makes this check go red.
 #   state `tree`  tree != due   else FAIL: the tree now handles it, so the row moves to `seed`. The
 #                               seed's result is printed and not judged, because the tree defect is
 #                               what the row tracks.

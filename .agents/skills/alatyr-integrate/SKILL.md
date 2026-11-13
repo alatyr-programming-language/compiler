@@ -441,8 +441,9 @@ planted program `scripts/seed_forms/<form>.al`, and changes nothing else. `land.
 as an integrator tail commit only in that shape and only above a reseed (#1648), so the queue walks
 past it. The workaround comments at the row's sites are **not** part of it: the check does not require
 their removal, and a `src/` or `lib/` hunk in the tail is ungated code on `main`. Rewrite them in a PR
-of their own after the landing. (The 0.3.0 tail's 58ef649f carried two such comment lines in
-`src/driver.al`, so the queue refused that base until it was acknowledged for one pass.)
+of their own after the landing. (Before #1648 no retirement was a tail kind, so the 0.3.0 tail's
+58ef649f stalled the queue until its base was acknowledged for one pass; it also rewrote two comments in
+`src/driver.al`, which this rule now refuses in the tail.)
 
 After the promotion lands on `main`, place an **annotated** tag `v<version>` on the promotion commit,
 with the digest as its message — one paragraph on what this generation does that the previous one did
