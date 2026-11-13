@@ -110,7 +110,7 @@ sf_check() {
         sed 's/^/    tree stderr: /' "$w/$name.tree.err" | head -3
         bad=1 ;;
       SEED-NOW-HANDLES)
-        echo "seed forms: FAIL $name: the seed now handles $name (answers $due). Retire this entry and remove its workaround comments at: $sites"
+        echo "seed forms: FAIL $name: the seed now handles $name (answers $due). Retire this entry and its planted program in the promotion's tail, and its workaround comments in a PR after it (#1648): $sites"
         bad=1 ;;
       TREE-NOW-HANDLES)
         echo "seed forms: FAIL $name: the tree now handles $name ($issue answers $due). Change its state to 'seed', so the registry tracks the seed until a promotion; its workaround sites are: $sites"

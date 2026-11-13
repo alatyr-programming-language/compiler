@@ -434,6 +434,16 @@ never commit the bump without the seed replacement, and never resolve the awkwar
 bump back. Leaving the flag set on an already-promoted tree changes nothing: the seed answers the
 block's number, the flag is not consulted, and the run reports the fixpoint as usual.
 
+**A promotion that answers a seed form** turns the gate red at `seed_forms`: "the seed now handles
+<form>". The promotion's tail then carries one more commit, on top of the reseed: the **retirement**,
+which removes the row from `scripts/seed_forms.tsv` (moving its `# live-rows:` count) and deletes its
+planted program `scripts/seed_forms/<form>.al`, and changes nothing else. `land.sh` PHASE 1b accepts it
+as an integrator tail commit only in that shape and only above a reseed (#1648), so the queue walks
+past it. The workaround comments at the row's sites are **not** part of it: the check does not require
+their removal, and a `src/` or `lib/` hunk in the tail is ungated code on `main`. Rewrite them in a PR
+of their own after the landing. (The 0.3.0 tail's 58ef649f carried two such comment lines in
+`src/driver.al`, so the queue refused that base until it was acknowledged for one pass.)
+
 After the promotion lands on `main`, place an **annotated** tag `v<version>` on the promotion commit,
 with the digest as its message — one paragraph on what this generation does that the previous one did
 not, the three hashes, the promoted stage, the gate line and the spec revision. The template is in

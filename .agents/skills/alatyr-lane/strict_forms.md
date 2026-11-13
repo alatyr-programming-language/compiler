@@ -488,7 +488,7 @@ x := mk() ; k := x.kind        ## seed miscompiles is_c(mk().kind)   (true? sinc
 ## this — the same workaround, plus a row in scripts/seed_forms.tsv with a planted program
 x := mk() ; k := x.kind        ## seed form `call_result_enum_field_arg` (scripts/seed_forms.tsv, #791)
 ## the row's `sites` field names this function; the check fails the promotion that fixes the form,
-## so the row and the workaround retire together
+## so the row retires with the promotion and the workaround right after it, in its own PR (#1648)
 ```
 
 **The registry.** `scripts/seed_forms.tsv` has one row per form. Each row points to a planted
