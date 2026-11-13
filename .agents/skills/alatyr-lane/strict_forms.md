@@ -589,7 +589,8 @@ planted program in the promotion's tail, and its workaround comments in a PR aft
 <sites>". So a promotion that fixes a form turns the gate red until the row and its program are
 gone; that retirement is one commit above the reseed, and `land.sh` walks past it only in that shape
 (#1648). The workaround comments go in a PR of their own after the landing. A `tree` row fails once
-the tree answers the due value, with "change its state to 'seed'". The registry and `scripts/seed_forms/` must match both ways. Its
+the tree answers the due value, with "Change its state to 'seed'". The registry and
+`scripts/seed_forms/` must match both ways. Its
 `--self-test`, in `full.sh --self-test`, drives the decider through fifteen planted registries with
 a fake compiler: four controls stay green and eleven plants are refused by name. Writing a *new* seed
 workaround without a row is held by review.
