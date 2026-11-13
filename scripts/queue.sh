@@ -338,7 +338,7 @@ queue_stack_drive() { # PR...
 }
 
 ## The exact number of checks queue_self_test runs, compared with -ne like land.sh's.
-QUEUE_SELFTEST_EXPECTED=118  # 49, +6 #1383, +7 #1386, +9 #1423, +2 #1526, +9 #1390, +36 #1571
+QUEUE_SELFTEST_EXPECTED=120  # 49, +6 #1383, +7 #1386, +9 #1423, +2 #1526, +9 #1390, +38 #1571
 queue_self_test() {
   local k=0 bad="" log t
   _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
@@ -548,6 +548,23 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
     gh_cmd() { c="$c gh:$*"; }; git() { c="$c git:${*: -1}"; }
     queue_stack_cleanup; [ "$c" = " git:gate/queue-s1 gh:run cancel 22 -R $REPO git:gate/queue-s2" ]
   ); _ck $? cleanup-cancelled-a-decided-run-or-kept-a-branch
+  (
+    QDIR="$t" STACK=(s1) SV=("") STACK_IDS=(""); c=""
+    gh_cmd() { case "$2" in list) echo 33 ;; *) c="$c gh:$*" ;; esac; }; git() { :; }
+    queue_stack_cleanup; [ "$c" = " gh:run cancel 33 -R $REPO" ]
+  ); _ck $? cleanup-did-not-cancel-a-run-it-had-not-seen
+  # One round against a stubbed runner: S1 green, S2 red; each verdict clears its member's strike.
+  (
+    QDIR="$t" DRY=0 QUEUE_RUNNER_WAIT=1 STACK=("$a" "$b") STACK_FOR=(7 8) HEAD[7]="$a" HEAD[8]="$b"
+    say() { :; }; sleep() { :; }; git() { :; }
+    gh_cmd() { case "$2" in
+        list) printf '%s\tcompleted\t%s\t%s\turl\n' "${8#gate/queue-}" "$([ "${8#gate/queue-}" = "$a" ] && echo success || echo failure)" 5 ;;
+        download) mkdir -p "$9"; if [ "$7" = "gate-$a" ]; then printf '*** FULL GATE: GREEN (sweeps RAN) ***\n'
+                  else printf -- '--- full part ir: FAILURES ---\n*** FULL GATE: FAILURES ***\n'; fi > "$9/gate.log" ;;
+      esac; }
+    queue_strike "$t" "7=$a stack" >/dev/null; queue_strike "$t" "8=$b stack" >/dev/null
+    queue_stack_gate; [ "${SV[*]}" = "g r" ] && ! ls "$t"/strike-* >/dev/null 2>&1
+  ); _ck $? stack-gate-misread-a-round-or-kept-a-strike-past-its-verdict
   STACK=(); SV=(); STACK_LOGS=(); STACK_RUNS=(); STACK_FOR=(); STACK_BASE=""
   rm -rf "$t"; unset -f rl cs
   # The driver against a fake runner: a stack is red when it holds a PR in FR, has no verdict when it
