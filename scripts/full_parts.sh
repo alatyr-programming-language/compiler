@@ -23,11 +23,15 @@
 #   - the sweeps part reports `sweeps STATUS=RAN`. Any other status prints the same "SWEEPS DID NOT RUN"
 #     verdict full.sh prints.
 #
-# Usage:  bash scripts/full_parts.sh --aggregate <dir-of-<part>.log> <gate-object-sha>
+# Usage:  bash scripts/full_parts.sh --collect <download-dir> <gate-object-sha> <parts-dir> <gate.log>
+#         bash scripts/full_parts.sh --aggregate <dir-of-<part>.log> <gate-object-sha>
 #         bash scripts/full_parts.sh --self-test
 set -u
 export LC_ALL=C
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+## The coverage names full.sh's serial verdict defaults to `NO COVERAGE LINE` (#1598)
+FULL_PARTS_COVER_REQUIRED="ird fc ig"
 
 ## aggregate TABLE DIR OBJECT -> stdout: the verdict; 0 GREEN, 1 anything else
 aggregate() {
@@ -77,10 +81,47 @@ aggregate() {
     echo "    landing any change that can reach a backend. ***"
   fi
   echo "    gate object:     $obj, $(printf '%s\n' "$table" | awk '{ print $1 }' | uniq | wc -l | tr -d ' ') parts in parallel"
+  ## Each coverage value once over the run, under the first part (table order) that reports it: the
+  ## pre-build stages run in every part, so their lines would otherwise print once per part (#1598).
   for p in $(printf '%s\n' "$table" | awk '{ print $1 }' | uniq); do
-    grep -E '^full part cover: [a-z]+ ' "$dir/$p.log" | awk '!seen[$4]++' | sed "s/^full part cover: /    [$p] /"
+    grep -E '^full part cover: [a-z]+ ' "$dir/$p.log" | sed "s/^full part cover: /$p /"
+  done | awk '!seen[$2]++ { p = $1; sub(/^[^ ]+ /, ""); print "    [" p "] " $0 }'
+  ## The values the serial verdict prints as `NO COVERAGE LINE` when empty (full.sh: ird_cover, fc_line,
+  ## ig_line) say so here too, rather than dropping out of the verdict unseen.
+  for n in $FULL_PARTS_COVER_REQUIRED; do
+    grep -qE "^full part cover: $n " "$dir"/*.log 2>/dev/null || echo "    [?] $n NO COVERAGE LINE"
   done
   return 0
+}
+
+## collect TABLE DOWNLOADED SHA PARTSDIR GATELOG -> copies every part log the matrix uploaded
+## (DOWNLOADED/gate-SHA-<anything>/parts/*.log) into PARTSDIR, not only the table's, so a matrix part
+## the table does not name reaches the aggregate, which refuses it (#1598); appends them to GATELOG in
+## table order, then any extra part. gate.yml's verdict job runs it, so the self-test can plant the
+## artifacts it reads.
+collect() {
+  local table="$1" dl="$2" sha="$3" pd="$4" gl="$5" f p parts
+  mkdir -p "$pd"
+  for f in "$dl"/gate-"$sha"-*/parts/*.log; do
+    [ -f "$f" ] && cp "$f" "$pd/$(basename "$f")"
+  done
+  parts="$(printf '%s\n' "$table" | awk '{ print $1 }' | uniq)"
+  for p in $parts; do [ -f "$pd/$p.log" ] && cat "$pd/$p.log" >> "$gl"; done
+  for f in "$pd"/*.log; do
+    [ -f "$f" ] || continue
+    printf '%s\n' "$parts" | grep -qx "$(basename "$f" .log)" || cat "$f" >> "$gl"
+  done
+  return 0
+}
+
+## workflow_parts_ok GATEYML -> 0 when every `run: |` block that writes `parts/` (a `tee` or a `>` into
+## it) runs `mkdir -p parts` before that line, or hands parts/ to --collect, which creates it
+workflow_parts_ok() {
+  awk '
+    /^ *(- name:|- uses:)/ || /^ *run: \|/ { made = 0 }
+    /mkdir -p parts/ || /--collect / { made = 1 }
+    /(tee|>>?) *"?parts\// && !made { print "  gate.yml:" NR ": writes parts/ before creating it" > "/dev/stderr"; bad = 1 }
+    END { exit bad }' "$1"
 }
 
 ## guards_match_table FULLSH TABLE -> 0 when every `if full_part_runs X; then` of FULLSH names a stage of
@@ -97,7 +138,7 @@ guards_match_table() {
 }
 
 self_test() {
-  local d rc=0 n=0 T O=0123abcd
+  local d rc=0 n=0 T O=0123abcd FULL_PARTS_COVER_REQUIRED=ird
   d="$(mktemp -d)"; trap 'rm -rf "$d"' RETURN
   chk() { n=$((n + 1)); if [ "$2" = "$3" ]; then echo "  ok   $1"; else echo "  FAIL $1: got [$2] want [$3]"; rc=1; fi; }
   T='a s1
@@ -109,7 +150,9 @@ sweeps sweeps'
     { echo "gate object: $O  base: b  runner: 4 cpu"; echo "*** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (9 lines) ***"
       echo "full part: $p ran=$r"; [ "$p" = sweeps ] && echo "full part: sweeps STATUS=RAN"
       [ "$p" = corpus ] && echo "xbackend diff: paths=9 rows=9"
-      echo "full part cover: $p covered"; for x in "$@"; do echo "$x"; done
+      echo "full part cover: ce shared by every part"; echo "full part cover: $p covered"
+      [ "$p" = corpus ] && echo "full part cover: ird 4 disagree"
+      for x in "$@"; do echo "$x"; done
       echo "--- full part $p: GREEN ---"; } > "$d/r/$p.log"
   }
   green() { rm -rf "$d/r"; mkdir -p "$d/r"; part a s1,s2; part corpus xb; part sweeps sweeps; }
@@ -117,7 +160,11 @@ sweeps sweeps'
 
   green; chk "control: every part green and complete is GREEN, with exactly one verdict line" "$(run)" "0:1"
   chk "control: the green verdict says the sweeps ran" "$(grep -c '^\*\*\* FULL GATE: GREEN (sweeps RAN) \*\*\*$' "$d/out")" "1"
-  chk "control: the green verdict carries each part's coverage" "$(grep -c '^    \[[a-z]*\] ' "$d/out")" "3"
+  chk "control: the green verdict carries each part's coverage" "$(grep -c '^    \[[a-z]*\] ' "$d/out")" "5"
+  chk "control: a coverage line every part reports prints once, under the first part" "$(grep -c '^    \[a\] ce shared by every part$' "$d/out")" "1"
+  chk "control: no required coverage value is missing" "$(grep -c 'NO COVERAGE LINE' "$d/out")" "0"
+  green; sed -i.b '/^full part cover: ird /d' "$d/r/corpus.log"; run > /dev/null
+  chk "plant: a required coverage value no part reports says NO COVERAGE LINE" "$(grep -c '^    \[?\] ird NO COVERAGE LINE$' "$d/out")" "1"
   green; rm "$d/r/corpus.log"; chk "plant: a missing part (cancelled, skipped) is red" "$(run)" "1:1"
   green; : > "$d/r/a.log"; chk "plant: an empty part log is red" "$(run)" "1:1"
   green; sed -i.b 's/: GREEN ---$/: FAILURES ---/' "$d/r/a.log"; echo "full part: a red=s2" >> "$d/r/a.log"; chk "plant: a red part is red" "$(run)" "1:1"
@@ -141,6 +188,29 @@ sweeps sweeps'
   chk "control: sweeps that did not run are green but say so" "$(grep -c 'SWEEPS DID NOT RUN' "$d/out")" "1"
   green; sed -i.b '/STATUS=/d' "$d/r/sweeps.log"; chk "plant: a sweeps part with no STATUS is red" "$(run)" "1:1"
 
+  green; echo "full part cover: zz a  b|c — d	e" >> "$d/r/a.log"; run > /dev/null
+  chk "control: a coverage value keeps its spaces, tabs and punctuation" "$(grep -cF "    [a] zz a  b|c — d	e" "$d/out")" "1"
+
+  ## collect: the artifacts as download-artifact@v4 lays them out (one directory per artifact)
+  coll() { rm -rf "$d/dl" "$d/p" "$d/g.log"; green
+    for p in a corpus sweeps; do mkdir -p "$d/dl/gate-$O-$p/parts"; cp "$d/r/$p.log" "$d/dl/gate-$O-$p/parts/"; done; }
+  coll; collect "$T" "$d/dl" "$O" "$d/p" "$d/g.log"
+  chk "control: collect copies the table's parts" "$(ls "$d/p" | tr '\n' ' ')" "a.log corpus.log sweeps.log "
+  chk "control: collect writes gate.log in table order" "$(grep -o '^--- full part [a-z]*' "$d/g.log" | tr '\n' '|')" "--- full part a|--- full part corpus|--- full part sweeps|"
+  coll; mkdir -p "$d/dl/gate-$O-extra/parts"; part extra s9; cp "$d/r/extra.log" "$d/dl/gate-$O-extra/parts/"
+  collect "$T" "$d/dl" "$O" "$d/p" "$d/g.log"; aggregate "$T" "$d/p" "$O" > "$d/out" 2>&1
+  chk "plant: an uploaded part the table does not name reaches the aggregate and is red" "$?:$(grep -c 'part extra: a log for a part the table does not name' "$d/out")" "1:1"
+  chk "control: an extra part's log follows the table's in gate.log" "$(grep -o '^--- full part [a-z]*' "$d/g.log" | tail -1)" "--- full part extra"
+  coll; mkdir -p "$d/dl/gate-$O/parts" "$d/dl/gate-fedcba98-x/parts"; echo decoy > "$d/dl/gate-$O/parts/zz.log"; echo decoy > "$d/dl/gate-fedcba98-x/parts/yy.log"
+  collect "$T" "$d/dl" "$O" "$d/p" "$d/g.log"
+  chk "control: collect ignores the aggregate's artifact and another object's" "$(ls "$d/p" | tr '\n' ' ')" "a.log corpus.log sweeps.log "
+
+  ## The workflow's own shell (#1646 review N4): each step that tees into parts/ makes it first, since
+  ## tee opens its file before full.sh runs, and a missing directory turns every part red.
+  chk "the real gate.yml: every step that writes parts/ creates it first" "$(workflow_parts_ok "$ROOT/.github/workflows/gate.yml"; echo $?)" "0"
+  sed '/^          mkdir -p parts$/d' "$ROOT/.github/workflows/gate.yml" > "$d/g.yml"
+  chk "plant: a gate.yml whose part step tees into parts/ without creating it is refused" "$(workflow_parts_ok "$d/g.yml" 2>/dev/null; echo $?)" "1"
+
   printf 'if full_part_runs s1; then\nfi\nif full_part_runs s2; then\nfi\nif full_part_runs xb; then\nfi\nif full_part_runs sweeps; then\nfi\n' > "$d/f.sh"
   guards_match_table "$d/f.sh" "$T" > /dev/null; chk "control: one guard per table stage matches" "$?" "0"
   printf 'if full_part_runs s9; then\n' >> "$d/f.sh"; guards_match_table "$d/f.sh" "$T" > /dev/null
@@ -157,6 +227,7 @@ sweeps sweeps'
 
 case "${1:-}" in
   --aggregate) aggregate "$(bash "$ROOT/scripts/full.sh" --parts)" "${2:?the directory of part logs}" "${3:-}" ;;
+  --collect) collect "$(bash "$ROOT/scripts/full.sh" --parts)" "${2:?the download directory}" "${3:?the gate object}" "${4:?the parts directory}" "${5:?the gate log}" ;;
   --self-test) self_test ;;
   -h|--help|'') sed -n '2,/^set -u/p' "${BASH_SOURCE[0]}" | sed '$d'; [ -n "${1:-}" ] ;;
   *) echo "full parts: unknown argument '$1' (try --help)" >&2; exit 2 ;;
