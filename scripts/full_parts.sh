@@ -23,7 +23,8 @@
 #   - the sweeps part reports `sweeps STATUS=RAN`. Any other status prints the same "SWEEPS DID NOT RUN"
 #     verdict full.sh prints.
 #
-# Usage:  bash scripts/full_parts.sh --aggregate <dir-of-<part>.log> <gate-object-sha>
+# Usage:  bash scripts/full_parts.sh --collect <download-dir> <gate-object-sha> <parts-dir> <gate.log>
+#         bash scripts/full_parts.sh --aggregate <dir-of-<part>.log> <gate-object-sha>
 #         bash scripts/full_parts.sh --self-test
 set -u
 export LC_ALL=C
@@ -84,11 +85,31 @@ aggregate() {
   ## pre-build stages run in every part, so their lines would otherwise print once per part (#1598).
   for p in $(printf '%s\n' "$table" | awk '{ print $1 }' | uniq); do
     grep -E '^full part cover: [a-z]+ ' "$dir/$p.log" | sed "s/^full part cover: /$p /"
-  done | awk '!seen[$2]++ { p = $1; $1 = ""; sub(/^ /, ""); print "    [" p "] " $0 }'
+  done | awk '!seen[$2]++ { p = $1; sub(/^[^ ]+ /, ""); print "    [" p "] " $0 }'
   ## The values the serial verdict prints as `NO COVERAGE LINE` when empty (full.sh: ird_cover, fc_line,
   ## ig_line) say so here too, rather than dropping out of the verdict unseen.
   for n in $FULL_PARTS_COVER_REQUIRED; do
     grep -qE "^full part cover: $n " "$dir"/*.log 2>/dev/null || echo "    [?] $n NO COVERAGE LINE"
+  done
+  return 0
+}
+
+## collect TABLE DOWNLOADED SHA PARTSDIR GATELOG -> copies every part log the matrix uploaded
+## (DOWNLOADED/gate-SHA-<anything>/parts/*.log) into PARTSDIR, not only the table's, so a matrix part
+## the table does not name reaches the aggregate, which refuses it (#1598); appends them to GATELOG in
+## table order, then any extra part. gate.yml's verdict job runs it, so the self-test can plant the
+## artifacts it reads.
+collect() {
+  local table="$1" dl="$2" sha="$3" pd="$4" gl="$5" f p parts
+  mkdir -p "$pd"
+  for f in "$dl"/gate-"$sha"-*/parts/*.log; do
+    [ -f "$f" ] && cp "$f" "$pd/$(basename "$f")"
+  done
+  parts="$(printf '%s\n' "$table" | awk '{ print $1 }' | uniq)"
+  for p in $parts; do [ -f "$pd/$p.log" ] && cat "$pd/$p.log" >> "$gl"; done
+  for f in "$pd"/*.log; do
+    [ -f "$f" ] || continue
+    printf '%s\n' "$parts" | grep -qx "$(basename "$f" .log)" || cat "$f" >> "$gl"
   done
   return 0
 }
@@ -157,6 +178,23 @@ sweeps sweeps'
   chk "control: sweeps that did not run are green but say so" "$(grep -c 'SWEEPS DID NOT RUN' "$d/out")" "1"
   green; sed -i.b '/STATUS=/d' "$d/r/sweeps.log"; chk "plant: a sweeps part with no STATUS is red" "$(run)" "1:1"
 
+  green; echo "full part cover: zz a  b|c — d	e" >> "$d/r/a.log"; run > /dev/null
+  chk "control: a coverage value keeps its spaces, tabs and punctuation" "$(grep -cF "    [a] zz a  b|c — d	e" "$d/out")" "1"
+
+  ## collect: the artifacts as download-artifact@v4 lays them out (one directory per artifact)
+  coll() { rm -rf "$d/dl" "$d/p" "$d/g.log"; green
+    for p in a corpus sweeps; do mkdir -p "$d/dl/gate-$O-$p/parts"; cp "$d/r/$p.log" "$d/dl/gate-$O-$p/parts/"; done; }
+  coll; collect "$T" "$d/dl" "$O" "$d/p" "$d/g.log"
+  chk "control: collect copies the table's parts" "$(ls "$d/p" | tr '\n' ' ')" "a.log corpus.log sweeps.log "
+  chk "control: collect writes gate.log in table order" "$(grep -o '^--- full part [a-z]*' "$d/g.log" | tr '\n' '|')" "--- full part a|--- full part corpus|--- full part sweeps|"
+  coll; mkdir -p "$d/dl/gate-$O-extra/parts"; part extra s9; cp "$d/r/extra.log" "$d/dl/gate-$O-extra/parts/"
+  collect "$T" "$d/dl" "$O" "$d/p" "$d/g.log"; aggregate "$T" "$d/p" "$O" > "$d/out" 2>&1
+  chk "plant: an uploaded part the table does not name reaches the aggregate and is red" "$?:$(grep -c 'part extra: a log for a part the table does not name' "$d/out")" "1:1"
+  chk "control: an extra part's log follows the table's in gate.log" "$(grep -o '^--- full part [a-z]*' "$d/g.log" | tail -1)" "--- full part extra"
+  coll; mkdir -p "$d/dl/gate-$O/parts" "$d/dl/gate-fedcba98-x/parts"; echo decoy > "$d/dl/gate-$O/parts/zz.log"; echo decoy > "$d/dl/gate-fedcba98-x/parts/yy.log"
+  collect "$T" "$d/dl" "$O" "$d/p" "$d/g.log"
+  chk "control: collect ignores the aggregate's artifact and another object's" "$(ls "$d/p" | tr '\n' ' ')" "a.log corpus.log sweeps.log "
+
   printf 'if full_part_runs s1; then\nfi\nif full_part_runs s2; then\nfi\nif full_part_runs xb; then\nfi\nif full_part_runs sweeps; then\nfi\n' > "$d/f.sh"
   guards_match_table "$d/f.sh" "$T" > /dev/null; chk "control: one guard per table stage matches" "$?" "0"
   printf 'if full_part_runs s9; then\n' >> "$d/f.sh"; guards_match_table "$d/f.sh" "$T" > /dev/null
@@ -173,6 +211,7 @@ sweeps sweeps'
 
 case "${1:-}" in
   --aggregate) aggregate "$(bash "$ROOT/scripts/full.sh" --parts)" "${2:?the directory of part logs}" "${3:-}" ;;
+  --collect) collect "$(bash "$ROOT/scripts/full.sh" --parts)" "${2:?the download directory}" "${3:?the gate object}" "${4:?the parts directory}" "${5:?the gate log}" ;;
   --self-test) self_test ;;
   -h|--help|'') sed -n '2,/^set -u/p' "${BASH_SOURCE[0]}" | sed '$d'; [ -n "${1:-}" ] ;;
   *) echo "full parts: unknown argument '$1' (try --help)" >&2; exit 2 ;;

@@ -80,7 +80,6 @@ jobs:
         run: |
           ulimit -c 0
           set -o pipefail
-          mkdir -p parts
           { echo "gate object: $(git rev-parse HEAD)  base: $(git merge-base origin/main HEAD)  runner: $(nproc) cpu  part: $ALATYR_FULL_PART"
             nix develop -c bash scripts/full.sh --force-sweeps; } 2>&1 | tee "parts/$ALATYR_FULL_PART.log"
 
@@ -125,18 +124,10 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p parts
-          # Every part log the matrix uploaded, not only the table's: a matrix part the table does not
-          # name must reach the aggregate, which refuses it (#1598). gate.log keeps table order, then
-          # any such extra part.
-          for f in downloaded/gate-${{ github.sha }}-*/parts/*.log; do
-            [ -f "$f" ] && cp "$f" "parts/$(basename "$f")"
-          done
-          table="$(bash scripts/full.sh --parts | awk '{ print $1 }' | uniq)"
-          for p in $table; do [ -f "parts/$p.log" ] && cat "parts/$p.log" >> gate.log; done
-          for f in parts/*.log; do
-            [ -f "$f" ] || continue
-            printf '%s\n' "$table" | grep -qx "$(basename "$f" .log)" || cat "$f" >> gate.log
-          done
+          # Every part log the matrix uploaded, not only the table's, so a matrix part the table does
+          # not name reaches the aggregate, which refuses it; gate.log in table order, then any extra
+          # part (#1598). In full_parts.sh so its self-test plants the artifacts.
+          bash scripts/full_parts.sh --collect downloaded "${{ github.sha }}" parts gate.log
           for f in corpus.manifest explain.txt; do
             [ -f "downloaded/gate-${{ github.sha }}-corpus/$f" ] && cp "downloaded/gate-${{ github.sha }}-corpus/$f" .
           done
