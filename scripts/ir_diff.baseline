@@ -1,30 +1,26 @@
-4
-# ir_diff: programs where the x86 emitter and the x86-via-IR path disagree, held so the count cannot
-# grow. MEASURED on a clean checkout of upstream main fdc40f6 (the reseed + #943 revision), corpus 2332
-# programs (with-ir=639, ir-fns=1130, agree=635), Stage1 from scripts/fixpoint.sh.
+5
+# ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
+# flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
+# emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
+# run 43310061101, part ir) at #1604 restacked onto main aa45ef19, Stage1 built by the seed: corpus 2623
+# programs, with-ir=756, ir-fns=1354, agree=751, disagree=5 (build=4 exit=1 stdout=0), verify-failed=0,
+# dump-failed=1 (test/issue926_const_qualified_same_name_ok.al, the front-half crash every path has,
+# #1567, recorded in scripts/known-deviations.tsv).
 #
-# It was 5 and it is 4 because #943 landed: `lower_bugA_neg_operand.al` — where legacy x86 answered 25
-# while the file declares TRAP per spec §6.5 and owner decision A, and all four other paths trapped — now
-# emits `jnc` and traps on both paths. That was the one silently-wrong value in the set, and it was in
-# the path that ships by default. Its row left by being FIXED, which is the only way a row leaves here.
+# It was 4 and it is 5 because the flip's #1579 fixture is new: every row below is the LEGACY path
+# being wrong, and the default answers what the fixture states and what aarch64, riscv64 and wasm
+# answer. A row leaves when the legacy emitter goes (docs/ir.md §7.2), or by being fixed there.
 #
-# The four that remain are ONE class, and the spec already decides them — x86 is the ONLY path that
-# refuses, while x86-ir, aarch64, riscv64 and wasm agree on the value read off the source:
-#   STOPGAP-IR-RUNS (3) — the file documents its own refusal ("refuse rather than emit a silent
-#   word-0-only store"), and the IR path does not need the stopgap because it lowers the shape correctly:
-#     test/deep_field_agg_enum_reject.al        x86 build 1   x86-ir run 42
-#     test/deep_field_agg_var_reject.al         x86 build 1   x86-ir run 42
-#     test/packed_in_plain_struct.al            x86 build 1   x86-ir run 20
-#   These are stopgaps in the legacy emitter, which §7.2 moves into the builder or sema at slice 9 when
-#   the legacy emitter goes. Nothing to decide, nothing to guess: corroboration.sh shows four backends
-#   agreeing on the value.
-#   UNEXPLAINED (1) — `test/reject_local_name_two_aggregate_types.al` (x86 build 1, x86-ir run 109)
-#   carries no machine-readable declaration in its header, so `oracle` cannot attribute it even though its
-#   prose cites Declarations §5/§6.1 and the other three backends answer 109. It is NOT an open language
-#   question — spec/spec/40-declarations.md allows shadowing across scopes and rejects only same-scope
-#   redeclaration, so the program is VALID and x86's refusal is the defect (its slot map keys a frame
-#   slot by NAME for the whole function, §2.4 row 6). Closing it is two ordered steps: make x86's slot
-#   map per-binding like collect_slots, then reclassify the fixture from reject_* to accept — the second
-#   before the first would turn the gate red, since reject_* is the corpus manifest's "must refuse" class.
+#   legacy refuses, the default runs (the four #1022 stopgaps, `## expect: run N` in each file):
+#     test/deep_field_agg_enum_reject.al                legacy build 1   default run 42
+#     test/deep_field_agg_var_reject.al                 legacy build 1   default run 42
+#     test/packed_in_plain_struct.al                    legacy build 1   default run 20
+#     test/reject_local_name_two_aggregate_types.al     legacy build 1   default run 109  (#406)
+#   legacy answers a value no arm computes, the default traps (`## expect(x86_64): trap`):
+#     test/issue1579_match_no_arm_traps.al              legacy run 255   default run 132  (#1579)
+#
+# ir_diff prints all five as UNEXPLAINED: its `oracle` (scripts/fixture_oracle.sh) reads only the
+# legacy header shapes (`## build_reject`, `## Expected exit: N`) in the first 30 lines, never the
+# `## expect:` directive these files state. Every row is explained above, by its file's own directive.
 #
 # Lowering the number means fixing a row, not editing this file.
