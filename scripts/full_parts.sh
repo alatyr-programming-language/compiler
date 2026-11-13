@@ -29,6 +29,9 @@ set -u
 export LC_ALL=C
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+## The coverage names full.sh's serial verdict defaults to `NO COVERAGE LINE` (#1598)
+FULL_PARTS_COVER_REQUIRED="ird fc ig"
+
 ## aggregate TABLE DIR OBJECT -> stdout: the verdict; 0 GREEN, 1 anything else
 aggregate() {
   local table="$1" dir="$2" obj="$3" bad=0 p want got log n red sw="" xb=0 reasons=""
@@ -77,8 +80,15 @@ aggregate() {
     echo "    landing any change that can reach a backend. ***"
   fi
   echo "    gate object:     $obj, $(printf '%s\n' "$table" | awk '{ print $1 }' | uniq | wc -l | tr -d ' ') parts in parallel"
+  ## Each coverage value once over the run, under the first part (table order) that reports it: the
+  ## pre-build stages run in every part, so their lines would otherwise print once per part (#1598).
   for p in $(printf '%s\n' "$table" | awk '{ print $1 }' | uniq); do
-    grep -E '^full part cover: [a-z]+ ' "$dir/$p.log" | awk '!seen[$4]++' | sed "s/^full part cover: /    [$p] /"
+    grep -E '^full part cover: [a-z]+ ' "$dir/$p.log" | sed "s/^full part cover: /$p /"
+  done | awk '!seen[$2]++ { p = $1; $1 = ""; sub(/^ /, ""); print "    [" p "] " $0 }'
+  ## The values the serial verdict prints as `NO COVERAGE LINE` when empty (full.sh: ird_cover, fc_line,
+  ## ig_line) say so here too, rather than dropping out of the verdict unseen.
+  for n in $FULL_PARTS_COVER_REQUIRED; do
+    grep -qE "^full part cover: $n " "$dir"/*.log 2>/dev/null || echo "    [?] $n NO COVERAGE LINE"
   done
   return 0
 }
@@ -97,7 +107,7 @@ guards_match_table() {
 }
 
 self_test() {
-  local d rc=0 n=0 T O=0123abcd
+  local d rc=0 n=0 T O=0123abcd FULL_PARTS_COVER_REQUIRED=ird
   d="$(mktemp -d)"; trap 'rm -rf "$d"' RETURN
   chk() { n=$((n + 1)); if [ "$2" = "$3" ]; then echo "  ok   $1"; else echo "  FAIL $1: got [$2] want [$3]"; rc=1; fi; }
   T='a s1
@@ -109,7 +119,9 @@ sweeps sweeps'
     { echo "gate object: $O  base: b  runner: 4 cpu"; echo "*** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (9 lines) ***"
       echo "full part: $p ran=$r"; [ "$p" = sweeps ] && echo "full part: sweeps STATUS=RAN"
       [ "$p" = corpus ] && echo "xbackend diff: paths=9 rows=9"
-      echo "full part cover: $p covered"; for x in "$@"; do echo "$x"; done
+      echo "full part cover: ce shared by every part"; echo "full part cover: $p covered"
+      [ "$p" = corpus ] && echo "full part cover: ird 4 disagree"
+      for x in "$@"; do echo "$x"; done
       echo "--- full part $p: GREEN ---"; } > "$d/r/$p.log"
   }
   green() { rm -rf "$d/r"; mkdir -p "$d/r"; part a s1,s2; part corpus xb; part sweeps sweeps; }
@@ -117,7 +129,11 @@ sweeps sweeps'
 
   green; chk "control: every part green and complete is GREEN, with exactly one verdict line" "$(run)" "0:1"
   chk "control: the green verdict says the sweeps ran" "$(grep -c '^\*\*\* FULL GATE: GREEN (sweeps RAN) \*\*\*$' "$d/out")" "1"
-  chk "control: the green verdict carries each part's coverage" "$(grep -c '^    \[[a-z]*\] ' "$d/out")" "3"
+  chk "control: the green verdict carries each part's coverage" "$(grep -c '^    \[[a-z]*\] ' "$d/out")" "5"
+  chk "control: a coverage line every part reports prints once, under the first part" "$(grep -c '^    \[a\] ce shared by every part$' "$d/out")" "1"
+  chk "control: no required coverage value is missing" "$(grep -c 'NO COVERAGE LINE' "$d/out")" "0"
+  green; sed -i.b '/^full part cover: ird /d' "$d/r/corpus.log"; run > /dev/null
+  chk "plant: a required coverage value no part reports says NO COVERAGE LINE" "$(grep -c '^    \[?\] ird NO COVERAGE LINE$' "$d/out")" "1"
   green; rm "$d/r/corpus.log"; chk "plant: a missing part (cancelled, skipped) is red" "$(run)" "1:1"
   green; : > "$d/r/a.log"; chk "plant: an empty part log is red" "$(run)" "1:1"
   green; sed -i.b 's/: GREEN ---$/: FAILURES ---/' "$d/r/a.log"; echo "full part: a red=s2" >> "$d/r/a.log"; chk "plant: a red part is red" "$(run)" "1:1"

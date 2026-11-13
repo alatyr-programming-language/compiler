@@ -125,10 +125,17 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p parts
-          for p in $(bash scripts/full.sh --parts | awk '{ print $1 }' | uniq); do
-            f="downloaded/gate-${{ github.sha }}-$p/parts/$p.log"
-            [ -f "$f" ] && cp "$f" "parts/$p.log"
-            [ -f "parts/$p.log" ] && cat "parts/$p.log" >> gate.log
+          # Every part log the matrix uploaded, not only the table's: a matrix part the table does not
+          # name must reach the aggregate, which refuses it (#1598). gate.log keeps table order, then
+          # any such extra part.
+          for f in downloaded/gate-${{ github.sha }}-*/parts/*.log; do
+            [ -f "$f" ] && cp "$f" "parts/$(basename "$f")"
+          done
+          table="$(bash scripts/full.sh --parts | awk '{ print $1 }' | uniq)"
+          for p in $table; do [ -f "parts/$p.log" ] && cat "parts/$p.log" >> gate.log; done
+          for f in parts/*.log; do
+            [ -f "$f" ] || continue
+            printf '%s\n' "$table" | grep -qx "$(basename "$f" .log)" || cat "$f" >> gate.log
           done
           for f in corpus.manifest explain.txt; do
             [ -f "downloaded/gate-${{ github.sha }}-corpus/$f" ] && cp "downloaded/gate-${{ github.sha }}-corpus/$f" .
