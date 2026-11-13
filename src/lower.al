@@ -32436,6 +32436,40 @@ fill_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
+## #987 — the type arguments `fill_inferred_targs` may write: only those whose explicit call is known to
+## lower right. A builtin scalar or `str` that no declaration shadows, or a bare name that exactly ONE
+## declaration in the program carries, a non-generic struct or enum. Not a generic application
+## (`Option(S)`, `Result(S, u64)`: the explicit `at(Option(S), …)` itself answers wrong) and not a path
+## (`geo::S`), nor a name two modules declare — the receiver's type text may sit in another module's
+## source, where the bare name means another type than at the call (`geo::S` vs main's `S`: 63 for 42).
+## Anything else keeps the implicit call and the parent's behaviour, a located refusal among them.
+fill_targ_plain := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 0 { return false }
+  b := bytes(str_at((src + s), n))
+  for i in 0..n {
+    c : u8 = b[i]
+    alpha := (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or c == 95
+    if not alpha and (i == 0 or c < 48 or c > 57) { return false }
+  }
+  tx := str_at((src + s), n)
+  builtin := tx == "u8" or tx == "u16" or tx == "u32" or tx == "u64" or tx == "usize" or tx == "i8" or tx == "i16" or tx == "i32" or tx == "i64" or tx == "isize" or tx == "bool" or tx == "f32" or tx == "f64" or tx == "str"
+  mut hits : usize = 0
+  mut hi : usize = 0
+  cnt := rt::vec_len(deref(decls))
+  for i in 0..cnt {
+    d := deref(lower_ctx::decl_get(decls, i))
+    if lower_ctx::streq(src, d.name_start, d.name_len, s, n) {
+      hits += 1
+      hi = i
+    }
+  }
+  if builtin { return hits == 0 }
+  if hits != 1 { return false }
+  if deref(lower_ctx::decl_get(decls, hi)).is_generic { return false }
+  ## the one declaration is the struct or enum the resolvers name (asked only once it is unique, so
+  ## their located ambiguity refusal cannot fire here)
+  struct_decl_of(decls, src, s, n) == i64(hi) or enum_decl_of(decls, src, s, n) == i64(hi)
+}
 ## #987 — Types §4.5: a call through an AUTO-REF receiver omits the callee's type arguments
 ## (`v.at(i)` ≡ `at(T, ptr(v), i)`, and `v[i]`, which the driver rewrites to `at(v, i)`), and they are
 ## read from the receiver's type. The mono passes already name the right instance (`at__S`) through
@@ -32507,6 +32541,7 @@ fill_inferred_targs := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms
             ut : UfcsTarg = ufcs_recv_targ(re, tp, FILL_FN_BODY, FILL_FN_TAIL, FILL_FN_PARAMS, xs, xn, decls, src, a)
             match ut {
               UfcsTarg::Read(us, un) => {
+                if not fill_targ_plain(decls, src, us, un) { return }
                 th := base_type_name(src, us, un)
                 tv := node_ptr(Expr, deref(mar), mk_expr(deref(mar), Expr.Var(th.s, th.n)))
                 h := mk_arg(deref(mar), Arg(e = tv, next = Option(ptr(mut Arg)).None))
@@ -32532,11 +32567,16 @@ fill_inferred_targs := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms
     Some(tl1) => { tq := deref(arg_p(tl1)); set_arg(deref(mar), tl1, Arg(e = tq.e, next = cp.ah)) }
     None => { return }
   }
-  ## the callee qualified by its declaration's module (`alloc__vec` → `alloc::vec::at`)
-  mut msb := rt::strbuf(deref(mar), 64)
+  ## the callee qualified by its declaration's module (`alloc__vec` → `alloc::vec::at`). The buffer
+  ## never grows and `rt::sb_byte` refuses a byte once `len + 8 > cap`, so it is sized from the name
+  ## it will hold: each `__` becomes `::` (same length), plus the final `::`, plus the name, plus the
+  ## 8-byte write margin — a long module path (`collections__sparse_matrix_storage`) fits.
   dms := d.mod_start
   dml := d.mod_len
+  mut msb := rt::strbuf(deref(mar), dml + 2 + d.name_len + 8)
   mut j : usize = 0
+  ## #1652 — keep this loop's `if`/`else` multi-line: the one-line `{ <call>; j += 2 } else { <call>;
+  ## j += 1 }` form inside a `while` drops both increments (seed and tree), and the loop never ends.
   while j < dml {
     if j + 1 < dml and str_at((src + dms + j), 1) == "_" and str_at((src + dms + j + 1), 1) == "_" {
       push_str(msb, "::")
@@ -32555,6 +32595,9 @@ fill_inferred_targs := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms
   nn := cp.na + ntpc
   if generic_decl_of(decls, src, qs, qn, ms, ml, nn, head, a) != di { return }
   if ret_call_target(decls, src, qs, qn, nn, head, a) != di { return }
+  ## the synthesized name is no source position: a located refusal at this call shows the line of the
+  ## call the author wrote (`ast::span_origin`), not the synthesized-construct marker
+  ast::synth_origin_mark(qs, cp.cs)
   set_expr(e, Expr.Call(qs, qn, nn, head))
 }
 ## Walk expression `e`, filling defaults on every `Call` within (itself + all sub-expressions +
