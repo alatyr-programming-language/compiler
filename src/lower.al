@@ -32452,6 +32452,7 @@ fill_targ_plain := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize)
     if not alpha and (i == 0 or c < 48 or c > 57) { return false }
   }
   tx := str_at((src + s), n)
+  ## `char` is left out on purpose, unprobed: no declaration carries it, so it fails closed (no rewrite)
   builtin := tx == "u8" or tx == "u16" or tx == "u32" or tx == "u64" or tx == "usize" or tx == "i8" or tx == "i16" or tx == "i32" or tx == "i64" or tx == "isize" or tx == "bool" or tx == "f32" or tx == "f64" or tx == "str"
   mut hits : usize = 0
   mut hi : usize = 0
@@ -32494,6 +32495,11 @@ fill_inferred_targs := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms
   if di < 0 { return }
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   if not d.is_generic { return }
+  ## only a callee DECLARED in `alloc::vec` (the resolved declaration's own module, as `alloc__fmt`'s
+  ## `display` is asked below): the explicit form is measured right only there. A user generic over a
+  ## user generic struct (`bget(E, ptr(Box(E)))`, `second(E, ptr(Pair(E)))`) answers wrong explicitly
+  ## (103 for 42, #1654), so completing it would turn the implicit call's trap into a wrong value.
+  if str_at((src + d.mod_start), d.mod_len) != "alloc__vec" { return }
   ## the type parameters lead and are all omitted; the first value parameter is `ptr([mut] X)`
   mut ntpc : usize = 0
   mut recv : Option(ptr(mut Param)) = Option(ptr(mut Param)).None
