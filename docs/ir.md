@@ -983,6 +983,12 @@ removes the question instead:
    changes what an operation does on overflow, never which operations exist, so it does not exempt a
    pair.
 
+   - **A result sink is held to the same rule** (#942). An early `return <v>` and a fn tail whose
+     recorded integer type differs in signedness from the declared result are refused at the value
+     (`sema_result_sign_err`; the same class, low bits `SIGNEDNESS_SINK_RESULT`, worded "the returned
+     value is …"). A literal-only value takes the declared result's type. Arguments, assignments and
+     width are #942's later slices.
+
    - **The verdict reads the records, so recording is on for every check** (`ir::STY_ON` starts true).
      A refusal that fired only when a consumer had asked for records would make `check` and `build`
      disagree with `x86-ir` and the census. Measured on the self-build, records cost ~35% of a
