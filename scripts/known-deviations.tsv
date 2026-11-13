@@ -319,6 +319,8 @@ aarch64	test/issue926_const_qualified_same_name_ok.al	run/1	#1567
 aarch64	test/issue986_expect_call_receiver.al	run/133	#1200
 aarch64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
 aarch64	test/issue987_vec_index_ops.al	run/133	#1200
+aarch64	test/issue987_vec_str_enum_result.al	run/133 #1200
+aarch64	test/issue987_vec_struct_result.al	run/133 #1200
 aarch64	test/issue987_vec_ufcs_autoref.al	run/133	#1200
 aarch64	test/issue988_vec_ufcs_subword_instance.al	run/133	#1200
 aarch64	test/issue992_alloc_with_match_arm.al	run/133	#577
@@ -874,6 +876,8 @@ riscv64	test/issue926_const_qualified_same_name_ok.al	run/1	#1567
 riscv64	test/issue986_expect_call_receiver.al	run/133	#1200
 riscv64	test/issue986_expect_multiword_value_reject.al	run/133	#1200
 riscv64	test/issue987_vec_index_ops.al	run/133	#1200
+riscv64	test/issue987_vec_str_enum_result.al	run/133 #1200
+riscv64	test/issue987_vec_struct_result.al	run/133 #1200
 riscv64	test/issue987_vec_ufcs_autoref.al	run/133	#1200
 riscv64	test/issue988_vec_ufcs_subword_instance.al	run/133	#1200
 riscv64	test/issue992_alloc_with_match_arm.al	run/133	#577
@@ -1429,6 +1433,8 @@ wasm	test/issue926_const_qualified_same_name_ok.al	run/1	#1567
 wasm	test/issue986_expect_call_receiver.al	run/134	#1200
 wasm	test/issue986_expect_multiword_value_reject.al	run/134	#1200
 wasm	test/issue987_vec_index_ops.al	run/134	#1186
+wasm	test/issue987_vec_str_enum_result.al	run/134 #1186
+wasm	test/issue987_vec_struct_result.al	run/134 #1186
 wasm	test/issue987_vec_ufcs_autoref.al	run/134	#1186
 wasm	test/issue988_vec_ufcs_subword_instance.al	run/134	#1186
 wasm	test/issue992_alloc_with_match_arm.al	run/134	#1190

@@ -4,15 +4,15 @@
 # now passes or traps (STALE: the fix deletes its own row), and a row naming no cell (UNKNOWN).
 # A TRAP (the checked-failure `ud2`, rc 132) is a recorded outcome and has no row; any other signal, a
 # timeout or a stray exit code is a CRASH and is held (#1277). The verdict holds a WRONG's check code, a
-# CRASH's rc and only the kind of a refusal (its message carries absolute paths). Measured at #1604
-# merged onto main ba74cc02 on omen, native x86_64, compiler built from this tree: 428 cells, OK=377
-# WRONG=0 TRAP=3 CRASH=19 REFUSED=29. 48 rows under 7 open issues: 29 REFUSED (20 #1250, 8 #1280,
-# 1 #1249) and 19 CRASH 139 (10 #987: `v[i]` and `v[a..b]` over a struct or enum element; 5 #1256: UFCS
-# `v.at(i)`; 2 #1608: an `Option` element of `vec::iter`'s slice; 2 #1308: a grown OMap of `Option`
-# values). The omap, oset, map, strmap, string and strbuf cells (#1278) add 3 of the rows. The 3
-# TRAP 132 cells, hashmap.key.{i8,i64,enumN}, are all #1304: the structural hash's checked `u64(v)` of
-# a negative leaf. The 25 `char` rows of #1244 are gone: since the x86_64 IR flip (#980) those cells
-# build and observe OK.
+# CRASH's rc and only the kind of a refusal (its message carries absolute paths). Measured at #987's
+# fix on main 9e60e8aa on omen, native x86_64, compiler built from this tree: 428 cells, OK=392
+# WRONG=0 TRAP=3 CRASH=4 REFUSED=29. 33 rows under 5 open issues: 29 REFUSED (20 #1250, 8 #1280,
+# 1 #1249) and 4 CRASH 139 (2 #1608: an `Option` element of `vec::iter`'s slice; 2 #1308: a grown
+# OMap of `Option` values). The 15 struct and enum cells of `v[i]`, `v[a..b]` and `v.at(i)` (#987,
+# #1256) are gone with #987's fix. The omap, oset, map, strmap, string and strbuf cells (#1278) add 3
+# of the rows. The 3 TRAP 132 cells, hashmap.key.{i8,i64,enumN}, are all #1304: the structural hash's
+# checked `u64(v)` of a negative leaf. The 25 `char` rows of #1244 are gone: since the x86_64 IR flip
+# (#980) those cells build and observe OK.
 x86_64	deque.front_back.array3	REFUSED	#1250
 x86_64	deque.pop_back.array3	REFUSED	#1250
 x86_64	deque.pop_front.array3	REFUSED	#1250
@@ -30,13 +30,8 @@ x86_64	vec.for_in.option_u64	CRASH 139	#1608
 x86_64	vec.get.array3	REFUSED	#1250
 x86_64	vec.grow.array3	REFUSED	#1250
 x86_64	vec.index_read.array3	REFUSED	#1250
-x86_64	vec.index_read.enum0	CRASH 139	#987
-x86_64	vec.index_read.enumN	CRASH 139	#987
 x86_64	vec.index_read.option_ptr	REFUSED	#1280
 x86_64	vec.index_read.option_u64	REFUSED	#1280
-x86_64	vec.index_read.struct1	CRASH 139	#987
-x86_64	vec.index_read.struct2	CRASH 139	#987
-x86_64	vec.index_read.struct3	CRASH 139	#987
 x86_64	vec.index_write.array3	REFUSED	#1250
 x86_64	vec.index_write.option_ptr	REFUSED	#1280
 x86_64	vec.index_write.option_u64	REFUSED	#1280
@@ -44,20 +39,10 @@ x86_64	vec.len.array3	REFUSED	#1250
 x86_64	vec.pop.array3	REFUSED	#1250
 x86_64	vec.push_at.array3	REFUSED	#1250
 x86_64	vec.range.array3	REFUSED	#1250
-x86_64	vec.range.enum0	CRASH 139	#987
-x86_64	vec.range.enumN	CRASH 139	#987
 x86_64	vec.range.option_ptr	REFUSED	#1280
 x86_64	vec.range.option_u64	REFUSED	#1280
-x86_64	vec.range.struct1	CRASH 139	#987
-x86_64	vec.range.struct2	CRASH 139	#987
-x86_64	vec.range.struct3	CRASH 139	#987
 x86_64	vec.set.array3	REFUSED	#1250
 x86_64	vec.try_at.array3	REFUSED	#1250
 x86_64	vec.ufcs.array3	REFUSED	#1250
-x86_64	vec.ufcs.enum0	CRASH 139	#1256
-x86_64	vec.ufcs.enumN	CRASH 139	#1256
 x86_64	vec.ufcs.option_ptr	REFUSED	#1280
 x86_64	vec.ufcs.option_u64	REFUSED	#1280
-x86_64	vec.ufcs.struct1	CRASH 139	#1256
-x86_64	vec.ufcs.struct2	CRASH 139	#1256
-x86_64	vec.ufcs.struct3	CRASH 139	#1256
