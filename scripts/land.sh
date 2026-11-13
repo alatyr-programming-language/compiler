@@ -609,8 +609,8 @@ LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scr
 ## lib/ is not part of it: the check does not require its removal, so the rewrite is a later PR's.
 ## A `tree` row never retires this way: it tracks a tree defect, which no promotion answers, so its
 ## removal in a tail is refused. What the shape cannot see is WHICH `seed` row the promoted seed
-## answers: any of them may go, with its tree-regression guard, while a reseed sits under it in a tail no landing has walked yet. That trust
-## is the reseed's own: the integrator's tail, gated as the promotion before it is pushed.
+## answers: any of them may go, with its tree-regression guard, while a reseed sits under it in a
+## tail no landing has walked yet. That trust is the reseed's own: the integrator's tail, gated as the promotion before it is pushed.
 LAND_TAIL_RETIRE_RE='^(scripts/seed_forms\.tsv|scripts/seed_forms/[a-z0-9_]+\.al)$'
 main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
   if [ "$1" -ge 2 ]; then
