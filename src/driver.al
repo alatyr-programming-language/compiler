@@ -2930,8 +2930,8 @@ d_idxop_expr := fn(e : ptr(Expr), body : Option(ptr(mut Stmt)), ph : Option(ptr(
       d_idxop_expr(b, body, ph, mq, decls, src, na)
       d_idxop_expr(ix, body, ph, mq, decls, src, na)
       if d_idxop_base(b, "at", decls, src, body, ph, mq, na) {
-        ## Bound before the store: `deref(p) = f()` keeps only the first word of the node (#1237, seed form
-        ## `store_call_aggregate`).
+        ## Bound before the store. Since seed 0.3.0 a direct `deref(p) = f()` stores every word (#1237), so the
+        ## binding is no longer required; collapsing it moves the compiler's own GAS and is a change of its own.
         ce := d_idxop_call(na, src, "at", b, ix, Option.None)
         ## unchecked-ok: the AST arena owns the node; the in-place rewrite is the d_lift_expr idiom.
         deref(unchecked bitcast(ptr(mut Expr), e)) = ce
@@ -2942,8 +2942,8 @@ d_idxop_expr := fn(e : ptr(Expr), body : Option(ptr(mut Stmt)), ph : Option(ptr(
       d_idxop_expr(lo, body, ph, mq, decls, src, na)
       d_idxop_expr(hi, body, ph, mq, decls, src, na)
       if d_idxop_base(b, "index_range", decls, src, body, ph, mq, na) {
-        ## Bound before the store: `deref(p) = f()` keeps only the first word of the node (#1237, seed form
-        ## `store_call_aggregate`).
+        ## Bound before the store. Since seed 0.3.0 a direct `deref(p) = f()` stores every word (#1237), so the
+        ## binding is no longer required; collapsing it moves the compiler's own GAS and is a change of its own.
         ce := d_idxop_call(na, src, "index_range", b, lo, Option.Some(hi))
         ## unchecked-ok: the AST arena owns the node; the in-place rewrite is the d_lift_expr idiom.
         deref(unchecked bitcast(ptr(mut Expr), e)) = ce
