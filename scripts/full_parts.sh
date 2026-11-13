@@ -114,6 +114,16 @@ collect() {
   return 0
 }
 
+## workflow_parts_ok GATEYML -> 0 when every `run: |` block that writes `parts/` (a `tee` or a `>` into
+## it) runs `mkdir -p parts` before that line, or hands parts/ to --collect, which creates it
+workflow_parts_ok() {
+  awk '
+    /^ *(- name:|- uses:)/ || /^ *run: \|/ { made = 0 }
+    /mkdir -p parts/ || /--collect / { made = 1 }
+    /(tee|>>?) *"?parts\// && !made { print "  gate.yml:" NR ": writes parts/ before creating it" > "/dev/stderr"; bad = 1 }
+    END { exit bad }' "$1"
+}
+
 ## guards_match_table FULLSH TABLE -> 0 when every `if full_part_runs X; then` of FULLSH names a stage of
 ## TABLE once, and every TABLE stage has exactly one guard; prints each mismatch
 guards_match_table() {
@@ -194,6 +204,12 @@ sweeps sweeps'
   coll; mkdir -p "$d/dl/gate-$O/parts" "$d/dl/gate-fedcba98-x/parts"; echo decoy > "$d/dl/gate-$O/parts/zz.log"; echo decoy > "$d/dl/gate-fedcba98-x/parts/yy.log"
   collect "$T" "$d/dl" "$O" "$d/p" "$d/g.log"
   chk "control: collect ignores the aggregate's artifact and another object's" "$(ls "$d/p" | tr '\n' ' ')" "a.log corpus.log sweeps.log "
+
+  ## The workflow's own shell (#1646 review N4): each step that tees into parts/ makes it first, since
+  ## tee opens its file before full.sh runs, and a missing directory turns every part red.
+  chk "the real gate.yml: every step that writes parts/ creates it first" "$(workflow_parts_ok "$ROOT/.github/workflows/gate.yml"; echo $?)" "0"
+  sed '/^          mkdir -p parts$/d' "$ROOT/.github/workflows/gate.yml" > "$d/g.yml"
+  chk "plant: a gate.yml whose part step tees into parts/ without creating it is refused" "$(workflow_parts_ok "$d/g.yml" 2>/dev/null; echo $?)" "1"
 
   printf 'if full_part_runs s1; then\nfi\nif full_part_runs s2; then\nfi\nif full_part_runs xb; then\nfi\nif full_part_runs sweeps; then\nfi\n' > "$d/f.sh"
   guards_match_table "$d/f.sh" "$T" > /dev/null; chk "control: one guard per table stage matches" "$?" "0"

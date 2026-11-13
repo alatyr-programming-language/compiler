@@ -80,6 +80,7 @@ jobs:
         run: |
           ulimit -c 0
           set -o pipefail
+          mkdir -p parts
           { echo "gate object: $(git rev-parse HEAD)  base: $(git merge-base origin/main HEAD)  runner: $(nproc) cpu  part: $ALATYR_FULL_PART"
             nix develop -c bash scripts/full.sh --force-sweeps; } 2>&1 | tee "parts/$ALATYR_FULL_PART.log"
 
