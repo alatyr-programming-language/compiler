@@ -602,15 +602,16 @@ source "$ROOT/scripts/attribution.sh"
 LAND_TAIL_ORACLE_RE='^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline|scripts/xbackend_diff\.baseline)$'
 LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scripts/package_cli_test\.sh|CHANGELOG\.md|changelog\.d/[1-9][0-9]*-[a-z0-9-]+\.md)$'
 ## A seed-forms retirement (#1648): the promotion's gate is red until the promoted seed's newly
-## answered form leaves scripts/seed_forms.tsv (scripts/seed_forms_check.sh: "the seed now handles"),
-## so a promotion that answers one carries a commit removing that row and deleting its planted
-## program. Paths alone say only that it COULD be one (return 4); `seed_retirement_shape_ok` checks the
-## shape and `provenance_tail_order_ok` that a reseed sits under it. A workaround comment in src/ or
-## lib/ is not part of it: the check does not require its removal, so the rewrite is a later PR's.
-## A `tree` row never retires this way: it tracks a tree defect, which no promotion answers, so its
-## removal in a tail is refused. What the shape cannot see is WHICH `seed` row the promoted seed
-## answers: any of them may go, with its tree-regression guard, while a reseed sits under it in a
-## tail no landing has walked yet. That trust is the reseed's own: the integrator's tail, gated as the promotion before it is pushed.
+## answered form leaves scripts/seed_forms.tsv (scripts/seed_forms_check.sh: "the seed now
+## handles"), so a promotion that answers one carries a commit removing that row and deleting its
+## planted program. Paths alone say only that it COULD be one (return 4); `seed_retirement_shape_ok`
+## checks the shape and `provenance_tail_order_ok` that a reseed sits under it. A workaround comment
+## in src/ or lib/ is not part of it: the check does not require its removal, so the rewrite is a
+## later PR's. A `tree` row never retires this way: it tracks a tree defect, which no promotion
+## answers, so its removal in a tail is refused. What the shape cannot see is WHICH `seed` row the
+## promoted seed answers: any of them may go, with its tree-regression guard, while a reseed sits
+## under it in a tail no landing has walked yet. That trust is the reseed's own: the integrator's
+## tail, gated as the promotion before it is pushed.
 LAND_TAIL_RETIRE_RE='^(scripts/seed_forms\.tsv|scripts/seed_forms/[a-z0-9_]+\.al)$'
 main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
   if [ "$1" -ge 2 ]; then
