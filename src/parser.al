@@ -6164,11 +6164,12 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
         if p_out or p_is_arr or str_eq(str_at(pc.src + pts, ptl), "ptr") { panic("selfhost: parameter default only on an `in` value parameter") }
         p_defp = unchecked bitcast(usize, dexpr)
       }
-      ## passing mode: a slice-variadic param is 3 (§7.2); else an array param is 1; else an
-      ## `out`/`in out` param is 2; else 0 (value). (Array takes precedence over out — an `out [T;N]`
-      ## is by-ref already, so it rides the array path. A slice-variadic is never array/out.)
+      ## passing mode: a slice-variadic param is 3 (§7.2); else an array-shaped param is 1 for `in`
+      ## and 4 for `out`/`in out` (#1632: the direction decides copy versus the caller's place,
+      ## Functions §4.1, and whether the binding is writable, Memory §3.1); else an `out`/`in out`
+      ## param is 2; else 0 (value). A slice-variadic is never array/out.
       mut p_pmode : u8 = 0
-      if p_slicevar { p_pmode = 3 } else if p_is_arr { p_pmode = 1 } else if p_out { p_pmode = 2 }
+      if p_slicevar { p_pmode = 3 } else if p_is_arr { if p_out { p_pmode = 4 } else { p_pmode = 1 } } else if p_out { p_pmode = 2 }
       ## a default (`p_defp`) is stored in `pps` — mutually exclusive with a pointer pointee span
       ## (rejected above), so no clash. `pps` is otherwise the pointer-pointee span (or 0).
       mut fpps := pps

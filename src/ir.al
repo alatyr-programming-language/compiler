@@ -2193,7 +2193,7 @@ pub sig_has_fixed_array := fn(d : Decl) -> bool {
     match pp {
       Some(pq) => {
         pm := deref(ast::param_p(pq))
-        if pm.pmode == 1 and pm.pps != 0 { return true }
+        if ast::param_is_array(pm) and pm.pps != 0 { return true }
         pp = pm.next
       }
       None => { break }

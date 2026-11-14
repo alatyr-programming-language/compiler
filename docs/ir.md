@@ -742,7 +742,9 @@ The builder decides, once, how an Alatyr-to-Alatyr call passes its values; the s
 IR signature onto registers or wasm params:
 
 - scalars by value;
-- an aggregate argument by the address of a caller-owned copy (the spec's documented byte-copy);
+- an `in` aggregate argument (a struct, an enum, a fixed array) by the address of a caller-owned copy
+  (the spec's documented byte-copy, Functions §4.1); an `out` / `in out` one by the address of the
+  caller's place itself. A fixed array's direction is `ast::param_array_by_place` (#1632);
 - an aggregate result of **one to eight words** in the result registers (`x0..x7` on aarch64,
   `a0..a7` on riscv64): the IR result is the `ptr` to the value and `ret_words` — recorded once by the
   builder, never recomputed by a backend — tells the selector how many words to read through it. The

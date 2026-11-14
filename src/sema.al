@@ -3322,7 +3322,7 @@ sema_brand_array_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : pt
   sema_brand_array_elems(false, dst, v, off, decls, upto, src, locals, nloc, a)
 }
 ## Issue #698 — the brand sink type of a call parameter. The parser records an array parameter
-## `xs : [T; N]` by its ELEMENT span `T` (`Param.pmode == 1`), so `callee_param_ty` answers `T`'s type.
+## `xs : [T; N]` by its ELEMENT span `T` (`ast::param_is_array`), so `callee_param_ty` answers `T`'s type.
 ## When the source around that span is a fixed-array annotation — `[` before it and `; N ]` after —
 ## this answers the whole annotation as the tag-7 array `Ty` a local `xs : [T; N]` would record, so
 ## the brand judge walks the argument's elements; otherwise `pty` unchanged. A slice `[T]` has no `;`
@@ -4136,8 +4136,11 @@ local_lookup := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n
 ##            Issue #429 marker that keeps `s[i] = v` refused — `prov_str_view`.
 ##   5 / 6    the binding is an inferred ARRAY LITERAL whose elements are all numeric / all boolean —
 ##            `prov_lit_array` builds it, `prov_lit_array_elem` reads it back.
-##   7        the local is a by-reference array-shaped PARAMETER (`pm.pmode == 1`: `a : [T; N]`, and
-##            the tuple parameters that share that representation) — `prov_array_param`.
+##   7        the local is an `out` / `in out` array-shaped PARAMETER (`ast::param_array_by_place`:
+##            `in out a : [T; N]`, and the tuple parameters that share that representation), the
+##            caller's place — `prov_array_param`.
+##   9        the local is an `in` array-shaped PARAMETER (#1632): an immutable binding whatever its
+##            element type — `prov_array_param_in`.
 ##   20 … 25  the binding is a RANGE-SLICE VIEW (`v := backing[lo..hi]`), carrying two sub-facts: the
 ##            BACKING place's write permission, and the element kind its initializer proved. Six
 ##            values, one per (permission x element kind) pair — `prov_view` builds them,
@@ -4165,17 +4168,25 @@ local_lookup := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n
 prov_field_ptr := fn() -> u8 { 1 }
 ## The binding holds a `str` view whose bytes are not an assignable place (Issue #429).
 prov_str_view := fn() -> u8 { 4 }
-## The local is a by-reference array-shaped parameter (`pm.pmode == 1`). SEPARATE from the view family
-## on purpose: until #626 this shared the view's "mutable backing" value because both wanted
-## `sema_write_mutability` to answer 0, and that agreement was the only thing keeping the two apart.
+## The local is an `out` / `in out` array-shaped parameter (`ast::param_array_by_place`). SEPARATE from
+## the view family on purpose: until #626 this shared the view's "mutable backing" value because both
+## wanted `sema_write_mutability` to answer 0, and that agreement was the only thing keeping the two
+## apart. Until #1632 it also stood for the `in` one, whose direction the AST did not keep.
 prov_array_param := fn() -> u8 { 7 }
+## #1632 — the local is an `in` array-shaped parameter (`ast::Param.pmode` 1). Memory §3.1: a binding is
+## immutable unless declared `mut`, and the parameter grammar admits no `mut` (Functions §9 `in-param`),
+## so an element write `xs[i] = v` is ill-formed (Memory §3.3/§3.4) — `sema_write_mutability` answers 1.
+## Its own value rather than 0 because the type-based answers below 0 would read the ELEMENT type
+## (`ts`/`tl`): an element that is a pointer or unresolved would answer "writable", and a function-typed
+## element would turn the local into `prov_fn_value`. Value 9 is produced by no other question.
+prov_array_param_in := fn() -> u8 { 9 }
 ## Issue #1464 — the binding holds a FUNCTION VALUE: its initializer is a `fn(…){…}` lambda, a lifted
 ## reference to one, another function-valued binding, or the NAME of a function declaration, and an
 ## annotation spelling the function type `fn(…) -> R`. A function value is one machine word, a code
 ## address (Functions §1.5), and `check_expr` answers UNKNOWN for it — so the fact that this word is
 ## CODE, with no fields of its own, lives in the provenance byte exactly as #429 put a `str` view
-## there. Value 8 is UNUSED today (the produced set is 1, 4, 5, 6, 7 and the view family 20..25) and is
-## produced by no other question.
+## there. Value 8 was UNUSED before it (the produced set is now 1, 4, 5, 6, 7, 8, 9 and the view family
+## 20..25) and is produced by no other question.
 prov_fn_value := fn() -> u8 { 8 }
 ## The binding is an inferred array literal with a proven homogeneous scalar element kind (`TyInt`
 ## numeric, `TyBool` boolean). Any other kind records no provenance: this is evidence, not inference.
@@ -13515,8 +13526,9 @@ call_arg_lit_incompatible := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
               ## becoming an aggregate (Types §9.4). Every other literal form still gives up here — in
               ## particular a StrLit, because `embed(path)` folds to a StrLit NODE whose spec surface IS
               ## `[u8; N]` (Comptime §2.4), and because `str` is itself a `{ptr, len}` two-word value.
-              if k == pidx and pm.pmode == 1 { isagg = true }
-              if k == pidx and pm.pmode != 0 and pm.pmode != 1 { giveup = true }
+              ## The same holds for the `out` / `in out` array-shaped parameter (`pmode` 4, #1632).
+              if k == pidx and param_is_array(pm) { isagg = true }
+              if k == pidx and pm.pmode != 0 and not param_is_array(pm) { giveup = true }
               k += 1
               pp = pm.next
             }
@@ -17296,11 +17308,13 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
       if prov_view_backing_imm(prov) { return 1 }
       return 0
     }
-    ## An array-shaped parameter is already a caller-backed place in the existing ABI, so its element
-    ## writes stay permitted. It reached this answer through the view family's "mutable backing" value
+    ## An `out` / `in out` array-shaped parameter is the caller's place (Functions §2.1), so its element
+    ## writes are permitted. It reached this answer through the view family's "mutable backing" value
     ## until #626; the two concepts are separate values now and each states its own case (the other
     ## half of this pair is the `prov_array_param()` setter in `check_fn`).
     if prov == prov_array_param() { return 0 }
+    ## #1632: an `in` one is an immutable binding (Memory §3.1, §3.4), whatever its element type.
+    if prov == prov_array_param_in() { return 1 }
     raw := local_lookup(locals, nloc, src, root.s, root.n)
     tag : TyKind = raw.ty.kind
     ## Pointer/deref places have a separate pointer mutability contract. Pattern/loop bindings and
@@ -17525,16 +17539,15 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         if kind_is_ptr(ptag) and pt.nl == 0 and kind_is_ptr(lpp.kind) { pt = lpp }
         mut pbyte := tag_of_kind(ptag)
         if pm.pmode == 2 { pbyte = tag_with_mut(pbyte) }
-        ## Array-shaped parameters are already caller-backed places in the existing ABI (pmode 1: a
-        ## `[T; N]` and the tuple parameters that share that representation); keep their element writes
-        ## compatible with the pre-existing aggregate-parameter contract. Scalar parameters still require
-        ## the explicit `out`/`in out` pmode 2 marker below. This is one half of a pair: the concept has
-        ## its OWN provenance value since #626, and the reason it may be written through is stated at the
-        ## `prov_array_param()` reader in `sema_write_mutability`. Until #626 it borrowed the range-slice
-        ## view's "mutable backing" value, and the only thing holding that alias together was that both
-        ## concepts happened to want the same answer from that one reader.
+        ## An array-shaped parameter (a `[T; N]` and the tuple parameters that share that representation)
+        ## records its direction in its provenance (#1632): `out` / `in out` is the caller's place and
+        ## may be written, `in` is an immutable binding. This is one half of a pair: each concept has
+        ## its OWN provenance value (#626, #1632), and the answer each gets is stated at its reader in
+        ## `sema_write_mutability`. Until #626 the writable one borrowed the range-slice view's "mutable
+        ## backing" value; until #1632 it also stood for the `in` one, so an `in` array accepted writes.
         mut pprov : u8 = 0
-        if pm.pmode == 1 { pprov = prov_array_param() }
+        if param_array_by_place(pm) { pprov = prov_array_param() }
+        else if param_is_array(pm) { pprov = prov_array_param_in() }
         ## Issue #1464 — a parameter DECLARED with a function type holds a function value (Functions
         ## §1.5: "passed"), so `h.a` on `h : fn() -> u64` is refused like `g.a` on `g := f`.
         if pprov == 0 and sema_ty_span_is_fn(src, pm.ts, pm.tl) { pprov = prov_fn_value() }
@@ -19667,7 +19680,7 @@ sema_repr_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
 }
 
 ## PROPOSAL 7 / Types §7 — the parser's parameter path records `[T]` and `[T; N]` as the same
-## `pmode == 1` aggregate shape. The lower currently treats that shape as a fixed-array address, while
+## array-shaped (`ast::param_is_array`) aggregate shape. The lower currently treats that shape as a fixed-array address, while
 ## the specification defines `[T]` as a `{ptr, len}` slice. Locate the closing bracket from source and
 ## distinguish the two spellings here, in sema, before any backend can observe the ambiguous AST. A
 ## semicolon at the outer bracket level is the fixed-array form; no semicolon is the slice sugar form.
@@ -19692,7 +19705,7 @@ sema_slice_sugar_at := fn(src : ptr(u8), open : usize) -> bool {
 }
 
 ## The parser stores an ARRAY parameter's element span (`pm.ts`/`pm.tl`), not its opening `[`. Recover
-## that opening delimiter by walking over source whitespace. `pmode == 1` is required by the caller, so
+## that opening delimiter by walking over source whitespace. `ast::param_is_array` is required by the caller, so
 ## a preceding `[` is the parameter's own array delimiter rather than an unrelated expression bracket.
 sema_param_array_open := fn(src : ptr(u8), ts : usize) -> usize {
   mut p := ts
@@ -19703,7 +19716,7 @@ sema_param_array_open := fn(src : ptr(u8), ts : usize) -> usize {
 
 ## Return the source location of the first direct nested fixed-array PARAMETER (`[[T; N]; M]`). The
 ## parser records only the first token after the outer `[`, so a nested form leaves `pm.ts` at the inner
-## `[`. `pmode == 1` proves the enclosing spelling entered the array-parameter path; the source token
+## `[`. `ast::param_is_array` proves the enclosing spelling entered the array-parameter path; the source token
 ## proves the element is itself an array. Reject before type checking/lowering can observe the corrupted
 ## parameter list, while leaving one-dimensional array parameters unchanged.
 sema_nested_array_param_bad := fn(d : Decl, src : ptr(u8)) -> usize {
@@ -19713,7 +19726,7 @@ sema_nested_array_param_bad := fn(d : Decl, src : ptr(u8)) -> usize {
     match pp {
       Some(ppq) => {
         pm := deref(param_p(ppq))
-        if pm.pmode == 1 and pm.tl == 1 and str_at((src + pm.ts), 1) == "[" {
+        if param_is_array(pm) and pm.tl == 1 and str_at((src + pm.ts), 1) == "[" {
           open := sema_param_array_open(src, pm.ts)
           if open != 0 { return open }
         }
@@ -19735,7 +19748,7 @@ sema_slice_sugar_reject := fn(d : Decl, src : ptr(u8)) -> usize {
     match pp {
       Some(ppq) => {
         pm := deref(param_p(ppq))
-        if pm.pmode == 1 {
+        if param_is_array(pm) {
           open := sema_param_array_open(src, pm.ts)
           if open != 0 and sema_slice_sugar_at(src, open) { return located_err(open) }
           if open == 0 and sema_slice_sugar_at(src, pm.ts) { return located_err(d.name_start) }
@@ -21987,7 +22000,7 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
       ca := sema_type_alias_chain_reject(d, decls, i, src)
       if ca != 0 { return ca }
       ## PROPOSAL 7: reject the spec's `[T]` slice spelling in PARAMETER and RETURN positions while the
-      ## lower only has the fixed-array ABI for the parser's shared `pmode == 1` representation. Local
+      ## lower only has the fixed-array ABI for the parser's shared array-shaped representation (`ast::param_is_array`). Local
       ## `[T]` annotations are deliberately not inspected here; their existing view lowering is correct.
       ss := sema_slice_sugar_reject(d, src)
       if ss != 0 { return ss }

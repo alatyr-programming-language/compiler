@@ -5245,7 +5245,7 @@ callee_folded_arg := fn(e : ptr(Expr), cidx : i64, pidx : usize, cx : ptr(LCtx),
 
 ## #795 — the BYTE element kind (`byte_type_eek`: 8 `u8`, 10 `i8`, 11 `bits8`) of parameter `pidx` of
 ## the callee at `cidx` when that parameter is a fixed array `[u8|i8|bits8; N]`, else 0 — the same
-## question `emit_fn`'s param binder answers for the callee (`pmode == 1` array param, its `ts`/`tl`
+## question `emit_fn`'s param binder answers for the callee (`param_is_array` array param, its `ts`/`tl`
 ## the ELEMENT type), which reads such a parameter through its pointer as N packed bytes.
 callee_byte_array_param_eek := fn(cidx : i64, pidx : usize, cx : ptr(LCtx)) -> u8 {
   if cidx < 0 { return 0 }
@@ -5257,7 +5257,7 @@ callee_byte_array_param_eek := fn(cidx : i64, pidx : usize, cx : ptr(LCtx)) -> u
       Some(ppq) => {
         pm := deref(param_p(ppq))
         if k == pidx {
-          if pm.pmode != 1 { return 0 }
+          if not param_is_array(pm) { return 0 }
           return byte_type_eek(cx.src, pm.ts, pm.tl)
         }
         k += 1
@@ -15581,12 +15581,13 @@ convert_lit_fits := fn(v : i64, p : ConvInt) -> bool {
 ## The operand's type is sema's record (D6, docs/ir.md §3.8: `ir::sty_get_cur` / `ir::sty_spell_get_cur`):
 ## a literal by its shape first, then the SPELLING sema resolved (which tells a brand or a struct from
 ## its representation), then the bare value type. Where none of them names the type the answer is
-## `CaUnknown`. Residual, said plainly: an array/tuple parameter (`pmode == 1` or a tuple) is matched by
+## `CaUnknown`. Residual, said plainly: an array/tuple parameter (`param_is_array` or a tuple) is matched by
 ## the operand being an unnamed aggregate, not by its element types; a spelling is compared as text.
 convert_param_accepts := fn(src : ptr(u8), pq : ptr(mut Param), a0 : ptr(Expr)) -> ConvAccept {
   pm := deref(param_p(pq))
+  ## Not an `in` parameter (an `out` / `in out` scalar or array, a slice-variadic): no conversion.
   if pm.pmode > 1 { return ConvAccept.CaNo }
-  pagg := pm.pmode == 1 or lower_layout::param_tuple_open_at(src, pm.ns, pm.nl) >= 0
+  pagg := param_is_array(pm) or lower_layout::param_tuple_open_at(src, pm.ns, pm.nl) >= 0
   convert_type_accepts(src, pm.ts, pm.tl, pagg, a0)
 }
 ## Is the operand `a0` assignable to the type spelled `[pts, pts+ptl)` (an aggregate one when `pagg`)? The
@@ -19550,7 +19551,7 @@ emit_operand_words := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
 ## them before a one-word fallback can silently miscompile an inline expansion.
 inline_param_kind := fn(decls : ptr(rt::Vec), src : ptr(u8), pm : Param) -> u8 {
   if str_at((src + pm.ts), pm.tl) == "str" { return 1 }
-  if pm.pmode == 1 { return 2 }
+  if param_is_array(pm) { return 2 }
   if pm.tl != 0 and (str_at((src + pm.ts), 1) == "[" or str_at((src + pm.ts), 1) == "(") { return 2 }
   bn := base_type_name(src, pm.ts, pm.tl)
   if bn.n != 0 and struct_decl_of(decls, src, bn.s, bn.n) >= 0 { return 1 }
@@ -29427,7 +29428,7 @@ pub PCtx := struct {
 ## word (like a scalar) but is marked `is_ref = true` with the aggregate's layout (`ek`/`sns`/
 ## `snl`/`estride`/`eek`) so field/element access dereferences the pointer. A struct param `p : P`
 ## (its type span resolves to a kind-2 `Decl`) binds `ek = 2`, type span `P`. An array param
-## `a : [T; N]` (`pm.pmode == 1`) binds `ek = 5` with the element layout resolved from the element
+## `a : [T; N]` (`param_is_array`, either direction) binds `ek = 5` with the element layout resolved from the element
 ## type span `T` (a word-sized element → stride 1, eek 0; a struct/enum element → its stride).
 ## A scalar/pointer/enum param binds an ordinary one-word scalar slot (`bind_slot`). The pointer
 ## itself is one word spilled from the argument register like any scalar (no new ABI work).
@@ -29591,7 +29592,7 @@ bind_param_shape := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : p
   bn := base_type_name(src, pts, ptl)
   bs := bn.s
   bl := bn.n
-  if pm.pmode == 1 {
+  if param_is_array(pm) {
     ## ARRAY param `a : [T; N]` — element layout from the element type span `T`.
     mut estride := 1
     mut eek : u8 = 0
@@ -29610,7 +29611,7 @@ bind_param_shape := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : p
       estride = 2; eek = 4
     } else if type_is_float(decls, src, bs, bl) {
       ## FLOAT-element array / uniform float-tuple param (`a : [f64; N]`, `t : (f64, f64)` — a tuple
-      ## param reaches this branch as a `pmode == 1` array of its first component). One word per
+      ## param reaches this branch as an array-shaped param of its first component). One word per
       ## element (the IEEE-754 bits), tagged `eek = 9` so `a[i]` / `t.N` read + arithmetic take the
       ## xmm (float) path (`is_float_expr`'s Index arm keys on `eek == 9`). Without this the element
       ## was `eek = 0` (integer): `t.0 + t.1` mis-lowered as an integer `addq` over the raw bits.
@@ -31358,7 +31359,7 @@ param_type_of := fn(ns : usize, nl : usize, penv : Option(ptr(mut Param)), src :
 }
 
 ## The static length of a concrete `[T; N]` parameter, captured by the parser in `Param.pps`.
-## `pmode == 1` also covers tuple parameters, but those have no captured array length (`pps == 0`),
+## `param_is_array` also covers tuple parameters, but those have no captured array length (`pps == 0`),
 ## so returning zero keeps tuple and generic/slice shapes outside fixed-array-only lowerings.
 fixed_array_param_len := fn(ns : usize, nl : usize, params : Option(ptr(mut Param)), src : ptr(u8)) -> usize {
   mut p := params
@@ -31366,7 +31367,7 @@ fixed_array_param_len := fn(ns : usize, nl : usize, params : Option(ptr(mut Para
     match p {
       Some(pq) => {
         pm := deref(param_p(pq))
-        if lower_ctx::streq(src, pm.ns, pm.nl, ns, nl) and pm.pmode == 1 { return pm.pps }
+        if lower_ctx::streq(src, pm.ns, pm.nl, ns, nl) and param_is_array(pm) { return pm.pps }
         p = pm.next
       }
       None => { break }

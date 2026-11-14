@@ -1653,6 +1653,27 @@ ib_inline_expr_ok := fn(bp : ptr(mut IbB), d : Decl, e : ptr(Expr)) -> bool {
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
+## #1632: does `b` name an `out` / `in out` array-shaped parameter of the function being built — the
+## caller's place, written in place (`ast::param_array_by_place`)?
+ib_arr_param_by_place := fn(bp : ptr(mut IbB), b : ptr(Expr)) -> bool {
+  bv : IbB = deref(bp)
+  vs := lower_layout::ex_var_ns(b)
+  vn := lower_layout::ex_var_nl(b)
+  if vn == 0 { return false }
+  d : Decl = deref(ib_decl_ptr(bv.decls, bv.di))
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if pm.nl == vn and streq(bv.src, pm.ns, vn, vs, vn) { return ast::param_array_by_place(pm) }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
 ## Whether the name `[s, s+n)` is one of `d`'s parameters.
 ib_is_param_of := fn(src : ptr(u8), d : Decl, s : usize, n : usize) -> bool {
   mut pp := d.params_head
@@ -1690,13 +1711,26 @@ ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param,
   match pk {
     Some(want) => {
       if pm.pmode == 0 { return ib_value_at(bp, a, ae, want) }
-      ## #1626: a fixed-array parameter takes the address of the argument's array — a literal's fresh
-      ## object, or the array local, parameter or field itself — the callee's convention (`ib_build_one`).
+      ## #1626: a fixed-array parameter takes an address, the callee's convention (`ib_build_one`).
+      ## #1632: which one is the parameter's direction (Functions §4.1, docs/ir.md §3.7). An `out` /
+      ## `in out` one takes the caller's place itself: the array local, parameter or field. An `in`
+      ## one takes a CALLER-OWNED COPY — a literal's fresh object as it is, anything else copied into
+      ## a fresh object first — so the callee never sees memory the caller, or an alias the callee
+      ## writes through, goes on to change.
       apo : Option(IbArr) = ib_arr_param_of(bp, a, pm)
       match apo {
         Some(ar) => {
           so : Option(IbArrAt) = ib_arr_value(bp, a, ae, ar)
-          match so { Some(sp) => { return Option(VRegId).Some(ib_arr_addr(bp, a, sp)) }; None => { return Option(VRegId).None } }
+          match so {
+            Some(sp) => {
+              if ast::param_array_by_place(pm) or lower_layout::ex_is_array_lit(ae) { return Option(VRegId).Some(ib_arr_addr(bp, a, sp)) }
+              cf := new_frame(ib_b_f(bp), a, ib_arr_bytes(ar), ar.stride)
+              os := ib_arr_src(bp, a, sp)
+              ib_copy_into(bp, a, cf, os, ib_arr_bytes(ar))
+              return Option(VRegId).Some(ib_addr_obj(bp, a, cf))
+            }
+            None => { return Option(VRegId).None }
+          }
         }
         None => {}
       }
@@ -3622,7 +3656,7 @@ ib_arr_elem_span := fn(bp : ptr(mut IbB), b : ptr(Expr)) -> Option(IbSpan) {
   bd : IbBind = ib_lookup(bp, vs, vn)
   match bd {
     BdArrI(xf, xn, xes, xen) => { return Option(IbSpan).Some(IbSpan(s = xes, n = xen)) }
-    ## Not an array parameter's: a range view over one is not built (`ib_view_range`, #1632).
+    ## Not an array parameter's: a range view over one is not built (`ib_view_range`).
     BdArrRef(qv, qn, qes, qel) => {}
     BdArr(af, ats, atn) => {}
     BdRef(rv, rsd, rts, rtn) => {}
@@ -3663,13 +3697,13 @@ ib_arr_src := fn(bp : ptr(mut IbB), in out a : rt::Arena, ap : IbArrAt) -> Opnd 
   av := ib_arr_addr(bp, a, ap)
   o_vreg(av)
 }
-## The layout of a fixed-array PARAMETER `xs : [T; N]` (`ast::Param.pmode` 1): `N` is the literal length
-## the parser kept in `pps` (0 when there is none, and for a tuple parameter, which shares `pmode` 1),
-## `T` the element span `ts`/`tl`. Only an 8-byte kernel scalar element: the one stride every legacy
-## emitter's array layout agrees on (as for an array field, see the band comment), so a legacy caller's
-## array and an IR-built callee's reads agree.
+## The layout of a fixed-array PARAMETER `xs : [T; N]` of either direction (`ast::param_is_array`): `N`
+## is the literal length the parser kept in `pps` (0 when there is none, and for a tuple parameter, which
+## shares the representation), `T` the element span `ts`/`tl`. Only an 8-byte kernel scalar element: the
+## one stride every legacy emitter's array layout agrees on (as for an array field, see the band
+## comment), so a legacy caller's array and an IR-built callee's reads agree.
 ib_arr_param_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, pm : Param) -> Option(IbArr) {
-  if pm.pmode != 1 or pm.pps == 0 { return Option(IbArr).None }
+  if not ast::param_is_array(pm) or pm.pps == 0 { return Option(IbArr).None }
   ib_arr_ref_of(bp, a, pm.pps, pm.ts, pm.tl)
 }
 ## `n` elements of the 8-byte kernel scalar spelled `[es, es+en)`, at its own stride.
@@ -4152,8 +4186,8 @@ ib_view_range := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), sb :
   apo : Option(IbArrAt) = ib_arr_place(bp, a, sb)
   match apo {
     Some(ap) => {
-      ## Not over an array parameter (#1626): its direction is lost (#1632), and a view of it could
-      ## write the caller's `in` array.
+      ## Not over an array parameter (#1626): a view of one is not built yet (a view's writes would need
+      ## the parameter's direction, which the AST keeps since #1632, carried into the view).
       if not opndk_is_frame(ap.bk) { return Option(IbVObj).None }
       lov : Option(i64) = ib_num_value(lo)
       hiv : Option(i64) = ib_num_value(hi)
@@ -4269,12 +4303,11 @@ ib_bs_index_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut St
   apo : Option(IbArrAt) = ib_arr_place(bp, a, b)
   match apo {
     Some(ap) => {
-      ## #1626/#1632: an array behind a `ptr` base is an array PARAMETER, which holds the caller's
-      ## address whatever its direction (`ast::Param` folds `in`/`out`/`in out` into `pmode` 1). A
-      ## write through it would reach the caller's array for an `in` parameter too, where Functions §4.1
-      ## owes a copy and Memory §3.4 refuses the write; so no element write is built through one, and
-      ## the function falls back (the legacy emitters' answer, unchanged).
-      if not opndk_is_frame(ap.bk) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
+      ## #1626/#1632: an array behind a `ptr` base is an array PARAMETER. An `out` / `in out` one is
+      ## the caller's place (Functions §2.1), and the write goes through the pointer to it. An `in` one
+      ## is an immutable binding sema refuses to write (Memory §3.4); should one reach here anyway, the
+      ## write is refused rather than built into the copy.
+      if not opndk_is_frame(ap.bk) and not ib_arr_param_by_place(bp, b) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
       x : IbIx = ib_arr_index(bp, a, ap, ix)
       match x { IxRefused => { return }; IxLit(i) => {}; IxVal(iv) => {} }
       vo : Option(VRegId) = ib_value_ctx(bp, a, v, ib_arr_at_ks(ap))
@@ -5405,17 +5438,17 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
         pk : Option(IbKS) = ib_type_ks(decls, src, pm.ts, pm.tl)
         match pk {
           Some(kk) => {
-            ## #1626: a fixed-array parameter `xs : [T; N]` (`pmode` 1, `ts`/`tl` the element `T`) arrives
-            ## as the ADDRESS of the caller's array, the convention every legacy emitter uses for it
-            ## (measured on x86_64: the caller passes its array's address, never a copy), so a legacy
-            ## caller and an IR-built callee agree; element reads and writes go through that pointer.
-            ## They agree on x86_64 only: the aarch64 and riscv64 legacy callers pass a field or an
-            ## element by its first word, and the twins' legacy array copies are wrong (#1641's review),
-            ## so no function with such a parameter is selected while a legacy caller may reach it
-            ## (`ir::ap_plan_begin`).
-            ## Functions §4.1 owes an `in` array a copy and an `in out` one the caller's place, but
-            ## `ast::Param` folds the direction into `pmode` 1, so neither side can choose yet (#1632).
-            if pm.pmode == 1 {
+            ## #1626: a fixed-array parameter `xs : [T; N]` (`ts`/`tl` the element `T`) arrives as an
+            ## ADDRESS, whatever its direction: for `in`, of the caller-owned copy; for `out` / `in out`,
+            ## of the caller's array (Functions §4.1, #1632; `ib_arg` makes the copy). The callee's side
+            ## is the same pointer either way, so a legacy caller (which passes its array's address and
+            ## makes no copy, the #1637 class) and an IR-built callee agree on the convention; element
+            ## reads, and element writes through an `out` / `in out` one (`ib_bs_index_assign`), go
+            ## through that pointer. They agree on x86_64 only: the aarch64 and riscv64 legacy callers
+            ## pass a field or an element by its first word, and the twins' legacy array copies are
+            ## wrong (#1641's review), so no function with such a parameter is selected while a legacy
+            ## caller may reach it (`ir::ap_plan_begin`).
+            if ast::param_is_array(pm) {
               apo : Option(IbArr) = ib_arr_param_of(bp, a, pm)
               match apo {
                 Some(ar) => {
@@ -5448,8 +5481,8 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
             ## #1026: an `out` / `in out` aggregate parameter denotes the CALLER's place by reference
             ## (Functions §2.1, §4.1) — the same address an `in` aggregate arrives as, so it binds the same
             ## way, and a field write goes through it to that place. A whole `p = v` stays refused (the
-            ## assignment's `BdRef` arm). An array (`pmode` 1) or a slice-variadic (3) parameter is not this
-            ## shape and stays refused (`ib_agg_param`).
+            ## assignment's `BdRef` arm). An array-shaped (`ast::param_is_array`) or a slice-variadic (3)
+            ## parameter is not this shape and stays refused (`ib_agg_param`).
             ## #1622: a `Slice(T)` / `[T]` parameter likewise arrives as the address of the caller's
             ## `{ptr, len}` pair; it is copied into a view object of its own and bound as a view local,
             ## so an index, `.len`, `for`, passing it on and returning it read it as any view.
