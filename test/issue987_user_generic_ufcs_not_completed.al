@@ -10,8 +10,8 @@
 ##
 ## Each check owns a code from 100 up; 42 means all held.
 ##
-## Parent `e7124b23` (x86_64, omen): exit 100 (`be.bget()` read the payload as 1, not 7). Its own
-## parent `837d4614`: SIGSEGV, as here.
+## PR #1650's previous head `e7124b23` (x86_64, omen): exit 100 (`be.bget()` read the payload as 1,
+## not 7). Its base `837d4614`: SIGSEGV, as here.
 Box := fn(T : type) -> type { struct { v : T, tag : u64 } }
 bget := fn(T : type, b : ptr(Box(T))) -> T { deref(b).v }
 

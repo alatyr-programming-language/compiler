@@ -324,6 +324,25 @@ arena_base := fn(a : ptr(mut rt::Arena)) -> usize { return unchecked bitcast(usi
 mut ROOT_MOD_S : usize = 0
 mut ROOT_MOD_L : usize = 0
 pub set_root_module := fn(s : usize, l : usize) -> i64 { ROOT_MOD_S = s ; ROOT_MOD_L = l ; return 0 }
+## #987 — the AMBIENT stdlib's module name spans, published by `driver::d_publish_lib_modules` from the
+## branch `push_module_name` built each name from: a `(mod_start, mod_len)` word-pair table of `n`
+## words. A declaration is the standard library's when its own pair is in it — an identity, not a
+## spelling, so a package's `src/alloc__vec.al` (also `alloc__vec`, Modules §6.6) is not. Unpublished
+## (`n == 0`) answers false: whatever asks it fails closed.
+mut STDLIB_MODS_P : usize = 0
+mut STDLIB_MODS_N : usize = 0
+pub set_stdlib_modules := fn(p : usize, n : usize) -> i64 { STDLIB_MODS_P = p ; STDLIB_MODS_N = n ; return 0 }
+## Is the module `[ms, ms+ml)` the ambient stdlib module mangled `name`?
+module_is_stdlib := fn(src : ptr(u8), ms : usize, ml : usize, name : str) -> bool {
+  if str_at((src + ms), ml) != name { return false }
+  tbl := unchecked bitcast(ptr(mut u8), STDLIB_MODS_P)
+  mut i : usize = 0
+  while i + 1 < STDLIB_MODS_N {
+    if rt::rec_get(tbl, i) == ms and rt::rec_get(tbl, i + 1) == ml { return true }
+    i += 2
+  }
+  false
+}
 ## The published root module span, for a consumer that publishes a naming module itself
 ## (`lower_layout::set_type_ref_module` from the shared IR builder, `ir::build`).
 pub root_mod_s := fn() -> usize { ROOT_MOD_S }
@@ -32495,11 +32514,13 @@ fill_inferred_targs := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms
   if di < 0 { return }
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   if not d.is_generic { return }
-  ## only a callee DECLARED in `alloc::vec` (the resolved declaration's own module, as `alloc__fmt`'s
-  ## `display` is asked below): the explicit form is measured right only there. A user generic over a
-  ## user generic struct (`bget(E, ptr(Box(E)))`, `second(E, ptr(Pair(E)))`) answers wrong explicitly
-  ## (103 for 42, #1654), so completing it would turn the implicit call's trap into a wrong value.
-  if str_at((src + d.mod_start), d.mod_len) != "alloc__vec" { return }
+  ## only a callee DECLARED in the standard library's `alloc::vec` (`module_is_stdlib`: the resolved
+  ## declaration's own module by identity, not by its mangled text — a package's own module file
+  ## `src/alloc__vec.al` mangles the same, Modules §6.6): the explicit form is measured right only
+  ## there. A user generic over a user generic struct (`bget(E, ptr(Box(E)))`, `second(E,
+  ## ptr(Pair(E)))`) answers wrong explicitly (103 for 42, #1654), so completing it would turn the
+  ## implicit call's trap into a wrong value.
+  if not module_is_stdlib(src, d.mod_start, d.mod_len, "alloc__vec") { return }
   ## the type parameters lead and are all omitted; the first value parameter is `ptr([mut] X)`
   mut ntpc : usize = 0
   mut recv : Option(ptr(mut Param)) = Option(ptr(mut Param)).None
