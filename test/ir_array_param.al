@@ -35,14 +35,8 @@ sum := fn(xs : [u64; 4]) -> u64 {
 }
 ## The parameter passed on to another array parameter.
 sum_on := fn(xs : [u64; 4]) -> u64 { sum(xs) + 1 }
-## An `in out` array parameter written in place (Functions §2.1: the caller's place).
-put := fn(in out xs : [u64; 3], v : u64) { xs[1] = v }
-## A copy is the value at the copy: writing the source afterwards does not reach it.
-copy_is_value := fn(in out xs : [u64; 3]) -> u64 {
-  ys : [u64; 3] = xs
-  xs[0] = 100
-  ys[0]
-}
+## No element write through an array parameter here: the builder refuses one (the parameter holds the
+## caller's address whatever its direction, #1632), and scripts/e2e.sh `check_ir_build` asserts that.
 
 main := fn() -> u8 {
   a : [u64; 3] = [1, 6, 10]
@@ -52,13 +46,7 @@ main := fn() -> u8 {
   if sum(b) != 18 { return 3 }
   if sum_on(b) != 19 { return 4 }
   if sum([10, 10, 10, 12]) != 42 { return 5 }
-  mut c : [u64; 3] = [0, 0, 0]
-  put(c, 7)
-  if c[1] != 7 { return 6 }
   s := S(tag = 1, arr = [2, 4, 40])
   if from_param(s.arr) != 44 { return 7 }
-  mut d : [u64; 3] = [5, 0, 0]
-  if copy_is_value(d) != 5 { return 8 }
-  if d[0] != 100 { return 9 }
   42
 }

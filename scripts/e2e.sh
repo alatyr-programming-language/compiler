@@ -942,6 +942,34 @@ check_ir_build() {
      && grep -q 'sema_gaps=0 verify_failed=0$' "$rep"; then
     echo "ok   ir issue977_struct_lit_field_ctx: the struct-literal field literal builds through the IR, no sema gap"
   else echo "FAIL ir issue977_struct_lit_field_ctx: rc=$rc"; grep -E 'NotYet|sema_gaps|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
+  ## #1626/#1632: an array parameter holds the caller's address whatever its direction, so the builder
+  ## builds reads through it but refuses an element WRITE, located at the store: built, `put_in`'s write
+  ## reached the caller's array (aarch64, riscv64 and wasm answered 72 for this program where the
+  ## parent trapped; Functions §4.1 owes an `in` array a copy, Memory §3.4 refuses the write). Written
+  ## here, not under test/, so the corpus manifest gains no row.
+  local wd="$T/ir1626_write"; mkdir -p "$wd"
+  cat > "$wd/ir1626_write.al" <<'EOF'
+rd := fn(xs : [u64; 3]) -> u64 { xs[0] + xs[2] }
+put_in := fn(xs : [u64; 3]) -> u64 {
+  xs[1] = 30
+  xs[1]
+}
+put_io := fn(in out xs : [u64; 3]) {
+  xs[1] = 30
+}
+main := fn() -> u8 {
+  mut a : [u64; 3] = [2, 0, 10]
+  r := put_in(a)
+  put_io(a)
+  u8(rd(a) + r)
+}
+EOF
+  "$CC" ir "$wd/ir1626_write.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^fn ir1626_write::rd Built$' "$rep" \
+     && grep -qE '^fn ir1626_write::put_in NotYet\(.*ir1626_write\.al:3:[0-9]+\)$' "$rep" \
+     && grep -qE '^fn ir1626_write::put_io NotYet\(.*ir1626_write\.al:7:[0-9]+\)$' "$rep"; then
+    echo "ok   ir #1626 array-param write: reads build, an element write through the parameter refuses at the store"
+  else echo "FAIL ir #1626 array-param write: rc=$rc"; grep -E '^fn ' "$rep" | head -6 | sed 's/^/     /'; fail=1; fi
 }
 
 check_ir_dev_verb() {

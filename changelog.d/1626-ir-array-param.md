@@ -3,4 +3,6 @@
   from a struct's array field (`ys : [u64; 3] = s.arr`) are now built from the IR; before, the builder
   refused them and every backend kept a legacy emitter that answered a wrong value (x86_64 trapped or
   answered 17 where 42 was due, aarch64 224 and 5) or trapped. The array is passed as its address, the
-  convention every legacy emitter uses; Functions §4.1's copy for an `in` array is not made yet (#1632).
+  convention every legacy emitter uses; Functions §4.1's copy for an `in` array is not made yet (#1632),
+  so a function that writes an element of its array parameter is not built from the IR and keeps its
+  legacy emitter.

@@ -4269,6 +4269,12 @@ ib_bs_index_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut St
   apo : Option(IbArrAt) = ib_arr_place(bp, a, b)
   match apo {
     Some(ap) => {
+      ## #1626/#1632: an array behind a `ptr` base is an array PARAMETER, which holds the caller's
+      ## address whatever its direction (`ast::Param` folds `in`/`out`/`in out` into `pmode` 1). A
+      ## write through it would reach the caller's array for an `in` parameter too, where Functions §4.1
+      ## owes a copy and Memory §3.4 refuses the write; so no element write is built through one, and
+      ## the function falls back (the legacy emitters' answer, unchanged).
+      if not opndk_is_frame(ap.bk) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
       x : IbIx = ib_arr_index(bp, a, ap, ix)
       match x { IxRefused => { return }; IxLit(i) => {}; IxVal(iv) => {} }
       vo : Option(VRegId) = ib_value_ctx(bp, a, v, ib_arr_at_ks(ap))
