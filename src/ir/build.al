@@ -1673,6 +1673,25 @@ ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param,
   match pk {
     Some(want) => { if pm.pmode == 0 { return ib_value_at(bp, a, ae, want) } }
     None => {
+      ## #1026: an `out` / `in out` aggregate parameter is bound by a PLACE argument and passed the
+      ## address of that place itself, never a copy (Functions §2.3, §4.1): a struct or enum local, a
+      ## field of one, a place through a pointer (`deref(q)`), or an aggregate parameter passed on by
+      ## reference (`ib_by_place_arg`). Anything else is refused below, never copied.
+      if ast::param_by_place(pm) {
+        pso : Option(IbSt) = ib_agg_named(bp, a, pm.ts, pm.tl)
+        match pso {
+          Some(pst) => {
+            if ib_st_is_enum(bp, pst) or ib_struct_word(bp, a, pst) {
+              plo : Option(IbPlace) = ib_by_place_arg(bp, a, ae)
+              match plo {
+                Some(pl) => { if pl.di == pst.di { return Option(VRegId).Some(ib_place_ptr(bp, a, pl)) } }
+                None => {}
+              }
+            }
+          }
+          None => {}
+        }
+      }
       ## Slice 3d: an aggregate argument is passed as the address of a CALLER-OWNED COPY (docs/ir.md
       ## §3.7): a fresh literal's own object, else a fresh object the value is copied into, so the callee
       ## never sees memory the caller goes on to change. WORD tier only (Q4), as the callee requires.
@@ -1710,6 +1729,43 @@ ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param,
     }
   }
   ib_no(bp, e, NyWhy.NwOutside)
+}
+## The place an `out` / `in out` aggregate argument `ae` names: a struct or enum local, a by-reference
+## parameter passed on, `deref(q)`, or a field of one of those. A bare POINTER name is not a place of the
+## parameter's type (Functions §2.3: "a mutable place of the matching type"; the one-level auto-deref of
+## Types §4.5 belongs to a receiver, a field and an index, not to a plain argument), so it answers None
+## and the call is refused rather than silently dereferenced (#1026 review N2; the checker's acceptance is
+## #1635). A UFCS receiver `q.m()`, where that auto-deref is due, is refused too: the legacy path takes it.
+ib_by_place_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, ae : ptr(Expr)) -> Option(IbPlace) {
+  match deref(ae) {
+    Expr::Var(s, n) => {
+      bd : IbBind = ib_lookup(bp, s, n)
+      match bd {
+        BdAgg(fr, sd, ts, tn) => { return ib_place_name(bp, a, s, n) }
+        BdRef(rv, rsd, rts, rtn) => { return ib_place_name(bp, a, s, n) }
+        BdVal(v, vts, vtn) => {}
+        BdMem(mf, mns) => {}
+        BdArr(af, ats, atn) => {}
+        BdView(wf, wes, wen) => {}
+        BdArrI(xf, xes, xen, xw) => {}
+        BdNone => {}
+      }
+    }
+    Expr::Deref(pe) => { return ib_place_of(bp, a, ae) }
+    Expr::Field(fb, ffs, ffl) => { return ib_place_of(bp, a, ae) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  Option(IbPlace).None
+}
+## The address of place `pl`, as a `ptr` vreg.
+ib_place_ptr := fn(bp : ptr(mut IbB), in out a : rt::Arena, pl : IbPlace) -> VRegId {
+  base : VRegId = if opndk_is_frame(pl.bk) { ib_addr_obj(bp, a, FrameId(usize(pl.bv))) } else { VRegId(usize(pl.bv)) }
+  if pl.off == 0 { return base }
+  o := ib_ptr_plus(bp, a, base, pl.off)
+  VRegId(usize(o.v))
 }
 ## The value of an integer literal node.
 ib_num_value := fn(e : ptr(Expr)) -> Option(i64) {
@@ -5274,6 +5330,11 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
             ## is not taken (the value is the caller's memory, read through the pointer).
             ## Slice 4b: an enum parameter likewise — every legacy emitter passes an enum by the address of
             ## its {tag, payload…} words (measured), the layout `ib_enum_named` builds.
+            ## #1026: an `out` / `in out` aggregate parameter denotes the CALLER's place by reference
+            ## (Functions §2.1, §4.1) — the same address an `in` aggregate arrives as, so it binds the same
+            ## way, and a field write goes through it to that place. A whole `p = v` stays refused (the
+            ## assignment's `BdRef` arm). An array (`pmode` 1) or a slice-variadic (3) parameter is not this
+            ## shape and stays refused (`ib_agg_param`).
             ## #1622: a `Slice(T)` / `[T]` parameter likewise arrives as the address of the caller's
             ## `{ptr, len}` pair; it is copied into a view object of its own and bound as a view local,
             ## so an index, `.len`, `for`, passing it on and returning it read it as any view.
@@ -5322,7 +5383,7 @@ ib_agg_param := fn(bp : ptr(mut IbB), in out a : rt::Arena, pm : Param) -> Optio
   sto : Option(IbSt) = ib_agg_named(bp, a, pm.ts, pm.tl)
   match sto {
     Some(st) => {
-      if pm.pmode != 0 { return Option(Construct).Some(Construct.CSigParamMode) }
+      if pm.pmode != 0 and not ast::param_by_place(pm) { return Option(Construct).Some(Construct.CSigParamMode) }
       if ib_is_taken(bp, pm.ns, pm.nl) { return Option(Construct).Some(Construct.CSigParamTaken) }
       if not ib_st_is_enum(bp, st) {
         wo : Option(Construct) = ib_struct_word_why(bp, a, st)

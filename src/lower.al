@@ -30393,6 +30393,9 @@ agg_pool_fit := fn(peak : i64, base : i64, reserved : usize) -> AggPoolFit {
 ## takes the same blocks as the first and fits. It is re-emitted only when it outgrew the first
 ## reservation, so every function that built before keeps its exact frame and text (fixpoint-neutral).
 pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx), in out nl : usize) {
+  ## #1633: a whole `p = v` into an `out` / `in out` struct or enum parameter is refused, never dropped
+  ## (before slot collection, whose width check used to refuse it only by accident).
+  lower_layout::refuse_inout_agg_whole_assign(d, p.src, p.decls)
   start := sb.len
   nl_start := nl
   first : AggPoolFit = emit_fn_pool(d, di, sb, p, nl, 0)

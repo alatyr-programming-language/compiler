@@ -8959,6 +8959,12 @@ run ir_struct_assign_self 21
 run_a64 ir_struct_assign_self 21
 run_rv64 ir_struct_assign_self 21
 run_wat ir_struct_assign_self 21
+## #1026: an `in out` / `out` struct parameter built from the shared IR, and calls passing the caller's
+## place (Functions §2.1, §2.3, §4.1); the twins trapped on the parent (133/133/134).
+run ir_inout_agg_param 42
+run_a64 ir_inout_agg_param 42
+run_rv64 ir_inout_agg_param 42
+run_wat ir_inout_agg_param 42
 ## IR slice 4a (`docs/ir-slice-4.md`): `match` over integers (literal, range and `_` arms, #821) and over
 ## enum locals, built from the shared IR on every twin.
 run ir_match_scalar 42

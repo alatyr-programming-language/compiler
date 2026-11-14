@@ -671,7 +671,9 @@ pub fld_any := fn(h : Option(ptr(mut FieldDecl))) -> bool {
 ##       type is not an array): passed BY REFERENCE (the slot holds a POINTER to the caller's
 ##       scalar) so a write `r = v` in the callee is visible to the caller. For an aggregate `out`
 ##       param `pmode` is also 2, but bind_param's TYPE branches already pass it by reference and
-##       ignore `pmode` (aggregate writes are caller-visible for free).
+##       ignore `pmode` (aggregate FIELD writes are caller-visible for free; a whole `p = v` is not
+##       written back by any legacy emitter, so `lower_layout::refuse_inout_agg_whole_assign`
+##       refuses it, #1633).
 ##   3 = a SLICE-VARIADIC parameter `name : ...T` (Functions §7.2) — the trailing rest WITH a
 ##       concrete element type `T` (`ts`/`tl` is the element type span). The call site gathers the
 ##       call's trailing args into one contiguous block + passes a `{ptr, len}` slice; `bind_param`
@@ -686,6 +688,9 @@ pub Param := struct { ns : usize, nl : usize, next : Option(ptr(mut Param)), ts 
 ## `Option(ptr(mut Param))` (`None` = end); `param_p` is the typed IDENTITY accessor applied to a `Some`
 ## payload (walks read `deref(param_p(q))`). See `fld_p` / `fld_any` / `fld_at` for the recipe.
 pub param_p := fn(p : ptr(mut Param)) -> ptr(mut Param) { p }
+## Is `pm` an `out` / `in out` parameter (`pmode` 2): bound to the caller's place by reference
+## (Functions §2.1, §4.1)? The one spelling of that question; `pmode` stays a `u8` (`Param` is 8 words).
+pub param_by_place := fn(pm : Param) -> bool { pm.pmode == 2 }
 pub param_any := fn(h : Option(ptr(mut Param))) -> bool { match h { Some(_q) => { true }; None => { false } } }
 pub param_at := fn(h : Option(ptr(mut Param)), msg : str) -> ptr(mut Param) {
   match h { Some(q) => { q }; None => { panic(msg) } }
