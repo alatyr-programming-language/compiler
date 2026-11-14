@@ -970,6 +970,38 @@ EOF
      && grep -qE '^fn ir1626_write::put_io NotYet\(.*ir1626_write\.al:7:[0-9]+\)$' "$rep"; then
     echo "ok   ir #1626 array-param write: reads build, an element write through the parameter refuses at the store"
   else echo "FAIL ir #1626 array-param write: rc=$rc"; grep -E '^fn ' "$rep" | head -6 | sed 's/^/     /'; fail=1; fi
+  ## #1641's second review (B1, N1, N2): a fixed-array parameter function reached by a call the source
+  ## does not write — the driver's index desugar (`w[0] = v`, `w[v]`, `w[a..b]`), a `@convert` (`W(v)`),
+  ## or a function VALUE called wherever it travels — is held to legacy on every target, and `alatyr ir`
+  ## says so beside its verdict. Measured on `f1d31328`: the first four were IR-built behind a legacy
+  ## caller and answered 139 on aarch64 and riscv64. Each route is its own function, so one route
+  ## losing its hold turns this check red even while the runtime fixtures trap on an earlier one. `rd`,
+  ## reached only by a direct call, keeps the per-target rule.
+  local wa="$T/ir1641_hold"; mkdir -p "$wa"
+  cat > "$wa/ir1641_hold.al" <<'EOF'
+W := struct { k : u64 }
+S := struct { tag : u64, arr : [u64; 3] }
+index_set := fn(w : W, i : u64, xs : [u64; 3]) -> u64 { w.k + i + xs[0] }
+at := fn(w : W, xs : [u64; 3]) -> u64 { w.k + xs[0] }
+index_range := fn(w : W, xs : [u64; 3], ys : [u64; 3]) -> u64 { w.k + xs[0] + ys[0] }
+to_w := @convert fn(xs : [u64; 3]) -> W { W(k = xs[0]) }
+fv := fn(xs : [u64; 3]) -> u64 { xs[1] }
+take := fn(f : fn([u64; 3]) -> u64) -> u64 { 0 }
+rd := fn(xs : [u64; 3]) -> u64 { xs[2] }
+main := fn() -> u8 {
+  s := S(tag = 1, arr = [0, 4, 2])
+  u8(rd(s.arr) + take(fv))
+}
+EOF
+  "$CC" ir "$wa/ir1641_hold.al" > "$rep" 2>/dev/null; rc=$?
+  local held=0 h
+  for h in index_set at index_range to_w fv; do
+    grep -q "^## ir1641_hold::$h: held to legacy on every target " "$rep" && held=$((held + 1))
+  done
+  if [ "$rc" = 0 ] && [ "$held" = 5 ] && grep -q '^## ir1641_hold::rd: IR-selected on a target only when every caller is ' "$rep" \
+     && grep -q '^fn ir1641_hold::rd Built$' "$rep"; then
+    echo "ok   ir #1641 array-param holds: index desugar, @convert and function value held; a direct callee keeps the per-target rule"
+  else echo "FAIL ir #1641 array-param holds: rc=$rc held=$held/5"; grep -E '^## ir1641_hold::' "$rep" | head -8 | sed 's/^/     /'; fail=1; fi
 }
 
 check_ir_dev_verb() {

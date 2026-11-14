@@ -243,6 +243,12 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/seed_forms_check.sh" --self-test
   _full_seed_forms_self_test_rc=$?
   [ "$_full_seed_forms_self_test_rc" = 0 ] || exit "$_full_seed_forms_self_test_rc"
+  # The fixed-array parameter plan's synthesized-name list (#1641): on a tree whose list is complete
+  # the check never refuses, so a planted driver name, a planted literal-name pick and a name dropped
+  # from the list must each be refused, and the unchanged tree must pass.
+  bash "$ROOT/scripts/ir_ap_names_check.sh" --self-test
+  _full_ir_ap_names_self_test_rc=$?
+  [ "$_full_ir_ap_names_self_test_rc" = 0 ] || exit "$_full_ir_ap_names_self_test_rc"
   # The FIXTURE EXPECT stage (#1126 S1): its (a) and malformed counts are a verdict, and the rest are
   # what S2's known-deviations list is cut from, so a reader that cannot see a disagreement must not
   # pass. Planted fixtures drive every class: a header/registration disagreement, the x86_64 row that
@@ -393,6 +399,11 @@ fi
 # and like the pin check it does not stop the gate.
 echo '### AGENTS.md SIZE (rules only, at most 150 lines) ###'
 if ! bash scripts/agents_size_check.sh; then fail=1; fi
+
+# The fixed-array parameter plan holds every name the compiler calls without writing it (#1641): a
+# helper that synthesizes or picks a callee by a literal name must find that name in ir::ap_synth_name.
+echo '### IR ARRAY-PARAM SYNTHESIZED NAMES (every synthesized callee name is held) ###'
+if ! bash scripts/ir_ap_names_check.sh; then fail=1; fi
 
 # CHANGELOG FRAGMENTS (#1566): a new entry is its own file `changelog.d/<issue>-<slug>.md`, so no two
 # PRs edit one anchor; a line ADDED under CHANGELOG.md's `## Unreleased` against the merge base is

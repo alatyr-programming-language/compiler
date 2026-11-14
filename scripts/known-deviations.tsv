@@ -206,8 +206,10 @@ aarch64	test/hof_float_pool_shared_cell.al	run/133	#1196
 aarch64	test/if_return_agg.al	run/133	#1184
 aarch64	test/inout_agg_whole_assign_enum.al	compile/1	#1633
 aarch64	test/inout_agg_whole_assign_struct.al	compile/1	#1633
+aarch64	test/ir_array_param_convert_caller.al	run/133	#1194
 aarch64	test/ir_array_param_legacy_caller.al	run/133	#1194
 aarch64	test/ir_array_param_legacy_copy.al	run/133	#1194
+aarch64	test/ir_array_param_synth_caller.al	run/133	#1194
 aarch64	test/issue1065_het_eq_declared.al	run/133	#1192
 aarch64	test/issue1065_het_eq_undeclared.al	run/133	#1065
 aarch64	test/issue1081_derive_ptr_key.al	link/1	#1187
@@ -767,8 +769,10 @@ riscv64	test/hof_float_pool_shared_cell.al	run/133	#1196
 riscv64	test/if_return_agg.al	run/133	#1191
 riscv64	test/inout_agg_whole_assign_enum.al	compile/1	#1633
 riscv64	test/inout_agg_whole_assign_struct.al	compile/1	#1633
+riscv64	test/ir_array_param_convert_caller.al	run/133	#1194
 riscv64	test/ir_array_param_legacy_caller.al	run/133	#1194
 riscv64	test/ir_array_param_legacy_copy.al	run/133	#1194
+riscv64	test/ir_array_param_synth_caller.al	run/133	#1194
 riscv64	test/ir_ptr_agree.al	run/133	#1187
 riscv64	test/issue1065_het_eq_declared.al	run/133	#1192
 riscv64	test/issue1065_het_eq_undeclared.al	run/133	#1065
@@ -1331,8 +1335,10 @@ wasm	test/hof_float_pool_shared_cell.al	run/134	#1195
 wasm	test/if_return_agg.al	run/134	#1184
 wasm	test/inout_agg_whole_assign_enum.al	compile/1	#1633
 wasm	test/inout_agg_whole_assign_struct.al	compile/1	#1633
+wasm	test/ir_array_param_convert_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_copy.al	run/134	#1194
+wasm	test/ir_array_param_synth_caller.al	run/134	#1194
 wasm	test/ir_ptr_agree.al	run/134	#1187
 wasm	test/issue1065_het_eq_declared.al	run/134	#1192
 wasm	test/issue1065_het_eq_undeclared.al	run/134	#1065

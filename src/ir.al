@@ -1871,12 +1871,16 @@ pub report_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr
   mut nbuilt : usize = 0
   mut ngap : usize = 0
   mut nbad : usize = 0
+  ## The fixed-array parameter plan (`ap_plan_begin`): its target-independent holds are reported beside a
+  ## function's verdict; its per-target fixpoint needs a selector, so this verb does not run it.
+  plan := ap_plan_init(decls, src, ba, offs, lens)
   mut i : usize = 0
   while i < cnt {
     ## unchecked-ok: `decls` holds Decl record addresses (the parser's `rt::Vec` of handles).
     dp : ptr(Decl) = unchecked bitcast(ptr(Decl), rt::vec_get(deref(decls), i))
     d : Decl = deref(dp)
     if d.is_fn and d.name_len != 0 {
+      ap_report_note(sb, src, i, d)
       mut why := BuildWhy(c = Construct.CEmpty, w = NyWhy.NwOutside, span = u64(d.name_start))
       out : BuildOut = build_one(p, decls, src, i, ba, why)
       put(sb, "fn ")
@@ -1932,7 +1936,25 @@ pub report_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr
   put(sb, "\n")
   if eb.len != 0 { elen : usize = eb.len; ew := rt::sb_flush(eb, 2) }
   IR_VERIFY_FAILED = IR_VERIFY_FAILED + nbad
+  AP_ON = false
   nbad
+}
+## #1641's second review, N2: a function with a fixed-array parameter is selected on a target only under
+## the plan, so its report line is preceded by what the plan says, which `Built` alone would hide.
+ap_report_note := fn(in out sb : rt::StrBuf, src : ptr(u8), di : usize, d : Decl) {
+  if not sig_has_fixed_array(d) { return }
+  put(sb, "## ")
+  put_qual_name(sb, src, d)
+  match AP_ST {
+    Some(w) => {
+      if wb_get(w, di) == 2 {
+        put(sb, ": held to legacy on every target (a caller the plan cannot see; ir::ap_plan_begin)\n")
+        return
+      }
+    }
+    None => {}
+  }
+  put(sb, ": IR-selected on a target only when every caller is (per-target fixpoint, not run here)\n")
 }
 ## How many built functions the verifier refused in this process (the `ir` verb exits 70 when any did).
 mut IR_VERIFY_FAILED : usize = 0
@@ -2132,6 +2154,23 @@ pub sig_has_narrow_view := fn(src : ptr(u8), d : Decl) -> bool {
 ## before it in that file, and that declaration is a caller. A function whose name occurs outside every
 ## declaration, in a declaration that is not a plain non-generic function (a global, an import list, a
 ## test, a generic whose instances are legacy-emitted), or that is `@export`ed, is held to legacy at once.
+##
+## The text shows only calls the AUTHOR wrote. A call the compiler makes without the callee's name at the
+## call site has no occurrence, so each such route holds its callee at once (#1641's second review, B1):
+##   * a SYNTHESIZED name (`ap_synth_name`): the driver rewrites `w[i]`, `w[i] = v` and `w[lo..hi]` to
+##     `at`, `index_set` and `index_range`, a `for` over an iterator to `next`/`unwrap`/`Some`/`None`;
+##     sema picks a user `iter` for `for`; the parser emits `alloc_into` and the `__defer*` markers; the
+##     comparison route calls `eq`/`lt`; `print` lowers through `print_one*`; the emitters pick `main`,
+##     `_start`, `sort` and `display` by their literal names. `scripts/ir_ap_names_check.sh`
+##     fails when one of those helpers gains a name this list lacks;
+##   * a `@convert` function, which `T(v)` reaches by its signature (Types §4.6);
+##   * a declaration whose name lies outside every source file: the driver's `__hoflam<N>` clone, whose
+##     only call site the driver renamed to it.
+## The scan also holds the function at any occurrence that is not a direct call (the name not followed by
+## `(`): a function VALUE (`f := rd`, `h(rd)`, a field or global holding it) is called indirectly from
+## wherever the value travels, which the text does not show. Today the builder refuses every way to form
+## one (`FnRef`, a `Var` naming a function), so the maker stays legacy anyway; this hold keeps the rule
+## sound the day it builds them (#1641's second review, N1).
 ## The rest is a greatest fixpoint each selector runs before its declaration loop (`x86_isel_plan`,
 ## `a64_isel_plan`, `rv_isel_plan`, `wat_isel_plan`): try every remaining caller with the selector itself
 ## and hold the callee when one is refused, until nothing changes. A program without such a function
@@ -2159,6 +2198,27 @@ pub sig_has_fixed_array := fn(d : Decl) -> bool {
       }
       None => { break }
     }
+  }
+  false
+}
+## Whether `src[s .. s+n]` is a name the compiler calls without writing it at the call site (the band
+## comment above). `scripts/ir_ap_names_check.sh` holds this list against the helpers that synthesize.
+ap_synth_name := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  nm := str_at((src + s), n)
+  nm == "at" or nm == "index_set" or nm == "index_range" or nm == "iter" or nm == "next" or nm == "unwrap"
+    or nm == "Some" or nm == "None" or nm == "eq" or nm == "lt" or nm == "alloc_into" or nm == "isize"
+    or nm == "__defer" or nm == "__deferblk" or nm == "__deferblkend" or nm == "print" or nm == "print_one"
+    or nm == "print_one_int" or nm == "print_one_float" or nm == "main" or nm == "_start" or nm == "sort"
+    or nm == "display"
+}
+## Whether the identifier ending at `q` is called directly: the next byte in `[q, hi)` past blanks is `(`.
+ap_called_at := fn(src : ptr(u8), q : usize, hi : usize) -> bool {
+  mut k := q
+  while k < hi {
+    c := str_at((src + k), 1)
+    if c == "(" { return true }
+    if c != " " and c != "\t" and c != "\n" and c != "\r" { return false }
+    k = k + 1
   }
   false
 }
@@ -2192,9 +2252,14 @@ ap_owner := fn(decls : ptr(rt::Vec), lo : usize, p : usize) -> Option(usize) {
   best
 }
 ## Record an occurrence of candidate `g`'s name at `p` (in the file starting at `lo`).
-ap_occur := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), in out a : rt::Arena, g : usize, lo : usize, p : usize) {
+## `call` says whether the occurrence is a direct call (`ap_called_at`); any other occurrence holds `g`.
+ap_occur := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), in out a : rt::Arena, g : usize, lo : usize, p : usize, call : bool) {
   gd : Decl = deref(lower_ctx::decl_get(decls, g))
   if p == gd.name_start { return }
+  if not call {
+    ap_hold(w, g)
+    return
+  }
   ro : Option(usize) = ap_owner(decls, lo, p)
   match ro {
     Some(r) => {
@@ -2216,6 +2281,26 @@ ap_occur := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), in ou
 ## Start the plan for one program (see the band comment). Answers whether any caller is left to try;
 ## the tables come from `a`, which the caller keeps past them.
 pub ap_plan_begin := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena) -> bool {
+  oso : Option(ptr(rt::Vec)) = IR_SM_OFFS
+  lso : Option(ptr(rt::Vec)) = IR_SM_LENS
+  match oso {
+    Some(offs) => {
+      match lso {
+        Some(lens) => { return ap_plan_init(decls, src, a, offs, lens) }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  ## No source map: no caller can be seen, so every candidate stays legacy (`ap_held` with no table).
+  AP_ON = true
+  AP_ST = Option(ptr(mut WBuf)).None
+  AP_EDGE = Option(ptr(mut WBuf)).None
+  AP_MEMO = Option(ptr(mut WBuf)).None
+  false
+}
+## `ap_plan_begin` over the source map `offs`/`lens` (the `ir` verb passes its own).
+ap_plan_init := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, offs : ptr(rt::Vec), lens : ptr(rt::Vec)) -> bool {
   AP_ON = true
   AP_ST = Option(ptr(mut WBuf)).None
   AP_EDGE = Option(ptr(mut WBuf)).None
@@ -2241,7 +2326,14 @@ pub ap_plan_begin := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Aren
       ## An `@export`ed function has foreign callers; a name that is not an identifier (an operator glyph)
       ## is called through a spelling the scan below does not see.
       named := d.name_len > 0 and lower_layout::ll_ident_byte(src, d.name_start)
-      if lower::export_name(src, d.name_start, d.name_len).n != 0 or not named { v = 2 } else { q := wb_push(cands, a, i) }
+      ## A synthesized name or a `@convert` is called where its name is not written (the band comment).
+      if lower::export_name(src, d.name_start, d.name_len).n != 0 or not named {
+        v = 2
+      } else if ap_synth_name(src, d.name_start, d.name_len) or lower::fn_is_convert(src, d.name_start, d.name_len) {
+        v = 2
+      } else {
+        q := wb_push(cands, a, i)
+      }
     }
     k1 := wb_push(w, a, v)
     k2 := wb_push(m, a, 0)
@@ -2253,31 +2345,21 @@ pub ap_plan_begin := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Aren
   AP_EDGE = Option(ptr(mut WBuf)).Some(e)
   nc := wb_len(cands)
   if nc == 0 { return false }
-  oso : Option(ptr(rt::Vec)) = IR_SM_OFFS
-  lso : Option(ptr(rt::Vec)) = IR_SM_LENS
-  match oso {
-    Some(offs) => {
-      match lso {
-        Some(lens) => {
-          ap_scan(decls, src, w, e, a, cands, offs, lens)
-          return wb_len(e) > 0
-        }
-        None => {}
-      }
-    }
-    None => {}
-  }
-  ## No source map: no caller can be seen, so every candidate stays legacy.
-  mut c : usize = 0
-  while c < nc {
-    ap_hold(w, wb_get(cands, c))
-    c = c + 1
-  }
-  false
+  ap_scan(decls, src, w, e, a, cands, offs, lens)
+  wb_len(e) > 0
 }
 ## Every identifier occurrence of a candidate's name in the source files `offs`/`lens` (`ap_occur`).
 ap_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), w : ptr(mut WBuf), e : ptr(mut WBuf), in out a : rt::Arena, cands : ptr(mut WBuf), offs : ptr(rt::Vec), lens : ptr(rt::Vec)) {
   nc := wb_len(cands)
+  ## A name outside every source file is the driver's (a `__hoflam<N>` clone): its call site was renamed.
+  mut c0 : usize = 0
+  while c0 < nc {
+    g0 := wb_get(cands, c0)
+    gd0 : Decl = deref(lower_ctx::decl_get(decls, g0))
+    mo : Option(u64) = module_of(gd0.name_start, offs, lens)
+    match mo { Some(_k) => {}; None => { ap_hold(w, g0) } }
+    c0 = c0 + 1
+  }
   nf := rt::vec_len(deref(offs))
   mut f : usize = 0
   while f < nf {
@@ -2292,7 +2374,7 @@ ap_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), w : ptr(mut WBuf), e : ptr(mu
         while c < nc {
           g := wb_get(cands, c)
           gd : Decl = deref(lower_ctx::decl_get(decls, g))
-          if lower_ctx::streq(src, gd.name_start, gd.name_len, p, q - p) { ap_occur(decls, w, e, a, g, lo, p) }
+          if lower_ctx::streq(src, gd.name_start, gd.name_len, p, q - p) { ap_occur(decls, w, e, a, g, lo, p, ap_called_at(src, q, hi)) }
           c = c + 1
         }
         p = q
