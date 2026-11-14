@@ -5409,6 +5409,10 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
             ## as the ADDRESS of the caller's array, the convention every legacy emitter uses for it
             ## (measured on x86_64: the caller passes its array's address, never a copy), so a legacy
             ## caller and an IR-built callee agree; element reads and writes go through that pointer.
+            ## They agree on x86_64 only: the aarch64 and riscv64 legacy callers pass a field or an
+            ## element by its first word, and the twins' legacy array copies are wrong (#1641's review),
+            ## so no function with such a parameter is selected while a legacy caller may reach it
+            ## (`ir::ap_plan_begin`).
             ## Functions §4.1 owes an `in` array a copy and an `in out` one the caller's place, but
             ## `ast::Param` folds the direction into `pmode` 1, so neither side can choose yet (#1632).
             if pm.pmode == 1 {
