@@ -134,6 +134,54 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.3.1 — 2026-11-14
+
+- **Returning an integer of the other signedness is a compile error (#942).** `fn() -> u64` that
+  returned an `i64` local, for example `a := 0` then `return a - 1`, compiled and answered
+  `2^64 - 1` on x86_64. Signed↔unsigned is a numeric conversion, and Types §4.3 makes it explicit. A
+  `return` and a fn's tail are now refused at the returned value with their own diagnostic. That
+  includes an untyped module constant: `K := 42` is an `i64`, so returning it from `-> u64` is refused.
+  Write `u64(v)`, or declare the binding with the type it is returned as. A literal still takes the
+  declared result's type. Three result sinks are not checked yet (#1348): a `return` inside
+  `comptime if`, a `match`-expression tail, and a generic `-> T` returning an inferred local.
+  Arguments, assignments and width follow in later slices of #942.
+- **The shared IR builds `in out` and `out` struct and enum parameters (#1026).** Such a parameter is
+  bound to the caller's place by reference (Functions §2.1, §4.1), and a call passes that place's
+  address, never a copy (§2.3). Before, the builder refused every function with one and every call to
+  one, so aarch64, riscv64 and wasm fell back to their legacy emitters and trapped. A whole `p = v`
+  into such a parameter, scalar `in out`/`out`, array and slice-variadic parameters stay refused.
+- **The merge queue composes through an append-only conflict in `scripts/e2e.sh` instead of sending
+  it back (#1390).** Every fixture PR appends its `run` rows at the end of one list, so every second
+  queued PR came back as "conflicts with main" for a hand rebase. A batch now composes through such a
+  conflict when BOTH sides only added lines at one anchor: both runs are kept, ours first, and the
+  merge commit says so (`scripts/land.sh --settle-append-only`, called by the queue from the base's
+  copy). A conflict where either side rewrote or deleted a line, one in any other file, and one in a
+  counted registry (`scripts/seed_forms.tsv`, `scripts/known-deviations.tsv`) stay refusals.
+  `CHANGELOG.md` is not settled here: an entry is a `changelog.d/` fragment since #1566.
+- **A `Slice(T)` over a narrow array reads the right elements on x86_64 when the shared IR builds both
+  ends (#1514).** A range slice of a `[u16; N]`, `[u32; N]`, `[bool; N]` or inferred `[u8; N]` local,
+  passed to or returned from a `Slice(T)` parameter or result, iterated with `for` or indexed, read
+  the wrong bytes: the array kept one word per element while the reader stepped the element's own
+  size. The shared IR now lays the array out at the element's own stride (Types §6.4), so
+  `pass(a16[0..3])[2]` and `for x in s` answer the stored values when the IR builds the function that
+  cuts the view and every function it reaches. A narrow-element view never crosses between a function
+  the IR builds and one it does not: such a call keeps both ends on the previous emitter, which still
+  reads some of these views wrong (#1559). aarch64, riscv64 and wasm keep such functions on their
+  previous emitter, unchanged.
+- Merge queue: `ALATYR_QUEUE_RUNNER=github` gates a batch as speculative stacks (main+A, main+A+B,
+  … up to `ALATYR_QUEUE_DEPTH`) on parallel `gate/**` runs and lands the deepest green prefix in one
+  push of exactly the gated object; a red stack over a green one isolates its member, and a verdict
+  counts only for the base its stack was composed on. omen stays the default (#1571).
+- **A whole `p = v` into an `out` / `in out` struct or enum parameter is refused on every backend
+  (#1633).** No legacy emitter wrote it back to the caller's place (Functions §2.1, §4.1): aarch64,
+  riscv64 and wasm answered the caller's old value, and x86_64 refused it only through an unrelated
+  slot-width check. It is now one located refusal, shared by the four legacy emitters, until the shared
+  IR builds the store. A bare `ptr(mut P)` is no longer taken by the IR as an `in out P` place (#1635).
+- Landing provenance: a seed-forms retirement in a promotion's tail (the row and its planted program,
+  nothing else, above the reseed) is an integrator tail commit, so a promotion that answers a seed form
+  no longer stalls the merge queue; a retirement carrying `src/` changes, or with no reseed under it,
+  is still refused (#1648).
+
 ## 0.3.0 — 2026-11-13
 
 - **A generic call's struct or enum result can be passed straight on (#1256).** `same(mk(S1, x), y)`

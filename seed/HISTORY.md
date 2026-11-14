@@ -1996,4 +1996,27 @@ The original reading note, verbatim:
 #
 # VERSION 0.2.24 -> 0.3.0, MINOR: new surface by CHANGELOG.md "Versioning policy": the `alatyr x86-legacy` verb appears, and x86_64 programs the legacy emitter refused now compile and run (#980, #406). Not MAJOR, a judgement at the edge of the policy: the one entry that stops a valid program is #1502's fail-loud stub on aarch64/riscv64/wasm, which also traps a typed constant's block-local shadow that answered correctly. Those cases were miscompiled all the same (the declaration stored into the constant's own `.data` cell / `global`; only the folded reads hid it), so the change turns a miscompile into a loud failure, the policy's PATCH rule; the residual stays published as the open #1502 in scripts/known-deviations.issues.tsv until a block-local declaration gets a slot of its own. Every other entry is a PATCH.
 # The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.3.0 -> 0.3.1   promoted 2026-11-14   seed/alatyr := Stage2
+#
+# WHY: #1631 (Refs #1026) lets the shared IR build `out` / `in out` struct and enum parameters; for 38 of the compiler's own functions that was the only remaining IR refusal, so the IR now emits them and the frozen seed must carry that emission or TOOL-1 cannot hold (gate run 43549454603 on 09cf317c, whose tree the landed head 12fe78b5 keeps with one commit-message line restored: full_fp DIFFER seed=1699679 gas1=gas2=1699750).
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k>): 333 hunks, 1463 added, 1392 removed. One sentence:
+# 38 more compiler functions are now emitted from the shared IR (465 -> 503 marked `# ir: selected from the shared IR`; 16 of the 38 branch, so 298 -> 314 take `.Lxir<N>_<k>` block labels): exactly the functions whose only remaining IR refusal was an `out` / `in out` aggregate parameter, now bound to the caller's place by reference, with the IR's frame-slot code in place of the legacy emitter's `pushq`/`popq`-staged operands; the other 5669 of the 5707 global symbols are byte-identical once labels are normalized.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1699750 lines.
+# GAS SHA-256 (Stage2): 60be54f7958217604ae93273a91e8f688d5e7a1163264b4657739ff480183805.
+# Stage2 == Stage3 BINARY SHA-256:
+# 69089d2290c70aec24137d62c9593fdb924a0d542b90365b8c3b8c182e999ab4 (6524904 B).
+# All three answer `alatyr 0.3.1, spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.3.0) SHA-256:
+# b50504a7cf085c6a160feab3d77d44fa91961537cd2836803f46c6a26ac20817.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1699750 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.3.0 -> 0.3.1, PATCH by CHANGELOG.md "Versioning policy": every entry since 0.3.0 is a defect fixed with no new surface. #1026 turns a trap where a value is due into the correct value (aarch64, riscv64 and wasm trapped on an `in out` struct parameter), and #1514 a wrong value into the right one (x86_64 read the wrong bytes of a narrow-array view). #1633 turns a silent wrong value (a whole `p = v` into an `out` / `in out` aggregate parameter never reached the caller on aarch64, riscv64 and wasm) into a located refusal, the policy's PATCH rule for a loud failure; the residual stays published as the open #1633. Not MAJOR, a judgement at the edge of the policy: a valid program whose callee assigns the whole parameter and reads it back only inside the callee may have answered correctly on those three backends and now stops compiling; the store still never reached the caller's place, which Functions §2.1 and §4.1 make the parameter denote, so the code was miscompiled even where the visible answer was right (not measured; the same edge 0.3.0 named for #1502). #942 newly refuses returning an integer of the other signedness, which Types §4.3 makes explicit, so the refused programs are invalid ones. #1390, #1571 and #1648 are under scripts/ and do not move the version. No CLI verb or flag appears and no construct that was rejected is newly accepted.
+# The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
