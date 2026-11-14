@@ -707,9 +707,22 @@ source "$ROOT/scripts/attribution.sh"
 ## the next gate its first one. One step of the first-parent walk from origin/main's tip:
 ##   0  a merge whose second parent is the head of a PR merged into main — provenance established
 ##   3  an integrator tail commit — keep walking to its first parent
+##   4  by its paths, a seed-forms retirement (#1648) — its shape is checked, then as 3
 ##   1  anything else — refuse
 LAND_TAIL_ORACLE_RE='^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline|scripts/xbackend_diff\.baseline)$'
 LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scripts/package_cli_test\.sh|CHANGELOG\.md|changelog\.d/[1-9][0-9]*-[a-z0-9-]+\.md)$'
+## A seed-forms retirement (#1648): the promotion's gate is red until the promoted seed's newly
+## answered form leaves scripts/seed_forms.tsv (scripts/seed_forms_check.sh: "the seed now
+## handles"), so a promotion that answers one carries a commit removing that row and deleting its
+## planted program. Paths alone say only that it COULD be one (return 4); `seed_retirement_shape_ok`
+## checks the shape and `provenance_tail_order_ok` that a reseed sits under it. A workaround comment
+## in src/ or lib/ is not part of it: the check does not require its removal, so the rewrite is a
+## later PR's. A `tree` row never retires this way: it tracks a tree defect, which no promotion
+## answers, so its removal in a tail is refused. What the shape cannot see is WHICH `seed` row the
+## promoted seed answers: any of them may go, with its tree-regression guard, while a reseed sits
+## under it in a tail no landing has walked yet. That trust is the reseed's own: the integrator's
+## tail, gated as the promotion before it is pushed.
+LAND_TAIL_RETIRE_RE='^(scripts/seed_forms\.tsv|scripts/seed_forms/[a-z0-9_]+\.al)$'
 main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
   if [ "$1" -ge 2 ]; then
     [ "$2" = yes ] && return 0
@@ -720,11 +733,59 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
     printf '%s\n' "$3" | grep -Evq "$LAND_TAIL_ORACLE_RE" || return 3
     printf '%s\n' "$3" | grep -Evq "$LAND_TAIL_RESEED_RE" || {
       printf '%s\n' "$3" | grep -qx seed/alatyr && return 3; }
+    printf '%s\n' "$3" | grep -Evq "$LAND_TAIL_RETIRE_RE" || {
+      printf '%s\n' "$3" | grep -qx scripts/seed_forms.tsv && return 4; }
   fi
   echo "  REFUSE: main's $4 did not come through a pull request — it is neither a PR merge nor an"
-  echo "          oracle or reseed commit on top of one (it changes: $(printf '%s' "$3" | tr '\n' ' '))."
+  echo "          oracle, reseed or seed-forms retirement commit on top of one (it changes: $(printf '%s' "$3" | tr '\n' ' '))."
   echo "          Land it through a PR, or, if the owner accepts it as it is, re-run with"
   echo "          ALATYR_LAND_ACCEPT_BASE=<origin/main's full sha> to acknowledge it for this one landing."
+  return 1
+}
+## Is a return-4 commit a retirement in fact? Input: its `git diff-tree --name-status -r` lines and the
+## +/- lines of its scripts/seed_forms.tsv diff. It modifies the registry, deletes at least one planted
+## program and adds none; the removed rows are exactly the deleted programs; and the registry gains no
+## line but its `# live-rows:` count — so no row was added, re-dated or rewritten under a promotion's name.
+seed_retirement_shape_ok() { # name-status-lines tsv-diff-lines -> 0 ok, 1 not (says why)
+  local st p n del=0 why="" gone=""
+  while IFS=$'\t' read -r st p; do
+    [ -n "$st" ] || continue
+    case "$st:$p" in
+      M:scripts/seed_forms.tsv) ;;
+      D:scripts/seed_forms/*.al)
+        del=$((del + 1)); n="$(basename "$p" .al)"; gone="$gone$n"$'\n'
+        printf '%s\n' "$2" | grep -q "^-$n"$'\t' || why="$why its deleted $p has no removed row;" ;;
+      *) why="$why it ${st} $p;" ;;
+    esac
+  done <<< "$1"
+  [ "$del" -gt 0 ] || why="$why it deletes no planted program;"
+  for n in $(printf '%s\n' "$2" | sed -n 's/^-\([a-z0-9_][a-z0-9_]*\)\t.*$/\1/p'); do
+    printf '%s' "$gone" | grep -qx "$n" || why="$why it removes row $n but keeps its program;"
+  done
+  printf '%s\n' "$2" | grep -E '^-[a-z0-9_]+'$'\t' | awk -F'\t' '$2 != "seed"' | grep -q . &&
+    why="$why it removes a row whose state is not seed (a tree defect no promotion answers);"
+  n="$(printf '%s\n' "$2" | grep -c '^+')"
+  [ "$n" -le 1 ] && ! printf '%s\n' "$2" | grep '^+' | grep -Evq '^\+# live-rows: [0-9]+$' ||
+    why="$why it adds registry lines other than the live-rows count;"
+  [ -z "$why" ] && return 0
+  echo "  REFUSE: not a seed-forms retirement:$why"
+  return 1
+}
+seed_retirement_commit_ok() { # commit — the shape, read from git
+  seed_retirement_shape_ok "$(git diff-tree --no-commit-id --name-status -r "$1")" \
+    "$(git diff-tree -p --no-color --no-ext-diff --no-textconv "$1^" "$1" -- scripts/seed_forms.tsv |
+       sed -n '/^@@/,$p' | grep -E '^[+-]')"
+}
+## The tail's kinds from main's tip down to the PR merge (oracle, reseed, retire): a retirement counts
+## only above a reseed, the promotion that answers its form. One pushed alone is a row dropped ungated.
+provenance_tail_order_ok() { # kind... (tip first)
+  local k need=0
+  for k in "$@"; do
+    case "$k" in retire) need=1 ;; reseed) need=0 ;; esac
+  done
+  [ "$need" = 0 ] && return 0
+  echo "  REFUSE: a seed-forms retirement in main's tail has no reseed under it: a row was dropped"
+  echo "          by a direct push, not by the promotion whose seed answers its form."
   return 1
 }
 
@@ -897,7 +958,7 @@ xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=155  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566
+LAND_SELFTEST_EXPECTED=172  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566, +17 #1648
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -1343,6 +1404,48 @@ Not a bullet.
   [ $? = 1 ]; _ck $? provenance-allowed-a-source-change-riding-an-oracle-commit
   main_provenance_step 0 - '' root >/dev/null 2>&1
   [ $? = 1 ]; _ck $? provenance-allowed-a-root-commit
+  # A seed-forms retirement (#1648): its paths make it a candidate, its shape and a reseed under it
+  # make it a tail commit; a workaround comment riding it, or a row dropped with no promotion, do not.
+  main_provenance_step 1 - "$(printf '%s\n' scripts/seed_forms.tsv scripts/seed_forms/store_call_aggregate.al)" t1 >/dev/null 2>&1
+  [ $? = 4 ]; _ck $? provenance-did-not-take-a-retirement-as-a-candidate
+  main_provenance_step 1 - "$(printf '%s\n' scripts/seed_forms.tsv scripts/seed_forms/store_call_aggregate.al src/driver.al)" t2 >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? provenance-allowed-a-source-change-riding-a-retirement
+  main_provenance_step 1 - scripts/seed_forms/store_call_aggregate.al t3 >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? provenance-allowed-a-program-change-without-its-registry
+  local rt_ns rt_d T=$'\t'
+  rt_ns="$(printf 'M\tscripts/seed_forms.tsv\nD\tscripts/seed_forms/store_call_aggregate.al')"
+  rt_d="$(printf -- '-# live-rows: 1\n+# live-rows: 0\n-store_call_aggregate\tseed\t42\t#1237\tsrc/driver.al:d_idxop_expr')"
+  seed_retirement_shape_ok "$rt_ns" "$rt_d" >/dev/null; _ck $? retirement-refused-the-0.3.0-retirement
+  seed_retirement_shape_ok "$(printf '%s\nM\tsrc/driver.al' "$rt_ns")" "$rt_d" >/dev/null; [ $? = 1 ]
+  _ck $? retirement-allowed-a-source-change
+  seed_retirement_shape_ok "$(printf '%s\nA\tscripts/seed_forms/new_form.al' "$rt_ns")" "$rt_d" >/dev/null; [ $? = 1 ]
+  _ck $? retirement-allowed-a-new-planted-program
+  seed_retirement_shape_ok "$rt_ns" "$(printf '%s\n+new_form%sseed%s7%s#1%ssrc/x.al:f' "$rt_d" "$T" "$T" "$T" "$T")" >/dev/null; [ $? = 1 ]
+  _ck $? retirement-allowed-an-added-row
+  seed_retirement_shape_ok "$rt_ns" "$(printf -- '-# live-rows: 1\n+# live-rows: 0\n-other_form\tseed\t42\t#9\tsrc/x.al:f')" >/dev/null; [ $? = 1 ]
+  _ck $? retirement-allowed-a-deleted-program-whose-row-stayed
+  seed_retirement_shape_ok "$(printf 'M\tscripts/seed_forms.tsv')" "$rt_d" >/dev/null; [ $? = 1 ]
+  _ck $? retirement-allowed-a-registry-edit-that-deletes-no-program
+  seed_retirement_shape_ok "$rt_ns" "$(printf '%s\n-store_call\tseed\t7\t#9\tsrc/x.al:f' "$rt_d")" >/dev/null; [ $? = 1 ]
+  _ck $? retirement-allowed-a-row-removed-while-its-program-stays
+  seed_retirement_shape_ok "$rt_ns" "$(printf '%s' "$rt_d" | sed 's/\tseed\t/\ttree\t/')" >/dev/null; [ $? = 1 ]
+  _ck $? retirement-allowed-a-tree-row
+  provenance_tail_order_ok oracle oracle retire reseed >/dev/null; _ck $? tail-order-refused-the-0.3.0-tail
+  provenance_tail_order_ok oracle retire >/dev/null; [ $? = 1 ]; _ck $? tail-order-allowed-a-retirement-with-no-reseed
+  provenance_tail_order_ok reseed retire >/dev/null; [ $? = 1 ]; _ck $? tail-order-allowed-a-retirement-under-the-reseed
+  provenance_tail_order_ok >/dev/null; _ck $? tail-order-refused-an-empty-tail
+  # The same shape read from git, in a planted repository: the retirement, then one that also edits src/.
+  ( set -e; mkdir -p "$st/rt/scripts/seed_forms" "$st/rt/src"; cd "$st/rt"; git init -q -b main .
+    git config user.email r@x; git config user.name r; git config commit.gpgsign false; git config core.hooksPath /dev/null
+    printf '# live-rows: 1\nstore_call_aggregate\tseed\t42\t#1237\tsrc/driver.al:d\n' > scripts/seed_forms.tsv
+    echo 'fn main() -> i32 { return 42 }' > scripts/seed_forms/store_call_aggregate.al; echo '// works around #1237' > src/driver.al
+    git add -A; git commit -qm base
+    printf '# live-rows: 0\n' > scripts/seed_forms.tsv; git rm -q scripts/seed_forms/store_call_aggregate.al
+    git commit -qam retire; git tag retire
+    echo '// fixed' > src/driver.al; git commit -qam comment; git reset -q --soft HEAD~2; git commit -qm both; git tag both ) >/dev/null 2>&1
+  ( cd "$st/rt" && seed_retirement_commit_ok retire ) >/dev/null 2>&1; _ck $? retirement-read-from-git-was-refused
+  ( cd "$st/rt" && git rev-parse -q --verify both >/dev/null && ! seed_retirement_commit_ok both ) >/dev/null 2>&1
+  _ck $? retirement-read-from-git-allowed-a-source-change
 
   # ---- 8 · the predicted-delta decider in corpus_manifest.sh, which PHASE 6a relies on. ------
   bash "$ROOT/scripts/corpus_manifest.sh" --delta-self-test >"$st/delta.out" 2>&1
@@ -1576,7 +1679,7 @@ echo "  head=$HEAD_SHA"
 # a merge of a PR that GitHub records as merged into main. Earlier history is not rescanned; each
 # landing proves its own base, so the chain is proved one link at a time from here on.
 say "PHASE 1b — provenance: origin/main's tip came through a pull request"
-prov_c="$BASE"; prov_ok=1; prov_n=0
+prov_c="$BASE"; prov_ok=1; prov_n=0; prov_kinds=()
 while :; do
   set -- $(git rev-list --parents -n 1 "$prov_c")
   prov_np=$(($# - 1)); prov_v=-; prov_files=
@@ -1591,9 +1694,17 @@ while :; do
     prov_files="$(git diff-tree --no-commit-id --name-only -r "$prov_c")"
   fi
   main_provenance_step "$prov_np" "$prov_v" "$prov_files" "$(git rev-parse --short "$prov_c")"; prov_rc=$?
+  if [ "$prov_rc" = 4 ]; then
+    seed_retirement_commit_ok "$prov_c" && prov_rc=3 || prov_rc=1
+  fi
   case "$prov_rc" in
-    0) echo "  $(git rev-parse --short "$prov_c") merges a PR head GitHub records as merged into main"; break ;;
-    3) echo "  $(git rev-parse --short "$prov_c") is an integrator tail commit ($(printf '%s' "$prov_files" | tr '\n' ' '))"
+    0) echo "  $(git rev-parse --short "$prov_c") merges a PR head GitHub records as merged into main"
+       provenance_tail_order_ok ${prov_kinds[@]+"${prov_kinds[@]}"} || prov_ok=0
+       break ;;
+    3) if printf '%s\n' "$prov_files" | grep -qx seed/alatyr; then prov_kinds+=(reseed)
+       elif printf '%s\n' "$prov_files" | grep -qx scripts/seed_forms.tsv; then prov_kinds+=(retire)
+       else prov_kinds+=(oracle); fi
+       echo "  $(git rev-parse --short "$prov_c") is an integrator tail commit ($(printf '%s' "$prov_files" | tr '\n' ' '))"
        prov_c="$(git rev-parse "$prov_c^")"; prov_n=$((prov_n + 1))
        [ "$prov_n" -le 8 ] || { echo "  REFUSE: more than 8 tail commits above the last PR merge"; prov_ok=0; break; } ;;
     *) prov_ok=0; break ;;
