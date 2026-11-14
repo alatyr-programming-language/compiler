@@ -15479,7 +15479,7 @@ direct_match_multiword_reject := fn(scrut : ptr(Expr), cx : ptr(LCtx)) {
 ## `:=`, skip whitespace, check for `@convert`. Mirrors `fn_is_inline` (which scans BACKWARD for a decl
 ## prefix); here the marker is a value-position effector, so the scan runs forward. Only called on real
 ## fn decls (a body always follows), so reading a few bytes past `:=` is in-bounds.
-fn_is_convert := fn(src : ptr(u8), name_s : usize, name_l : usize) -> bool {
+pub fn_is_convert := fn(src : ptr(u8), name_s : usize, name_l : usize) -> bool {
   mut p := name_s + name_l
   mut sc := true
   while sc {

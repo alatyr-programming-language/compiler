@@ -1871,12 +1871,16 @@ pub report_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr
   mut nbuilt : usize = 0
   mut ngap : usize = 0
   mut nbad : usize = 0
+  ## The fixed-array parameter plan (`ap_plan_begin`): its target-independent holds are reported beside a
+  ## function's verdict; its per-target fixpoint needs a selector, so this verb does not run it.
+  plan := ap_plan_init(decls, src, ba, offs, lens)
   mut i : usize = 0
   while i < cnt {
     ## unchecked-ok: `decls` holds Decl record addresses (the parser's `rt::Vec` of handles).
     dp : ptr(Decl) = unchecked bitcast(ptr(Decl), rt::vec_get(deref(decls), i))
     d : Decl = deref(dp)
     if d.is_fn and d.name_len != 0 {
+      ap_report_note(sb, src, i, d)
       mut why := BuildWhy(c = Construct.CEmpty, w = NyWhy.NwOutside, span = u64(d.name_start))
       out : BuildOut = build_one(p, decls, src, i, ba, why)
       put(sb, "fn ")
@@ -1932,7 +1936,25 @@ pub report_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr
   put(sb, "\n")
   if eb.len != 0 { elen : usize = eb.len; ew := rt::sb_flush(eb, 2) }
   IR_VERIFY_FAILED = IR_VERIFY_FAILED + nbad
+  AP_ON = false
   nbad
+}
+## #1641's second review, N2: a function with a fixed-array parameter is selected on a target only under
+## the plan, so its report line is preceded by what the plan says, which `Built` alone would hide.
+ap_report_note := fn(in out sb : rt::StrBuf, src : ptr(u8), di : usize, d : Decl) {
+  if not sig_has_fixed_array(d) { return }
+  put(sb, "## ")
+  put_qual_name(sb, src, d)
+  match AP_ST {
+    Some(w) => {
+      if wb_get(w, di) == 2 {
+        put(sb, ": held to legacy on every target (a caller the plan cannot see; ir::ap_plan_begin)\n")
+        return
+      }
+    }
+    None => {}
+  }
+  put(sb, ": IR-selected on a target only when every caller is (per-target fixpoint, not run here)\n")
 }
 ## How many built functions the verifier refused in this process (the `ir` verb exits 70 when any did).
 mut IR_VERIFY_FAILED : usize = 0
@@ -2115,12 +2137,332 @@ pub sig_has_narrow_view := fn(src : ptr(u8), d : Decl) -> bool {
   false
 }
 
+## ── the fixed-array parameter boundary (#1626; #1641's review, B1 and B2) ──
+##
+## An IR-built function takes a fixed-array parameter `xs : [T; N]` as the ADDRESS of the caller's array
+## (`build`'s `ib_arr_param_of`). Legacy callers do not all pass one: the aarch64 and riscv64 legacy
+## emitters pass a field `s.arr`, `o.inner.arr` or an element `m[1]` by the value of its first word, and
+## their (and wasm's) legacy array copies are wrong (#1626). On those targets the legacy callee is a
+## fail-loud stub (#1194), so the old pairing trapped; an IR-built callee instead ran on the bad pointer
+## or the bad copy (SIGSEGV, or a wrong value). So on EVERY target a function with a fixed-array
+## parameter is IR-built only when every function that may call it is IR-built on that target; otherwise
+## it keeps its legacy emission, exactly as before #1641. An IR-built caller of a legacy one is the
+## pairing that existed before #1641, and is unchanged.
+##
+## "May call it" is decided from the source text, an over-approximation: every occurrence of the
+## function's name as an identifier in any source file belongs to the declaration whose name starts last
+## before it in that file, and that declaration is a caller. A function whose name occurs outside every
+## declaration, in a declaration that is not a plain non-generic function (a global, an import list, a
+## test, a generic whose instances are legacy-emitted), or that is `@export`ed, is held to legacy at once.
+##
+## The text shows only calls the AUTHOR wrote. A call the compiler makes without the callee's name at the
+## call site has no occurrence, so each such route holds its callee at once (#1641's second review, B1):
+##   * a SYNTHESIZED name (`ap_synth_name`): the driver rewrites `w[i]`, `w[i] = v` and `w[lo..hi]` to
+##     `at`, `index_set` and `index_range`, a `for` over an iterator to `next`/`unwrap`/`Some`/`None`;
+##     sema picks a user `iter` for `for`; the parser emits `alloc_into` and the `__defer*` markers; the
+##     comparison route calls `eq`/`lt`; `print` lowers through `print_one*`; the emitters pick `main`,
+##     `_start`, `sort` and `display` by their literal names. `scripts/ir_ap_names_check.sh`
+##     fails when one of those helpers gains a name this list lacks;
+##   * a `@convert` function, which `T(v)` reaches by its signature (Types §4.6);
+##   * a declaration whose name lies outside every source file: the driver's `__hoflam<N>` clone, whose
+##     only call site the driver renamed to it.
+## The scan also holds the function at any occurrence that is not a direct call (the name not followed by
+## `(`): a function VALUE (`f := rd`, `h(rd)`, a field or global holding it) is called indirectly from
+## wherever the value travels, which the text does not show. Today the builder refuses every way to form
+## one (`FnRef`, a `Var` naming a function), so the maker stays legacy anyway; this hold keeps the rule
+## sound the day it builds them (#1641's second review, N1).
+## The rest is a greatest fixpoint each selector runs before its declaration loop (`x86_isel_plan`,
+## `a64_isel_plan`, `rv_isel_plan`, `wat_isel_plan`): try every remaining caller with the selector itself
+## and hold the callee when one is refused, until nothing changes. A program without such a function
+## reserves nothing. Until a plan has run, `select_input` holds every such function (fail-closed).
+##
+## Word `i` of `AP_ST`: 0 not a fixed-array-parameter function, 1 admitted, 2 held to legacy.
+mut AP_ON : bool = false
+mut AP_ST : Option(ptr(mut WBuf)) = Option(ptr(mut WBuf)).None
+## (callee, caller) declaration pairs; and per declaration, this round's selector answer (0 untried,
+## 1 selected, 2 refused).
+mut AP_EDGE : Option(ptr(mut WBuf)) = Option(ptr(mut WBuf)).None
+mut AP_MEMO : Option(ptr(mut WBuf)) = Option(ptr(mut WBuf)).None
+mut AP_MOVED : bool = false
+
+## Whether `d` has a fixed-array parameter `xs : [T; N]` (`ast::Param.pmode` 1 with the literal `N` in
+## `pps`; a tuple parameter shares `pmode` 1 with `pps` 0).
+pub sig_has_fixed_array := fn(d : Decl) -> bool {
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(ast::param_p(pq))
+        if pm.pmode == 1 and pm.pps != 0 { return true }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+## Whether `src[s .. s+n]` is a name the compiler calls without writing it at the call site (the band
+## comment above). `scripts/ir_ap_names_check.sh` holds this list against the helpers that synthesize.
+ap_synth_name := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  nm := str_at((src + s), n)
+  nm == "at" or nm == "index_set" or nm == "index_range" or nm == "iter" or nm == "next" or nm == "unwrap"
+    or nm == "Some" or nm == "None" or nm == "eq" or nm == "lt" or nm == "alloc_into" or nm == "isize"
+    or nm == "__defer" or nm == "__deferblk" or nm == "__deferblkend" or nm == "print" or nm == "print_one"
+    or nm == "print_one_int" or nm == "print_one_float" or nm == "main" or nm == "_start" or nm == "sort"
+    or nm == "display"
+}
+## Whether the identifier ending at `q` is called directly: the next byte in `[q, hi)` past blanks is `(`.
+ap_called_at := fn(src : ptr(u8), q : usize, hi : usize) -> bool {
+  mut k := q
+  while k < hi {
+    c := str_at((src + k), 1)
+    if c == "(" { return true }
+    if c != " " and c != "\t" and c != "\n" and c != "\r" { return false }
+    k = k + 1
+  }
+  false
+}
+## Whether the plan holds declaration `di` (with `d` its declaration) to its legacy emission.
+ap_held := fn(di : usize, d : Decl) -> bool {
+  if not d.is_fn or not sig_has_fixed_array(d) { return false }
+  if not AP_ON { return true }
+  match AP_ST { Some(w) => { wb_get(w, di) == 2 }; None => { true } }
+}
+ap_hold := fn(w : ptr(mut WBuf), di : usize) {
+  if wb_get(w, di) == 1 {
+    q := wb_set(w, di, 2)
+    AP_MOVED = true
+  }
+}
+## The declaration whose name starts last at or before `p` within `[lo, p]`, if any.
+ap_owner := fn(decls : ptr(rt::Vec), lo : usize, p : usize) -> Option(usize) {
+  mut best : Option(usize) = Option(usize).None
+  mut bs : usize = 0
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    dd : Decl = deref(lower_ctx::decl_get(decls, i))
+    ns := dd.name_start
+    if ns >= lo and ns <= p and ns >= bs {
+      best = Option(usize).Some(i)
+      bs = ns
+    }
+    i = i + 1
+  }
+  best
+}
+## Record an occurrence of candidate `g`'s name at `p` (in the file starting at `lo`).
+## `call` says whether the occurrence is a direct call (`ap_called_at`); any other occurrence holds `g`.
+ap_occur := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), in out a : rt::Arena, g : usize, lo : usize, p : usize, call : bool) {
+  gd : Decl = deref(lower_ctx::decl_get(decls, g))
+  if p == gd.name_start { return }
+  if not call {
+    ap_hold(w, g)
+    return
+  }
+  ro : Option(usize) = ap_owner(decls, lo, p)
+  match ro {
+    Some(r) => {
+      rd : Decl = deref(lower_ctx::decl_get(decls, r))
+      if not rd.is_fn or rd.is_generic or rd.kind != lower_layout::DECL_KIND_FN {
+        ap_hold(w, g)
+        return
+      }
+      n := wb_len(e)
+      if n >= 2 {
+        if wb_get(e, n - 2) == g and wb_get(e, n - 1) == r { return }
+      }
+      q1 := wb_push(e, a, g)
+      q2 := wb_push(e, a, r)
+    }
+    None => { ap_hold(w, g) }
+  }
+}
+## Start the plan for one program (see the band comment). Answers whether any caller is left to try;
+## the tables come from `a`, which the caller keeps past them.
+pub ap_plan_begin := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena) -> bool {
+  oso : Option(ptr(rt::Vec)) = IR_SM_OFFS
+  lso : Option(ptr(rt::Vec)) = IR_SM_LENS
+  match oso {
+    Some(offs) => {
+      match lso {
+        Some(lens) => { return ap_plan_init(decls, src, a, offs, lens) }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  ## No source map: no caller can be seen, so every candidate stays legacy (`ap_held` with no table).
+  AP_ON = true
+  AP_ST = Option(ptr(mut WBuf)).None
+  AP_EDGE = Option(ptr(mut WBuf)).None
+  AP_MEMO = Option(ptr(mut WBuf)).None
+  false
+}
+## `ap_plan_begin` over the source map `offs`/`lens` (the `ir` verb passes its own).
+ap_plan_init := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, offs : ptr(rt::Vec), lens : ptr(rt::Vec)) -> bool {
+  AP_ON = true
+  AP_ST = Option(ptr(mut WBuf)).None
+  AP_EDGE = Option(ptr(mut WBuf)).None
+  AP_MEMO = Option(ptr(mut WBuf)).None
+  cnt := rt::vec_len(deref(decls))
+  mut any := false
+  mut i : usize = 0
+  while i < cnt and not any {
+    d : Decl = deref(lower_ctx::decl_get(decls, i))
+    any = d.is_fn and sig_has_fixed_array(d)
+    i = i + 1
+  }
+  if not any { return false }
+  w := wb_new(a, cnt)
+  m := wb_new(a, cnt)
+  cands := wb_new(a, 8)
+  i = 0
+  while i < cnt {
+    d : Decl = deref(lower_ctx::decl_get(decls, i))
+    mut v : usize = 0
+    if d.is_fn and sig_has_fixed_array(d) {
+      v = 1
+      ## An `@export`ed function has foreign callers; a name that is not an identifier (an operator glyph)
+      ## is called through a spelling the scan below does not see.
+      named := d.name_len > 0 and lower_layout::ll_ident_byte(src, d.name_start)
+      ## A synthesized name or a `@convert` is called where its name is not written (the band comment).
+      if lower::export_name(src, d.name_start, d.name_len).n != 0 or not named {
+        v = 2
+      } else if ap_synth_name(src, d.name_start, d.name_len) or lower::fn_is_convert(src, d.name_start, d.name_len) {
+        v = 2
+      } else {
+        q := wb_push(cands, a, i)
+      }
+    }
+    k1 := wb_push(w, a, v)
+    k2 := wb_push(m, a, 0)
+    i = i + 1
+  }
+  AP_ST = Option(ptr(mut WBuf)).Some(w)
+  AP_MEMO = Option(ptr(mut WBuf)).Some(m)
+  e := wb_new(a, 16)
+  AP_EDGE = Option(ptr(mut WBuf)).Some(e)
+  nc := wb_len(cands)
+  if nc == 0 { return false }
+  ap_scan(decls, src, w, e, a, cands, offs, lens)
+  wb_len(e) > 0
+}
+## Every identifier occurrence of a candidate's name in the source files `offs`/`lens` (`ap_occur`).
+ap_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), w : ptr(mut WBuf), e : ptr(mut WBuf), in out a : rt::Arena, cands : ptr(mut WBuf), offs : ptr(rt::Vec), lens : ptr(rt::Vec)) {
+  nc := wb_len(cands)
+  ## A name outside every source file is the driver's (a `__hoflam<N>` clone): its call site was renamed.
+  mut c0 : usize = 0
+  while c0 < nc {
+    g0 := wb_get(cands, c0)
+    gd0 : Decl = deref(lower_ctx::decl_get(decls, g0))
+    mo : Option(u64) = module_of(gd0.name_start, offs, lens)
+    match mo { Some(_k) => {}; None => { ap_hold(w, g0) } }
+    c0 = c0 + 1
+  }
+  nf := rt::vec_len(deref(offs))
+  mut f : usize = 0
+  while f < nf {
+    lo := rt::vec_get(deref(offs), f)
+    hi := lo + rt::vec_get(deref(lens), f)
+    mut p := lo
+    while p < hi {
+      if lower_layout::ll_ident_byte(src, p) {
+        mut q := p
+        while q < hi and lower_layout::ll_ident_byte(src, q) { q = q + 1 }
+        mut c : usize = 0
+        while c < nc {
+          g := wb_get(cands, c)
+          gd : Decl = deref(lower_ctx::decl_get(decls, g))
+          if lower_ctx::streq(src, gd.name_start, gd.name_len, p, q - p) { ap_occur(decls, w, e, a, g, lo, p, ap_called_at(src, q, hi)) }
+          c = c + 1
+        }
+        p = q
+      } else {
+        p = p + 1
+      }
+    }
+    f = f + 1
+  }
+}
+## Start a round of the fixpoint: answers true while the previous round held a callee (and for the
+## first round), forgetting every selector answer, which a newly held callee may change.
+pub ap_round := fn(first : bool) -> bool {
+  if not first and not AP_MOVED { return false }
+  AP_MOVED = false
+  match AP_MEMO {
+    Some(m) => {
+      mut i : usize = 0
+      while i < wb_len(m) {
+        q := wb_set(m, i, 0)
+        i = i + 1
+      }
+    }
+    None => {}
+  }
+  true
+}
+pub ap_edges := fn() -> usize { match AP_EDGE { Some(e) => { wb_len(e) / 2 }; None => { 0 } } }
+## The caller of pair `k` the selector has to try, when its callee is still admitted and that caller has
+## not been tried this round; a caller already refused holds the callee here.
+pub ap_next_trial := fn(k : usize) -> Option(usize) {
+  match AP_ST {
+    Some(w) => {
+      match AP_EDGE {
+        Some(e) => {
+          match AP_MEMO {
+            Some(m) => {
+              g := wb_get(e, 2 * k)
+              r := wb_get(e, 2 * k + 1)
+              if wb_get(w, g) != 1 { return Option(usize).None }
+              if wb_get(w, r) == 2 {
+                ap_hold(w, g)
+                return Option(usize).None
+              }
+              mv := wb_get(m, r)
+              if mv == 2 { ap_hold(w, g) }
+              if mv == 0 { return Option(usize).Some(r) }
+            }
+            None => {}
+          }
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  Option(usize).None
+}
+## The selector's answer for the caller of pair `k`: selected, or refused (which holds the callee).
+pub ap_trial_result := fn(k : usize, ok : bool) {
+  match AP_EDGE {
+    Some(e) => {
+      r := wb_get(e, 2 * k + 1)
+      mut v : usize = 2
+      if ok { v = 1 }
+      match AP_MEMO {
+        Some(m) => { q := wb_set(m, r, v) }
+        None => {}
+      }
+      if not ok {
+        match AP_ST {
+          Some(w) => { ap_hold(w, wb_get(e, 2 * k)) }
+          None => {}
+        }
+      }
+    }
+    None => {}
+  }
+}
+
 ## Build declaration `di` of `decls` and verify it, for a selector.
 pub select_input := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, in out a : rt::Arena) -> SelIn {
   ## unchecked-ok: `decls` holds Decl record addresses (the parser's `rt::Vec` of handles).
   dp : ptr(Decl) = unchecked bitcast(ptr(Decl), rt::vec_get(deref(decls), di))
   d : Decl = deref(dp)
   if not d.is_fn or d.name_len == 0 { return SelIn.SiLegacy }
+  ## A fixed-array parameter function a legacy caller may reach stays legacy (the band comment above).
+  if ap_held(di, d) { return SelIn.SiLegacy }
   mut why := BuildWhy(c = Construct.CEmpty, w = NyWhy.NwOutside, span = u64(d.name_start))
   out : BuildOut = build_one(p, decls, src, di, a, why)
   match out {

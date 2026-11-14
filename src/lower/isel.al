@@ -930,6 +930,8 @@ sx_nv_cand := fn(decls : ptr(rt::Vec), src : ptr(u8), i : usize) -> bool {
 ## reserved from `mar`, below the loop's scratch high-water mark; each trial selection runs in a scratch
 ## copy of `mar` above it and is rewound from `sb`.
 pub x86_isel_plan := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), mar : ptr(mut rt::Arena)) {
+  ## The fixed-array parameter boundary first (#1641's review): the copies below are tried against it.
+  sx_ap_plan(decls, sb, src, mar)
   SX_NV = Option(ptr(mut ir::WBuf)).None
   cnt := rt::vec_len(deref(decls))
   mut any := false
@@ -968,6 +970,43 @@ pub x86_isel_plan := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(
         }
       }
       i = i + 1
+    }
+  }
+}
+
+## The fixed-array parameter boundary on x86_64 (`ir::ap_plan_begin`, #1641's review): a function with a
+## fixed-array parameter is IR-built only when every function that may call it is selected here. A
+## caller is tried exactly as `emit_program`'s loop treats it: a narrow-view signature or a variadic
+## function keeps its legacy emission under its own label, so it counts as a legacy caller. The tables
+## are reserved from `mar` like `SX_NV`'s; each trial runs in a scratch copy above them and is rewound.
+sx_ap_plan := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), mar : ptr(mut rt::Arena)) {
+  mut m : rt::Arena = deref(mar)
+  more := ir::ap_plan_begin(decls, src, m)
+  mar.off = m.off
+  if not more { return }
+  mut first := true
+  while ir::ap_round(first) {
+    first = false
+    mut k : usize = 0
+    while k < ir::ap_edges() {
+      ro : Option(usize) = ir::ap_next_trial(k)
+      match ro {
+        Some(r) => {
+          d : Decl = deref(lower_ctx::decl_get(decls, r))
+          mut ok := not ir::sig_has_narrow_view(src, d) and not lower_attrs::decl_is_variadic(d, src, deref(mar))
+          if ok {
+            sa : rt::Arena = deref(mar)
+            fn0 := SX_FN
+            mark := sb.len
+            ok = sx_sel(decls, r, sb, src, sa, false)
+            sb.len = mark
+            SX_FN = fn0
+          }
+          ir::ap_trial_result(k, ok)
+        }
+        None => {}
+      }
+      k = k + 1
     }
   }
 }
