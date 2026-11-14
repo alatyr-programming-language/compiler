@@ -6,8 +6,8 @@
 ## the alternative of the same target: 40 + 2 on x86_64, 41 + 1 elsewhere (wasm has no `Arch` variant,
 ## FND-6, so it takes the `!=` rows). A pick that ignored the guards would mix the rows (43 or 41).
 ##
-## Parent (200d3376): `alatyr ir` refused both readers, `k` and `j` (NotYet at the name read: two
-## declarations of the name, `ib_global_decl` refused the tie), so they fell back to the legacy emitter.
+## Parent (200d3376): `alatyr ir` refused both readers, `k` and `j` (NotYet at the name read). The `ir`
+## verb did not fold the guards, so `ib_global_decl` saw two declarations of each name and refused the tie.
 K : u64 = 40 when target.arch == Arch.x86_64
 K : u64 = 41 when target.arch != Arch.x86_64
 J : u64 = 2 when target.arch == Arch.x86_64

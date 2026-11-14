@@ -831,8 +831,8 @@ ib_bx_local := fn(bp : ptr(mut IbB), e : ptr(Expr), r : VRegId) -> Option(VRegId
 }
 ## The one value declaration named `[s, s+n)`: the declaration whose own name span it IS (the twins'
 ## front half rewrites a resolved `m::NAME` to its target's name span, `driver::d_qual_expr`), else the
-## one in the function's own module, else the only one in the program, counting only the declarations
-## the target selects. None when there is none or the name is ambiguous.
+## one in the function's own module, else the only one in the program. None when there is none or the
+## name is ambiguous.
 ib_global_decl := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(u64) {
   bv : IbB = deref(bp)
   idn : Option(u64) = ib_decl_named_at(bv.decls, s, n, false)
@@ -845,9 +845,7 @@ ib_global_decl := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(u64) {
   mut i : usize = 0
   while i < cnt {
     d : Decl = deref(ib_decl_ptr(bv.decls, i))
-    ## A `when` alternative the target does not select is absent (Comptime §7.1, §9.2; #1577): sema's
-    ## fold, so the pick here and sema's record agree on the one declaration the name has.
-    if not d.is_fn and d.name_len == n and streq(bv.src, d.name_start, d.name_len, s, n) and not sema::guard_is_false(d, bv.src) {
+    if not d.is_fn and d.name_len == n and streq(bv.src, d.name_start, d.name_len, s, n) {
       nany = nany + 1
       any = Option(u64).Some(u64(i))
       if d.mod_len == bv.mod_n and streq(bv.src, d.mod_start, d.mod_len, bv.mod_s, bv.mod_n) {

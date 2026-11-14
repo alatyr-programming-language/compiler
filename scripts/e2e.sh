@@ -951,6 +951,22 @@ check_ir_build() {
      && grep -q 'sema_gaps=0 verify_failed=0$' "$rep"; then
     echo "ok   ir issue1577_when_const_pair: a module const read through its target's when alternative builds"
   else echo "FAIL ir issue1577_when_const_pair: rc=$rc"; grep -E 'NotYet|sema_gaps|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
+  ## #1577, the qualified read: `std::sysno::MMAP` names a two-row library table. The `ir` verb now folds
+  ## the guards before the prune, as the twins do, so the path is rewritten to its one row and kept.
+  ## Inline, not a corpus fixture: wasm has no sysno row, so the program has no target-neutral result.
+  local q="$T/ir_issue1577_sysno.al"
+  cat > "$q" <<'EOF'
+sysno := std::sysno
+mm := fn() -> usize { std::sysno::MMAP }
+mu := fn() -> usize { sysno::MUNMAP }
+main := fn() -> u64 { if mm() == 9 and mu() == 11 { return 42 } 1 }
+EOF
+  "$CC" ir "$q" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^fn ir_issue1577_sysno::mm Built$' "$rep" \
+     && grep -q '^fn ir_issue1577_sysno::mu Built$' "$rep" \
+     && grep -q '^  %0 = const.u i64 9$' "$rep" && grep -q 'sema_gaps=0 verify_failed=0$' "$rep"; then
+    echo "ok   ir issue1577 std::sysno::MMAP: a qualified read of a two-row table builds as its x86_64 row"
+  else echo "FAIL ir issue1577 std::sysno::MMAP: rc=$rc"; grep -E 'NotYet|sema_gaps|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
 }
 
 check_ir_dev_verb() {

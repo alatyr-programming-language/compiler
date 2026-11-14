@@ -18082,7 +18082,7 @@ guard_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
 ## alternative whose body calls a symbol absent on this target, or whose name duplicates the active
 ## one) does not FALSE-reject. A decl with no guard (`when_cond == 0`) or a TRUE/unfoldable guard stays
 ## active. `src/`+`lib/` carry no `when` (every `when_cond` is 0) → always active → check unchanged.
-pub guard_is_false := fn(d : Decl, src : ptr(u8)) -> bool {
+guard_is_false := fn(d : Decl, src : ptr(u8)) -> bool {
   if unchecked bitcast(usize, d.when_cond) == 0 { return false }
   guard_fold(d.when_cond, src) == 0
 }
