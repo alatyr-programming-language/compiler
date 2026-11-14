@@ -3480,20 +3480,38 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
 ## built from; the `__` that ends up in `std__io` is a CONSEQUENCE of it, not the fact itself, and a
 ## nested package submodule (`src/lower/place.al` → `lower__place`) carries the same consequence
 ## without being a library at all. Keep the two tests adjacent so the classes cannot drift apart.
-d_path_is_trusted_lib := fn(p : str) -> bool {
+d_path_is_trusted_lib := fn(in out a : rt::Arena, p : str, stdlib_root : str) -> bool {
   if dep_root_prefix(p) != 0 { return true }
-  mut i : usize = 0
-  mut lib := false
-  while i + 5 <= p.len {
-    if bytes(p)[i] == 47 and str_at(unchecked bitcast(usize, p.ptr) + i, 5) == "/lib/" { lib = true }
-    i += 1
-  }
-  if lib == false { return false }
-  ## …but a `lib/` directory INSIDE the package's own source root is the package's own code, however
-  ## `push_module_name` chooses to name it. Trusting it would let anyone switch the type checker off
-  ## for part of their own package by naming a directory `lib`, and it would take `src/lib/thing.al`
-  ## (`test/package/dep_lib_nested`) out of the checked set it is in today. The ambient stdlib lives
-  ## at `<install>/lib/…`, outside every package's `source_dir`, so this costs it nothing.
+  d_path_is_ambient_lib(a, p, stdlib_root)
+}
+
+## The ONE stdlib root: the directory the import resolver loads every ambient module from
+## (`cli::lib_dir`, beside the running compiler), lexically normalized so `<root>/target/../lib` and
+## `<root>/lib` are one directory. Empty when it cannot be located; then nothing is ambient.
+d_stdlib_root := fn(in out a : rt::Arena) -> str {
+  ## bind before forwarding: an inline str-returning call as a str argument drops its length
+  ldir := cli::lib_dir(a)
+  if ldir.len == 0 { return ldir }
+  cli::normalize_path(a, ldir)
+}
+
+## The AMBIENT stdlib alone: a file under `stdlib_root` (`d_stdlib_root`), never a dependency (whose
+## alias may spell the same mangled name: alias `alloc` with `src/vec.al` is `alloc__vec` too).
+## #987 / #655 — identity comes from WHERE the file is, never from how its path is spelled: a user
+## file at `<anything>/lib/alloc__vec.al` listed on a direct build is named `alloc__vec` by
+## `push_module_name`'s `/lib/` branch, but it is not the standard library and is neither trusted by
+## `check` nor completed by lower. A path that does not normalize under the root (a relative
+## spelling of the real stdlib, say) fails closed: checked, and never completed.
+d_path_is_ambient_lib := fn(in out a : rt::Arena, p : str, stdlib_root : str) -> bool {
+  if dep_root_prefix(p) != 0 { return false }
+  if stdlib_root.len == 0 { return false }
+  np := cli::normalize_path(a, p)
+  if np.len <= stdlib_root.len + 1 { return false }
+  if str_at(unchecked bitcast(usize, np.ptr), stdlib_root.len) != stdlib_root { return false }
+  if bytes(np)[stdlib_root.len] != 47 { return false }
+  ## …and a file INSIDE the package's own source root is the package's own code, wherever it sits.
+  ## Trusting it would let anyone switch the type checker off for part of their own package, and it
+  ## would take `src/lib/thing.al` (`test/package/dep_lib_nested`) out of the checked set.
   not d_path_under_module_root(p)
 }
 
@@ -3504,20 +3522,40 @@ d_path_is_trusted_lib := fn(p : str) -> bool {
 ## the table holds no library module at all: `sema::set_lib_modules` records that it was PUBLISHED,
 ## which is a different answer from "nothing was published" and is what lets the fallback stay exact.
 d_publish_lib_modules := fn(pv : rt::Vec, mod_start : rt::Vec, mod_len : rt::Vec, in out tar : rt::Arena) {
+  lib := d_module_spans(pv, mod_start, mod_len, tar, false)
+  ksl := sema::set_lib_modules(lib.base, lib.n)
+  ## #987 — and the AMBIENT stdlib's spans alone to lower, which asks whether a declaration IS the
+  ## standard library's module rather than whether its module mangles to the same text (a package's
+  ## own `src/alloc__vec.al` is `alloc__vec` too, Modules §6.6).
+  amb := d_module_spans(pv, mod_start, mod_len, tar, true)
+  kst := lower::set_stdlib_modules(amb.base, amb.n)
+}
+
+## A `(mod_start, mod_len)` word-pair table in `tar`: `base` and its word count `n`.
+DModSpans := struct { base : usize, n : usize }
+
+## The name spans of the trusted modules (`ambient_only`: of the ambient stdlib alone).
+d_module_spans := fn(pv : rt::Vec, mod_start : rt::Vec, mod_len : rt::Vec, in out tar : rt::Arena, ambient_only : bool) -> DModSpans {
   n := rt::vec_len(pv)
   base := rt::bump(tar, n * 2 * 8 + 8)
   tbl := unchecked bitcast(ptr(mut u8), base)
-  mut c := 0
+  root := d_stdlib_root(tar)
+  mut c : usize = 0
   mut k : usize = 0
   while k < n {
-    if d_path_is_trusted_lib(rt::svec_str_get(pv, k)) {
+    p := rt::svec_str_get(pv, k)
+    mut keep := d_path_is_trusted_lib(tar, p, root)
+    if ambient_only {
+      keep = d_path_is_ambient_lib(tar, p, root)
+    }
+    if keep {
       rt::rec_set(tbl, c, rt::vec_get(mod_start, k))
       rt::rec_set(tbl, c + 1, rt::vec_get(mod_len, k))
       c += 2
     }
     k += 1
   }
-  ksl := sema::set_lib_modules(base, c)
+  DModSpans(base = base, n = c)
 }
 
 ## Publish the manifest's module source root for the following compile/check/test call. The CLI keeps

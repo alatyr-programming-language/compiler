@@ -82,6 +82,35 @@ pub span_is_synthetic := fn(off : usize) -> bool {
   off >= n
 }
 
+## #987 — the source position a SYNTHESIZED span stands for. A pass that replaces a source name with a
+## name it builds (the lowerer's `fill_inferred_targs` writes `alloc::vec::at` for the `at` of `v.at(i)`)
+## records the pair here, so a located refusal at that node shows the line the author wrote instead of
+## the synthesized-construct marker. Two words per entry in an `rt` word table (#801: no count past which
+## an entry is lost). `span_origin` answers `off` itself for a span nobody recorded.
+mut SYNTH_ORIGIN_BASE : rt::WTab = rt::WTab(0)
+mut SYNTH_ORIGIN_CAP : rt::Words = rt::Words(0)
+mut SYNTH_ORIGIN_N : usize = 0
+
+pub synth_origin_mark := fn(syn : usize, orig : usize) {
+  mut sb := SYNTH_ORIGIN_BASE
+  mut sc := SYNTH_ORIGIN_CAP
+  rt::wtab_reserve(sb, sc, rt::wtab_words(SYNTH_ORIGIN_N, 2), rt::wtab_words(SYNTH_ORIGIN_N + 1, 2))
+  SYNTH_ORIGIN_BASE = sb
+  SYNTH_ORIGIN_CAP = sc
+  rt::wtab_set(SYNTH_ORIGIN_BASE, rt::wtab_at(SYNTH_ORIGIN_N, 2, 0), syn)
+  rt::wtab_set(SYNTH_ORIGIN_BASE, rt::wtab_at(SYNTH_ORIGIN_N, 2, 1), orig)
+  SYNTH_ORIGIN_N = SYNTH_ORIGIN_N + 1
+}
+
+pub span_origin := fn(off : usize) -> usize {
+  mut i : usize = 0
+  while i < SYNTH_ORIGIN_N {
+    if rt::wtab_get(SYNTH_ORIGIN_BASE, rt::wtab_at(i, 2, 0)) == off { return rt::wtab_get(SYNTH_ORIGIN_BASE, rt::wtab_at(i, 2, 1)) }
+    i = i + 1
+  }
+  off
+}
+
 ## Length-aware primitives for the recovery below. `src` is a raw pointer, not a length-carrying `str`,
 ## so every prefix and single-byte read is first proven to lie inside `[0, end)` — the shape
 ## `lower::ptr_scan_has` / `ptr_scan_ws` established for the inferred-pointer recovery. A scan that

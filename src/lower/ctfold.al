@@ -782,7 +782,9 @@ pub compfor_target_type := fn(cx : ptr(LCtx), vs : usize, vl : usize) -> CSpan {
 ## stand-in for a LOCATED diagnostic. The lower has no diagnostic channel of its own (every other
 ## fail-loud here is a bare static `panic`), so the location is one `write(2, …)` straight out of the
 ## source text; the caller then panics with the reason.
-pub lower_show_src_line := fn(src : ptr(u8), off : usize) {
+pub lower_show_src_line := fn(src : ptr(u8), off0 : usize) {
+  ## #987 — a name a later pass synthesized for a source call shows that call's line (`ast::span_origin`)
+  off := ast::span_origin(off0)
   ## Issue #523 — a span a parse-time desugar SYNTHESIZED is not a position in the source buffer
   ## (`ast::span_is_synthetic`): `src + off` re-forms an AST-ARENA address, so the window scanned below
   ## would be arena bytes presented to the user as "the source line" — measured, with a temporarily

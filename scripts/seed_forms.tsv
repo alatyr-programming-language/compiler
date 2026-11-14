@@ -19,4 +19,5 @@
 #
 # name	state	due	issue	sites
 #
-# live-rows: 0
+# live-rows: 1
+oneline_call_compound_if_in_while	tree	42	#1652	src/lower.al:fill_inferred_targs

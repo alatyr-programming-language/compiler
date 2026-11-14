@@ -324,6 +324,27 @@ arena_base := fn(a : ptr(mut rt::Arena)) -> usize { return unchecked bitcast(usi
 mut ROOT_MOD_S : usize = 0
 mut ROOT_MOD_L : usize = 0
 pub set_root_module := fn(s : usize, l : usize) -> i64 { ROOT_MOD_S = s ; ROOT_MOD_L = l ; return 0 }
+## #987 — the AMBIENT stdlib's module name spans, published by `driver::d_publish_lib_modules` for the
+## files under the stdlib root the resolver loads from (`driver::d_path_is_ambient_lib`, the classifier
+## `check`'s trust shares): a `(mod_start, mod_len)` word-pair table of `n`
+## words. A declaration is the standard library's when its own pair is in it — an identity, not a
+## spelling, so a package's `src/alloc__vec.al` (also `alloc__vec`, Modules §6.6) is not. Unpublished
+## (`n == 0`) answers false: whatever asks it fails closed.
+mut STDLIB_MODS_P : usize = 0
+mut STDLIB_MODS_N : usize = 0
+pub set_stdlib_modules := fn(p : usize, n : usize) -> i64 { STDLIB_MODS_P = p ; STDLIB_MODS_N = n ; return 0 }
+## Is the module `[ms, ms+ml)` the ambient stdlib module mangled `name`?
+module_is_stdlib := fn(src : ptr(u8), ms : usize, ml : usize, name : str) -> bool {
+  if str_at((src + ms), ml) != name { return false }
+  ## unchecked-ok: the driver publishes the table as an arena address word, the shape of `sema_module_is_lib`'s
+  tbl := unchecked bitcast(ptr(mut u8), STDLIB_MODS_P)
+  mut i : usize = 0
+  while i + 1 < STDLIB_MODS_N {
+    if rt::rec_get(tbl, i) == ms and rt::rec_get(tbl, i + 1) == ml { return true }
+    i += 2
+  }
+  false
+}
 ## The published root module span, for a consumer that publishes a naming module itself
 ## (`lower_layout::set_type_ref_module` from the shared IR builder, `ir::build`).
 pub root_mod_s := fn() -> usize { ROOT_MOD_S }
@@ -27813,6 +27834,14 @@ mut EMIT_PARAMS : Option(ptr(mut Param)) = Option.None
 ## A fn with no tail carries a null `value` (#1069); `ufcs_scope_expr`'s guard reads it as no tail.
 mut EMIT_TAIL : Option(ptr(Expr)) = Option.None
 
+## #987 — the scope `fill_inferred_targs` reads a receiver's type in: the body, tail and parameters of
+## the declaration `fill_program` is walking (the `COLLECT_FN_*` twins for the filler). `FILL_TARGS_ON`
+## is set by `emit_program` alone, so the other back ends' `fill_program` keep their call shapes.
+mut FILL_FN_BODY : Option(ptr(mut Stmt)) = Option.None
+mut FILL_FN_TAIL : Option(ptr(Expr)) = Option.None
+mut FILL_FN_PARAMS : Option(ptr(mut Param)) = Option.None
+mut FILL_TARGS_ON : bool = false
+
 
 
 
@@ -32428,6 +32457,178 @@ fill_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
+## #987 — the type arguments `fill_inferred_targs` may write: only those whose explicit call is known to
+## lower right. A builtin scalar or `str` that no declaration shadows, or a bare name that exactly ONE
+## declaration in the program carries, a non-generic struct or enum. Not a generic application
+## (`Option(S)`, `Result(S, u64)`: the explicit `at(Option(S), …)` itself answers wrong) and not a path
+## (`geo::S`), nor a name two modules declare — the receiver's type text may sit in another module's
+## source, where the bare name means another type than at the call (`geo::S` vs main's `S`: 63 for 42).
+## Anything else keeps the implicit call and the parent's behaviour, a located refusal among them.
+fill_targ_plain := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 0 { return false }
+  b := bytes(str_at((src + s), n))
+  for i in 0..n {
+    c : u8 = b[i]
+    alpha := (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or c == 95
+    if not alpha and (i == 0 or c < 48 or c > 57) { return false }
+  }
+  tx := str_at((src + s), n)
+  ## `char` is left out on purpose, unprobed: no declaration carries it, so it fails closed (no rewrite)
+  builtin := tx == "u8" or tx == "u16" or tx == "u32" or tx == "u64" or tx == "usize" or tx == "i8" or tx == "i16" or tx == "i32" or tx == "i64" or tx == "isize" or tx == "bool" or tx == "f32" or tx == "f64" or tx == "str"
+  mut hits : usize = 0
+  mut hi : usize = 0
+  cnt := rt::vec_len(deref(decls))
+  for i in 0..cnt {
+    d := deref(lower_ctx::decl_get(decls, i))
+    if lower_ctx::streq(src, d.name_start, d.name_len, s, n) {
+      hits += 1
+      hi = i
+    }
+  }
+  if builtin { return hits == 0 }
+  if hits != 1 { return false }
+  if deref(lower_ctx::decl_get(decls, hi)).is_generic { return false }
+  ## the one declaration is the struct or enum the resolvers name (asked only once it is unique, so
+  ## their located ambiguity refusal cannot fire here)
+  struct_decl_of(decls, src, s, n) == i64(hi) or enum_decl_of(decls, src, s, n) == i64(hi)
+}
+## #987 — Types §4.5: a call through an AUTO-REF receiver omits the callee's type arguments
+## (`v.at(i)` ≡ `at(T, ptr(v), i)`, and `v[i]`, which the driver rewrites to `at(v, i)`), and they are
+## read from the receiver's type. The mono passes already name the right instance (`at__S`) through
+## `ufcs_autoref_targ`, but every consumer that types the call's RESULT — the binding classifiers
+## (`gen_ret_struct_span`, the str and enum binders), the by-reference argument staging
+## (`agg_call_ret_span`), a field read of the result — reads only an EXPLICIT type argument. So
+## `e := v[0]` bound a struct as one scalar word, `v[0].fd` and `same(v[i], x)` passed that word where
+## an address was due, and `s := v[1]` dropped a str's length: 0 for 42, or a segfault. Completed
+## HERE, once, before any emission, into the explicit call the author could have written — the type
+## arguments the receiver supplies (`ufcs_recv_targ`, the instance's own reading) as leading
+## arguments, and the callee QUALIFIED by its own module (`alloc::vec::at(S, v, i)`): FN-7 dispatched
+## the method on the receiver, while a bare explicit `get(S, v, i)` would resolve by name to another
+## module's same-arity `get`. The receiver stays the argument it was (the auto-ref lowering of the
+## implicit call is the explicit call's too). Nothing changes unless every type parameter leads the
+## parameter list, every one is read, and the completed call resolves back to the same declaration;
+## a receiver whose type is not read keeps today's call and its refusal.
+fill_inferred_targs := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, mar : ptr(mut rt::Arena)) {
+  cp := call_parts(e)
+  if not cp.is_call or cp.na == 0 { return }
+  a := deref(mar)
+  di := ret_call_target(decls, src, cp.cs, cp.cl, cp.na, cp.ah, a)
+  if di < 0 { return }
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  if not d.is_generic { return }
+  ## only a callee DECLARED in the standard library's `alloc::vec` (`module_is_stdlib`: the resolved
+  ## declaration's own module by identity, not by its mangled text — a package's own module file
+  ## `src/alloc__vec.al` mangles the same, Modules §6.6): the explicit form is measured right only
+  ## there. A user generic over a user generic struct (`bget(E, ptr(Box(E)))`, `second(E,
+  ## ptr(Pair(E)))`) answers wrong explicitly (103 for 42, #1654), so completing it would turn the
+  ## implicit call's trap into a wrong value.
+  if not module_is_stdlib(src, d.mod_start, d.mod_len, "alloc__vec") { return }
+  ## the type parameters lead and are all omitted; the first value parameter is `ptr([mut] X)`
+  mut ntpc : usize = 0
+  mut recv : Option(ptr(mut Param)) = Option(ptr(mut Param)).None
+  mut q : Option(ptr(mut Param)) = d.params_head
+  loop {
+    match q {
+      Some(qq) => {
+        qm := deref(param_p(qq))
+        if str_at((src + qm.ts), qm.tl) == "type" {
+          match recv { Some(_r) => { return }; None => { ntpc += 1 } }
+        } else {
+          match recv { Some(_r) => {}; None => { recv = Option(ptr(mut Param)).Some(qq) } }
+        }
+        q = qm.next
+      }
+      None => { break }
+    }
+  }
+  if ntpc == 0 or cp.na + ntpc != d.arity { return }
+  mut xs : usize = 0
+  mut xn : usize = 0
+  match recv {
+    Some(rq) => {
+      rp := deref(param_p(rq))
+      match ufcs_ref_pointee(src, rp.ts, rp.tl) {
+        Some(x) => { xs = x.s; xn = x.n }
+        None => { return }
+      }
+    }
+    None => { return }
+  }
+  re := arg_expr_at(cp.ah, 0, a)
+  ## each type argument as the explicit call spells it: a name, or an application's head with its
+  ## `(…)` following in the text (the node `type_arg_at` reads for a parsed `Vec(u64)`)
+  mut head : Option(ptr(mut Arg)) = Option(ptr(mut Arg)).None
+  mut tail : Option(ptr(mut Arg)) = Option(ptr(mut Arg)).None
+  q = d.params_head
+  mut k : usize = 0
+  while k < ntpc {
+    match q {
+      Some(qq) => {
+        qm := deref(param_p(qq))
+        match ufcs_param_tpos(src, xs, xn, qm.ns, qm.nl) {
+          Some(tp) => {
+            ut : UfcsTarg = ufcs_recv_targ(re, tp, FILL_FN_BODY, FILL_FN_TAIL, FILL_FN_PARAMS, xs, xn, decls, src, a)
+            match ut {
+              UfcsTarg::Read(us, un) => {
+                if not fill_targ_plain(decls, src, us, un) { return }
+                th := base_type_name(src, us, un)
+                tv := node_ptr(Expr, deref(mar), mk_expr(deref(mar), Expr.Var(th.s, th.n)))
+                h := mk_arg(deref(mar), Arg(e = tv, next = Option(ptr(mut Arg)).None))
+                match tail {
+                  Some(tl0) => { told := deref(arg_p(tl0)); set_arg(deref(mar), tl0, Arg(e = told.e, next = Option(ptr(mut Arg)).Some(h))) }
+                  None => { head = Option(ptr(mut Arg)).Some(h) }
+                }
+                tail = Option(ptr(mut Arg)).Some(h)
+              }
+              UfcsTarg::OtherHead => { return }
+              UfcsTarg::Unread => { return }
+            }
+          }
+          None => { return }
+        }
+        q = qm.next
+      }
+      None => { return }
+    }
+    k += 1
+  }
+  match tail {
+    Some(tl1) => { tq := deref(arg_p(tl1)); set_arg(deref(mar), tl1, Arg(e = tq.e, next = cp.ah)) }
+    None => { return }
+  }
+  ## the callee qualified by its declaration's module (`alloc__vec` → `alloc::vec::at`). The buffer
+  ## never grows and `rt::sb_byte` refuses a byte once `len + 8 > cap`, so it is sized from the name
+  ## it will hold: each `__` becomes `::` (same length), plus the final `::`, plus the name, plus the
+  ## 8-byte write margin — a long module path (`collections__sparse_matrix_storage`) fits.
+  dms := d.mod_start
+  dml := d.mod_len
+  mut msb := rt::strbuf(deref(mar), dml + 2 + d.name_len + 8)
+  mut j : usize = 0
+  ## #1652 — keep this loop's `if`/`else` multi-line: the one-line `{ <call>; j += 2 } else { <call>;
+  ## j += 1 }` form inside a `while` drops both increments (seed and tree), and the loop never ends.
+  while j < dml {
+    if j + 1 < dml and str_at((src + dms + j), 1) == "_" and str_at((src + dms + j + 1), 1) == "_" {
+      push_str(msb, "::")
+      j += 2
+    } else {
+      push_str(msb, str_at((src + dms + j), 1))
+      j += 1
+    }
+  }
+  if dml != 0 { push_str(msb, "::") }
+  qn := push_str(msb, str_at((src + d.name_start), d.name_len))
+  ## unchecked-ok: the synthesized name's address read as an integer to rebase it on `src`
+  qabs := unchecked bitcast(usize, rt::strbuf_base(msb))
+  ## unchecked-ok: modular pointer difference; every consumer wraps it back with `src + s`
+  qs := unchecked (qabs - src)
+  nn := cp.na + ntpc
+  if generic_decl_of(decls, src, qs, qn, ms, ml, nn, head, a) != di { return }
+  if ret_call_target(decls, src, qs, qn, nn, head, a) != di { return }
+  ## the synthesized name is no source position: a located refusal at this call shows the line of the
+  ## call the author wrote (`ast::span_origin`), not the synthesized-construct marker
+  ast::synth_origin_mark(qs, cp.cs)
+  set_expr(e, Expr.Call(qs, qn, nn, head))
+}
 ## Walk expression `e`, filling defaults on every `Call` within (itself + all sub-expressions +
 ## arguments). Structural twin of `scan_str_arg_expr`.
 fill_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, mar : ptr(mut rt::Arena)) {
@@ -32461,6 +32662,8 @@ fill_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
           None => { break }
         }
       }
+      ## the omitted type arguments first, so the defaults below are counted against a complete list
+      if FILL_TARGS_ON { fill_inferred_targs(e, decls, src, ms, ml, mar) }
       fill_call(e, decls, src, ms, ml, mar)
     }
     Expr::StructLit(cs, cl, nf, fhead) => {
@@ -32536,8 +32739,14 @@ pub fill_program := fn(decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt::Ar
   for i in 0..cnt {
     d := deref(lower_ctx::decl_get(decls, i))
     if d.kind == 1 or d.kind == 5 {
+      FILL_FN_BODY = d.body_stmts
+      FILL_FN_TAIL = Option(ptr(Expr)).Some(d.value)
+      FILL_FN_PARAMS = d.params_head
       fill_stmts(d.body_stmts, decls, src, d.mod_start, d.mod_len, mar)
       if unchecked bitcast(usize, d.value) != 0 { fill_expr(d.value, decls, src, d.mod_start, d.mod_len, mar) }
+      FILL_FN_BODY = Option.None
+      FILL_FN_TAIL = Option.None
+      FILL_FN_PARAMS = Option.None
     } else if d.kind == 0 {
       if unchecked bitcast(usize, d.value) != 0 { fill_expr(d.value, decls, src, d.mod_start, d.mod_len, mar) }
     }
@@ -33048,7 +33257,10 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   }
   ## §5.1 fill omitted trailing parameter-defaults BEFORE any emission (the `.rodata`/pool scans below
   ## must see the completed arg lists). No-op for `src/` (no defaults) → fixpoint-neutral.
+  ## #987 — and complete each auto-ref method call's omitted type arguments (`fill_inferred_targs`).
+  FILL_TARGS_ON = true
   fill_program(decls, src, mar)
+  FILL_TARGS_ON = false
   validate_standard_byte_tuple_boundaries(decls, src)
   ## .rodata: emit every string literal's data, walking each fn body + each value binding.
   ## `seen` collects already-emitted FLOAT-literal source offsets so a HOF-clone body that duplicates

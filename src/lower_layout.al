@@ -519,7 +519,9 @@ pub type_mod_rank_from := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize,
 ## duplicated here because this base module cannot import `lower` back (the cycle `lower_ctx.al`
 ## exists to avoid). A type-name ambiguity is rejected AT THE RESOLVER, so it cannot be bypassed by
 ## a consumer that forgot to ask.
-ll_show_src_line := fn(src : ptr(u8), off : usize) {
+ll_show_src_line := fn(src : ptr(u8), off0 : usize) {
+  ## #987 — a name a later pass synthesized for a source call shows that call's line (`ast::span_origin`)
+  off := ast::span_origin(off0)
   ## Issue #523 — the same refusal `lower::ctfold::lower_show_src_line` makes, for the same reason and
   ## with the same marker line: a span a parse-time desugar SYNTHESIZED is not a source position
   ## (`ast::span_is_synthetic`), so `src + off` re-forms an AST-arena address and there is no source
