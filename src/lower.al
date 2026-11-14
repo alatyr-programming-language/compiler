@@ -335,6 +335,7 @@ pub set_stdlib_modules := fn(p : usize, n : usize) -> i64 { STDLIB_MODS_P = p ; 
 ## Is the module `[ms, ms+ml)` the ambient stdlib module mangled `name`?
 module_is_stdlib := fn(src : ptr(u8), ms : usize, ml : usize, name : str) -> bool {
   if str_at((src + ms), ml) != name { return false }
+  ## unchecked-ok: the driver publishes the table as an arena address word, the shape of `sema_module_is_lib`'s
   tbl := unchecked bitcast(ptr(mut u8), STDLIB_MODS_P)
   mut i : usize = 0
   while i + 1 < STDLIB_MODS_N {

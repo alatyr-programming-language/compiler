@@ -388,6 +388,8 @@ aarch64	test/package/issue703_global_module_scope_qualified/src/z.al	link/1	#3
 aarch64	test/package/issue703_global_module_scope_reject/src/z.al	link/1	#3
 aarch64	test/package/issue703_qualified_scalar_read_reject/src/z.al	link/1	#3
 aarch64	test/package/issue703_qualified_scalar_store_reject/src/z.al	link/1	#3
+aarch64	test/package/issue987_user_module_alloc__vec_not_completed/package.al	run/133	#1193
+aarch64	test/package/issue987_user_module_alloc__vec_not_completed/src/alloc__vec.al	link/1	#3
 aarch64	test/print_array_display.al	run/133	#1191
 aarch64	test/print_global_struct_snapshot.al	run/133	#1191
 aarch64	test/print_one.al	run/133	#1200
@@ -950,6 +952,8 @@ riscv64	test/package/issue703_global_module_scope_qualified/src/z.al	link/1	#3
 riscv64	test/package/issue703_global_module_scope_reject/src/z.al	link/1	#3
 riscv64	test/package/issue703_qualified_scalar_read_reject/src/z.al	link/1	#3
 riscv64	test/package/issue703_qualified_scalar_store_reject/src/z.al	link/1	#3
+riscv64	test/package/issue987_user_module_alloc__vec_not_completed/package.al	run/133	#1193
+riscv64	test/package/issue987_user_module_alloc__vec_not_completed/src/alloc__vec.al	link/1	#3
 riscv64	test/print_array_display.al	run/133	#1191
 riscv64	test/print_global_struct_snapshot.al	run/133	#1189
 riscv64	test/print_one.al	run/133	#1200
@@ -1502,6 +1506,8 @@ wasm	test/package/issue703_global_module_scope_qualified/src/z.al	assemble/1	#3
 wasm	test/package/issue703_global_module_scope_reject/src/z.al	assemble/1	#3
 wasm	test/package/issue703_qualified_scalar_read_reject/src/z.al	assemble/1	#3
 wasm	test/package/issue703_qualified_scalar_store_reject/src/z.al	assemble/1	#3
+wasm	test/package/issue987_user_module_alloc__vec_not_completed/package.al	run/134	#1193
+wasm	test/package/issue987_user_module_alloc__vec_not_completed/src/alloc__vec.al	assemble/1	#3
 wasm	test/print_global_struct_snapshot.al	run/134	#1204
 wasm	test/print_one.al	run/134	#1200
 wasm	test/print_str_hole.al	run/134	#1184
@@ -1681,3 +1687,4 @@ x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
 x86_64	test/issue926_const_qualified_same_name_ok.al	compile/139	#1567
 x86_64	test/issue987_user_generic_ufcs_not_completed.al	run/139	#1654
 x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
+x86_64	test/package/issue987_user_module_alloc__vec_not_completed/package.al	run/139	#1654
