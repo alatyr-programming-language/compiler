@@ -942,6 +942,15 @@ check_ir_build() {
      && grep -q 'sema_gaps=0 verify_failed=0$' "$rep"; then
     echo "ok   ir issue977_struct_lit_field_ctx: the struct-literal field literal builds through the IR, no sema gap"
   else echo "FAIL ir issue977_struct_lit_field_ctx: rc=$rc"; grep -E 'NotYet|sema_gaps|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
+  ## #1577: a declaration whose `when` guard folds false is absent, so a name declared as `when`
+  ## alternatives has one declaration on the target, in the builder's pick and in sema's record alike.
+  ## On the parent both readers refused at the name read and fell back to the legacy emitter.
+  "$CC" ir "$E2E_TEST/issue1577_when_const_pair.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^fn issue1577_when_const_pair::k Built$' "$rep" \
+     && grep -q '^fn issue1577_when_const_pair::j Built$' "$rep" \
+     && grep -q 'sema_gaps=0 verify_failed=0$' "$rep"; then
+    echo "ok   ir issue1577_when_const_pair: a module const read through its target's when alternative builds"
+  else echo "FAIL ir issue1577_when_const_pair: rc=$rc"; grep -E 'NotYet|sema_gaps|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
 }
 
 check_ir_dev_verb() {
@@ -11306,6 +11315,9 @@ run_x86 comptime_typeinfo_field_mutable 42
 run comptime_arch_ne 42
 run comptime_target_facets 42
 run issue1578_twin_target_model 42
+## #1577: a module const declared as a pair of `when` alternatives, read in a function; each target
+## sums its own row of two pairs to 42. `check_ir_build` asserts the two readers build through the IR.
+run issue1577_when_const_pair 42
 run comptime_if_facts 42
 run comptime_typeinfo_arg 42
 run comptime_resolves_args 42

@@ -10614,6 +10614,8 @@ sema_rec_pick_by := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
     mut kind_ok := d.kind == lower_layout::DECL_KIND_FN or d.kind == lower_layout::DECL_KIND_SYSCALL
     if not want_fn { kind_ok = d.kind == lower_layout::DECL_KIND_VALUE and not d.is_fn and d.arity == 0 and d.ret_tl == 0 }
     match na { Some(nav) => { if kind_ok and not sema_rec_arity_ok(d, nav, src) { kind_ok = false } }; None => {} }
+    ## a `when` alternative this target does not select is absent (Comptime §7.1, §9.2; #1577)
+    if kind_ok and guard_is_false(d, src) { kind_ok = false }
     if kind_ok and streq(src, d.name_start, d.name_len, ns, nl) and (not in_mod or sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl)) {
       hits += 1
       mut r : i64 = 0 - 1
@@ -18080,7 +18082,7 @@ guard_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
 ## alternative whose body calls a symbol absent on this target, or whose name duplicates the active
 ## one) does not FALSE-reject. A decl with no guard (`when_cond == 0`) or a TRUE/unfoldable guard stays
 ## active. `src/`+`lib/` carry no `when` (every `when_cond` is 0) → always active → check unchanged.
-guard_is_false := fn(d : Decl, src : ptr(u8)) -> bool {
+pub guard_is_false := fn(d : Decl, src : ptr(u8)) -> bool {
   if unchecked bitcast(usize, d.when_cond) == 0 { return false }
   guard_fold(d.when_cond, src) == 0
 }
