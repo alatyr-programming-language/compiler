@@ -50,6 +50,17 @@
 #   and marked `queue-failed` with its log tail, while the PRs that are green land. Every refusal and
 #   `queue-failed` relabel also writes one `#N refused at <stage> on <sha8>: <reason>` line to queue.log
 #   (#1368).
+# - With ALATYR_QUEUE_RUNNER=github (#1571) the batch is gated as speculative stacks instead: S1 =
+#   main+A, S2 = S1+B, … up to ALATYR_QUEUE_DEPTH (3), each pushed to its own gate/queue-<sha> run of
+#   .github/workflows/gate.yml at once. A stack's verdict is its run's conclusion AND the one verdict
+#   line of its `gate-<sha>` artifact, for exactly that object, and it counts only while main is still
+#   the base the stacks were composed on (each Sk's parents are checked to chain back to it). The
+#   deepest green prefix lands in ONE push of exactly that object, with its xbackend baseline commit
+#   made from that stack's own gate.log. A red Sk over a green S(k-1) has isolated its member, which is
+#   marked `queue-failed`; the members after it are recomposed on the new main. A cancelled, timed-out
+#   or verdict-less run blames no one: the pass ends, and the second time for the same head is charged
+#   to its member, as on omen. Solo PRs stay on omen, which the runner cannot replace for the native
+#   seed; an object is never gated on both. The acceptance comment names the machine that gated it.
 # - A failure that is not the PR's (provenance of main, a fetch, the tree moving, a busy box) ends the
 #   pass and changes no label: the PRs stay queued for the next one.
 #
@@ -71,10 +82,15 @@
 #                                         and start the systemd user timer
 #   scripts/queue.sh --self-test          the deciders: marker, entry rules, gate verdict, push
 #                                         arguments, busy box, bisection plan, and the append-only batch
-#                                         settle against a planted repository (#1390)
+#                                         settle against a planted repository (#1390), and the
+#                                         speculative stacks against a fake runner (#1571)
 #
 #   ALATYR_QUEUE_DRY=1       --once screens, composes and gates but neither pushes, labels nor comments
 #   ALATYR_QUEUE_DRY=screen  as 1, and no gate runs (each counted green): a check of the plumbing
+#   ALATYR_QUEUE_RUNNER=github  gate a batch as speculative stacks S1=main+A, S2=S1+B, … on parallel
+#                            gate/** runs and land the deepest green prefix in one push (#1571); with
+#                            DRY=1 it still pushes the gate/queue-<sha> branches, never main
+#   ALATYR_QUEUE_DEPTH=3     the deepest stack one round gates (#1571)
 set -u
 
 SELF="$0"
@@ -84,6 +100,8 @@ ROOT="$(git -C "$(dirname "$SELF")" rev-parse --show-toplevel 2>/dev/null || (cd
 REPO="${ALATYR_REPO:-alatyr-programming-language/compiler}"
 QUEUE_MAX="${ALATYR_QUEUE_MAX:-4}"
 DRY="${ALATYR_QUEUE_DRY:-0}"
+RUNNER="${ALATYR_QUEUE_RUNNER:-omen}"   # omen, or github: speculative stacks on gate/** runs (#1571)
+GATE_MACHINE=omen; GATE_RUN_URL=""; STACK_NOTE=""
 QDIR="$ROOT/target/queue"
 
 say() { printf '%s queue: %s\n' "$(date -u +%FT%TZ)" "$*"; }
@@ -223,8 +241,104 @@ queue_drive() { # PR...
   done
 }
 
+## ---- speculative stacks on the GitHub runner (#1571) ----
+## With ALATYR_QUEUE_RUNNER=github a batch is not gated as one object on omen. The queue composes
+## S1 = base+A, S2 = S1+B, … up to ALATYR_QUEUE_DEPTH, gates every Sk at once as its own gate/** run,
+## and lands the deepest green prefix in ONE push of exactly that gated object. Each stack adds one
+## member, so a red Sk over a green S(k-1) has already isolated its member: that is the bisection's
+## answer, reached in one round instead of log2(n) gates in a row. A batch that bisection would have
+## split further is still split: the members after the red one are recomposed on the new main.
+
+## What one round of stacks decided. Input: the base the stacks were composed on, what main is now,
+## and one verdict per stack in order — g green, r red (the run's own FAILURES verdict), n anything
+## else (cancelled, timed out, no verdict, a verdict for another object). Prints `land K`, then the
+## reason the round went no deeper: `fail J` (stack J red over a green prefix: member J is red),
+## `stop J` (stack J has no verdict that blames anyone) or `moved` (main is no longer the base: no
+## verdict counts, nothing lands, everything is recomposed next pass).
+queue_stack_plan() { # base main-now verdict...
+  local base="$1" now="$2" k=0 v; shift 2
+  [ -n "$base" ] && [ "$base" = "$now" ] || { echo "land 0 moved"; return; }
+  for v in "$@"; do
+    case "$v" in
+      g) k=$((k + 1)) ;;
+      r) echo "land $k fail $((k + 1))"; return ;;
+      *) echo "land $k stop $((k + 1))"; return ;;
+    esac
+  done
+  echo "land $k"
+}
+
+## The verdict of one stack's run. Input: the stack's object, the run as `headSha<TAB>status<TAB>
+## conclusion` from `gh run list`, and the gate.log of its `gate-<sha>` artifact. 0 green: the run
+## gated exactly this object, completed with success, and its log holds ONE verdict line and it is
+## GREEN. 1 red: the same object, completed with failure, the one verdict line is FAILURES, AND some
+## part ran its stages and gave its own `--- full part <p>: FAILURES` verdict — a stage failed. The
+## aggregate also says FAILURES when a part has no log or stopped before its verdict (a lost runner,
+## a nix install that failed): that is omen's "no verdict", not the member's red.
+## 2 otherwise — another object's run, still running, cancelled or timed out (an operator act or the
+## runner's, not the member's), or a log without exactly one verdict line: never green, never blamed.
+queue_runner_verdict() { # object run-line gate-log
+  local sha st co n
+  IFS=$'\t' read -r sha st co _ <<< "$2"
+  [ -n "$1" ] && [ "$sha" = "$1" ] && [ "$st" = completed ] || return 2
+  n="$(grep -c '^\*\*\* FULL GATE' "$3" 2>/dev/null)"
+  [ "$n" = 1 ] || return 2
+  [ "$co" = success ] && grep -q '^\*\*\* FULL GATE: GREEN (sweeps RAN) \*\*\*$' "$3" && return 0
+  [ "$co" = failure ] && grep -q '^\*\*\* FULL GATE: FAILURES \*\*\*$' "$3" &&
+    grep -qE '^--- full part [a-z0-9-]+: FAILURES' "$3" && return 1
+  return 2
+}
+
+## Are these the stacks of these members on this base? S1's first parent is the base and its second
+## the member's reviewed head, Sk's first parent is S(k-1): so a green verdict counts only for the base
+## it was composed on — an object composed on an older main is a different object and fails here.
+queue_stack_chain_ok() { # base object=head...
+  local prev="$1" pair obj head; shift
+  [ "$#" -gt 0 ] || return 1
+  for pair in "$@"; do
+    obj="${pair%%=*}"; head="${pair#*=}"
+    [ "$(git rev-list --parents -n 1 "$obj" 2>/dev/null | wc -w | tr -d ' ')" = 3 ] &&
+      [ "$(git rev-parse "$obj^1" 2>/dev/null)" = "$prev" ] &&
+      [ "$(git rev-parse "$obj^2" 2>/dev/null)" = "$head" ] || return 1
+    prev="$obj"
+  done
+}
+
+## The stacks driver. It calls the functions the caller defines:
+##   queue_stack_build PR...  compose STACK=(S1 … Sn) on origin/main, base STACK_BASE; non-zero ends the pass
+##   queue_stack_gate         gate every stack at once; SV=(one g, r or n per stack, in order)
+##   queue_main_now           print what main is now
+##   queue_stack_land K PR... publish stack K, which holds exactly these PRs
+##   queue_stack_fail J PR    stack J is red over a green prefix: mark its member PR red
+##   queue_stack_stop J PR    stack J, which PR completes, has no verdict: a strike, the pass ends
+QUEUE_DEPTH="${ALATYR_QUEUE_DEPTH:-3}"
+queue_stack_drive() { # PR...
+  local rest=("$@") n plan k what j now vs i before
+  case "$QUEUE_DEPTH" in ''|0*|*[!0-9]*) say "ALATYR_QUEUE_DEPTH must be a positive number, not '$QUEUE_DEPTH'"; return 0 ;; esac
+  while [ "${#rest[@]}" -gt 0 ]; do
+    n="${#rest[@]}"; [ "$n" -gt "$QUEUE_DEPTH" ] && n="$QUEUE_DEPTH"
+    before="${#rest[@]}"
+    queue_stack_build "${rest[@]:0:n}" || return 0
+    queue_stack_gate || return 0
+    now="$(queue_main_now)" || return 0
+    vs=(); for ((i = 0; i < n; i++)); do vs+=("${SV[i]:-n}"); done   # a stack with no verdict is n
+    plan="$(queue_stack_plan "$STACK_BASE" "$now" "${vs[@]}")"
+    read -r _ k what j <<< "$plan"
+    if [ "$k" -gt 0 ]; then queue_stack_land "$k" "${rest[@]:0:k}" || return 0; fi
+    case "$what" in
+      fail) queue_stack_fail "$j" "${rest[$((j - 1))]}"; rest=("${rest[@]:j}") ;;
+      stop) queue_stack_stop "$j" "${rest[$((j - 1))]}"; return 0 ;;
+      moved) return 0 ;;
+      '') rest=("${rest[@]:k}") ;;
+      *) say "internal: the stack plan '$plan' is not one the driver knows; this pass ends"; return 0 ;;
+    esac
+    [ "${#rest[@]}" -lt "$before" ] ||
+      { say "internal: a round of stacks settled no member; this pass ends"; return 0; }
+  done
+}
+
 ## The exact number of checks queue_self_test runs, compared with -ne like land.sh's.
-QUEUE_SELFTEST_EXPECTED=82  # 49, +6 #1383, +7 #1386, +9 #1423, +2 #1526, +9 #1390
+QUEUE_SELFTEST_EXPECTED=120  # 49, +6 #1383, +7 #1386, +9 #1423, +2 #1526, +9 #1390, +38 #1571
 queue_self_test() {
   local k=0 bad="" log t
   _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
@@ -376,6 +490,105 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   queue_land() { log="$log land:$*;"; return 1; }
   log=""; queue_drive 1 3; [ "$log" = " try:1 3; land:1 3;" ]; _ck $? "failed-publish-did-not-end-the-pass($log)"
   unset -f queue_try queue_land queue_fail
+  # ---- speculative stacks (#1571): the round's plan, the runner's verdict, the chain, the driver ----
+  [ "$(queue_stack_plan B B g g g)" = "land 3" ]; _ck $? stack-plan-did-not-land-three-greens-at-once
+  [ "$(queue_stack_plan B B g r g)" = "land 1 fail 2" ]; _ck $? stack-plan-did-not-strike-the-member-of-a-red-S2
+  [ "$(queue_stack_plan B B r g g)" = "land 0 fail 1" ]; _ck $? stack-plan-landed-over-a-red-S1
+  [ "$(queue_stack_plan B M g g g)" = "land 0 moved" ]; _ck $? stack-plan-landed-on-a-main-that-moved
+  [ "$(queue_stack_plan "" "" g)" = "land 0 moved" ]; _ck $? stack-plan-landed-with-no-base
+  [ "$(queue_stack_plan B B g n r)" = "land 1 stop 2" ]; _ck $? stack-plan-blamed-a-stack-with-no-verdict
+  mkdir -p "$ROOT/target" && t="$(mktemp -d "$ROOT/target/queue-selftest.XXXXXX")" || return 1
+  printf 'x\n*** FULL GATE: GREEN (sweeps RAN) ***\n' > "$t/green"
+  printf 'x\n*** FULL GATE: FAILURES ***\n' > "$t/red"
+  printf '*** FULL GATE: GREEN (sweeps RAN) ***\n*** FULL GATE: GREEN (sweeps RAN) ***\n' > "$t/two"
+  printf '*** FULL GATE: GREEN — but the SWEEPS DID NOT RUN (sweeps STATUS=SKIP): x\n' > "$t/nosweeps"
+  rl() { printf '%s\t%s\t%s\t%s\t%s' "$1" "$2" "$3" 42 https://example/run/42; } # sha status conclusion
+  queue_runner_verdict "$a" "$(rl "$a" completed success)" "$t/green"; _ck $? runner-refused-its-green
+  queue_runner_verdict "$a" "$(rl "$b" completed success)" "$t/green"; [ $? = 2 ]; _ck $? runner-took-a-verdict-on-another-object
+  queue_runner_verdict "$a" "$(rl "$a" completed cancelled)" "$t/red"; [ $? = 2 ]; _ck $? runner-took-a-cancelled-run-as-a-verdict
+  queue_runner_verdict "$a" "$(rl "$a" in_progress success)" "$t/green"; [ $? = 2 ]; _ck $? runner-took-an-unfinished-run
+  printf '%s\n' '--- full part ir: FAILURES ---' >> "$t/red"
+  queue_runner_verdict "$a" "$(rl "$a" completed failure)" "$t/red"; [ $? = 1 ]; _ck $? runner-did-not-blame-a-part-that-failed-a-stage
+  printf 'x\n*** FULL GATE: FAILURES ***\n    part ir: no log (the job did not run, was cancelled, or uploaded nothing)\n' > "$t/lost"
+  queue_runner_verdict "$a" "$(rl "$a" completed failure)" "$t/lost"; [ $? = 2 ]; _ck $? runner-blamed-a-member-for-a-lost-part
+  queue_runner_verdict "$a" "$(rl "$a" completed success)" "$t/red"; [ $? = 2 ]; _ck $? runner-took-success-over-a-FAILURES-line
+  queue_runner_verdict "$a" "$(rl "$a" completed success)" "$t/two"; [ $? = 2 ]; _ck $? runner-took-a-log-with-two-verdicts
+  queue_runner_verdict "$a" "$(rl "$a" completed success)" "$t/none"; [ $? = 2 ]; _ck $? runner-took-a-run-with-no-log
+  queue_runner_verdict "$a" "$(rl "$a" completed success)" "$t/nosweeps"; [ $? = 2 ]; _ck $? runner-took-a-green-whose-sweeps-did-not-run
+  # The chain, in a planted repository: a stale green from an older base is another object.
+  ( cd "$t" && git init -q -b main c && cd c && git config user.email q@x && git config user.name q &&
+    git commit -q --allow-empty -m old && git tag old && git commit -q --allow-empty -m base && git tag base &&
+    for m in A B; do git switch -q -c "m$m" old && git commit -q --allow-empty -m "$m" && git tag "$m"; done &&
+    git switch -q --detach base && git merge -q --no-ff -m s1 A && git tag s1 && git merge -q --no-ff -m s2 B && git tag s2 &&
+    git switch -q --detach old && git merge -q --no-ff -m o1 A && git tag o1 ) >/dev/null 2>&1
+  cs() { git -C "$t/c" rev-parse "$1"; }
+  ( cd "$t/c" && queue_stack_chain_ok "$(cs base)" "$(cs s1)=$(cs A)" "$(cs s2)=$(cs B)" ); _ck $? chain-refused-its-stacks
+  ( cd "$t/c" && queue_stack_chain_ok "$(cs base)" "$(cs o1)=$(cs A)" ); [ $? = 1 ]; _ck $? chain-took-a-stack-composed-on-an-older-base
+  ( cd "$t/c" && queue_stack_chain_ok "$(cs base)" "$(cs s1)=$(cs B)" "$(cs s2)=$(cs A)" ); [ $? = 1 ]; _ck $? chain-took-swapped-members
+  ( cd "$t/c" && queue_stack_chain_ok "$(cs base)" "$(cs s2)=$(cs B)" ); [ $? = 1 ]; _ck $? chain-took-a-stack-that-skips-one
+  ( cd "$t/c" && queue_stack_chain_ok "$(cs old)" "$(cs A)=$(cs A)" ); [ $? = 1 ]; _ck $? chain-took-a-one-parent-commit
+  # The round is decided once every stack up to the first non-green one has a verdict.
+  STACK=(x y z)
+  SV=(g "" ""); ! queue_stack_decided; _ck $? decided-before-S2-had-a-verdict
+  SV=(r "" ""); queue_stack_decided; _ck $? undecided-after-a-red-S1
+  SV=(g g g); queue_stack_decided; _ck $? undecided-with-every-verdict-in
+  SV=(g g); ! queue_stack_decided; _ck $? decided-with-a-stack-missing
+  # Stack K selects its own object, log and run.
+  STACK_BASE=B STACK=(s1 s2 s3) STACK_LOGS=(l1 l2 l3) STACK_RUNS=(u1 u2 u3) STACK_FOR=(7 8 9)
+  queue_stack_select 2
+  [ "$BUILT $BUILT_BASE $GATE_LOG $GATE_RUN_URL" = "s2 B l2 u2" ]; _ck $? "select-took-another-stack($BUILT $GATE_LOG)"
+  # No verdict: the first time a strike and the pass ends, the second time at the same head it is red.
+  (
+    QDIR="$t" HEAD[8]="$a"; f=""; queue_fail() { f="$f fail:$1"; }; say() { :; }
+    queue_stack_stop 2 8; queue_stack_stop 2 8; [ "$f" = " fail:8" ] && [ ! -e "$t/strike-$(printf '%s' "8=$a stack" | cksum | cut -d' ' -f1)" ]
+  ); _ck $? stack-stop-charged-on-the-first-no-verdict-or-kept-the-strike
+  # Cleanup cancels only a run no verdict was read from, and deletes every gate branch.
+  (
+    QDIR="$t" STACK=(s1 s2) SV=(g "") STACK_IDS=(11 22); c=""
+    gh_cmd() { c="$c gh:$*"; }; git() { c="$c git:${*: -1}"; }
+    queue_stack_cleanup; [ "$c" = " git:gate/queue-s1 gh:run cancel 22 -R $REPO git:gate/queue-s2" ]
+  ); _ck $? cleanup-cancelled-a-decided-run-or-kept-a-branch
+  (
+    QDIR="$t" STACK=(s1) SV=("") STACK_IDS=(""); c=""
+    gh_cmd() { case "$2" in list) echo 33 ;; *) c="$c gh:$*" ;; esac; }; git() { :; }
+    queue_stack_cleanup; [ "$c" = " gh:run cancel 33 -R $REPO" ]
+  ); _ck $? cleanup-did-not-cancel-a-run-it-had-not-seen
+  # One round against a stubbed runner: S1 green, S2 red; each verdict clears its member's strike.
+  (
+    QDIR="$t" DRY=0 QUEUE_RUNNER_WAIT=1 STACK=("$a" "$b") STACK_FOR=(7 8) HEAD[7]="$a" HEAD[8]="$b"
+    say() { :; }; sleep() { :; }; git() { :; }
+    gh_cmd() { case "$2" in
+        list) printf '%s\tcompleted\t%s\t%s\turl\n' "${8#gate/queue-}" "$([ "${8#gate/queue-}" = "$a" ] && echo success || echo failure)" 5 ;;
+        download) mkdir -p "$9"; if [ "$7" = "gate-$a" ]; then printf '*** FULL GATE: GREEN (sweeps RAN) ***\n'
+                  else printf -- '--- full part ir: FAILURES ---\n*** FULL GATE: FAILURES ***\n'; fi > "$9/gate.log" ;;
+      esac; }
+    queue_strike "$t" "7=$a stack" >/dev/null; queue_strike "$t" "8=$b stack" >/dev/null
+    queue_stack_gate; [ "${SV[*]}" = "g r" ] && ! ls "$t"/strike-* >/dev/null 2>&1
+  ); _ck $? stack-gate-misread-a-round-or-kept-a-strike-past-its-verdict
+  STACK=(); SV=(); STACK_LOGS=(); STACK_RUNS=(); STACK_FOR=(); STACK_BASE=""
+  rm -rf "$t"; unset -f rl cs
+  # The driver against a fake runner: a stack is red when it holds a PR in FR, has no verdict when it
+  # holds one in FN, and is green otherwise; FM is what main is when the round ends.
+  local FR FN FM qdp="$QUEUE_DEPTH"
+  queue_stack_build() { log="$log build:$*;"; STACK_BASE=B; STACK=(); local p s=""; for p in "$@"; do s="$s$p"; STACK+=("$s"); done; }
+  queue_stack_gate() { local i x; SV=(); for i in "${!STACK[@]}"; do x=g
+      case "${STACK[i]}" in *[$FN]*) x=n ;; esac; case "${STACK[i]}" in *[$FR]*) x=r ;; esac; SV+=("$x"); done; }
+  queue_main_now() { echo "$FM"; }
+  queue_stack_land() { log="$log land:$*;"; }
+  queue_stack_fail() { log="$log fail:$*;"; }
+  queue_stack_stop() { log="$log stop:$*;"; }
+  QUEUE_DEPTH=3 FR=_ FN=_ FM=B
+  log=""; queue_stack_drive 1 2 3; [ "$log" = " build:1 2 3; land:3 1 2 3;" ]; _ck $? "stacks-three-greens-not-one-push($log)"
+  FR=2; log=""; queue_stack_drive 1 2 3; [ "$log" = " build:1 2 3; land:1 1; fail:2 2; build:3; land:1 3;" ]; _ck $? "stacks-red-S2($log)"
+  FR=1; log=""; queue_stack_drive 1 2 3; [ "$log" = " build:1 2 3; fail:1 1; build:2 3; land:2 2 3;" ]; _ck $? "stacks-red-S1($log)"
+  FR=_ FM=M; log=""; queue_stack_drive 1 2 3; [ "$log" = " build:1 2 3;" ]; _ck $? "stacks-landed-on-a-main-that-moved($log)"
+  FM=B FN=2; log=""; queue_stack_drive 1 2 3; [ "$log" = " build:1 2 3; land:1 1; stop:2 2;" ]; _ck $? "stacks-cancelled-S2($log)"
+  FN=_; log=""; queue_stack_drive 1 2 3 4; [ "$log" = " build:1 2 3; land:3 1 2 3; build:4; land:1 4;" ]; _ck $? "stacks-deeper-than-the-depth($log)"
+  queue_stack_gate() { SV=(g); }
+  log=""; queue_stack_drive 1 2; [ "$log" = " build:1 2; land:1 1; stop:2 2;" ]; _ck $? "stacks-a-missing-verdict-was-not-n($log)"
+  QUEUE_DEPTH=0; log=""; queue_stack_drive 1 2 >/dev/null; [ "$log" = "" ]; _ck $? "stacks-built-at-depth-0($log)"
+  QUEUE_DEPTH="$qdp"
+  unset -f queue_stack_build queue_stack_gate queue_main_now queue_stack_land queue_stack_fail queue_stack_stop
   # The bootstrap recovers the queue checkout from a merge left in flight (#1423), and still cleans dirt.
   ## The scratch clone names its branch `main` EXPLICITLY, three times over: `git init -b`, the bare
   ## repo's HEAD, and every clone's `-b`. A row that inherits the machine's `init.defaultBranch` passes
@@ -497,7 +710,8 @@ Refs #2")" ]; _ck $? entry-took-a-PR-with-two-markers
   fi
   echo "ok   queue self-test: $k checks — reviewed-head marker, entry rules, head check, gate verdict,"
   echo "     push arguments, the xbackend baseline commit and its refusal, busy box, the bisection plan,"
-  echo "     the bootstrap recovery (#1423) and the append-only batch settle (#1390)"
+  echo "     the bootstrap recovery (#1423), the append-only batch settle (#1390) and the speculative"
+  echo "     stacks on the runner: plan, verdict, chain and driver (#1571)"
 }
 
 # ---- GitHub ------------------------------------------------------------------------------------------
@@ -580,11 +794,15 @@ $note" >/dev/null 2>&1 || return 2
   return 0
 }
 
-queue_try() { # PR... — compose onto origin/main and gate
-  [ "$DRY" = screen ] || wait_for_box || return 2   # before the base is read: a long wait would void the lease
-  git fetch --quiet origin main || return 2
+## Compose the members onto origin/main one merge at a time, each its reviewed head. Leaves the tree at
+## the last merge; COMPOSE_BASE is the base, COMPOSE_OBJS the object after each member, in order.
+## 0 composed, 2 not (a fetch, a moved head, a conflict: this pass ends, nothing is labelled).
+COMPOSE_BASE=""; COMPOSE_OBJS=()
+queue_compose_onto_main() { # PR...
   local base pr msg rc
-  base="$(git rev-parse origin/main)"
+  COMPOSE_OBJS=()
+  git fetch --quiet origin main || return 2
+  base="$(git rev-parse origin/main)"; COMPOSE_BASE="$base"
   git switch --quiet --detach "$base" || return 2
   QUEUE_LAND_REF="$base"     # the base's copy of land.sh settles, never a batch's (#1390)
   for pr in "$@"; do
@@ -603,7 +821,15 @@ ${LINK[$pr]}"
       return 2
     fi
     [ -z "$QUEUE_MERGE_NOTE" ] || say "#$pr composed with an append-only conflict settled (#1390)"
+    COMPOSE_OBJS+=("$(git rev-parse HEAD)")
   done
+}
+
+queue_try() { # PR... — compose onto origin/main and gate
+  [ "$DRY" = screen ] || wait_for_box || return 2   # before the base is read: a long wait would void the lease
+  queue_compose_onto_main "$@" || return 2
+  local base="$COMPOSE_BASE" pr
+  GATE_MACHINE=omen; GATE_RUN_URL=""; STACK_NOTE=""
   BUILT="$(git rev-parse HEAD)"; BUILT_BASE="$base"; BUILT_FOR="$*"
   GATE_LOG="$QDIR/gate-$(date -u +%Y%m%dT%H%M%S)-$(git rev-parse --short HEAD).log"
   if [ "$DRY" = screen ]; then say "(dry=screen) composed $BUILT for $(prs_h "$@"); no gate"; return 0; fi
@@ -630,6 +856,11 @@ ${LINK[$pr]}"
 }
 
 gate_line() { grep -m1 '^\*\*\* FULL GATE' "$1" 2>/dev/null || echo '(no verdict line)'; }
+## Where a reader finds a gate's log: under target/queue/ on omen, or the runner's run and artifact.
+queue_log_where() { # log
+  if [ "${GATE_MACHINE:-omen}" = omen ]; then echo "log \`$(basename "$1")\` under \`target/queue/\` on omen"
+  else echo "run ${GATE_RUN_URL:-(unknown)}, artifact \`gate-$BUILT\`"; fi
+}
 
 ## After a push: one acceptance per PR, labels off, the PR's snapshot ref and branch removed.
 queue_accept() { # how object base log PR...
@@ -640,7 +871,7 @@ queue_accept() { # how object base log PR...
 
 - reviewed head: \`${HEAD[$pr]}\` (the \`queue-head\` marker; the object gated)
 - members: $(prs_h "$@"), composed onto \`$base\`; \`main\` is now \`$obj\`
-- gate on omen, on that exact object: \`$(gate_line "$log")\` (log \`$(basename "$log")\` under \`target/queue/\` on omen)
+- gate on ${GATE_MACHINE:-omen}, on that exact object: \`$(gate_line "$log")\` ($(queue_log_where "$log"))
 $(git diff --quiet "$obj^" "$obj" -- scripts/xbackend_diff.baseline 2>/dev/null || echo "- xbackend baseline: \`$obj\` moves it by the gate's newly covered and x86_64-fixed paths and rows (#1526), alone, on the gated object (#1383)")
 - check: \`git merge-base --is-ancestor $obj origin/main\`
 ${LINK[$pr]:+- issue: ${LINK[$pr]}}"
@@ -719,7 +950,7 @@ queue_follow_failed() { # PR...
   local pr
   for pr in "$@"; do
     refused "$pr" follow "${HEAD[$pr]}" "the xbackend baseline commit on the green $BUILT was refused (#1383)"
-    comment "$pr" "**Merge queue: refused after a green gate** on head \`${HEAD[$pr]}\` (\`scripts/queue.sh\`, #1383). Members $(prs_h "$@") were gated green as \`$BUILT\` (\`$(gate_line "$GATE_LOG")\`), but the xbackend baseline commit that must land with it was refused, so nothing was pushed. Its report (\`$(basename "$GATE_LOG").follow\` under \`target/queue/\` on omen):
+    comment "$pr" "**Merge queue: refused after a green gate** on head \`${HEAD[$pr]}\` (\`scripts/queue.sh\`, #1383). Members $(prs_h "$@") were gated green as \`$BUILT\` (\`$(gate_line "$GATE_LOG")\`), but the xbackend baseline commit that must land with it was refused, so nothing was pushed. Its report (\`${GATE_LOG#"$ROOT"/}.follow\` on omen):
 
 \`\`\`
 $(tail -n 15 "$GATE_LOG.follow" 2>/dev/null)
@@ -750,7 +981,7 @@ queue_fail() { # PR
   refused "$pr" gate "${HEAD[$pr]}" "red, isolated ($(gate_line "$GATE_LOG"))"
   comment "$pr" "**Merge queue: red** on head \`${HEAD[$pr]}\` (\`scripts/queue.sh\`, #1127).
 
-Gated alone on \`$BUILT_BASE\` as \`$BUILT\`: \`$(gate_line "$GATE_LOG")\`. Log \`$(basename "$GATE_LOG")\` under \`target/queue/\` on omen; its failing lines:
+Gated ${STACK_NOTE:-alone} on \`$BUILT_BASE\` as \`$BUILT\`: \`$(gate_line "$GATE_LOG")\`. $(queue_log_where "$GATE_LOG"); its failing lines:
 
 \`\`\`
 $(grep -E 'FAIL|MISMATCH|REFUSED|NOT LANDABLE|error' "$GATE_LOG" 2>/dev/null | tail -n 30)
@@ -758,6 +989,120 @@ $(grep -E 'FAIL|MISMATCH|REFUSED|NOT LANDABLE|error' "$GATE_LOG" 2>/dev/null | t
 
 The label moved to \`queue-failed\`. Fix, push, and re-enqueue after review."
   relabel "$pr" queue-failed queue
+}
+
+## ---- the runner's side of the stacks (#1571) ----
+## Every stack is pushed to gate/queue-<sha>, which runs .github/workflows/gate.yml on exactly that
+## object; its verdict is the run's conclusion AND the one `*** FULL GATE` line of its `gate-<sha>`
+## artifact (queue_runner_verdict). An omen gate and a runner gate never both claim an object: in this
+## mode a batch is gated on the runner only, and a solo PR (oracle, predicted delta) on omen only,
+## through land.sh as before — the runner cannot run what needs the native seed. Trust is the omen
+## gate's: the composed tree's own full.sh judges it there, and the composed tree's own gate.yml here,
+## both bounded by the §2 review that precedes --enqueue.
+QUEUE_RUNNER_WAIT="${ALATYR_QUEUE_RUNNER_WAIT:-240}"   # minutes; the slowest of 30 runs took 146
+STACK_BASE=""; STACK=(); STACK_FOR=(); SV=(); STACK_LOGS=(); STACK_RUNS=(); STACK_IDS=()
+queue_stack_build() { # PR...
+  local i pairs=()
+  STACK=(); STACK_FOR=("$@"); SV=(); STACK_LOGS=(); STACK_RUNS=(); STACK_IDS=()
+  queue_compose_onto_main "$@" || return 2
+  STACK_BASE="$COMPOSE_BASE"; STACK=("${COMPOSE_OBJS[@]}")
+  for i in "${!STACK[@]}"; do pairs+=("${STACK[i]}=${HEAD[${STACK_FOR[i]}]}"); done
+  queue_stack_chain_ok "$STACK_BASE" "${pairs[@]}" ||
+    { say "the stacks of $(prs_h "$@") are not one chain on $STACK_BASE; this pass ends"; return 2; }
+  say "stacks on $STACK_BASE:$(for i in "${!STACK[@]}"; do printf ' S%d=%s(+#%s)' $((i + 1)) "${STACK[i]:0:12}" "${STACK_FOR[i]}"; done)"
+}
+## Is the round decided? Every stack up to and including the first one that is not green has a verdict.
+queue_stack_decided() {
+  local v
+  for v in ${SV[@]+"${SV[@]}"}; do
+    case "$v" in g) ;; '') return 1 ;; *) return 0 ;; esac
+  done
+  [ "${#SV[@]}" = "${#STACK[@]}" ]
+}
+queue_stack_gate() {
+  local i obj line st id url dir deadline
+  SV=(); STACK_LOGS=(); STACK_RUNS=(); STACK_IDS=()
+  for i in "${!STACK[@]}"; do SV[i]=""; STACK_LOGS[i]=""; STACK_RUNS[i]=""; STACK_IDS[i]=""; done
+  if [ "$DRY" = screen ]; then
+    for i in "${!STACK[@]}"; do SV[i]=g; done; say "(dry=screen) no runner gate; every stack counted green"; return 0
+  fi
+  for obj in "${STACK[@]}"; do
+    git push --quiet --no-verify origin "$obj:refs/heads/gate/queue-$obj" ||
+      { say "could not push gate/queue-$obj; this pass ends"; sleep 15; queue_stack_cleanup; return 2; }
+  done
+  say "gating ${#STACK[@]} stack(s) on the runner (gate/queue-<sha>), at most $QUEUE_RUNNER_WAIT min"
+  deadline=$(( $(date +%s) + QUEUE_RUNNER_WAIT * 60 ))
+  while :; do
+    for i in "${!STACK[@]}"; do
+      [ -z "${SV[i]}" ] || continue
+      obj="${STACK[i]}"
+      line="$(gh_cmd run list -R "$REPO" --workflow gate.yml --branch "gate/queue-$obj" --limit 1 \
+        --json headSha,status,conclusion,databaseId,url \
+        --jq '.[0] | [.headSha, .status, (.conclusion // "" | if . == "" then "none" else . end), (.databaseId | tostring), .url] | @tsv' 2>/dev/null)"
+      IFS=$'\t' read -r _ st _ id url <<< "$line"   # every field non-empty: tab is whitespace to read
+      STACK_IDS[i]="$id"
+      [ "$st" = completed ] || continue
+      dir="$QDIR/stack-$obj"; rm -rf "$dir"; mkdir -p "$dir"
+      gh_cmd run download "$id" -R "$REPO" -n "gate-$obj" -D "$dir" >/dev/null 2>&1 ||
+        { sleep 20; gh_cmd run download "$id" -R "$REPO" -n "gate-$obj" -D "$dir" >/dev/null 2>&1; }
+      STACK_LOGS[i]="$dir/gate.log"; STACK_RUNS[i]="$url"
+      queue_runner_verdict "$obj" "$line" "$dir/gate.log"
+      case $? in 0) SV[i]=g ;; 1) SV[i]=r ;; *) SV[i]=n ;; esac
+      # A verdict clears the member's stack strike, as any verdict does on omen.
+      [ "${SV[i]}" = n ] || queue_strike_clear "$QDIR" "${STACK_FOR[i]}=${HEAD[${STACK_FOR[i]}]} stack"
+      say "S$((i + 1)) ${obj:0:12} (+#${STACK_FOR[i]}): ${SV[i]} — $(gate_line "$dir/gate.log") $url"
+    done
+    queue_stack_decided && break
+    [ "$(date +%s)" -lt "$deadline" ] ||
+      { say "no verdict within $QUEUE_RUNNER_WAIT min; a stack without one counts as n"; break; }
+    sleep 60
+  done
+  queue_stack_cleanup
+}
+## The gate branches go once the round is decided; a run no verdict depends on any more is cancelled,
+## so it frees its runners for the next round.
+queue_stack_cleanup() {
+  local i id
+  for i in "${!STACK[@]}"; do
+    if [ -z "${SV[i]}" ]; then
+      id="${STACK_IDS[i]}"   # unknown when the round ended before the run was first seen
+      [ -n "$id" ] || id="$(gh_cmd run list -R "$REPO" --workflow gate.yml --branch "gate/queue-${STACK[i]}" \
+        --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null)"
+      [ -n "$id" ] && gh_cmd run cancel "$id" -R "$REPO" >/dev/null 2>&1
+    fi
+    git push --quiet --no-verify origin --delete "gate/queue-${STACK[i]}" >/dev/null 2>&1
+  done
+  # A stack's artifacts stay 30 days on the runner; its copy here goes after 30 too.
+  find "$QDIR" -maxdepth 1 -name 'stack-*' -mtime +30 -exec rm -rf {} + 2>/dev/null
+  return 0
+}
+queue_main_now() { git fetch --quiet origin main && git rev-parse origin/main; }
+## Land stack K: the members it holds, its own object and log, and the base it was composed on.
+queue_stack_select() { # K
+  BUILT="${STACK[$1 - 1]}"; BUILT_BASE="$STACK_BASE"; GATE_LOG="${STACK_LOGS[$1 - 1]}"
+  GATE_MACHINE="the GitHub runner"; GATE_RUN_URL="${STACK_RUNS[$1 - 1]}"
+  STACK_NOTE="as stack S$1 of $(prs_h ${STACK_FOR[@]+"${STACK_FOR[@]}"}) on the runner"
+  [ "$1" -gt 1 ] && STACK_NOTE="$STACK_NOTE, over a green S$(($1 - 1))"
+}
+queue_stack_land() { # K PR...
+  local k="$1"; shift
+  queue_stack_select "$k"; BUILT_FOR="$*"
+  queue_land "$@"
+}
+queue_stack_fail() { # J PR
+  queue_stack_select "$1"
+  queue_fail "$2"
+}
+queue_stack_stop() { # J PR
+  local pr="$2" key
+  queue_stack_select "$1"; key="$pr=${HEAD[$pr]} stack"
+  if [ "$(queue_strike "$QDIR" "$key")" -ge 2 ]; then
+    queue_strike_clear "$QDIR" "$key"
+    say "S$1 (+#$pr) ended with no verdict twice at the same head; charged to it as red"
+    STACK_NOTE="$STACK_NOTE, twice with no verdict at this head, so charged to it"
+    queue_fail "$pr"; return 0
+  fi
+  say "S$1 (+#$pr) ended with no verdict; this pass ends, everything stays queued"
 }
 
 ## Which of the screened PRs compose onto origin/main, in order? One that conflicts with main alone is
@@ -802,6 +1147,7 @@ queue_compose_screen() { # PR...
 ## The queue pushes the object land.sh names; land.sh never pushes.
 queue_solo() { # pr -> 0 done (landed, failed or dropped), 2 the pass ends
   local pr="$1" log="$QDIR/solo-$1-$(date -u +%Y%m%dT%H%M%S).log" out obj
+  GATE_MACHINE=omen; GATE_RUN_URL=""; STACK_NOTE=""
   if [ "$DRY" = screen ]; then say "(dry=screen) #$pr would be landed alone"; return 0; fi
   wait_for_box || return 2
   say "solo landing #$pr (oracle or predicted delta) at ${HEAD[$pr]}; log $log"
@@ -898,6 +1244,7 @@ queue_once() {
     exec 9> "$QDIR/lock"
     flock -n 9 || { say "another pass holds the lock"; return 0; }
   fi
+  case "$RUNNER" in omen|github) ;; *) die "ALATYR_QUEUE_RUNNER is omen or github, not '$RUNNER'" ;; esac
   queue_bootstrap_recover || die "the queue checkout cannot be cleaned to origin/main (#1423) — see above"
   local prs pr head marker out why solo batch=() shead rc base draft labels body
   prs="$(gh_cmd pr list -R "$REPO" --label queue --state open --json number --jq '.[].number' | sort -n | head -n "$QUEUE_MAX")"
@@ -956,7 +1303,9 @@ $(printf '%s\n' "$out" | tail -n 25)
   if [ "${#batch[@]}" -gt 0 ]; then
     queue_compose_screen "${batch[@]}"
     # shellcheck disable=SC2086
-    [ -z "$COMPOSED" ] || queue_drive $COMPOSED
+    if [ -z "$COMPOSED" ]; then :
+    elif [ "$RUNNER" = github ]; then queue_stack_drive $COMPOSED   # #1571
+    else queue_drive $COMPOSED; fi
   fi
   git switch --quiet --detach origin/main 2>/dev/null
   return 0
