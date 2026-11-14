@@ -977,7 +977,10 @@ pub x86_isel_plan := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(
 ## The fixed-array parameter boundary on x86_64 (`ir::ap_plan_begin`, #1641's review): a function with a
 ## fixed-array parameter is IR-built only when every function that may call it is selected here. A
 ## caller is tried exactly as `emit_program`'s loop treats it: a narrow-view signature or a variadic
-## function keeps its legacy emission under its own label, so it counts as a legacy caller. The tables
+## function keeps its legacy emission under its own label, so it counts as a legacy caller. An `@inline`
+## caller counts as one too (#1662): x86's legacy emitter expands its body into each legacy function that
+## calls it (`lower::inline_callee_idx`), so its call to the callee runs inside callers the plan never
+## relates to the callee, and the source text does not say which of them are legacy. The tables
 ## are reserved from `mar` like `SX_NV`'s; each trial runs in a scratch copy above them and is rewound.
 sx_ap_plan := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), mar : ptr(mut rt::Arena)) {
   mut m : rt::Arena = deref(mar)
@@ -994,6 +997,7 @@ sx_ap_plan := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), ma
         Some(r) => {
           d : Decl = deref(lower_ctx::decl_get(decls, r))
           mut ok := not ir::sig_has_narrow_view(src, d) and not lower_attrs::decl_is_variadic(d, src, deref(mar))
+            and not lower_attrs::fn_is_inline(src, d.name_start, d.name_len)
           if ok {
             sa : rt::Arena = deref(mar)
             fn0 := SX_FN

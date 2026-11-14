@@ -23,10 +23,10 @@ extract_used() {
     grep -ohE 'synth_ident_span\(pc, "[A-Za-z_][A-Za-z0-9_]*"' "$r"/src/parser.al
     # declarations looked up by a literal name for a call the source does not write
     grep -ohE '(decl_by_lit_name|mark_lit|named_op_decl_idx)\([^"]*"[A-Za-z_][A-Za-z0-9_]*"' "$r"/src/*.al "$r"/src/*/*.al
-    # a declaration chosen by comparing its own name with a literal
-    grep -ohE 'name_start\)?, *[A-Za-z0-9_.]+\) *== *"[A-Za-z_][A-Za-z0-9_]*"' "$r"/src/*.al "$r"/src/*/*.al
+    # a declaration chosen by comparing its own name with a literal (`==`, or `!=` guarding the pick)
+    grep -ohE 'name_start\)?, *[A-Za-z0-9_.]+\) *[=!]= *"[A-Za-z_][A-Za-z0-9_]*"' "$r"/src/*.al "$r"/src/*/*.al
     # the comparison route's callee names
-    awk '/^cmp_route_name := fn/{on=1} on && /return "[A-Za-z_]+"/{print} on && /^}/{exit}' "$r"/src/lower.al
+    awk '/^cmp_route_name := fn/{on=1} on && /return "[A-Za-z_][A-Za-z0-9_]*"/{print} on && /^}/{exit}' "$r"/src/lower.al
   } | grep -oE '"[A-Za-z_][A-Za-z0-9_]*"' | tr -d '"' | sort -u
 }
 
@@ -69,10 +69,18 @@ self_test() {
   printf '\nplanted := fn() -> bool { str_at((src + d.name_start), d.name_len) == "planted_pick" }\n' >> "$t/src/lower/mono.al"
   if check "$t" > /dev/null; then echo "self-test FAIL: a new literal-name pick passed"; fails=1; fi
   cp "$here/src/lower/mono.al" "$t/src/lower/mono.al"
+  # plant: a declaration picked by a literal name behind `!=` (#1662)
+  printf '\nplanted := fn() -> bool { str_at((src + d.name_start), d.name_len) != "planted_ne" }\n' >> "$t/src/lower/mono.al"
+  if check "$t" > /dev/null; then echo "self-test FAIL: a new literal-name pick behind != passed"; fails=1; fi
+  cp "$here/src/lower/mono.al" "$t/src/lower/mono.al"
+  # plant: the comparison route returns a name holding a digit (#1662)
+  sed -i.bak 's/return "lt" }/return "lt3" }/' "$t/src/lower.al"
+  if check "$t" > /dev/null; then echo "self-test FAIL: a comparison-route name with a digit passed"; fails=1; fi
+  cp "$here/src/lower.al" "$t/src/lower.al"
   # plant: a name dropped from the list
   sed -i.bak 's/nm == "index_set" or //' "$t/src/ir.al"
   if check "$t" > /dev/null; then echo "self-test FAIL: a name dropped from ap_synth_name passed"; fails=1; fi
-  if [ "$fails" = 0 ]; then echo "ir_ap_names self-test: OK (1 control, 3 plants)"; fi
+  if [ "$fails" = 0 ]; then echo "ir_ap_names self-test: OK (1 control, 5 plants)"; fi
   return "$fails"
 }
 
