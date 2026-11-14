@@ -324,8 +324,9 @@ arena_base := fn(a : ptr(mut rt::Arena)) -> usize { return unchecked bitcast(usi
 mut ROOT_MOD_S : usize = 0
 mut ROOT_MOD_L : usize = 0
 pub set_root_module := fn(s : usize, l : usize) -> i64 { ROOT_MOD_S = s ; ROOT_MOD_L = l ; return 0 }
-## #987 — the AMBIENT stdlib's module name spans, published by `driver::d_publish_lib_modules` from the
-## branch `push_module_name` built each name from: a `(mod_start, mod_len)` word-pair table of `n`
+## #987 — the AMBIENT stdlib's module name spans, published by `driver::d_publish_lib_modules` for the
+## files under the stdlib root the resolver loads from (`driver::d_path_is_ambient_lib`, the classifier
+## `check`'s trust shares): a `(mod_start, mod_len)` word-pair table of `n`
 ## words. A declaration is the standard library's when its own pair is in it — an identity, not a
 ## spelling, so a package's `src/alloc__vec.al` (also `alloc__vec`, Modules §6.6) is not. Unpublished
 ## (`n == 0`) answers false: whatever asks it fails closed.

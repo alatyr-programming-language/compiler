@@ -3480,27 +3480,38 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
 ## built from; the `__` that ends up in `std__io` is a CONSEQUENCE of it, not the fact itself, and a
 ## nested package submodule (`src/lower/place.al` → `lower__place`) carries the same consequence
 ## without being a library at all. Keep the two tests adjacent so the classes cannot drift apart.
-d_path_is_trusted_lib := fn(p : str) -> bool {
+d_path_is_trusted_lib := fn(in out a : rt::Arena, p : str, stdlib_root : str) -> bool {
   if dep_root_prefix(p) != 0 { return true }
-  d_path_is_ambient_lib(p)
+  d_path_is_ambient_lib(a, p, stdlib_root)
 }
 
-## The AMBIENT stdlib alone: the `/lib/` branch of `push_module_name`, never a dependency (whose alias
-## may spell the same mangled name: alias `alloc` with `src/vec.al` is `alloc__vec` too).
-d_path_is_ambient_lib := fn(p : str) -> bool {
+## The ONE stdlib root: the directory the import resolver loads every ambient module from
+## (`cli::lib_dir`, beside the running compiler), lexically normalized so `<root>/target/../lib` and
+## `<root>/lib` are one directory. Empty when it cannot be located; then nothing is ambient.
+d_stdlib_root := fn(in out a : rt::Arena) -> str {
+  ## bind before forwarding: an inline str-returning call as a str argument drops its length
+  ldir := cli::lib_dir(a)
+  if ldir.len == 0 { return ldir }
+  cli::normalize_path(a, ldir)
+}
+
+## The AMBIENT stdlib alone: a file under `stdlib_root` (`d_stdlib_root`), never a dependency (whose
+## alias may spell the same mangled name: alias `alloc` with `src/vec.al` is `alloc__vec` too).
+## #987 / #655 — identity comes from WHERE the file is, never from how its path is spelled: a user
+## file at `<anything>/lib/alloc__vec.al` listed on a direct build is named `alloc__vec` by
+## `push_module_name`'s `/lib/` branch, but it is not the standard library and is neither trusted by
+## `check` nor completed by lower. A path that does not normalize under the root (a relative
+## spelling of the real stdlib, say) fails closed: checked, and never completed.
+d_path_is_ambient_lib := fn(in out a : rt::Arena, p : str, stdlib_root : str) -> bool {
   if dep_root_prefix(p) != 0 { return false }
-  mut i : usize = 0
-  mut lib := false
-  while i + 5 <= p.len {
-    if bytes(p)[i] == 47 and str_at(unchecked bitcast(usize, p.ptr) + i, 5) == "/lib/" { lib = true }
-    i += 1
-  }
-  if lib == false { return false }
-  ## …but a `lib/` directory INSIDE the package's own source root is the package's own code, however
-  ## `push_module_name` chooses to name it. Trusting it would let anyone switch the type checker off
-  ## for part of their own package by naming a directory `lib`, and it would take `src/lib/thing.al`
-  ## (`test/package/dep_lib_nested`) out of the checked set it is in today. The ambient stdlib lives
-  ## at `<install>/lib/…`, outside every package's `source_dir`, so this costs it nothing.
+  if stdlib_root.len == 0 { return false }
+  np := cli::normalize_path(a, p)
+  if np.len <= stdlib_root.len + 1 { return false }
+  if str_at(unchecked bitcast(usize, np.ptr), stdlib_root.len) != stdlib_root { return false }
+  if bytes(np)[stdlib_root.len] != 47 { return false }
+  ## …and a file INSIDE the package's own source root is the package's own code, wherever it sits.
+  ## Trusting it would let anyone switch the type checker off for part of their own package, and it
+  ## would take `src/lib/thing.al` (`test/package/dep_lib_nested`) out of the checked set.
   not d_path_under_module_root(p)
 }
 
@@ -3528,13 +3539,14 @@ d_module_spans := fn(pv : rt::Vec, mod_start : rt::Vec, mod_len : rt::Vec, in ou
   n := rt::vec_len(pv)
   base := rt::bump(tar, n * 2 * 8 + 8)
   tbl := unchecked bitcast(ptr(mut u8), base)
+  root := d_stdlib_root(tar)
   mut c : usize = 0
   mut k : usize = 0
   while k < n {
     p := rt::svec_str_get(pv, k)
-    mut keep := d_path_is_trusted_lib(p)
+    mut keep := d_path_is_trusted_lib(tar, p, root)
     if ambient_only {
-      keep = d_path_is_ambient_lib(p)
+      keep = d_path_is_ambient_lib(tar, p, root)
     }
     if keep {
       rt::rec_set(tbl, c, rt::vec_get(mod_start, k))

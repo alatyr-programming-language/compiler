@@ -3811,8 +3811,10 @@ is_lib_module := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
 ## it; #655's "ten" is the only number in its report that the count does not bear out —
 ## in which a name bound nowhere passed `check` AND `build`. `driver::push_module_name` knows which
 ## of its three branches it took; `driver::d_publish_lib_modules` publishes the resulting name spans
-## of the trusted ones, and this asks that table. Membership is an exact `(start, len)` compare
-## against the pair the parser stamped on the Decl, so no substring is consulted at all.
+## of the trusted ones (a dependency, or a file under the stdlib root the resolver loads from — #987
+## made that a location test, `driver::d_path_is_ambient_lib`, not a `/lib/` substring), and this
+## asks that table. Membership is an exact `(start, len)` compare against the pair the parser stamped
+## on the Decl, so no substring is consulted at all.
 ##
 ## `SEMA_LIB_MODULES_SET` is deliberately separate from `_N`: "a table with no library module in it"
 ## (a package that imports no stdlib file) and "no table was published" (single-source `check`, whose

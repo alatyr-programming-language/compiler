@@ -5560,6 +5560,57 @@ issue516_root_module_test() {
   fi
 }
 
+## #987 / #655 — which files are the AMBIENT STANDARD LIBRARY is decided by where they are (under the
+## stdlib root the import resolver loads from), never by a `/lib/` in a user-supplied path. On a direct
+## multi-file build (`alatyr -o <exe> <file.al>...`, Tooling §4) a user file `<dir>/lib/alloc__vec.al`
+## or `<dir>/lib/alloc/vec.al` is named `alloc__vec`, but it is the user's code:
+##   lower — its generic `be.bget()` over `Box(E)` must NOT be completed into the explicit form, whose
+##           x86_64 answer is the wrong value 100 (#1654). Base's answer is a trap (139), which is
+##           acceptable; 42 is the answer once #1654 is fixed. NON-VACUOUS: PR #1650's head `4bfb6263`
+##           answers 100 on every spelling, default and `x86-legacy`.
+##   check — its body is type-checked like any user module (#655): an unbound name is refused at its
+##           line. NON-VACUOUS: on `4bfb6263` (and on `origin/main` `8c555b79`) the file was trusted,
+##           `check` skipped it, and the build failed only at the linker (rc 14, an undefined
+##           `badmod__unbound_name_987`).
+## The sources live in the row's private scratch directory, so no `test/*.al` corpus row is added.
+issue987_lib_spelling_test() {
+  local d="$T/issue987_lib_spelling"
+  rm -rf "$d"
+  mkdir -p "$d/app" "$d/mm/lib/alloc" || { echo "FAIL issue987_lib_spelling: scratch"; fail=1; return; }
+  local body="$E2E_TEST/package/issue987_user_module_alloc__vec_not_completed/src/alloc__vec.al"
+  cp "$body" "$d/mm/lib/alloc__vec.al" && cp "$body" "$d/mm/lib/alloc/vec.al" ||
+    { echo "FAIL issue987_lib_spelling: copy"; fail=1; return; }
+  printf '%s\n' 'main := fn() -> u64 { alloc__vec::run() }' > "$d/app/m_flat.al"
+  printf '%s\n' 'main := fn() -> u64 { alloc::vec::run() }' > "$d/app/m_nested.al"
+  local emit main lib exe got
+  for emit in default x86-legacy; do
+    for main in flat nested; do
+      lib="$d/mm/lib/alloc__vec.al"
+      [ "$main" = nested ] && lib="$d/mm/lib/alloc/vec.al"
+      exe="$d/$emit.$main.bin"
+      if [ "$emit" = default ]; then "$CC" -o "$exe" "$d/app/m_$main.al" "$lib" >/dev/null 2>&1
+      else "$CC" x86-legacy -o "$exe" "$d/app/m_$main.al" "$lib" >/dev/null 2>&1; fi
+      got=$?
+      if [ "$got" != 0 ]; then echo "FAIL issue987_lib_spelling/$emit/$main: build rc=$got"; fail=1; continue; fi
+      _e2e_exec "$exe" >/dev/null 2>&1; got=$?
+      if _e2e_runtime_failure "issue987_lib_spelling/$emit/$main" "$got"; then continue; fi
+      case "$got" in
+        42|139) echo "ok   issue987_lib_spelling/$emit/$main: a user lib/ file is not the stdlib ($got, no wrong value)" ;;
+        *) echo "FAIL issue987_lib_spelling/$emit/$main: got $got, want 42 (or #1654's trap 139); 100 = completed as stdlib"; fail=1 ;;
+      esac
+    done
+  done
+  printf '%s\n' 'pub run := fn() -> u64 { return unbound_name_987() }' > "$d/mm/lib/badmod.al"
+  printf '%s\n' 'main := fn() -> u64 { badmod::run() }' > "$d/app/m_bad.al"
+  local err="$d/bad.err"
+  "$CC" -o "$d/bad.bin" "$d/app/m_bad.al" "$d/mm/lib/badmod.al" >/dev/null 2>"$err"; got=$?
+  if [ "$got" = 1 ] && grep -qF "check: unbound name at line 1 in badmod" "$err"; then
+    echo "ok   issue987_lib_spelling/check: a user lib/ file is checked, its unbound name refused at its line (rc $got)"
+  else
+    echo "FAIL issue987_lib_spelling/check: rc=$got [$(head -3 "$err" 2>/dev/null)], want a located refusal in badmod.al"; fail=1
+  fi
+}
+
 ## Moved up from the fixture table: a helper must be defined ABOVE the driver's arming point
 ## or its rows cannot be scheduled (see `_e2e_check_armed`). Its CALL SITE did not move.
 check_ra_const_fold() {
@@ -13042,6 +13093,8 @@ run issue987_vec_ufcs_autoref 42
 ## #987 — `v[i].f = x` on a `Vec` is refused: `v[i]` is `at`, a value. NON-VACUOUS: on the parent
 ## `7bb90a3a` (x86_64) the build fails (rc 1) with an unrelated lowering message, without the needle.
 build_reject_has issue987_vec_index_field_write "a value, not a place"
+
+issue987_lib_spelling_test
 
 ## #1321 — `for x in xs` over struct/enum elements kept its hidden index at `slot(x) + stride`, which
 ## is the body's first local, so a body binding a local reset the index and the loop ran once.

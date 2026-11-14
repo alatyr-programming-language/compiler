@@ -1326,7 +1326,7 @@ line_in_set := fn(in out setbuf : rt::StrBuf, needle : str) -> bool {
 ## two spellings of the same directory normalize to one form — this DEDUPS a diamond dependency
 ## (reached two ways) and TERMINATES a dependency cycle (whose `..`-laden paths would otherwise keep
 ## differing and never match the seen-set). Preserves a leading `/` (absolute) vs none (relative).
-normalize_path := fn(in out a : rt::Arena, p : str) -> str {
+pub normalize_path := fn(in out a : rt::Arena, p : str) -> str {
   abs := p.len > 0 and bytes(p)[0] == 47
   mut out := rt::strbuf(a, p.len + 16)
   if abs { kk := rt::push_byte(out, 47) }
