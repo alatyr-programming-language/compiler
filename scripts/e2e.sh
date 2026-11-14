@@ -9016,6 +9016,14 @@ run ir_inout_agg_param 42
 run_a64 ir_inout_agg_param 42
 run_rv64 ir_inout_agg_param 42
 run_wat ir_inout_agg_param 42
+## #1626: fixed-array parameters and `s.arr` as array copy sources, built from the shared IR (Functions
+## §2.1, §4.1; Types §6.4); the parent answered 1 on x86_64, aarch64 and riscv64 and trapped (134) on wasm.
+## x86_64's default builds it from the IR too; `x86-legacy` still answers 1 (no legacy-x86 fix, #980),
+## a row of scripts/ir_diff.baseline.
+run ir_array_param 42
+run_a64 ir_array_param 42
+run_rv64 ir_array_param 42
+run_wat ir_array_param 42
 ## IR slice 4a (`docs/ir-slice-4.md`): `match` over integers (literal, range and `_` arms, #821) and over
 ## enum locals, built from the shared IR on every twin.
 run ir_match_scalar 42
