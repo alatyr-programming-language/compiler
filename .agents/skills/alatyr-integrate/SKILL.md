@@ -552,6 +552,11 @@ Then run `scripts/land.sh <pr>`. Every step is a check that stops on failure:
   instead of back to its author. This CHANGELOG half is transitional (#1566): a new entry is a
   `changelog.d/` fragment, which never conflicts, and the full gate refuses a line added under
   `## Unreleased`. Once no open PR adds one, the settling and the solo route are removed.
+  `scripts/e2e.sh` is the other append anchor: the queue's batch composer settles a conflict confined
+  to it, when both sides only add lines at one anchor, through `land.sh --settle-append-only`,
+  keeping both runs with main's first (#1390). A rewritten or deleted line, any other path, or a
+  counted registry such as `scripts/seed_forms.tsv` is refused there, in seconds, and goes back to
+  its author.
 - **PHASE 3b**, for a rebased delta only: the rebase is a hypothesis about `main`'s code, which can
   change what the PR's own fixtures do without moving a manifest row (#1215). land.sh builds the merge
   and walks the corpus alone (~15 min with the two self-builds); a walk that does not realise the rebased delta is

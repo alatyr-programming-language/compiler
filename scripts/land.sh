@@ -33,6 +33,12 @@
 #       `land-screen: pr=N head=SHA solo=yes|no link=<relation marker>` and exits 0 when the PR may be
 #       merged; solo=yes when it carries an oracle file or a predicted delta, which is gated alone.
 #       scripts/queue.sh (#1127) screens each queued PR this way before batching it.
+#   scripts/land.sh --settle-append-only <path>...
+#       PHASE 3's conflict settle alone, in a merge already in progress in this tree, for the queue's
+#       batch composer (#1390). Settles scripts/e2e.sh with land_append_only_merge, only when every
+#       hunk is a pure addition on both sides at one anchor; refuses every other path (CHANGELOG.md
+#       among them: entries are changelog.d fragments, #1566) and every other hunk, leaving the merge
+#       untouched for the caller to abort. Prints one sentence per settled path, for the merge message.
 #   ALATYR_LAND_EXPECT_HEAD=<sha>  refuse unless the fetched PR head is exactly <sha> (the queue's
 #                                  reviewed head)
 #   scripts/land.sh --self-test          exercise the PR-shape, provenance and oracle-commit deciders
@@ -68,7 +74,11 @@
 # edits the one `-merge` file, so PHASE 3 settles a conflict there; it also settles CHANGELOG.md when
 # both sides only added `## Unreleased` bullets, or main opened a release heading there (#1312), and
 # refuses every other conflict; on a clean merge too, a line the PR added that git filed under a release
-# heading moves back to `## Unreleased` (#1319). The merge message says so, and the PR's branch is never rewritten. The rebased rows are a hypothesis about main's code, not
+# heading moves back to `## Unreleased` (#1319). The merge message says so, and the PR's branch is never
+# rewritten. `scripts/queue.sh`'s batch composer settles the other append anchor, scripts/e2e.sh,
+# through `--settle-append-only <path>`, so a batch whose members only append `run` rows composes
+# instead of every second PR going back for a hand rebase (#1390); the queue writes no resolver of its own.
+# The rebased rows are a hypothesis about main's code, not
 # a fact (#1215), so PHASE 3b walks the corpus alone on the merge and refuses there when the walk does
 # not realise them. The gate then reads the rebased delta as the merged tree's own file, and PHASE 6a
 # commits what it realised.
@@ -418,6 +428,73 @@ land_changelog_merge() {
   printf '.\n'
 }
 
+## A pure-addition conflict in any other line-oriented file (#1390). `scripts/e2e.sh` is the case:
+## every PR appends its `run` rows at the end of the fixture list, so two of them collide at one
+## anchor and the batch sent both back for a hand rebase. The test is git's own, not a guess: in
+## `--diff3` output a hunk's base section holds every line the two sides could not agree on that
+## EXISTS in the base, so an EMPTY base section says both sides only inserted lines, at the same
+## anchor, and that neither deleted nor rewrote one. Any other hunk refuses. Keeps both runs, ours
+## first. Input: `git merge-file --diff3` output; the resolved file goes to stdout, `<hunks>` to
+## <summary>; a refusal names its hunk on stderr and exits 1.
+land_append_only_resolve() { # diff3-merged-file summary-file
+  awk -v sum="$2" '
+    function fail(m) { print "conflict hunk " h ": " m > "/dev/stderr"; bad = 1; exit 1 }
+    function resolve(   i) {
+      h++
+      if (nb > 0) fail("the base holds " nb " line(s): one side deleted or rewrote an existing line")
+      if (no == 0) fail("our side added nothing")
+      if (nt == 0) fail("their side added nothing")
+      for (i = 1; i <= no; i++) print o[i]
+      for (i = 1; i <= nt; i++) print t[i]
+    }
+    st == 0 && /^<<<<<<< / { st = 1; no = 0; nb = 0; nt = 0; next }
+    st == 1 && /^\|\|\|\|\|\|\| / { st = 2; next }
+    st == 1 && /^=======$/ { h++; fail("no base section (not diff3 output)") }
+    st == 2 && /^=======$/ { st = 3; next }
+    st == 3 && /^>>>>>>> / { resolve(); st = 0; next }
+    st == 1 { o[++no] = $0; next }
+    st == 2 { b[++nb] = $0; next }
+    st == 3 { t[++nt] = $0; next }
+    { print }
+    END {
+      if (bad) exit 1
+      if (st != 0) { print "the settled file ends inside a conflict hunk" > "/dev/stderr"; exit 1 }
+      if (h == 0) { print "no conflict hunk to settle" > "/dev/stderr"; exit 1 }
+      print h + 0 > sum
+    }' "$1"
+}
+## Settles ONE conflicted path in the merge in progress as a pure addition on both sides, stages it
+## and prints the sentence the merge message carries. 1 (the merge is left as it was, for the caller
+## to abort): a stage is missing (an add/add or a deletion), a side holds a line that looks like a
+## conflict marker, the resolver refused a hunk, or the settled file lost a line either side had.
+land_append_only_merge() { # path
+  local p="$1" d rc n
+  d="$(git rev-parse --absolute-git-dir)/land-append-only" && rm -rf "$d" && mkdir -p "$d" || return 1
+  git show ":1:$p" > "$d/base" 2>/dev/null && git show ":2:$p" > "$d/ours" 2>/dev/null &&
+    git show ":3:$p" > "$d/theirs" 2>/dev/null ||
+    { echo "  $p: not a content conflict (a side added or deleted the file)" >&2; rm -rf "$d"; return 1; }
+  ## git merge-file writes 7-character markers, and land_append_only_resolve reads them; a side that
+  ## already holds such a line would end a hunk early and pass the rest of it unchecked (#1312).
+  if grep -Eq '^(<{7}|[|]{7}|={7}|>{7})' "$d/base" "$d/ours" "$d/theirs"; then
+    echo "  $p: a line in base, ours or theirs looks like a conflict marker; settle it by hand" >&2
+    rm -rf "$d"; return 1
+  fi
+  git merge-file -p --diff3 -L ours -L base -L theirs "$d/ours" "$d/base" "$d/theirs" > "$d/merged"; rc=$?
+  if [ "$rc" -lt 0 ] || [ "$rc" -gt 127 ] || ! land_append_only_resolve "$d/merged" "$d/sum" > "$d/out"; then
+    rm -rf "$d"; return 1
+  fi
+  ## Every line each side had must still be in the settled file: the resolver's claim, checked
+  ## against its input rather than taken from it.
+  if comm -23 <(sort "$d/ours") <(sort "$d/out") | grep -q . ||
+     comm -23 <(sort "$d/theirs") <(sort "$d/out") | grep -q .; then
+    echo "  $p: the settled file lost a line one side had; settle it by hand" >&2
+    rm -rf "$d"; return 1
+  fi
+  cp "$d/out" "$p" && git add -- "$p" || { rm -rf "$d"; return 1; }
+  read -r n < "$d/sum"; rm -rf "$d"
+  printf '%s: %s conflict hunk(s) settled by scripts/land.sh (#1390): both sides added at the same\nanchor and neither deleted nor rewrote a line, so both runs are kept, ours first.\n' "$p" "$n"
+}
+
 ## A CLEAN CHANGELOG.md merge can misfile too (#1319): over a seed promotion that opened a release
 ## heading under `## Unreleased`, git puts a PR's added bullet where the old Unreleased content was,
 ## now under the release. This compares main's file with the merged one. Every run of lines the merge
@@ -584,6 +661,39 @@ oracle_commit_paths_check() { # changed-paths-of-the-oracle-commit
   echo "          {scripts/corpus.manifest}, or the gate on its parent is not a verdict on it."
   return 1
 }
+
+## `--settle-append-only <path>...` (#1390): a conflict settle for a merge the QUEUE has already
+## started and stopped on a conflict. Every fixture PR appends its `run` rows at the end of the list in
+## scripts/e2e.sh, so every second queued PR went back for a hand rebase. The queue calls this rather
+## than carry a resolver of its own, from the BASE's copy of this script (never the batch's), in the
+## tree its merge is in progress in. scripts/e2e.sh goes to land_append_only_merge, which accepts a hunk
+## only when its diff3 base section is empty. NOTHING ELSE IS ON THE LIST. CHANGELOG.md is not: an
+## entry is a changelog.d fragment (#1566), and the full gate refuses an added Unreleased line, so a
+## CHANGELOG conflict is a PR to rebase, not a batch to compose. Nor is a counted registry —
+## scripts/known-deviations.tsv, sorted and unique under `fixture_expect.sh --gate`, and
+## scripts/seed_forms.tsv, whose `# live-rows: N` must equal its parsed rows: keeping both sides means
+## re-sorting it and rewriting that declaration, a decision, not an addition. A path off the list, or a
+## hunk that deleted or rewrote a line, exits 1 with the reason and leaves the merge exactly as it was,
+## for the caller to abort; every path is checked against the list before any file is touched. Prints
+## one sentence per settled path.
+## It dispatches HERE, before attribution.sh is sourced: it needs nothing above it, and a tree that is
+## mid-merge holds the batch's copy of that file, which this script must not take (#1390).
+if [ "${1:-}" = '--settle-append-only' ]; then
+  shift; [ $# -gt 0 ] || die "use --settle-append-only <path>..."
+  git rev-parse -q --verify MERGE_HEAD >/dev/null || die "no merge in progress to settle"
+  for ap_path in "$@"; do
+    case "$ap_path" in scripts/e2e.sh) ;; *)
+      printf '  %s: not a file the append-only settle covers (#1390): only scripts/e2e.sh is, so keeping both sides here is a decision, not an addition\n' "$ap_path" >&2
+      exit 1 ;;
+    esac
+  done
+  for ap_path in "$@"; do
+    case "$ap_path" in
+      scripts/e2e.sh) land_append_only_merge "$ap_path" || exit 1 ;;
+    esac
+  done
+  exit 0
+fi
 
 ## ATTRIBUTION. The decider and the pattern live in `scripts/attribution.sh`, which the pre-commit
 ## hook sources too — one definition, so the hook and the landing gate can never disagree about the
