@@ -954,11 +954,11 @@ check_ir_build() {
   ## #1577, the qualified read: `std::sysno::MMAP` names a two-row library table. The `ir` verb now folds
   ## the guards before the prune, as the twins do, so the path is rewritten to its one row and kept.
   ## Inline, not a corpus fixture: wasm has no sysno row, so the program has no target-neutral result.
+  ## A read through a root alias (`sysno := std::sysno`) is refused with or without `when`: #1667.
   local q="$T/ir_issue1577_sysno.al"
   cat > "$q" <<'EOF'
-sysno := std::sysno
 mm := fn() -> usize { std::sysno::MMAP }
-mu := fn() -> usize { sysno::MUNMAP }
+mu := fn() -> usize { std::sysno::MUNMAP }
 main := fn() -> u64 { if mm() == 9 and mu() == 11 { return 42 } 1 }
 EOF
   "$CC" ir "$q" > "$rep" 2>/dev/null; rc=$?
