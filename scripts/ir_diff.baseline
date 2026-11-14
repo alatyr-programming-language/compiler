@@ -1,4 +1,4 @@
-5
+6
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -19,7 +19,14 @@
 #   legacy answers a value no arm computes, the default traps (`## expect(x86_64): trap`):
 #     test/issue1579_match_no_arm_traps.al              legacy run 255   default run 132  (#1579)
 #
-# ir_diff prints all five as UNEXPLAINED: its `oracle` (scripts/fixture_oracle.sh) reads only the
+# It was 5 and it is 6 because #1622's fixture is new (gate run 43468442478 on 51477418, part ir, the
+# only new row): legacy reads a narrow-element `Slice(T)` over its word-spaced array at T's own stride
+# (#1514, the silent wrong value this row records), while the default builds every function of the
+# program from the shared IR, lays the array out at the element's stride (Types §6.4) and answers the
+# fixture's `## expect: run 42`:
+#     test/issue1514_word_array_range_slice.al          legacy run 1     default run 42   (#1514)
+#
+# ir_diff prints all six as UNEXPLAINED: its `oracle` (scripts/fixture_oracle.sh) reads only the
 # legacy header shapes (`## build_reject`, `## Expected exit: N`) in the first 30 lines, never the
 # `## expect:` directive these files state. Every row is explained above, by its file's own directive.
 #

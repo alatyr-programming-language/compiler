@@ -86,7 +86,7 @@ ecallee_is := ast::ecallee_is
 ## The x86_64 selector over the SHARED IR (`src/lower/isel.al`, `docs/ir-slice-1.md` §4, slice 1d) — a
 ## CHILD module, reached whenever `X86_IR_SELECT` is on: the default since the slice-9 flip (#980);
 ## `alatyr x86-legacy` turns it off (owner decision D5).
-(x86_isel_try) := isel
+(x86_isel_try, x86_isel_plan) := isel
 ## COMPILE-TIME FOLDING (`src/lower/ctfold.al`) — a CHILD module under MOD-12. It is NOT called
 ## `comptime`: `comptime` is a KEYWORD, so `(…) := comptime` is a parse error, and a submodule named
 ## after it could never be imported by bare name (measured — see the file's header).
@@ -33279,6 +33279,10 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     deref(up) = rt::Vec(data = rt::bump(deref(mar), ucap * 8), len = 0, cap = ucap)
     UNCHECKED_INSTANCES = Option.Some(up)
   }
+  ## #1622: x86's narrow-view boundary (`x86_isel_plan`): which functions with a narrow-element view in
+  ## their signature get an IR-built copy. Its table is reserved here, before `emit_hw`, for the same
+  ## reason; a program with no such function (the self-host build) reserves nothing.
+  if X86_IR_SELECT { x86_isel_plan(decls, sb, src, mar) }
   emit_hw := mar.off
   ## slice 1c-β span-table cursors: `sp_n` = spans recorded so far, `sp_prev` = the byte offset at which
   ## the CURRENT (not-yet-closed) span began. Each boundary closes the previous span (writes its len) and

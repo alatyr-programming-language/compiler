@@ -4351,6 +4351,28 @@ pub is_view_type := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   }
   true
 }
+## A signature's type as spelled. The parser records a parameter's or a result's type by its HEAD
+## (`Slice` of `Slice(T)`, as `fn_returns_slice` reads it); this extends a `Slice` head across the
+## balanced `(…)` that follows it in `src`, so `view_elem_span` sees the element (#1622). Any other span,
+## a whole one included, comes back unchanged.
+pub sig_type_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
+  if tl != 5 or str_at((src + ts), 5) != "Slice" { return LSpan(s = ts, n = tl) }
+  mut i := ts + tl
+  while str_at((src + i), 1) == " " { i = i + 1 }
+  if str_at((src + i), 1) != "(" { return LSpan(s = ts, n = tl) }
+  mut depth : usize = 0
+  loop {
+    c := str_at((src + i), 1)
+    if c == "(" { depth = depth + 1 }
+    else if c == ")" {
+      depth = depth - 1
+      if depth == 0 { return LSpan(s = ts, n = i + 1 - ts) }
+    }
+    else if c == "\n" or c == "{" or c == "=" { return LSpan(s = ts, n = tl) }
+    i = i + 1
+  }
+  LSpan(s = ts, n = tl)
+}
 ## The element type written in a slice view annotation, `[T]` or `Slice(T)`, trimmed of spaces.
 ## `{0,0}` for any other type, `str` included: its element is not spelled (#1576).
 pub view_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {

@@ -594,6 +594,8 @@ sw_call := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool
   match cdo {
     Some(cd) => {
       if not cd.is_fn or cd.name_len == 0 or wat_ovl_is_marked(cd.name_start) { return false }
+      ## A narrow-element view: the legacy emitter steps it by the word (`ir::sig_has_narrow_view`, #1622).
+      if ir::sig_has_narrow_view(x.src, cd) { return false }
       n := ir::i_n(ip)
       mut j : usize = 0
       while j < n {
@@ -753,6 +755,8 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
 ## Select function `f` (declaration `d`) into `sb`. Answers false when the function is refused.
 sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> bool {
   if wat_ovl_is_marked(d.name_start) { return false }
+  ## A narrow-element view in the signature: legacy callers step it by the word (#1622).
+  if ir::sig_has_narrow_view(x.src, d) { return false }
   ## Slice 3w: frame objects live on the shadow stack in linear memory (`docs/ir.md` §6), laid out from
   ## `fp`, the value of the module's `$__sp` at entry. This first step does not pop the frame on return:
   ## the legacy emitter bump-allocates the same way and never reclaims, and a legacy callee may hand back

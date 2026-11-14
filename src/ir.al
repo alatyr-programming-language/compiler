@@ -451,6 +451,13 @@ pub wb_pop := fn(w : ptr(mut WBuf)) -> bool {
   deref(w).len = n - 1
   true
 }
+## Replace element `i`. Answers false when `i` is past the length.
+pub wb_set := fn(w : ptr(mut WBuf), i : usize, x : usize) -> bool {
+  wv : WBuf = deref(w)
+  if i >= wv.len { return false }
+  deref(word_at(wv.data, i)) = x
+  true
+}
 ## Replace the last element. Answers false on an empty buffer.
 pub wb_set_top := fn(w : ptr(mut WBuf), x : usize) -> bool {
   wv : WBuf = deref(w)
@@ -2062,6 +2069,50 @@ pub put_fn_symbol := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
   ## The name goes through the ONE symbol table above, not verbatim: an operator-glyph name would
   ## otherwise reach the assembler raw (#475).
   put_symbol_name(sb, src, d.name_start, d.name_len)
+}
+
+## Whether `d` returns a view (`str`, `[T]`, `Slice(T)`) — the result the twins' legacy emitters hand
+## back as the ADDRESS of the pair in x0/a0, where the IR's twin convention returns the pair's two words
+## in x0/x1 or a0/a1 (#1622). x86 legacy and IR agree on rax/rdx, and wasm both ways returns an address,
+## so only the twins' selectors ask: they leave a function returning a view, and a function calling one,
+## to the legacy emitter, which keeps both ends of every such call on one convention.
+pub ret_is_view := fn(src : ptr(u8), d : Decl) -> bool {
+  rt := lower_layout::sig_type_span(src, d.ret_ts, d.ret_tl)
+  lower_layout::is_view_type(src, rt.s, rt.n) or lower_layout::view_elem_span(src, rt.s, rt.n).n != 0
+}
+
+## Whether the view type spelled `[ts, ts+tl)` (a signature's head span included) has an element whose
+## IR stride is not the 8-byte word: the element's own size (Types §6.4) is what the IR steps, while
+## every legacy emitter keeps such an array one word per element, and the aarch64, riscv64 and wasm ones
+## step a `Slice(T)` by the word (measured, #1622). Any other type answers false.
+view_is_narrow := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  if tl == 0 { return false }
+  tw := lower_layout::sig_type_span(src, ts, tl)
+  el := lower_layout::view_elem_span(src, tw.s, tw.n)
+  el.n != 0 and lower_layout::scalar_byte_size(src, el.s, el.n) != 8
+}
+## Whether `d`'s signature carries a narrow-element view (`view_is_narrow`) as a parameter or the result:
+## a call across it would hand one side's element stride to the other. The aarch64, riscv64 and wasm
+## selectors leave such a function, and a call to one, to the legacy emitter (#1622). x86_64 asks too:
+## its legacy emitter agrees with the IR on some readers of a narrow view (`s[i]`, `for x in s` on the
+## parameter itself) but not on others (a re-slice `s[lo..hi]` of a view parameter steps the word,
+## measured on #1651), so no such view crosses between an IR-built and a legacy-emitted function. The
+## function keeps its legacy emission under its own label, and an IR-built copy of it, under a label only
+## IR-built callers name, is emitted when the whole IR-built side closes (`lower::isel`'s `x86_isel_plan`).
+pub sig_has_narrow_view := fn(src : ptr(u8), d : Decl) -> bool {
+  if view_is_narrow(src, d.ret_ts, d.ret_tl) { return true }
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(ast::param_p(pq))
+        if view_is_narrow(src, pm.ts, pm.tl) { return true }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
 }
 
 ## Build declaration `di` of `decls` and verify it, for a selector.
