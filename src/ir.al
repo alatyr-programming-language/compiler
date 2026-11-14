@@ -51,8 +51,10 @@ pub Cc := enum { CcEq, CcNe, CcLt, CcLe, CcGt, CcGe, CcNone }
 pub TrapKind := enum { TkOverflow, TkDivZero, TkDivOverflow, TkShiftRange, TkNarrow, TkBounds, TkMatchNoArm, TkUnwrap, TkRequire, TkPanic, TkNone }
 
 ## An operand's kind. `OkFn` names a function of the same IR program by its index (a call V8 can
-## check); `OkSym` names a symbol outside the program (a legacy-emitted function, a global).
-pub OpndK := enum { OkNone, OkVReg, OkImm, OkFrame, OkSym, OkFn, OkLabel }
+## check); `OkSym` names a symbol outside the program (a legacy-emitted function, a global); `OkLit`
+## names a `str` literal's read-only bytes by its index in the program's literal table (`prog_lit`), the
+## `addr @rodata` of `docs/ir.md` §4 (#1576).
+pub OpndK := enum { OkNone, OkVReg, OkImm, OkFrame, OkSym, OkFn, OkLabel, OkLit }
 
 ## The operations (§3.4). Regions: `block`, `loop`, `if`, `unchecked` open one, `else` separates an
 ## `if`'s arms, `end` closes the innermost. `mov` assigns a vreg from another (vregs are variables,
@@ -181,16 +183,16 @@ pub vrule_is_ok := fn(r : VRule) -> bool {
   match r { VOk => { true }; V1 | V2 | V3 | V4 | V5 | V6 | V7 | V8 | V9 | V10 => { false } }
 }
 opndk_is_vreg := fn(k : OpndK) -> bool {
-  match k { OkVReg => { true }; OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => { false } }
+  match k { OkVReg => { true }; OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { false } }
 }
 opndk_is_none := fn(k : OpndK) -> bool {
-  match k { OkNone => { true }; OkVReg | OkImm | OkFrame | OkSym | OkFn | OkLabel => { false } }
+  match k { OkNone => { true }; OkVReg | OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { false } }
 }
 pub opndk_is_frame := fn(k : OpndK) -> bool {
-  match k { OkFrame => { true }; OkNone | OkVReg | OkImm | OkSym | OkFn | OkLabel => { false } }
+  match k { OkFrame => { true }; OkNone | OkVReg | OkImm | OkSym | OkFn | OkLabel | OkLit => { false } }
 }
 opndk_is_fn := fn(k : OpndK) -> bool {
-  match k { OkFn => { true }; OkNone | OkVReg | OkImm | OkFrame | OkSym | OkLabel => { false } }
+  match k { OkFn => { true }; OkNone | OkVReg | OkImm | OkFrame | OkSym | OkLabel | OkLit => { false } }
 }
 
 ## The textual mnemonic of an op.
@@ -526,7 +528,10 @@ pub IrFn := struct {
 ## A program: its functions, in order (an `OkFn` operand is an index into `fns`), and the symbols its
 ## `OkSym` operands name — a function or a global outside the program, identified by its declaration.
 ## `syms` holds three words per symbol: the declaration's index, its name's address and its length.
-pub IrProg := struct { fns : ptr(mut WBuf), syms : ptr(mut WBuf) }
+## `lits` holds three words per `str` literal an `OkLit` operand names: the address of its DECODED bytes
+## (the builder decodes the source escapes once, `lower_layout::str_lit_byte`), their count, and the
+## parser's label of the literal.
+pub IrProg := struct { fns : ptr(mut WBuf), syms : ptr(mut WBuf), lits : ptr(mut WBuf) }
 
 ## ── the way back out of a WBuf word: one accessor per record type ──
 ## unchecked-ok: `fn_ptr` reads back a word `prog_add` pushed from a `ptr(mut IrFn)`.
@@ -541,7 +546,44 @@ frame_ptr := fn(w : usize) -> ptr(mut Frame) { unchecked bitcast(ptr(mut Frame),
 pub prog_new := fn(in out a : rt::Arena) -> IrProg {
   fw := wb_new(a, 8)
   sw := wb_new(a, 24)
-  IrProg(fns = fw, syms = sw)
+  lw := wb_new(a, 8)
+  IrProg(fns = fw, syms = sw, lits = lw)
+}
+## A `str` literal whose `n` decoded bytes sit at `b`, as the operand `addr` names it by (#1576).
+## `lbl` is the parser's label of the literal, unique in the program (the wasm selector places the bytes
+## by it, where the legacy emitter places a print literal's).
+pub prog_lit := fn(p : IrProg, in out a : rt::Arena, b : ptr(u8), n : usize, lbl : usize) -> Opnd {
+  k := wb_len(p.lits) / 3
+  ## unchecked-ok: a literal's byte address is kept as its WBuf word; `lit_bytes` is the only way back.
+  k1 := wb_push(p.lits, a, unchecked bitcast(usize, b))
+  k2 := wb_push(p.lits, a, n)
+  k3 := wb_push(p.lits, a, lbl)
+  Opnd(k = OpndK.OkLit, v = i64(k))
+}
+## The decoded bytes of literal `k` (an `OkLit` operand's value), for a selector to emit.
+pub lit_bytes := fn(p : IrProg, k : usize) -> str {
+  ## unchecked-ok: the word `prog_lit` stored from the literal's byte address.
+  bq : ptr(u8) = unchecked bitcast(ptr(u8), wb_get(p.lits, k * 3))
+  str_at(bq, wb_get(p.lits, k * 3 + 1))
+}
+## The parser's label of literal `k`.
+pub lit_label := fn(p : IrProg, k : usize) -> usize { wb_get(p.lits, k * 3 + 2) }
+pub prog_nlits := fn(p : IrProg) -> usize { wb_len(p.lits) / 3 }
+## Literal `k`'s bytes as assembler `.byte` lines, sixteen to a line (the three assembly selectors' one
+## spelling of a literal's data; its label and section are theirs).
+pub put_lit_data := fn(in out sb : rt::StrBuf, p : IrProg, k : usize) {
+  s := lit_bytes(p, k)
+  bs := bytes(s)
+  mut i : usize = 0
+  while i < s.len {
+    if i % 16 == 0 { put(sb, "  .byte ") } else { put(sb, ", ") }
+    put_u(sb, usize(bs[i]))
+    if i % 16 == 15 or i + 1 == s.len { put(sb, "\n") }
+    i = i + 1
+  }
+}
+pub opndk_is_lit := fn(k : OpndK) -> bool {
+  match k { OkLit => { true }; OkNone | OkVReg | OkImm | OkFrame | OkSym | OkFn | OkLabel => { false } }
 }
 ## The symbol of declaration `decl` named `[name_p, name_p+name_n)`, added on first use.
 pub prog_sym := fn(p : IrProg, in out a : rt::Arena, decl : usize, name_p : ptr(u8), name_n : usize) -> SymId {
@@ -784,6 +826,7 @@ put_opnd := fn(in out sb : rt::StrBuf, p : IrProg, k : OpndK, v : i64) {
     OkSym => { put_sym_opnd(sb, p, v) }
     OkFn => { put_fn_opnd(sb, p, v) }
     OkLabel => { put(sb, "L"); put_i(sb, v) }
+    OkLit => { put(sb, "@str"); put_i(sb, v) }
   }
 }
 put_a := fn(in out sb : rt::StrBuf, p : IrProg, ip : ptr(mut IrInst)) { put_opnd(sb, p, i_ak(ip), i_av(ip)) }
@@ -1015,15 +1058,16 @@ val_ok := fn(f : ptr(mut IrFn), k : OpndK, v : i64, ty : Kty) -> bool {
   match k {
     OkVReg => { vreg_in(f, v) and kty_eq(vreg_ty(f, usize(v)), ty) }
     OkImm => { kty_is_int(ty) or kty_is_bool(ty) or kty_is_ptr(ty) }
-    OkNone | OkFrame | OkSym | OkFn | OkLabel => { false }
+    OkNone | OkFrame | OkSym | OkFn | OkLabel | OkLit => { false }
   }
 }
-## An ADDRESS operand: a `ptr` vreg, a frame object, or a symbol.
+## An ADDRESS operand: a `ptr` vreg, a frame object, a symbol, or a literal's bytes.
 addr_ok := fn(f : ptr(mut IrFn), k : OpndK, v : i64) -> bool {
   match k {
     OkVReg => { vreg_in(f, v) and kty_is_ptr(vreg_ty(f, usize(v))) }
     OkFrame => { v >= 0 and usize(v) < fn_nframes(f) }
     OkSym => { true }
+    OkLit => { v >= 0 }
     OkNone | OkImm | OkFn | OkLabel => { false }
   }
 }
@@ -2106,7 +2150,8 @@ pub ret_is_view := fn(src : ptr(u8), d : Decl) -> bool {
 ## Whether the view type spelled `[ts, ts+tl)` (a signature's head span included) has an element whose
 ## IR stride is not the 8-byte word: the element's own size (Types §6.4) is what the IR steps, while
 ## every legacy emitter keeps such an array one word per element, and the aarch64, riscv64 and wasm ones
-## step a `Slice(T)` by the word (measured, #1622). Any other type answers false.
+## step a `Slice(T)` by the word (measured, #1622). Any other type answers false; a `str`, whose legacy
+## x86_64 bytes sit at stride 1 as the IR's do, is `sig_pins_legacy`'s.
 view_is_narrow := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   if tl == 0 { return false }
   tw := lower_layout::sig_type_span(src, ts, tl)
@@ -2136,6 +2181,31 @@ pub sig_has_narrow_view := fn(src : ptr(u8), d : Decl) -> bool {
   }
   false
 }
+## Whether `d`'s signature keeps it, and every call to it, to the legacy emitter on aarch64, riscv64 and
+## wasm: a narrow-element view (`sig_has_narrow_view`), or a `str` (#1576). Those legacy emitters build
+## no `str` value at all (each `str` expression is a trapping stub, measured), so the convention they
+## would hand one across is unmeasured, and no `str` crosses there. x86_64 does not ask: its legacy
+## emitter, as the IR does, passes a `str` parameter as one word (the address of its `{ptr, len}` pair)
+## and returns a `str` as the pair in two words, over bytes at stride 1, so a `str` crosses there like a
+## word-element view. A parameter past the six argument registers never crosses: `lower::isel` refuses
+## a call or a function that would pass one.
+pub sig_pins_legacy := fn(src : ptr(u8), d : Decl) -> bool {
+  if sig_has_narrow_view(src, d) or type_is_str(src, d.ret_ts, d.ret_tl) { return true }
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(ast::param_p(pq))
+        if type_is_str(src, pm.ts, pm.tl) { return true }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+## Whether `[ts, ts+tl)` spells `str`.
+type_is_str := fn(src : ptr(u8), ts : usize, tl : usize) -> bool { tl == 3 and str_at((src + ts), 3) == "str" }
 
 ## ── the fixed-array parameter boundary (#1626; #1641's review, B1 and B2) ──
 ##

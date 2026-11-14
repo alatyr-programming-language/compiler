@@ -58,7 +58,7 @@ sa_ld := fn(in out sb : rt::StrBuf, reg : str, k : ir::OpndK, v : i64) -> bool {
   match k {
     OkVReg => { sa_ldv(sb, reg, usize(v)); true }
     OkImm => { sa_put(sb, "  ldr "); sa_put(sb, reg); sa_put(sb, ", ="); sa_int(sb, v); sa_put(sb, "\n"); true }
-    OkNone | OkFrame | OkSym | OkFn | OkLabel => { false }
+    OkNone | OkFrame | OkSym | OkFn | OkLabel | OkLit => { false }
   }
 }
 sa_lda := fn(in out sb : rt::StrBuf, reg : str, ip : ptr(mut ir::IrInst)) -> bool { sa_ld(sb, reg, ir::i_ak(ip), ir::i_av(ip)) }
@@ -67,7 +67,7 @@ sa_ldb := fn(in out sb : rt::StrBuf, reg : str, ip : ptr(mut ir::IrInst)) -> boo
 sa_dst := fn(ip : ptr(mut ir::IrInst)) -> Option(usize) {
   match ir::i_dk(ip) {
     OkVReg => { Option(usize).Some(usize(ir::i_dv(ip))) }
-    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => { Option(usize).None }
+    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { Option(usize).None }
   }
 }
 ## Store x11 into `ip`'s destination.
@@ -81,6 +81,23 @@ sa_st11 := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
 sa_lbl := fn(in out sb : rt::StrBuf, x : SaX, k : usize) { sa_put(sb, ".Lir"); sa_u(sb, x.fid); sa_put(sb, "_"); sa_u(sb, k) }
 sa_def_lbl := fn(in out sb : rt::StrBuf, x : SaX, k : usize) { sa_lbl(sb, x, k); sa_put(sb, ":\n") }
 sa_ret_lbl := fn(in out sb : rt::StrBuf, x : SaX) { sa_put(sb, ".Lir"); sa_u(sb, x.fid); sa_put(sb, "_ret") }
+## `.Lir<fn>_s<k>` — the label of the function's `str` literal `k` (#1576).
+sa_lit_lbl := fn(in out sb : rt::StrBuf, x : SaX, k : usize) { sa_put(sb, ".Lir"); sa_u(sb, x.fid); sa_put(sb, "_s"); sa_u(sb, k) }
+## The function's `str` literals, each its bytes under `sa_lit_lbl` in `.rodata` (see `lower::isel`'s
+## `sx_lits`).
+sa_lits := fn(in out sb : rt::StrBuf, x : SaX) {
+  n := ir::prog_nlits(x.p)
+  if n == 0 { return }
+  sa_put(sb, "  .pushsection .rodata\n")
+  mut k : usize = 0
+  while k < n {
+    sa_lit_lbl(sb, x, k)
+    sa_put(sb, ":\n")
+    ir::put_lit_data(sb, x.p, k)
+    k = k + 1
+  }
+  sa_put(sb, "  .popsection\n")
+}
 
 ## `  brk #0 // trap <kind> <file>:<line>:<col>` (§3.6).
 sa_trap := fn(in out sb : rt::StrBuf, x : SaX, tk : ir::TrapKind, ip : ptr(mut ir::IrInst)) {
@@ -355,12 +372,24 @@ sa_sym_decl := fn(x : SaX, ip : ptr(mut ir::IrInst)) -> Option(Decl) {
       d : Decl = deref(lower_ctx::decl_get(x.decls, di))
       Option(Decl).Some(d)
     }
-    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel => { Option(Decl).None }
+    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel | OkLit => { Option(Decl).None }
   }
 }
 ## `addr @g` of a module scalar: the address of the `.quad` cell `emit_a64_program` gives it, under
 ## the target's existing global naming (its bare name). A symbol without such a cell is refused.
+##
+## `addr @str<k>` of a `str` literal (#1576): the address of its bytes, which `sa_lits` emits after the
+## function under `sa_lit_lbl`.
 sa_addr := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
+  if ir::opndk_is_lit(ir::i_ak(ip)) {
+    k := usize(ir::i_av(ip))
+    sa_put(sb, "  adrp x11, ")
+    sa_lit_lbl(sb, x, k)
+    sa_put(sb, "\n  add x11, x11, :lo12:")
+    sa_lit_lbl(sb, x, k)
+    sa_put(sb, "\n")
+    return sa_st11(sb, ip)
+  }
   gdo : Option(Decl) = sa_sym_decl(x, ip)
   match gdo {
     Some(g) => {
@@ -392,7 +421,7 @@ sa_base := fn(in out sb : rt::StrBuf, x : SaX, reg : str, k : ir::OpndK, v : i64
       sa_put(sb, "\n  add "); sa_put(sb, reg); sa_put(sb, ", x29, "); sa_put(sb, reg); sa_put(sb, "\n")
       true
     }
-    OkNone | OkImm | OkSym | OkFn | OkLabel => { false }
+    OkNone | OkImm | OkSym | OkFn | OkLabel | OkLit => { false }
   }
 }
 ## The memory operand `[x9, #off]` of a `width`-byte access whose base is in x9: the offset folded
@@ -505,8 +534,9 @@ sa_call := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool
     Some(cd) => {
       if not cd.is_fn or cd.name_len == 0 { return false }
       ## A view result (legacy returns its address, the IR its two words) or a narrow-element view (legacy
-      ## steps it by the word): `ir::ret_is_view`, `ir::sig_has_narrow_view` (#1622).
-      if ir::ret_is_view(x.src, cd) or ir::sig_has_narrow_view(x.src, cd) { return false }
+      ## steps it by the word) or a `str` (legacy builds none): `ir::ret_is_view`, `ir::sig_pins_legacy`
+      ## (#1622, #1576).
+      if ir::ret_is_view(x.src, cd) or ir::sig_pins_legacy(x.src, cd) { return false }
       sa_args(sb, x, ip)
       sa_put(sb, "  bl ")
       a64_emit_fn_label(sb, x.src, cd)
@@ -726,7 +756,7 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
         match ir::i_ak(ip) {
           OkVReg => { sa_ldv(sb, "x0", usize(ir::i_av(ip))) }
           OkNone => {}
-          OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+          OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { return false }
         }
       }
       sa_put(sb, "  b ")
@@ -753,8 +783,9 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
 ## written; the caller rewinds it — when the function is refused.
 sa_fn := fn(in out sb : rt::StrBuf, x : SaX, d : Decl, in out a : rt::Arena) -> bool {
   ## A view result (legacy callers expect its address, the IR returns its two words) or a narrow-element
-  ## view (legacy steps it by the word): `ir::ret_is_view`, `ir::sig_has_narrow_view` (#1622).
-  if ir::ret_is_view(x.src, d) or ir::sig_has_narrow_view(x.src, d) { return false }
+  ## view (legacy steps it by the word) or a `str` (legacy builds none): `ir::ret_is_view`,
+  ## `ir::sig_pins_legacy` (#1622, #1576).
+  if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.src, d) { return false }
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > 8 or nv > SA_MAX_VREGS { return false }
@@ -795,6 +826,7 @@ sa_fn := fn(in out sb : rt::StrBuf, x : SaX, d : Decl, in out a : rt::Arena) -> 
   if frame <= 504 { sa_put(sb, "  ldp x29, x30, [sp], #"); sa_int(sb, frame); sa_put(sb, "\n") }
   else { sa_put(sb, "  ldp x29, x30, [sp]\n  mov x9, #"); sa_int(sb, frame); sa_put(sb, "\n  add sp, sp, x9\n") }
   sa_put(sb, "  ret\n")
+  sa_lits(sb, x)
   true
 }
 

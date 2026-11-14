@@ -244,7 +244,7 @@ pub newnode := fn(a : ptr(mut rt::Arena), val : Expr) -> ptr(mut Expr) {
 ## missing / unopenable file FAILS LOUD (`panic` → non-zero build); an embed is never silently empty.
 ## (The embed label `embed_label_base + pc.nstr` assumes a program has < 500000 string literals — the
 ## renumber design already caps a module at 1000000; the whole compiler uses ~6.5k.)
-embed_label_base : usize = 500000
+pub embed_label_base : usize = 500000
 
 ## Build a `StrLit` for `embed(<path>)`: `[ps, ps+pn)` is the path's INNER span in `pc.src`. Reads the
 ## file's bytes into the compile arena via the PROVEN arena primitives (`node_alloc`/`node_ptr`, as

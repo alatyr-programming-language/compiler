@@ -4391,6 +4391,27 @@ pub str_esc_byte := fn(c : u8) -> u8 {
   if c == 34 { return 34 }
   return c
 }
+## One decoded byte of a `str` literal and the source bytes it took: a plain byte (1), a simple escape
+## `\<c>` (2, `str_esc_byte`), or `\xHH` (4) — the decoding `parser::scan_string` validated (Grammar
+## §2.4). Flat for the frozen seed (#912).
+pub LitByte := struct { b : u8, w : usize }
+## The byte at raw offset `i` of the literal whose raw inner bytes start at `src + ss`.
+pub str_lit_byte := fn(src : ptr(u8), ss : usize, i : usize) -> LitByte {
+  c := bytes(str_at((src + ss + i), 1))[0]
+  if c != 92 { return LitByte(b = c, w = 1) }
+  e := bytes(str_at((src + ss + i + 1), 1))[0]
+  if e != 120 { return LitByte(b = str_esc_byte(e), w = 2) }
+  mut v : u8 = 0
+  mut k : usize = 2
+  while k < 4 {
+    h := bytes(str_at((src + ss + i + k), 1))[0]
+    mut d : u8 = 0
+    if h >= 48 and h <= 57 { d = h - 48 } else if h >= 65 and h <= 70 { d = h - 55 } else if h >= 97 and h <= 102 { d = h - 87 }
+    v = v * 16 + d
+    k = k + 1
+  }
+  LitByte(b = v, w = 4)
+}
 ## The value of a decimal digit, or -1 when the byte is not one.
 pub dec_digit_val := fn(c : str) -> i64 {
   if c == "0" { return 0 }
