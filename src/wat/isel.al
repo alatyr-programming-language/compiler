@@ -843,3 +843,30 @@ pub wat_isel_try := fn(decls : ptr(rt::Vec), di : usize, gt : ptr(mut ir::WBuf),
     SiLegacy => { false }
   }
 }
+
+## The fixed-array parameter boundary (`ir::ap_plan_begin`, #1641's review), run once per program before
+## the declaration loop: a function with a fixed-array parameter is IR-built only when every function
+## that may call it is selected here (the wasm legacy caller passes some arrays by the value of their
+## first word, and its array copies are wrong: #1626). Each caller is tried with this selector and
+## rewound. The tables come from `a`, which the program loop then allocates past.
+pub wat_isel_plan := fn(decls : ptr(rt::Vec), gt : ptr(mut ir::WBuf), in out sb : rt::StrBuf, src : ptr(u8), in out a : rt::Arena) {
+  if not ir::ap_plan_begin(decls, src, a) { return }
+  mut first := true
+  while ir::ap_round(first) {
+    first = false
+    mut k : usize = 0
+    while k < ir::ap_edges() {
+      ro : Option(usize) = ir::ap_next_trial(k)
+      match ro {
+        Some(r) => {
+          mark := sb.len
+          ok := wat_isel_try(decls, r, gt, sb, src, a)
+          sb.len = mark
+          ir::ap_trial_result(k, ok)
+        }
+        None => {}
+      }
+      k = k + 1
+    }
+  }
+}

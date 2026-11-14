@@ -56,7 +56,7 @@ stmt_label_span := ast::stmt_label_span
 local_is_comptime := ast::binding_is_comptime
 (push_str, push_int) := rt
 ## The shared-IR instruction selector, a child module (`src/wat/isel.al`).
-(wat_isel_try) := isel
+(wat_isel_try, wat_isel_plan) := isel
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 variant_payload_type := lower_layout::variant_payload_type
@@ -8472,6 +8472,9 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
       }
     }
   }
+  ## #1641's review: which fixed-array parameter functions stay legacy (`wat_isel_plan`); its tables come
+  ## from `ga`, which the loop below allocates past.
+  wat_isel_plan(decls, gtab, sb, src, ga)
   for i in 0..cnt {
     d := deref(decl_get(decls, i))
     ## IR slice 1c: a function the shared IR builds and verifies is emitted by the selector

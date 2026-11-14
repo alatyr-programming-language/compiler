@@ -34,7 +34,7 @@ stmt_same := ast::stmt_same
 stmt_any := ast::stmt_any
 (push_str, push_int) := rt
 ## The shared-IR instruction selector, a child module (`src/riscv64/isel.al`).
-(rv_isel_try) := isel
+(rv_isel_try, rv_isel_plan) := isel
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
@@ -8271,7 +8271,9 @@ rv_emit_test_runner := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : pt
 }
 
 ## Emit a complete runnable RV64 GAS program: `_start` (call main, exit(a0)) + every fn + `.data`.
-pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), src_n : usize, a : rt::Arena) {
+pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), src_n : usize, a0 : rt::Arena) {
+  ## `a` advances past the fixed-array parameter plan's tables (`rv_isel_plan`), when it reserves any.
+  mut a := a0
   ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
   ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
   lower_layout::set_call_signedness_decls(decls)       ## #725: call operands take the callee's result signedness
@@ -8285,6 +8287,8 @@ pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : pt
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on another arch is neutered to an
   ## as-if-absent no-op here, so an arch-gated raw-`asm` body (`lib/std/thread.al`) never reaches `as`.
   apply_when_guards(decls, src, lower::ctfold::target_arch_name())
+  ## #1641's review: which fixed-array parameter functions stay legacy (`rv_isel_plan`).
+  rv_isel_plan(decls, sb, src, a)
   ## Each program emission gets a fresh deterministic label namespace. Within it, rv_next_label remains
   ## monotonic across functions, nested control flow, and generic re-emission.
   RV_NL = 0
