@@ -12,7 +12,9 @@
 ##
 ## Plus a gated inferred CONSTANT (the `:= … when …` binding-tail form): the FALSE `Arch.riscv64` decl
 ## (declared FIRST, value 100) is dropped and the TRUE `Arch.x86_64` decl (value 0) stays, so the name
-## `bonus` resolves to 0 — `answer() + bonus` = 42, not 142 (which an un-dropped first `bonus` would give).
+## `bonus` resolves to 0 — `answer() + u64(bonus)` = 42, not 142 (which an un-dropped first `bonus` would give).
+## `bonus` is an `i64` (an integer literal with no context, Types §9.1), so the sum converts it. Until #1577
+## the two `bonus` decls tied in sema's pick, the name went untyped, and the bare `answer() + bonus` passed.
 answer := fn() -> u64 when target.arch == Arch.x86_64 { return 42 }
 answer := fn() -> u64 when target.arch == Arch.aarch64 { return absent_on_x86() }
 
@@ -20,6 +22,6 @@ bonus := 100 when target.arch == Arch.riscv64
 bonus := 0 when target.arch == Arch.x86_64
 
 main := fn() -> u64 {
-  answer() + bonus
+  answer() + u64(bonus)
 }
 ## expect(x86_64): run 42

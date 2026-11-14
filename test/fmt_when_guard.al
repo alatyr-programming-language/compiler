@@ -8,7 +8,7 @@
 ##     Stopping at the first `{` truncated the guard, the render no longer parsed, and the SECOND fmt
 ##     pass segfaulted. The body brace is the last `{…}` group of the decl, not the first.
 ##   • a value-binding tail — `bonus := 100 when target.arch == Arch.riscv64`
-## Returns 42.
+## Returns 42. `bonus` is an `i64` (an integer literal with no context, Types §9.1), so `main` converts it.
 S := struct { a : u64, b : u64 }
 
 pick := fn(T : type, x : u64) -> u64 when match typeinfo(T) { Struct(_) => true; _ => false } { x }
@@ -20,5 +20,5 @@ bonus := 100 when target.arch == Arch.riscv64
 bonus := 20 when target.arch == Arch.x86_64
 
 main := fn() -> u64 {
-  answer() + bonus + pick(S, 0)
+  answer() + u64(bonus) + pick(S, 0)
 }

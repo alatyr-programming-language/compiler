@@ -7053,9 +7053,11 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## (Comptime §7.1), so a declaration gated on another architecture is already absent when reachability
   ## and the duplicate-label guard below look at the decls. A per-target table (`std::sysno`, owner
   ## decision D3) then keeps exactly its own row. Each emitter applies the same fold again (idempotent).
+  ## The `ir` verb (backend 3) folds for the target it reports for, as the emitters do: without it a
+  ## qualified read of a two-row name (`std::sysno::MMAP`) was neither rewritten nor kept by the prune,
+  ## and an alternative the target drops was still built and still tied with its partner (#1577).
   if backend == 0 { lower_layout::apply_when_guards(ptr(decls), base, wat::wat_target_arch()) }
-  if backend == 1 { lower_layout::apply_when_guards(ptr(decls), base, lower::ctfold::target_arch_name()) }
-  if backend == 2 { lower_layout::apply_when_guards(ptr(decls), base, lower::ctfold::target_arch_name()) }
+  if backend == 1 or backend == 2 or backend == 3 { lower_layout::apply_when_guards(ptr(decls), base, lower::ctfold::target_arch_name()) }
   ## Resolve `mod::fn` / `alias::fn` callees to the target decl's BARE name and prune the injected
   ## `lib/` closure to what the program reaches — without this the module-unaware backends cannot use
   ## any of the decls this front end just supplied. A single-module compile (nothing injected) skips
