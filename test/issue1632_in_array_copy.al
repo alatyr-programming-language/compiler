@@ -13,6 +13,8 @@
 ## Every function here is built from the shared IR on every target. A caller the IR cannot build still
 ## passes its array's address with no copy (the legacy emitters' missing `in` aggregate copy, #1637).
 ## Each check below answers its own number when it fails; all passing answers 42.
+## Expected exit 42. `x86-legacy` still answers 1 (no legacy-x86 fix, #980; the copy is #1637): a row
+## of scripts/ir_diff.baseline.
 ## expect: run 42
 mix := fn(xs : [u64; 3], in out ys : [u64; 3]) -> u64 {
   ys[0] = 100
