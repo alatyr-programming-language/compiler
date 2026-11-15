@@ -2645,7 +2645,7 @@ ib_st_is_folded := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
   lower_layout::is_niche_folded(ib_b_src(bp), st.s, st.n)
 }
 ## The folded shape's payload field: the whole word at byte 0, which IS the pointer (Types §6.2).
-ib_folded_comp_fld := fn() -> IbFld { IbFld(off = ByteOff(0), ty = Kty.KPtr, sg = Sgn.SgNone) }
+ib_folded_comp_fld := fn() -> IbFld { IbFld(off = ByteOff(0), ty = Kty.KPtr, sg = Sgn.SgNone, be = false) }
 ## The one-word layout of a niche-folded `Option(ptr(T))`, taken ONLY for the shape that claim rests
 ## on (Types §6.2/§8, Memory §4.2): exactly two variants, the one whose discriminant is the payload's
 ## null pattern (0) carrying NO components and the other exactly one, and `lower_layout`'s own byte
@@ -2791,10 +2791,11 @@ ib_enum_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s
     ib_store_field(bp, a, fr, ib_fld_plus(ib_tag_fld(), boff), tv)
   }
   ## The folded absent variant has no component to write, and its word is the null pattern: it is
-  ## WRITTEN, never assumed — the place may hold the pointer a previous `Some` left there.
+  ## WRITTEN, never assumed — the place may hold the pointer a previous `Some` left there. The store
+  ## is the one-word word-0 store the ordinary path already makes for a discriminant of 0.
   if folded and np == 0 {
-    zn := ib_konst(bp, a, IbKS(ty = Kty.KPtr, sg = Sgn.SgNone), 0)
-    ib_store_field(bp, a, fr, ib_fld_plus(ib_folded_comp_fld(), boff), zn)
+    zn := ib_konst(bp, a, ib_ks_i64(Sgn.SgS), 0)
+    ib_store_field(bp, a, fr, ib_fld_plus(ib_tag_fld(), boff), zn)
   }
   mut g : Option(ptr(mut Arg)) = ph
   mut i : usize = 0
