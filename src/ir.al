@@ -1954,7 +1954,14 @@ ap_report_note := fn(in out sb : rt::StrBuf, src : ptr(u8), di : usize, d : Decl
     }
     None => {}
   }
-  put(sb, ": IR-selected on a target only when every caller is (per-target fixpoint, not run here)\n")
+  put(sb, ": IR-selected on a target only when every caller is")
+  match AP_TREE {
+    Some(t) => {
+      if wb_get(t, di) == 1 { put(sb, ", and from a declaration the text does not name (a driver clone or lifted lambda, ir::ap_walk)") }
+    }
+    None => {}
+  }
+  put(sb, " (per-target fixpoint, not run here)\n")
 }
 ## How many built functions the verifier refused in this process (the `ir` verb exits 70 when any did).
 mut IR_VERIFY_FAILED : usize = 0
@@ -2193,6 +2200,10 @@ mut AP_ST : Option(ptr(mut WBuf)) = Option(ptr(mut WBuf)).None
 ## 1 selected, 2 refused).
 mut AP_EDGE : Option(ptr(mut WBuf)) = Option(ptr(mut WBuf)).None
 mut AP_MEMO : Option(ptr(mut WBuf)) = Option(ptr(mut WBuf)).None
+## Word `i` is 1 when the tree gave declaration `i` a caller whose name lies outside every source file —
+## a `__hoflam<N>` clone or a lifted lambda, which the text attributes to some other declaration (#1675).
+## `ap_report_note` says so beside the verdict, because `Built` alone would hide who calls it.
+mut AP_TREE : Option(ptr(mut WBuf)) = Option(ptr(mut WBuf)).None
 mut AP_MOVED : bool = false
 
 ## Whether `d` has a fixed-array parameter `xs : [T; N]` (`ast::Param.pmode` 1 with the literal `N` in
@@ -2310,6 +2321,7 @@ pub ap_plan_begin := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Aren
   AP_ST = Option(ptr(mut WBuf)).None
   AP_EDGE = Option(ptr(mut WBuf)).None
   AP_MEMO = Option(ptr(mut WBuf)).None
+  AP_TREE = Option(ptr(mut WBuf)).None
   false
 }
 ## `ap_plan_begin` over the source map `offs`/`lens` (the `ir` verb passes its own).
@@ -2318,6 +2330,7 @@ ap_plan_init := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, of
   AP_ST = Option(ptr(mut WBuf)).None
   AP_EDGE = Option(ptr(mut WBuf)).None
   AP_MEMO = Option(ptr(mut WBuf)).None
+  AP_TREE = Option(ptr(mut WBuf)).None
   cnt := rt::vec_len(deref(decls))
   mut any := false
   mut i : usize = 0
@@ -2329,6 +2342,7 @@ ap_plan_init := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, of
   if not any { return false }
   w := wb_new(a, cnt)
   m := wb_new(a, cnt)
+  t := wb_new(a, cnt)
   cands := wb_new(a, 8)
   i = 0
   while i < cnt {
@@ -2350,10 +2364,12 @@ ap_plan_init := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, of
     }
     k1 := wb_push(w, a, v)
     k2 := wb_push(m, a, 0)
+    k3 := wb_push(t, a, 0)
     i = i + 1
   }
   AP_ST = Option(ptr(mut WBuf)).Some(w)
   AP_MEMO = Option(ptr(mut WBuf)).Some(m)
+  AP_TREE = Option(ptr(mut WBuf)).Some(t)
   e := wb_new(a, 16)
   AP_EDGE = Option(ptr(mut WBuf)).Some(e)
   nc := wb_len(cands)
@@ -2433,6 +2449,28 @@ ap_tree_occur := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), 
   }
   q1 := wb_push(e, a, g)
   q2 := wb_push(e, a, di)
+  ## When the carrier's own name lies outside every source file the driver made it — a `__hoflam<N>`
+  ## clone, a lifted lambda — and the text scan attributes this call to some other declaration. The plan
+  ## now knows who calls it, and says so beside the verdict (#1675).
+  oso : Option(ptr(rt::Vec)) = IR_SM_OFFS
+  lso : Option(ptr(rt::Vec)) = IR_SM_LENS
+  match oso {
+    Some(offs) => {
+      match lso {
+        Some(lens) => {
+          mo : Option(u64) = module_of(gd.name_start, offs, lens)
+          match mo {
+            Some(_k) => {}
+            None => {
+              match AP_TREE { Some(tt) => { q := wb_set(tt, g, 1) }; None => {} }
+            }
+          }
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
 }
 ## Every candidate the name `[ns, ns+nl)` names, in declaration `di`'s tree (`ap_tree_occur`).
 ap_tree_name := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), cands : ptr(mut WBuf), src : ptr(u8), di : usize, ns : usize, nl : usize, call : bool, in out a : rt::Arena) {
