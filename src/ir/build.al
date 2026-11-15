@@ -4214,7 +4214,11 @@ ib_view_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), want
 ## A `str` literal (#1576): its decoded bytes enter the program's literal table (`prog_lit`), and the
 ## view is that entry's address and its byte length in a fresh object — docs/ir.md §4's `addr @rodata`
 ## plus a length. An `embed(path)` literal (label residue at or above `parser::embed_label_base`) is not
-## built: its bytes are not the source's.
+## built: its bytes are not the source's. Nor is a literal with a simple escape Grammar §2.4 does not
+## list, `\u{H…}` among them (#1676): the parser decodes it as the byte after the backslash, so building
+## it would turn the twins' StrLit trap (#1184) into that wrong length. The refusal, located at the
+## literal by `ib_view_value`, is lifted when the parser decodes `\u{…}` per Grammar §2.4 and refuses
+## the escapes §2.4 does not list.
 ib_view_strlit := fn(bp : ptr(mut IbB), in out a : rt::Arena, ss : usize, sl : usize, lbl : usize) -> Option(IbVObj) {
   if lbl % 1000000 >= parser::embed_label_base { return Option(IbVObj).None }
   src := ib_b_src(bp)
@@ -4224,6 +4228,7 @@ ib_view_strlit := fn(bp : ptr(mut IbB), in out a : rt::Arena, ss : usize, sl : u
   mut n : usize = 0
   while n < sl {
     lb : lower_layout::LitByte = lower_layout::str_lit_byte(src, ss, i)
+    if lb.w == 2 and not lower_layout::str_lit_esc_listed(src, ss, i) { return Option(IbVObj).None }
     k := rt::push_byte(sb, lb.b)
     i = i + lb.w
     n = n + 1

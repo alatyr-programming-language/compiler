@@ -1022,6 +1022,33 @@ EOF
      && grep -q '^  %0 = const.u i64 9$' "$rep" && grep -q 'sema_gaps=0 verify_failed=0$' "$rep"; then
     echo "ok   ir issue1577 std::sysno::MMAP: a qualified read of a two-row table builds as its x86_64 row"
   else echo "FAIL ir issue1577 std::sysno::MMAP: rc=$rc"; grep -E 'NotYet|sema_gaps|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
+  ## #1576 / #1676: the parser decodes `\u{E9}` as the letter `u` and four plain bytes, and accepts an
+  ## escape Grammar §2.4 does not list (`\q`) as its byte, so the builder refuses a `str` literal with
+  ## either, at the literal; building it would turn the twins' StrLit trap (#1184) into that wrong length.
+  ## Every escape §2.4 lists builds. Inline, not a corpus fixture: the program's answer is the wrong one
+  ## until #1676 is fixed. On `271a7116` all three functions were Built.
+  local se="$T/ir_str_escape.al"
+  cat > "$se" <<'EOF'
+u_esc := fn() -> usize {
+  s := "\u{E9}"
+  s.len
+}
+q_esc := fn() -> usize {
+  s := "a\qb"
+  s.len
+}
+ok_esc := fn() -> usize {
+  s := "\x41\n\t\r\0\\\'\"é"
+  s.len
+}
+main := fn() -> usize { u_esc() + q_esc() + ok_esc() }
+EOF
+  "$CC" ir "$se" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -qE '^fn ir_str_escape::u_esc NotYet\(.*ir_str_escape\.al:2:9\)$' "$rep" \
+     && grep -qE '^fn ir_str_escape::q_esc NotYet\(.*ir_str_escape\.al:6:9\)$' "$rep" \
+     && grep -q '^fn ir_str_escape::ok_esc Built$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir #1676 str escapes: a literal with \\u{…} or an unlisted escape refuses at the literal; the listed ones build"
+  else echo "FAIL ir #1676 str escapes: rc=$rc"; grep -E '^fn ir_str_escape::' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
   ## #1662: two callers the text attributes to another declaration. (a) A call inside a HOF `hof` that
   ## the driver clones for a capturing closure (`__hoflam<N>`) is also the clone's call, so `rd` is held
   ## on every target; the parent left it to the per-target rule. (b) x86's legacy emitter expands an

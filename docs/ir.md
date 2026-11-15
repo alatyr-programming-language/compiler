@@ -668,7 +668,9 @@ selector ever infers signedness, and there is no "unknown" default to drift.
   A `str` literal's bytes are one more such symbol: the builder decodes the literal's escapes once into
   the program's literal table, and `addr @str<k>` names entry `k` (#1576). Each selector places those
   bytes read-only — x86_64, aarch64 and riscv64 in `.rodata` under a label of the selected function,
-  wasm as a `(data …)` segment in the slab the legacy emitter keeps for the literal's label.
+  wasm as a `(data …)` segment in the slab the legacy emitter keeps for the literal's label. A literal
+  holding `\u{…}` or an escape Grammar §2.4 does not list is refused at the literal, because the parser
+  decodes such an escape as the byte after the backslash (#1676).
 
 **Aggregate temporaries are frame objects, one per use, never a shared pool.** Every aggregate value
 the program creates without naming it gets **its own** frame object, sized from `lower_layout` when
