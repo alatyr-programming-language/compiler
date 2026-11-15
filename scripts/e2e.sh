@@ -1061,6 +1061,36 @@ EOF
   if [ "$rc" = 0 ] && [ "$sel" = "main zr_mid zr_mid2 zr_rd2 " ]; then
     echo "ok   ir #1662 x86 @inline caller: zr_rd stays legacy behind an @inline caller; zr_rd2 is IR-selected"
   else echo "FAIL ir #1662 x86 @inline caller: rc=$rc selected=[$sel], want [main zr_mid zr_mid2 zr_rd2 ]"; fail=1; fi
+  ## #1675: the plan's caller edges come from the tree the emitters see, not only from the text. The
+  ## driver clones `hof` for the capturing closure `f` and names the clone `__hoflam<N>`; that clone has
+  ## no text of its own, so `ap_scan` sees the call to `rd` only in `hof`'s source. `ap_walk` walks the
+  ## clone's tree, finds it there, and says so on a line of its own beside the verdict — which stands:
+  ## `rd` stays held on every target (#1662) and the program still answers 42. The parent printed no such
+  ## line, and deleting `ap_walk` takes it away. Written here, not under test/, so the corpus manifest
+  ## gains no row.
+  local wtree="$T/ir20_tree"; mkdir -p "$wtree"
+  cat > "$wtree/ir20_tree.al" <<'EOF'
+rd := fn(xs : [u64; 3]) -> u64 { xs[2] }
+hof := fn(g : fn(u64) -> u64, v : u64) -> u64 {
+  a : [u64; 3] = [0, 4, v]
+  g(rd(a))
+}
+main := fn() -> u8 {
+  c : u64 = 2
+  f := fn(n : u64) -> u64 { return n + c }
+  u8(hof(f, 40))
+}
+EOF
+  "$CC" ir "$wtree/ir20_tree.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^## ir20_tree::rd: held to legacy on every target ' "$rep" \
+     && grep -q '^## ir20_tree::rd: the tree names a caller the text does not (a driver clone or lifted lambda; ir::ap_walk)$' "$rep" \
+     && grep -q '^fn ir20_tree::__hoflam' "$rep"; then
+    echo "ok   ir #1675 tree callers: the walk names the clone's call the text cannot; the verdict stands"
+  else echo "FAIL ir #1675 tree callers: rc=$rc"; grep -E '^## ir20_tree::' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
+  "$CC" -o "$wtree/ir20_tree" "$wtree/ir20_tree.al" >/dev/null 2>&1
+  _e2e_exec "$wtree/ir20_tree" >/dev/null 2>&1; rc=$?
+  if [ "$rc" = 42 ]; then echo "ok   ir #1675 tree callers: the program runs to 42 behind the held callee"
+  else echo "FAIL ir #1675 tree callers: ran to $rc, want 42"; fail=1; fi
 }
 
 check_ir_dev_verb() {
