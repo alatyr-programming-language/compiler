@@ -1,4 +1,4 @@
-7
+8
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -32,10 +32,17 @@
 # answers the fixture's `## expect: run 42`, as aarch64, riscv64 and wasm do:
 #     test/ir_array_param.al                            legacy run 1     default run 42   (#1626)
 #
+# It was 7 and it is 8 because #1632's fixture is new (gate run 43642090774 on 38751828, part ir, the
+# only new row): legacy passes an `in` array argument as the caller's own array, with no copy (#1637,
+# the legacy `in` aggregate copy), so `mix(a, a)` sees the write through its `in out` parameter in its
+# `in` one; the default builds the program from the shared IR, copies (Functions §4.1) and answers the
+# fixture's `## expect: run 42`, as aarch64, riscv64 and wasm do:
+#     test/issue1632_in_array_copy.al                   legacy run 1     default run 42   (#1637)
+#
 # ir_diff prints the first six as UNEXPLAINED: its `oracle` (scripts/fixture_oracle.sh) reads only the
 # legacy header shapes (`## build_reject`, `## Expected exit: N`) in the first 30 lines, never the
-# `## expect:` directive these files state. #1626's file also says `Expected exit 42` in its header,
-# so ir_diff attributes that row itself (LEGACY-WRONG; attributed=1 unexplained=6). Every row is
-# explained above, by its file's own directive.
+# `## expect:` directive these files state. #1626's and #1632's files also say `Expected exit 42` in
+# their headers, so ir_diff attributes those rows itself (LEGACY-WRONG; attributed=2 unexplained=6).
+# Every row is explained above, by its file's own directive.
 #
 # Lowering the number means fixing a row, not editing this file.

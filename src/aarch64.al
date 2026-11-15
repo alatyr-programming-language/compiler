@@ -579,7 +579,7 @@ a64_param_struct_nl := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), n
 }
 
 ## The ELEMENT type span of an explicit fixed-array PARAM `[ns,nl]` with positive static length, or
-## {0,0}. The parser stores the element in `pm.ts/pm.tl`, marks the parameter with `pmode == 1`, and
+## {0,0}. The parser stores the element in `pm.ts/pm.tl`, marks the parameter `ast::param_is_array`, and
 ## stores the static length in `pm.pps`; it does not store the source `[E; N]` annotation as a type span.
 ## Generic/slice/tuple parameters remain outside this bounded path.
 a64_param_arr_elem_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
@@ -590,7 +590,7 @@ a64_param_arr_elem_span := fn(params_head : Option(ptr(mut Param)), src : ptr(u8
       Some(pq) => {
         pm := deref(param_p(pq))
         if streq(src, pm.ns, pm.nl, ns, nl) {
-          if pm.pmode == 1 and pm.pps > 0 { r = CSpan(s = pm.ts, n = pm.tl) }
+          if param_is_array(pm) and pm.pps > 0 { r = CSpan(s = pm.ts, n = pm.tl) }
         }
         p = pm.next
       }
@@ -607,7 +607,7 @@ a64_param_fixed_array_len := fn(params_head : Option(ptr(mut Param)), src : ptr(
     match p {
       Some(pq) => {
         pm := deref(param_p(pq))
-        if streq(src, pm.ns, pm.nl, ns, nl) { if pm.pmode == 1 { r = i64(pm.pps) } }
+        if streq(src, pm.ns, pm.nl, ns, nl) { if param_is_array(pm) { r = i64(pm.pps) } }
         p = pm.next
       }
       None => { break }

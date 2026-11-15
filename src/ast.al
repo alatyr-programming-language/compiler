@@ -694,8 +694,9 @@ pub fld_any := fn(h : Option(ptr(mut FieldDecl))) -> bool {
 ##   0 = an ordinary value parameter (`in`/default) — a scalar passed by value, or an aggregate
 ##       passed by reference (the aggregate-ness is decided by the TYPE, not `pmode`);
 ##   1 = an ARRAY parameter `a : [T; N]` (`ts`/`tl` is the ELEMENT type span `T`; lower resolves
-##       the element layout/stride; the length `N` is not needed — access is a runtime index, no
-##       bounds check) — passed by reference like a struct;
+##       the element layout/stride; `pps` holds the literal length `N`), or a TUPLE parameter
+##       `t : (T0, …)` that shares the representation, with direction `in` (the default) — passed by
+##       reference to a caller-owned copy (Functions §4.1), an immutable binding (Memory §3.1);
 ##   2 = an `out` / `in out` SCALAR parameter (the `out`/`in out` modifier was present and the
 ##       type is not an array): passed BY REFERENCE (the slot holds a POINTER to the caller's
 ##       scalar) so a write `r = v` in the callee is visible to the caller. For an aggregate `out`
@@ -708,6 +709,12 @@ pub fld_any := fn(h : Option(ptr(mut FieldDecl))) -> bool {
 ##       call's trailing args into one contiguous block + passes a `{ptr, len}` slice; `bind_param`
 ##       binds it as a by-reference `[T]` slice (`ek 5`, `is_ref`, `snl 1`), identical to a
 ##       `Slice(T)` param — so `for x in name` / `name[i]` / `name.len()` read it uniformly.
+##   4 = the array-shaped parameter of `1` with direction `out` / `in out` (#1632): passed by
+##       reference to the CALLER's place (Functions §2.1, §4.1), its elements written in place. Until
+##       #1632 the parser folded every direction into `1`, so no reader could tell the two apart.
+## Ask `param_is_array` / `param_array_by_place` below, never `pmode` against a number, for the
+## array-shaped modes: the two values answer one question ("is this an array-shaped parameter")
+## and a reader that compared with `1` alone would silently drop the `out` / `in out` one.
 ## For a POINTER param `p : ptr([mut] T)`, `ts`/`tl` is `ptr` (so sema/lower see a pointer) and
 ## `pps`/`ppl` is the POINTEE type span `T` (0/0 for a non-pointer) — lower uses it so a
 ## `match deref(p)` over a `ptr(Enum)` resolves the enum's variants (the arena-AST shape).
@@ -719,7 +726,17 @@ pub Param := struct { ns : usize, nl : usize, next : Option(ptr(mut Param)), ts 
 pub param_p := fn(p : ptr(mut Param)) -> ptr(mut Param) { p }
 ## Is `pm` an `out` / `in out` parameter (`pmode` 2): bound to the caller's place by reference
 ## (Functions §2.1, §4.1)? The one spelling of that question; `pmode` stays a `u8` (`Param` is 8 words).
+## An array-shaped `out` / `in out` parameter (`pmode` 4) answers false here: its question is
+## `param_array_by_place`, because the readers of this one treat the slot as a scalar's or a named
+## aggregate's place.
 pub param_by_place := fn(pm : Param) -> bool { pm.pmode == 2 }
+## Is `pm` an array-shaped parameter (a fixed array `[T; N]` or a tuple), whatever its direction
+## (`pmode` 1 or 4)? `ts`/`tl` is then its element (first component) type and `pps` its literal
+## length (0 for a tuple).
+pub param_is_array := fn(pm : Param) -> bool { pm.pmode == 1 or pm.pmode == 4 }
+## Is `pm` an array-shaped `out` / `in out` parameter (`pmode` 4), bound to the caller's place and
+## written in place (Functions §2.1)? An `in` one (`pmode` 1) is an immutable copy.
+pub param_array_by_place := fn(pm : Param) -> bool { pm.pmode == 4 }
 pub param_any := fn(h : Option(ptr(mut Param))) -> bool { match h { Some(_q) => { true }; None => { false } } }
 pub param_at := fn(h : Option(ptr(mut Param)), msg : str) -> ptr(mut Param) {
   match h { Some(q) => { q }; None => { panic(msg) } }
