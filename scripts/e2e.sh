@@ -6669,6 +6669,15 @@ run_rv64 trap_checked_narrow_global_operand 133
 run_wat trap_checked_narrow_global_operand 134
 run inline_call 42
 run inline_stmt_body 42
+## #1664 — an `@inline` expansion emits the body's FINAL EXPRESSION, not the value its last
+## STATEMENT left behind (Control Flow §3, Functions §3.3/§3.4). The first is the issue's program:
+## `main` holds an `f64`, which the shared IR refuses (`expr FloatLit`), so the legacy emitter expands
+## `mid` inside it — it answered 2 on every x86 route before the fix. The second is the control with an
+## IR-built caller (`ib_inline_subst`, #1074), which already answered 42. The third chains two
+## `@inline` bodies, spells one with `return`, and ends one in a nominal-struct expression.
+run issue1664_inline_tail_value 42
+run issue1664_inline_tail_ir_caller 42
+run issue1664_inline_tail_shapes 42
 ## Proposal #3 / Codegen §3.5 — aggregate parameters and builtin `bytes(...)` must survive direct @inline expansion.
 run_x86 inline_aggregate_param 42
 check_accept inline_aggregate_param
