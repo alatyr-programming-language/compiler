@@ -2512,27 +2512,29 @@ ap_tree_occur := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), 
   }
   q1 := wb_push(e, a, g)
   q2 := wb_push(e, a, di)
-  ## When the carrier's own name lies outside every source file the driver made it — a `__hoflam<N>`
-  ## clone, a lifted lambda — and the text scan attributes this call to some other declaration. The plan
-  ## now knows who calls it, and says so beside the verdict (#1675).
-  oso : Option(ptr(rt::Vec)) = IR_SM_OFFS
-  lso : Option(ptr(rt::Vec)) = IR_SM_LENS
-  match oso {
-    Some(offs) => {
-      match lso {
-        Some(lens) => {
-          mo : Option(u64) = module_of(gd.name_start, offs, lens)
-          match mo {
-            Some(_k) => {}
-            None => {
-              match AP_TREE { Some(tt) => { q := wb_set(tt, g, 1) }; None => {} }
-            }
+  ## When the carrier has no written name the text can attribute this call to, the driver made it: a
+  ## lifted lambda carries `name_len` 0 with its `name_start` at the `fn` keyword, and a `__hoflam<N>`
+  ## clone's name lies outside every source file. The plan now knows who calls it, and says so beside
+  ## the verdict (#1675).
+  mut hidden := gd.name_len == 0
+  if not hidden {
+    oso : Option(ptr(rt::Vec)) = IR_SM_OFFS
+    lso : Option(ptr(rt::Vec)) = IR_SM_LENS
+    match oso {
+      Some(offs) => {
+        match lso {
+          Some(lens) => {
+            mo : Option(u64) = module_of(gd.name_start, offs, lens)
+            match mo { Some(_k) => {}; None => { hidden = true } }
           }
+          None => {}
         }
-        None => {}
       }
+      None => {}
     }
-    None => {}
+  }
+  if hidden {
+    match AP_TREE { Some(tt) => { q := wb_set(tt, g, 1) }; None => {} }
   }
 }
 ## Every candidate the name `[ns, ns+nl)` names, in declaration `di`'s tree (`ap_tree_occur`).
