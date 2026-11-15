@@ -1943,25 +1943,27 @@ pub report_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr
 ## the plan, so its report line is preceded by what the plan says, which `Built` alone would hide.
 ap_report_note := fn(in out sb : rt::StrBuf, src : ptr(u8), di : usize, d : Decl) {
   if not sig_has_fixed_array(d) { return }
+  mut seen := false
+  match AP_TREE { Some(t) => { seen = wb_get(t, di) == 1 }; None => {} }
   put(sb, "## ")
   put_qual_name(sb, src, d)
+  mut held := false
   match AP_ST {
-    Some(w) => {
-      if wb_get(w, di) == 2 {
-        put(sb, ": held to legacy on every target (a caller the plan cannot see; ir::ap_plan_begin)\n")
-        return
-      }
-    }
+    Some(w) => { if wb_get(w, di) == 2 { held = true } }
     None => {}
   }
-  put(sb, ": IR-selected on a target only when every caller is")
-  match AP_TREE {
-    Some(t) => {
-      if wb_get(t, di) == 1 { put(sb, ", and from a declaration the text does not name (a driver clone or lifted lambda, ir::ap_walk)") }
-    }
-    None => {}
+  if held {
+    put(sb, ": held to legacy on every target (a caller the plan cannot see; ir::ap_plan_begin)\n")
+  } else {
+    put(sb, ": IR-selected on a target only when every caller is (per-target fixpoint, not run here)\n")
   }
-  put(sb, " (per-target fixpoint, not run here)\n")
+  ## #1675: the walk found the call in a declaration the text cannot name — a `__hoflam<N>` clone, a
+  ## lifted lambda. The verdict above is unchanged; this says who else calls it.
+  if seen {
+    put(sb, "## ")
+    put_qual_name(sb, src, d)
+    put(sb, ": the tree names a caller the text does not (a driver clone or lifted lambda; ir::ap_walk)\n")
+  }
 }
 ## How many built functions the verifier refused in this process (the `ir` verb exits 70 when any did).
 mut IR_VERIFY_FAILED : usize = 0
