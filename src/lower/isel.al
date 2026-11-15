@@ -101,7 +101,7 @@ sx_ld := fn(in out sb : rt::StrBuf, r : SxR, k : ir::OpndK, v : i64) -> bool {
       sx_int(sb, v); sx_put(sb, ", "); sx_put(sb, sx_rq(r)); sx_put(sb, "\n")
       true
     }
-    OkNone | OkFrame | OkSym | OkFn | OkLabel => { false }
+    OkNone | OkFrame | OkSym | OkFn | OkLabel | OkLit => { false }
   }
 }
 sx_lda := fn(in out sb : rt::StrBuf, r : SxR, ip : ptr(mut ir::IrInst)) -> bool { sx_ld(sb, r, ir::i_ak(ip), ir::i_av(ip)) }
@@ -147,18 +147,18 @@ sx_bimm := fn(x : SxX, ip : ptr(mut ir::IrInst)) -> Option(i64) {
       if defs == 1 { return got }
       Option(i64).None
     }
-    OkNone | OkFrame | OkSym | OkFn | OkLabel => { Option(i64).None }
+    OkNone | OkFrame | OkSym | OkFn | OkLabel | OkLit => { Option(i64).None }
   }
 }
 ## Whether `q` writes vreg `v`.
 sx_defines := fn(q : ptr(mut ir::IrInst), v : usize) -> bool {
   match ir::i_dk(q) {
     OkVReg => { usize(ir::i_dv(q)) == v }
-    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => { false }
+    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { false }
   }
 }
 sx_bk_is_imm := fn(k : ir::OpndK) -> bool {
-  match k { OkImm => { true }; OkNone | OkVReg | OkFrame | OkSym | OkFn | OkLabel => { false } }
+  match k { OkImm => { true }; OkNone | OkVReg | OkFrame | OkSym | OkFn | OkLabel | OkLit => { false } }
 }
 sx_op_is_const := fn(o : ir::Op) -> bool {
   match o {
@@ -188,7 +188,7 @@ sx_alu := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), mn : str
 sx_dst := fn(ip : ptr(mut ir::IrInst)) -> Option(SxSlot) {
   match ir::i_dk(ip) {
     OkVReg => { Option(SxSlot).Some(sx_slot(usize(ir::i_dv(ip)))) }
-    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => { Option(SxSlot).None }
+    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { Option(SxSlot).None }
   }
 }
 ## Store %rax into `ip`'s destination.
@@ -205,6 +205,23 @@ SxAt := brand(usize)
 sx_lbl := fn(in out sb : rt::StrBuf, x : SxX, k : SxAt) { sx_put(sb, ".Lxir"); sx_u(sb, x.fid); sx_put(sb, "_"); sx_u(sb, usize(k)) }
 sx_def_lbl := fn(in out sb : rt::StrBuf, x : SxX, k : SxAt) { sx_lbl(sb, x, k); sx_put(sb, ":\n") }
 sx_ret_lbl := fn(in out sb : rt::StrBuf, x : SxX) { sx_put(sb, ".Lxir"); sx_u(sb, x.fid); sx_put(sb, "_ret") }
+## `.Lxir<fn>_s<k>` — the label of the function's `str` literal `k` (#1576).
+sx_lit_lbl := fn(in out sb : rt::StrBuf, x : SxX, k : usize) { sx_put(sb, ".Lxir"); sx_u(sb, x.fid); sx_put(sb, "_s"); sx_u(sb, k) }
+## The function's `str` literals, each its bytes under `sx_lit_lbl` in `.rodata` (read-only: a `str`'s
+## bytes are `[u8]`, not `[mut u8]`, Stdlib appendix §3.6).
+sx_lits := fn(in out sb : rt::StrBuf, x : SxX) {
+  n := ir::prog_nlits(x.p)
+  if n == 0 { return }
+  sx_put(sb, "  .pushsection .rodata\n")
+  mut k : usize = 0
+  while k < n {
+    sx_lit_lbl(sb, x, k)
+    sx_put(sb, ":\n")
+    ir::put_lit_data(sb, x.p, k)
+    k = k + 1
+  }
+  sx_put(sb, "  .popsection\n")
+}
 
 ## `  ud2 # trap <kind> <file>:<line>:<col>` (§3.6).
 sx_trap := fn(in out sb : rt::StrBuf, x : SxX, tk : ir::TrapKind, ip : ptr(mut ir::IrInst)) {
@@ -454,7 +471,7 @@ sx_cmp := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool 
 sx_sym_di := fn(x : SxX, ip : ptr(mut ir::IrInst)) -> Option(u64) {
   match ir::i_ak(ip) {
     OkSym => { Option(u64).Some(u64(ir::sym_decl(x.p, ir::SymId(usize(ir::i_av(ip)))))) }
-    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel => { Option(u64).None }
+    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel | OkLit => { Option(u64).None }
   }
 }
 ## The declaration a symbol operand names.
@@ -471,7 +488,16 @@ sx_sym_decl := fn(x : SxX, ip : ptr(mut ir::IrInst)) -> Option(Decl) {
 ## `addr @g` of a module scalar: the address of the `.data` cell `emit_program` gives it, under the
 ## legacy global naming (`emit_mangled_def`, as `emit_global_label` spells it). A symbol without such a
 ## cell — an immutable scalar the legacy emitter inlines — is refused.
+##
+## `addr @str<k>` of a `str` literal (#1576): the address of its bytes, which `sx_lits` emits after
+## the function under `sx_lit_lbl`.
 sx_addr := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
+  if ir::opndk_is_lit(ir::i_ak(ip)) {
+    sx_put(sb, "  leaq ")
+    sx_lit_lbl(sb, x, usize(ir::i_av(ip)))
+    sx_put(sb, "(%rip), %rax\n")
+    return sx_strax(sb, ip)
+  }
   gdo : Option(Decl) = sx_sym_decl(x, ip)
   match gdo {
     Some(g) => {
@@ -492,7 +518,7 @@ sx_base := fn(in out sb : rt::StrBuf, x : SxX, r : SxR, k : ir::OpndK, v : i64) 
       sx_put(sb, "  leaq "); sx_int(sb, i64(ir::wb_get(x.fobj, usize(v))) - x.ftop); sx_put(sb, "(%rbp), "); sx_put(sb, sx_rq(r)); sx_put(sb, "\n")
       true
     }
-    OkNone | OkImm | OkSym | OkFn | OkLabel => { false }
+    OkNone | OkImm | OkSym | OkFn | OkLabel | OkLit => { false }
   }
 }
 ## `store T [a + off], v`: the value's low `T`-width bytes (base in %rax, value in %rcx).
@@ -793,7 +819,7 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
         match ir::i_ak(ip) {
           OkVReg => { sx_ldv(sb, SxR.XrAx, sx_slot(usize(ir::i_av(ip)))) }
           OkNone => {}
-          OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+          OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { return false }
         }
       }
       sx_put(sb, "  jmp ")
@@ -873,6 +899,7 @@ sx_fn := fn(in out sb : rt::StrBuf, x : SxX, d : Decl, in out a : rt::Arena, nvc
   if ir::wb_len(x.stk) != 0 { return false }
   sx_ret_lbl(sb, x)
   sx_put(sb, ":\n  movq %rbp, %rsp\n  popq %rbp\n  ret\n")
+  sx_lits(sb, x)
   true
 }
 

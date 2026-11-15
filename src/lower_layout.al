@@ -4391,6 +4391,36 @@ pub str_esc_byte := fn(c : u8) -> u8 {
   if c == 34 { return 34 }
   return c
 }
+## One decoded byte of a `str` literal and the source bytes it took: a plain byte (1), a simple escape
+## `\<c>` (2, `str_esc_byte`), or `\xHH` (4) — the decoding `parser::scan_string` accepted. That
+## decoding follows Grammar §2.4 only where `str_lit_esc_listed` holds (#1676). Flat for the frozen
+## seed (#912).
+pub LitByte := struct { b : u8, w : usize }
+## The byte at raw offset `i` of the literal whose raw inner bytes start at `src + ss`.
+pub str_lit_byte := fn(src : ptr(u8), ss : usize, i : usize) -> LitByte {
+  c := bytes(str_at((src + ss + i), 1))[0]
+  if c != 92 { return LitByte(b = c, w = 1) }
+  e := bytes(str_at((src + ss + i + 1), 1))[0]
+  if e != 120 { return LitByte(b = str_esc_byte(e), w = 2) }
+  mut v : u8 = 0
+  mut k : usize = 2
+  while k < 4 {
+    h := bytes(str_at((src + ss + i + k), 1))[0]
+    mut d : u8 = 0
+    if h >= 48 and h <= 57 { d = h - 48 } else if h >= 65 and h <= 70 { d = h - 55 } else if h >= 97 and h <= 102 { d = h - 87 }
+    v = v * 16 + d
+    k = k + 1
+  }
+  LitByte(b = v, w = 4)
+}
+## Whether the escape `\<c>` at raw offset `i` (a backslash) is one of the simple escapes Grammar §2.4
+## lists: `\n \t \r \0 \\ \' \"`, the ones `str_esc_byte` decodes right. Any other `\<c>` is the byte
+## `c` to `parser::scan_string`: `\u{E9}` becomes the letter `u` and four plain bytes instead of the
+## code point, and an escape §2.4 does not list (`\q`) is accepted instead of refused (#1676).
+pub str_lit_esc_listed := fn(src : ptr(u8), ss : usize, i : usize) -> bool {
+  e := bytes(str_at((src + ss + i + 1), 1))[0]
+  e == 110 or e == 116 or e == 114 or e == 48 or e == 92 or e == 39 or e == 34
+}
 ## The value of a decimal digit, or -1 when the byte is not one.
 pub dec_digit_val := fn(c : str) -> i64 {
   if c == "0" { return 0 }

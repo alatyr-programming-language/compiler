@@ -665,6 +665,12 @@ selector ever infers signedness, and there is no "unknown" default to drift.
 - **Frame objects** (`$k`) are per-function memory with a size and alignment: aggregate locals,
   address-taken scalars, spill-proof temporaries, sret buffers. `addr $k` yields their address.
 - **Globals and rodata** are symbols with a layout; `addr @sym` yields their address.
+  A `str` literal's bytes are one more such symbol: the builder decodes the literal's escapes once into
+  the program's literal table, and `addr @str<k>` names entry `k` (#1576). Each selector places those
+  bytes read-only — x86_64, aarch64 and riscv64 in `.rodata` under a label of the selected function,
+  wasm as a `(data …)` segment in the slab the legacy emitter keeps for the literal's label. A literal
+  holding `\u{…}` or an escape Grammar §2.4 does not list is refused at the literal, because the parser
+  decodes such an escape as the byte after the backslash (#1676).
 
 **Aggregate temporaries are frame objects, one per use, never a shared pool.** Every aggregate value
 the program creates without naming it gets **its own** frame object, sized from `lower_layout` when
@@ -1067,7 +1073,7 @@ census says in advance whether it does.
 | generics | one IR function per mono instance; types substituted before build |
 | comptime `if` / `for` / `match typeinfo` | already folded or unrolled by the front half; the IR never sees comptime |
 | lambdas, fn values | lifted functions; `fnaddr f`, `call_ind` |
-| `str` literal | `addr @rodata` + length, as a two-word aggregate |
+| `str` literal | `addr @str<k>` + length, as a two-word aggregate (§3.3); `s[i]` adds the code-point-boundary half of the bounds guard (`trap_if … bounds`, Stdlib appendix §3.6) |
 | `@abi(syscall)` call | `syscall` |
 | `extern` call | `call_c` |
 | `asm`, `jmp`, `@label`, `@abi(naked)` | **not IR.** A function containing them is emitted by its target's raw path; on wasm it is a located compile-time refusal (a target capability the backend lacks) |

@@ -44,7 +44,7 @@ sw_ld := fn(in out sb : rt::StrBuf, k : ir::OpndK, v : i64) -> bool {
   match k {
     OkVReg => { sw_get(sb, usize(v)); true }
     OkImm => { sw_const(sb, v); true }
-    OkNone | OkFrame | OkSym | OkFn | OkLabel => { false }
+    OkNone | OkFrame | OkSym | OkFn | OkLabel | OkLit => { false }
   }
 }
 sw_lda := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool { sw_ld(sb, ir::i_ak(ip), ir::i_av(ip)) }
@@ -52,7 +52,7 @@ sw_ldb := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool { sw_ld(s
 sw_dst := fn(ip : ptr(mut ir::IrInst)) -> Option(usize) {
   match ir::i_dk(ip) {
     OkVReg => { Option(usize).Some(usize(ir::i_dv(ip))) }
-    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => { Option(usize).None }
+    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { Option(usize).None }
   }
 }
 ## Pop the stack top into `ip`'s destination.
@@ -336,7 +336,7 @@ sw_sym_decl := fn(x : SwX, ip : ptr(mut ir::IrInst)) -> Option(Decl) {
       d : Decl = deref(lower_ctx::decl_get(x.decls, di))
       Option(Decl).Some(d)
     }
-    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel => { Option(Decl).None }
+    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel | OkLit => { Option(Decl).None }
   }
 }
 ## `addr @g` of a module scalar that has a wasm global: remembered, not emitted (see the header).
@@ -344,7 +344,15 @@ sw_sym_decl := fn(x : SwX, ip : ptr(mut ir::IrInst)) -> Option(Decl) {
 ## `ib_bx_index_global`): its linear-memory address, which the legacy data emitter decides and
 ## `wat.al` hands over in `x.gt` (pairs of declaration index and base) — one layout, never a second
 ## copy of it here (Q4).
+##
+## `addr @str<k>` of a `str` literal (#1576): the linear-memory offset `sw_lits` gives its bytes.
 sw_addr := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, ip : ptr(mut ir::IrInst)) -> bool {
+  if ir::opndk_is_lit(ir::i_ak(ip)) {
+    k := usize(ir::i_av(ip))
+    if not sw_lit_fits(x, k) { return false }
+    sw_const(sb, str_data_off(ir::lit_label(x.p, k)))
+    return sw_setd(sb, ip)
+  }
   gdo : Option(Decl) = sw_sym_decl(x, ip)
   dv : Option(usize) = sw_dst(ip)
   match gdo {
@@ -383,7 +391,7 @@ sw_word_array_base := fn(x : SwX, ip : ptr(mut ir::IrInst)) -> Option(usize) {
         i = i + 2
       }
     }
-    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel => {}
+    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel | OkLit => {}
   }
   Option(usize).None
 }
@@ -475,7 +483,7 @@ sw_store_ins := fn(nb : u64) -> Option(str) {
 sw_global_base := fn(x : SwX, k : ir::OpndK, v : i64) -> Option(usize) {
   match k {
     OkVReg => { return sw_addr_of(x, usize(v)) }
-    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => {}
+    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => {}
   }
   Option(usize).None
 }
@@ -495,7 +503,7 @@ sw_addr64 := fn(in out sb : rt::StrBuf, x : SwX, k : ir::OpndK, v : i64, off : i
       sw_const(sb, i64(ir::wb_get(x.fobj, usize(v))))
       sw_op(sb, "i64.add")
     }
-    OkNone | OkImm | OkSym | OkFn | OkLabel => { return false }
+    OkNone | OkImm | OkSym | OkFn | OkLabel | OkLit => { return false }
   }
   if off != 0 {
     sw_const(sb, off)
@@ -594,8 +602,9 @@ sw_call := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool
   match cdo {
     Some(cd) => {
       if not cd.is_fn or cd.name_len == 0 or wat_ovl_is_marked(cd.name_start) { return false }
-      ## A narrow-element view: the legacy emitter steps it by the word (`ir::sig_has_narrow_view`, #1622).
-      if ir::sig_has_narrow_view(x.src, cd) { return false }
+      ## A narrow-element view: the legacy emitter steps it by the word (`ir::sig_has_narrow_view`, #1622);
+      ## a `str`: the legacy emitter builds none (`ir::sig_pins_legacy`, #1576).
+      if ir::sig_pins_legacy(x.src, cd) { return false }
       n := ir::i_n(ip)
       mut j : usize = 0
       while j < n {
@@ -735,7 +744,7 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
       match ir::i_ak(ip) {
         OkVReg => { sw_get(sb, usize(ir::i_av(ip))) }
         OkNone => {}
-        OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+        OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { return false }
       }
       sw_op(sb, "return")
       true
@@ -755,8 +764,9 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
 ## Select function `f` (declaration `d`) into `sb`. Answers false when the function is refused.
 sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> bool {
   if wat_ovl_is_marked(d.name_start) { return false }
-  ## A narrow-element view in the signature: legacy callers step it by the word (#1622).
-  if ir::sig_has_narrow_view(x.src, d) { return false }
+  ## A narrow-element view in the signature: legacy callers step it by the word (#1622); a `str`: legacy
+  ## callers build none (`ir::sig_pins_legacy`, #1576).
+  if ir::sig_pins_legacy(x.src, d) { return false }
   ## Slice 3w: frame objects live on the shadow stack in linear memory (`docs/ir.md` §6), laid out from
   ## `fp`, the value of the module's `$__sp` at entry. This first step does not pop the frame on return:
   ## the legacy emitter bump-allocates the same way and never reclaims, and a legacy callee may hand back
@@ -822,7 +832,35 @@ sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> 
     ir::put_symbol_name(sb, x.src, d.name_start, d.name_len)
     sw_put(sb, "))\n")
   }
+  sw_lits(sb, x)
   true
+}
+
+## Whether literal `k` fits the slab the legacy emitter keeps for its label: the module's one page holds
+## 256-byte slabs from `str_data_off(0)` (`wat::str_data_off`), one per parser label, so a label's slab is
+## its own and no other literal's. A literal longer than its slab, or a label past the page, is refused.
+sw_lit_fits := fn(x : SwX, k : usize) -> bool {
+  lbl := ir::lit_label(x.p, k)
+  lbl < 128 and ir::lit_bytes(x.p, k).len <= 256
+}
+## The function's `str` literals, each a `(data …)` segment of its bytes at `str_data_off` of its label.
+sw_lits := fn(in out sb : rt::StrBuf, x : SwX) {
+  n := ir::prog_nlits(x.p)
+  mut k : usize = 0
+  while k < n {
+    s := ir::lit_bytes(x.p, k)
+    bs := bytes(s)
+    sw_put(sb, "  (data (i32.const ")
+    k0 := rt::push_int(sb, str_data_off(ir::lit_label(x.p, k)))
+    sw_put(sb, ") \"")
+    mut i : usize = 0
+    while i < s.len {
+      emit_byte_esc(sb, bs[i])
+      i = i + 1
+    }
+    sw_put(sb, "\")\n")
+    k = k + 1
+  }
 }
 
 ## The hook in `emit_wat_program`'s declaration loop (see `aarch64::isel`'s `a64_isel_try`).

@@ -60,7 +60,7 @@ sr_ld := fn(in out sb : rt::StrBuf, reg : str, k : ir::OpndK, v : i64) -> bool {
   match k {
     OkVReg => { sr_ldv(sb, reg, usize(v)); true }
     OkImm => { sr_put(sb, "  li "); sr_put(sb, reg); sr_put(sb, ", "); sr_int(sb, v); sr_put(sb, "\n"); true }
-    OkNone | OkFrame | OkSym | OkFn | OkLabel => { false }
+    OkNone | OkFrame | OkSym | OkFn | OkLabel | OkLit => { false }
   }
 }
 sr_lda := fn(in out sb : rt::StrBuf, reg : str, ip : ptr(mut ir::IrInst)) -> bool { sr_ld(sb, reg, ir::i_ak(ip), ir::i_av(ip)) }
@@ -68,7 +68,7 @@ sr_ldb := fn(in out sb : rt::StrBuf, reg : str, ip : ptr(mut ir::IrInst)) -> boo
 sr_dst := fn(ip : ptr(mut ir::IrInst)) -> Option(usize) {
   match ir::i_dk(ip) {
     OkVReg => { Option(usize).Some(usize(ir::i_dv(ip))) }
-    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel => { Option(usize).None }
+    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { Option(usize).None }
   }
 }
 ## Store t2 into `ip`'s destination.
@@ -79,6 +79,23 @@ sr_st2 := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
 
 ## `.Lir<fn>_<k>` — the one label family of a selected function (see `aarch64::isel`).
 sr_lbl := fn(in out sb : rt::StrBuf, x : SrX, k : usize) { sr_put(sb, ".Lir"); sr_u(sb, x.fid); sr_put(sb, "_"); sr_u(sb, k) }
+## `.Lir<fn>_s<k>` — the label of the function's `str` literal `k` (#1576).
+sr_lit_lbl := fn(in out sb : rt::StrBuf, x : SrX, k : usize) { sr_put(sb, ".Lir"); sr_u(sb, x.fid); sr_put(sb, "_s"); sr_u(sb, k) }
+## The function's `str` literals, each its bytes under `sr_lit_lbl` in `.rodata` (see `lower::isel`'s
+## `sx_lits`).
+sr_lits := fn(in out sb : rt::StrBuf, x : SrX) {
+  n := ir::prog_nlits(x.p)
+  if n == 0 { return }
+  sr_put(sb, "  .pushsection .rodata\n")
+  mut k : usize = 0
+  while k < n {
+    sr_lit_lbl(sb, x, k)
+    sr_put(sb, ":\n")
+    ir::put_lit_data(sb, x.p, k)
+    k = k + 1
+  }
+  sr_put(sb, "  .popsection\n")
+}
 sr_def_lbl := fn(in out sb : rt::StrBuf, x : SrX, k : usize) { sr_lbl(sb, x, k); sr_put(sb, ":\n") }
 sr_ret_lbl := fn(in out sb : rt::StrBuf, x : SrX) { sr_put(sb, ".Lir"); sr_u(sb, x.fid); sr_put(sb, "_ret") }
 
@@ -324,11 +341,20 @@ sr_sym_decl := fn(x : SrX, ip : ptr(mut ir::IrInst)) -> Option(Decl) {
       d : Decl = deref(lower_ctx::decl_get(x.decls, di))
       Option(Decl).Some(d)
     }
-    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel => { Option(Decl).None }
+    OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel | OkLit => { Option(Decl).None }
   }
 }
 ## `addr @g` of a module scalar: `la` of the `.quad` cell `emit_rv_program` gives it (its bare name).
+##
+## `addr @str<k>` of a `str` literal (#1576): the address of its bytes, which `sr_lits` emits after the
+## function under `sr_lit_lbl`.
 sr_addr := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
+  if ir::opndk_is_lit(ir::i_ak(ip)) {
+    sr_put(sb, "  la t2, ")
+    sr_lit_lbl(sb, x, usize(ir::i_av(ip)))
+    sr_put(sb, "\n")
+    return sr_st2(sb, ip)
+  }
   gdo : Option(Decl) = sr_sym_decl(x, ip)
   match gdo {
     Some(g) => {
@@ -355,7 +381,7 @@ sr_base := fn(in out sb : rt::StrBuf, x : SrX, reg : str, k : ir::OpndK, v : i64
       sr_put(sb, "\n  add "); sr_put(sb, reg); sr_put(sb, ", s0, "); sr_put(sb, reg); sr_put(sb, "\n")
       true
     }
-    OkNone | OkImm | OkSym | OkFn | OkLabel => { false }
+    OkNone | OkImm | OkSym | OkFn | OkLabel | OkLit => { false }
   }
 }
 ## The displacement of an access whose base is in t0: the offset folded into t0 first when the 12-bit
@@ -518,8 +544,9 @@ sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool
     Some(cd) => {
       if not cd.is_fn or cd.name_len == 0 { return false }
       ## A view result (legacy returns its address, the IR its two words) or a narrow-element view (legacy
-      ## steps it by the word): `ir::ret_is_view`, `ir::sig_has_narrow_view` (#1622).
-      if ir::ret_is_view(x.src, cd) or ir::sig_has_narrow_view(x.src, cd) { return false }
+      ## steps it by the word) or a `str` (legacy builds none): `ir::ret_is_view`, `ir::sig_pins_legacy`
+      ## (#1622, #1576).
+      if ir::ret_is_view(x.src, cd) or ir::sig_pins_legacy(x.src, cd) { return false }
       sr_args(sb, x, ip)
       sr_put(sb, "  call ")
       sr_put_label(sb, x.src, cd)
@@ -684,7 +711,7 @@ sr_inst := fn(in out sb : rt::StrBuf, x : SrX, in out a : rt::Arena, i : usize) 
         match ir::i_ak(ip) {
           OkVReg => { sr_ldv(sb, "a0", usize(ir::i_av(ip))) }
           OkNone => {}
-          OkImm | OkFrame | OkSym | OkFn | OkLabel => { return false }
+          OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => { return false }
         }
       }
       sr_put(sb, "  j ")
@@ -734,8 +761,9 @@ sr_put_label := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
 ## Select function `f` (declaration `d`) into `sb`. Answers false when the function is refused.
 sr_fn := fn(in out sb : rt::StrBuf, x : SrX, d : Decl, in out a : rt::Arena) -> bool {
   ## A view result (legacy callers expect its address, the IR returns its two words) or a narrow-element
-  ## view (legacy steps it by the word): `ir::ret_is_view`, `ir::sig_has_narrow_view` (#1622).
-  if ir::ret_is_view(x.src, d) or ir::sig_has_narrow_view(x.src, d) { return false }
+  ## view (legacy steps it by the word) or a `str` (legacy builds none): `ir::ret_is_view`,
+  ## `ir::sig_pins_legacy` (#1622, #1576).
+  if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.src, d) { return false }
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > 8 { return false }
@@ -772,6 +800,7 @@ sr_fn := fn(in out sb : rt::StrBuf, x : SrX, d : Decl, in out a : rt::Arena) -> 
   sr_put(sb, ":\n  mv sp, s0\n  ld ra, 8(sp)\n  ld s0, 0(sp)\n")
   sr_sp_adjust(sb, frame, false)
   sr_put(sb, "  ret\n")
+  sr_lits(sb, x)
   true
 }
 
