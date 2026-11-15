@@ -2361,6 +2361,7 @@ ap_plan_init := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, of
   nc := wb_len(cands)
   if nc == 0 { return false }
   ap_scan(decls, src, w, e, a, cands, offs, lens)
+  ap_walk(decls, w, e, cands, src, a)
   wb_len(e) > 0
 }
 ## Every identifier occurrence of a candidate's name in the source files `offs`/`lens` (`ap_occur`).
@@ -2458,6 +2459,158 @@ ap_clone_owners := fn(decls : ptr(rt::Vec), in out a : rt::Arena, offs : ptr(rt:
     }
   }
   ho
+}
+## ── the caller edges from the tree (#1675) ──
+##
+## `ap_scan` finds the callers from the SOURCE TEXT: an identifier occurrence belongs to the declaration
+## whose name starts last before it. That answers for a call the author wrote, and not for one the driver
+## makes in the tree: a `__hoflam<N>` clone's body is a copy of its original `H`'s, spans and all, so
+## every call inside it is attributed to `H`, and a lifted lambda's body leaves its enclosing function
+## while its calls stay attributed there. The tree the emitters actually see answers both, because each
+## declaration owns its own nodes: a call is an edge from the declaration that carries it, and a name
+## that is not called is a function value in that declaration's hands. `ap_walk` walks every
+## declaration's post-rewrite tree (after `driver`'s index, iterator and lambda rewrites, which is the
+## tree `select_input` builds from) and adds those edges. It never removes one: where the text sees a
+## caller the tree does not, the plan keeps it, and where the text holds a callee the tree cannot
+## explain, the plan keeps the hold. What the tree answers today is the clone's own call — the reason
+## `ap_clone_owners` marks `H` and holds every callee it sees, whatever the selector would say.
+## The name `[ns, ns+nl)` in declaration `di`'s tree names candidate `g`: a direct call (`call`) is the
+## edge (g, di) when `di` is a plain non-generic function the selector can try; a name not called, and
+## a call from a declaration the selector will not try, hold `g` (the same rules as `ap_occur`).
+ap_tree_occur := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), g : usize, di : usize, call : bool, in out a : rt::Arena) {
+  if di == g { return }
+  if not call {
+    ap_hold(w, g)
+    return
+  }
+  gd : Decl = deref(lower_ctx::decl_get(decls, di))
+  if not gd.is_fn or gd.is_generic or gd.kind != lower_layout::DECL_KIND_FN {
+    ap_hold(w, g)
+    return
+  }
+  n := wb_len(e)
+  if n >= 2 {
+    if wb_get(e, n - 2) == g and wb_get(e, n - 1) == di { return }
+  }
+  q1 := wb_push(e, a, g)
+  q2 := wb_push(e, a, di)
+}
+## Every candidate the name `[ns, ns+nl)` names, in declaration `di`'s tree (`ap_tree_occur`).
+ap_tree_name := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), cands : ptr(mut WBuf), src : ptr(u8), di : usize, ns : usize, nl : usize, call : bool, in out a : rt::Arena) {
+  if nl == 0 { return }
+  mut c : usize = 0
+  while c < wb_len(cands) {
+    g := wb_get(cands, c)
+    gd : Decl = deref(lower_ctx::decl_get(decls, g))
+    if lower_ctx::streq(src, gd.name_start, gd.name_len, ns, nl) { ap_tree_occur(decls, w, e, g, di, call, a) }
+    c = c + 1
+  }
+}
+## `ap_walk_expr` over an argument (or element / field-initializer / payload) list.
+ap_walk_args := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), cands : ptr(mut WBuf), src : ptr(u8), di : usize, ah : Option(ptr(mut Arg)), in out a : rt::Arena) {
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => { ga := deref(arg_p(gq)); ap_walk_expr(decls, w, e, cands, src, di, ga.e, a); g = ga.next }
+      None => { break }
+    }
+  }
+}
+## `ap_walk_expr` across a `match` arm list: each arm's statements and its value.
+ap_walk_arms := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), cands : ptr(mut WBuf), src : ptr(u8), di : usize, ah : Option(ptr(mut Arm)), in out a : rt::Arena) {
+  mut arm : Option(ptr(mut Arm)) = ah
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(ast::arm_p(armq))
+        ap_walk_stmts(decls, w, e, cands, src, di, am.body_stmts, a)
+        ap_walk_expr(decls, w, e, cands, src, di, am.body, a)
+        arm = am.next
+      }
+      None => { break }
+    }
+  }
+}
+## Every call of a candidate inside expression `p`, in declaration `di` (#1675). A `Call` names its
+## callee and is a call; a `Var` of that name is a function value, which holds the callee. The struct,
+## enum and array literal heads carry values, not callees; `FnRef` names nothing readable — the
+## declaration it points at is a lifted lambda, whose synthesized name `ap_scan` already holds.
+ap_walk_expr := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), cands : ptr(mut WBuf), src : ptr(u8), di : usize, p : ptr(Expr), in out a : rt::Arena) {
+  if not expr_present(p) { return }
+  match deref(p) {
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::FnRef => {}
+    Expr::Var(ns, nl) => { ap_tree_name(decls, w, e, cands, src, di, ns, nl, false, a) }
+    Expr::Bin(op, l, r) => { ap_walk_expr(decls, w, e, cands, src, di, l, a); ap_walk_expr(decls, w, e, cands, src, di, r, a) }
+    Expr::If(c, t, f) => { ap_walk_expr(decls, w, e, cands, src, di, c, a); ap_walk_expr(decls, w, e, cands, src, di, t, a); ap_walk_expr(decls, w, e, cands, src, di, f, a) }
+    Expr::Match(sc, ah) => { ap_walk_expr(decls, w, e, cands, src, di, sc, a); ap_walk_arms(decls, w, e, cands, src, di, ah, a) }
+    Expr::Call(cs, cl, nn, ah) => { ap_tree_name(decls, w, e, cands, src, di, cs, cl, true, a); ap_walk_args(decls, w, e, cands, src, di, ah, a) }
+    Expr::StructLit(ss, sl, nf, fh) => { ap_walk_args(decls, w, e, cands, src, di, fh, a) }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { ap_walk_args(decls, w, e, cands, src, di, ph, a) }
+    Expr::ArrayLit(n, eh) => { ap_walk_args(decls, w, e, cands, src, di, eh, a) }
+    Expr::Field(b, fs, fl) => { ap_walk_expr(decls, w, e, cands, src, di, b, a) }
+    Expr::AddrOf(p0) => { ap_walk_expr(decls, w, e, cands, src, di, p0, a) }
+    Expr::Deref(p0) => { ap_walk_expr(decls, w, e, cands, src, di, p0, a) }
+    Expr::Index(b, ix) => { ap_walk_expr(decls, w, e, cands, src, di, b, a); ap_walk_expr(decls, w, e, cands, src, di, ix, a) }
+    Expr::Slice(b, lo, hi) => { ap_walk_expr(decls, w, e, cands, src, di, b, a); ap_walk_expr(decls, w, e, cands, src, di, lo, a); ap_walk_expr(decls, w, e, cands, src, di, hi, a) }
+    Expr::CompField(b, ix) => { ap_walk_expr(decls, w, e, cands, src, di, b, a); ap_walk_expr(decls, w, e, cands, src, di, ix, a) }
+    Expr::Try(inner) => { ap_walk_expr(decls, w, e, cands, src, di, inner, a) }
+    Expr::Unchecked(inner) => { ap_walk_expr(decls, w, e, cands, src, di, inner, a) }
+    Expr::Bitcast(inner, ts, tl) => { ap_walk_expr(decls, w, e, cands, src, di, inner, a) }
+    Expr::Lambda(fnpos, ph, rts, rtl, bh, value) => { ap_walk_stmts(decls, w, e, cands, src, di, bh, a); ap_walk_expr(decls, w, e, cands, src, di, value, a) }
+    Expr::Loop(lb) => { ap_walk_stmts(decls, w, e, cands, src, di, lb, a) }
+  }
+}
+## `ap_walk_expr` over a statement list: the same children each emitter walks, so a call the emitter
+## reaches is an edge the plan sees (`driver`'s `d_idxop_stmts` is the shape this mirrors).
+ap_walk_stmts := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), cands : ptr(mut WBuf), src : ptr(u8), di : usize, head : Option(ptr(mut Stmt)), in out a : rt::Arena) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { ap_walk_expr(decls, w, e, cands, src, di, v, a) }
+          Stmt::While(c, b, nx) => { ap_walk_expr(decls, w, e, cands, src, di, c, a); ap_walk_stmts(decls, w, e, cands, src, di, b, a) }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { ap_walk_expr(decls, w, e, cands, src, di, fv, a) }
+          Stmt::Return(rv, nx) => { ap_walk_expr(decls, w, e, cands, src, di, rv, a) }
+          Stmt::If(c, th, el, nx) => { ap_walk_expr(decls, w, e, cands, src, di, c, a); ap_walk_stmts(decls, w, e, cands, src, di, th, a); ap_walk_stmts(decls, w, e, cands, src, di, el, a) }
+          Stmt::Match(sc, ah, nx) => { ap_walk_expr(decls, w, e, cands, src, di, sc, a); ap_walk_arms(decls, w, e, cands, src, di, ah, a) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { ap_walk_expr(decls, w, e, cands, src, di, lo, a); ap_walk_expr(decls, w, e, cands, src, di, hi, a); ap_walk_stmts(decls, w, e, cands, src, di, b, a) }
+          Stmt::DerefAssign(p0, v, nx) => { ap_walk_expr(decls, w, e, cands, src, di, p0, a); ap_walk_expr(decls, w, e, cands, src, di, v, a) }
+          Stmt::IndexAssign(b, ix, v, nx) => { ap_walk_expr(decls, w, e, cands, src, di, b, a); ap_walk_expr(decls, w, e, cands, src, di, ix, a); ap_walk_expr(decls, w, e, cands, src, di, v, a) }
+          Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { ap_walk_expr(decls, w, e, cands, src, di, b, a); ap_walk_expr(decls, w, e, cands, src, di, ix, a); ap_walk_expr(decls, w, e, cands, src, di, v, a) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { ap_walk_expr(decls, w, e, cands, src, di, pl, a); ap_walk_expr(decls, w, e, cands, src, di, fpv, a) }
+          Stmt::Loop(lb, nx) => { ap_walk_stmts(decls, w, e, cands, src, di, lb, a) }
+          Stmt::Break(bv, bl, nx) => { ap_walk_expr(decls, w, e, cands, src, di, bv, a) }
+          Stmt::Continue => {}
+          Stmt::ExprStmt(x, nx) => { ap_walk_expr(decls, w, e, cands, src, di, x, a) }
+          Stmt::CompIf(c, th, el, nx) => { ap_walk_expr(decls, w, e, cands, src, di, c, a); ap_walk_stmts(decls, w, e, cands, src, di, th, a); ap_walk_stmts(decls, w, e, cands, src, di, el, a) }
+          Stmt::CompFor(vs, vl, iv, cb, nx) => { ap_walk_stmts(decls, w, e, cands, src, di, cb, a) }
+          Stmt::CompMatch(sc, ah, nx) => { ap_walk_expr(decls, w, e, cands, src, di, sc, a); ap_walk_arms(decls, w, e, cands, src, di, ah, a) }
+          Stmt::CompForRange(vs, vl, lo, hi, rb, nx) => { ap_walk_expr(decls, w, e, cands, src, di, lo, a); ap_walk_expr(decls, w, e, cands, src, di, hi, a); ap_walk_stmts(decls, w, e, cands, src, di, rb, a) }
+          Stmt::Unchecked(ub, nx) => { ap_walk_stmts(decls, w, e, cands, src, di, ub, a) }
+          Stmt::AllocWith(ae, ab, nx) => { ap_walk_expr(decls, w, e, cands, src, di, ae, a); ap_walk_stmts(decls, w, e, cands, src, di, ab, a) }
+        }
+        s = ast::stmt_next(sq)
+      }
+      None => { break }
+    }
+  }
+}
+## The tree walk of every function declaration (#1675): the callers the emitters see, each attributed to
+## the declaration that carries the call — a `__hoflam<N>` clone included, which is a caller in its own
+## right and no longer a reason to hold whatever its original's text shows.
+ap_walk := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), cands : ptr(mut WBuf), src : ptr(u8), in out a : rt::Arena) {
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d : Decl = deref(lower_ctx::decl_get(decls, i))
+    if d.is_fn {
+      ap_walk_stmts(decls, w, e, cands, src, i, d.body_stmts, a)
+      ap_walk_expr(decls, w, e, cands, src, i, d.value, a)
+    }
+    i = i + 1
+  }
 }
 ## Start a round of the fixpoint: answers true while the previous round held a callee (and for the
 ## first round), forgetting every selector answer, which a newly held callee may change.
