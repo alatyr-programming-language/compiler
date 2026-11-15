@@ -134,6 +134,74 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.3.2 — 2026-11-15
+
+- **A `Vec` element read as `v[i]`, `v.at(i)` or `v[a..b]` keeps its whole struct, `str` or enum value on
+  x86_64 (#987).** The legacy lowerer typed the result of an auto-ref generic call only from explicit
+  type arguments, so `e := v[0]; e.fd` read 0, `s := v[1]` lost its length, and a struct or enum
+  element passed straight to a function segfaulted. The lowerer now completes the omitted type
+  arguments into the explicit, module-qualified call before it types the result, for a callee
+  declared in the standard library's `alloc::vec` (asked by module identity, so a package's own
+  `src/alloc__vec.al` is not taken for it) and an element type that is a scalar, `str` or a uniquely named
+  non-generic struct or enum; any other call keeps its earlier behaviour. Fifteen container
+  matrix cells move from CRASH to OK, including the five `v.at(i)` cells of #1256.
+- **A source file is the standard library only when it sits under the compiler's own `lib/` (#987,
+  #655).** Both `check`'s trust and the lowerer's stdlib test used to accept any path containing
+  `/lib/` outside the package's source root. On a direct multi-file build a user file such as
+  `mm/lib/badmod.al` was therefore skipped by `check`, so an unbound name in it failed only at the
+  linker. It is now checked like any other user module, and the error names its line.
+- **The shared IR builds `str` values: literals, `.len`, `s[i]`, and `str` parameters, arguments and
+  results (#1576).** A `str` is the two-word view of its bytes, a literal's bytes addressed read-only.
+  `s[i]` now checks the code-point boundary as well as the range, so an index into the middle of a
+  multi-byte character traps (Stdlib appendix §3.6; #1550) wherever the function is built from the IR;
+  x86_64 answered the continuation byte before. On aarch64, riscv64 and wasm, whose legacy emitters
+  build no `str` value at all and trapped on every one, a function that uses `str` literals and locals
+  is now built from the IR and answers; a function with `str` in its signature, and a call to one,
+  stays with the legacy emitter there (its convention is not measured), so it still traps. A `for`
+  over a `str`, an `embed(path)` literal, a re-slice of a `str`, and a literal holding `\u{…}` or an
+  escape Grammar §2.4 does not list (the parser still misreads those, #1676) are not built yet.
+- **A module constant declared as a pair of `when` alternatives has exactly one declaration on the
+  target, in `check` and in `alatyr ir` (#1577).** A declaration whose guard folds false is absent
+  (Comptime §7.1, §9.2), but sema's name pick still counted it. The two alternatives tied and the
+  name went untyped, and the `ir` verb, unlike the emitters, did not fold the guards before its prune.
+  So every function reading such a name, `std::sysno::MMAP` among them, was refused by the IR. Sema's
+  pick now skips the absent declaration, and the `ir` verb folds the guards as the emitters do. A side
+  effect: `check` now types such a name, so `bonus := 0 when …` is an `i64` (Types §9.1). Mixing it
+  with an unsigned operand without a conversion is now refused, as it already was for an unguarded
+  `bonus := 0`.
+- **The shared IR builds fixed-array parameters, and copies an array field (#1626).** A function with an
+  `xs : [T; N]` parameter of 8-byte elements, a call to one, and an array copy from such a parameter or
+  from a struct's array field (`ys : [u64; 3] = s.arr`) are now built from the IR; before, the builder
+  refused them and every backend kept a legacy emitter that answered a wrong value (x86_64 trapped or
+  answered 17 where 42 was due, aarch64 224 and 5) or trapped. The array is passed as its address, the
+  convention every legacy emitter uses; Functions §4.1's copy for an `in` array is not made yet (#1632),
+  so a function that writes an element of its array parameter is not built from the IR and keeps its
+  legacy emitter.
+  A function with an array parameter is built from the IR only when every function that may call it is
+  too (on every target): the aarch64 and riscv64 legacy emitters pass an array field or element by the
+  value of its first element, and the twins' legacy array copies are wrong, so a legacy caller keeps the
+  legacy callee and its trap (aarch64 and riscv64 had answered SIGSEGV or 1 there with the callee built).
+  A function the compiler calls without its name at the call site — the index operator's `at`,
+  `index_set` and `index_range`, a `@convert`, any other name the compiler synthesizes — or whose name
+  is used other than in a direct call, as a function value, keeps its legacy emitter on every target.
+  `alatyr ir` notes beside such a function what the rule decides.
+- **An array or tuple parameter keeps its direction, so a write through an `in` one is refused (#1632).**
+  The parser recorded `xs : [T; N]`, `in out xs : [T; N]` and `out xs : [T; N]` the same way, so `check`
+  accepted `xs[0] = v` through a plain `in` array parameter and the write reached the caller's array.
+  An element write through an `in` array or tuple parameter is now `check: immutable binding` at its
+  line (Memory §3.4); an `out` / `in out` one still writes the caller's array. A call the shared IR
+  builds now passes an `in` array as the address of a caller-owned copy (Functions §4.1), so a write
+  the callee makes through an `in out` argument naming the same array does not reach the copy; a call
+  the legacy x86_64 lowerer emits still passes the caller's array itself (#1637). An element write
+  through an `in out` array parameter is built by the shared IR on every target instead of trapping on
+  aarch64, riscv64 and wasm32.
+- The fixed-array parameter plan sees two callers the source text attributes to another function
+  (#1662): a function called from a higher-order function that the driver clones for a capturing
+  closure is held to its legacy emission on every target, and on x86_64 a function called from an
+  `@inline` function stays legacy, because the legacy emitter expands that body into callers the plan
+  does not relate to it. `scripts/ir_ap_names_check.sh` now sees a literal-name pick behind `!=` and a
+  comparison-route name holding a digit, with a self-test plant for each.
+
 ## 0.3.1 — 2026-11-14
 
 - **Returning an integer of the other signedness is a compile error (#942).** `fn() -> u64` that

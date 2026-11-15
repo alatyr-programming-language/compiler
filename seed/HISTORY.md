@@ -2019,4 +2019,27 @@ The original reading note, verbatim:
 #
 # VERSION 0.3.0 -> 0.3.1, PATCH by CHANGELOG.md "Versioning policy": every entry since 0.3.0 is a defect fixed with no new surface. #1026 turns a trap where a value is due into the correct value (aarch64, riscv64 and wasm trapped on an `in out` struct parameter), and #1514 a wrong value into the right one (x86_64 read the wrong bytes of a narrow-array view). #1633 turns a silent wrong value (a whole `p = v` into an `out` / `in out` aggregate parameter never reached the caller on aarch64, riscv64 and wasm) into a located refusal, the policy's PATCH rule for a loud failure; the residual stays published as the open #1633. Not MAJOR, a judgement at the edge of the policy: a valid program whose callee assigns the whole parameter and reads it back only inside the callee may have answered correctly on those three backends and now stops compiling; the store still never reached the caller's place, which Functions §2.1 and §4.1 make the parameter denote, so the code was miscompiled even where the visible answer was right (not measured; the same edge 0.3.0 named for #1502). #942 newly refuses returning an integer of the other signedness, which Types §4.3 makes explicit, so the refused programs are invalid ones. #1390, #1571 and #1648 are under scripts/ and do not move the version. No CLI verb or flag appears and no construct that was rejected is newly accepted.
 # The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.3.1 -> 0.3.2   promoted 2026-11-15   seed/alatyr := Stage2
+#
+# WHY: # #1576 (carried by #1674) lets the shared IR build `str` values: literals, `.len`, `s[i]` with the code-point boundary check Stdlib appendix § 3.6 owes (#1550), and `str` parameters, arguments and results. The compiler is full of string literals, and until now any function carrying one was NotYet and stayed on the legacy emitter; with #1641/#1626 array parameters, #1632 parameter directions and #1577 `when`-alternative constants also building, 196 of the compiler's own functions moved to the IR, so the seed had to be rebuilt to carry that emission.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k>): 4313 hunks, 34797 added, 20675 removed. One sentence:
+# # 196 more compiler functions are emitted from the shared IR (510 -> 706 of its 5785 global symbols): each is a function whose body carries a string literal, an array parameter or a `when`-alternative constant, which the builder refused before #1674, #1641, #1632 and #1577. Every other symbol is byte-identical once labels are normalized: all 510 already IR-emitted, and all 5078 that stayed on the legacy emitter.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1726563 lines.
+# GAS SHA-256 (Stage2): 7d173ff8b4fd6d2f10c45c3914777990a1bb4d353bbfede4bd1e22c8f9f91be6.
+# Stage2 == Stage3 BINARY SHA-256:
+# 91f3be63ff867fedd4e266b4a9eaa5aa3f70f3a4ac693019a0c1809895cd63e1 (6680064 B).
+# All three answer `alatyr 0.3.2, spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.3.1) SHA-256:
+# 69089d2290c70aec24137d62c9593fdb924a0d542b90365b8c3b8c182e999ab4.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1726563 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.3.1 -> 0.3.2, PATCH by CHANGELOG.md "Versioning policy": every entry since 0.3.1 is a defect fixed with no new surface. #1576 turns the twins' runtime trap on a `str` value into the correct value, and makes x86_64 trap where #1550 answered a continuation byte; #1626/#1632 fix array-parameter reads and newly refuse a write through an `in` parameter, which the specification declares invalid (Memory § 3.4) - the defect was accepting it; #1577 types a `when`-alternative constant; #1662 holds two callers the array-parameter plan missed. No program the specification calls valid stops compiling, and no construct, backend shape or CLI verb appears.
+# The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
