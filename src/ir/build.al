@@ -2900,11 +2900,14 @@ ib_arm_cond := fn(bp : ptr(mut IbB), in out a : rt::Arena, scr : ptr(Expr), arm 
       tgo : Option(i64) = lower_layout::variant_disc(bv.decls, bv.src, st.s, st.n, arm.vs, arm.vl, a)
       ## Folded (#1576 IR-19): `sv` is the one word, so the arm whose discriminant is the null
       ## pattern (0) is `word == 0` and every other arm is `word != 0` — there is no tag to match
-      ## against (Types §6.2).
+      ## against (Types §6.2). The discriminant is BOUND and compared, never matched as a literal:
+      ## `Some(0)` here is a variant pattern, not a test against zero.
       if lower_layout::is_niche_folded(bv.src, st.s, st.n) {
         match tgo {
-          Some(0) => { return Option(VRegId).Some(ib_eq_const(bp, a, sv, 0)) }
-          Some(_) => { return Option(VRegId).Some(ib_ord_const(bp, a, Cc.CcNe, sv, 0)) }
+          Some(t) => {
+            if t == 0 { return Option(VRegId).Some(ib_eq_const(bp, a, sv, 0)) }
+            return Option(VRegId).Some(ib_ord_const(bp, a, Cc.CcNe, sv, 0))
+          }
           None => {}
         }
         return ib_no(bp, scr, NyWhy.NwOutside)
