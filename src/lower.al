@@ -19893,6 +19893,8 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
     ## un-advanced base) so a routed operator inside the body gets fresh scratch; restored below.
     cx.inl_tmp = ov_inl - i64(totw) - i64(lcnt)
     emit_stmts(icd.body_stmts, sb, cx, nl)
+    ## #1664: the body's FINAL EXPRESSION is the call's value — emit it (see `emit_inline_tail_value`).
+    emit_inline_tail_value(icd.value, icd.ret_ts, icd.ret_tl, cstruct, cfloat, sb, cx, a, nl)
     cx.epi = ov_epi
     cx.ret_float = ov_rf
     cx.ret_enum = ov_re
@@ -19919,6 +19921,40 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
   }
   cx.inl_tmp = ov_inl
   svec_truncate(deref(cx.slots), saved)
+}
+
+## Deliver the trailing EXPRESSION of an expanded STATEMENT body — an `@inline` callee
+## (`emit_inline_body`) or a pack unrolled inline (`emit_variadic_body`) — at its inline-end label
+## (#1664). A block is an expression whose value is its FINAL expression (Control Flow §3, result
+## typing: "an expression `e` — the value and type of `e`"), and Functions §3.3 fills the `-> T`
+## output from that body expression while §3.4 puts it "on a par with" `return expr`: both fill the
+## same anonymous output, so both must deliver the same value. Emitting only the statements left %rax
+## holding whatever the last STATEMENT computed — a silent wrong value (2 where 42 was due).
+## So this emits what the `Stmt::Return` arm emits for `return e`: the struct return registers for a
+## nominal struct, else the value lowered to the stack popped into %rax and, for a float result,
+## copied into %xmm0; the inline-end label then pushes the delivered word(s). A body with NO trailing
+## expression (the parser's `Num(-1)` marker, `expr_is_no_tail`) emits nothing here and keeps the
+## fall-through %rax it always had. A result shape this expansion does not deliver at its label — a
+## byte array, a niche-folded `Option`, a `str`/`Slice`/bracketed aggregate, an enum with a payload —
+## is refused with a located diagnostic rather than silently mis-delivered.
+emit_inline_tail_value := fn(tv : ptr(Expr), rs : usize, rn : usize, cstruct : bool, cfloat : bool, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  if expr_is_no_tail(tv) { return }
+  if cstruct {
+    emit_struct_value(tv, sb, cx, a, nl)
+    return
+  }
+  ebn := base_type_name(cx.src, rs, rn)
+  byteret := fixed_array_byte_return_len_span(cx.src, rs, rn) >= 1
+  folded := is_niche_folded(cx.src, rs, rn)
+  strret := str_at((cx.src + rs), rn) == "str"
+  enumwide := enum_inst_words(cx.decls, cx.src, ebn.s, ebn.n, a) > 0
+  bracketed := rn != 0 and (str_at((cx.src + rs), 1) == "[" or str_at((cx.src + rs), 1) == "(")
+  if byteret or folded or strret or enumwide or bracketed {
+    panic("selfhost: @inline statement body with a trailing expression of this result shape is unsupported; write `return <value>`, or keep the result a scalar, float or nominal struct")
+  }
+  emit_gas(tv, sb, cx, a, nl)
+  push_str(sb, "  popq %rax\n")
+  if cfloat { push_str(sb, "  movq %rax, %xmm0\n") }
 }
 
 ## Emit a call to a §7.2 SLICE-VARIADIC callee `f(xs : ...T)`. The callee is an ORDINARY runtime fn
@@ -20211,6 +20247,8 @@ emit_variadic_body := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), nfixed 
     cx.ret_str = false
     cx.ret_sret = false
     emit_stmts(icd.body_stmts, sb, cx, nl)
+    ## #1664: the body's FINAL EXPRESSION is the call's value — emit it (see `emit_inline_tail_value`).
+    emit_inline_tail_value(icd.value, icd.ret_ts, icd.ret_tl, cstruct, cfloat, sb, cx, a, nl)
     cx.epi = ov_epi
     cx.ret_float = ov_rf
     cx.ret_enum = ov_re
