@@ -544,8 +544,8 @@ sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool
     Some(cd) => {
       if not cd.is_fn or cd.name_len == 0 { return false }
       ## A view result (legacy returns its address, the IR its two words) or a narrow-element view (legacy
-      ## steps it by the word) or a `str` (legacy builds none): `ir::ret_is_view`, `ir::sig_pins_legacy`
-      ## (#1622, #1576).
+      ## steps it by the word) or a `str` (legacy builds none) or a niche-folded option (legacy passes
+      ## the unfolded tag and payload words): `ir::ret_is_view`, `ir::sig_pins_legacy` (#1622, #1576).
       if ir::ret_is_view(x.src, cd) or ir::sig_pins_legacy(x.src, cd) { return false }
       sr_args(sb, x, ip)
       sr_put(sb, "  call ")
@@ -761,7 +761,8 @@ sr_put_label := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
 ## Select function `f` (declaration `d`) into `sb`. Answers false when the function is refused.
 sr_fn := fn(in out sb : rt::StrBuf, x : SrX, d : Decl, in out a : rt::Arena) -> bool {
   ## A view result (legacy callers expect its address, the IR returns its two words) or a narrow-element
-  ## view (legacy steps it by the word) or a `str` (legacy builds none): `ir::ret_is_view`,
+  ## view (legacy steps it by the word) or a `str` (legacy builds none) or a niche-folded option
+  ## (legacy passes and returns the unfolded tag and payload words): `ir::ret_is_view`,
   ## `ir::sig_pins_legacy` (#1622, #1576).
   if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.src, d) { return false }
   nv := ir::fn_nvregs(x.f)

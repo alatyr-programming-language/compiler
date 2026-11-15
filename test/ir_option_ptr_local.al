@@ -5,6 +5,11 @@
 ## On the parent every function here was refused (`CSigParamUnresolved`, `CSigResultWide`), and the
 ## legacy emitter that took them over trapped on aarch64 and riscv64 (SIGTRAP) and crashed wasm.
 ## 42 when every form held; otherwise 100 + the mask of the failed ones.
+## The directive is x86_64-only on purpose: the aarch64, riscv64 and wasm selectors leave a
+## function whose signature mentions a folded option to the legacy emitter, because their legacy
+## emitters pass and return an aggregate as the unfolded tag and payload words and a mixed
+## crossing was measured wrong there — `ir::sig_has_folded_option`, #1576. On those targets
+## this program keeps the parent's behaviour, a trap.
 rd := fn(o : Option(ptr(u64))) -> u64 {
   match o { Some(p) => deref(p); None => 7 }
 }
@@ -38,4 +43,4 @@ main := fn() -> u64 {
   if m != 0 { return 100 + m }
   return 42
 }
-## expect: run 42
+## expect(x86_64): run 42
