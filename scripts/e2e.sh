@@ -1027,6 +1027,45 @@ EOF
      && grep -q '^  %0 = const.u i64 9$' "$rep" && grep -q 'sema_gaps=0 verify_failed=0$' "$rep"; then
     echo "ok   ir issue1577 std::sysno::MMAP: a qualified read of a two-row table builds as its x86_64 row"
   else echo "FAIL ir issue1577 std::sysno::MMAP: rc=$rc"; grep -E 'NotYet|sema_gaps|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
+  ## #1662: two callers the text attributes to another declaration. (a) A call inside a HOF `hof` that
+  ## the driver clones for a capturing closure (`__hoflam<N>`) is also the clone's call, so `rd` is held
+  ## on every target; the parent left it to the per-target rule. (b) x86's legacy emitter expands an
+  ## `@inline` body into each legacy caller, so x86 keeps `zr_rd`, called only from `@inline zr_mid`,
+  ## legacy; `zr_rd2`, called from a plain `zr_mid2`, stays IR-selected. The parent selected `zr_rd`.
+  local wh="$T/ir1662_hold"; mkdir -p "$wh"
+  cat > "$wh/ir1662_hof.al" <<'EOF'
+rd := fn(xs : [u64; 3]) -> u64 { xs[2] }
+hof := fn(g : fn(u64) -> u64, v : u64) -> u64 {
+  a : [u64; 3] = [0, 4, v]
+  g(rd(a))
+}
+main := fn() -> u8 {
+  c : u64 = 2
+  f := fn(n : u64) -> u64 { return n + c }
+  u8(hof(f, 40))
+}
+EOF
+  cat > "$wh/ir1662_inl.al" <<'EOF'
+zr_rd := fn(xs : [u64; 3]) -> u64 { xs[1] + xs[2] }
+@inline zr_mid := fn(k : u64) -> u64 { zr_rd([0, 4, k]) }
+zr_rd2 := fn(xs : [u64; 3]) -> u64 { xs[1] + xs[2] }
+zr_mid2 := fn(k : u64) -> u64 { zr_rd2([0, 4, k]) }
+main := fn() -> u8 {
+  mut s : u64 = 0
+  for i in 0..2 { s = s + u64(i) }
+  u8(zr_mid(37 + s) + zr_mid2(0) - 4)
+}
+EOF
+  "$CC" ir "$wh/ir1662_hof.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^## ir1662_hof::rd: held to legacy on every target ' "$rep" && grep -q '^fn ir1662_hof::__hoflam' "$rep"; then
+    echo "ok   ir #1662 array-param hold: a callee of a cloned HOF is held on every target"
+  else echo "FAIL ir #1662 array-param hold: rc=$rc"; grep -E '^(## |fn )ir1662_hof::' "$rep" | head -6 | sed 's/^/     /'; fail=1; fi
+  local asm="$wh/ir1662_inl.s" sel
+  "$CC" x86-ir "$wh/ir1662_inl.al" > "$asm" 2>/dev/null; rc=$?
+  sel="$(awk '/^# ir: selected from the shared IR$/ { s = 1; next } /^[[:space:]]*ret$/ { s = 0 } /^ir1662_inl__[a-z_0-9]+:$/ { if (s) print substr($0, 13, length($0) - 13); s = 0 }' "$asm" | sort | tr '\n' ' ')"
+  if [ "$rc" = 0 ] && [ "$sel" = "main zr_mid zr_mid2 zr_rd2 " ]; then
+    echo "ok   ir #1662 x86 @inline caller: zr_rd stays legacy behind an @inline caller; zr_rd2 is IR-selected"
+  else echo "FAIL ir #1662 x86 @inline caller: rc=$rc selected=[$sel], want [main zr_mid zr_mid2 zr_rd2 ]"; fail=1; fi
 }
 
 check_ir_dev_verb() {
