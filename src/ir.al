@@ -2168,9 +2168,10 @@ pub sig_has_narrow_view := fn(src : ptr(u8), d : Decl) -> bool {
 ##     only call site the driver renamed to it.
 ## Two callers sit where the text puts some OTHER declaration (#1662):
 ##   * a `__hoflam<N>` clone's body is a copy of its original `H`'s, spans and all, so a call inside it
-##     is attributed to `H`. A callee called from an `H` that has a clone (`ap_clone_owners`) is held at
-##     once. Today this only restates what the fixpoint finds anyway (the builder refuses every
-##     fn-typed parameter, so `H` is legacy); the hold keeps the rule sound the day those build;
+##     is attributed to `H`, and a lifted lambda's body leaves its enclosing function while its calls
+##     stay attributed there. Both are answered from the tree instead of by a hold: `ap_walk` walks
+##     every declaration's post-rewrite tree, so the carrier of the call — the clone, the lifted lambda —
+##     is the caller the fixpoint tries, and no other declaration of theirs is held for it (#1675);
 ##   * x86's legacy emitter expands an `@inline` callee's body into each legacy function calling it
 ##     (`lower::inline_callee_idx`; the builder substitutes only bodies without a call). So x86's
 ##     selector (`sx_ap_plan`) counts an `@inline` caller as a legacy one; the other targets' legacy
@@ -2262,8 +2263,10 @@ ap_owner := fn(decls : ptr(rt::Vec), lo : usize, p : usize) -> Option(usize) {
 }
 ## Record an occurrence of candidate `g`'s name at `p` (in the file starting at `lo`).
 ## `call` says whether the occurrence is a direct call (`ap_called_at`); any other occurrence holds `g`.
-## `ho` marks the declarations a `__hoflam<N>` clone was cut from (`ap_clone_owners`).
-ap_occur := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), ho : ptr(mut WBuf), in out a : rt::Arena, g : usize, lo : usize, p : usize, call : bool) {
+## A call inside a `__hoflam<N>` clone or a lifted lambda is attributed here to the declaration whose
+## name starts last before it; `ap_walk` adds the carrier's own edge from the tree (#1675), so this
+## scan no longer needs to hold the callee for its clones.
+ap_occur := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), in out a : rt::Arena, g : usize, lo : usize, p : usize, call : bool) {
   gd : Decl = deref(lower_ctx::decl_get(decls, g))
   if p == gd.name_start { return }
   if not call {
@@ -2275,11 +2278,6 @@ ap_occur := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), ho : 
     Some(r) => {
       rd : Decl = deref(lower_ctx::decl_get(decls, r))
       if not rd.is_fn or rd.is_generic or rd.kind != lower_layout::DECL_KIND_FN {
-        ap_hold(w, g)
-        return
-      }
-      ## The occurrence is also a call from every clone of `r`, which the text attributes to `r` (#1662).
-      if wb_get(ho, r) == 1 {
         ap_hold(w, g)
         return
       }
@@ -2376,7 +2374,6 @@ ap_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), w : ptr(mut WBuf), e : ptr(mu
     match mo { Some(_k) => {}; None => { ap_hold(w, g0) } }
     c0 = c0 + 1
   }
-  ho := ap_clone_owners(decls, a, offs, lens)
   nf := rt::vec_len(deref(offs))
   mut f : usize = 0
   while f < nf {
@@ -2391,7 +2388,7 @@ ap_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), w : ptr(mut WBuf), e : ptr(mu
         while c < nc {
           g := wb_get(cands, c)
           gd : Decl = deref(lower_ctx::decl_get(decls, g))
-          if lower_ctx::streq(src, gd.name_start, gd.name_len, p, q - p) { ap_occur(decls, w, e, ho, a, g, lo, p, ap_called_at(src, q, hi)) }
+          if lower_ctx::streq(src, gd.name_start, gd.name_len, p, q - p) { ap_occur(decls, w, e, a, g, lo, p, ap_called_at(src, q, hi)) }
           c = c + 1
         }
         p = q
@@ -2401,64 +2398,6 @@ ap_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), w : ptr(mut WBuf), e : ptr(mu
     }
     f = f + 1
   }
-}
-## Word `i` is 1 when declaration `i` is the original of a `__hoflam<N>` clone (#1662). A clone's name
-## lies outside every source file, but its parameters are copies of the original's, spans and all
-## (`parser::clone_params`), so the declaration owning its first parameter's span is the original. A
-## clone whose original cannot be found that way (no parameter, or a span outside every file) marks
-## every declaration: the plan then holds each callee that has a caller at all (fail-closed).
-ap_clone_owners := fn(decls : ptr(rt::Vec), in out a : rt::Arena, offs : ptr(rt::Vec), lens : ptr(rt::Vec)) -> ptr(mut WBuf) {
-  cnt := rt::vec_len(deref(decls))
-  ho := wb_new(a, cnt)
-  mut i : usize = 0
-  while i < cnt {
-    k := wb_push(ho, a, 0)
-    i = i + 1
-  }
-  mut lost := false
-  i = 0
-  while i < cnt {
-    d : Decl = deref(lower_ctx::decl_get(decls, i))
-    dm : Option(u64) = module_of(d.name_start, offs, lens)
-    match dm {
-      Some(_k) => {}
-      None => {
-        if d.is_fn and d.name_len != 0 {
-          mut found := false
-          match d.params_head {
-            Some(pq) => {
-              ps := deref(ast::param_p(pq)).ns
-              pmo : Option(u64) = module_of(ps, offs, lens)
-              match pmo {
-                Some(f) => {
-                  ro : Option(usize) = ap_owner(decls, rt::vec_get(deref(offs), usize(f)), ps)
-                  match ro {
-                    Some(r) => {
-                      q := wb_set(ho, r, 1)
-                      found = true
-                    }
-                    None => {}
-                  }
-                }
-                None => {}
-              }
-            }
-            None => {}
-          }
-          if not found { lost = true }
-        }
-      }
-    }
-    i = i + 1
-  }
-  if lost {
-    i = 0
-    while i < cnt {
-      q := wb_set(ho, i, 1)
-      i = i + 1
-    }
-  }
-  ho
 }
 ## ── the caller edges from the tree (#1675) ──
 ##
