@@ -3792,16 +3792,9 @@ name_matches := fn(src : ptr(u8), dns : usize, dnl : usize, cs : usize, cn : usi
 ## RESOLUTION but does not re-`check_decl` them, so a check-gap on a stdlib feature (generics, comptime,
 ## …) never rejects a well-typed USER program — the intended check/build parity (§1 item 5). A
 ## single-`_` user module (`print_one`) is not matched; the fixpoint is unaffected (`check` isn't in the
-## build path).
-is_lib_module := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
-  if ml < 2 { return false }
-  mut i : usize = 0
-  while i + 1 < ml {
-    if str_at((src + ms + i), 2) == "__" { return true }
-    i += 1
-  }
-  false
-}
+## build path). #1434: the spelling test lives in `lower_layout`, which the intrinsic-shadow predicate
+## (`callee_is_program_fn`) asks too.
+is_lib_module := lower_layout::module_spelled_ambient
 
 ## Issue #655 — the same question asked of the PRODUCER instead of the spelling. `is_lib_module`
 ## above is a NAME test standing in for a provenance question, and the parser mangles a nested
@@ -8529,8 +8522,9 @@ sema_is_dyn_over_call := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
 ## Is the callee `[s, s+n)` a comptime TYPE-BUILTIN whose arguments are TYPE names, not values
 ## (`size(T)`, `align(T)`, `typeinfo(T)`)? A type-shaped argument must not be walked as an unbound
 ## VALUE — the `expr_has_unbound` Call arm consults this (next-up #2; Types §6.4/§6.5).
-callee_is_type_builtin := fn(src : ptr(u8), s : usize, n : usize) -> bool {
-  nm := str_at((src + s), n)
+## #1434: a program-declared `size`/`align` is its own fn, asked through `lower_layout::intrinsic_callee`.
+callee_is_type_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  nm := lower_layout::intrinsic_callee(decls, src, s, n)
   nm == "size" or nm == "align" or nm == "typeinfo"
 }
 
@@ -8863,7 +8857,7 @@ expr_statement_has_unbound_m := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
       if not callee_ok { bad = true }
       ## `size`/`align`/`typeinfo` arguments are type expressions, not runtime name uses. Generic type
       ## parameters are likewise skipped at their declared type-argument positions.
-      tb := callee_is_type_builtin(src, cs, cl)
+      tb := callee_is_type_builtin(decls, src, cs, cl)
       gen := callee_is_generic(decls, upto, src, cs, cl)
       mut ai := 0
       mut g : Option(ptr(mut Arg)) = ah
@@ -9052,7 +9046,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       ## a type-shaped arg (a bare known-type-name Var, or an array-TYPE literal `[T; N]` whose inner
       ## names ARE the type) is NOT an unbound VALUE — without this `size([u64; 3])` read `u64` as an
       ## unbound Var (next-up #2; Types §6.4).
-      tb := callee_is_type_builtin(src, cs, cl)
+      tb := callee_is_type_builtin(decls, src, cs, cl)
       mut ai := 0
       loop {
         match g {
@@ -9400,7 +9394,7 @@ sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)
         | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast => {}
     }
   }
-  if sema_vty_site(e, src) { ir::sign_site(e) }
+  if sema_vty_site(e, decls, src) { ir::sign_site(e) }
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { sema_vty_call_args(cs, cl, na, ah, decls, src) }
     ## #968 — an enum construction's declared payload types are the CONTEXT of its arguments, exactly as a
@@ -9483,7 +9477,7 @@ sema_vty_enum_args := fn(es : usize, el : usize, vs : usize, vl : usize, np : us
 sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) {
   ## OP-6: a shift or rotation's count is a `usize` (`op(in v : T, in n : usize) -> T`, Stdlib appendix
   ## §4), so a literal count takes that type. `na == 2` is the parser's count of the two links.
-  cnm := str_at((src + cs), cl)
+  cnm := lower_layout::intrinsic_callee(decls, src, cs, cl)   ## #1434: a declared `shl` is its own fn
   if na == 2 and (cnm == "shl" or cnm == "shr" or cnm == "rotl" or cnm == "rotr") {
     sa0 := deref(arg_at(ah, "argument list ended early"))
     sa1 := deref(arg_at(sa0.next, "argument list ended early"))
@@ -9917,7 +9911,7 @@ sema_vty_range := fn(lo : ptr(Expr), hi : ptr(Expr)) -> ir::VTy {
 }
 ## A call: its declared result; the shift/rotate builtins take their first operand's type.
 sema_vty_call := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
-  nm := str_at((src + cs), cl)
+  nm := lower_layout::intrinsic_callee(decls, src, cs, cl)   ## #1434: a declared `shl` is its own fn
   if na == 2 and (nm == "shr" or nm == "shl" or nm == "rotl" or nm == "rotr") {
     a0 := deref(arg_at(ah, "argument list ended early"))
     return sema_vty_child(a0.e)
@@ -11472,14 +11466,14 @@ sema_spell_bind := fn(ns : usize, sp : ir::TySpell, decls : ptr(rt::Vec), src : 
 mut SEMA_VTY_RET_S : usize = 0
 mut SEMA_VTY_RET_N : usize = 0
 ## Is `e` a site the signedness census follows (`/`, `%`, an ordering compare, a `shr` call)?
-sema_vty_site := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+sema_vty_site := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
   ## docs/ir-slice-1.md §8.3 (e2) — the per-instance walk re-walks nodes the generic pass already
   ## added to the site list; adding them twice would double every row. The instance walk's own output
   ## is the per-instance refusal, not a census row (§8.6).
   if SEMA_INST_RECORDING { return false }
   match deref(e) {
     Expr::Bin(op, l, r) => { ir::sign_op_followed(op) }
-    Expr::Call(cs, cl, na, ah) => { na == 2 and str_at((src + cs), cl) == "shr" }
+    Expr::Call(cs, cl, na, ah) => { na == 2 and lower_layout::intrinsic_callee(decls, src, cs, cl) == "shr" }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
@@ -13263,7 +13257,7 @@ ct_check := fn(e : ptr(Expr), w : str, chk : bool, src : ptr(u8), decls : ptr(rt
       }
     }
     Expr::Call(cs, cl, na, ah) => {
-      cnm := str_at((src + cs), cl)
+      cnm := lower_layout::intrinsic_callee(decls, src, cs, cl)   ## #1434: a declared `shl` is its own fn
       if (cnm == "shl" or cnm == "shr" or cnm == "rotl" or cnm == "rotr") and na == 2 {
         a0 := ct_arg_at(ah, 0)
         a1 := ct_arg_at(ah, 1)
@@ -14211,7 +14205,7 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
       if not callee_ok0 and not synth0 { return cs0 }
       gen0 := callee_is_generic(decls, upto, src, cs0, cl0)
       if not gen0 and not synth0 and call_arity_match(decls, upto, src, cs0, cl0, na0, a) == 0 { return cs0 }
-      tb0 := callee_is_type_builtin(src, cs0, cl0)
+      tb0 := callee_is_type_builtin(decls, src, cs0, cl0)
       mut ai0 := 0
       mut g0 : Option(ptr(mut Arg)) = ah1
       loop {
@@ -18333,7 +18327,7 @@ sema_guard_type_concrete := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n
 sema_guard_size_operand := fn(e : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> i64 {
   match deref(e) {
     Expr::Call(cs, cl, nargs, ah) => {
-      if str_at((src + cs), cl) == "size" and nargs >= 1 {
+      if lower_layout::intrinsic_callee(decls, src, cs, cl) == "size" and nargs >= 1 {
         aa := deref(arg_at(ah, "argument list ended early"))
         tn := expr_var_span(aa.e)
         if tn.n == 0 { return 0 - 1 }
@@ -21682,7 +21676,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       if cr0 == 0 { cr0 = sema_bare_private(decls, src, ec0.s, ec0.n, cs, cl, 1, 4) }
     }
     mut cg0 : Option(ptr(mut Arg)) = expr_call_args_head(e)
-    if cr0 == 0 and callee_is_type_builtin(src, ec0.s, ec0.n) {
+    if cr0 == 0 and callee_is_type_builtin(decls, src, ec0.s, ec0.n) {
       if arg_any(cg0) {
         cga0 := deref(arg_at(cg0, "argument list ended early"))
         cr0 = sema_package_type_builtin_arg_bad(cga0.e, decls, src, cs, cl)

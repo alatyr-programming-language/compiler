@@ -1243,22 +1243,24 @@ ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize
     bcv : Option(VRegId) = ib_bx_brand_ctor(bp, a, e, cs, cl, bu.s, bu.n, ah)
     return ib_call_out(bcv)
   }
-  nm := str_at((src + cs), cl)
+  ## #1434 — the one predicate every name-keyed site asks (`lower_layout::intrinsic_callee`): a callee that
+  ## resolves to a fn the program wrote answers no spelling, so neither arm below claims it.
+  nm := lower_layout::intrinsic_callee(ib_b_decls(bp), src, cs, cl)
   so : Option(ShiftK) = ib_shift_of(nm)
   match so {
-    ## #1434 — the same question the two arms above ask (`not ib_fn_named`): a callee that resolves to a
-    ## declaration the program wrote is a call to THAT declaration (Grammar §2.3: `shl`/`shr` are not
-    ## keywords; Declarations §6.1: the inner name wins). Answered by the name alone, `shl := fn(a, b)`
-    ## called `shl(10, 2)` became a hardware `shlq` on the operand: 40 + 32 = **72** where 42 was due,
-    ## with no diagnostic (measured on native x86_64; `shr` the same, 34). `rotl`/`rotr` reach
-    ## `ib_call_user` because `ib_bx_shift` refuses them, which is why only the two shifts were hijacked.
-    Some(sk) => { if na == 2 and not ib_fn_named(bp, cs, cl) { sv : Option(VRegId) = ib_bx_shift(bp, a, e, sk, ah); return ib_call_out(sv) } }
+    ## #1434 — a callee that resolves to a declaration the program wrote is a call to THAT declaration
+    ## (`nm` above answers no spelling for it; Grammar §2.3: `shl`/`shr` are not keywords; Declarations
+    ## §6.1: the inner name wins). Answered by the name alone, `shl := fn(a, b)` called `shl(10, 2)`
+    ## became a hardware `shlq` on the operand: 40 + 32 = **72** where 42 was due, with no diagnostic
+    ## (measured on native x86_64; `shr` the same, 34). `rotl`/`rotr` reach `ib_call_user`
+    ## because `ib_bx_shift` refuses them, which is why only the two shifts were hijacked.
+    Some(sk) => { if na == 2 { sv : Option(VRegId) = ib_bx_shift(bp, a, e, sk, ah); return ib_call_out(sv) } }
     None => {}
   }
   lo : Option(LayoutQ) = ib_layout_q_of(nm)
   match lo {
     Some(q) => {
-      if na == 1 and not ib_fn_named(bp, cs, cl) { lv : Option(VRegId) = ib_bx_layout_q(bp, a, e, q, ah); return ib_call_out(lv) }
+      if na == 1 { lv : Option(VRegId) = ib_bx_layout_q(bp, a, e, q, ah); return ib_call_out(lv) }
     }
     None => {}
   }

@@ -13452,6 +13452,17 @@ run issue1434_declared_shl_value 42
 run issue1434_declared_shr_value 42
 run issue1434_declared_shl_two_args 42
 run issue1434_declared_shr_two_args 42
+## #1434 (the rest of it) — every name-keyed intrinsic arm asks one predicate, `lower_layout::intrinsic_callee`;
+## each fixture reaches the legacy x86_64 path (an f64 literal) and failed on the parent (139, 40, 32 or 1).
+run issue1434_declared_size_legacy 42
+run issue1434_declared_align_legacy 42
+run issue1434_declared_len_legacy 42
+run issue1434_declared_str_at_legacy 42
+run issue1434_declared_str_eq_legacy 42
+run issue1434_declared_byte_at_legacy 42
+run issue1434_declared_bytes_legacy 42
+run issue1434_declared_panic_legacy 42
+run issue1434_declared_forget_legacy 42
 
 ## #992 — `alloc::with(ar)` inside a match arm, and a match inside `alloc::with`, pass the ambient
 ## `ptr(ar)` to a call that omits its allocator (Memory §5.2.1); the splice never walked a `match`.
