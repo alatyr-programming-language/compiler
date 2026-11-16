@@ -13284,6 +13284,10 @@ check_build_located reject_narrow_arith_reassign 7 "comptime overflow"
 check_build_located reject_narrow_lit_field_store 11 "type mismatch"
 check_build_located reject_narrow_arith_field_store 8 "comptime overflow"
 check_build_located reject_narrow_lit_reassign_signed 11 "type mismatch"
+## #1473: `u16` and `i16`, the two widths besides `i8` that `resolve_ty` once left out, each pinned by
+## an out-of-range write to an annotated binding (`i8` is pinned by the row above).
+check_build_located reject_narrow_lit_reassign_u16 10 "type mismatch"
+check_build_located reject_narrow_lit_reassign_i16 11 "type mismatch"
 run accept_narrow_reassign_range 42
 run_a64 accept_narrow_reassign_range 42
 run_rv64 accept_narrow_reassign_range 42
