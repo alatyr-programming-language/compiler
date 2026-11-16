@@ -16191,7 +16191,7 @@ slice_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
 ## local to the lower fence: changing parser-wide return spans would widen a high-conflict surface for a
 ## boundary that only needs to reject direct indexing. The bounded scan handles nested array element types
 ## and stops at the matching `]`; malformed/incomplete spans remain unknown and follow existing paths.
-fixed_array_return_span := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
+pub fixed_array_return_span := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
   if tl == 0 or str_at((src + ts), 1) != "[" { return CSpan(s = 0, n = 0) }
   mut i := ts
   mut depth := 0
@@ -22109,10 +22109,16 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         }
         return
       }
+      ## comptime-VARIADIC owns the call site BEFORE `@inline` does (#1681). Both expand the callee
+      ## at the call site with no `call` (CG-10, Codegen §3.5, is satisfied by either), but only
+      ## `emit_variadic_body` threads the comptime PACK (`cx.pack_args`) that the body's
+      ## `comptime for` walks (§7.1). Taking the inline expander first bound the `...` rest to one
+      ## scratch word, left the pack empty, and answered 2 where 42 was due.
+      var_ci := variadic_callee_idx(cx.decls, cx.src, cs, cl, cx.mod_s, cx.mod_l, a)
       ## `@inline` CALL — EXPAND the callee's body at the call site (§3.1/§3.5) instead of a `call`
       ## (`emit_inline_call`, shared with the operator-routing path). Tail-expression + statement bodies.
       inl_ci := inline_callee_idx(cx.decls, cx.src, cs, cl, cx.mod_s, cx.mod_l)
-      if inl_ci >= 0 and cx.inl_tmp >= 0 {
+      if inl_ci >= 0 and var_ci < 0 and cx.inl_tmp >= 0 {
         emit_inline_call(inl_ci, args_head, sb, cx, a, nl)
         return
       }
@@ -22126,8 +22132,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       }
       ## comptime-VARIADIC CALL (Functions §7.1) — a callee whose last param is a `...` rest is
       ## monomorphized/EXPANDED at the call site: fixed args bind, trailing args form the pack the body's
-      ## `comptime for` unrolls over. Like `@inline`, there is no runtime call.
-      var_ci := variadic_callee_idx(cx.decls, cx.src, cs, cl, cx.mod_s, cx.mod_l, a)
+      ## `comptime for` unrolls over. Like `@inline`, there is no runtime call. `var_ci` was resolved
+      ## above, where it also gates the `@inline` expander (#1681).
       if var_ci >= 0 and cx.inl_tmp >= 0 {
         emit_variadic_call(var_ci, args_head, sb, cx, a, nl)
         return
