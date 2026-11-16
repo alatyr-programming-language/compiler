@@ -4413,7 +4413,14 @@ d_manifest_set_sema_modules := fn(pv : rt::Vec, name_start : rt::Vec, name_len :
     }
     k += 1
   }
-  sema::set_package_modules(unchecked bitcast(usize, ptr(owned)), rt::vec_len(owned))
+  ## The table's header lives in `tar` beside its data: sema reads it after this fn returns, and the
+  ## address of the local `owned` used to be published instead — a read of a dead frame, which crashed
+  ## `check` on a package root once `check_program`'s frames grew (#1028).
+  hp := rt::bump(tar, size(rt::Vec))
+  ## unchecked-ok: `rt::bump` answered a fresh `size(rt::Vec)` block of the live arena `tar`.
+  hv : ptr(mut rt::Vec) = unchecked bitcast(ptr(mut rt::Vec), hp)
+  deref(hv) = owned
+  sema::set_package_modules(hp, rt::vec_len(owned))
 }
 
 d_manifest_rewrite_decls := fn(decls : rt::Vec, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec, src : ptr(u8), in out nstr : usize, na : ptr(mut rt::Arena)) {
@@ -7035,7 +7042,14 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## docs/ir.md §3.8.6 — this run records library bodies too, so the twins' IR builder can select a
   ## library function whose records the walk completes (measured: `char_class` moves from a trap to the
   ## x86_64 value on the three twins; no other run moves).
+  ## #1028 — the `ir` verb (backend 3) emits nothing, so its record walk does not stop at a refusal
+  ## (`sema::set_walk_all`): a raw module list (`--modules`) has no other check, and its first refusal
+  ## used to leave every later declaration without records — measured on `src/`, a refusal at `cli`'s
+  ## `app.version` (the manifest's module, absent from a raw list) cost every later module its records.
+  ## The emitting backends keep the early return, so what they select from the IR does not move.
+  wa0 := sema::set_walk_all(backend == 3)
   styped := sema::check_program(ptr(decls), base, ptr(na))
+  wa1 := sema::set_walk_all(wa0)
   ## Match the ordinary compile paths: lift parsed local lambdas before any lowering-side
   ## normalization or backend emission. This multi-file path previously passed Expr::Lambda
   ## through unchanged, while compile/compile_program/compile_files_mode all lift exactly once.

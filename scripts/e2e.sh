@@ -1150,6 +1150,25 @@ check_ir_dev_verb() {
   "$CC" ir --modules "$ROOT/lib/std/math.al" > "$rep" 2>/dev/null; rc=$?
   if [ "$rc" = 0 ] && grep -q '^ir: functions=[1-9][0-9]* built=[0-9]* notyet=[0-9]* sema_gaps=[0-9]* verify_failed=0$' "$rep"; then echo "ok   ir --modules lib/std/math.al: every function reported, none pruned"
   else echo "FAIL ir --modules lib/std/math.al: rc=$rc"; fail=1; fi
+  # #1028 — the `ir` verb's record walk does not stop at a refusal. Before, sema's first refusal on a
+  # raw module list left every later declaration without records, so each parameter use was counted
+  # `sema-gap absent: expr Var`. (1) The issue's repro: two files that are both module `h` (a
+  # duplicate, refused) — the second body is still checked, so it still has records. (2) The `src/`
+  # shape: a module refused for a name it cannot resolve (as `cli` is for the manifest's `app`), and a
+  # LATER module whose function only reads its parameters.
+  local w1028="$T/ir1028"; mkdir -p "$w1028/a" "$w1028/b"
+  printf 'streq := fn(src : ptr(u8), a : usize, n : usize) -> bool { return a != n }\n' > "$w1028/a/h.al"
+  printf 'streq := fn(src : ptr(u8), a : usize, n : usize) -> bool { return a == n }\n' > "$w1028/b/h.al"
+  "$CC" ir --modules "$w1028/a/h.al" "$w1028/b/h.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && [ "$(grep -cx 'fn h::streq Built' "$rep")" = 2 ] && ! grep -q 'sema-gap' "$rep"; then
+    echo "ok   ir --modules #1028 duplicate: both declarations of h::streq built"
+  else echo "FAIL ir --modules #1028 duplicate: rc=$rc"; grep '^fn ' "$rep" | sed 's/^/     /'; fail=1; fi
+  printf 'pick := fn() -> u64 { return app.version }\n' > "$w1028/a/aref.al"
+  printf 'add := fn(x : u64, y : u64) -> u64 { return x + y }\n' > "$w1028/b/later.al"
+  "$CC" ir --modules "$w1028/a/aref.al" "$w1028/b/later.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -qx 'fn later::add Built' "$rep"; then
+    echo "ok   ir --modules #1028 refusal: a later module's function still has its records"
+  else echo "FAIL ir --modules #1028 refusal: rc=$rc"; grep '^fn ' "$rep" | sed 's/^/     /'; fail=1; fi
   "$CC" help > "$rep" 2>&1; rc=$?
   if [ "$rc" = 0 ] && grep -q '^  ir       ' "$rep"; then echo "ok   help: lists the \`ir\` dev verb (D5, TOOL-21)"
   else echo "FAIL help: no \`ir\` line"; fail=1; fi
