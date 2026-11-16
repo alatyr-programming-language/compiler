@@ -4413,7 +4413,14 @@ d_manifest_set_sema_modules := fn(pv : rt::Vec, name_start : rt::Vec, name_len :
     }
     k += 1
   }
-  sema::set_package_modules(unchecked bitcast(usize, ptr(owned)), rt::vec_len(owned))
+  ## The table's header lives in `tar` beside its data: sema reads it after this fn returns, and the
+  ## address of the local `owned` used to be published instead — a read of a dead frame, which crashed
+  ## `check` on a package root once `check_program`'s frames grew (#1028).
+  hp := rt::bump(tar, size(rt::Vec))
+  ## unchecked-ok: `rt::bump` answered a fresh `size(rt::Vec)` block of the live arena `tar`.
+  hv : ptr(mut rt::Vec) = unchecked bitcast(ptr(mut rt::Vec), hp)
+  deref(hv) = owned
+  sema::set_package_modules(hp, rt::vec_len(owned))
 }
 
 d_manifest_rewrite_decls := fn(decls : rt::Vec, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec, src : ptr(u8), in out nstr : usize, na : ptr(mut rt::Arena)) {
