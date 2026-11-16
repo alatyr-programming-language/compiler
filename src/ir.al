@@ -2194,11 +2194,14 @@ span_is_folded_option := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 ## (`span_is_folded_option`, #1576). Those legacy emitters build no `str` value at all (each `str`
 ## expression is a trapping stub, measured), so the convention they would hand one across is unmeasured,
 ## and no `str` crosses there. A folded option is ONE word whose tag and payload share it — the caller
-## passes that word, the callee reads it from there — while those legacy emitters pass an aggregate as
-## the UNFOLDED tag and payload words (`[x2,#0]` and `[x2,#8]`) and read the payload where the tag is:
-## measured SIGSEGV (139) on aarch64 and riscv64 for a legacy caller of an IR-built callee, and the
-## WRONG VALUE on wasm for a legacy callee returning one. So the two shapes never meet there: the
-## function and every caller of it stay legacy, and the program emits what it emitted before. x86_64
+## passes that word, the callee reads it from there (Types §6.2, Memory §4.2) — while those legacy
+## emitters read an aggregate parameter's payload at `[#8]`, the second word of the UNFOLDED tag and
+## payload pair (`src/aarch64.al`'s `isaggparam`, and its riscv64 and wasm counterparts): a folded word
+## has nothing at byte 8. So the two shapes never meet there — the function and every call to it stay
+## legacy, and on those three targets the folded-option fixtures emit byte for byte what they emitted
+## before (measured, `ir: selected` count 0 on each). A folded option that NO signature mentions — a
+## local read with `match` — is not pinned and is IR-built there, which is where this slice moves a
+## value on the twins (measured 133 to 42 on aarch64 and riscv64, 134 to 42 on wasm, #1576). x86_64
 ## does not ask: its legacy emitter, as the IR does, passes a `str` parameter as one word (the address
 ## of its `{ptr, len}` pair) and returns a `str` as the pair in two words over bytes at stride 1, and
 ## passes such a folded option as one word and returns it as one word in rax, measured right in both
