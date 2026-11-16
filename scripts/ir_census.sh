@@ -304,7 +304,9 @@ analyse() {
   local lib_rc src_rc
   read -r lib_rc _ < "$W/lib.rc"; read -r src_rc _ < "$W/src.rc"
   for set in lib src; do
-    grep '^fn ' "$W/$set.out" | sed "s|^|$set/	|" > "$W/$set.fns" || true
+    # A report line only (`fn <module>::<name> <verdict>`), never a built function's IR header
+    # (`fn <name>(…) {`): matching that too counted every built function twice (#1028).
+    grep -E '^fn [^ (]+ (Built$|NotYet\(|VerifyFailed\()' "$W/$set.out" | sed "s|^|$set/	|" > "$W/$set.fns" || true
   done
 
   echo "ir census: functions handed to the shared IR builder; every built one is verified (docs/ir.md §5)"
@@ -405,6 +407,13 @@ if [ "$SELFTEST" = 1 ]; then
     && printf '%s\n' "$cl" | grep -qE '^ +1 sema-gap absent: expr Var$'; then c=0; printf '%s\n' "$cl" >/dev/null
   else c=1; printf '%s\n' "$cl" | sed 's/^/     /'; fi
   chk "$c" "ir_census self-test counts: built, outside and sema-gap columns"
+  # A built lib/ or src/ function prints its IR after its report line; the IR's own `fn g(…) {` header
+  # is not a second function (#1028: it was counted, so `functions` read real + built).
+  plant irhead "fn p::f Built" 0 "$(printf 'fn base::g Built\nfn g(%%0 : i64 u) -> i64 u {\n  ret %%0\n}')" 0
+  cl="$(GATE=0 QUIET=0 analyse "$T/irhead" 2>&1)"
+  if printf '%s\n' "$cl" | grep -qE '^  lib/ +1 +1 +0 +0 +0 +0$'; then c=0
+  else c=1; printf '%s\n' "$cl" | sed 's/^/     /'; fi
+  chk "$c" "ir_census self-test counts: a built function's IR header is not a second function"
   # ---- per-backend coverage: the marker counting, with no compiler ----
   # Each backend's marker must be distinct where its comment syntax is distinct: riscv64 and x86_64
   # share `#` (different runs, so no collision), but wasm's `(; ;)` must not be counted by the twins'
