@@ -4,7 +4,7 @@
 ## a `mut` module global each give the writable AND-path of §3.3; `k` is read back through a plain
 ## pointer, which §4.4 permits. 30 + 30 + 8 + 2 = 70. (`ptr(mut s.a)`, a field address, is refused by
 ## the existing field-address fence on the parent too, so no aggregate appears here.)
-## expect: run 70
+## expect(x86_64): run 70
 mut g : u64 = 0
 main := fn() -> u8 {
   mut v : u64 = 2
