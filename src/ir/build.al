@@ -2647,40 +2647,47 @@ ib_st_is_folded := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
 ## The folded shape's payload field: the whole word at byte 0, which IS the pointer (Types §6.2).
 ib_folded_comp_fld := fn() -> IbFld { IbFld(off = ByteOff(0), ty = Kty.KPtr, sg = Sgn.SgNone, be = false) }
 ## The one-word layout of a niche-folded `Option(ptr(T))`, taken ONLY for the shape that claim rests
-## on (Types §6.2/§8, Memory §4.2): exactly two variants, one of which carries discriminant 0 — the
-## payload's null pattern, which IS the absent case — with NO components, and the other exactly one, and
+## on (Types §6.2/§8, Memory §4.2): exactly two variants, one with NO components — the absent case, whose
+## word is the payload's null pattern — and the other with exactly one, IN EITHER ORDER, and
 ## `lower_layout`'s own byte size of the instance — the size every emitter sizes the slot by — exactly one
 ## pointer word. Any other shape answers `None` and stays refused where it was asked (`CSigParamUnresolved`,
 ## `CSigResultWide`): the builder never guesses a folded layout.
-## The discriminant-0 variant is asked to have been SEEN, not merely to have left `null_arity` at zero
-## (#1687): an enum whose variants all pin a non-zero discriminant would answer `null_arity == 0` for
-## never having met one, and the fold would be taken for a type whose null pattern is not its absent
-## case — a wrong layout silently taken. `null_seen` is what the zero in the guard otherwise stands for.
+## Types §6.2 folds the single extra variant into the niche whatever its position, so the variants are
+## told apart by their MEANING (their arity), never by their discriminant (#1711): the compiler's own
+## `ast::Option` declares `Some` first. Every variant's discriminant must still resolve (#1687): a
+## variant `variant_disc` cannot place is a shape the builder does not claim to know.
 ib_folded_shape := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, di : usize, s : usize, n : usize) -> Option(IbSt) {
   if lower_layout::layout_type_size_bytes(decls, src, s, n, a) != 8 { return Option(IbSt).None }
   d : Decl = deref(ib_decl_ptr(decls, di))
   mut nv : usize = 0
-  mut null_seen := false
-  mut null_arity : usize = 0
-  mut other_arity : usize = 0
+  mut nullary : usize = 0
+  mut single : usize = 0
   mut f := d.fields_head
   loop {
     match f {
       Some(fq) => {
         fd := deref(ast::fld_p(fq))
         tgo : Option(i64) = lower_layout::variant_disc(decls, src, s, n, fd.ns, fd.nl, a)
-        match tgo {
-          Some(t) => { if t == 0 { null_seen = true; null_arity = fd.arity } else { other_arity = fd.arity } }
-          None => { return Option(IbSt).None }
-        }
+        match tgo { Some(t) => {}; None => { return Option(IbSt).None } }
+        if fd.arity == 0 { nullary = nullary + 1 }
+        if fd.arity == 1 { single = single + 1 }
         nv = nv + 1
         f = fd.next
       }
       None => { break }
     }
   }
-  if nv != 2 or not null_seen or null_arity != 0 or other_arity != 1 { return Option(IbSt).None }
+  if nv != 2 or nullary != 1 or single != 1 { return Option(IbSt).None }
   Option(IbSt).Some(IbSt(di = di, s = s, n = n, size = 8, align = 8))
+}
+## THE folded tag test (#1711): is the one word `w` of a niche-folded enum (`ib_folded_shape`) the
+## variant `vq`? By the variant's meaning, never its number (Types §6.2): the nullary variant is the
+## null pattern, `w == 0`; the payload variant is `w != 0`. Every test of a folded object's variant — a
+## `match` arm, the `?` operator — goes through here and never compares `w` with `variant_disc`.
+ib_folded_is := fn(bp : ptr(mut IbB), in out a : rt::Arena, w : VRegId, vq : ptr(mut FieldDecl)) -> VRegId {
+  fd := deref(ast::fld_p(vq))
+  if fd.arity == 0 { return ib_eq_const(bp, a, w, 0) }
+  ib_ord_const(bp, a, Cc.CcNe, w, 0)
 }
 ## Is `st` an enum type (`ib_enum_named`), not a struct?
 ib_st_is_enum := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
@@ -2902,21 +2909,17 @@ ib_arm_cond := fn(bp : ptr(mut IbB), in out a : rt::Arena, scr : ptr(Expr), arm 
     Some(st) => {
       if arm.wild != 0 or arm.vl == 0 { return ib_no(bp, scr, NyWhy.NwOutside) }
       bv : IbB = deref(bp)
-      tgo : Option(i64) = lower_layout::variant_disc(bv.decls, bv.src, st.s, st.n, arm.vs, arm.vl, a)
-      ## Folded (#1576 IR-19): `sv` is the one word, so the arm whose discriminant is the null
-      ## pattern (0) is `word == 0` and every other arm is `word != 0` — there is no tag to match
-      ## against (Types §6.2). The discriminant is BOUND and compared, never matched as a literal:
-      ## `Some(0)` here is a variant pattern, not a test against zero.
+      ## Folded (#1576 IR-19): `sv` is the one word and there is no tag to match against (Types
+      ## §6.2); the arm's variant is tested by its meaning (`ib_folded_is`, #1711).
       if lower_layout::is_niche_folded(bv.src, st.s, st.n) {
-        match tgo {
-          Some(t) => {
-            if t == 0 { return Option(VRegId).Some(ib_eq_const(bp, a, sv, 0)) }
-            return Option(VRegId).Some(ib_ord_const(bp, a, Cc.CcNe, sv, 0))
-          }
+        vo : Option(ptr(mut FieldDecl)) = ib_variant_of(bp, st, arm.vs, arm.vl)
+        match vo {
+          Some(vq) => { return Option(VRegId).Some(ib_folded_is(bp, a, sv, vq)) }
           None => {}
         }
         return ib_no(bp, scr, NyWhy.NwOutside)
       }
+      tgo : Option(i64) = lower_layout::variant_disc(bv.decls, bv.src, st.s, st.n, arm.vs, arm.vl, a)
       match tgo { Some(tag) => { return Option(VRegId).Some(ib_eq_const(bp, a, sv, tag)) }; None => {} }
       return ib_no(bp, scr, NyWhy.NwOutside)
     }
@@ -3232,16 +3235,24 @@ ib_bx_try_build := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), in
     match eko { Some(x) => { ek = x }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
     match rko { Some(x) => { if not ib_ks_eq(ek, x) { return ib_no(bp, e, NyWhy.NwOutside) } }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
   }
+  ## A niche-folded operand or result (#1711, Types §6.2) has no tag word: its success test is the
+  ## variant's meaning (`ib_folded_is`), its payload the one word, and its absent result the null
+  ## pattern the zeroed object already holds — no discriminant is stored into it.
+  sfold := ib_st_is_folded(bp, st)
+  rfold := ib_st_is_folded(bp, rt)
   o := ib_agg(bp, a, inner, st)?
   base := o_frame(o.fr)
   tag := ib_load_at(bp, a, base, ib_tag_fld())
-  c := ib_eq_const(bp, a, tag, sidx)
+  mut c : VRegId = tag
+  if sfold { c = ib_folded_is(bp, a, tag, sq) } else { c = ib_eq_const(bp, a, tag, sidx) }
   ib_open_if(bp, a, c)
   ib_plain(bp, a, Op.OpElse)
   rf := ib_new_obj(bp, a, rt)
   ib_zero_obj(bp, a, rf, rt.size)
-  tv := ib_konst(bp, a, ib_ks_i64(Sgn.SgS), ridx)
-  ib_store_field(bp, a, rf, ib_tag_fld(), tv)
+  if not rfold {
+    tv := ib_konst(bp, a, ib_ks_i64(Sgn.SgS), ridx)
+    ib_store_field(bp, a, rf, ib_tag_fld(), tv)
+  }
   if tk == 2 {
     base2 := o_frame(o.fr)
     ev := ib_load_at(bp, a, base2, ib_comp_fld(0, ek))
@@ -3253,7 +3264,9 @@ ib_bx_try_build := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), in
   ib_plain(bp, a, Op.OpEnd)
   ib_b_set_term(bp, false)
   base3 := o_frame(o.fr)
-  v := ib_load_at(bp, a, base3, ib_comp_fld(0, k))
+  mut pf : IbFld = ib_comp_fld(0, k)
+  if sfold { pf = ib_folded_comp_fld() }
+  v := ib_load_at(bp, a, base3, pf)
   Option(VRegId).Some(v)
 }
 
