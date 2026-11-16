@@ -319,7 +319,7 @@ wat_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
 ## matches: float, `str` and aggregate holes still reach the one integer renderer here, unchanged and
 ## still out of scope.
 wat_hole_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
-  if lower_layout::operand_signed(e, params_head, body_head, src, a) { return true }
+  if lower_layout::operand_signed(e, params_head, body_head, decls, src, a) { return true }
   if wat_operand_unsigned(e, params_head, body_head, src, a) { return false }
   mut r := false
   if lit_arith_i64(e, src) { r = true }
@@ -5181,8 +5181,8 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         emit_wat_expr(r, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "))")
       } else if is_arith_op(op) and (not wat_operand_is_aggregate(l, params_head, body_head, src, a, decls)) and (not wat_operand_is_aggregate(r, params_head, body_head, src, a, decls)) {
-        dl := lower_layout::operand_signed(l, params_head, body_head, src, a)
-        dr := lower_layout::operand_signed(r, params_head, body_head, src, a)
+        dl := lower_layout::operand_signed(l, params_head, body_head, decls, src, a)
+        dr := lower_layout::operand_signed(r, params_head, body_head, decls, src, a)
         ## #964 — as in `aarch64.al`: `/ %` read sema's RECORD of the operator
         ## (`lower_layout::ir_arith_signed`, docs/ir.md §3.8 e3) as x86_64 does; the shape query proved
         ## nothing about a literal-only `Bin` dividend and answered unsigned. `+ - *` keep it until #943.
@@ -5399,7 +5399,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         wspost := wat_narrow_post(wsnw)
         push_str(sb, wspre)
         if wscn == "shl" { push_str(sb, "(i64.shl ") }
-        else if wscn == "shr" { ir::sign_row("wasm", 0, wsv, wsn, src, lower_layout::operand_signed(wsv, params_head, body_head, src, a)); if lower_layout::operand_signed(wsv, params_head, body_head, src, a) { push_str(sb, "(i64.shr_s ") } else { push_str(sb, "(i64.shr_u ") } }
+        else if wscn == "shr" { ir::sign_row("wasm", 0, wsv, wsn, src, lower_layout::operand_signed(wsv, params_head, body_head, decls, src, a)); if lower_layout::operand_signed(wsv, params_head, body_head, decls, src, a) { push_str(sb, "(i64.shr_s ") } else { push_str(sb, "(i64.shr_u ") } }
         else if wscn == "rotl" { push_str(sb, "(i64.rotl ") }
         else { push_str(sb, "(i64.rotr ") }
         emit_wat_expr(wsv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -5422,7 +5422,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         }
         push_str(sb, ")")
         push_str(sb, wspost)
-      } else if str_at((src + cs), cl) == "len" and arg_any(args_head) and wat_len_recv_slice(arg_expr_at(args_head, 0, a), params_head, src, body_head, decls, a) {
+      } else if lower_layout::intrinsic_callee(decls, src, cs, cl) == "len" and arg_any(args_head) and wat_len_recv_slice(arg_expr_at(args_head, 0, a), params_head, src, body_head, decls, a) {
         ## `s.len()` (UFCS-desugared to `Call("len", [s])`) on a slice receiver — the runtime length = word1
         ## of the `{ptr,len}` block. A slice PARAM (a WASM local holding the block base) and a local slice
         ## VIEW share the same shape; the base local index comes from `param_find` (param) or

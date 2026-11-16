@@ -4604,7 +4604,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   ## Without this the `bytes(x)` call fell to the generic Call emit and was mangled to a
   ## `<module>__bytes` label (an undefined symbol at link). `src/` uses `bytes(x)` only in the
   ## `bytes(x)[i]` index form (handled elsewhere), never as a bare arg → fixpoint-neutral.
-  bva := bytes_view_arg(e, cx.src, a)
+  bva := bytes_view_arg(e, cx.decls, cx.src, a)
   if unchecked bitcast(usize, bva) != 0 {
     emit_arg(bva, sb, cx, a, nl, tmp_off)
     return
@@ -4643,7 +4643,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
     push_str(sb, "  pushq %rax\n")
     return
   }
-  if is_strat_call(e, cx.src) and tmp_off >= 0 {
+  if is_strat_call(e, cx.decls, cx.src) and tmp_off >= 0 {
     ## `str_at(base, len)` argument: a str VIEW with no frame home — materialize its {ptr, len} into
     ## the temp block (ptr at slot `tmp_off`, len at `tmp_off+1`) and push the block's ADDRESS, by
     ## reference, exactly like a str literal. This is THE dominant str argument in the emitter
@@ -6173,13 +6173,13 @@ is_str_call := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
 ## Answering by the callee TEXT alone routed `x := sub(t[0..3])` (a user fn) to `emit_sub_pair`, which
 ## reads argument positions 1 and 2 of a one-argument call: `arg_expr_at` answers null there (its own
 ## `res := 0`) and `emit_gas` dereferences its argument unguarded — SIGSEGV, exit 139, no diagnostic.
-## The resolution is asked AFTER the name test, so every callee not spelled `sub` answers exactly as
-## before; an UNDECLARED `sub(…)` still resolves to nothing and keeps the internal view path.
+## #1434 asks it through the one predicate every name-keyed site shares, `lower_layout::intrinsic_callee`
+## (a program-written fn of that name, lib declarations excluded); an UNDECLARED `sub(…)` keeps the
+## internal view path.
 is_sub_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
   match deref(e) {
-    Expr::Call(cs, cl, nargs, args_head) => {
-      if str_at((src + cs), cl) != "sub" { return false }
-      ret_call_target(decls, src, cs, cl, nargs, args_head, a) < 0
+    Expr::Call(cs, cl, _nargs, _args_head) => {
+      lower_layout::intrinsic_callee(decls, src, cs, cl) == "sub"
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
@@ -6197,22 +6197,21 @@ is_sub_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
 ## lower_layout and the `lower::call_ret_ty_span` these same three arms already call. Grammar §2.3 lists
 ## the keywords and states built-ins are prelude identifiers, and none of these four is a keyword;
 ## Declarations §6.1 gives the inner declaration the win, so a callee that resolves to a kind-1 decl is a
-## call to THAT declaration and lowers as the same call under any other name does. The resolution is asked
-## AFTER the name test, so every callee not spelled like a shift answers exactly as before, and an
-## UNDECLARED `shl(…)` still resolves to nothing and keeps the intrinsic path.
+## call to THAT declaration and lowers as the same call under any other name does. The one predicate is
+## `lower_layout::intrinsic_callee` (a program-written fn of that name, lib declarations excluded), so an
+## UNDECLARED `shl(…)` keeps the intrinsic path byte for byte.
 pub is_shift_intrinsic_call := fn(cs : usize, cl : usize, nargs : usize, args_head : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
-  cn := str_at((src + cs), cl)
-  if cn != "shl" and cn != "shr" and cn != "rotl" and cn != "rotr" { return false }
-  ret_call_target(decls, src, cs, cl, nargs, args_head, a) < 0
+  cn := lower_layout::intrinsic_callee(decls, src, cs, cl)
+  cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr"
 }
 
 ## Is `e` a `bytes(x)` call — the str→`[u8]` view (appendix 160 §3.5)? `str` and `[u8]` share the
 ## `{ptr, len}` representation, so `bytes(x)` is a str-VALUED expression: a `name := bytes(x)`
 ## binding reserves a str slot, and `emit_str_pair` emits `x`'s pair. (`src/` uses `bytes` only in
 ## the `bytes(x)[i]` index form, so this classification never fires for the fixpoint build.)
-is_bytes_call := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+is_bytes_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
   match deref(e) {
-    Expr::Call(cs, cl, nargs, args_head) => { nargs == 1 and str_at((src + cs), cl) == "bytes" }
+    Expr::Call(cs, cl, nargs, args_head) => { nargs == 1 and lower_layout::intrinsic_callee(decls, src, cs, cl) == "bytes" }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
@@ -7335,8 +7334,8 @@ is_ecallee_call := fn(e : ptr(Expr)) -> bool {
 view_pair_base := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   if str_lit_info(e).is_s { return true }
   if is_sub_call(e, cx.decls, cx.src, arena_of(cx)) { return true }
-  if is_strat_call(e, cx.src) { return true }
-  if is_bytes_call(e, cx.src) { return true }
+  if is_strat_call(e, cx.decls, cx.src) { return true }
+  if is_bytes_call(e, cx.decls, cx.src) { return true }
   is_slice_expr(e)
 }
 
@@ -7373,7 +7372,7 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
     return
   }
   ## `bytes(x)` — the str→`[u8]` view (identical `{ptr, len}` repr). Emit `x`'s pair directly.
-  mut bvp := bytes_view_arg(e, cx.src, a)
+  mut bvp := bytes_view_arg(e, cx.decls, cx.src, a)
   if unchecked bitcast(usize, bvp) != 0 {
     ## A bytes-view source may be an immutable module constant. Resolve only at the builtin boundary
     ## so ordinary `str` operations keep their established behavior while immediate/bound/initializer
@@ -7381,14 +7380,14 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
     bvn := var_name_span(bvp)
     if bvn.n != 0 {
       bcm := module_const_value(cx.decls, cx.src, bvn.s, bvn.n)
-      if unchecked bitcast(usize, bcm) != 0 and (str_lit_info(bcm).is_s or is_bytes_call(bcm, cx.src)) {
+      if unchecked bitcast(usize, bcm) != 0 and (str_lit_info(bcm).is_s or is_bytes_call(bcm, cx.decls, cx.src)) {
         bvp = bcm
       }
     }
     emit_str_pair(bvp, sb, cx, a, nl)
     return
   }
-  if is_strat_call(e, cx.src) {
+  if is_strat_call(e, cx.decls, cx.src) {
     emit_strat_pair(e, sb, cx, a, nl)
     return
   }
@@ -7859,9 +7858,9 @@ emit_view_byte_index := fn(pair : ptr(Expr), idx : ptr(Expr), in out sb : strbuf
 ## it is a str-PRODUCING call (a 2-word str value), so it must be sized + lowered as a str wherever
 ## a str expression flows. The self-host lower has NO `str_at` fn to call (it is a Stage-0 builtin),
 ## so every pass's `str_at(...)` is recognized + INLINED here, like `byte_at`/`str_eq`/`sub`.
-is_strat_call := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+is_strat_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
   match deref(e) {
-    Expr::Call(cs, cl, nargs, args_head) => { str_at((src + cs), cl) == "str_at" }
+    Expr::Call(cs, cl, nargs, args_head) => { lower_layout::intrinsic_callee(decls, src, cs, cl) == "str_at" }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
@@ -10310,10 +10309,10 @@ subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src 
 ## payload's words from the return registers itself, so it needs the operand, not the unwrapped value
 ## (which is only payload word 0). Unlike `tryable_field_recv` this does not look through
 ## `unchecked`/`bitcast`: a binding of those keeps its previous lowering.
-try_bind_unwrap := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena) -> TryField {
+try_bind_unwrap := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> TryField {
   match deref(v) {
-    Expr::Try(_inner) => { tryable_field_recv(v, src, a) }
-    Expr::Call(_cs, _cl, _na, _ah) => { tryable_field_recv(v, src, a) }
+    Expr::Try(_inner) => { tryable_field_recv(v, decls, src, a) }
+    Expr::Call(_cs, _cl, _na, _ah) => { tryable_field_recv(v, decls, src, a) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::ArrayLit | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
@@ -10328,7 +10327,7 @@ try_bind_unwrap := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena) -> TryField {
 ## payload, 0 when the value is neither or its payload is not a struct. Locals, not chained reads of
 ## call results, so the frozen seed lowers it (the shape #753 had to avoid).
 try_bind_struct_words := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
-  tbu := try_bind_unwrap(v, src, a)
+  tbu := try_bind_unwrap(v, decls, src, a)
   if not unwrap_is_some(tbu.kind) { return 0 }
   tos := try_ok_struct_span(v, slots, decls, src, a)
   if tos.n == 0 { return 0 }
@@ -10365,7 +10364,7 @@ try_ok_struct_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
     ## `<call>?`'s does. (An `expect` on a LOCAL goes through the library `expect`, which already
     ## returns the payload whole.)
     Expr::Call(_cs, _cl, _na, _ah) => {
-      tbf := tryable_field_recv(v, src, a)
+      tbf := tryable_field_recv(v, decls, src, a)
       if not unwrap_is_expect(tbf.kind) { return CSpan(s = 0, n = 0) }
       es := call_ret_enum_span_d(tbf.recv, decls, src, a)
       if es.n == 0 { return CSpan(s = 0, n = 0) }
@@ -10908,7 +10907,7 @@ emit_retreg := fn(in out sb : strbuf::StrBuf, k : usize) {
 is_str_operand := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   si := str_lit_info(e)
   if si.is_s { return true }
-  if is_strat_call(e, cx.src) { return true }
+  if is_strat_call(e, cx.decls, cx.src) { return true }
   if is_sub_call(e, cx.decls, cx.src, deref(cx.mar)) { return true }
   if is_slice_expr(e) { return true }
   if str_ret_call(e, cx.decls, cx.src, deref(cx.mar)) { return true }
@@ -11978,15 +11977,15 @@ unwrap_is_some := fn(k : UnwrapKind) -> bool {
   match k { Try | Expect => { true }; NotUnwrap => { false } }
 }
 TryField := struct { kind : UnwrapKind, recv : ptr(Expr), msg : ptr(Expr) }
-tryable_field_recv := fn(base : ptr(Expr), src : ptr(u8), a : rt::Arena) -> TryField {
+tryable_field_recv := fn(base : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> TryField {
   z := unchecked bitcast(ptr(Expr), 0)
   mut res := TryField(kind = UnwrapKind.NotUnwrap, recv = z, msg = z)
   match deref(base) {
     Expr::Try(inner) => { res = TryField(kind = UnwrapKind.Try, recv = inner, msg = z) }
-    Expr::Unchecked(inner) => { res = tryable_field_recv(inner, src, a) }
-    Expr::Bitcast(inner, _bcs, _bcl) => { res = tryable_field_recv(inner, src, a) }
+    Expr::Unchecked(inner) => { res = tryable_field_recv(inner, decls, src, a) }
+    Expr::Bitcast(inner, _bcs, _bcl) => { res = tryable_field_recv(inner, decls, src, a) }
     Expr::Call(cs, cl, nargs, args_head) => {
-      if str_at((src + cs), cl) == "expect" and nargs >= 2 {
+      if lower_layout::intrinsic_callee(decls, src, cs, cl) == "expect" and nargs >= 2 {
         r0 := arg_expr_at(args_head, 0, a)
         m1 := arg_expr_at(args_head, 1, a)
         res = TryField(kind = UnwrapKind.Expect, recv = r0, msg = m1)
@@ -13511,11 +13510,11 @@ expr_is_branch := fn(e : ptr(Expr)) -> bool {
 ## The `match deref` stays in this helper: a nested deref-`match` inside another match arm does
 ## not lower (Stage-0 "variant-pattern match is not lowered yet"), the same reason the other
 ## deref-matches are isolated into pointer-PARAM helpers.
-bytes_view_arg := fn(base : ptr(Expr), src : ptr(u8), a : rt::Arena) -> ptr(Expr) {
+bytes_view_arg := fn(base : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> ptr(Expr) {
   mut r := unchecked bitcast(ptr(Expr), 0)
   match deref(base) {
     Expr::Call(cs, cl, nargs, ah) => {
-      if nargs == 1 and str_at((src + cs), cl) == "bytes" { r = arg_expr_at(ah, 0, a) }
+      if nargs == 1 and lower_layout::intrinsic_callee(decls, src, cs, cl) == "bytes" { r = arg_expr_at(ah, 0, a) }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
@@ -13533,10 +13532,10 @@ bytes_view_arg := fn(base : ptr(Expr), src : ptr(u8), a : rt::Arena) -> ptr(Expr
 ## (`scan_call_str_args`) and the per-arg OFFSET (`str_arg_tmp_off`) use this so they agree.
 arg_str_temp := fn(e : ptr(Expr), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena) -> bool {
   mut inner := e
-  bva := bytes_view_arg(e, src, a)
+  bva := bytes_view_arg(e, decls, src, a)
   if unchecked bitcast(usize, bva) != 0 { inner = bva }
   si := str_lit_info(inner)
-  if si.is_s or is_strat_call(inner, src) or is_name_field_ref(e, src) { return true }
+  if si.is_s or is_strat_call(inner, decls, src) or is_name_field_ref(e, src) { return true }
   ## a str-CONSTANT `Var` argument (`MSG := "…"`) is materialized like a str literal → it too needs a
   ## 2-word temp block, so the pool is sized + indexed consistently (scan + offset agree).
   vn := var_name_span(e)
@@ -19451,7 +19450,7 @@ emit_operand_words := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
   ## A `bytes(…)` view and a string literal are already proven two-word values. Keep them on the
   ## same `{ptr,len}` choke point used by ordinary call arguments; the inline caller supplies the
   ## addressable scratch home implicitly by copying the two pushed words into its inline frame.
-  bva := bytes_view_arg(e, cx.src, a)
+  bva := bytes_view_arg(e, cx.decls, cx.src, a)
   if unchecked bitcast(usize, bva) != 0 {
     emit_str_pair(e, sb, cx, a, nl)
     return 2
@@ -21189,7 +21188,10 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## the ptr, push the len. `str_eq(a, b)` is the byte-compare equality (`emit_str_eq`).
       ## Both take str operands directly (a `StrLit` or a str `Var`), read via `emit_str_pair`,
       ## not the generic argument-register convention.
-      callee := str_at((cx.src + cs), cl)
+      ## #1434 — the spelling the name-keyed arms below match: the callee text, or nothing when the callee
+      ## resolves to a declaration the program wrote (`lower_layout::callee_is_program_fn`), so a declared
+      ## `size`/`len`/`str_eq`/… reaches the generic call like any other name.
+      callee := lower_layout::intrinsic_callee(cx.decls, cx.src, cs, cl)
       ## COMPTIME CAPABILITY QUERIES (Comptime §6.1): value-position `resolves(...)` and
       ## `compiles(...)` must never reach ordinary call lowering. The sema pass rewrites these
       ## nodes when it runs, but build lowering can receive a fresh AST; fold with the same
@@ -21761,7 +21763,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## (`emit_unwrap_check`), and a payload wider than one word is refused here exactly as `?`'s is —
       ## a binding `x := <call>.expect(m)` takes every word itself (`emit_st_assign`).
       if callee == "expect" {
-        tbf := tryable_field_recv(e, cx.src, a)
+        tbf := tryable_field_recv(e, cx.decls, cx.src, a)
         if unwrap_is_expect(tbf.kind) and call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar)).n != 0 {
           if try_value_payload_words(tbf.recv, cx, a) > 1 {
             panic("selfhost: the value of `.expect(…)` over a multi-word payload is used here, and only one word would arrive (#986); bind it first (`x := ….expect(…)`) and use `x`")
@@ -22661,7 +22663,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## writes `msg` + `exit(1)` (the `panic` sequence); on success the field IS payload[0] (%rdx)
       ## since it is at offset 0. (Offset > 0 needs payload words past %rdx — not delivered here — so
       ## this fires ONLY for an offset-0 field; anything else falls through.)
-      tbf := tryable_field_recv(base, cx.src, a)
+      tbf := tryable_field_recv(base, cx.decls, cx.src, a)
       if unwrap_is_some(tbf.kind) {
         mut rty := call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar))
         ## #752 — `?` on an enum LOCAL (`r?.a`) types its payload from the local, as the value arm does.
@@ -23642,7 +23644,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## `emit_view_byte_index` (the same shared decision the str-LITERAL and str-ELEMENT arms above
       ## use, bounds check included); otherwise the ordinary array-element word read. This is the
       ## byte primitive both Stage-0 and the self-host lower accept (no `byte_at` builtin).
-      mut bv := bytes_view_arg(base, cx.src, a)
+      mut bv := bytes_view_arg(base, cx.decls, cx.src, a)
       ## `GLOBAL[i]` on a MUTABLE array global (`TABLE[i]`): load element `i` from `.data` at
       ## `LABEL + i*8`. `leaq LABEL(%rip)` (PIE-safe base), then an indexed word load. The base is a
       ## module global, not a frame array, so this precedes `emit_index_addr` (which reads a slot).
@@ -23653,8 +23655,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## than treating an arbitrary module constant as an array place.
       if unchecked bitcast(usize, bv) == 0 and gav.n != 0 {
         gcv := module_const_value(cx.decls, cx.src, gav.s, gav.n)
-        if unchecked bitcast(usize, gcv) != 0 and is_bytes_call(gcv, cx.src) {
-          bv = bytes_view_arg(gcv, cx.src, a)
+        if unchecked bitcast(usize, gcv) != 0 and is_bytes_call(gcv, cx.decls, cx.src) {
+          bv = bytes_view_arg(gcv, cx.decls, cx.src, a)
         }
       }
       mut gamgv : ptr(Expr) = if gav.n != 0 { mut_global_value(cx.decls, cx.src, gav.s, gav.n) } else { unchecked bitcast(ptr(Expr), 0) }
@@ -25399,8 +25401,8 @@ pair_value_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   if str_lit_info(e).is_s { return true }
   if is_slice_expr(e) { return true }
   if is_sub_call(e, cx.decls, cx.src, arena_of(cx)) { return true }
-  if is_strat_call(e, cx.src) { return true }
-  if is_bytes_call(e, cx.src) { return true }
+  if is_strat_call(e, cx.decls, cx.src) { return true }
+  if is_bytes_call(e, cx.decls, cx.src) { return true }
   vn := var_name_span(e)
   if vn.n == 0 { return false }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
@@ -26122,9 +26124,9 @@ arm_count := fn(head : Option(ptr(mut Arm)), a : rt::Arena) -> usize {
 ## would route through `emit_struct_value`/`emit_enum_value`, which mangle `panic` to an undefined
 ## `<module>__panic` (link error). TAIL-match form (a `mut res`+assign-in-arm form is seed-mislowered —
 ## mirror `is_sub_call`).
-ret_expr_is_panic := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+ret_expr_is_panic := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
   match deref(e) {
-    Expr::Call(cs, cl, nargs, args_head) => { str_at((src + cs), cl) == "panic" }
+    Expr::Call(cs, cl, nargs, args_head) => { lower_layout::intrinsic_callee(decls, src, cs, cl) == "panic" }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
@@ -26136,7 +26138,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
   ## A `panic(msg)` arm/return value in an AGGREGATE-returning fn (`unwrap`/`expect`'s `None`/`Err` arm):
   ## emit the builtin panic (write(2,msg)+exit(1)) via the scalar path, pop its dead `$0`, and jmp the
   ## epilogue — never route it through the aggregate emitters (which would mangle `panic`).
-  if ret_expr_is_panic(rv, cx.src) {
+  if ret_expr_is_panic(rv, cx.decls, cx.src) {
     emit_gas(rv, sb, cx, a, nl)          ## builtin panic: write(2,msg)+exit(1); leaves a dead $0
     push_str(sb, "  popq %rax\n  jmp ")
     emit_label(sb, cx.epi)
@@ -26566,7 +26568,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
 expr_is_str_val := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
   si := str_lit_info(e)
   if si.is_s { return true }
-  if is_sub_call(e, decls, src, a) or is_strat_call(e, src) or is_slice_expr(e) or is_bytes_call(e, src) { return true }
+  if is_sub_call(e, decls, src, a) or is_strat_call(e, decls, src) or is_slice_expr(e) or is_bytes_call(e, decls, src) { return true }
   str_ret_call(e, decls, src, a)
 }
 ## The FIRST real value body of a `match`/`if` EXPRESSION — the first non-wildcard (or str-literal)
@@ -27534,7 +27536,7 @@ guard_resolve_tp := fn(tp : ptr(GuardTP), src : ptr(u8), ts : usize, tl : usize)
 guard_size_operand := fn(e : ptr(Expr), tp : ptr(GuardTP), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64 {
   match deref(e) {
     Expr::Call(cs, cl, nargs, ah) => {
-      if str_at((src + cs), cl) == "size" and nargs >= 1 {
+      if lower_layout::intrinsic_callee(decls, src, cs, cl) == "size" and nargs >= 1 {
         a0 := arg_expr_at(ah, 0, a)
         tn := var_name_span(a0)
         rv := guard_resolve_tp(tp, src, tn.s, tn.n)
@@ -27983,7 +27985,7 @@ emit_st_expr_stmt := fn(e : ptr(Expr), nx : Option(ptr(mut Stmt)), head : Option
     vpr = true
   }
   if not vpr {
-    tbf := tryable_field_recv(e, cx.src, a)
+    tbf := tryable_field_recv(e, cx.decls, cx.src, a)
     mut handled := false
     if unwrap_is_some(tbf.kind) {
       rty := call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar))
@@ -28758,7 +28760,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             is_nonvar := fv.n == 0
             ## a `for c in bytes(s)` iterable is a BYTE slice (u8 elements, stride 1) — read each element
             ## with `movzbq` at stride 1, not a word load at stride 8. (Detected on the `bytes(…)` call.)
-            mut byte_elem := is_nonvar and is_bytes_call(flo, cx.src)
+            mut byte_elem := is_nonvar and is_bytes_call(flo, cx.decls, cx.src)
             ## #1238 — the iterable element's OWN width and signedness, the same rule `slice_var_ref`
             ## applies to `s[i]`: a `for x in v.iter()` over a `Slice(u16)` steps 2 bytes and loads 2
             ## bytes, not a word at stride 8 (Types §6.4). 8 = the word, unchanged for every element the

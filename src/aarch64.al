@@ -3834,7 +3834,7 @@ a64_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), 
 ## matches: float, `str` and aggregate holes still reach the one integer renderer here, unchanged and
 ## still out of scope.
 a64_hole_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
-  if lower_layout::operand_signed(e, params_head, body_head, src, a) { return true }
+  if lower_layout::operand_signed(e, params_head, body_head, decls, src, a) { return true }
   if a64_operand_unsigned(e, params_head, body_head, src, a) { return false }
   mut r := false
   if lit_arith_i64(e, src) { r = true }
@@ -5078,8 +5078,8 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         if op == 19 { push_str(sb, "  fdiv d0, d0, d1\n") }
         push_str(sb, "  fmov x0, d0\n")
       } else {
-        dl := lower_layout::operand_signed(l, params_head, body_head, src, a)
-        dr := lower_layout::operand_signed(r, params_head, body_head, src, a)
+        dl := lower_layout::operand_signed(l, params_head, body_head, decls, src, a)
+        dr := lower_layout::operand_signed(r, params_head, body_head, decls, src, a)
         ## #964 — `/ %` take their signedness from sema's RECORD of the operator, exactly as x86_64
         ## already does at its own division site (`lower.al`, `ir_arith_signed`; docs/ir.md §3.8 e3).
         ## The shape query proves a `Var` signed from its annotation and nothing about a literal-only
@@ -5145,7 +5145,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       push_str(sb, ".Lend") ; push_int(sb, id) ; push_str(sb, ":\n")
     }
     Expr::Call(cs, cl, nargs, args_head) => {
-      nm := str_at((src + cs), cl)
+      nm := lower_layout::intrinsic_callee(decls, src, cs, cl)   ## #1434: a program-declared `len`/`shl`/… is its own call
       ## `print`/`println` whose FIRST arg is a string literal → template emission (a plain literal is
       ## a template with no `{}` holes). Literal runs → write(1,…) syscalls; `{}` holes → the arg via
       ## `__print_u64`; println → a trailing newline write. Anything else falls through (trap).
@@ -5221,7 +5221,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         push_str(sb, "  str x0, [sp, #-16]!\n")
         emit_a64_expr(sn, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "  mov x1, x0\n  ldr x0, [sp], #16\n")
-        ssigned := lower_layout::operand_signed(sv, params_head, body_head, src, a)
+        ssigned := lower_layout::operand_signed(sv, params_head, body_head, decls, src, a)
         if nm == "shr" { ir::sign_row("aarch64", 0, sv, sn, src, ssigned) }
         ## A SUB-WORD operand bounds the count by ITS width (Concurrency §6.1) and its result is
         ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual.
