@@ -304,7 +304,9 @@ analyse() {
   local lib_rc src_rc
   read -r lib_rc _ < "$W/lib.rc"; read -r src_rc _ < "$W/src.rc"
   for set in lib src; do
-    grep '^fn ' "$W/$set.out" | sed "s|^|$set/	|" > "$W/$set.fns" || true
+    # A report line only (`fn <module>::<name> <verdict>`), never a built function's IR header
+    # (`fn <name>(…) {`): matching that too counted every built function twice (#1028).
+    grep -E '^fn [^ (]+ (Built$|NotYet\(|VerifyFailed\()' "$W/$set.out" | sed "s|^|$set/	|" > "$W/$set.fns" || true
   done
 
   echo "ir census: functions handed to the shared IR builder; every built one is verified (docs/ir.md §5)"
