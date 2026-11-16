@@ -13,3 +13,7 @@
   a one-byte element (`[u8; N]`, `[i8; N]`, a byte field or view), because the callee still writes
   its place a whole word wide and would overwrite the neighbouring bytes, and an element of a
   module-global array.
+  On wasm, which passes every scalar argument by value and has no place passing for one, a write to a
+  scalar `out` / `in out` parameter now traps instead of being lost: `give(g)` answered 12 there too,
+  and `bump(g)` twice answered 105 where 111 was due (#1692). A callee that only reads its `in out`
+  scalar is unaffected.

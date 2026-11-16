@@ -1397,8 +1397,8 @@ wasm	test/issue1497_block_scoped_shadow_const.al	run/134	#1502
 wasm	test/issue1502_block_local_module_binding.al	run/134	#1502
 wasm	test/issue1514_word_array_range_slice.al	run/134	#1288
 wasm	test/issue1622_narrow_view_legacy_reslice.al	run/134	#1288
-wasm	test/issue1684_out_u8_elem_last.al	run/2	#1692
-wasm	test/issue1684_out_u8_elem_mid.al	run/2	#1692
+wasm	test/issue1684_out_u8_elem_last.al	run/134	#1692
+wasm	test/issue1684_out_u8_elem_mid.al	run/134	#1692
 wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
 wasm	test/issue169_wasm_array_write.al	run/134	#1194
 wasm	test/issue169_wasm_nested_return.al	run/134	#1191
