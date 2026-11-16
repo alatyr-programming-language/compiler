@@ -1,23 +1,27 @@
 ## e2e — #1576 (IR-19): a NICHE-FOLDED `Option(ptr(T))` crosses a call on the shared IR, in both
-## directions, on x86_64. It is exactly one pointer word with NO discriminant (Types §6.2/§8,
+## directions, on x86_64. It is exactly one pointer word with NO discriminant (Types §6.2/§7,
 ## Memory §4.2; `lower_layout::is_niche_folded` is the one place that decides it): `None` is the
 ## payload's null pattern (0), `Some(p)` is the pointer `p`, and a `match` tests that word against 0.
 ## It crosses as any aggregate does — a parameter is the ADDRESS of a caller-owned copy of its words,
 ## a result of one word comes back in the result register — the convention x86_64's legacy emitter
-## already uses (measured: `leaq` of the spilled word, `%rax`). `lg_rd` and `lg_pass` hold a float
-## literal the IR does not build, so the legacy emitter emits them; `rd`, `mk` and `main` are IR-built.
-##   * IR -> legacy: `lg_rd(mk(…))` — a legacy callee reads an IR-built callee's folded result;
-##   * legacy -> IR: `lg_pass` passes a folded value it built to `rd`;
+## already uses. `lg_rd` and `lg_pass` hold a float literal the IR does not build, so the legacy
+## emitter emits them; `rd`, `mk` and `main` are IR-built (`alatyr ir` says so, measured):
+##   * IR -> legacy: `main` calls `lg_rd` / `lg_pass`, legacy callees of an IR-built caller;
+##   * legacy -> IR: `lg_pass` passes a folded value it built to `rd`, an IR-built callee;
 ##   * IR -> IR: `rd(s)` through a folded local, and `rd(mk(…))` straight from a call.
-## Each check owns its own bit of the mask; 42 when all held. On the parent every function here was
-## refused (`CSigParamUnresolved`, `CSigResultWide`) and the whole program went to the legacy emitter.
-## The directive names every backend that answers it: aarch64 and riscv64 answer 42 too, because
-## `ir::sig_has_folded_option` keeps such a signature — and every IR-built call to one — on THEIR
-## legacy emitter (`sa_fn`/`sa_call`, `sr_fn`/`sr_call`), which handles it; that refusal is what this
-## fixture pins there, and it is the answer they gave on the parent. wasm is left undeclared, as the
-## whole folded-option family leaves it: its legacy emitter traps (134) on the folded LOCAL in `main`,
-## unchanged from the parent. So this slice moves no value on wasm and none on the twins either — the
-## twins' 42 is the parent's 42, held in place by a refusal rather than by new code.
+## Each check owns its own bit of the mask; 42 when all held.
+## On the PARENT every function here was refused by the builder (`signature: parameter type names no
+## struct or enum resolvable here`, `signature: aggregate result wider than two words`) and the whole
+## program went to the legacy emitter, which ANSWERS 42 on x86_64, aarch64 and riscv64 and traps (134)
+## on wasm — measured: the same 42, 42, 42 and 134 on both trees, the aarch64, riscv64 and wasm dumps
+## byte-identical. So this fixture pins that the crossing is now the IR's, at the same value; the
+## value that MOVES is in `test/ir_option_ptr_local_twin.al`.
+## The directive names every backend that answers 42. aarch64 and riscv64 answer it because
+## `ir::sig_pins_legacy` keeps such a signature — and every call to one — on THEIR legacy emitter
+## (`sa_fn`/`sa_call`, `sr_fn`/`sr_call`), which passes an aggregate as the unfolded tag and payload
+## words: nothing here is selected from the IR there (measured, `ir: selected` count 0). wasm is left
+## undeclared, as the whole folded-option family leaves it: its legacy emitter traps (134) on the
+## folded LOCAL in `main`, unchanged from the parent.
 rd := fn(o : Option(ptr(u64))) -> u64 {
   match o { Some(p) => deref(p); None => 7 }
 }
