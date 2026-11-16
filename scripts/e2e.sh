@@ -9308,6 +9308,25 @@ run_x86_trap ir_array_bound 132
 run_a64 ir_array_bound 133
 run_rv64 ir_array_bound 133
 run_wat ir_array_bound 134
+## IR #1705: fixed arrays of struct and enum elements (one frame object, element `i` at `i * stride`,
+## Types §6.4) and aggregate locals declared without an initializer (Declarations §4, §5), built from the
+## shared IR on every backend; the index of a struct-element array is checked like a scalar array's.
+run ir_agg_arr_local 42
+run_a64 ir_agg_arr_local 42
+run_rv64 ir_agg_arr_local 42
+run_wat ir_agg_arr_local 42
+run ir_agg_arr_enum 42
+run_a64 ir_agg_arr_enum 42
+run_rv64 ir_agg_arr_enum 42
+run_wat ir_agg_arr_enum 42
+run ir_uninit_agg 42
+run_a64 ir_uninit_agg 42
+run_rv64 ir_uninit_agg 42
+run_wat ir_uninit_agg 42
+run_x86_trap ir_agg_arr_bound 132
+run_a64 ir_agg_arr_bound 133
+run_rv64 ir_agg_arr_bound 133
+run_wat ir_agg_arr_bound 134
 ## Explicit overflow-policy operations (Concurrency §6.3 / CG-8): wrapping_*/saturating_*/checked_* (->
 ## Option)/overflowing_* (-> (T,bool)) on the integer interpretations, exercised at the u8/u64/i32
 ## boundaries. A NEUTRAL library addition (lib/base/num.al) resting on the x86_64-gated scalar

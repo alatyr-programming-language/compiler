@@ -2181,8 +2181,13 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
         match plo { Some(pl) => { return ib_agg_bound(bp, a, pl.di, pl.s, pl.n) }; None => {} }
       }
     }
+    ## #1705: `xs[i]` of an aggregate-element array local — its element type (asking emits nothing).
+    Expr::Index(gb, gix) => {
+      gpo : Option(IbAgAt) = ib_agarr_place(bp, a, gb)
+      match gpo { Some(gp) => { return Option(IbSt).Some(ib_agat_el(gp)) }; None => {} }
+    }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match
-      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   Option(IbSt).None
@@ -2273,8 +2278,27 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
         }
       }
     }
+    ## #1705: an element of an aggregate-element array read whole — the index checked, the element copied
+    ## out of its place into a fresh object.
+    Expr::Index(gb, gix) => {
+      eplo : Option(IbPlace) = ib_agarr_index_place(bp, a, e, gb, gix)
+      match eplo {
+        Some(epl) => {
+          efr := ib_new_obj(bp, a, st)
+          esrc := ib_place_addr(bp, a, epl)
+          oef := o_frame(efr)
+          mut eit := inst0(Op.OpCopy)
+          set_a(eit, oef)
+          set_b(eit, esrc)
+          eit.n = st.size
+          ek := emit(ib_b_f(bp), a, eit)
+          return Option(IbObj).Some(IbObj(fr = efr, fresh = true))
+        }
+        None => { return Option(IbObj).None }
+      }
+    }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit
-      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   ib_refuse_expr(bp, e, NyWhy.NwOutside)
@@ -2287,6 +2311,16 @@ ib_place_pure := fn(b : ptr(Expr)) -> bool {
     Expr::Field(fb, fs, fl) => { ib_place_pure(fb) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+## Does the place expression `b` step through an index (`xs[i].f`, `xs[i].inner`)?
+ib_place_has_index := fn(b : ptr(Expr)) -> bool {
+  match deref(b) {
+    Expr::Index(ib, ix) => { true }
+    Expr::Field(fb, fs, fl) => { ib_place_has_index(fb) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
@@ -2522,6 +2556,22 @@ ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
                 ## A literal's value is a fresh frame object of its own (`ib_arr_value`).
                 lso : Option(IbArrAt) = ib_arr_value(bp, a, v, r)
                 match lso { Some(lsp) => { ib_bind_arr_inf(bp, a, ns, nl, FrameId(usize(lsp.bv)), nel, esp.s, esp.n) }; None => {} }
+                return
+              }
+              None => {}
+            }
+          }
+          None => {}
+        }
+        ## #1705: `t := [P(…), P(…)]` — every element names one struct (or enum) the builder lays out.
+        gso : Option(IbSpan) = ib_agarr_lit_elem(bp, a, v)
+        match gso {
+          Some(gsp) => {
+            gro : Option(IbAgArr) = ib_agarr_of(bp, a, nel, gsp.s, gsp.n)
+            match gro {
+              Some(gr) => {
+                gfo : Option(FrameId) = ib_agarr_value(bp, a, v, gr)
+                match gfo { Some(gf) => { ib_bind_arr_inf(bp, a, ns, nl, gf, nel, gsp.s, gsp.n) }; None => {} }
                 return
               }
               None => {}
@@ -3431,8 +3481,11 @@ ib_place_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Opt
         None => {}
       }
     }
+    ## #1705: `xs[i]` of an aggregate-element array local — the element, a place (Memory §1.6). The index
+    ## is evaluated (and checked) here, once.
+    Expr::Index(gb, gix) => { return ib_agarr_index_place(bp, a, b, gb, gix) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
-      | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   Option(IbPlace).None
@@ -3472,6 +3525,10 @@ ib_bs_field_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut St
 ib_bs_field_path_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), pl : ptr(Expr), pv : ptr(Expr)) {
   match deref(pl) {
     Expr::Field(b, fs, fl) => {
+      ## #1705: a write into an element of an aggregate-element array (`xs[i].inner.f = v`; the parser
+      ## records `xs[i].f = v` as `IndexFieldAssign`) would resolve, and check, the index before the value
+      ## is built — not the order `xs[i] = v` takes. It is not built.
+      if ib_place_has_index(b) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
       plo : Option(IbPlace) = ib_place_of(bp, a, b)
       ib_bs_store_field(bp, a, h, plo, fs, fl, pv)
       return
@@ -3542,6 +3599,20 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
   match apo {
     Some(ap) => {
       if fl == 3 and str_at((ib_b_src(bp) + fs), 3) == "len" { return ib_bx_arr_len(bp, a, e, ap) }
+      return ib_no(bp, e, NyWhy.NwOutside)
+    }
+    None => {}
+  }
+  ## #1705: `xs.len` of an aggregate-element array local, its comptime `N` too.
+  gpo : Option(IbAgAt) = ib_agarr_place(bp, a, b)
+  match gpo {
+    Some(gp) => {
+      if fl == 3 and str_at((ib_b_src(bp) + fs), 3) == "len" {
+        k := ib_ty(bp, e)?
+        if not kty_is_int(k.ty) { return ib_no(bp, e, NyWhy.NwDisagree) }
+        d := ib_konst(bp, a, k, i64(gp.n))
+        return Option(VRegId).Some(d)
+      }
       return ib_no(bp, e, NyWhy.NwOutside)
     }
     None => {}
@@ -3960,10 +4031,12 @@ ib_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, ix : ptr(Expr)) -> IbIx 
 }
 ## Evaluate index `ix` of `ap` (`ib_index`). A literal outside the array is refused (x86_64 owns that
 ## case today).
-ib_arr_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, ap : IbArrAt, ix : ptr(Expr)) -> IbIx {
+ib_arr_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, ap : IbArrAt, ix : ptr(Expr)) -> IbIx { ib_index_below(bp, a, ap.n, ix) }
+## Evaluate index `ix` of an array of `n` elements, scalar or aggregate (#1705).
+ib_index_below := fn(bp : ptr(mut IbB), in out a : rt::Arena, n : usize, ix : ptr(Expr)) -> IbIx {
   x : IbIx = ib_index(bp, a, ix)
   match x {
-    IxLit(i) => { if i >= ap.n { ib_refuse_expr(bp, ix, NyWhy.NwOutside); return IbIx.IxRefused } }
+    IxLit(i) => { if i >= n { ib_refuse_expr(bp, ix, NyWhy.NwOutside); return IbIx.IxRefused } }
     IxVal(iv) => {}
     IxRefused => {}
   }
@@ -4485,6 +4558,7 @@ ib_bs_index_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut St
     }
     None => {}
   }
+  if ib_bs_agarr_index_assign(bp, a, b, ix, v) { return }
   ib_refuse_stmt(bp, h, NyWhy.NwOutside)
 }
 
@@ -4588,7 +4662,8 @@ ib_bs_arr_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
         None => {}
       }
     }
-    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    ## #1705: an array of struct or enum elements.
+    None => { ib_bs_agarr_decl(bp, a, h, ns, nl, ts, tn, v) }
   }
 }
 ## `xs = v` into the array local in object `fr`: the value in its own object first (a literal reading
@@ -4600,7 +4675,8 @@ ib_bs_arr_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt
       so : Option(IbArrAt) = ib_arr_value(bp, a, v, r)
       match so { Some(sp) => { os := ib_arr_src(bp, a, sp); ib_copy_into(bp, a, fr, os, ib_arr_bytes(r)) }; None => {} }
     }
-    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    ## #1705: an array of struct or enum elements.
+    None => { ib_bs_agarr_assign(bp, a, h, fr, ts, tn, v) }
   }
 }
 ## `xs.len` of an array the builder lays out: the comptime `N` (Types §6.4), at sema's type of the read.
@@ -4609,6 +4685,384 @@ ib_bx_arr_len := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ap :
   if not kty_is_int(k.ty) { return ib_no(bp, e, NyWhy.NwDisagree) }
   d := ib_konst(bp, a, k, i64(ap.n))
   Option(VRegId).Some(d)
+}
+
+## ── fixed arrays of aggregate elements (#1705) ──
+##
+## An array local `[P; N]` whose element `P` is a struct or enum the builder lays out (`ib_agg_named`) is
+## one frame object of `N * stride` bytes, element `i` a sub-object at byte `i * stride` (Types §6.4: the
+## element's size rounded up to its alignment). Size and alignment are the element's `IbSt`, the same
+## `lower_layout` answer (`standard_struct_*`, `enum_layout`) every object of that type gets, so an element
+## and a standalone value of `P` never disagree. The stride is NOT asked of
+## `lower_layout::layout_elem_stride_bytes`: it answers 0 or 8 for an enum element (#1709). The array is
+## built only where `size` is already a multiple of the alignment, so element `i + 1` begins where element
+## `i` ends and a whole-element copy of `size` bytes covers exactly one element.
+##
+## Like a scalar array local (slice 3c) it never meets legacy code: `ib_arr_of` answers `None` for it, so
+## passing it whole to a call, `ptr(xs)`, a range over it and `for x in xs` stay refused. Built: the
+## declaration (annotated, by an array literal or a copy of another such array; unannotated, by a literal
+## whose elements all name the element type), `xs = v`, `xs[i] = v`, `xs[i].f` and `xs[i].f = v` of a
+## scalar field, the element read whole (`p := xs[i]`, an argument, a result) and `xs.len`. An index is
+## evaluated and checked exactly as a scalar array's (`ib_index_below`, `ib_checked_gep`).
+
+## An aggregate-element array the builder lays out: `n` elements of the struct or enum `di` (named
+## `[s, s+sn)`) of `size` bytes and alignment `align`, `stride` bytes apart. Flat for the frozen seed (#912).
+IbAgArr := struct { n : usize, di : usize, s : usize, sn : usize, size : usize, align : usize, stride : usize }
+## Where one lives: always a whole frame object of its own (it crosses no call and no pointer).
+IbAgAt := struct { fr : FrameId, n : usize, di : usize, s : usize, sn : usize, size : usize, align : usize, stride : usize }
+ib_agarr_at := fn(fr : FrameId, r : IbAgArr) -> IbAgAt { IbAgAt(fr = fr, n = r.n, di = r.di, s = r.s, sn = r.sn, size = r.size, align = r.align, stride = r.stride) }
+ib_agarr_layout := fn(ap : IbAgAt) -> IbAgArr { IbAgArr(n = ap.n, di = ap.di, s = ap.s, sn = ap.sn, size = ap.size, align = ap.align, stride = ap.stride) }
+## The element type of `ap`.
+ib_agat_el := fn(ap : IbAgAt) -> IbSt { IbSt(di = ap.di, s = ap.s, n = ap.sn, size = ap.size, align = ap.align) }
+ib_agarr_bytes := fn(r : IbAgArr) -> usize { r.n * r.stride }
+## Two layouts describe the same array type (a copy between them is a whole-object copy).
+ib_agarr_same := fn(x : IbAgArr, y : IbAgArr) -> bool { x.n == y.n and x.di == y.di and x.stride == y.stride and x.size == y.size }
+## A fresh frame object for one array of layout `r`.
+ib_agarr_obj := fn(bp : ptr(mut IbB), in out a : rt::Arena, r : IbAgArr) -> FrameId { new_frame(ib_b_f(bp), a, ib_agarr_bytes(r), r.align) }
+
+## `n` elements of the struct or enum type spelled `[es, es+en)`, when the builder lays it out (above).
+ib_agarr_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, n : usize, es : usize, en : usize) -> Option(IbAgArr) {
+  if n == 0 or en == 0 { return Option(IbAgArr).None }
+  bv : IbB = deref(bp)
+  fsp : IbSpan = ib_type_span_full(bv.src, es, en)
+  so : Option(IbSt) = ib_agg_named(bp, a, fsp.s, fsp.n)
+  match so {
+    Some(st) => {
+      sz : usize = st.size
+      al : usize = st.align
+      if al == 0 or sz == 0 { return Option(IbAgArr).None }
+      ## A levered struct (`@packed`, or a field `@offset`/`@align`/`@endian`, or a struct `@align`) is
+      ## out of scope (#1705): its legacy fail-loud refusal stays. A plain struct of narrow fields (the
+      ## byte tier with no lever) is built: its field places are `lower_layout`'s, as for a local value.
+      if not ib_st_is_enum(bp, st) {
+        if lower_layout::is_packed(bv.decls, bv.src, st.s, st.n) or lower_layout::struct_has_layout_lever(bv.decls, bv.src, st.s, st.n) {
+          return Option(IbAgArr).None
+        }
+      }
+      stride : usize = lower_layout::round_up_to(sz, al)
+      if stride != sz { return Option(IbAgArr).None }
+      return Option(IbAgArr).Some(IbAgArr(n = n, di = st.di, s = st.s, sn = st.n, size = sz, align = al, stride = stride))
+    }
+    None => {}
+  }
+  Option(IbAgArr).None
+}
+## The aggregate-element array TYPE spelled `[ts, ts+tn)`: `[P; N]` with a literal `N > 0` (no nested array).
+ib_agarr_ty := fn(bp : ptr(mut IbB), in out a : rt::Arena, ts : usize, tn : usize) -> Option(IbAgArr) {
+  src := ib_b_src(bp)
+  if tn == 0 or lower_layout::array_type_has_array_element(src, ts, tn) { return Option(IbAgArr).None }
+  es := lower_layout::arr_field_elem_span(src, ts, tn)
+  if es.n == 0 { return Option(IbAgArr).None }
+  no : Option(u64) = lower_layout::arr_type_lit_len(src, ts, tn)
+  match no { Some(x) => { return ib_agarr_of(bp, a, usize(x), es.s, es.n) }; None => {} }
+  Option(IbAgArr).None
+}
+## The aggregate-element array local the name `b` denotes, annotated (`BdArr`) or not (`BdArrI`). Asking
+## emits nothing and refuses nothing.
+ib_agarr_place := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Option(IbAgAt) {
+  vs := lower_layout::ex_var_ns(b)
+  vn := lower_layout::ex_var_nl(b)
+  if vn == 0 or ib_names_global(bp, vs, vn) { return Option(IbAgAt).None }
+  bd : IbBind = ib_lookup(bp, vs, vn)
+  match bd {
+    BdArr(af, ats, atn) => {
+      ro : Option(IbAgArr) = ib_agarr_ty(bp, a, ats, atn)
+      match ro { Some(r) => { return Option(IbAgAt).Some(ib_agarr_at(af, r)) }; None => {} }
+    }
+    BdArrI(xf, xn, xes, xen) => {
+      xo : Option(IbAgArr) = ib_agarr_of(bp, a, xn, xes, xen)
+      match xo { Some(xr) => { return Option(IbAgAt).Some(ib_agarr_at(xf, xr)) }; None => {} }
+    }
+    BdArrRef(qv, qn, qes, qel) => {}
+    BdRef(rv, rsd, rts, rtn) => {}
+    BdView(wf, wes, wen) => {}
+    BdStr(sf) => {}
+    BdNone => {}
+    BdVal(v, vts, vtn) => {}
+    BdAgg(fr, sd, ts, tn) => {}
+    BdMem(mf, mns) => {}
+  }
+  Option(IbAgAt).None
+}
+## The place of element `x` of `ap` (`at` locates the `bound` trap): a literal index is `[$k + i * stride]`;
+## a value is checked (`bound i, N`, in a checked scope only) and `gep`'d from the object's address.
+ib_agarr_elem := fn(bp : ptr(mut IbB), in out a : rt::Arena, at : ptr(Expr), ap : IbAgAt, x : IbIx) -> Option(IbPlace) {
+  match x {
+    IxLit(i) => {
+      return Option(IbPlace).Some(IbPlace(bk = OpndK.OkFrame, bv = i64(usize(ap.fr)), di = ap.di, s = ap.s, n = ap.sn, off = i * ap.stride))
+    }
+    IxVal(iv) => {
+      q := ib_checked_gep(bp, a, at, IbSeq.SqArr(ap.fr, ap.n), iv, ap.stride)
+      return Option(IbPlace).Some(IbPlace(bk = OpndK.OkVReg, bv = i64(usize(q)), di = ap.di, s = ap.s, n = ap.sn, off = 0))
+    }
+    IxRefused => {}
+  }
+  Option(IbPlace).None
+}
+## `xs[i]` of an aggregate-element array local `gb`: the index evaluated, then the element's place.
+## `None` when `gb` is not one (nothing emitted) or the index is refused.
+ib_agarr_index_place := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), gb : ptr(Expr), gix : ptr(Expr)) -> Option(IbPlace) {
+  gpo : Option(IbAgAt) = ib_agarr_place(bp, a, gb)
+  match gpo {
+    Some(gp) => {
+      x : IbIx = ib_index_below(bp, a, gp.n, gix)
+      return ib_agarr_elem(bp, a, e, gp, x)
+    }
+    None => {}
+  }
+  Option(IbPlace).None
+}
+## `copy <place>, $src, n` — a whole aggregate value stored at a place.
+ib_copy_to_place := fn(bp : ptr(mut IbB), in out a : rt::Arena, pl : IbPlace, src : FrameId, n : usize) {
+  dst := ib_place_addr(bp, a, pl)
+  osrc := o_frame(src)
+  mut it := inst0(Op.OpCopy)
+  set_a(it, dst)
+  set_b(it, osrc)
+  it.n = n
+  k := emit(ib_b_f(bp), a, it)
+}
+## An array literal `[e0, …]` built element by element into the array at `ap`, left to right, each at the
+## element type and in place (`ib_agg_into`). The object is zeroed first when an element could leave a
+## byte undefined — an enum, a padded struct (`ib_agg_lit`'s rule). A fill `[v; N]` (one node referenced
+## N times) is refused: building it per element would evaluate `v` N times.
+ib_agarr_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ap : IbAgAt) -> bool {
+  match deref(e) {
+    Expr::ArrayLit(nel, eh) => {
+      if nel != ap.n { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+      st : IbSt = ib_agat_el(ap)
+      if ib_st_is_enum(bp, st) { ib_zero_obj(bp, a, ap.fr, ap.n * ap.stride) } else { if ib_struct_padded(bp, a, st) { ib_zero_obj(bp, a, ap.fr, ap.n * ap.stride) } }
+      mut g : Option(ptr(mut Arg)) = eh
+      mut prev : Option(ptr(Expr)) = Option(ptr(Expr)).None
+      mut i : usize = 0
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            match prev { Some(pe) => { if pe == ga.e { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false } }; None => {} }
+            if not ib_agg_into(bp, a, ga.e, st, ap.fr, i * ap.stride) { return false }
+            prev = Option(ptr(Expr)).Some(ga.e)
+            i = i + 1
+            g = ga.next
+          }
+          None => { break }
+        }
+      }
+      if i != ap.n { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+      return true
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  false
+}
+## The value `v` of layout `r` in a FRESH object of its own: a literal built into it, an array local of the
+## same layout copied into it (a local never shares another's memory, and a literal reading the array it
+## is assigned to sees the old elements).
+ib_agarr_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : ptr(Expr), r : IbAgArr) -> Option(FrameId) {
+  match deref(v) {
+    Expr::ArrayLit(nel, eh) => {
+      fr := ib_agarr_obj(bp, a, r)
+      if ib_agarr_lit(bp, a, v, ib_agarr_at(fr, r)) { return Option(FrameId).Some(fr) }
+      return Option(FrameId).None
+    }
+    Expr::Var(vs, vn) => {
+      apo : Option(IbAgAt) = ib_agarr_place(bp, a, v)
+      match apo {
+        Some(ap) => {
+          if ib_agarr_same(ib_agarr_layout(ap), r) {
+            fr2 := ib_agarr_obj(bp, a, r)
+            ib_copy_obj(bp, a, fr2, ap.fr, ib_agarr_bytes(r))
+            return Option(FrameId).Some(fr2)
+          }
+        }
+        None => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  ib_refuse_expr(bp, v, NyWhy.NwOutside)
+  Option(FrameId).None
+}
+## The element type an unannotated array literal spells when every element is a struct literal of one
+## struct, or an enum literal of one enum, the builder lays out: the first element's type name. `None` for
+## any other literal (the builder never infers an element type of its own).
+ib_agarr_lit_elem := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : ptr(Expr)) -> Option(IbSpan) {
+  match deref(v) {
+    Expr::ArrayLit(nel, eh) => {
+      mut sp : IbSpan = IbSpan(s = 0, n = 0)
+      mut di : usize = 0
+      mut g : Option(ptr(mut Arg)) = eh
+      mut cnt : usize = 0
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            mut eso : Option(IbSt) = Option(IbSt).None
+            mut nsp : IbSpan = IbSpan(s = 0, n = 0)
+            ge : ptr(Expr) = ga.e
+            match deref(ge) {
+              Expr::StructLit(ss, sl, nf, fh) => { eso = ib_struct_named(bp, a, ss, sl); nsp = IbSpan(s = ss, n = sl) }
+              Expr::EnumLit(es, el, vs, vl, np, ph) => { eso = ib_enum_named(bp, a, es, el); nsp = IbSpan(s = es, n = el) }
+              Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field
+                | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+                | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+                | Expr::Loop => { return Option(IbSpan).None }
+            }
+            match eso {
+              Some(est) => {
+                if cnt == 0 { di = est.di; sp = nsp } else { if est.di != di { return Option(IbSpan).None } }
+              }
+              None => { return Option(IbSpan).None }
+            }
+            cnt = cnt + 1
+            g = ga.next
+          }
+          None => { break }
+        }
+      }
+      if cnt == 0 or cnt != nel { return Option(IbSpan).None }
+      return Option(IbSpan).Some(sp)
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  Option(IbSpan).None
+}
+## `xs : [P; N] = v`, or `xs := ys` of such an array local (the caller's `ib_bs_arr_decl` when `ib_arr_of`
+## answers `None`): the value in a fresh object of its own, bound after it is built (so the initializer
+## still sees an outer `xs`).
+ib_bs_agarr_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, ts : usize, tn : usize, v : ptr(Expr)) {
+  ro : Option(IbAgArr) = ib_agarr_ty(bp, a, ts, tn)
+  match ro {
+    Some(r) => {
+      fro : Option(FrameId) = ib_agarr_value(bp, a, v, r)
+      match fro { Some(fr) => { ib_bind_arr(bp, a, ns, nl, fr, ts, tn) }; None => {} }
+    }
+    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+  }
+}
+## `xs = v` into the aggregate-element array local in object `fr`, annotated `[ts, ts+tn)`: the value in
+## its own object first, then copied.
+ib_bs_agarr_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), fr : FrameId, ts : usize, tn : usize, v : ptr(Expr)) {
+  ro : Option(IbAgArr) = ib_agarr_ty(bp, a, ts, tn)
+  match ro {
+    Some(r) => {
+      fro : Option(FrameId) = ib_agarr_value(bp, a, v, r)
+      match fro { Some(sf) => { ib_copy_obj(bp, a, fr, sf, ib_agarr_bytes(r)) }; None => {} }
+    }
+    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+  }
+}
+## `xs[i] = v` into an aggregate-element array local, in `ib_bs_index_assign`'s order: the index, then the
+## value in its own object (it may read `xs`), then the checked element place, and a copy into it.
+## Answers false when `b` is not such an array (nothing emitted).
+ib_bs_agarr_index_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr), ix : ptr(Expr), v : ptr(Expr)) -> bool {
+  gpo : Option(IbAgAt) = ib_agarr_place(bp, a, b)
+  match gpo {
+    Some(gp) => {
+      x : IbIx = ib_index_below(bp, a, gp.n, ix)
+      match x { IxRefused => { return true }; IxLit(i) => {}; IxVal(iv) => {} }
+      st : IbSt = ib_agat_el(gp)
+      oo : Option(IbObj) = ib_agg(bp, a, v, st)
+      match oo {
+        Some(o) => {
+          plo : Option(IbPlace) = ib_agarr_elem(bp, a, ix, gp, x)
+          match plo { Some(pl) => { ib_copy_to_place(bp, a, pl, o.fr, st.size) }; None => {} }
+        }
+        None => {}
+      }
+      return true
+    }
+    None => {}
+  }
+  false
+}
+## `xs[i].f = v` of a scalar field `f` of a struct element, in the same order: the index, the value at the
+## field's declared type, then the checked element place and a `store`. Answers false when `b` is not an
+## aggregate-element array local (nothing emitted).
+ib_bs_agarr_field_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), b : ptr(Expr), ix : ptr(Expr), fs : usize, fl : usize, fv : ptr(Expr)) -> bool {
+  gpo : Option(IbAgAt) = ib_agarr_place(bp, a, b)
+  match gpo {
+    Some(gp) => {
+      sto : Option(IbSt) = ib_struct_bound(bp, a, gp.di, gp.s, gp.sn)
+      match sto {
+        Some(st) => {
+          flo : Option(IbFld) = ib_field(bp, a, st, fs, fl)
+          match flo {
+            Some(fld) => {
+              x : IbIx = ib_index_below(bp, a, gp.n, ix)
+              match x { IxRefused => { return true }; IxLit(i) => {}; IxVal(iv) => {} }
+              vo : Option(VRegId) = ib_value_ctx(bp, a, fv, IbKS(ty = fld.ty, sg = fld.sg))
+              match vo {
+                Some(vv) => {
+                  plo : Option(IbPlace) = ib_agarr_elem(bp, a, ix, gp, x)
+                  match plo { Some(pl) => { pb := ib_place_base(pl); ib_store_at(bp, a, pb, ib_fld_plus(fld, pl.off), vv) }; None => {} }
+                }
+                None => {}
+              }
+              return true
+            }
+            None => {}
+          }
+        }
+        None => {}
+      }
+      ib_refuse_stmt(bp, h, NyWhy.NwOutside)
+      return true
+    }
+    None => {}
+  }
+  false
+}
+## `mut x : T` with no initializer, of an aggregate type — a struct or enum the builder lays out, or a
+## fixed array of kernel scalars or of those: its frame object, bound, and NO store (Declarations §4, §5:
+## "no store is emitted until the definite assignment"; Types §9.4: no zeroing). Sema's definite
+## assignment orders a write before every read. Any other aggregate (a view, a `str`) is refused.
+ib_bs_uninit_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize) {
+  src := ib_b_src(bp)
+  lts := ast::local_type_span(src, ns, nl)
+  if lts.n != 0 {
+    if lower_layout::arr_field_elem_span(src, lts.s, lts.n).n != 0 {
+      ro : Option(IbArr) = ib_arr_of(bp, a, lts.s, lts.n, false)
+      match ro {
+        Some(r) => {
+          fr := new_frame(ib_b_f(bp), a, ib_arr_bytes(r), r.stride)
+          ib_bind_arr(bp, a, ns, nl, fr, lts.s, lts.n)
+          return
+        }
+        None => {}
+      }
+      go : Option(IbAgArr) = ib_agarr_ty(bp, a, lts.s, lts.n)
+      match go {
+        Some(gr) => {
+          gf := ib_agarr_obj(bp, a, gr)
+          ib_bind_arr(bp, a, ns, nl, gf, lts.s, lts.n)
+          return
+        }
+        None => {}
+      }
+    } else {
+      if lower_layout::view_elem_span(src, lts.s, lts.n).n == 0 and not ib_spells_str(src, lts.s, lts.n) {
+        so : Option(IbSt) = ib_agg_named(bp, a, lts.s, lts.n)
+        match so {
+          Some(st) => {
+            sf := ib_new_obj(bp, a, st)
+            ib_bind_agg(bp, a, ns, nl, sf, st)
+            return
+          }
+          None => {}
+        }
+      }
+    }
+  }
+  ib_refuse_stmt(bp, h, NyWhy.NwOutside)
 }
 
 ## A one-word kernel scalar (8 bytes): what a pointer or an address-taken local may move (see above).
@@ -4778,8 +5232,9 @@ ib_scan_stmt := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
     Stmt::Unchecked(b, nx) => { ib_scan_stmts(bp, a, b) }
     Stmt::IndexAssign(ib, ix, iv, nx) => { ib_scan_expr(bp, a, ib); ib_scan_expr(bp, a, ix); ib_scan_expr(bp, a, iv) }
     Stmt::Match(scr, arms, nx) => { ib_scan_expr(bp, a, scr); ib_scan_arms(bp, a, arms) }
+    Stmt::IndexFieldAssign(fb, fix, ffs, ffl, fv, nx) => { ib_scan_expr(bp, a, fb); ib_scan_expr(bp, a, fix); ib_scan_expr(bp, a, fv) }
     ## Constructs the builder refuses before it reaches anything inside them (see the band comment).
-    Stmt::IndexFieldAssign | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+    Stmt::Continue | Stmt::CompIf | Stmt::CompFor
       | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => {}
   }
 }
@@ -5255,8 +5710,11 @@ ib_bs_one := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
     Stmt::FieldPathAssign(pl, pv, nx) => { ib_bs_field_path_assign(bp, a, h, pl, pv) }
     Stmt::IndexAssign(ib, ix, iv, nx) => { ib_bs_index_assign(bp, a, h, ib, ix, iv) }
     Stmt::Match(scr, arms, nx) => { ib_bs_match(bp, a, scr, arms, false) }
-    Stmt::IndexFieldAssign
-      | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange
+    Stmt::IndexFieldAssign(fb, fix, ffs, ffl, fv, nx) => {
+      ## #1705: `xs[i].f = v` of an aggregate-element array local; any other base stays outside.
+      if not ib_bs_agarr_field_assign(bp, a, h, fb, fix, ffs, ffl, fv) { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    }
+    Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange
       | Stmt::AllocWith => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
   }
 }
@@ -5283,7 +5741,9 @@ ib_bs_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
 ## `x = e` assigns the innermost binding of `x`.
 ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, v : ptr(Expr)) {
   src := ib_b_src(bp)
-  if ast::local_is_uninit(src, ns, nl) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
+  ## #1705: `mut x : T` of an aggregate type (the parser's zero sentinel is no initializer); a scalar one
+  ## keeps its vreg path below, where the sentinel is a value no read can observe (Types §9.4).
+  if ast::local_is_uninit(src, ns, nl) and ib_vty_is_agg(sty_bind_get(ns)) { ib_bs_uninit_decl(bp, a, h, ns, nl); return }
   if ast::assign_is_decl(src, ns, nl) {
     if ib_vty_is_agg(sty_bind_get(ns)) { ib_bs_agg_decl(bp, a, h, ns, nl, v); return }
     nvo : Option(VRegId) = ib_decl_value(bp, a, h, ns, v)

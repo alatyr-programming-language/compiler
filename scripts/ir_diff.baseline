@@ -1,4 +1,4 @@
-9
+13
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -46,10 +46,21 @@
 # as aarch64, riscv64 and wasm do (the IR track takes no legacy-x86 fixes, #980):
 #     test/ir_str_index_mid_codepoint.al                legacy run 169   default run 132  (#1550)
 #
-# ir_diff prints the first six, and the ninth, as UNEXPLAINED: its `oracle` (scripts/fixture_oracle.sh)
-# reads only the legacy header shapes (`## build_reject`, `## Expected exit: N`) in the first 30 lines,
-# never the `## expect:` directive these files state. #1626's and #1632's files also say `Expected exit
-# 42` in their headers, so ir_diff attributes those rows itself (LEGACY-WRONG; attributed=2
-# unexplained=7). Every row is explained above, by its file's own directive.
+# It was 9 and it is 13 because #1705 builds fixed arrays of struct and enum elements and uninitialized
+# aggregate locals from the shared IR (measured on omen, native x86_64, `scripts/ir_diff.sh` on the
+# #1705 branch: disagree=13, the four rows below the only new ones). Each fixture states
+# `## expect: run 42`, the default answers it, and aarch64, riscv64 and wasm answer it too; legacy x86
+# refuses the aggregate-element array (the IR track takes no legacy-x86 fixes, #980), or gives the
+# uninitialized `[P; 2]` a one-word slot and writes its elements over the frame (#1708):
+#     test/ir_agg_arr_local.al                          legacy build 1   default run 42   (#1705)
+#     test/ir_agg_arr_enum.al                           legacy build 1   default run 42   (#1705)
+#     test/issue805_exhaustive_index_copy.al            legacy build 1   default run 42   (#1705)
+#     test/ir_uninit_agg.al                             legacy run 39    default run 42   (#1708)
+#
+# ir_diff prints the first six, the ninth and the four #1705 rows as UNEXPLAINED: its `oracle`
+# (scripts/fixture_oracle.sh) reads only the legacy header shapes (`## build_reject`, `## Expected exit:
+# N`) in the first 30 lines, never the `## expect:` directive these files state. #1626's and #1632's
+# files also say `Expected exit 42` in their headers, so ir_diff attributes those rows itself
+# (LEGACY-WRONG; attributed=2 unexplained=11). Every row is explained above, by its file's own directive.
 #
 # Lowering the number means fixing a row, not editing this file.
