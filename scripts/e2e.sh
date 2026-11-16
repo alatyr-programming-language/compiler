@@ -11795,6 +11795,10 @@ run_x86 issue865_option_ptr_payload_local 42
 # because their legacy emitters pass an aggregate as the unfolded tag and payload words.
 run_x86 ir_option_ptr_local 42
 run_x86 ir_option_ptr_cross 42
+run_a64 ir_option_ptr_local 42
+run_a64 ir_option_ptr_cross 42
+run_rv64 ir_option_ptr_local 42
+run_rv64 ir_option_ptr_cross 42
 # #1497 / Declarations §5+§6.1 — after the block that declared a local `C` closes, `C.k` is the module
 # constant's field again. `lower::slot_declared_before` asked only whether the slot was declared EARLIER,
 # not whether its block was still open, so the read took the dead local's slot. Fails on the parent

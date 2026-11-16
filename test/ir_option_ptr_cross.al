@@ -11,15 +11,13 @@
 ##   * IR -> IR: `rd(s)` through a folded local, and `rd(mk(…))` straight from a call.
 ## Each check owns its own bit of the mask; 42 when all held. On the parent every function here was
 ## refused (`CSigParamUnresolved`, `CSigResultWide`) and the whole program went to the legacy emitter.
-## The directive is x86_64-only, as it is for the whole folded-option family (`niche_option_ptr`,
-## `issue775_…` and the rest): aarch64, riscv64 and wasm keep such a signature on the LEGACY emitter —
-## `ir::sig_has_folded_option` names it, and each of those selectors refuses it at both ends, the
-## function itself (`sa_fn`, `sr_fn`, `sw_fn`) and every IR-built call to one (`sa_call`, `sr_call`,
-## `sw_call`), because THEIR legacy emitter passes an aggregate as the unfolded tag and payload words
-## (`[x2,#0]`, `[x2,#8]`) and a mixed crossing was measured wrong there. Measured on this program:
-## aarch64 and riscv64 answer 42 through that legacy emitter, wasm traps (134) on the folded LOCAL in
-## `main`, which is what its legacy emitter does for every fixture of this family. Undeclared, then,
-## and unchanged from the parent — this slice moves no value on those three targets.
+## The directive names every backend that answers it: aarch64 and riscv64 answer 42 too, because
+## `ir::sig_has_folded_option` keeps such a signature — and every IR-built call to one — on THEIR
+## legacy emitter (`sa_fn`/`sa_call`, `sr_fn`/`sr_call`), which handles it; that refusal is what this
+## fixture pins there, and it is the answer they gave on the parent. wasm is left undeclared, as the
+## whole folded-option family leaves it: its legacy emitter traps (134) on the folded LOCAL in `main`,
+## unchanged from the parent. So this slice moves no value on wasm and none on the twins either — the
+## twins' 42 is the parent's 42, held in place by a refusal rather than by new code.
 rd := fn(o : Option(ptr(u64))) -> u64 {
   match o { Some(p) => deref(p); None => 7 }
 }
@@ -51,3 +49,5 @@ main := fn() -> u64 {
   return 42
 }
 ## expect(x86_64): run 42
+## expect(aarch64): run 42
+## expect(riscv64): run 42
