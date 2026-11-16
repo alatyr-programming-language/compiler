@@ -9658,8 +9658,10 @@ sema_vty_kind := fn(k : TyKind) -> ir::VTy {
   }
 }
 ## The kernel value type a type NAME `[s, s+n)` denotes: a scalar by its name, a brand by its
-## underlying type (one level, Types §4.2), anything else unknown to this slice.
-sema_vty_name := fn(src : ptr(u8), s : usize, n : usize, decls : ptr(rt::Vec)) -> ir::VTy {
+## underlying type (one level, Types §4.2), anything else unknown to this slice. The IR builder asks it
+## for an enum payload component's kernel type (`ir::build`'s `ib_variant_comp_in`), so a brand, a
+## required type or an alias payload has one answer for sema and the builder.
+pub sema_vty_name := fn(src : ptr(u8), s : usize, n : usize, decls : ptr(rt::Vec)) -> ir::VTy {
   sv : ir::VTy = sema_vty_scalar(src, s, n)
   if ir::vty_known(sv) { return sv }
   ## A QUALIFIED brand or alias name names one declaration of the module its head names.

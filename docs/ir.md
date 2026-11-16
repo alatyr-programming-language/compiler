@@ -778,6 +778,18 @@ During the migration an IR-built function and a legacy-emitted function must be 
 other, so each selector adopts **its target's existing convention** for every signature class it
 supports; the convention is unified only when the last legacy caller of that class is gone.
 
+Where a target's legacy emitter lays a signature class out differently from the shared layout, the class
+does not cross on that target: the function and every call to it stay legacy, rather than either side
+adopting the other's layout. A generic enum instance whose one-component variant holds a struct or an
+enum (`Option(P)`, `Result(u64, E)`, `Option(Option(u64))`, #1033) is one such class. The builder lays
+its payload out as the layout authority does (`lower_layout::enum_layout` and `agg_words`, Types §6.2):
+the component is a sub-object at the payload offset, a struct one only when `layout_struct_is_word_stored`
+holds. The aarch64 and riscv64 legacy emitters size the same enum by variant arity instead
+(`1 + enum_max_arity`), two words for `Option(P)` where the layout has three, and legacy wasm traps on
+the crossing (both measured). So `ir::sig_pins_legacy` keeps every signature that carries such an
+instance on those three targets legacy (`span_is_enum_inst_agg`). On x86_64 an instance of one or two
+words crosses in `%rax`/`%rdx`, where both layouts agree; a wider one does not cross there.
+
 ### 3.8 Signedness and width are attributes of the value, derived once
 
 Today signedness is decided **by the shape of the expression**, separately in each emitter: a bare

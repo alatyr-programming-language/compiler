@@ -536,7 +536,7 @@ sa_call := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool
       ## A view result (legacy returns its address, the IR its two words) or a narrow-element view (legacy
       ## steps it by the word) or a `str` (legacy builds none) or a niche-folded option (legacy passes
       ## the unfolded tag and payload words): `ir::ret_is_view`, `ir::sig_pins_legacy` (#1622, #1576).
-      if ir::ret_is_view(x.src, cd) or ir::sig_pins_legacy(x.src, cd) { return false }
+      if ir::ret_is_view(x.src, cd) or ir::sig_pins_legacy(x.decls, x.src, cd) { return false }
       sa_args(sb, x, ip)
       sa_put(sb, "  bl ")
       a64_emit_fn_label(sb, x.src, cd)
@@ -786,7 +786,7 @@ sa_fn := fn(in out sb : rt::StrBuf, x : SaX, d : Decl, in out a : rt::Arena) -> 
   ## view (legacy steps it by the word) or a `str` (legacy builds none) or a niche-folded option
   ## (legacy passes and returns the unfolded tag and payload words): `ir::ret_is_view`,
   ## `ir::sig_pins_legacy` (#1622, #1576).
-  if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.src, d) { return false }
+  if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.decls, x.src, d) { return false }
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > 8 or nv > SA_MAX_VREGS { return false }

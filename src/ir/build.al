@@ -2624,13 +2624,21 @@ ib_enum_named_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena
     match f {
       Some(fq) => {
         fd := deref(ast::fld_p(fq))
+        ## The variant's payload words: one per scalar component, or an aggregate component's own.
+        mut vw : usize = 0
         mut i : usize = 0
         while i < fd.arity {
           ko : Option(IbKS) = ib_variant_comp_in(decls, src, a, st0, fq, i)
-          match ko { Some(k) => {}; None => { return Option(IbSt).None } }
+          match ko {
+            Some(k) => { vw = vw + 1 }
+            None => {
+              ago : Option(IbCompAgg) = ib_variant_agg_in(decls, src, a, st0, fq, i)
+              match ago { Some(ag) => { vw = vw + ag.size / 8 }; None => { return Option(IbSt).None } }
+            }
+          }
           i = i + 1
         }
-        if fd.arity > mx { mx = fd.arity }
+        if vw > mx { mx = vw }
         nv = nv + 1
         f = fd.next
       }
@@ -2638,7 +2646,7 @@ ib_enum_named_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena
     }
   }
   if nv == 0 { return Option(IbSt).None }
-  ## The shared layout must be exactly the tag word plus one word per component of the widest variant.
+  ## The shared layout must be exactly the tag word plus the payload words of the widest variant.
   w := lower_layout::enum_layout_words(decls, src, s, n, a)
   if w != 1 + mx { return Option(IbSt).None }
   Option(IbSt).Some(IbSt(di = usize(edi), s = s, n = n, size = w * 8, align = 8))
@@ -2711,12 +2719,26 @@ ib_variant_comp_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Are
   ## instance's own type argument (`is_niche_folded` reads it from there, Types §6.2) — the declared
   ## component is the type-PARAMETER `T`, which names no type on its own.
   if lower_layout::is_niche_folded(src, st.s, st.n) { return Option(IbKS).Some(IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)) }
+  spo : Option(IbSpan) = ib_variant_comp_span_in(decls, src, a, st, vq, i)
+  match spo {
+    ## Its width and signedness are sema's answer for the type name (`sema_vty_name`): a scalar, or a
+    ## brand, required type or alias over one (Types §5.4, §8.1), which has that scalar's representation.
+    Some(sp) => { return ib_vty_ks(sema::sema_vty_name(src, sp.s, sp.n, decls)) }
+    None => {}
+  }
+  Option(IbKS).None
+}
+## The type span of component `i` of variant `vq` of enum `st`, as written in the variant's `( … )`
+## group, or the instance's type argument when it names a type parameter of a generic enum.
+ib_variant_comp_span_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbSpan) {
+  fd := deref(ast::fld_p(vq))
+  if i >= fd.arity { return Option(IbSpan).None }
   end := ast::src_extent()
   mut op := fd.ns + fd.nl
   while op < end and str_at((src + op), 1) != "(" { op = op + 1 }
-  if op >= end { return Option(IbKS).None }
+  if op >= end { return Option(IbSpan).None }
   comp := lower_layout::typearg_at(src, op, 0, i)
-  if comp.n == 0 { return Option(IbKS).None }
+  if comp.n == 0 { return Option(IbSpan).None }
   mut ts := comp.s
   mut tl := comp.n
   d : Decl = deref(ib_decl_ptr(decls, st.di))
@@ -2725,12 +2747,79 @@ ib_variant_comp_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Are
     if pos >= 0 {
       bn := lower_layout::base_type_name(src, st.s, st.n)
       ta := lower_layout::typearg_at(src, bn.s, bn.n, usize(pos))
-      if ta.n == 0 { return Option(IbKS).None }
+      if ta.n == 0 { return Option(IbSpan).None }
       ts = ta.s
       tl = ta.n
     }
   }
-  ib_name_ks(src, ts, tl)
+  Option(IbSpan).Some(IbSpan(s = ts, n = tl))
+}
+## ── aggregate payload components of a generic enum instance (#1033 step 2) ──
+##
+## `Option(S)`, `Result(u64, E)`, `Option(Result(u64, E))`: the variant's ONE component is a struct or
+## an enum, held in place in the payload as a SUB-OBJECT. Where it sits and how many bytes it takes are
+## the layout's answers, never the builder's (Types §6.2): the payload offset `lower_layout::enum_layout`
+## gives, and the words `lower_layout::agg_words` sizes the component by — the count `enum_inst_words`
+## sizes the instance's payload with. Only a generic enum's instance takes this shape: a non-generic
+## enum's payload is sized by `enum_max_arity_of_decl`, which does not size every component the way
+## `agg_words` does, so it stays refused (`CSigResultEnum`). A component of a several-component variant
+## (the layout gives each one word), a view or `str` component, and a type the layout does not resolve
+## to a struct or an enum are not this shape either.
+
+## An aggregate component's place in the payload and its type span (flat, for the seed, #912).
+IbCompAgg := struct { off : usize, s : usize, n : usize, size : usize }
+ib_variant_agg_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbCompAgg) {
+  fd := deref(ast::fld_p(vq))
+  if fd.arity != 1 or i != 0 { return Option(IbCompAgg).None }
+  d : Decl = deref(ib_decl_ptr(decls, st.di))
+  if not d.is_generic or lower_layout::is_niche_folded(src, st.s, st.n) { return Option(IbCompAgg).None }
+  spo : Option(IbSpan) = ib_variant_comp_span_in(decls, src, a, st, vq, 0)
+  match spo {
+    Some(sp) => {
+      full : IbSpan = ib_type_span_full(src, sp.s, sp.n)
+      if lower_layout::is_view_type(src, full.s, full.n) or lower_layout::view_elem_span(src, full.s, full.n).n != 0 { return Option(IbCompAgg).None }
+      bn := lower_layout::base_type_name(src, full.s, full.n)
+      ## A struct component must be one the layout writes word by word (`layout_struct_is_word_stored`):
+      ## the only child whose image every backend constructs alike.
+      if lower_layout::struct_decl_of(decls, src, bn.s, bn.n) >= 0 {
+        if not lower_layout::layout_struct_is_word_stored(decls, src, full.s, full.n, a) { return Option(IbCompAgg).None }
+      } else if lower_layout::qualified_enum_decl_of(decls, src, bn.s, bn.n) < 0 { return Option(IbCompAgg).None }
+      words := lower_layout::agg_words(decls, src, full.s, full.n, a)
+      el := lower_layout::enum_layout(decls, src, st.s, st.n, a)
+      if words == 0 or el.is_union or el.payload_offset + words * 8 > el.size { return Option(IbCompAgg).None }
+      return Option(IbCompAgg).Some(IbCompAgg(off = el.payload_offset, s = full.s, n = full.n, size = words * 8))
+    }
+    None => {}
+  }
+  Option(IbCompAgg).None
+}
+## The aggregate component as a sub-object the builder lays out (`ib_agg_named`): it must fit the words
+## the layout gives it, and a struct must be in the WORD tier — the layout every legacy reader shares
+## (Q4) — because the enum crosses calls whole and its payload's fields are read and written in place.
+ib_variant_sub := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbSub) {
+  bv : IbB = deref(bp)
+  ago : Option(IbCompAgg) = ib_variant_agg_in(bv.decls, bv.src, a, st, vq, i)
+  match ago {
+    Some(ag) => {
+      so : Option(IbSt) = ib_agg_named(bp, a, ag.s, ag.n)
+      match so {
+        Some(sub) => {
+          if sub.size > ag.size { return Option(IbSub).None }
+          if not ib_st_is_enum(bp, sub) and not ib_struct_word(bp, a, sub) { return Option(IbSub).None }
+          return Option(IbSub).Some(IbSub(off = ag.off, di = sub.di, s = sub.s, n = sub.n, size = sub.size))
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  Option(IbSub).None
+}
+## Do two aggregate components name ONE type — one declaration, spelled alike (an instance's type
+## arguments included), at one size? Two spellings of one type (`io::IoError`, `IoError`) answer false,
+## which keeps the site refused, never passed through as the wrong type's bytes.
+ib_sub_same_type := fn(bp : ptr(mut IbB), x : IbSub, y : IbSub) -> bool {
+  x.di == y.di and x.size == y.size and x.n == y.n and streq(ib_b_src(bp), x.s, x.n, y.s, y.n)
 }
 ## The variant of enum `st` named `[vs, vs+vl)`.
 ib_variant_of := fn(bp : ptr(mut IbB), st : IbSt, vs : usize, vl : usize) -> Option(ptr(mut FieldDecl)) {
@@ -2819,12 +2908,22 @@ ib_enum_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s
       Some(gq) => {
         ga := deref(arg_p(gq))
         ko : Option(IbKS) = ib_variant_comp(bp, a, st, vq, i)
-        mut k : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
-        match ko { Some(kk) => { k = kk }; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false } }
-        vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, k)
-        mut fld : IbFld = ib_comp_fld(i, k)
-        if folded { fld = ib_folded_comp_fld() }
-        match vo { Some(v) => { ib_store_field(bp, a, fr, ib_fld_plus(fld, boff), v) }; None => { return false } }
+        match ko {
+          Some(k) => {
+            vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, k)
+            mut fld : IbFld = ib_comp_fld(i, k)
+            if folded { fld = ib_folded_comp_fld() }
+            match vo { Some(v) => { ib_store_field(bp, a, fr, ib_fld_plus(fld, boff), v) }; None => { return false } }
+          }
+          None => {
+            ## An aggregate component (`ib_variant_sub`) is built in place, at its payload offset.
+            sbo : Option(IbSub) = ib_variant_sub(bp, a, st, vq, i)
+            match sbo {
+              Some(sb) => { if not ib_agg_into(bp, a, ga.e, ib_sub_st(sb), fr, boff + sb.off) { return false } }
+              None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+            }
+          }
+        }
         i = i + 1
         g = ga.next
       }
@@ -2971,7 +3070,22 @@ ib_arm_binds := fn(bp : ptr(mut IbB), in out a : rt::Arena, arm : Arm, st : IbSt
                 v := ib_load_at(bp, a, ofr, fld)
                 ib_bind(bp, a, ast::bnd_ns(bq), ast::bnd_nl(bq), v)
               }
-              None => { return false }
+              None => {
+                ## An aggregate component (`ib_variant_sub`) is taken at the match as a scalar one is
+                ## loaded there: its bytes are copied out of the payload into an object of its own, so a
+                ## later write to the scrutinee's place cannot reach the binding.
+                sbo : Option(IbSub) = ib_variant_sub(bp, a, st, vq, i)
+                match sbo {
+                  Some(sb) => {
+                    sst := ib_sub_st(sb)
+                    cfr := ib_new_obj(bp, a, sst)
+                    pay := ib_frame_at(bp, a, fr, sb.off)
+                    ib_copy_into(bp, a, cfr, pay, sb.size)
+                    ib_bind_agg(bp, a, ast::bnd_ns(bq), ast::bnd_nl(bq), cfr, sst)
+                  }
+                  None => { return false }
+                }
+              }
             }
             i = i + 1
             b = ast::bnd_next(bq)
@@ -3232,11 +3346,38 @@ ib_bx_try_build := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), in
   match pko { Some(pk) => { if not ib_ks_eq(pk, k) { return ib_no(bp, e, NyWhy.NwDisagree) } }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
   ## A `Result`'s error passes through unconverted only when both error components are one type.
   mut ek : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+  ## An aggregate error component (`ib_variant_sub`) passes through as its bytes, from its payload place
+  ## in the operand to its payload place in the result; `eb` is its byte size, 0 for a scalar one.
+  mut eb : usize = 0
+  mut eoff : usize = 0
+  mut roff : usize = 0
   if tk == 2 {
     eko : Option(IbKS) = ib_variant_comp(bp, a, st, fq, 0)
     rko : Option(IbKS) = ib_variant_comp(bp, a, rt, rq, 0)
-    match eko { Some(x) => { ek = x }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
-    match rko { Some(x) => { if not ib_ks_eq(ek, x) { return ib_no(bp, e, NyWhy.NwOutside) } }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
+    match eko {
+      Some(x) => {
+        ek = x
+        match rko { Some(y) => { if not ib_ks_eq(ek, y) { return ib_no(bp, e, NyWhy.NwOutside) } }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
+      }
+      None => {
+        eso : Option(IbSub) = ib_variant_sub(bp, a, st, fq, 0)
+        rso : Option(IbSub) = ib_variant_sub(bp, a, rt, rq, 0)
+        match eso {
+          Some(es) => {
+            match rso {
+              Some(rs) => {
+                if not ib_sub_same_type(bp, es, rs) { return ib_no(bp, e, NyWhy.NwOutside) }
+                eb = es.size
+                eoff = es.off
+                roff = rs.off
+              }
+              None => { return ib_no(bp, e, NyWhy.NwOutside) }
+            }
+          }
+          None => { return ib_no(bp, e, NyWhy.NwOutside) }
+        }
+      }
+    }
   }
   ## A niche-folded operand or result (#1711, Types §6.2) has no tag word: its success test is the
   ## variant's meaning (`ib_folded_is`), its payload the one word, and its absent result the null
@@ -3256,10 +3397,19 @@ ib_bx_try_build := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), in
     tv := ib_konst(bp, a, ib_ks_i64(Sgn.SgS), ridx)
     ib_store_field(bp, a, rf, ib_tag_fld(), tv)
   }
-  if tk == 2 {
+  if tk == 2 and eb == 0 {
     base2 := o_frame(o.fr)
     ev := ib_load_at(bp, a, base2, ib_comp_fld(0, ek))
     ib_store_field(bp, a, rf, ib_comp_fld(0, ek), ev)
+  }
+  if tk == 2 and eb != 0 {
+    epl := ib_frame_at(bp, a, o.fr, eoff)
+    rpl := ib_frame_at(bp, a, rf, roff)
+    mut ci := inst0(Op.OpCopy)
+    set_a(ci, rpl)
+    set_b(ci, epl)
+    ci.n = eb
+    k2 := emit(ib_b_f(bp), a, ci)
   }
   av := ib_addr_obj(bp, a, rf)
   oav := o_vreg(av)

@@ -2212,6 +2212,31 @@ span_is_folded_option := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   tw := lower_layout::sig_type_span(src, ts, tl)
   lower_layout::is_niche_folded(src, tw.s, tw.n)
 }
+## Whether `[ts, ts+tl)` names an instance of a generic ENUM with a type argument that is a struct or an
+## enum (`Option(P)`, `Result(u64, E)`, `Option(Option(u64))`) — the instances whose payload holds an
+## aggregate sub-object the IR builder lays out by `lower_layout::agg_words` (#1033). The aarch64 and
+## riscv64 legacy emitters size such an enum by its variants' ARITY (`1 + enum_max_arity`: two words
+## for `Option(P)` where the layout has three, measured: an IR-built `Option(P)` result read back by a
+## legacy caller lost its last word, wrong value 1 on both), and the legacy wasm emitter trapped on the
+## same crossing (measured, 134). Any type argument of that kind answers true, whether or not a
+## one-component variant carries it: an over-approximation that keeps more functions legacy, never one
+## fewer. Any other type answers false.
+span_is_enum_inst_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> bool {
+  if tl == 0 { return false }
+  tw := lower_layout::sig_type_span(src, ts, tl)
+  bn := lower_layout::base_type_name(src, tw.s, tw.n)
+  ## A signature keeps the instance's HEAD span (`Option`); its `(…)` arguments follow it in `src`.
+  if lower_layout::qualified_enum_decl_of(decls, src, bn.s, bn.n) < 0 { return false }
+  mut k : usize = 0
+  while k < 8 {
+    ta := lower_layout::typearg_at(src, bn.s, bn.n, k)
+    if ta.n == 0 { return false }
+    tb := lower_layout::base_type_name(src, ta.s, ta.n)
+    if lower_layout::struct_decl_of(decls, src, tb.s, tb.n) >= 0 or lower_layout::qualified_enum_decl_of(decls, src, tb.s, tb.n) >= 0 { return true }
+    k = k + 1
+  }
+  false
+}
 
 ## Whether `d`'s signature keeps it, and every call to it, to the legacy emitter on aarch64, riscv64 and
 ## wasm: a narrow-element view (`sig_has_narrow_view`), a `str` (#1576), or a niche-folded option
@@ -2231,16 +2256,19 @@ span_is_folded_option := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 ## passes such a folded option as one word and returns it as one word in rax, measured right in both
 ## directions on the default and the `x86-legacy` plans (#1576).
 ## A parameter past the six argument registers never crosses: `lower::isel` refuses a call or a function
-## that would pass one.
-pub sig_pins_legacy := fn(src : ptr(u8), d : Decl) -> bool {
+## that would pass one. A generic enum instance with an aggregate payload (`span_is_enum_inst_agg`,
+## #1033) is pinned the same way, for the same reason: those legacy emitters lay it out differently. Such
+## an instance that no signature mentions — a local built and matched in one function — is not pinned.
+pub sig_pins_legacy := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
   if sig_has_narrow_view(src, d) or type_is_str(src, d.ret_ts, d.ret_tl) { return true }
-  if span_is_folded_option(src, d.ret_ts, d.ret_tl) { return true }
+  if span_is_folded_option(src, d.ret_ts, d.ret_tl) or span_is_enum_inst_agg(decls, src, d.ret_ts, d.ret_tl) { return true }
   mut pp := d.params_head
   loop {
     match pp {
       Some(pq) => {
         pm := deref(ast::param_p(pq))
         if type_is_str(src, pm.ts, pm.tl) or span_is_folded_option(src, pm.ts, pm.tl) { return true }
+        if span_is_enum_inst_agg(decls, src, pm.ts, pm.tl) { return true }
         pp = pm.next
       }
       None => { break }

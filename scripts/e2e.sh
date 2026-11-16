@@ -9261,6 +9261,15 @@ run ir_enum_cross 42
 run_a64 ir_enum_cross 42
 run_rv64 ir_enum_cross 42
 run_wat ir_enum_cross 42
+## #1033 step 2: a generic enum instance with a struct or enum payload, built by the shared IR. Locals
+## on all four; results, parameters, `?` and crossings to legacy code on x86_64, where such a
+## signature is not pinned legacy (`ir::sig_pins_legacy`).
+run ir_enum_inst_local 42
+run_a64 ir_enum_inst_local 42
+run_rv64 ir_enum_inst_local 42
+run_wat ir_enum_inst_local 42
+run_x86 ir_enum_inst 42
+run_x86 ir_enum_inst_cross 42
 ## IR slice 4c: `?` on an Option and a Result, success and failure paths.
 run ir_try 42
 run_a64 ir_try 42
