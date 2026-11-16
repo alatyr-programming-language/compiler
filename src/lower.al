@@ -5410,15 +5410,48 @@ reject_scalar_str_elem_arg := fn(e : ptr(Expr), cx : ptr(LCtx), cidx : i64, pidx
   }
 }
 
-## Pass an OUT-SCALAR argument: the address of the argument's local (a place — a `Var`). For an
-## ordinary scalar local this is `leaq` its slot; for an argument that is ITSELF an out-scalar
-## param (ek 8, the slot holds a pointer) it forwards that pointer — both via `emit_agg_base_addr`'s
-## is_ref dual. (A non-place out argument is invalid; fall back to the value path so it still lowers.)
+## Pass an OUT-SCALAR argument: the ADDRESS of the argument's PLACE — Functions §2.3 binds an
+## `in out`/`out` parameter by a place argument, "a place-expression the callee reads and writes
+## **in place**", and requires it to be a MUTABLE place (Memory §3). Three place roots reach here:
+##   * a frame LOCAL, or an argument that is ITSELF an out-scalar param (ek 8, the slot holds a
+##     pointer) — `emit_agg_base_addr`'s is_ref dual gives the slot's address or forwards the pointer;
+##   * a MUTABLE MODULE GLOBAL (§2.3's place argument, Memory §3.1's `mut` path): it has no frame
+##     slot, so `local_entry` answers None. Taking `entry_of`'s unbound sentinel 0 there handed the
+##     callee `leaq -8(%rbp)` — the caller's FIRST FRAME WORD — which it wrote while the global kept
+##     its OLD value: `give(g); g + 12` answered 12 where 22 was due (#1684, a silent wrong value).
+##     Pass the `.data` label address, the target its reads and writes already share;
+##   * an ARRAY ELEMENT `a[i]` — a place of the array's element type. `emit_index_addr` composes its
+##     address for every frame base (the `leaq` of a local array, the `movq` through a by-ref param,
+##     the deref of a `Slice` view); the value path loaded THROUGH that address, so the callee got
+##     the element's VALUE as a pointer and stored into it — `put(a[0])` SIGSEGV'd (#1684). A base
+##     with no frame place (a module-global array) is refused located inside `emit_index_addr`.
+## A name that is neither a frame place nor a mutable module global is not a mutable place: §2.3
+## makes passing it ill-formed, so it is refused located rather than lowered as frame slot 0.
+## A non-place argument (a literal, a call result) keeps the value path — §2.3 refuses it upstream.
 emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(e) {
     Expr::Var(s, n) => {
-      ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
-      emit_agg_base_addr(ent, sb)
+      le := local_entry(cx.slots, cx.src, s, n)
+      match le {
+        Some(i) => {
+          ent := deref(svec_at(SlotEntry, cx.slots, usize(i)))
+          emit_agg_base_addr(ent, sb)
+          push_str(sb, "  pushq %rax\n")
+        }
+        None => {
+          if is_module_mut_global(cx.decls, cx.src, s, n) {
+            push_str(sb, "  leaq ")
+            emit_global_label(sb, cx.decls, cx.src, s, n)
+            push_str(sb, "(%rip), %rax\n  pushq %rax\n")
+          } else {
+            lower_show_src_line(cx.src, s)
+            panic("selfhost: an out/in-out argument names neither a bound local nor a `mut` module global (the source line above) — Functions §2.3 requires a MUTABLE place, and this name has no addressable storage")
+          }
+        }
+      }
+    }
+    Expr::Index(base, idx) => {
+      emit_index_addr(base, idx, sb, cx, a, nl)   ## the element's address → %rax
       push_str(sb, "  pushq %rax\n")
     }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
