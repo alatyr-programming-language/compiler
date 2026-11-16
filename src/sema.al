@@ -11884,12 +11884,15 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   ## Issue #1663 / Functions §2.3 — the MUTABLE-place rule for an `out` / `in out` ARGUMENT, at the one
   ## sink where this call's arguments meet its callee's declared directions. Placed AFTER every argument
   ## fence ABOVE in this function so an existing refusal keeps its precedence and its wording (the sticky
-  ## carrier keeps the FIRST located code, `mark_failed`). CAVEAT, stated rather than assumed: the
-  ## `Expr::Call` arm of `check_expr_arms` runs BELOW this sink (`src/sema.al:11921`, its own refusals
-  ## at `12132`/`12149`), so a call whose place argument is BOTH immutable and mistyped now answers
-  ## `immutable binding` where it answered `type mismatch`. Both refusals conform — §2.3 requires the
-  ## place mutable AND of the matching type — and no fixture moves, but the wording is not preserved
-  ## there. Fail-open everywhere the callee is not one plain non-generic fn.
+  ## carrier keeps the FIRST located code, `mark_failed`). What this sink does NOT outrank is named rather
+  ## than assumed: the `Expr::Call` arm of `check_expr_arms` runs BELOW (`src/sema.al:11925`, its type
+  ## mismatch raised at `12136`, returned at `12153`) and it RETURNS a located `mismatch_err`, which
+  ## `check_stmts` propagates with `?` and `check_fn` assigns to `err`; the sticky `fspan` is promoted
+  ## only under `if failed and err / 4 == 0` (`src/sema.al:17873`), and a located mismatch carries a
+  ## span, so `err / 4 != 0` — a place argument that is BOTH immutable and mistyped therefore still
+  ## answers `type mismatch`, and this fence never reaches the report. It fires only where the argument
+  ## is conforming in type and insufficiently mutable, which is exactly §2.3's second clause. Fail-open
+  ## everywhere the callee is not one plain non-generic fn.
   if ecs.n != 0 {
     pae := sema_call_place_arg_err(e, decls, upto, src, locals, nloc, ecs.s, ecs.n)
     if pae != 0 { mark_failed(locals, immutable_err(pae)) }
@@ -17355,8 +17358,9 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
 ## `s.f = v` already refused that very place. The permission is NOT re-decided here — it is the one
 ## `sema_write_mutability` immediately above answers for the same root (AGENTS.md strict forms §4, "one
 ## decision, one place"). The two routes are NOT identical and must not be "harmonised": the store sinks
-## add a definite-assignment exemption (`perm == 2 or (perm == 1 and not …unready…)`, `src/sema.al:15814`
-## / `15518` / `16110`) that this fence does not carry, so `v : u64;` then `v = 30` is accepted under
+## add a definite-assignment exemption (`perm == 2 or (perm == 1 and not …unready…)` at `src/sema.al:15809`
+## field, `15880` place, `16149`+`16150` index, `16191` if-root) that this fence does not carry, so
+## `v : u64;` then `v = 30` is accepted under
 ## Declarations §4 (`spec/40-declarations.md:231-235`, established once by a single definite assignment)
 ## while `put(v)` is refused here. That split is what §2.3 says — its MUST is about MUTABILITY, not
 ## about definite-assignment state — and it is written down so the next reader does not close it.
