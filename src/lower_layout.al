@@ -3220,12 +3220,12 @@ pub local_rhs := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl 
   r
 }
 
-pub shift_call_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+pub shift_call_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
   mut r := false
   match deref(v) {
     Expr::Call(cs, cl, na, ah) => {
-      cn := str_at((src + cs), cl)
-      if cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr" { if operand_signed_dep(arg_expr_at(ah, 0, a), params_head, body_head, src, a, dep) { r = true } }
+      cn := intrinsic_callee(decls, src, cs, cl)
+      if cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr" { if operand_signed_dep(arg_expr_at(ah, 0, a), params_head, body_head, decls, src, a, dep) { r = true } }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
@@ -3235,13 +3235,13 @@ pub shift_call_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)),
   r
 }
 
-pub bin_init_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+pub bin_init_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
   mut r := false
   match deref(v) {
     Expr::Bin(op, bl, br) => {
       if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 or op == 34 or op == 35 or op == 36 {
-        sl := operand_signed_dep(bl, params_head, body_head, src, a, dep)
-        sr := operand_signed_dep(br, params_head, body_head, src, a, dep)
+        sl := operand_signed_dep(bl, params_head, body_head, decls, src, a, dep)
+        sr := operand_signed_dep(br, params_head, body_head, decls, src, a, dep)
         if sl and sr { r = true }
         if sl and ex_is_num_lit(br) { r = true }
         if sr and ex_is_num_lit(bl) { r = true }
@@ -3255,8 +3255,8 @@ pub bin_init_signed := fn(v : ptr(Expr), params_head : Option(ptr(mut Param)), b
   r
 }
 
-pub operand_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena) -> bool {
-  operand_signed_dep(e, params_head, body_head, src, a, 0)
+pub operand_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+  operand_signed_dep(e, params_head, body_head, decls, src, a, 0)
 }
 
 ## `dep` BOUNDS the binding-chain walk, and the bound is load-bearing rather than defensive: the twins'
@@ -3266,7 +3266,7 @@ pub operand_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), bo
 ## cap that pair walks forever. Exhausting it answers "not proven", which is the pre-existing unsigned
 ## default and never a wrong type. Same shape and same cap as the backends' `*_is_float_local`, which
 ## stay backend-local because they take `decls` and answer float questions.
-pub operand_signed_dep := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+pub operand_signed_dep := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
   if dep > 24 { return false }
   mut r := false
   match deref(e) {
@@ -3281,14 +3281,14 @@ pub operand_signed_dep := fn(e : ptr(Expr), params_head : Option(ptr(mut Param))
       ## unsigned annotations for #652's two recorded reasons.
       if r == false { if local_ann_native_signed_deep(body_head, src, s, n, 0) { r = true } }
       ## un-annotated `b := shr(<signed>, n)` — recover the signed result type from the shift RHS.
-      if r == false { rhs := local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if shift_call_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
+      if r == false { rhs := local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if shift_call_signed(rhs, params_head, body_head, decls, src, a, dep + 1) { r = true } } }
       ## un-annotated `d := m - 1` — recover the signed result type from the ARITHMETIC RHS (#651).
-      if r == false { rhs := local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if bin_init_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
+      if r == false { rhs := local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if bin_init_signed(rhs, params_head, body_head, decls, src, a, dep + 1) { r = true } } }
     }
     Expr::Call(cs, cl, na, ah) => { if call_value_signed(src, cs, cl) { r = true } }
     ## An ARITHMETIC `Bin` used DIRECTLY as an operand (`(a - b) + c`) carries its operands' type by
     ## the same rule as a `Bin`-inferred binding — the two halves of `0 + d + p` (#651).
-    Expr::Bin(bop, obl, obr) => { if bin_init_signed(e, params_head, body_head, src, a, dep + 1) { r = true } }
+    Expr::Bin(bop, obl, obr) => { if bin_init_signed(e, params_head, body_head, decls, src, a, dep + 1) { r = true } }
     Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
@@ -4153,6 +4153,69 @@ pub DECL_KIND_FN : u8 = 1
 ## the same reason.
 pub DECL_KIND_STRUCT : u8 = 2
 pub DECL_KIND_ENUM : u8 = 3
+
+## #1434 — THE one question every name-keyed intrinsic site asks: does the callee `[cs, cs+cl)` resolve
+## to a function declaration the PROGRAM wrote? If it does, the call is a call to that declaration and no
+## intrinsic of the same spelling may claim it. Grammar §2.3 makes these names prelude identifiers or
+## ordinary identifiers, never keywords, and Declarations §6.1 lets a declaration shadow an outer name. The
+## lowering, sema, the IR builder and the twin emitters each matched the callee TEXT instead, so a program
+## declaring `size`/`len`/`str_eq`/… had its calls hijacked: the x86_64 legacy emitter read argument
+## positions the call does not have (SIGSEGV, exit 139) or answered the intrinsic's value (#1406 `sub`,
+## #1434 `shl`/`shr`, then the rest of this list).
+##
+## Asked AFTER the spelling test, so a callee not spelled like one of these intrinsics answers exactly as
+## before and costs one comparison chain. The spelling set is the set the sites below key on; a name
+## missing from it keeps its old behaviour, never a new one.
+##
+## The ambient standard library declares `len`, `expect`, `bytes`, `str_at` and `str_eq` itself, and the
+## intrinsic has always taken precedence over those declarations. So a declaration in an ambient-library
+## module (its mangled `dir__stem` name, `base__str`) does not count: an UNDECLARED call keeps its exact
+## old lowering. The test is the module's spelling, not the published stdlib table, because the twin
+## emit verbs build their own module table and publish none; the spelling is the same on every path.
+## A package's own nested submodule (`lower__place`) is spelled the same way and so keeps the old
+## behaviour too — conservative, never a new answer (#1434 follow-up).
+pub intrinsic_spelling := fn(src : ptr(u8), cs : usize, cl : usize) -> bool {
+  nm := str_at((src + cs), cl)
+  nm == "shl" or nm == "shr" or nm == "rotl" or nm == "rotr"
+    or nm == "size" or nm == "align" or nm == "len" or nm == "sub" or nm == "expect"
+    or nm == "str_at" or nm == "str_eq" or nm == "byte_at" or nm == "bytes"
+    or nm == "panic" or nm == "forget"
+}
+pub callee_is_program_fn := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
+  if not intrinsic_spelling(src, cs, cl) { return false }
+  ## The `LNI` name index narrows the walk to the decls carrying this name's hash (the full scan when it
+  ## is not live); `streq` stays the arbiter.
+  cnt := rt::vec_len(deref(decls))
+  th := _fnv_name(src, cs, cl)
+  mut j := lni_lo(decls, cnt, th)
+  je := lni_hi(decls, cnt, th)
+  while j < je {
+    i := lni_at(decls, cnt, j)
+    if not lni_skip(decls, cnt, i, th) {
+      d := deref(decl_get(decls, i))
+      if d.kind == DECL_KIND_FN and streq(src, d.name_start, d.name_len, cs, cl) and not module_spelled_ambient(src, d.mod_start, d.mod_len) { return true }
+    }
+    j += 1
+  }
+  false
+}
+## The spelling an intrinsic arm may match: the callee's text, or the empty str when the callee resolves
+## to a declaration the program wrote (`callee_is_program_fn`), so that no name-keyed arm matches it.
+pub intrinsic_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> str {
+  if callee_is_program_fn(decls, src, cs, cl) { return str_at(src, 0) }
+  str_at((src + cs), cl)
+}
+## Is the module `[ms, ms+ml)` spelled like an ambient-library module (`dir__stem`)? Moved here from
+## sema's `is_lib_module`, which now names this one, so the spelling test has one home.
+pub module_spelled_ambient := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
+  if ml < 2 { return false }
+  mut i : usize = 0
+  while i + 1 < ml {
+    if str_at((src + ms + i), 2) == "__" { return true }
+    i += 1
+  }
+  false
+}
 ## `Decl.kind` of a bodyless `@abi(syscall)` declaration (the parser's kind 4): a trampoline from the
 ## target's call convention to its system-call convention, built by the shared IR (`docs/ir-slice-2.md`).
 pub DECL_KIND_SYSCALL : u8 = 4
