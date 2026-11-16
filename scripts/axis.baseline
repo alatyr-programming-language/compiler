@@ -30,8 +30,15 @@ field-layout eightbytexpath wide-then-narrowxslice-element
 # ── GAP — the residual of #298 at the two remaining targets ─────────────────────────────────────
 # #303 landed the mutability check for a field, a bare element, a slice element and a global. A write to
 # the FIELD OF AN ELEMENT and a write THROUGH A POINTER are the two path shapes its fixtures do not name.
+# RETIRED as of #1663 (this line is gone, not re-worded): five of its fixtures put the two signals in
+# one file — `test/reject_issue1663_ptr_mut_{immutable_local,immutable_struct,in_param,in_array_elem}.al`
+# and `test/accept_issue1663_ptr_mut_mutable.al` each store through a `deref(p)` and name immutability in
+# their header, so the cell answers 5 and is no longer empty. The gate fails on a listed cell that stopped
+# being empty, so the line goes. What #298 still owes is a fixture that ASSERTS a refusal at a write
+# THROUGH A POINTER whose pointee permission is the failing step; #1663 refuses at the `ptr(mut …)` that
+# makes the pointer, which the gate counts as a mention and this file does not pretend is an assertion.
+# The FIELD-OF-AN-ELEMENT shape still has no fixture naming it and stays listed below.
 place-check targetxcheck element-fieldximmutability
-place-check targetxcheck pointer-derefximmutability
 
 # ── ACCEPTED — an unresolved name in a path position ────────────────────────────────────────────
 # The unbound-name check resolves the ROOT of a path, so varying the path should not change its verdict,
