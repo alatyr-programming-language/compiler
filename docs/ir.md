@@ -761,7 +761,8 @@ IR signature onto registers or wasm params:
   `ig_notyet`, which pinned the refusal, moved with it. That family was one label for every reason
   the builder answered "no word count" (#1033), and only one of them was width: `ib_agg_ret` now names
   each cause as its own `CSigResult*` construct (wider than eight words, no fields, byte layout,
-  unresolved, generic, array or aggregate field, non-word field, untypable view);
+  unresolved, generic, array or aggregate field, non-word field, untypable view, an enum or generic
+  enum instance the register tier cannot lay out, a tuple);
 - an aggregate result **wider than eight words**, or one the caller asks to receive by address, through a
   hidden first `ptr` parameter (sret) into a caller frame object;
 - the callee symbol — module path, overload suffix, generic instance tag — is computed by the builder,

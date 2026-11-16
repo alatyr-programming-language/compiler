@@ -16,7 +16,7 @@
 ## One golden: its module name (the file stem), its source, and the report it must print.
 Golden := struct { name : str, src : str, want : str }
 
-golden_count := fn() -> usize { 11 }
+golden_count := fn() -> usize { 12 }
 golden_at := fn(i : usize) -> Golden {
   if i == 0 { return Golden(name = "ig_arith", src = g_arith_src(), want = g_arith_want()) }
   if i == 1 { return Golden(name = "ig_logic", src = g_logic_src(), want = g_logic_want()) }
@@ -28,6 +28,7 @@ golden_at := fn(i : usize) -> Golden {
   if i == 7 { return Golden(name = "ig_agg", src = g_agg_src(), want = g_agg_want()) }
   if i == 8 { return Golden(name = "ig_place", src = g_place_src(), want = g_place_want()) }
   if i == 9 { return Golden(name = "ig_aggret", src = g_aggret_src(), want = g_aggret_want()) }
+  if i == 10 { return Golden(name = "ig_aggwhy", src = g_aggwhy_src(), want = g_aggwhy_want()) }
   Golden(name = "ig_notyet", src = g_notyet_src(), want = g_notyet_want())
 }
 
@@ -119,6 +120,15 @@ g_aggret_src := fn() -> str {
 }
 g_aggret_want := fn() -> str {
   "fn ig_aggret::mk Built\nfn mk(%0 : i64 u) -> agg 16 {\n  $0 : frame 16 align 8\n  store i64 [$0 + 0], %0\n  %1 = const.u i64 1\n  %2 = add.chk.u i64 %0, %1 overflow  @15488\n  store i64 [$0 + 8], %2\n  %3 = addr $0\n  ret %3\n}\nfn ig_aggret::get Built\nfn get(%0 : i64 u) -> i64 u {\n  $0 : frame 16 align 8\n  $0 = call @mk(%0)\n  %1 = load.u i64 [$0 + 8]\n  ret %1\n}\nir: functions=2 built=2 notyet=0 sema_gaps=0 verify_failed=0\n"
+}
+
+## #1033: every cause the aggregate-result convention refuses names itself, never "wider than two words"
+## (`r2` is the built control).
+g_aggwhy_src := fn() -> str {
+  "W2 := struct { a : u64, b : u64 }\nN := struct { a : u32, b : u32 }\nT := struct { inner : W2, tail : u64 }\nA := struct { items : [u64; 4] }\nZ := struct {}\nX := struct { a : u64, b : u64, c : u64, d : u64, e : u64, f : u64, g : u64, h : u64, i : u64 }\nP := @packed struct { a : u8, b : u64 }\nK := enum { One(W2), Two }\nr2 := fn() -> W2 { W2(a = 1, b = 2) }\nrn := fn() -> N { N(a = 1, b = 2) }\nrt := fn() -> T { T(inner = W2(a = 1, b = 2), tail = 3) }\nra := fn() -> A { A(items = [1, 2, 3, 4]) }\nrz := fn() -> Z { Z() }\nrx := fn() -> X { X(a = 1, b = 1, c = 1, d = 1, e = 1, f = 1, g = 1, h = 1, i = 1) }\nrp := fn() -> P { P(a = 1, b = 2) }\nrk := fn() -> K { K.Two }\nro := fn() -> Option(W2) { Option(W2).None }\nru := fn() -> (u64, bool) { return (1, true) }\n"
+}
+g_aggwhy_want := fn() -> str {
+  "fn ig_aggwhy::r2 Built\nfn r2() -> agg 16 {\n  $0 : frame 16 align 8\n  %0 = const.u i64 1\n  store i64 [$0 + 0], %0\n  %1 = const.u i64 2\n  store i64 [$0 + 8], %1\n  %2 = addr $0\n  ret %2\n}\nfn ig_aggwhy::rn NotYet(signature: byte-layout (@packed/@offset/@endian or narrow-tier) struct result, ig_aggwhy.al:10:1)\nfn ig_aggwhy::rt NotYet(signature: struct result with a field that is not a word scalar, ig_aggwhy.al:11:1)\nfn ig_aggwhy::ra NotYet(signature: struct result with an array or aggregate field, ig_aggwhy.al:12:1)\nfn ig_aggwhy::rz NotYet(signature: aggregate result with no fields, ig_aggwhy.al:13:1)\nfn ig_aggwhy::rx NotYet(signature: aggregate result wider than eight words, ig_aggwhy.al:14:1)\nfn ig_aggwhy::rp NotYet(signature: byte-layout (@packed/@offset/@endian or narrow-tier) struct result, ig_aggwhy.al:15:1)\nfn ig_aggwhy::rk NotYet(signature: enum result the builder cannot lay out, ig_aggwhy.al:16:1)\nfn ig_aggwhy::ro NotYet(signature: generic enum instance result the builder cannot lay out, ig_aggwhy.al:17:1)\nfn ig_aggwhy::ru NotYet(signature: tuple result, ig_aggwhy.al:18:1)\nir: functions=10 built=1 notyet=9 sema_gaps=0 verify_failed=0\n"
 }
 
 ## Refusals: constructs outside the subset, and sema gaps (D6).

@@ -1721,7 +1721,8 @@ pub Construct := enum {
   ## The aggregate-result family (#1033): one arm per cause `ir::build`'s `ib_agg_ret` refuses, so the
   ## census ranks the causes instead of one label that named width for all of them.
   CSigResultWide, CSigResultEmpty, CSigResultLevered, CSigResultUnresolved, CSigResultGeneric,
-  CSigResultNestedField, CSigResultNarrowField, CSigResultView,
+  CSigResultNestedField, CSigResultNarrowField, CSigResultView, CSigResultEnumInstance, CSigResultEnum,
+  CSigResultTuple,
   CSigParamMode, CSigParamTaken, CSigParamLevered, CSigParamNestedField,
   CSigParamPadded, CSigParamUnresolved, CSigSyscall,
   SAssign, SWhile, SFieldAssign, SReturn, SIf, SMatch, SFor, SDerefAssign, SIndexAssign, SIndexFieldAssign,
@@ -1742,6 +1743,9 @@ pub construct_name := fn(c : Construct) -> str {
     CSigResultNestedField => { "signature: struct result with an array or aggregate field" }
     CSigResultNarrowField => { "signature: struct result with a field that is not a word scalar" }
     CSigResultView => { "signature: view result the builder cannot type" }
+    CSigResultEnumInstance => { "signature: generic enum instance result the builder cannot lay out" }
+    CSigResultEnum => { "signature: enum result the builder cannot lay out" }
+    CSigResultTuple => { "signature: tuple result" }
     CSigParamMode => { "signature: parameter with a mode (in/out/by-ref)" }
     CSigParamTaken => { "signature: address-taken aggregate parameter" }
     CSigParamLevered => { "signature: @packed/@offset/@endian (byte-layout) struct parameter" }
