@@ -3,13 +3,15 @@
 ## Memory §4.2). The absent case WRITES the null pattern: a local that answered `Some` and is
 ## re-assigned `None` must answer `None` after it, never the pointer the earlier `Some` left behind.
 ## On the parent every function here was refused (`CSigParamUnresolved`, `CSigResultWide`), and the
-## legacy emitter that took them over trapped on aarch64 and riscv64 (SIGTRAP) and crashed wasm.
+## legacy emitter that took them over answers 42 here on x86_64, aarch64 and riscv64 and traps (134)
+## on wasm, where a folded LOCAL is what its emitter cannot do.
 ## 42 when every form held; otherwise 100 + the mask of the failed ones.
-## The directive is x86_64-only on purpose: the aarch64, riscv64 and wasm selectors leave a
-## function whose signature mentions a folded option to the legacy emitter, because their legacy
-## emitters pass and return an aggregate as the unfolded tag and payload words and a mixed
-## crossing was measured wrong there — `ir::sig_has_folded_option`, #1576. On those targets
-## this program keeps the parent's behaviour, a trap.
+## The directive is x86_64-only, as it is for the whole folded-option family: aarch64, riscv64 and wasm
+## keep a signature that mentions a folded option on the legacy emitter (`ir::sig_has_folded_option`,
+## refused in `sa_fn`/`sr_fn`/`sw_fn` and in each `*_call`, because THEIR legacy emitter passes an
+## aggregate as the unfolded tag and payload words). This slice moves no value on those three targets:
+## measured after it, aarch64 and riscv64 still answer 42 and wasm still traps 134, byte for byte what
+## the parent answered.
 rd := fn(o : Option(ptr(u64))) -> u64 {
   match o { Some(p) => deref(p); None => 7 }
 }
