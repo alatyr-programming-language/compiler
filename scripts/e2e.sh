@@ -13365,6 +13365,16 @@ run issue1256_generic_ret_arg 42
 ## (x86_64) the bound form built and returned 10 (a wrong value), the passed form ran to SIGSEGV (139).
 build_reject_has issue1324_wide_gen_enum_bound "generic call returning an enum wider than seven words is not supported yet"
 build_reject_has issue1324_wide_gen_enum_arg "generic call returning an enum wider than seven words is not supported yet"
+## #1681 — an `@inline` callee that is ALSO comptime-variadic. The call-site dispatch took the `@inline`
+## expander first, and `emit_inline_call` binds every parameter as an ordinary value: it never set
+## `cx.pack_args`, so the body's `comptime for a in args` unrolled ZERO times and only the trailing
+## expression survived. NON-VACUOUS: on the parent `1b3b22e0` (native x86_64, default, `x86-legacy` and
+## `x86-ir` alike) the fixtures exit **2** and **12** where 42 is due; the same callees WITHOUT `@inline`
+## answer 42 and 132 (`test/variadic_sum.al`, `test/variadic_accum.al`). The fix routes a comptime
+## variadic to `emit_variadic_body`, the one expander that threads the pack (§7.1), which still emits no
+## `call`, so CG-10's `@inline` contract holds.
+run_x86 issue1681_inline_variadic_tail 42
+run_x86 issue1681_inline_variadic_fixed 42
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
