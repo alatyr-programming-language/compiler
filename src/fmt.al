@@ -1657,10 +1657,16 @@ emit_fmt_expr_core := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a
       ## SOURCE, and a build break the day it is. Recover the marker by source-scan off the operand's own
       ## name span (`local_is_mut`, as `emit_fmt_value`/`fmt_is_pub` recover `: T`/`pub`) — inside a
       ## `ptr(` the only token that can precede the operand is the `mut` marker itself, so no false match.
-      mut ps : usize = 0
-      mut pn : usize = 0
+      ## The scan runs off the operand's OWN FIRST BYTE, not off its node: `fmt_var_span` sees no
+      ## `Var` at the top of a postfix chain, so `ptr(mut xs[1])` lost the marker and the formatted
+      ## text COMPILED while the source was refused — a lost reject, which `fmt_corpus` sees as
+      ## `RECOMPILE` (#1663, the moment this fence landed). `fmt_expr_left_off` is the existing
+      ## leftmost-byte walk of this same file (it already descends `Field`/`Index`/`Slice`/`CompField`
+      ## /`Try`) and answers 0 for a PREFIX form (`deref(p)`, `unchecked x`), which is exactly the
+      ## fail-open wanted here: a miss keeps the historical rendering, never a rewrite.
       mut ismut := false
-      if fmt_var_span(p, ptr(ps), ptr(pn)) { if local_is_mut(src, ps) { ismut = true } }
+      lo := fmt_expr_left_off(p, src)
+      if lo != 0 { if local_is_mut(src, lo) { ismut = true } }
       if ismut { push_str(sb, "ptr(mut ") }
       if not ismut { push_str(sb, "ptr(") }
       emit_fmt_expr(p, sb, src, a, decls)
