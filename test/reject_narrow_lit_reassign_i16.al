@@ -3,7 +3,7 @@
 ## refused at its line. Before #1471 `i16` was missing from `resolve_ty`'s list, the binding recorded
 ## no type, and the write was accepted silently. The in-range writes above it, both bounds AT their
 ## edges included, stay accepted.
-## expect: reject "type mismatch at line 11"
+## expect: reject "type mismatch" "at line 11"
 main := fn() -> i64 {
   mut y : i16 = 0 - 32768
   y = 32767
