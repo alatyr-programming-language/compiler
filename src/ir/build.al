@@ -2999,7 +2999,10 @@ ib_enum_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s
             ## value (`ib_agg_into`): its literal in place, any other value copied in.
             fo : Option(IbSt) = ib_variant_comp_folded(bp, a, st, vq, i)
             match fo {
-              Some(fst) => { if not ib_agg_into(bp, a, ga.e, fst, fr, boff + 8 + 8 * i) { return false } }
+              Some(fst) => {
+                cf : IbFld = ib_comp_fld(i, IbKS(ty = Kty.KPtr, sg = Sgn.SgNone))
+                if not ib_agg_into(bp, a, ga.e, fst, fr, boff + usize(cf.off)) { return false }
+              }
               None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
             }
           }

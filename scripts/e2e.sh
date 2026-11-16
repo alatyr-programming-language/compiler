@@ -1118,6 +1118,17 @@ EOF
   if [ "$f1$f2$f3" = 000 ] && [ "$fwhere" = "ir legacy legacy" ]; then
     echo "ok   ir #1723 folded component: x86_64 selects it from the IR; aarch64 and riscv64 keep it legacy"
   else echo "FAIL ir #1723 folded component: rc=$f1$f2$f3 where (x86 a64 rv64) = $fwhere"; fail=1; fi
+  ## #1723: the fixtures' newly built shapes. The parent refused every one of these functions at its
+  ## `deref` (or at the folded component), and its x86_64 legacy emitter answered 42 for both programs.
+  local df1="$E2E_TEST/ir_deref_agg_read.al" df2="$E2E_TEST/ir_deref_folded_comp.al" dok=1
+  "$CC" ir "$df1" > "$rep" 2>/dev/null || dok=0
+  "$CC" ir "$df2" > "$rep.2" 2>/dev/null || dok=0
+  for fnm in tag copy_then_write folded; do grep -q "^fn ir_deref_agg_read::$fnm Built\$" "$rep" || dok=0; done
+  for fnm in walk count mk mk_last; do grep -q "^fn ir_deref_folded_comp::$fnm Built\$" "$rep.2" || dok=0; done
+  grep -q 'verify_failed=0$' "$rep" && grep -q 'verify_failed=0$' "$rep.2" || dok=0
+  if [ "$dok" = 1 ]; then
+    echo "ok   ir #1723 deref fixtures: the read-whole and folded-component functions are built"
+  else echo "FAIL ir #1723 deref fixtures:"; grep -hE '^fn ir_deref_(agg_read|folded_comp)::' "$rep" "$rep.2" | sed 's/^/     /'; fail=1; fi
   ## #1662: two callers the text attributes to another declaration. (a) A call inside a HOF `hof` that
   ## the driver clones for a capturing closure (`__hoflam<N>`) is also the clone's call, so `rd` is held
   ## on every target; the parent left it to the per-target rule. (b) x86's legacy emitter expands an
@@ -12014,6 +12025,19 @@ run_x86 ir_option_ptr_local_twin 42
 run_a64 ir_option_ptr_local_twin 42
 run_rv64 ir_option_ptr_local_twin 42
 run_wat ir_option_ptr_local_twin 42
+# #1723 / Memory §4.3 — `deref(p)` read WHOLE as an aggregate value on the shared IR. `ir_deref_agg_call`
+# is the value regression for #1345's shape, `sum(deref(get(p)))`. Every function in it is IR-built on
+# all four backends, where the parent died on each of them (139 x86_64, 133 aarch64/riscv64, 134 wasm).
+# `ir_deref_agg_read` and `ir_deref_folded_comp` answered 42 on the parent's x86_64 through the legacy
+# emitter, so they pin a newly built shape. The row `ir #1723 deref fixtures` asks which of their
+# functions the builder builds. Their `main` stays legacy on the twins and wasm: `ptr(e)` of an enum
+# local is #1188's stub, and the folded component is #1724. Both are rows of scripts/known-deviations.tsv.
+run_x86 ir_deref_agg_call 42
+run_a64 ir_deref_agg_call 42
+run_rv64 ir_deref_agg_call 42
+run_wat ir_deref_agg_call 42
+run_x86 ir_deref_agg_read 42
+run_x86 ir_deref_folded_comp 42
 # #1497 / Declarations §5+§6.1 — after the block that declared a local `C` closes, `C.k` is the module
 # constant's field again. `lower::slot_declared_before` asked only whether the slot was declared EARLIER,
 # not whether its block was still open, so the read took the dead local's slot. Fails on the parent
