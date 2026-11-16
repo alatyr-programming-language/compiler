@@ -785,8 +785,9 @@ sa_fn := fn(in out sb : rt::StrBuf, x : SaX, d : Decl, in out a : rt::Arena) -> 
   ## A view result (legacy callers expect its address, the IR returns its two words) or a narrow-element
   ## view (legacy steps it by the word) or a `str` (legacy builds none) or a niche-folded option
   ## (legacy passes and returns the unfolded tag and payload words): `ir::ret_is_view`,
-  ## `ir::sig_pins_legacy` (#1622, #1576).
-  if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.src, d) { return false }
+  ## `ir::sig_pins_legacy` (#1622, #1576). An enum with a folded `Option(ptr(T))` component: this
+  ## target's legacy emitter does not lay it out as the IR does (`ir::fn_folded_comp`, #1723).
+  if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.src, d) or ir::fn_folded_comp(x.f) { return false }
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > 8 or nv > SA_MAX_VREGS { return false }
