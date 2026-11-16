@@ -5156,7 +5156,19 @@ ib_agg_ret := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, in o
       if ew > 8 { return IbAggRet.ArNo(Construct.CSigResultWide) }
       return IbAggRet.ArWords(ew)
     }
-    None => {}
+    None => {
+      ## A result that names an enum the register tier above refused, or a tuple, is resolvable: it
+      ## is refused for its own reason, never as "unresolved" (#1033).
+      full : IbSpan = ib_type_span_full(src, s, n)
+      if lower::type_span_is_tuple(src, full.s, full.n) { return IbAggRet.ArNo(Construct.CSigResultTuple) }
+      bn := lower_layout::base_type_name(src, full.s, full.n)
+      edi := lower_layout::enum_decl_of(decls, src, bn.s, bn.n)
+      if edi >= 0 {
+        ed : Decl = deref(ib_decl_ptr(decls, usize(edi)))
+        if ed.is_generic { return IbAggRet.ArNo(Construct.CSigResultEnumInstance) }
+        return IbAggRet.ArNo(Construct.CSigResultEnum)
+      }
+    }
   }
   lk := lower_layout::layout_kind(decls, src, s, n, a)
   if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return IbAggRet.ArNo(Construct.CSigResultLevered) }
