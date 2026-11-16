@@ -11881,6 +11881,15 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       }
     }
   }
+  ## Issue #1663 / Functions §2.3 — the MUTABLE-place rule for an `out` / `in out` ARGUMENT, at the one
+  ## sink where this call's arguments meet its callee's declared directions. Placed AFTER every
+  ## established argument fence above so an existing refusal keeps its precedence and its wording (the
+  ## sticky carrier keeps the FIRST located code, `mark_failed`), and reaching here means the argument
+  ## was conforming in type. Fail-open everywhere the callee is not one plain non-generic fn.
+  if ecs.n != 0 {
+    pae := sema_call_place_arg_err(e, decls, upto, src, locals, nloc, ecs.s, ecs.n)
+    if pae != 0 { mark_failed(locals, immutable_err(pae)) }
+  }
   ## EXHAUSTIVENESS for a VALUE match (§60/CF-1) — the dual of the `check_stmts` statement-match check.
   ## Done here (BEFORE the big `match deref(e)`) as a side-effect + fall-through, because the big match's
   ## payload-heavy `Expr::Match` arm is not dispatched under the seed (scar #2, same as `Var`); poison
@@ -12262,6 +12271,15 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     ## level, where `param.ts`/`cd.ret_ts` already carry the span; it does not ask for this one.
     Expr::AddrOf(p) => {
       tp := check_expr(p, decls, upto, src, a, locals, nloc)?
+      ## Issue #1663 / Memory §4.4 — address-of produces a permission LESS THAN OR EQUAL TO the place's:
+      ## "an immutable place yields only `ptr(T)`", and taking `ptr(mut ...)` to `c.f` "additionally
+      ## requires the whole AND-path to `c.f` to be writable (§3.3)". A plain `ptr(x)` of an immutable
+      ## place is exactly §4.4's permitted case and stays accepted; the `mut` qualifier is what gains a
+      ## permission, and the parser drops it (`Expr::AddrOf` carries the place alone, `parser.al:1828`),
+      ## so the spelling is read back off the source below — the same answer-by-source-scan
+      ## `decl_is_extern_fn` gives for the same reason, and it can only ever ADD a refusal.
+      mspan := sema_addr_of_mut_immutable_span(p, decls, src, locals, nloc)
+      if mspan != 0 { mark_failed(locals, immutable_err(mspan)) }
       Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = 0, nl = 0))
     }
     ## `deref(<ptr>)` — a load through a pointer. The inner pointer is checked; the result
@@ -17329,6 +17347,130 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
     return 0
   }
   if sema_global_name_anywhere(decls, src, root.s, root.n) and not is_mod_mut_global(decls, src, root.s, root.n) { return 2 }
+  0
+}
+
+## Issue #1663 / Functions §2.3 + Memory §3.1/§3.4 — is this argument of an `out` / `in out` parameter
+## something the callee must NOT be handed? §2.3: "A **place argument** (for `out` / `in out`) MUST be a
+## **mutable** place (Memory §3) of the matching type … Passing a non-place (e.g. a literal) to an
+## `out` / `in out`, or an insufficiently-mutable place, is ill-formed." Conformance §10 item 3 repeats
+## it. Until now the checker asked only the argument's TYPE, so an immutable local, an `in` parameter
+## (Functions §9's `in-param` admits no `mut`, so it is an immutable binding, Memory §3.1) and a literal
+## were all accepted and the callee wrote through them; the direct store `x = v` / `x[i] = v` /
+## `s.f = v` already refused that very place. The permission is NOT re-decided here — it is the one
+## `sema_write_mutability` immediately above answers for the same root (AGENTS.md strict forms §4, "one
+## decision, one place"), so the store route and this one cannot drift apart.
+##
+## Returns the offset to locate — the immutable place's ROOT name, the AND-step of §3.3 that has
+## already failed — or 0 when the argument is permitted. A NON-place (a literal of any shape) names no
+## place and is located at `fallback`, the call's callee.
+##
+## FAIL-OPEN by construction, so it can only ever ADD a refusal: every shape whose permission lives
+## somewhere the checker does not model stays accepted exactly as it is today — `deref(p)` is the
+## POINTEE's contract (§3.3, and `sema_place_root_var` deliberately gives it no root), and a call, an
+## `if`, a `match`, a `try` or a slice is left alone rather than asserted to be a non-place, because
+## the checker cannot prove what they yield is not a place. A `Slice(T)` view and an unresolved,
+## poisoned or pointer-typed local answer 0 from `sema_write_mutability` and stay accepted too.
+sema_out_arg_immutable_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, fallback : usize) -> usize {
+  root := sema_place_root_var(e)
+  if root.n != 0 {
+    if sema_write_mutability(decls, src, locals, nloc, root) != 0 { return root.s }
+    return 0
+  }
+  if sema_out_arg_is_non_place(e) { return fallback }
+  0
+}
+
+## Is this expression a LITERAL, the one non-place form §2.3 names ("e.g. a literal") and the only one
+## whose non-place-ness this checker can prove from the node alone? An exhaustive `match` (strict forms
+## §3): every other form answers false and stays accepted.
+sema_out_arg_is_non_place := fn(e : ptr(Expr)) -> bool {
+  match deref(e) {
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::ArrayLit | Expr::StructLit | Expr::EnumLit
+      | Expr::FloatLit => { true }
+    Expr::Var | Expr::Field | Expr::Index | Expr::Slice | Expr::Unchecked | Expr::Bitcast
+      | Expr::AddrOf | Expr::Deref | Expr::Call | Expr::If | Expr::Match | Expr::Try
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bin | Expr::Loop => { false }
+  }
+}
+
+## Issue #1663 — the arguments of one resolved call against its callee's declared directions. Walks the
+## parameters and the arguments in lockstep (the resolver below admits ONLY `arity == nargs`, so the two
+## lists are the same length and argument `i` IS parameter `i`; a named argument list is normalized into
+## declaration order by the parser — `test/named_args.al` answers `combine(c = 3, a = 50, b = 5)` as
+## 50-5-3 — and a NAMED argument to an `out` parameter does not parse at all, measured on the parent:
+## `f(a = 20, o = r)` is refused before `check` reports anything). Asks each parameter the ONE place
+## question of `ast::param_by_place` / `ast::param_array_by_place` (never `pmode` against a number,
+## ast.al §715) and hands each place argument to `sema_out_arg_immutable_span`. Returns the first
+## offending offset, 0 when every place argument is a mutable place.
+sema_call_place_arg_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, cs : usize, cn : usize) -> usize {
+  lv := deref(locals)
+  di := sema_direct_call_decl_idx(decls, upto, src, cs, cn, expr_call_arity(e), lv.mod_s, lv.mod_l)
+  if di < 0 { return 0 }
+  mut pp := deref(decl_get(decls, usize(di))).params_head
+  mut aa := expr_call_args_head(e)
+  mut res : usize = 0
+  loop {
+    mut step := false
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        match aa {
+          Some(aaq) => {
+            ca := deref(arg_p(aaq))
+            mut byplace := param_by_place(pm)
+            if not byplace { byplace = param_array_by_place(pm) }
+            if byplace {
+              sp := sema_out_arg_immutable_span(ca.e, decls, src, locals, nloc, cs)
+              if sp != 0 { res = sp }
+            }
+            aa = ca.next
+            pp = pm.next
+            step = true
+          }
+          None => {}
+        }
+      }
+      None => {}
+    }
+    if not step { break }
+  }
+  res
+}
+
+## Issue #1663 / Memory §4.4 — does the source spell the `mut` borrow qualifier on this `ptr( … )`?
+## The parser consumes it and stores only the place (`parser.al:1828`, so that `emit_addr_of` still sees
+## a `Var`/`Index`), which leaves `ptr(mut x)` and `ptr(x)` AST-identical; the qualifier is therefore
+## read back off the source, exactly as `decl_is_extern_fn` reads `@extern` "because the parser records
+## no flag". `[p, …)` is the operand's first token: `mut` immediately before it (whitespace only) inside
+## an `AddrOf` node can only be that qualifier, since `ptr` and `deref` are the two spellings that build
+## the node and only `ptr` takes it. Anything else between — a comment, another token — answers false,
+## which leaves the site accepted: this scan can only ever ADD a refusal.
+sema_spelled_ptr_mut := fn(src : ptr(u8), p : usize) -> bool {
+  mut q := p
+  while q > 0 and (str_at((src + q - 1), 1) == " " or str_at((src + q - 1), 1) == "\t" or str_at((src + q - 1), 1) == "\n" or str_at((src + q - 1), 1) == "\r") { q -= 1 }
+  if q < 3 { return false }
+  if str_at((src + q - 3), 3) != "mut" { return false }
+  q -= 3
+  while q > 0 and (str_at((src + q - 1), 1) == " " or str_at((src + q - 1), 1) == "\t" or str_at((src + q - 1), 1) == "\n" or str_at((src + q - 1), 1) == "\r") { q -= 1 }
+  if q == 0 { return false }
+  str_at((src + q - 1), 1) == "("
+}
+
+## Issue #1663 / Memory §4.4 — `ptr(mut <place>)` over a place whose AND-path is not writable GAINS a
+## permission, which §4.4 forbids ("A permission may only be **dropped**, never gained"). Returns the
+## offset of the immutable root to locate, 0 when the address is permitted: a plain `ptr(x)` (no
+## qualifier), an operand with no root the checker can name (`deref(p)`, a call — the POINTEE's contract,
+## §3.3), and any root `sema_write_mutability` cannot decide all stay accepted exactly as they are
+## today. The permission question is that same query, not a second one. `inner` is the operand the CALLER
+## already holds out of its own `Expr::AddrOf(p)` arm, so this takes the place directly: routing it
+## through `expr_addr_inner` would answer with that helper's NULL for every non-`AddrOf`, and a
+## `bitcast(usize, …) == 0` to see the NULL is exactly the sentinel `strict_forms` refuses to grow.
+sema_addr_of_mut_immutable_span := fn(inner : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> usize {
+  root := sema_place_root_var(inner)
+  if root.n == 0 or ast::span_is_synthetic(root.s) { return 0 }
+  if not sema_spelled_ptr_mut(src, root.s) { return 0 }
+  if sema_write_mutability(decls, src, locals, nloc, root) != 0 { return root.s }
   0
 }
 

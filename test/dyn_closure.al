@@ -4,11 +4,14 @@
 ## pair via `dyn_over(ptr(mut …))` — env borrows the named place, no hidden allocation (I3) — and called
 ## through the fat pair (`d(x)` = one indirect call through `code`, passing `env`).
 ##   d1 = add-10, d2 = add-20 ;  d1(2) + d2(10) = (2+10) + (10+20) = 12 + 30 = 42
+## #1663: the closure storage is declared `mut` because `dyn_over(ptr(mut store))` takes a WRITABLE
+## address (Memory §4.4: an immutable place yields only `ptr(T)`); the spec's own §6.3 spelling is
+## `ptr(mut store)` over a named place, and the place here is named by these bindings. Behaviour unchanged.
 main := fn() -> u64 {
   a := 10
-  s1 := fn(x : u64) -> u64 { return x + a }
+  mut s1 := fn(x : u64) -> u64 { return x + a }
   b := 20
-  s2 := fn(x : u64) -> u64 { return x + b }
+  mut s2 := fn(x : u64) -> u64 { return x + b }
   d1 : dyn fn(u64) -> u64 = dyn_over(ptr(mut s1))
   d2 : dyn fn(u64) -> u64 = dyn_over(ptr(mut s2))
   return d1(2) + d2(10)

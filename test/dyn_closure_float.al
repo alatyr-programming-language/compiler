@@ -6,9 +6,12 @@
 ## as if its capture were 0). Here `d(v, n)` has ONE float user arg + ONE integer user arg, so exactly
 ## one integer slot is shifted and the single capture follows it.
 ## 2.5 + 10 + 3 = 15.5 → 15.
+## #1663: the closure storage is declared `mut` because `dyn_over(ptr(mut store))` takes a WRITABLE
+## address (Memory §4.4: an immutable place yields only `ptr(T)`); the spec's own §6.3 spelling is
+## `ptr(mut store)` over a named place, and the place here is named by these bindings. Behaviour unchanged.
 main := fn() -> u64 {
   a := 10
-  s1 := fn(x : f64, n : u64) -> f64 { return x + f64(a) + f64(n) }
+  mut s1 := fn(x : f64, n : u64) -> f64 { return x + f64(a) + f64(n) }
   d1 : dyn fn(f64, u64) -> f64 = dyn_over(ptr(mut s1))
   v : f64 = 2.5
   return u64(d1(v, 3))

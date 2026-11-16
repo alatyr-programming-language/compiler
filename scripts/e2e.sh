@@ -7101,6 +7101,59 @@ check_reject reject_p1_unknown_enum_variant
 ## Declarations §3.1 / Memory §1.6 — the types agree, but a plain `=` to an immutable local is a
 ## dedicated located diagnostic, not a type mismatch. Check and build must agree on the line and name.
 check_build_located reject_immutable_write 3 "immutable binding"
+## Issue #1663 (Functions §2.3 / Memory §3.1, §3.3, §3.4, §4.4) — the two routes that reached an
+## immutable PLACE without the checker ever asking whether it was writable: an `out` / `in out`
+## ARGUMENT, and the operand of `ptr(mut …)`. The direct store above already refused the very same
+## place with this diagnostic; both routes now ask it the same query (`sema_write_mutability`), so the
+## three cannot drift. Every row is a `check` refusal, so it is one answer for all four backends and
+## `check_build_located` proves the build leaves no artifact either. The legal shapes stay `run` rows.
+check_build_located reject_issue1663_out_immutable_local 10 "immutable binding"
+check_build_located reject_issue1663_out_in_param 7 "immutable binding"
+check_build_located reject_issue1663_out_literal 8 "immutable binding"
+check_build_located reject_issue1663_out_immutable_field 11 "immutable binding"
+check_build_located reject_issue1663_out_in_struct_param 9 "immutable binding"
+check_build_located reject_issue1663_out_immutable_array 10 "immutable binding"
+check_build_located reject_issue1663_out_array_literal 8 "immutable binding"
+check_build_located reject_issue1663_out_in_array_param 8 "immutable binding"
+check_build_located reject_issue1663_ptr_mut_immutable_local 9 "immutable binding"
+check_build_located reject_issue1663_ptr_mut_immutable_struct 11 "immutable binding"
+check_build_located reject_issue1663_ptr_mut_in_param 7 "immutable binding"
+check_build_located reject_issue1663_ptr_mut_in_array_elem 7 "immutable binding"
+run accept_issue1663_mutable_place_args 44
+run accept_issue1663_ptr_mut_mutable 70
+## The shapes §2.3 admits but the x86_64 lower does not yet EMIT, measured identical on the parent
+## (`836b97ba`): an array ELEMENT bound to a place argument SIGSEGVs (139) and an `out` SCALAR bound
+## to a module global silently keeps its old value (12 where 22 was asked for). Both are emission
+## defects, not permission questions — `check` must keep accepting them, so they are asserted here at
+## the front end only and never as a `run` row that would bless the wrong value. Written here, not
+## under test/, so the corpus manifest gains no row.
+issue1663_unemitted_place_shapes_test() {
+  d="$T/issue1663_unemitted"; mkdir -p "$d"
+  cat > "$d/elem_arg.al" <<'EOF'
+put := fn(in out x : u64) { x = x + 10 }
+main := fn() -> u8 {
+  mut a : [u64; 3] = [1, 0, 0]
+  put(a[0])
+  u8(a[0] + 12)
+}
+EOF
+  cat > "$d/global_out.al" <<'EOF'
+mut g : u64 = 0
+give := fn(out y : u64) { y = 10 }
+main := fn() -> u8 {
+  give(g)
+  u8(g + 12)
+}
+EOF
+  bad=0
+  for n in elem_arg global_out; do
+    "$CC" check "$d/$n.al" >"$d/$n.ck" 2>&1; rc=$?
+    if [ "$rc" = 0 ]; then echo "ok   issue1663_unemitted/$n: check accepts the writable place"
+    else echo "FAIL issue1663_unemitted/$n: check rc=$rc $(head -c 120 "$d/$n.ck")"; bad=1; fi
+  done
+  [ "$bad" = 0 ] || fail=1
+}
+issue1663_unemitted_place_shapes_test
 ## Issue #429 (Types §7 / Stdlib appendix §3.6 / Memory §3.3) — `str` IS the slice `[u8]`, so an
 ## element store into a `str` place is refused whatever the BINDING says: the AND rule reads a
 ## dereference step's permission off the POINTEE, and the writable slice spelling is `[mut T]`.
