@@ -2647,15 +2647,20 @@ ib_st_is_folded := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
 ## The folded shape's payload field: the whole word at byte 0, which IS the pointer (Types §6.2).
 ib_folded_comp_fld := fn() -> IbFld { IbFld(off = ByteOff(0), ty = Kty.KPtr, sg = Sgn.SgNone, be = false) }
 ## The one-word layout of a niche-folded `Option(ptr(T))`, taken ONLY for the shape that claim rests
-## on (Types §6.2/§8, Memory §4.2): exactly two variants, the one whose discriminant is the payload's
-## null pattern (0) carrying NO components and the other exactly one, and `lower_layout`'s own byte
-## size of the instance — the size every emitter sizes the slot by — exactly one pointer word. Any
-## other shape answers `None` and stays refused where it was asked (`CSigParamUnresolved`,
+## on (Types §6.2/§8, Memory §4.2): exactly two variants, one of which carries discriminant 0 — the
+## payload's null pattern, which IS the absent case — with NO components, and the other exactly one, and
+## `lower_layout`'s own byte size of the instance — the size every emitter sizes the slot by — exactly one
+## pointer word. Any other shape answers `None` and stays refused where it was asked (`CSigParamUnresolved`,
 ## `CSigResultWide`): the builder never guesses a folded layout.
+## The discriminant-0 variant is asked to have been SEEN, not merely to have left `null_arity` at zero
+## (#1687): an enum whose variants all pin a non-zero discriminant would answer `null_arity == 0` for
+## never having met one, and the fold would be taken for a type whose null pattern is not its absent
+## case — a wrong layout silently taken. `null_seen` is what the zero in the guard otherwise stands for.
 ib_folded_shape := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, di : usize, s : usize, n : usize) -> Option(IbSt) {
   if lower_layout::layout_type_size_bytes(decls, src, s, n, a) != 8 { return Option(IbSt).None }
   d : Decl = deref(ib_decl_ptr(decls, di))
   mut nv : usize = 0
+  mut null_seen := false
   mut null_arity : usize = 0
   mut other_arity : usize = 0
   mut f := d.fields_head
@@ -2665,7 +2670,7 @@ ib_folded_shape := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena,
         fd := deref(ast::fld_p(fq))
         tgo : Option(i64) = lower_layout::variant_disc(decls, src, s, n, fd.ns, fd.nl, a)
         match tgo {
-          Some(t) => { if t == 0 { null_arity = fd.arity } else { other_arity = fd.arity } }
+          Some(t) => { if t == 0 { null_seen = true; null_arity = fd.arity } else { other_arity = fd.arity } }
           None => { return Option(IbSt).None }
         }
         nv = nv + 1
@@ -2674,7 +2679,7 @@ ib_folded_shape := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena,
       None => { break }
     }
   }
-  if nv != 2 or null_arity != 0 or other_arity != 1 { return Option(IbSt).None }
+  if nv != 2 or not null_seen or null_arity != 0 or other_arity != 1 { return Option(IbSt).None }
   Option(IbSt).Some(IbSt(di = di, s = s, n = n, size = 8, align = 8))
 }
 ## Is `st` an enum type (`ib_enum_named`), not a struct?

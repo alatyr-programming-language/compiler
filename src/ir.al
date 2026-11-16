@@ -2732,8 +2732,11 @@ ap_walk_stmts := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), 
   }
 }
 ## The tree walk of every function declaration (#1675): the callers the emitters see, each attributed to
-## the declaration that carries the call — a `__hoflam<N>` clone included, which is a caller in its own
-## right and no longer a reason to hold whatever its original's text shows.
+## the declaration that carries the call. A `__hoflam<N>` clone is one of those callers in its own right,
+## and being one lifts nothing: the hold on its original stays live a few lines above, where `ap_occur`
+## answers `ap_hold(w, g)` for a callee called from a declaration `ap_clone_owners` marked (#1662). So
+## the walk ADDS the clone's own edges — the calls the text scan cannot attribute to the declaration that
+## makes them — and REMOVES none: a callee held by its original stays held.
 ap_walk := fn(decls : ptr(rt::Vec), w : ptr(mut WBuf), e : ptr(mut WBuf), cands : ptr(mut WBuf), src : ptr(u8), in out a : rt::Arena) {
   cnt := rt::vec_len(deref(decls))
   mut i : usize = 0
