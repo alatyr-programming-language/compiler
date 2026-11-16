@@ -11824,6 +11824,28 @@ run_x86 issue864_global_arg_str 42
 # #865 — a local annotated `Option(ptr(T))` and initialized from a component of a multi-payload variant's
 # pattern is the one-word folded Option: it can be walked with `match` (the AST list migrations' shape).
 run_x86 issue865_option_ptr_payload_local 42
+# #1576 (IR-19) — the folded `Option(ptr(T))` now crosses a CALL on the SHARED IR: a parameter is the
+# address of a caller-owned copy of its one word, a one-word result comes back in the result register,
+# and `match` tests that word against 0 instead of a discriminant the folded shape never stores. The
+# absent case WRITES the null pattern, so a local that answered `Some` and is re-assigned `None`
+# answers `None` after it and never the pointer the earlier `Some` left behind. The aarch64, riscv64
+# and wasm selectors leave a signature that mentions a folded option — and every call to one — to the
+# legacy emitter (`ir::sig_pins_legacy`), because their legacy emitters pass an aggregate as the
+# unfolded tag and payload words; on those three the two fixtures below answer the SAME 42 (wasm
+# traps 134) with byte-identical dumps as the parent, so they pin the IR-built side, not a value.
+# `ir_option_ptr_local_twin` is the value regression: with no folded option in any signature its
+# `main` is IR-built on all four backends, where the parent refused it and each legacy emitter trapped
+# (133 aarch64/riscv64, 134 wasm).
+run_x86 ir_option_ptr_local 42
+run_x86 ir_option_ptr_cross 42
+run_a64 ir_option_ptr_local 42
+run_a64 ir_option_ptr_cross 42
+run_rv64 ir_option_ptr_local 42
+run_rv64 ir_option_ptr_cross 42
+run_x86 ir_option_ptr_local_twin 42
+run_a64 ir_option_ptr_local_twin 42
+run_rv64 ir_option_ptr_local_twin 42
+run_wat ir_option_ptr_local_twin 42
 # #1497 / Declarations §5+§6.1 — after the block that declared a local `C` closes, `C.k` is the module
 # constant's field again. `lower::slot_declared_before` asked only whether the slot was declared EARLIER,
 # not whether its block was still open, so the read took the dead local's slot. Fails on the parent

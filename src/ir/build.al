@@ -2604,7 +2604,13 @@ ib_enum_named_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena
   d : Decl = deref(ib_decl_ptr(decls, usize(edi)))
   if d.kind != lower_layout::DECL_KIND_ENUM { return Option(IbSt).None }
   if lower_layout::is_union_decl(decls, src, bn.s, bn.n) { return Option(IbSt).None }
-  if lower_layout::is_niche_folded(src, s, n) or lower_layout::is_bool_niche_pending(src, s, n) { return Option(IbSt).None }
+  if lower_layout::is_bool_niche_pending(src, s, n) { return Option(IbSt).None }
+  ## #1576 (IR-19): a NICHE-FOLDED `Option(ptr(T))` is exactly ONE pointer word (Types §6.2/§8,
+  ## Memory §4.2) — no discriminant: `None` is the payload's null pattern (0), `Some(p)` is the
+  ## pointer itself, so the tag test is `word == 0` and the payload IS that word. The builder models
+  ## it as a one-word object whose tag load (`ib_tag_fld`, byte 0 as a word) is also its payload
+  ## load; `ib_folded_shape` checks the shape that claim rests on before it is taken.
+  if lower_layout::is_niche_folded(src, s, n) { return ib_folded_shape(decls, src, a, usize(edi), s, n) }
   ## A generic enum is laid out only by an instance: `Option` alone names no payload type.
   if d.is_generic and bn.n == n { return Option(IbSt).None }
   st0 := IbSt(di = usize(edi), s = s, n = n, size = 0, align = 8)
@@ -2634,6 +2640,43 @@ ib_enum_named_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena
   if w != 1 + mx { return Option(IbSt).None }
   Option(IbSt).Some(IbSt(di = usize(edi), s = s, n = n, size = w * 8, align = 8))
 }
+## Is `st` a niche-folded enum (`ib_folded_shape`): one word, no discriminant?
+ib_st_is_folded := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
+  lower_layout::is_niche_folded(ib_b_src(bp), st.s, st.n)
+}
+## The folded shape's payload field: the whole word at byte 0, which IS the pointer (Types §6.2).
+ib_folded_comp_fld := fn() -> IbFld { IbFld(off = ByteOff(0), ty = Kty.KPtr, sg = Sgn.SgNone, be = false) }
+## The one-word layout of a niche-folded `Option(ptr(T))`, taken ONLY for the shape that claim rests
+## on (Types §6.2/§8, Memory §4.2): exactly two variants, the one whose discriminant is the payload's
+## null pattern (0) carrying NO components and the other exactly one, and `lower_layout`'s own byte
+## size of the instance — the size every emitter sizes the slot by — exactly one pointer word. Any
+## other shape answers `None` and stays refused where it was asked (`CSigParamUnresolved`,
+## `CSigResultWide`): the builder never guesses a folded layout.
+ib_folded_shape := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, di : usize, s : usize, n : usize) -> Option(IbSt) {
+  if lower_layout::layout_type_size_bytes(decls, src, s, n, a) != 8 { return Option(IbSt).None }
+  d : Decl = deref(ib_decl_ptr(decls, di))
+  mut nv : usize = 0
+  mut null_arity : usize = 0
+  mut other_arity : usize = 0
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        tgo : Option(i64) = lower_layout::variant_disc(decls, src, s, n, fd.ns, fd.nl, a)
+        match tgo {
+          Some(t) => { if t == 0 { null_arity = fd.arity } else { other_arity = fd.arity } }
+          None => { return Option(IbSt).None }
+        }
+        nv = nv + 1
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  if nv != 2 or null_arity != 0 or other_arity != 1 { return Option(IbSt).None }
+  Option(IbSt).Some(IbSt(di = di, s = s, n = n, size = 8, align = 8))
+}
 ## Is `st` an enum type (`ib_enum_named`), not a struct?
 ib_st_is_enum := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
   d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), st.di))
@@ -2649,6 +2692,10 @@ ib_variant_comp := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, vq : p
 ib_variant_comp_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbKS) {
   fd := deref(ast::fld_p(vq))
   if i >= fd.arity { return Option(IbKS).None }
+  ## #1576 (IR-19): in the folded shape the payload IS the one word, and it is a pointer by the
+  ## instance's own type argument (`is_niche_folded` reads it from there, Types §6.2) — the declared
+  ## component is the type-PARAMETER `T`, which names no type on its own.
+  if lower_layout::is_niche_folded(src, st.s, st.n) { return Option(IbKS).Some(IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)) }
   end := ast::src_extent()
   mut op := fd.ns + fd.nl
   while op < end and str_at((src + op), 1) != "(" { op = op + 1 }
@@ -2727,7 +2774,9 @@ ib_enum_lit_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st 
   Option(IbObj).Some(IbObj(fr = fr, fresh = true))
 }
 ## The tag and the components of enum literal `e` stored into object `fr` at byte offset `boff` (an
-## already zeroed object: a narrower variant leaves the rest of the payload zero).
+## already zeroed object: a narrower variant leaves the rest of the payload zero). In the NICHE-FOLDED
+## shape (#1576 IR-19) there is no tag word to write: the absent variant IS the null pattern, so `None`
+## stores 0 into the one word and `Some(p)` stores the pointer `p` into that SAME word (Types §6.2).
 ib_enum_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt, vq : ptr(mut FieldDecl), vs : usize, vl : usize, np : usize, ph : Option(ptr(mut Arg)), fr : FrameId, boff : usize) -> bool {
   bv : IbB = deref(bp)
   vfd := deref(ast::fld_p(vq))
@@ -2735,8 +2784,19 @@ ib_enum_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s
   tgo : Option(i64) = lower_layout::variant_disc(bv.decls, bv.src, st.s, st.n, vs, vl, a)
   mut tag : i64 = 0
   match tgo { Some(t) => { tag = t }; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false } }
-  tv := ib_konst(bp, a, ib_ks_i64(Sgn.SgS), tag)
-  ib_store_field(bp, a, fr, ib_fld_plus(ib_tag_fld(), boff), tv)
+  mut folded := false
+  if lower_layout::is_niche_folded(bv.src, st.s, st.n) { folded = true }
+  if not folded {
+    tv := ib_konst(bp, a, ib_ks_i64(Sgn.SgS), tag)
+    ib_store_field(bp, a, fr, ib_fld_plus(ib_tag_fld(), boff), tv)
+  }
+  ## The folded absent variant has no component to write, and its word is the null pattern: it is
+  ## WRITTEN, never assumed — the place may hold the pointer a previous `Some` left there. The store
+  ## is the one-word word-0 store the ordinary path already makes for a discriminant of 0.
+  if folded and np == 0 {
+    zn := ib_konst(bp, a, ib_ks_i64(Sgn.SgS), 0)
+    ib_store_field(bp, a, fr, ib_fld_plus(ib_tag_fld(), boff), zn)
+  }
   mut g : Option(ptr(mut Arg)) = ph
   mut i : usize = 0
   loop {
@@ -2747,7 +2807,9 @@ ib_enum_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s
         mut k : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
         match ko { Some(kk) => { k = kk }; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false } }
         vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, k)
-        match vo { Some(v) => { ib_store_field(bp, a, fr, ib_fld_plus(ib_comp_fld(i, k), boff), v) }; None => { return false } }
+        mut fld : IbFld = ib_comp_fld(i, k)
+        if folded { fld = ib_folded_comp_fld() }
+        match vo { Some(v) => { ib_store_field(bp, a, fr, ib_fld_plus(fld, boff), v) }; None => { return false } }
         i = i + 1
         g = ga.next
       }
@@ -2836,6 +2898,20 @@ ib_arm_cond := fn(bp : ptr(mut IbB), in out a : rt::Arena, scr : ptr(Expr), arm 
       if arm.wild != 0 or arm.vl == 0 { return ib_no(bp, scr, NyWhy.NwOutside) }
       bv : IbB = deref(bp)
       tgo : Option(i64) = lower_layout::variant_disc(bv.decls, bv.src, st.s, st.n, arm.vs, arm.vl, a)
+      ## Folded (#1576 IR-19): `sv` is the one word, so the arm whose discriminant is the null
+      ## pattern (0) is `word == 0` and every other arm is `word != 0` — there is no tag to match
+      ## against (Types §6.2). The discriminant is BOUND and compared, never matched as a literal:
+      ## `Some(0)` here is a variant pattern, not a test against zero.
+      if lower_layout::is_niche_folded(bv.src, st.s, st.n) {
+        match tgo {
+          Some(t) => {
+            if t == 0 { return Option(VRegId).Some(ib_eq_const(bp, a, sv, 0)) }
+            return Option(VRegId).Some(ib_ord_const(bp, a, Cc.CcNe, sv, 0))
+          }
+          None => {}
+        }
+        return ib_no(bp, scr, NyWhy.NwOutside)
+      }
       match tgo { Some(tag) => { return Option(VRegId).Some(ib_eq_const(bp, a, sv, tag)) }; None => {} }
       return ib_no(bp, scr, NyWhy.NwOutside)
     }
@@ -2878,7 +2954,10 @@ ib_arm_binds := fn(bp : ptr(mut IbB), in out a : rt::Arena, arm : Arm, st : IbSt
             match ko {
               Some(k) => {
                 ofr := o_frame(fr)
-                v := ib_load_at(bp, a, ofr, ib_comp_fld(i, k))
+                mut fld : IbFld = ib_comp_fld(i, k)
+                ## Folded: the bound payload IS the word at byte 0 (#1576 IR-19, Types §6.2).
+                if ib_st_is_folded(bp, st) { fld = ib_folded_comp_fld() }
+                v := ib_load_at(bp, a, ofr, fld)
                 ib_bind(bp, a, ast::bnd_ns(bq), ast::bnd_nl(bq), v)
               }
               None => { return false }
