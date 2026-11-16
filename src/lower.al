@@ -104,7 +104,7 @@ ecallee_is := ast::ecallee_is
 ## serialized `CLAYOUT` lanes S3(a)-S3(d) touched. The types (`AggFld`, `FPParts`, `FieldAgg`,
 ## `IFPlace`, `StdFieldPath`, `StdIdxOne`, `StdIdxPath`) stay HERE — the parent constructs and reads
 ## them too, and the child builds them through the §3/TYPE-ANCESTOR chain.
-(agg_field_of, agg_base_struct_span, emit_ptr_root_addr, agg_arr_fill_count, slot_elem_stride_bytes, field_place_parts, standard_field_path, std_idx_path, std_idx_leaf_is_agg, std_idx_byte_field_eek, std_idx_one, resolve_idx_field_place, emit_addr_of, field_read_agg, emit_elem_copy_in, emit_index_addr) := place
+(agg_field_of, agg_base_struct_span, emit_ptr_root_addr, agg_arr_fill_count, slot_elem_stride_bytes, field_place_parts, standard_field_path, std_idx_path, std_idx_leaf_is_agg, std_idx_byte_field_eek, std_idx_one, resolve_idx_field_place, emit_addr_of, field_read_agg, emit_elem_copy_in, emit_index_addr, index_base_blame_off) := place
 (emit_rodata_decl) := rodata
 (scan_str_arg_expr, scan_str_arg_stmts, scan_agg_width_expr, scan_agg_width_stmts, scan_agg_arg_expr, scan_agg_arg_stmts, agg_unbound_sret_block) := scratch
 
@@ -5310,7 +5310,8 @@ emit_byte_array_lit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : pt
 emit_param_arg := fn(e : ptr(Expr), cidx : i64, pidx : usize, tmp_off : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   reject_scalar_str_elem_arg(e, cx, cidx, pidx)
   if callee_out_scalar(cx.decls, cx.src, a, cidx, pidx) {
-    emit_out_scalar_arg(e, sb, cx, a, nl)
+    opts := callee_param_ty_span(cx.decls, cidx, pidx)
+    emit_out_scalar_arg(e, byte_type_eek(cx.src, opts.s, opts.n) != 0, sb, cx, a, nl)
   } else if callee_folded_arg(e, cidx, pidx, cx, a) {
     emit_folded_arg(e, sb, cx, a, nl)
   } else if array_lit_info(e).is_a and cx.agg_tmp >= 0 and is_byte_array_eek(callee_byte_array_param_eek(cidx, pidx, cx)) {
@@ -5423,12 +5424,18 @@ reject_scalar_str_elem_arg := fn(e : ptr(Expr), cx : ptr(LCtx), cidx : i64, pidx
 ##   * an ARRAY ELEMENT `a[i]` — a place of the array's element type. `emit_index_addr` composes its
 ##     address for every frame base (the `leaq` of a local array, the `movq` through a by-ref param,
 ##     the deref of a `Slice` view); the value path loaded THROUGH that address, so the callee got
-##     the element's VALUE as a pointer and stored into it — `put(a[0])` SIGSEGV'd (#1684). A base
-##     with no frame place (a module-global array) is refused located inside `emit_index_addr`.
+##     the element's VALUE as a pointer and stored into it — `put(a[0])` SIGSEGV'd (#1684).
+##     Two element places are refused, located, rather than passed (#1684's residual):
+##       - a BYTE element (`byte_param`: the parameter is declared `u8`/`i8`/`bits8`, or the base is
+##         one the element store writes with `movb`, `index_base_is_byte`). The callee reads and
+##         writes its out-scalar place a whole word wide (`movq`), which is right for every frame slot
+##         and `.data` word but runs seven bytes past a one-byte element: `set8(b[1])` over a
+##         `[u8; 4]` zeroed `b[2]`, and `set8(b[3])` overwrote the next local (review of PR #1694);
+##       - an element of a MODULE-GLOBAL array, which has no frame place for `emit_index_addr`.
 ## A name that is neither a frame place nor a mutable module global is not a mutable place: §2.3
 ## makes passing it ill-formed, so it is refused located rather than lowered as frame slot 0.
 ## A non-place argument (a literal, a call result) keeps the value path — §2.3 refuses it upstream.
-emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_out_scalar_arg := fn(e : ptr(Expr), byte_param : bool, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(e) {
     Expr::Var(s, n) => {
       le := local_entry(cx.slots, cx.src, s, n)
@@ -5451,12 +5458,28 @@ emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LC
       }
     }
     Expr::Index(base, idx) => {
+      bvn := var_name_span(base)
+      if bvn.n != 0 and is_module_mut_global(cx.decls, cx.src, bvn.s, bvn.n) {
+        ble := local_entry(cx.slots, cx.src, bvn.s, bvn.n)
+        match ble {
+          Some(bi) => {}
+          None => {
+            lower_show_src_line(cx.src, bvn.s)
+            panic("selfhost: an out/in-out argument is an element of a module-global array (the source line above) — a module-global array element is not supported as an out/in-out place argument on x86_64 yet (#1684); a local array's element and the global scalar itself are")
+          }
+        }
+      }
+      if byte_param or index_base_is_byte(base, cx, a) {
+        blm := index_base_blame_off(base)
+        if blm != 0 { lower_show_src_line(cx.src, blm) }
+        panic("selfhost: an out/in-out argument is a one-byte array element (the source line above) — a byte-packed array element is not supported as an out/in-out place argument on x86_64 yet (#1684): the callee writes its place a whole word wide and would overwrite the neighbouring bytes")
+      }
       emit_index_addr(base, idx, sb, cx, a, nl)   ## the element's address → %rax
       push_str(sb, "  pushq %rax\n")
     }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { emit_gas(e, sb, cx, a, nl) }
   }
 }
@@ -24702,6 +24725,18 @@ packed_byte_base_entry := fn(base : ptr(Expr), cx : ptr(LCtx)) -> i64 {
   ent := deref(svec_at(SlotEntry, cx.slots, si))
   if lower_ctx::streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 5 and is_byte_array_eek(ent.eek) { return i64(si) }
   -1
+}
+
+## Is an element of `ib[…]` one byte wide in storage — the base a byte-packed local array or slice, a
+## byte-array field of a `@packed` or standard-layout struct, a byte-tier element's byte-array field, or
+## a byte tuple component? The element store (`emit_st_index_assign`) writes these with `movb`, and an
+## out/in-out place argument (`emit_out_scalar_arg`) refuses them, so both ask this one question.
+index_base_is_byte := fn(ib : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> bool {
+  if packed_byte_base_entry(ib, cx) >= 0 { return true }
+  if packed_byte_field_eek(ib, cx) != 0 { return true }
+  if standard_byte_field_eek(ib, cx) != 0 { return true }
+  if std_idx_byte_field_eek(ib, cx.slots, cx.decls, cx.src, a) != 0 { return true }
+  tuple_byte_component_base(ib, cx).ok
 }
 
 ## #808 — store the elements of the array literal `v` into an array of NICHE-FOLDED `Option(ptr(T))`

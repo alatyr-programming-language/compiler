@@ -9,4 +9,7 @@
   index machinery already composes for every base — so the callee's write is visible to the caller. A
   name that is neither a bound local nor a `mut` global is refused with a located diagnostic instead of
   silently addressing frame slot 0. The shared IR declines these signatures, so this is the legacy
-  emitter honouring the same rule; an element of a module-global array keeps its located refusal.
+  emitter honouring the same rule. Two element places are refused with a located diagnostic for now:
+  a one-byte element (`[u8; N]`, `[i8; N]`, a byte field or view), because the callee still writes
+  its place a whole word wide and would overwrite the neighbouring bytes, and an element of a
+  module-global array.

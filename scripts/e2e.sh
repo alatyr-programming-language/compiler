@@ -13375,10 +13375,20 @@ build_reject_has issue1324_wide_gen_enum_arg "generic call returning an enum wid
 ## x86_64-scoped (`run_x86`, sweep-excluded): the fix is in the legacy x86 lower, and `alatyr ir`
 ## declines every one of these functions (`NotYet(signature: parameter with a mode)` / `NotYet(expr
 ## Call)`), so no IR shape is being papered over (#980). aarch64 answers 139 for the element shape too —
-## measured on this tree, filed as a follow-up; it is not this row's claim.
+## measured on this tree, filed as #1692; it is not this row's claim.
 run_x86 issue1684_out_array_elem 21
 run_x86 issue1684_out_global_scalar 22
 run_x86 issue1684_inout_global 111
+## #1684, review of PR #1694 (B1): a ONE-BYTE element (`[u8; N]`, packed) bound to an out/in-out u8. The
+## x86_64 callee stores a whole word through its place, so passing the element's address wrote eight bytes
+## over one: the PR's first head d4461e92 answered 3 (`b[2]` zeroed) and 5 (the next local overwritten),
+## where its parent 1b3b22e0 died with SIGSEGV (139). Refused at the argument until the callee writes at
+## the declared width. The control row holds the refusal to one-byte elements: u16/u32/i32/bool elements
+## sit in 8-byte cells and still answer 42.
+build_reject_has issue1684_out_u8_elem_mid "a byte-packed array element is not supported as an out/in-out place argument on x86_64 yet"
+build_reject_has issue1684_out_u8_elem_last "a byte-packed array element is not supported as an out/in-out place argument on x86_64 yet"
+run_x86 issue1684_out_narrow_word_elem 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

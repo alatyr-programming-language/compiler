@@ -6,7 +6,7 @@
 ## the committed seed 0.3.2): `put(a[0])` exited **139 (SIGSEGV)** — the callee stored through the
 ## integer 1. Here both a constant and a runtime index write back: 1 + 10 = 11, then `a[1] := 7`, and
 ## the untouched `a[2]` stays 3 — 11 + 7 + 3 = 21.
-## The twins are not this fix's surface: aarch64 answers 139 for the same shape (filed as a follow-up),
+## The twins are not this fix's surface: aarch64 answers 139 for the same shape (filed as #1692),
 ## so the row is x86_64-scoped and sweep-excluded (`run_x86`).
 ## spec: Functions §2.3, Memory §3.1/§3.3
 ## expect(x86_64): run 21
