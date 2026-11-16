@@ -10,15 +10,16 @@
 ##   * legacy -> IR: `lg_pass` passes a folded value it built to `rd`;
 ##   * IR -> IR: `rd(s)` through a folded local, and `rd(mk(…))` straight from a call.
 ## Each check owns its own bit of the mask; 42 when all held. On the parent every function here was
-## refused (`CSigParamUnresolved`, `CSigResultWide`) and the register twins trapped (SIGTRAP) while a
-## `main` that stored the folded value in a LOCAL crashed wasm.
-## The directive is x86_64-only on purpose: the aarch64, riscv64 and wasm selectors leave a function
-## whose signature mentions a folded option — and every caller of one — to the legacy emitter, because
-## THEIR legacy emitter passes an aggregate as the unfolded tag and payload words (`[x2,#0]`, `[x2,#8]`)
-## and a mixed crossing was measured there as `SIGSEGV` (139, a legacy caller of an IR callee) and as
-## the WRONG VALUE 7 instead of 42 (wasm, a legacy callee returning one) — `ir::sig_has_folded_option`.
-## On those targets this program keeps the parent's behaviour, a trap; the folded value still flows
-## through their IR path where it does not cross a call (`test/ir_option_ptr_local.al`).
+## refused (`CSigParamUnresolved`, `CSigResultWide`) and the whole program went to the legacy emitter.
+## The directive is x86_64-only, as it is for the whole folded-option family (`niche_option_ptr`,
+## `issue775_…` and the rest): aarch64, riscv64 and wasm keep such a signature on the LEGACY emitter —
+## `ir::sig_has_folded_option` names it, and each of those selectors refuses it at both ends, the
+## function itself (`sa_fn`, `sr_fn`, `sw_fn`) and every IR-built call to one (`sa_call`, `sr_call`,
+## `sw_call`), because THEIR legacy emitter passes an aggregate as the unfolded tag and payload words
+## (`[x2,#0]`, `[x2,#8]`) and a mixed crossing was measured wrong there. Measured on this program:
+## aarch64 and riscv64 answer 42 through that legacy emitter, wasm traps (134) on the folded LOCAL in
+## `main`, which is what its legacy emitter does for every fixture of this family. Undeclared, then,
+## and unchanged from the parent — this slice moves no value on those three targets.
 rd := fn(o : Option(ptr(u64))) -> u64 {
   match o { Some(p) => deref(p); None => 7 }
 }
