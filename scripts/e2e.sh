@@ -7130,14 +7130,18 @@ check_reject reject_p1_unknown_enum_variant
 check_build_located reject_immutable_write 3 "immutable binding"
 ## Issue #1663 (Functions §2.3 / Memory §3.1, §3.3, §3.4) — the route that reached an immutable PLACE
 ## without the checker ever asking whether it was writable: an `out` / `in out` ARGUMENT. The direct
-## store above already refused the very same place with this diagnostic; this route now asks it the same
-## query (`sema_write_mutability`), so the two cannot drift on the root. Every row is a `check` refusal,
-## so it is one answer for all four backends and `check_build_located` proves the build leaves no
-## artifact either. The legal shapes stay `run` rows.
-## The `ptr(mut …)` operand half of #1663 is NOT here: it turns on whether Memory §4.4 binds the
-## `dyn_over(ptr(mut store))` construction site, which spec#152 has not settled yet. It lands after
-## that is decided, with `sema_spelled_ptr_mut` / `sema_addr_of_mut_immutable_span` and the
-## `src/fmt.al` fix that keeps the `mut` on a postfix-chain operand.
+## store above already refused the very same place with this diagnostic; this route now asks the same
+## permission query (`sema_write_mutability`) of the same root. The two routes still differ on purpose:
+## the store sinks carry a definite-assignment exemption that §2.3's mutability rule does not, so
+## `v : u64;` then `v = 30` is accepted while `put(v)` is refused (`src/sema.al`, the
+## `sema_out_arg_immutable_span` comment). Every refusal row is a `check` refusal, so it is one answer
+## for all four backends and `check_build_located` proves the build leaves no artifact either. The legal
+## shapes stay `run` rows, including the three calls whose callee is NOT the module-level fn of that
+## name — a shadowing local, a shadowing parameter, an expression callee — which the fence must leave alone.
+## The `ptr(mut …)` operand half of #1663 is NOT here: spec#152 is decided (`ptr(store)` is the
+## canonical construction, and Memory §4.4 binds it unconditionally), but the compiler answers the
+## pinned 1.10.0, so that fence — `sema_spelled_ptr_mut` / `sema_addr_of_mut_immutable_span` and the
+## `src/fmt.al` fix that keeps the `mut` on a postfix-chain operand — lands with the pin move.
 check_build_located reject_issue1663_out_immutable_local 10 "check: immutable binding"
 check_build_located reject_issue1663_out_in_param 7 "check: immutable binding"
 check_build_located reject_issue1663_out_literal 8 "check: immutable binding"

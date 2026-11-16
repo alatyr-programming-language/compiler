@@ -11885,14 +11885,17 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   ## sink where this call's arguments meet its callee's declared directions. Placed AFTER every argument
   ## fence ABOVE in this function so an existing refusal keeps its precedence and its wording (the sticky
   ## carrier keeps the FIRST located code, `mark_failed`). What this sink does NOT outrank is named rather
-  ## than assumed: the `Expr::Call` arm of `check_expr_arms` runs BELOW (`src/sema.al:11925`, its type
-  ## mismatch raised at `12136`, returned at `12153`) and it RETURNS a located `mismatch_err`, which
+  ## than assumed: the `Expr::Call` arm of `check_expr_arms` runs BELOW (`src/sema.al:12100`, its type
+  ## mismatch raised at `12149`, returned at `12162`) and it RETURNS a located `mismatch_err`, which
   ## `check_stmts` propagates with `?` and `check_fn` assigns to `err`; the sticky `fspan` is promoted
-  ## only under `if failed and err / 4 == 0` (`src/sema.al:17873`), and a located mismatch carries a
-  ## span, so `err / 4 != 0` — a place argument that is BOTH immutable and mistyped therefore still
-  ## answers `type mismatch`, and this fence never reaches the report. It fires only where the argument
-  ## is conforming in type and insufficiently mutable, which is exactly §2.3's second clause. Fail-open
-  ## everywhere the callee is not one plain non-generic fn.
+  ## only under `if failed and err / 4 == 0` (`src/sema.al:17900`), and a located mismatch carries a
+  ## span, so `err / 4 != 0` — WHERE that arm raises a mismatch for an immutable place argument (a `bool`
+  ## or a struct local into `in out x : u64`, measured), the program still answers `type mismatch`.
+  ## Where it raises none, this fence's refusal is the report: a `u32` local into `in out x : u64` was
+  ## accepted on the parent (the arm does not ask a place argument for the MATCHING type §2.3 requires,
+  ## a gap of its own) and now answers `immutable binding` because the local is immutable. Both answers
+  ## refuse an ill-formed program. Fail-open everywhere the callee is not one plain non-generic
+  ## module-level fn (`sema_call_place_arg_err`: a shadowing local or an expression callee is not judged).
   if ecs.n != 0 {
     pae : Option(usize) = sema_call_place_arg_err(e, decls, upto, src, locals, nloc, ecs.s, ecs.n)
     match pae {
@@ -17361,8 +17364,8 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
 ## `s.f = v` already refused that very place. The permission is NOT re-decided here — it is the one
 ## `sema_write_mutability` immediately above answers for the same root (AGENTS.md strict forms §4, "one
 ## decision, one place"). The two routes are NOT identical and must not be "harmonised": the store sinks
-## add a definite-assignment exemption (`perm == 2 or (perm == 1 and not …unready…)` at `src/sema.al:15809`
-## field, `15880` place, `16149`+`16150` index, `16191` if-root) that this fence does not carry, so
+## add a definite-assignment exemption (`perm == 2 or (perm == 1 and not …unready…)` at `src/sema.al:15818`
+## field, `15889` place, `16158` index, `16200` if-root) that this fence does not carry, so
 ## `v : u64;` then `v = 30` is accepted under
 ## Declarations §4 (`spec/40-declarations.md:231-235`, established once by a single definite assignment)
 ## while `put(v)` is refused here. That split is what §2.3 says — its MUST is about MUTABILITY, not
