@@ -2181,11 +2181,108 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
         match plo { Some(pl) => { return ib_agg_bound(bp, a, pl.di, pl.s, pl.n) }; None => {} }
       }
     }
+    ## #1723: `deref(p)` — the pointee its operand's declaration spells.
+    Expr::Deref(pe) => { return ib_deref_agg_type(bp, a, pe) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match
-      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   Option(IbSt).None
+}
+## #1723: the pointee type `deref(pe)` reads, as its operand's declaration spells it: a pointer name
+## declared `ptr(T)`, a call to a concrete function declared `-> ptr(T)`, or `bitcast(ptr(T), x)`. A
+## binding with no spelled type (an inferred local, a payload binding) answers `None`. Asking emits
+## nothing.
+ib_deref_pointee := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> Option(IbSpan) {
+  match deref(pe) {
+    Expr::Var(s, n) => {
+      if ib_names_global(bp, s, n) { return Option(IbSpan).None }
+      bd : IbBind = ib_lookup(bp, s, n)
+      match bd {
+        BdVal(v, vts, vtn) => { return ib_pointee(bp, vts, vtn) }
+        BdAgg(fr, sd, ts, tn) => {}
+        BdMem(mf, mns) => {}
+        BdArr(af, ats, atn) => {}
+        BdArrI(xf, xn, xes, xen) => {}
+        BdArrRef(qv, qn, qes, qel) => {}
+        BdRef(rv, rsd, rts, rtn) => {}
+        BdView(wf, wes, wen) => {}
+        BdStr(sf) => {}
+        BdNone => {}
+      }
+    }
+    Expr::Call(cs, cl, na, ah) => {
+      ci : Option(u64) = ib_callee_decl(bp, cs, cl)
+      match ci {
+        Some(di) => {
+          d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
+          ## A generic callee's `ptr(T)` names its own parameter, not the instance's type.
+          if d.ret_tl != 0 and not d.is_generic { return ib_pointee(bp, d.ret_ts, d.ret_tl) }
+        }
+        None => {}
+      }
+    }
+    Expr::Unchecked(inner) => { return ib_deref_pointee(bp, inner) }
+    Expr::Bitcast(inner, ts, tl) => { return ib_pointee(bp, ts, tl) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
+  }
+  Option(IbSpan).None
+}
+## #1723: the aggregate type `deref(pe)` reads whole — its declared pointee, when that is an enum the
+## builder lays out or a WORD-tier struct (the only struct a place through a pointer may be, see
+## "places"). Asking emits nothing.
+ib_deref_agg_type := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> Option(IbSt) {
+  po : Option(IbSpan) = ib_deref_pointee(bp, pe)
+  match po {
+    Some(ps) => {
+      sto : Option(IbSt) = ib_agg_named(bp, a, ps.s, ps.n)
+      match sto {
+        Some(st) => { if ib_st_is_enum(bp, st) or ib_struct_word(bp, a, st) { return sto } }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  Option(IbSt).None
+}
+## #1723: why `deref(pe)` read whole is not built — the construct a refusal names — or `EDeref` when it
+## can be: the pointee is not spelled (`EDerefPointee`), names no aggregate the builder lays out
+## (`EDerefUnlaid`), or is a struct outside the WORD tier (`EDerefTier`).
+ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> Construct {
+  po : Option(IbSpan) = ib_deref_pointee(bp, pe)
+  match po {
+    Some(ps) => {
+      sto : Option(IbSt) = ib_agg_named(bp, a, ps.s, ps.n)
+      match sto {
+        Some(st) => {
+          if ib_st_is_enum(bp, st) or ib_struct_word(bp, a, st) { return Construct.EDeref }
+          return Construct.EDerefTier
+        }
+        None => { return Construct.EDerefUnlaid }
+      }
+    }
+    None => {}
+  }
+  Construct.EDerefPointee
+}
+## Refuse the aggregate expression `e` for reason `w`: a `deref` under the cause `ib_deref_why` names
+## (#1723), any other expression under its own construct.
+ib_refuse_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), w : NyWhy) {
+  match deref(e) {
+    Expr::Deref(pe) => {
+      c : Construct = ib_deref_why(bp, a, pe)
+      sp : Option(u64) = expr_span(e)
+      ib_refuse(bp, c, w, sp)
+      return
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  ib_refuse_expr(bp, e, w)
 }
 ## Does the name `[s, s+n)` resolve to a module value by span identity (`m::NAME` after the front half)?
 ib_names_global := fn(bp : ptr(mut IbB), s : usize, n : usize) -> bool {
@@ -2215,12 +2312,30 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
       }
     }
     None => {
-      ib_refuse_expr(bp, e, NyWhy.NwOutside)
+      ib_refuse_agg(bp, a, e, NyWhy.NwOutside)
       return Option(IbObj).None
     }
   }
   match deref(e) {
     Expr::StructLit(ss, sl, nf, fh) => { return ib_agg_lit(bp, a, e, st, nf, fh) }
+    Expr::Deref(pe) => {
+      ## #1723: the pointee read whole (Memory §4.3) — a fresh object copied from the address, as a
+      ## by-reference parameter's value is: the pointee's memory is never aliased by a local.
+      pvo : Option(VRegId) = ib_bx(bp, a, pe)
+      match pvo {
+        Some(pv) => {
+          if not kty_is_ptr(vreg_ty(ib_b_f(bp), usize(pv))) {
+            ib_refuse_expr(bp, e, NyWhy.NwDisagree)
+            return Option(IbObj).None
+          }
+          cfr := ib_new_obj(bp, a, st)
+          opv := o_vreg(pv)
+          ib_copy_into(bp, a, cfr, opv, st.size)
+          return Option(IbObj).Some(IbObj(fr = cfr, fresh = true))
+        }
+        None => { return Option(IbObj).None }
+      }
+    }
     Expr::Var(s, n) => {
       b : IbBind = ib_lookup(bp, s, n)
       match b {
@@ -2274,7 +2389,7 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit
-      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   ib_refuse_expr(bp, e, NyWhy.NwOutside)
@@ -2555,7 +2670,21 @@ ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
         None => {}
       }
     }
-    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    None => {
+      ## #1723: `v := deref(p)` names the `deref`'s own cause, not the declaration's.
+      if lts.n == 0 and ib_is_deref(v) { ib_refuse_agg(bp, a, v, NyWhy.NwOutside); return }
+      ib_refuse_stmt(bp, h, NyWhy.NwOutside)
+    }
+  }
+}
+## Is `e` a `deref(p)`?
+ib_is_deref := fn(e : ptr(Expr)) -> bool {
+  match deref(e) {
+    Expr::Deref(pe) => { true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## `s = e` into the struct local in object `fr`: the value is built in its own object first (a literal
@@ -2624,7 +2753,14 @@ ib_enum_named_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena
         mut i : usize = 0
         while i < fd.arity {
           ko : Option(IbKS) = ib_variant_comp_in(decls, src, a, st0, fq, i)
-          match ko { Some(k) => {}; None => { return Option(IbSt).None } }
+          match ko {
+            Some(k) => {}
+            None => {
+              ## #1723: or a folded `Option(ptr(T))` — one pointer word, which the width check below holds to.
+              fo : Option(IbSt) = ib_variant_comp_folded_in(decls, src, a, st0, fq, i)
+              match fo { Some(fst) => {}; None => { return Option(IbSt).None } }
+            }
+          }
           i = i + 1
         }
         if fd.arity > mx { mx = fd.arity }
@@ -2701,12 +2837,54 @@ ib_variant_comp_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Are
   ## instance's own type argument (`is_niche_folded` reads it from there, Types §6.2) — the declared
   ## component is the type-PARAMETER `T`, which names no type on its own.
   if lower_layout::is_niche_folded(src, st.s, st.n) { return Option(IbKS).Some(IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)) }
+  so : Option(IbSpan) = ib_variant_comp_span_in(decls, src, a, st, vq, i)
+  match so { Some(sp) => { return ib_name_ks(src, sp.s, sp.n) }; None => {} }
+  Option(IbKS).None
+}
+## #1723: component `i` of variant `vq` of enum `st` when it is itself a niche-folded `Option(ptr(T))`:
+## the one pointer word its slot holds (Types §6.2), as the folded one-word object `ib_folded_shape`
+## admits. A folded `st`'s own payload is the kernel `ptr` above, never this.
+ib_variant_comp_folded := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbSt) {
+  bv : IbB = deref(bp)
+  ib_variant_comp_folded_in(bv.decls, bv.src, a, st, vq, i)
+}
+## Set while a function is built when a folded component was laid out (`ib_variant_comp_folded_in`);
+## `build_one` clears it and records it on the built function (`ir::fn_folded_comp`).
+mut IB_FOLDED_COMP : bool = false
+ib_variant_comp_folded_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbSt) {
+  fd := deref(ast::fld_p(vq))
+  if i >= fd.arity { return Option(IbSt).None }
+  if lower_layout::is_niche_folded(src, st.s, st.n) { return Option(IbSt).None }
+  so : Option(IbSpan) = ib_variant_comp_span_in(decls, src, a, st, vq, i)
+  match so {
+    Some(sp) => {
+      if not lower_layout::is_niche_folded(src, sp.s, sp.n) { return Option(IbSt).None }
+      fo : Option(IbSt) = ib_enum_named_in(decls, src, a, sp.s, sp.n)
+      match fo {
+        Some(fst) => {
+          if fst.size == 8 {
+            IB_FOLDED_COMP = true
+            return fo
+          }
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  Option(IbSt).None
+}
+## The type span of component `i` of variant `vq` of enum `st`, read from the variant's own `( … )` group
+## — through the instance's type argument when the component is a type parameter of a generic enum.
+ib_variant_comp_span_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbSpan) {
+  fd := deref(ast::fld_p(vq))
+  if i >= fd.arity { return Option(IbSpan).None }
   end := ast::src_extent()
   mut op := fd.ns + fd.nl
   while op < end and str_at((src + op), 1) != "(" { op = op + 1 }
-  if op >= end { return Option(IbKS).None }
+  if op >= end { return Option(IbSpan).None }
   comp := lower_layout::typearg_at(src, op, 0, i)
-  if comp.n == 0 { return Option(IbKS).None }
+  if comp.n == 0 { return Option(IbSpan).None }
   mut ts := comp.s
   mut tl := comp.n
   d : Decl = deref(ib_decl_ptr(decls, st.di))
@@ -2715,12 +2893,12 @@ ib_variant_comp_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Are
     if pos >= 0 {
       bn := lower_layout::base_type_name(src, st.s, st.n)
       ta := lower_layout::typearg_at(src, bn.s, bn.n, usize(pos))
-      if ta.n == 0 { return Option(IbKS).None }
+      if ta.n == 0 { return Option(IbSpan).None }
       ts = ta.s
       tl = ta.n
     }
   }
-  ib_name_ks(src, ts, tl)
+  Option(IbSpan).Some(IbSpan(s = ts, n = tl))
 }
 ## The variant of enum `st` named `[vs, vs+vl)`.
 ib_variant_of := fn(bp : ptr(mut IbB), st : IbSt, vs : usize, vl : usize) -> Option(ptr(mut FieldDecl)) {
@@ -2809,12 +2987,23 @@ ib_enum_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s
       Some(gq) => {
         ga := deref(arg_p(gq))
         ko : Option(IbKS) = ib_variant_comp(bp, a, st, vq, i)
-        mut k : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
-        match ko { Some(kk) => { k = kk }; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false } }
-        vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, k)
-        mut fld : IbFld = ib_comp_fld(i, k)
-        if folded { fld = ib_folded_comp_fld() }
-        match vo { Some(v) => { ib_store_field(bp, a, fr, ib_fld_plus(fld, boff), v) }; None => { return false } }
+        match ko {
+          Some(k) => {
+            vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, k)
+            mut fld : IbFld = ib_comp_fld(i, k)
+            if folded { fld = ib_folded_comp_fld() }
+            match vo { Some(v) => { ib_store_field(bp, a, fr, ib_fld_plus(fld, boff), v) }; None => { return false } }
+          }
+          None => {
+            ## #1723: a folded `Option(ptr(T))` component is built in its one-word slot like any `Option`
+            ## value (`ib_agg_into`): its literal in place, any other value copied in.
+            fo : Option(IbSt) = ib_variant_comp_folded(bp, a, st, vq, i)
+            match fo {
+              Some(fst) => { if not ib_agg_into(bp, a, ga.e, fst, fr, boff + 8 + 8 * i) { return false } }
+              None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+            }
+          }
+        }
         i = i + 1
         g = ga.next
       }
@@ -2965,7 +3154,21 @@ ib_arm_binds := fn(bp : ptr(mut IbB), in out a : rt::Arena, arm : Arm, st : IbSt
                 v := ib_load_at(bp, a, ofr, fld)
                 ib_bind(bp, a, ast::bnd_ns(bq), ast::bnd_nl(bq), v)
               }
-              None => { return false }
+              None => {
+                ## #1723: a folded `Option(ptr(T))` component is bound as an `Option` value of its own —
+                ## its one word copied out of the slot into a one-word object (Types §6.2).
+                fo : Option(IbSt) = ib_variant_comp_folded(bp, a, st, vq, i)
+                match fo {
+                  Some(fst) => {
+                    ofr2 := o_frame(fr)
+                    w := ib_load_at(bp, a, ofr2, ib_comp_fld(i, IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)))
+                    cfr := ib_new_obj(bp, a, fst)
+                    ib_store_field(bp, a, cfr, ib_folded_comp_fld(), w)
+                    ib_bind_agg(bp, a, ast::bnd_ns(bq), ast::bnd_nl(bq), cfr, fst)
+                  }
+                  None => { return false }
+                }
+              }
             }
             i = i + 1
             b = ast::bnd_next(bq)
@@ -3071,7 +3274,7 @@ ib_match := fn(bp : ptr(mut IbB), in out a : rt::Arena, scr : ptr(Expr), arms : 
           None => {}
         }
       }
-      None => { ib_refuse_expr(bp, scr, NyWhy.NwOutside) }
+      None => { ib_refuse_agg(bp, a, scr, NyWhy.NwOutside) }
     }
     return
   }
@@ -4626,7 +4829,11 @@ ib_bx_deref := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pe : p
   pv := ib_bx(bp, a, pe)?
   if not kty_is_ptr(vreg_ty(ib_b_f(bp), usize(pv))) { return ib_no(bp, e, NyWhy.NwDisagree) }
   k := ib_ty(bp, e)?
-  if not ib_ks_word(k) { return ib_no(bp, e, NyWhy.NwOutside) }
+  if not ib_ks_word(k) {
+    sp : Option(u64) = expr_span(e)
+    ib_refuse(bp, Construct.EDerefNarrow, NyWhy.NwOutside, sp)
+    return Option(VRegId).None
+  }
   opv := o_vreg(pv)
   lv := ib_load_at(bp, a, opv, ib_word_fld(k))
   Option(VRegId).Some(lv)
@@ -5553,7 +5760,9 @@ pub build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize,
   was_s := lower_layout::type_ref_mod_s()
   was_l := lower_layout::type_ref_mod_l()
   lower_layout::set_type_ref_module(d.mod_start, d.mod_len, lower::root_mod_s(), lower::root_mod_l())
+  IB_FOLDED_COMP = false
   out : BuildOut = ib_build_one(p, decls, src, di, a, why)
+  match out { Built(fid) => { if IB_FOLDED_COMP { fn_set_folded_comp(prog_fn(p, fid)) } }; Refused => {} }
   if was_on { lower_layout::set_type_ref_module(was_s, was_l, lower::root_mod_s(), lower::root_mod_l()) } else { lower_layout::clear_type_ref_module() }
   out
 }

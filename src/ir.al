@@ -523,6 +523,8 @@ pub IrFn := struct {
   ret_words : usize,
   vregs : ptr(mut WBuf), frames : ptr(mut WBuf), insts : ptr(mut WBuf), pool : ptr(mut WBuf),
   nlabels : usize,
+  ## #1723: the builder laid out an enum with a niche-folded `Option(ptr(T))` component (`fn_folded_comp`).
+  folded_comp : bool,
 }
 
 ## A program: its functions, in order (an `OkFn` operand is an index into `fns`), and the symbols its
@@ -620,7 +622,7 @@ pub fn_new := fn(in out a : rt::Arena, name_p : ptr(u8), name_n : usize, has_ret
   iw := wb_new(a, 32)
   pw := wb_new(a, 8)
   nf := IrFn(name_p = name_p, name_n = name_n, nparams = 0, has_ret = has_ret, ret_ty = ret_ty, ret_sg = ret_sg,
-             ret_words = 0, vregs = vw, frames = fw, insts = iw, pool = pw, nlabels = 0)
+             ret_words = 0, vregs = vw, frames = fw, insts = iw, pool = pw, nlabels = 0, folded_comp = false)
   deref(f) = nf
   f
 }
@@ -636,6 +638,13 @@ pub fn_ret_sg := fn(f : ptr(mut IrFn)) -> Sgn { fv : IrFn = deref(f); fv.ret_sg 
 pub fn_ret_words := fn(f : ptr(mut IrFn)) -> usize { fv : IrFn = deref(f); fv.ret_words }
 ## Mark `f`'s result an aggregate of `n` words (slice 3d); its `ret_ty` must be `ptr`.
 pub fn_set_ret_words := fn(f : ptr(mut IrFn), n : usize) { deref(f).ret_words = n }
+## #1723: whether `f` lays out an enum with a niche-folded `Option(ptr(T))` component, as one pointer word
+## in its payload slot (Types §6.2). x86_64's legacy emitter lays such a component out the same way
+## (#852). The aarch64, riscv64 and wasm legacy emitters do not: a node one of them built, read by an
+## IR-built `match` on the same target, crashed where the parent trapped (measured). Their selectors
+## therefore leave such a function to the legacy emitter.
+pub fn_folded_comp := fn(f : ptr(mut IrFn)) -> bool { fv : IrFn = deref(f); fv.folded_comp }
+pub fn_set_folded_comp := fn(f : ptr(mut IrFn)) { deref(f).folded_comp = true }
 fn_nlabels := fn(f : ptr(mut IrFn)) -> usize { fv : IrFn = deref(f); fv.nlabels }
 fn_vregs := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.vregs }
 fn_frames := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.frames }
@@ -1723,8 +1732,10 @@ pub Construct := enum {
   SAssign, SWhile, SFieldAssign, SReturn, SIf, SMatch, SFor, SDerefAssign, SIndexAssign, SIndexFieldAssign,
   SFieldPathAssign, SLoop, SBreak, SContinue, SExprStmt, SCompIf, SCompFor, SCompMatch, SCompForRange,
   SUnchecked, SAllocWith,
-  ENum, EBoolLit, EVar, EBin, EIf, EMatch, ECall, EStructLit, EField, EEnumLit, EAddrOf, EDeref, EStrLit,
-  EArrayLit, EIndex, ETry, EFloatLit, ESlice, ECompField, EUnchecked, ELambda, EFnRef, EBitcast, ELoop,
+  ENum, EBoolLit, EVar, EBin, EIf, EMatch, ECall, EStructLit, EField, EEnumLit, EAddrOf, EDeref,
+  ## The `deref` family (#1723): `EDeref` stays the label of a refusal no cause was found for.
+  EDerefPointee, EDerefUnlaid, EDerefTier, EDerefNarrow,
+  EStrLit, EArrayLit, EIndex, ETry, EFloatLit, ESlice, ECompField, EUnchecked, ELambda, EFnRef, EBitcast, ELoop,
 }
 pub construct_name := fn(c : Construct) -> str {
   match c {
@@ -1750,7 +1761,12 @@ pub construct_name := fn(c : Construct) -> str {
     ENum => { "expr Num" }; EBoolLit => { "expr BoolLit" }; EVar => { "expr Var" }; EBin => { "expr Bin" }
     EIf => { "expr If" }; EMatch => { "expr Match" }; ECall => { "expr Call" }; EStructLit => { "expr StructLit" }
     EField => { "expr Field" }; EEnumLit => { "expr EnumLit" }; EAddrOf => { "expr AddrOf" }
-    EDeref => { "expr Deref" }; EStrLit => { "expr StrLit" }; EArrayLit => { "expr ArrayLit" }
+    EDeref => { "expr Deref" }
+    EDerefPointee => { "expr Deref: pointee type not spelled by the operand's declaration" }
+    EDerefUnlaid => { "expr Deref: pointee aggregate the builder does not lay out" }
+    EDerefTier => { "expr Deref: struct pointee not in the WORD tier" }
+    EDerefNarrow => { "expr Deref: scalar narrower than a word through a pointer" }
+    EStrLit => { "expr StrLit" }; EArrayLit => { "expr ArrayLit" }
     EIndex => { "expr Index" }; ETry => { "expr Try" }; EFloatLit => { "expr FloatLit" }; ESlice => { "expr Slice" }
     ECompField => { "expr CompField" }; EUnchecked => { "expr Unchecked" }; ELambda => { "expr Lambda" }
     EFnRef => { "expr FnRef" }; EBitcast => { "expr Bitcast" }; ELoop => { "expr Loop" }

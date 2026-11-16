@@ -1049,6 +1049,75 @@ EOF
      && grep -q '^fn ir_str_escape::ok_esc Built$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
     echo "ok   ir #1676 str escapes: a literal with \\u{…} or an unlisted escape refuses at the literal; the listed ones build"
   else echo "FAIL ir #1676 str escapes: rc=$rc"; grep -E '^fn ir_str_escape::' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
+  ## #1723: `deref(p)` read whole. A pointee the operand's declaration spells, an enum in the shared layout
+  ## or a WORD-tier struct, is built. The parent refused it as a bare `expr Deref`. Every other cause names
+  ## its own refusal: a struct outside the WORD tier, an enum the builder does not lay out (a `str`
+  ## component), a pointer with no spelled type (a payload binding), and a scalar narrower than a word.
+  local dw="$T/ir_deref_why.al"
+  cat > "$dw" <<'EOF'
+P := struct { a : u64, b : u8 }
+U := enum { A(str), B }
+Q := enum { A, B(u64) }
+tier := fn(p : ptr(P)) -> u64 {
+  v : P = deref(p)
+  v.a
+}
+unlaid := fn(p : ptr(U)) -> u64 {
+  match deref(p) { U.A(s) => { return 1 }; U.B => { return 2 } }
+}
+unspelled := fn(o : Option(ptr(Q))) -> u64 {
+  match o {
+    Some(q) => { match deref(q) { Q.A => { return 1 }; Q.B(x) => { return x } } }
+    None => { return 0 }
+  }
+}
+narrow := fn(p : ptr(u8)) -> u8 { deref(p) }
+whole := fn(p : ptr(Q)) -> u64 {
+  match deref(p) { Q.A => { return 1 }; Q.B(x) => { return x } }
+}
+main := fn() -> u64 { 0 }
+EOF
+  "$CC" ir "$dw" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -qE '^fn ir_deref_why::tier NotYet\(expr Deref: struct pointee not in the WORD tier, .*ir_deref_why\.al:5:17\)$' "$rep" \
+     && grep -qE '^fn ir_deref_why::unlaid NotYet\(expr Deref: pointee aggregate the builder does not lay out, .*ir_deref_why\.al:9:15\)$' "$rep" \
+     && grep -qE "^fn ir_deref_why::unspelled NotYet\(expr Deref: pointee type not spelled by the operand's declaration, .*ir_deref_why\.al:13:30\)$" "$rep" \
+     && grep -qE '^fn ir_deref_why::narrow NotYet\(expr Deref: scalar narrower than a word through a pointer, .*ir_deref_why\.al:17:41\)$' "$rep" \
+     && grep -q '^fn ir_deref_why::whole Built$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir #1723 deref read whole: built for a spelled enum pointee; each other cause names its refusal"
+  else echo "FAIL ir #1723 deref read whole: rc=$rc"; grep -E '^fn ir_deref_why::' "$rep" | head -5 | sed 's/^/     /'; fail=1; fi
+  ## #1723: an enum with a niche-folded `Option(ptr(T))` component. x86_64's legacy emitter lays the
+  ## component out as the IR does, one pointer word (#852), so x86_64 selects `walk` from the IR. The
+  ## aarch64 and riscv64 legacy emitters lay it out otherwise. There an IR-built `walk` reading nodes that
+  ## legacy `lg_run` built died with SIGSEGV where the parent trapped (133, measured), so their selectors
+  ## leave it to the legacy emitter (`ir::fn_folded_comp`). The row asks where `walk` came from on each.
+  local fw="$T/ir1723_fold.al"
+  cat > "$fw" <<'EOF'
+L := enum { Nil, Cons(u64, Option(ptr(L))) }
+walk := fn(p : ptr(L)) -> u64 {
+  match deref(p) {
+    L.Nil => { return 0 }
+    L.Cons(v, nx) => {
+      match nx { Some(q) => { return v + walk(q) }; None => { return v } }
+    }
+  }
+}
+lg_run := fn() -> u64 {
+  w := 1.5
+  n3 := L.Cons(5, Option(ptr(L)).None)
+  n2 := L.Cons(7, Option(ptr(L)).Some(ptr(n3)))
+  n1 := L.Cons(30, Option(ptr(L)).Some(ptr(n2)))
+  walk(ptr(n1))
+}
+main := fn() -> u64 { lg_run() }
+EOF
+  local fsel='{ if ($0 ~ /^(ir1723_fold__)?walk:$/) { print ((p1 ~ /ir: selected/ || p2 ~ /ir: selected/) ? "ir" : "legacy"); exit } p2 = p1; p1 = $0 }'
+  "$CC" "$fw" > "$T/ir1723_fold.x86.s" 2>/dev/null; local f1=$?
+  "$CC" aarch64 "$fw" > "$T/ir1723_fold.a64.s" 2>/dev/null; local f2=$?
+  "$CC" riscv64 "$fw" > "$T/ir1723_fold.rv.s" 2>/dev/null; local f3=$?
+  local fwhere="$(awk "$fsel" "$T/ir1723_fold.x86.s") $(awk "$fsel" "$T/ir1723_fold.a64.s") $(awk "$fsel" "$T/ir1723_fold.rv.s")"
+  if [ "$f1$f2$f3" = 000 ] && [ "$fwhere" = "ir legacy legacy" ]; then
+    echo "ok   ir #1723 folded component: x86_64 selects it from the IR; aarch64 and riscv64 keep it legacy"
+  else echo "FAIL ir #1723 folded component: rc=$f1$f2$f3 where (x86 a64 rv64) = $fwhere"; fail=1; fi
   ## #1662: two callers the text attributes to another declaration. (a) A call inside a HOF `hof` that
   ## the driver clones for a capturing closure (`__hoflam<N>`) is also the clone's call, so `rd` is held
   ## on every target; the parent left it to the per-target rule. (b) x86's legacy emitter expands an
