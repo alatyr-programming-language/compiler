@@ -1653,14 +1653,19 @@ emit_fmt_expr_core := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a
     Expr::AddrOf(p) => {
       ## `ptr(mut x)` — the MUTABLE address-of spelling (`dyn_over(ptr(mut s1))`, a by-ref out-param).
       ## `Expr::AddrOf` records no mutability (the parser consumes the marker), so it was rendered back
-      ## as `ptr(x)`: the same program TODAY (pointer mutability is not yet enforced) but a different
-      ## SOURCE, and a build break the day it is. Recover the marker by source-scan off the operand's own
-      ## name span (`local_is_mut`, as `emit_fmt_value`/`fmt_is_pub` recover `: T`/`pub`) — inside a
-      ## `ptr(` the only token that can precede the operand is the `mut` marker itself, so no false match.
-      mut ps : usize = 0
-      mut pn : usize = 0
+      ## as `ptr(x)`: a different SOURCE, and since #1663 (Memory §4.4) a different PROGRAM, because
+      ## `ptr(mut x)` of an immutable place is refused where `ptr(x)` is not. Recover the marker by
+      ## source-scan (`local_is_mut`, as `emit_fmt_value`/`fmt_is_pub` recover `: T`/`pub`; `sema`'s
+      ## `sema_addr_of_mut_immutable_span` asks the same scan) — inside a `ptr(` the only token that can
+      ## precede the operand is the `mut` marker itself, so no false match. The scan runs off the
+      ## operand's OWN FIRST BYTE, `fmt_expr_left_off` (it descends `Field`/`Index`/`Slice`/`CompField`/
+      ## `Try`): off `fmt_var_span` it saw no `Var` at the top of a postfix chain, so `ptr(mut xs[1])`
+      ## lost the marker and the formatted text COMPILED while the source was refused — `fmt_corpus`'s
+      ## `RECOMPILE`. It answers 0 for a PREFIX form (`deref(p)`, `unchecked x`), which keeps the
+      ## historical rendering there; sema fails open on those same operands, so no verdict moves.
       mut ismut := false
-      if fmt_var_span(p, ptr(ps), ptr(pn)) { if local_is_mut(src, ps) { ismut = true } }
+      lo := fmt_expr_left_off(p, src)
+      if lo != 0 { if local_is_mut(src, lo) { ismut = true } }
       if ismut { push_str(sb, "ptr(mut ") }
       if not ismut { push_str(sb, "ptr(") }
       emit_fmt_expr(p, sb, src, a, decls)

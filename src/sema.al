@@ -12284,6 +12284,18 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     ## level, where `param.ts`/`cd.ret_ts` already carry the span; it does not ask for this one.
     Expr::AddrOf(p) => {
       tp := check_expr(p, decls, upto, src, a, locals, nloc)?
+      ## Issue #1663 / Memory §4.4 — address-of produces a permission LESS THAN OR EQUAL TO the place's:
+      ## "an immutable place yields only `ptr(T)`", and `ptr(mut ...)` "additionally requires the whole
+      ## AND-path ... to be writable (§3.3)". A plain `ptr(x)` of an immutable place is §4.4's permitted
+      ## case and stays accepted; the `mut` qualifier is what gains a permission, and the parser drops it
+      ## (`Expr::AddrOf` carries the place alone, `parser.al:1828`), so it is read back off the source.
+      ## No carve-out for `dyn_over` (Functions §1.6, spec#152): its canonical `dyn_over(ptr(store))`
+      ## passes here over any place, and `dyn_over(ptr(mut store))` only over a writable one.
+      mspan : Option(usize) = sema_addr_of_mut_immutable_span(p, decls, src, locals, nloc)
+      match mspan {
+        Some(msp) => { mark_failed(locals, immutable_err(msp)) }
+        None => {}
+      }
       Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyPtr, ns = 0, nl = 0))
     }
     ## `deref(<ptr>)` — a load through a pointer. The inner pointer is checked; the result
@@ -17465,6 +17477,28 @@ sema_call_place_arg_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize,
     }
     if not step { break }
   }
+  Option.None
+}
+
+## Issue #1663 / Memory §4.4 — `ptr(mut <place>)` over a place whose AND-path is not writable GAINS a
+## permission, which §4.4 forbids ("A permission may only be **dropped**, never gained"). Returns the
+## offset of the immutable root to locate, `None` when the address is permitted. The `mut` qualifier is
+## erased by the parser, so whether it was spelled is `ast::local_is_mut` at the operand's first byte —
+## the one scan `fmt` already uses to render this same qualifier back (`src/fmt.al`, `Expr::AddrOf`), so
+## the checker and the formatter cannot disagree on what was written. Inside `ptr(` the only token that
+## can precede the operand is that qualifier or the `(` itself. `sema_place_root_var`'s root of a
+## `Var`/`Field`/`Index`/`Slice` chain IS its first byte; for `unchecked`/`bitcast` it is not, the scan
+## then sees no `mut`, and the site stays accepted. The permission is `sema_write_mutability`'s answer,
+## not a second query (strict forms §4). FAIL-OPEN, so it can only ever ADD a refusal: a plain `ptr(x)`,
+## an operand with no root the checker can name (`deref(p)`, a call — the POINTEE's contract, §3.3), and
+## any root `sema_write_mutability` cannot decide all stay accepted exactly as they were. ROOT ONLY, as
+## the place-argument fence above: a non-`mut` field under a `mut` root is the #298 residual. `inner` is
+## the operand the caller already holds out of its own `Expr::AddrOf(p)` arm.
+sema_addr_of_mut_immutable_span := fn(inner : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> Option(usize) {
+  root := sema_place_root_var(inner)
+  if root.n == 0 or ast::span_is_synthetic(root.s) { return Option.None }
+  if not local_is_mut(src, root.s) { return Option.None }
+  if sema_write_mutability(decls, src, locals, nloc, root) != 0 { return Option.Some(root.s) }
   Option.None
 }
 
