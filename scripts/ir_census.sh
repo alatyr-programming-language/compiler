@@ -407,6 +407,13 @@ if [ "$SELFTEST" = 1 ]; then
     && printf '%s\n' "$cl" | grep -qE '^ +1 sema-gap absent: expr Var$'; then c=0; printf '%s\n' "$cl" >/dev/null
   else c=1; printf '%s\n' "$cl" | sed 's/^/     /'; fi
   chk "$c" "ir_census self-test counts: built, outside and sema-gap columns"
+  # A built lib/ or src/ function prints its IR after its report line; the IR's own `fn g(…) {` header
+  # is not a second function (#1028: it was counted, so `functions` read real + built).
+  plant irhead "fn p::f Built" 0 "$(printf 'fn base::g Built\nfn g(%%0 : i64 u) -> i64 u {\n  ret %%0\n}')" 0
+  cl="$(GATE=0 QUIET=0 analyse "$T/irhead" 2>&1)"
+  if printf '%s\n' "$cl" | grep -qE '^  lib/ +1 +1 +0 +0 +0 +0$'; then c=0
+  else c=1; printf '%s\n' "$cl" | sed 's/^/     /'; fi
+  chk "$c" "ir_census self-test counts: a built function's IR header is not a second function"
   # ---- per-backend coverage: the marker counting, with no compiler ----
   # Each backend's marker must be distinct where its comment syntax is distinct: riscv64 and x86_64
   # share `#` (different runs, so no collision), but wasm's `(; ;)` must not be counted by the twins'
