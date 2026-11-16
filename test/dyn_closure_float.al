@@ -9,7 +9,7 @@
 main := fn() -> u64 {
   a := 10
   s1 := fn(x : f64, n : u64) -> f64 { return x + f64(a) + f64(n) }
-  d1 : dyn fn(f64, u64) -> f64 = dyn_over(ptr(mut s1))
+  d1 : dyn fn(f64, u64) -> f64 = dyn_over(ptr(s1))
   v : f64 = 2.5
   return u64(d1(v, 3))
 }

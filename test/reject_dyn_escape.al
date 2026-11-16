@@ -4,6 +4,6 @@
 main := fn() -> u64 {
   a := 10
   s := fn(x : u64) -> u64 { return x + a }
-  d : dyn fn(u64) -> u64 = dyn_over(ptr(mut s))
+  d : dyn fn(u64) -> u64 = dyn_over(ptr(s))
   return d
 }
