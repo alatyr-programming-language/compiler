@@ -758,7 +758,10 @@ IR signature onto registers or wasm params:
   words to eight by the owner on #1026, after measuring that the selectors already emitted eight
   (`sa_agg_ret` / `sr_agg_ret`: `if w == 0 or w > 8`) while the builder refused past two, leaving
   **1022 refusals** in the family `signature: aggregate result wider than two words`. The golden
-  `ig_notyet`, which pinned the refusal, moved with it;
+  `ig_notyet`, which pinned the refusal, moved with it. That family was one label for every reason
+  the builder answered "no word count" (#1033), and only one of them was width: `ib_agg_ret` now names
+  each cause as its own `CSigResult*` construct (wider than eight words, no fields, byte layout,
+  unresolved, generic, array or aggregate field, non-word field, untypable view);
 - an aggregate result **wider than eight words**, or one the caller asks to receive by address, through a
   hidden first `ptr` parameter (sret) into a caller frame object;
 - the callee symbol — module path, overload suffix, generic instance tag — is computed by the builder,
