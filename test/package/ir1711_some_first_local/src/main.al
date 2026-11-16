@@ -1,4 +1,5 @@
-## The package `ir1711_some_first_local` (see its `package.al`): `opt.al` declares the Some-first `Option`.
+## Part of the package `ir1711_some_first_local` (see its `package.al`); `opt.al` declares the
+## Some-first `Option`.
 pub main := fn() -> u64 {
   mut x : u64 = 8
   s : Option(ptr(u64)) = Option(ptr(u64)).Some(ptr(x))
@@ -13,3 +14,6 @@ pub main := fn() -> u64 {
   if deref(ptr(x)) != 8 { return 108 }
   return 42
 }
+## Compiled alone (the corpus walk), this file is a bare program over the prelude's `None`-first
+## `Option`, the same folded word in the other variant order.
+## expect: run 42

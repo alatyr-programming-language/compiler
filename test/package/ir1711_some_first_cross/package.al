@@ -1,11 +1,12 @@
-## e2e — #1711: a NICHE-FOLDED `Option(ptr(T))` whose enum declares `Some` FIRST (as the compiler's own
-## `src/ast.al` does) is the same one pointer word as the prelude's, with no discriminant (Types §6.2:
+## e2e — #1711: a NICHE-FOLDED `Option(ptr(T))` whose enum declares `Some` FIRST (as the compiler's
+## own `src/ast.al` does) is the same one pointer word as the prelude's, with no discriminant (Types §6.2:
 ## the single extra variant folds into the payload's niche whatever its position). `None` is the null
 ## pattern (0) and `Some(p)` the pointer `p`, so a variant is tested by its MEANING — `None` is
 ## `word == 0`, `Some` is `word != 0` — never by its discriminant, which here is 0 for `Some`.
 ## Covered: a parameter, a result, a local, a `match` with each arm order, and a call across the
-## IR-built / legacy-built boundary in both directions (`?` is `test/package/ir1711_some_first_try`). `lg_rd`
-## and `lg_pass` hold a float literal the IR does not build, so the legacy emitter emits them; `rd`, `rd_none_first`, `mk` and `main` are IR-built (`alatyr ir`):
+## IR-built / legacy-built boundary in both directions (`?` is `test/package/ir1711_some_first_try`).
+## `lg_rd` and `lg_pass` hold a float literal the IR does not build, so the legacy emitter emits them;
+## `rd`, `rd_none_first`, `mk` and `main` are IR-built (`alatyr ir`):
 ##   * IR -> legacy: `main` calls `lg_rd` / `lg_pass`;
 ##   * legacy -> IR: `lg_pass` passes a folded value to `rd`, an IR-built callee.
 ## On the PARENT every function with a folded signature was refused by the builder (`signature:

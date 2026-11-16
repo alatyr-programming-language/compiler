@@ -1,4 +1,5 @@
-## The package `ir1711_some_first_u64` (see its `package.al`): `opt.al` declares the Some-first `Option`.
+## Part of the package `ir1711_some_first_u64` (see its `package.al`); `opt.al` declares the
+## Some-first `Option`.
 mk := fn(v : u64, z : u64) -> Option(u64) {
   if z == 0 { return Option(u64).None }
   Option(u64).Some(v)
@@ -19,3 +20,6 @@ pub main := fn() -> u64 {
   if rd_none_first(n) != 7 { return 105 }
   return 42
 }
+## Compiled alone (the corpus walk), this file is a bare program over the prelude's `None`-first
+## `Option`, the same folded word in the other variant order.
+## expect: run 42

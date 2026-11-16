@@ -1,4 +1,5 @@
-## The package `ir1711_some_first_cross` (see its `package.al`): `opt.al` declares the Some-first `Option`.
+## Part of the package `ir1711_some_first_cross` (see its `package.al`); `opt.al` declares the
+## Some-first `Option`.
 rd := fn(o : Option(ptr(u64))) -> u64 {
   match o { Some(p) => deref(p); None => 7 }
 }
@@ -30,3 +31,9 @@ pub main := fn() -> u64 {
   if lg_pass(ptr(x)) != 42 { return 107 }
   return 42
 }
+## Compiled alone (the corpus walk), this file is a bare program over the prelude's `None`-first
+## `Option`, the same folded word in the other variant order. As in the package, wasm is left
+## undeclared (its legacy emitter traps on a folded local).
+## expect(x86_64): run 42
+## expect(aarch64): run 42
+## expect(riscv64): run 42

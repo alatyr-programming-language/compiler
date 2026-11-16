@@ -4,7 +4,8 @@
 ## local and a `match` in each arm order, with a payload of 0 (which a folded reading would take for
 ## the absent case) and a non-zero one, across IR-built functions.
 ## A guard, not a moved value: the parent built all four functions too and every backend answered 42
-## (measured); the head must keep that. 42 when every check held; otherwise the failed check's own code, 101 upward.
+## (measured); the head must keep that. 42 when every check held; otherwise the failed check's own
+## code, 101 upward.
 app := Package(
   version = "0.1.0",
   source_dir = "src",
