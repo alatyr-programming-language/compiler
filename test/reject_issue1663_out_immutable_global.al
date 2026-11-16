@@ -4,7 +4,7 @@
 ## `sema_write_mutability` (`src/sema.al:17344`) reached through the CALL route: the store route refused
 ## `g = 30` there already, and `test/accept_issue1663_mutable_place_args.al` exercises only the writable
 ## `mut g`. The callee's `x = 30` wrote the caller's global.
-## expect: reject "check: immutable binding" "at line 10"
+## expect: reject "check: immutable binding" "at line 11"
 g : u64 = 0
 put := fn(in out x : u64) { x = 30 }
 main := fn() -> u8 {

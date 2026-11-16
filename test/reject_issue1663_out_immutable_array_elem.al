@@ -6,7 +6,7 @@
 ## with this diagnostic; the call route reached the same place unchecked. Emission of a place argument
 ## that IS an array element is separately defective (#1684), which is why this stays a reject row and
 ## never a `run` row — `check` refuses it before any code is emitted.
-## expect: reject "check: immutable binding" "at line 10"
+## expect: reject "check: immutable binding" "at line 13"
 put := fn(in out x : u64) { x = 30 }
 main := fn() -> u8 {
   a : [u64; 3] = [2, 0, 10]
