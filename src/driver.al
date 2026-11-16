@@ -7035,7 +7035,14 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## docs/ir.md §3.8.6 — this run records library bodies too, so the twins' IR builder can select a
   ## library function whose records the walk completes (measured: `char_class` moves from a trap to the
   ## x86_64 value on the three twins; no other run moves).
+  ## #1028 — the `ir` verb (backend 3) emits nothing, so its record walk does not stop at a refusal
+  ## (`sema::set_walk_all`): a raw module list (`--modules`) has no other check, and its first refusal
+  ## used to leave every later declaration without records — measured on `src/`, a refusal at `cli`'s
+  ## `app.version` (the manifest's module, absent from a raw list) cost every later module its records.
+  ## The emitting backends keep the early return, so what they select from the IR does not move.
+  wa0 := sema::set_walk_all(backend == 3)
   styped := sema::check_program(ptr(decls), base, ptr(na))
+  wa1 := sema::set_walk_all(wa0)
   ## Match the ordinary compile paths: lift parsed local lambdas before any lowering-side
   ## normalization or backend emission. This multi-file path previously passed Expr::Lambda
   ## through unchanged, while compile/compile_program/compile_files_mode all lift exactly once.

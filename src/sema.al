@@ -21918,6 +21918,108 @@ sema_inst_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)
   0
 }
 
+## docs/ir.md §3.8 (#1028) — the record walk. `alatyr ir` runs `check_program` for its records only
+## (the driver never reads its answer), and there a refusal must not end the walk: before this, the
+## first refused declaration left every later one without records, and the builder counted each of
+## their values as a sema gap (`absent: expr Var` on a parameter, measured on `src/`: everything after
+## a refusal at `cli`'s `app.version`, which a raw module list does not declare). Off everywhere a
+## verdict is read, so no accept/refuse decision moves.
+mut SEMA_WALK_ALL : bool = false
+pub set_walk_all := fn(on : bool) -> bool {
+  was := SEMA_WALK_ALL
+  SEMA_WALK_ALL = on
+  was
+}
+## One declaration of `check_program`'s walk: its refusal code, `0` when it is accepted.
+check_program_decl := fn(dp : ptr(Decl), decls : ptr(rt::Vec), i : usize, cnt : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
+  d := deref(dp)
+  ## TRUST the stdlib: keep ambient-lib decls for resolution but do not re-check them (check/build
+  ## parity — a check-gap on a stdlib feature must not reject a well-typed user program, §1 item 5).
+  ## #655 — by PROVENANCE (the driver's published table), not by the `__` in the mangled name: a
+  ## nested submodule of the package under check spells its name the same way and is not a library.
+  ## docs/ir.md §3.8.6 — when records are wanted, the body is still walked for them, verdict-free.
+  if sema_module_is_lib(src, d.mod_start, d.mod_len) {
+    if SEMA_LIB_RECORDS and ir::sty_on() and not guard_is_false(d, src) { sema_lib_record(d, decls, i, src, a) }
+  }
+  ## a FALSE `when`-guarded decl (CT-5, Comptime §9) is "as if absent" for THIS target: skip its
+  ## duplicate + body check entirely, exactly as `lower::emit_program` neuters it before emission.
+  else if guard_is_false(d, src) { }
+  else {
+    ## Memory §2.2 — module-level data bindings have no implicit runtime initializer. A direct aggregate
+    ## CALL would therefore be folded as zeroed/static storage while its callee never runs; reject the
+    ## same CONST shape before any backend can emit it, with one diagnostic class for every CLI path.
+    if sema_global_init_call_bad(d, decls, src) { return global_init_call_err(d.name_start) }
+    ## Declarations §7.1 — a cycle among comptime initializers is a compile error. Reject the
+    ## declaration before any backend can chase it: `lower::global_init_value` recursed into the
+    ## initializer with no cycle guard and exhausted the stack (#926, rc 139 measured on `58a80376`
+    ## for the direct, the annotated and the mutual spelling, with `check` answering rc 0).
+    if sema_global_init_cycle_bad(d, decls, src) { return const_cycle_err(d.name_start) }
+    ## Issue #214 / Types §6.4 + I11: the lower's direct nested-array field fence must run on the
+    ## check path too. Reject the declaration before any backend can reserve a word-only image;
+    ## the sema helper shares lower_layout's exact source predicate and preserves the field line.
+    mdf := sema_multidim_array_field_bad(d, decls, src, deref(a))
+    if mdf != 0 { return multidim_array_field_err(mdf) }
+    ## Issue #324 / Types §6.4 + I11: the lower cannot compose the nested indexes of a direct fixed-array
+    ## parameter. Reject the parameter before its parser-corrupted arity/ABI reaches any backend; the
+    ## one-dimensional parameter path remains untouched.
+    nap := sema_nested_array_param_bad(d, src)
+    if nap != 0 { return nested_array_param_err(nap) }
+    ## Types §6.1 / Memory — a direct byte-array component gives a tuple its standard byte layout,
+    ## but module-global storage remains word-based. Reject the exact explicit global form before any
+    ## backend can emit a partial word copy; the local tuple tier and ordinary tuple ABI remain open.
+    if sema_standard_tuple_global_bad(d, src) { return standard_tuple_global_err(d.name_start) }
+    ca := sema_type_alias_chain_reject(d, decls, i, src)
+    if ca != 0 { return ca }
+    ## PROPOSAL 7: reject the spec's `[T]` slice spelling in PARAMETER and RETURN positions while the
+    ## lower only has the fixed-array ABI for the parser's shared array-shaped representation (`ast::param_is_array`). Local
+    ## `[T]` annotations are deliberately not inspected here; their existing view lowering is correct.
+    ss := sema_slice_sugar_reject(d, src)
+    if ss != 0 { return ss }
+    ## Issue #11 Slice 3a: an unknown bare nominal type in a function parameter/return annotation
+    ## must fail before body checking or backend emission. Composite and qualified forms remain on
+    ## their dedicated validation paths.
+    st := sema_signature_type_reject(d, decls, src)
+    if st != 0 { return st }
+    ## Issue #857 / Comptime §10: a type function in a type position must be applied.
+    ut := sema_unapplied_type_fn_reject(d, decls, src)
+    if ut != 0 { return ut }
+    ## Types §1/§4.1 + Modules §2: a qualified type argument is a concrete comptime type value whose
+    ## declaration identity includes its module. Unknown/unsupported paths are located rejects.
+    qg := sema_qualified_generic_reject(d, decls, src)
+    if qg != 0 { return qg }
+    ## Return the ENCODED error code (kind in the low 2 bits, source start in the rest — the
+    ## `CheckErr` encoding) on rejection, so a caller can decode it into a source-located
+    ## diagnostic. Any non-zero result is still "reject" (the verdict is unchanged); the caller
+    ## normalizes it to the exit-code convention. `3` is the duplicate-name code (kind 3, no span).
+    ## kind 3 + the duplicate decl's name offset as the span (§1 item 6 — locate it too, not a bare
+    ## "duplicate name"); `name_start * 4` keeps `% 4 == 3` so the kind decodes unchanged.
+    ## In the record walk a duplicate's body is still checked for its records: the checker walks it
+    ## exactly as it walks the same body under a distinct name (#1028), and the duplicate stays the
+    ## verdict.
+    mut dup : usize = 0
+    if duplicate_decl(d, decls, i, src, a) {
+      if not SEMA_WALK_ALL { return 3 + d.name_start * 4 }
+      dup = 3 + d.name_start * 4
+    }
+    ## §8 @repr(T) representability — LOCATED reject (mirror of `lower::validate_repr`); user enums only
+    ## (lib enums are trusted, exactly as the surrounding is_lib_module skip). Neutral: no `@repr` in src/.
+    rr := sema_repr_reject(d, decls, src)
+    if rr != 0 { return rr }
+    ## Declarations §2.3 — an UNKNOWN `@name` in DECLARATION-PREFIX position (see
+    ## `sema_unknown_prefix_attr`). Located at the attribute's own name. User decls only, exactly
+    ## like the `@repr` reject above. Neutral for the self-build: every prefix attribute in
+    ## `src/`+`lib/` is a §2.3 built-in.
+    ua := sema_unknown_prefix_attr(decls, cnt, src, d.name_start)
+    if ua != 0 { return unbound_err(ua, 0) }
+    cr := check_decl(d, decls, i, src, a)
+    match cr {
+      Result::Ok(c) => { if c != 0 { return 1 } }
+      Result::Err(e) => { return e }
+    }
+    return dup
+  }
+  0
+}
 pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
   ## docs/ir-slice-1.md §8.4 — pack expansions are noted per check (an earlier, refused check in the
   ## same process may have left notes behind).
@@ -21952,94 +22054,35 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   QH_FIRST_S = 0
   QH_FIRST_N = 0
   QH_PROBE_LOST = 0
+  ## In the record walk (`set_walk_all`) no refusal ends the walk; the first one is the verdict.
+  mut first : usize = 0
   lim := enforce_declared_limits(decls, src, a)
-  if lim != 0 { return lim }
+  if lim != 0 {
+    if not SEMA_WALK_ALL { return lim }
+    first = lim
+  }
   vis0 := sema_vis_declared(decls, src)
-  if vis0 != 0 { return located_err(vis0) }
+  if vis0 != 0 {
+    if not SEMA_WALK_ALL { return located_err(vis0) }
+    if first == 0 { first = located_err(vis0) }
+  }
   ## `is_lib_module` is also the parser's nested-module marker (`parent__child`). The ordinary loop
   ## below trusts those bodies, so run the same source-only visibility walk over them here; this keeps
   ## check/build parity without re-entering the full type checker for ambient library code.
   vis1 := sema_vis_all_bodies(decls, src, a)
-  if vis1 != 0 { return vis1 }
+  if vis1 != 0 {
+    if not SEMA_WALK_ALL { return vis1 }
+    if first == 0 { first = vis1 }
+  }
   cnt := rt::vec_len(deref(decls))
+  ## docs/ir.md §3.8 (#1028) — in the record walk (`set_walk_all`) a refusal does not end the walk: it
+  ## is kept as the verdict and the next declaration is still checked, so one refused declaration no
+  ## longer leaves every LATER declaration of the program without records.
   for i in 0..cnt {
-    d := deref(decl_get(decls, i))
-    ## TRUST the stdlib: keep ambient-lib decls for resolution but do not re-check them (check/build
-    ## parity — a check-gap on a stdlib feature must not reject a well-typed user program, §1 item 5).
-    ## #655 — by PROVENANCE (the driver's published table), not by the `__` in the mangled name: a
-    ## nested submodule of the package under check spells its name the same way and is not a library.
-    ## docs/ir.md §3.8.6 — when records are wanted, the body is still walked for them, verdict-free.
-    if sema_module_is_lib(src, d.mod_start, d.mod_len) {
-      if SEMA_LIB_RECORDS and ir::sty_on() and not guard_is_false(d, src) { sema_lib_record(d, decls, i, src, a) }
-    }
-    ## a FALSE `when`-guarded decl (CT-5, Comptime §9) is "as if absent" for THIS target: skip its
-    ## duplicate + body check entirely, exactly as `lower::emit_program` neuters it before emission.
-    else if guard_is_false(d, src) { }
-    else {
-      ## Memory §2.2 — module-level data bindings have no implicit runtime initializer. A direct aggregate
-      ## CALL would therefore be folded as zeroed/static storage while its callee never runs; reject the
-      ## same CONST shape before any backend can emit it, with one diagnostic class for every CLI path.
-      if sema_global_init_call_bad(d, decls, src) { return global_init_call_err(d.name_start) }
-      ## Declarations §7.1 — a cycle among comptime initializers is a compile error. Reject the
-      ## declaration before any backend can chase it: `lower::global_init_value` recursed into the
-      ## initializer with no cycle guard and exhausted the stack (#926, rc 139 measured on `58a80376`
-      ## for the direct, the annotated and the mutual spelling, with `check` answering rc 0).
-      if sema_global_init_cycle_bad(d, decls, src) { return const_cycle_err(d.name_start) }
-      ## Issue #214 / Types §6.4 + I11: the lower's direct nested-array field fence must run on the
-      ## check path too. Reject the declaration before any backend can reserve a word-only image;
-      ## the sema helper shares lower_layout's exact source predicate and preserves the field line.
-      mdf := sema_multidim_array_field_bad(d, decls, src, deref(a))
-      if mdf != 0 { return multidim_array_field_err(mdf) }
-      ## Issue #324 / Types §6.4 + I11: the lower cannot compose the nested indexes of a direct fixed-array
-      ## parameter. Reject the parameter before its parser-corrupted arity/ABI reaches any backend; the
-      ## one-dimensional parameter path remains untouched.
-      nap := sema_nested_array_param_bad(d, src)
-      if nap != 0 { return nested_array_param_err(nap) }
-      ## Types §6.1 / Memory — a direct byte-array component gives a tuple its standard byte layout,
-      ## but module-global storage remains word-based. Reject the exact explicit global form before any
-      ## backend can emit a partial word copy; the local tuple tier and ordinary tuple ABI remain open.
-      if sema_standard_tuple_global_bad(d, src) { return standard_tuple_global_err(d.name_start) }
-      ca := sema_type_alias_chain_reject(d, decls, i, src)
-      if ca != 0 { return ca }
-      ## PROPOSAL 7: reject the spec's `[T]` slice spelling in PARAMETER and RETURN positions while the
-      ## lower only has the fixed-array ABI for the parser's shared array-shaped representation (`ast::param_is_array`). Local
-      ## `[T]` annotations are deliberately not inspected here; their existing view lowering is correct.
-      ss := sema_slice_sugar_reject(d, src)
-      if ss != 0 { return ss }
-      ## Issue #11 Slice 3a: an unknown bare nominal type in a function parameter/return annotation
-      ## must fail before body checking or backend emission. Composite and qualified forms remain on
-      ## their dedicated validation paths.
-      st := sema_signature_type_reject(d, decls, src)
-      if st != 0 { return st }
-      ## Issue #857 / Comptime §10: a type function in a type position must be applied.
-      ut := sema_unapplied_type_fn_reject(d, decls, src)
-      if ut != 0 { return ut }
-      ## Types §1/§4.1 + Modules §2: a qualified type argument is a concrete comptime type value whose
-      ## declaration identity includes its module. Unknown/unsupported paths are located rejects.
-      qg := sema_qualified_generic_reject(d, decls, src)
-      if qg != 0 { return qg }
-      ## Return the ENCODED error code (kind in the low 2 bits, source start in the rest — the
-      ## `CheckErr` encoding) on rejection, so a caller can decode it into a source-located
-      ## diagnostic. Any non-zero result is still "reject" (the verdict is unchanged); the caller
-      ## normalizes it to the exit-code convention. `3` is the duplicate-name code (kind 3, no span).
-      ## kind 3 + the duplicate decl's name offset as the span (§1 item 6 — locate it too, not a bare
-      ## "duplicate name"); `name_start * 4` keeps `% 4 == 3` so the kind decodes unchanged.
-      if duplicate_decl(d, decls, i, src, a) { return 3 + d.name_start * 4 }
-      ## §8 @repr(T) representability — LOCATED reject (mirror of `lower::validate_repr`); user enums only
-      ## (lib enums are trusted, exactly as the surrounding is_lib_module skip). Neutral: no `@repr` in src/.
-      rr := sema_repr_reject(d, decls, src)
-      if rr != 0 { return rr }
-      ## Declarations §2.3 — an UNKNOWN `@name` in DECLARATION-PREFIX position (see
-      ## `sema_unknown_prefix_attr`). Located at the attribute's own name. User decls only, exactly
-      ## like the `@repr` reject above. Neutral for the self-build: every prefix attribute in
-      ## `src/`+`lib/` is a §2.3 built-in.
-      ua := sema_unknown_prefix_attr(decls, cnt, src, d.name_start)
-      if ua != 0 { return unbound_err(ua, 0) }
-      cr := check_decl(d, decls, i, src, a)
-      match cr {
-        Result::Ok(c) => { if c != 0 { return 1 } }
-        Result::Err(e) => { return e }
-      }
+    dc := check_program_decl(decl_get(decls, i), decls, i, cnt, src, a)
+    if dc != 0 {
+      if not SEMA_WALK_ALL { return dc }
+      if first == 0 { first = dc }
     }
   }
   ## docs/ir-slice-1.md §8.3 (e2) — the per-instance walk: after the generic pass, re-check each
@@ -22051,7 +22094,10 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   ## (Comptime §9.3 — there is no abstract check). A rejection here is the located per-instance verdict
   ## (E-Q1: the spec wins — a mixing lib generic is refused at its instantiation).
   iw := sema_inst_walk(decls, src, a)
-  if iw != 0 { return iw }
+  if iw != 0 {
+    if not SEMA_WALK_ALL { return iw }
+    if first == 0 { first = iw }
+  }
   ## docs/ir-slice-1.md §8.4 (e4) — then each comptime-variadic expansion noted on the way, for its
   ## records only, in its call's context.
   sema_pack_walk(decls, src)
@@ -22071,5 +22117,5 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   ## docs/ir.md §3.8.5 — sema's rows of the signedness census, written only now that every context
   ## has refined its literals (a no-op unless fd 97 is open).
   ir::sign_flush_sema(src)
-  0
+  first
 }
