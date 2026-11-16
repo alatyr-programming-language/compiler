@@ -760,9 +760,14 @@ IR signature onto registers or wasm params:
   **1022 refusals** in the family `signature: aggregate result wider than two words`. The golden
   `ig_notyet`, which pinned the refusal, moved with it. That family was one label for every reason
   the builder answered "no word count" (#1033), and only one of them was width: `ib_agg_ret` now names
-  each cause as its own `CSigResult*` construct (wider than eight words, no fields, byte layout,
-  unresolved, generic, array or aggregate field, non-word field, untypable view, an enum or generic
-  enum instance the register tier cannot lay out, a tuple);
+  each cause as its own `CSigResult*` construct. A struct result is refused as wider than eight words,
+  with no fields, byte-layout, generic, or by the first field the convention cannot take: a fixed array,
+  a sub-word scalar, a brand or alias of a scalar (the field test reads scalar names only), a float, or a
+  type that is no scalar at all (a struct, an enum, a view). Any other result is refused as what it is: a
+  view the builder cannot type, a fixed array (the parser records `[T; N]` by its `[` head), an enum or
+  generic enum instance the register tier cannot lay out, a tuple, a scalar reached only through a type
+  alias, a float, a function type, `Never`, and last a type that names nothing the builder resolves
+  there. Only the label moves: every one of these was refused before, and still is;
 - an aggregate result **wider than eight words**, or one the caller asks to receive by address, through a
   hidden first `ptr` parameter (sret) into a caller frame object;
 - the callee symbol — module path, overload suffix, generic instance tag — is computed by the builder,

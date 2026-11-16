@@ -16191,7 +16191,7 @@ slice_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
 ## local to the lower fence: changing parser-wide return spans would widen a high-conflict surface for a
 ## boundary that only needs to reject direct indexing. The bounded scan handles nested array element types
 ## and stops at the matching `]`; malformed/incomplete spans remain unknown and follow existing paths.
-fixed_array_return_span := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
+pub fixed_array_return_span := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
   if tl == 0 or str_at((src + ts), 1) != "[" { return CSpan(s = 0, n = 0) }
   mut i := ts
   mut depth := 0
