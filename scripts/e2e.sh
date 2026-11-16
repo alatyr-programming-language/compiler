@@ -1049,6 +1049,24 @@ EOF
      && grep -q '^fn ir_str_escape::ok_esc Built$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
     echo "ok   ir #1676 str escapes: a literal with \\u{…} or an unlisted escape refuses at the literal; the listed ones build"
   else echo "FAIL ir #1676 str escapes: rc=$rc"; grep -E '^fn ir_str_escape::' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
+  ## #1711: a niche-folded `Option(ptr(T))` whose enum declares `Some` FIRST (as `src/ast.al` does) is
+  ## the one-word folded shape too (Types §6.2), so a function with it in a parameter, a result or a
+  ## local is BUILT — read over each package's modules, as the census reads `src/`. The parent refused
+  ## every one (`signature: parameter type names no struct or enum resolvable here`). The values are
+  ## the packages' own `## expect:` directives; `ir1711_some_first_u64` (not folded) stays Built.
+  local k f ok1711=1 bad1711=""
+  for k in cross:rd cross:rd_none_first cross:mk cross:main local:main try:rd try:fwd try:main \
+           u64:mk u64:rd u64:rd_none_first u64:main; do
+    f="${k#*:}"; k="${k%%:*}"
+    "$CC" ir --modules "$E2E_TEST/package/ir1711_some_first_$k/src/opt.al" "$E2E_TEST/package/ir1711_some_first_$k/src/main.al" \
+      > "$rep" 2>/dev/null; rc=$?
+    if [ "$rc" != 0 ] || ! grep -q "^fn main::$f Built\$" "$rep" || ! grep -q 'verify_failed=0$' "$rep"; then
+      ok1711=0; bad1711="$bad1711 $k:$f(rc=$rc)"
+    fi
+  done
+  if [ "$ok1711" = 1 ]; then
+    echo "ok   ir #1711 Some-first folded option: parameter, result, local, match in both orders and ? build"
+  else echo "FAIL ir #1711 Some-first folded option: not Built:$bad1711"; fail=1; fi
   ## #1662: two callers the text attributes to another declaration. (a) A call inside a HOF `hof` that
   ## the driver clones for a capturing closure (`__hoflam<N>`) is also the clone's call, so `rd` is held
   ## on every target; the parent left it to the per-target rule. (b) x86's legacy emitter expands an
@@ -11846,6 +11864,9 @@ run_x86 ir_option_ptr_local_twin 42
 run_a64 ir_option_ptr_local_twin 42
 run_rv64 ir_option_ptr_local_twin 42
 run_wat ir_option_ptr_local_twin 42
+# #1711 — `?` on a folded `Option(ptr(T))` tests the variant by its meaning and reads the one word; the
+# parent compared the word with `Some`'s discriminant and loaded byte 8, an IR verifier refusal (70).
+run_x86 ir_option_ptr_try 42
 # #1497 / Declarations §5+§6.1 — after the block that declared a local `C` closes, `C.k` is the module
 # constant's field again. `lower::slot_declared_before` asked only whether the slot was declared EARLIER,
 # not whether its block was still open, so the read took the dead local's slot. Fails on the parent
