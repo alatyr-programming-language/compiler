@@ -7149,6 +7149,9 @@ check_build_located reject_issue1663_out_in_array_param 8 "check: immutable bind
 check_build_located reject_issue1663_out_immutable_array_elem 13 "check: immutable binding"
 check_build_located reject_issue1663_out_immutable_global 11 "check: immutable binding"
 run accept_issue1663_mutable_place_args 44
+run accept_issue1663_local_shadows_callee 12
+run accept_issue1663_param_shadows_callee 42
+run accept_issue1663_expr_callee 42
 ## The shapes §2.3 admits but the x86_64 lower does not yet EMIT, measured identical on the parent
 ## (`836b97ba`): an array ELEMENT bound to a place argument SIGSEGVs (139) and an `out` SCALAR bound
 ## to a module global silently keeps its old value (12 where 22 was asked for). Both are emission

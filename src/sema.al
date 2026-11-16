@@ -11894,8 +11894,11 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   ## is conforming in type and insufficiently mutable, which is exactly §2.3's second clause. Fail-open
   ## everywhere the callee is not one plain non-generic fn.
   if ecs.n != 0 {
-    pae := sema_call_place_arg_err(e, decls, upto, src, locals, nloc, ecs.s, ecs.n)
-    if pae != 0 { mark_failed(locals, immutable_err(pae)) }
+    pae : Option(usize) = sema_call_place_arg_err(e, decls, upto, src, locals, nloc, ecs.s, ecs.n)
+    match pae {
+      Some(pas) => { mark_failed(locals, immutable_err(pas)) }
+      None => {}
+    }
   }
   ## EXHAUSTIVENESS for a VALUE match (§60/CF-1) — the dual of the `check_stmts` statement-match check.
   ## Done here (BEFORE the big `match deref(e)`) as a side-effect + fall-through, because the big match's
@@ -17365,8 +17368,9 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
 ## while `put(v)` is refused here. That split is what §2.3 says — its MUST is about MUTABILITY, not
 ## about definite-assignment state — and it is written down so the next reader does not close it.
 ##
-## Returns the offset to locate — the immutable place's ROOT name — or 0 when the argument is permitted.
-## A NON-place (a literal of any shape) names no place and is located at `fallback`, the call's callee.
+## Returns `Some(offset)` to locate — the immutable place's ROOT name — or `None` when the argument is
+## permitted (strict forms §1: the absence is a variant, not the offset 0). A NON-place (a literal of
+## any shape) names no place and is located at `fallback`, the call's callee.
 ## ROOT ONLY: `sema_place_root_var` stops at the root, so `put(s.b)` with `mut s` and a non-`mut` field
 ## `b` is accepted although §3.2/§3.3 (`spec/10-memory.md:307-319`) fail the AND at the FIELD step; that
 ## is the known #298 residual, shared with the store route, and is tracked there — this fence adds no
@@ -17378,14 +17382,14 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
 ## `if`, a `match`, a `try` or a slice is left alone rather than asserted to be a non-place, because
 ## the checker cannot prove what they yield is not a place. A `Slice(T)` view and an unresolved,
 ## poisoned or pointer-typed local answer 0 from `sema_write_mutability` and stay accepted too.
-sema_out_arg_immutable_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, fallback : usize) -> usize {
+sema_out_arg_immutable_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, fallback : usize) -> Option(usize) {
   root := sema_place_root_var(e)
   if root.n != 0 {
-    if sema_write_mutability(decls, src, locals, nloc, root) != 0 { return root.s }
-    return 0
+    if sema_write_mutability(decls, src, locals, nloc, root) != 0 { return Option.Some(root.s) }
+    return Option.None
   }
-  if sema_out_arg_is_non_place(e) { return fallback }
-  0
+  if sema_out_arg_is_non_place(e) { return Option.Some(fallback) }
+  Option.None
 }
 
 ## Is this expression a LITERAL, the one non-place form §2.3 names ("e.g. a literal") and the only one
@@ -17409,14 +17413,27 @@ sema_out_arg_is_non_place := fn(e : ptr(Expr)) -> bool {
 ## `f(a = 20, o = r)` is refused before `check` reports anything). Asks each parameter the ONE place
 ## question of `ast::param_by_place` / `ast::param_array_by_place` (never `pmode` against a number,
 ## ast.al §715) and hands each place argument to `sema_out_arg_immutable_span`. Returns the first
-## offending offset, 0 when every place argument is a mutable place.
-sema_call_place_arg_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, cs : usize, cn : usize) -> usize {
+## offending offset, `None` when every place argument is a mutable place or the callee is not judged.
+##
+## WHICH callee: the module-level signature is applied ONLY when the call really goes to it. Two call
+## shapes reach this sink with a callee name that is NOT a module-level fn, and both answer `None`:
+##  - an EXPRESSION callee (`fs[0](v)`, FN-6): the parser stores the root variable's name as the callee
+##    span and the callee expression itself as ARGUMENT 0 (`p_ecallee`, `src/parser.al`), so a lockstep
+##    walk would pair every argument one parameter off. `ecallee_is` tells it apart, as the #269 fence
+##    on this same sink does.
+##  - a bare name bound by a LOCAL or PARAMETER that shadows the module-level fn (Declarations §6.1): the
+##    call goes to the local's fn value, whose parameter directions are its TYPE's, not the global's.
+##    Judging such a call from the local's `fn(...)` type is a residual of #1663, not done here.
+##    `local_in` reads the function-wide local set (#1003), so a block-local of that name whose block
+##    has ENDED also turns the fence off for a later call to the module fn — fail-open, named on #1663.
+sema_call_place_arg_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, cs : usize, cn : usize) -> Option(usize) {
+  if ecallee_is(cs) { return Option.None }
+  if sema_colon_pos(src, cs, cn) < 0 and nloc != 0 and local_in(locals, nloc, src, cs, cn) { return Option.None }
   lv := deref(locals)
   di := sema_direct_call_decl_idx(decls, upto, src, cs, cn, expr_call_arity(e), lv.mod_s, lv.mod_l)
-  if di < 0 { return 0 }
+  if di < 0 { return Option.None }
   mut pp := deref(decl_get(decls, usize(di))).params_head
   mut aa := expr_call_args_head(e)
-  mut res : usize = 0
   loop {
     mut step := false
     match pp {
@@ -17428,8 +17445,11 @@ sema_call_place_arg_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize,
             mut byplace := param_by_place(pm)
             if not byplace { byplace = param_array_by_place(pm) }
             if byplace {
-              sp := sema_out_arg_immutable_span(ca.e, decls, src, locals, nloc, cs)
-              if sp != 0 and res == 0 { res = sp }
+              sp : Option(usize) = sema_out_arg_immutable_span(ca.e, decls, src, locals, nloc, cs)
+              match sp {
+                Some(spo) => { return Option.Some(spo) }
+                None => {}
+              }
             }
             aa = ca.next
             pp = pm.next
@@ -17442,7 +17462,7 @@ sema_call_place_arg_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize,
     }
     if not step { break }
   }
-  res
+  Option.None
 }
 
 ## Issue #429 / Types §7 + Stdlib appendix §3.6 — is this place root a `str` view? `str` is the slice
