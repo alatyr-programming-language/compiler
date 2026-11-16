@@ -7171,6 +7171,7 @@ check_build_located reject_issue1663_ptr_mut_immutable_local 8 "check: immutable
 check_build_located reject_issue1663_ptr_mut_immutable_struct 9 "check: immutable binding"
 check_build_located reject_issue1663_ptr_mut_in_param 6 "check: immutable binding"
 check_build_located reject_issue1663_ptr_mut_in_array_elem 8 "check: immutable binding"
+check_build_located reject_issue1663_ptr_mut_immutable_global 8 "check: immutable binding"
 check_build_located reject_dyn_over_ptr_mut_immutable 10 "check: immutable binding"
 run_x86 accept_issue1663_ptr_mut_mutable 70
 ## Issue #429 (Types §7 / Stdlib appendix §3.6 / Memory §3.3) — `str` IS the slice `[u8]`, so an
