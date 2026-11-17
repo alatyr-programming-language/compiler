@@ -1185,6 +1185,18 @@ check_ir_dev_verb() {
      && grep -qx 'fn main::main Built' "$rep"; then
     echo "ok   ir --modules #1744 qualified overload: a module-path call into an overload set stays refused by name"
   else echo "FAIL ir --modules #1744 qualified overload: rc=$rc"; grep '^fn main::' "$rep" | sed 's/^/     /'; fail=1; fi
+  # #1744, review of PR #1748 (B2): the signature guard follows what the layout follows. `m::sum(t : T)`
+  # with `T := Inner`, a `Box` field and an `E` payload after the first reach a name both modules declare,
+  # so each caller is refused by the named cause. On the PR's first head 0f90e2a9 `main::use` was Built.
+  local s1744="$E2E_TEST/package/issue1744_sig_alias_ir/src" c ok
+  "$CC" ir --modules "$s1744/main.al" "$s1744/m.al" > "$rep" 2>/dev/null; rc=$?
+  ok=1
+  for c in use boxed payload; do
+    grep -q "^fn main::$c NotYet(call: callee from another module whose signature names a type declared more than once" "$rep" || ok=0
+  done
+  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir --modules #1744 signature walk: an alias, a field and a later payload reaching a twice-declared type are refused"
+  else echo "FAIL ir --modules #1744 signature walk: rc=$rc"; grep '^fn main::' "$rep" | sed 's/^/     /'; fail=1; fi
   "$CC" help > "$rep" 2>&1; rc=$?
   if [ "$rc" = 0 ] && grep -q '^  ir       ' "$rep"; then echo "ok   help: lists the \`ir\` dev verb (D5, TOOL-21)"
   else echo "FAIL help: no \`ir\` line"; fail=1; fi
