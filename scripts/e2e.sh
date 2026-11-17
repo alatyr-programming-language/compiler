@@ -7407,7 +7407,7 @@ check_accept issue805_exhaustive_index_copy
 # control is the spelling the diagnostic recommends.
 build_reject_has reject_enum_match_deref_local "cannot see the scrutinee's enum type"
 build_reject_has reject_enum_match_value_of_deref "cannot see the scrutinee's enum type"
-build_reject_has reject_enum_match_generic_deref "cannot see the scrutinee's enum type"
+# `reject_enum_match_generic_deref` is built on the shared IR since #1723: its run row is with the #1723 rows.
 run accept_enum_match_param_deref 42
 # …and the same `match deref(q)` over an ANNOTATED pointer-to-enum LOCAL, which the lowering now
 # binds like the parameter; `G` is variant 1, so the parent's integer path returned 1 here, silently.
@@ -11947,14 +11947,18 @@ run_rv64 ir_option_ptr_local_twin 42
 run_wat ir_option_ptr_local_twin 42
 # #1723 / Memory §4.3 — `deref(p)` read WHOLE as an aggregate value on the shared IR. `ir_deref_agg_call`
 # is the value regression for #1345's shape, `sum(deref(get(p)))`. Every function in it is IR-built on
-# all four backends, where the parent died on each of them (139 x86_64, 133 aarch64/riscv64, 134 wasm).
+# x86_64 and wasm, where the parent died (139 x86_64, 134 wasm). aarch64 and riscv64 leave a whole read
+# through `deref` to their legacy emitter (`ir::fn_deref_whole`, #1727), so they trap as on the parent
+# (133), and those are rows of scripts/known-deviations.tsv.
 # `ir_deref_agg_read` and `ir_deref_folded_comp` answered 42 on the parent's x86_64 through the legacy
 # emitter, so they pin a newly built shape. The row `ir #1723 deref fixtures` asks which of their
 # functions the builder builds. Their `main` stays legacy on the twins and wasm: `ptr(e)` of an enum
 # local is #1188's stub, and the folded component is #1724. Both are rows of scripts/known-deviations.tsv.
+# `reject_enum_match_generic_deref` (#716) was a located refusal of the x86_64 legacy lowering, which
+# could not see the enum type of `deref(gp(q))`. The shared IR reads it from `gp`'s declared
+# `-> ptr(mut C)` and answers 42 on x86_64 (measured; the parent refused the build).
+run_x86 reject_enum_match_generic_deref 42
 run_x86 ir_deref_agg_call 42
-run_a64 ir_deref_agg_call 42
-run_rv64 ir_deref_agg_call 42
 run_wat ir_deref_agg_call 42
 run_x86 ir_deref_agg_read 42
 run_x86 ir_deref_folded_comp 42
