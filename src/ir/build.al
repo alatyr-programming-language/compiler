@@ -2841,6 +2841,19 @@ ib_variant_of := fn(bp : ptr(mut IbB), st : IbSt, vs : usize, vl : usize) -> Opt
 ## The place of the tag, and of payload component `i` at kernel type `k`.
 ib_tag_fld := fn() -> IbFld { IbFld(off = ByteOff(0), ty = Kty.KI64, sg = Sgn.SgS, be = false) }
 ib_comp_fld := fn(i : usize, k : IbKS) -> IbFld { IbFld(off = ByteOff(8 + 8 * i), ty = k.ty, sg = k.sg, be = false) }
+## Write scalar payload component `v` at its place `fd` (`ib_comp_fld`) as the WHOLE word its slot is in
+## the tag-word-plus-one-word-per-component layout `ib_enum_named_in` accepts. The bytes above a narrow
+## integer are padding (Types §6.2), but the legacy emitters read the slot whole as a canonical word, so
+## the builder writes the canonical value, sign-extended if signed, never only its low bytes: a
+## `store i32` left `-12345` reading as `4294954951` in a legacy caller (#1726).
+ib_store_comp := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId, fd : IbFld, v : VRegId) {
+  if kty_is_narrow(fd.ty) {
+    w := ib_ext_to(bp, a, v, IbKS(ty = Kty.KI64, sg = fd.sg))
+    ib_store_field(bp, a, fr, IbFld(off = fd.off, ty = Kty.KI64, sg = fd.sg, be = false), w)
+    return
+  }
+  ib_store_field(bp, a, fr, fd, v)
+}
 ## The enum type of a binding of declaration `sd` and type span `[ts, ts+tn)`.
 ib_enum_bound := fn(bp : ptr(mut IbB), in out a : rt::Arena, sd : usize, ts : usize, tn : usize) -> Option(IbSt) {
   eo : Option(IbSt) = ib_enum_named(bp, a, ts, tn)
@@ -2913,7 +2926,7 @@ ib_enum_lit_into := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s
             vo : Option(VRegId) = ib_value_ctx(bp, a, ga.e, k)
             mut fld : IbFld = ib_comp_fld(i, k)
             if folded { fld = ib_folded_comp_fld() }
-            match vo { Some(v) => { ib_store_field(bp, a, fr, ib_fld_plus(fld, boff), v) }; None => { return false } }
+            match vo { Some(v) => { ib_store_comp(bp, a, fr, ib_fld_plus(fld, boff), v) }; None => { return false } }
           }
           None => {
             ## An aggregate component (`ib_variant_sub`) is built in place, at its payload offset.
@@ -3400,7 +3413,7 @@ ib_bx_try_build := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), in
   if tk == 2 and eb == 0 {
     base2 := o_frame(o.fr)
     ev := ib_load_at(bp, a, base2, ib_comp_fld(0, ek))
-    ib_store_field(bp, a, rf, ib_comp_fld(0, ek), ev)
+    ib_store_comp(bp, a, rf, ib_comp_fld(0, ek), ev)
   }
   if tk == 2 and eb != 0 {
     epl := ib_frame_at(bp, a, o.fr, eoff)
