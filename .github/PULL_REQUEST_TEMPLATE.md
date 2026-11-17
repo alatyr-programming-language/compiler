@@ -68,8 +68,8 @@ merge plus oracle commit.
       this check is inapplicable. (The full-gate check is mechanical now — this box is here so you
       read the banner, not so you assert it.)
 - [ ] Emission changed? The GAS delta was measured with the **input tree held fixed, in both
-      directions**, with `.L<N>` and `.Lra<N>_<k>` normalized. Comparing your tree against the old
-      one compares a longer source with a shorter one and proves nothing.
+      directions**, with the label families of `scripts/gas_normalize.sh` normalized. Comparing your
+      tree against the old one compares a longer source with a shorter one and proves nothing.
 - [ ] Fixpoint green for every full-gate change. A reseed, if one is owed, is the maintainer's act and
       needs three-stage evidence — say so rather than doing it. For docs-only, record why fixpoint is
       inapplicable.

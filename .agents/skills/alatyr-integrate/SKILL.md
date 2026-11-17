@@ -345,8 +345,8 @@ If a reseed is owed, it is committed **onto `M` before the gate runs**, so that 
 verified is the fixpoint that ships: land the `src/` change → **bump the version set first** (the
 three rows marked *before the build* in the table below) → seed builds Stage1 → Stage1 builds
 Stage2 → Stage2 builds Stage3 → require `Stage1 == Stage2 == Stage3` in the **emitted GAS**,
-byte-identical once the `.L<N>` and `.Lra<N>_<k>` label families are normalized, and
-`Stage2 == Stage3` in the **binary** → read the seed→Stage1 GAS delta line by line with both label
+byte-identical once the label families listed in `scripts/gas_normalize.sh` are normalized, and
+`Stage2 == Stage3` in the **binary** → read the seed→Stage1 GAS delta line by line with those label
 families normalized (**this is the best place to find the compiler miscompiling itself** — one
 reseed surfaced four latent bugs) → copy **Stage2** over `seed/alatyr` and append the evidence to
 `seed/HISTORY.md` → re-run `scripts/fixpoint.sh` on the promoted tree, which is the proof, not the
