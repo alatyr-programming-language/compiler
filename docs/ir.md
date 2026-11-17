@@ -864,16 +864,29 @@ with an array of 1-byte elements (`[bool; N]` too) at stride 1 (Types §6.4) and
 struct child only when it is word-granular, so that its word and byte layouts coincide. A levered struct
 still never crosses a call, a result or a pointer (`CSigParamLevered`, `CSigResultLevered`, `ib_bx_addr_of`).
 
-A **qualified callee** (`m::f(…)`) that the front half did not rewrite to a declaration's name span (on
-x86, the compiler's own build, and `alatyr ir --modules`) is taken from the resolver x86's own call
-emission uses, `lower::resolve_callee_idx`, which is what `emit_mangled_call` binds the path to (#1744).
-The builder therefore runs no resolver of its own, and the IR and the legacy emitter cannot name two
-different functions for one call. A resolved callee is still refused by name in three cases: it is
-generic; it is a member of an overload set (its symbol carries the per-signature suffix,
-`docs/ir-slice-2.md` Q3); or it comes from another module and its signature names a type that is declared
-more than once in the program (`call: callee from another module whose signature names a type declared
-more than once`). That last guard exists because the builder lays out a callee's signature types from the
-caller's module (#1734, #1737). #1743 and #1731 fix that, and the guard goes with them.
+A **qualified callee** (`m::f(…)`) that the front half did not rewrite to a declaration's name span is
+taken from the resolver x86's own call emission uses, `lower::resolve_callee_idx`, which is what
+`emit_mangled_call` binds the path to (#1744). That happens on x86, in the compiler's own build, in
+`alatyr ir --modules`, and on a twin whose kept functions would share a bare label: there
+`driver::d_resolve_and_prune` keeps the entry module's declarations alone and rewrites nothing (#41).
+The builder runs no resolver of its own. It takes the resolver's answer only when the declaration belongs
+to a module the call's head can name (`lower::qual_callee_in_head`), because the resolver's fallbacks
+answer an unmatched head with a same-named function of another module. On x86 the declaration set holds
+every module, so the IR and the legacy emitter name the same function for the call. On a cut-down twin set
+the head's module is missing, the builder refuses (`call: qualified callee that resolves to no function
+here`), and the legacy emitter keeps its undefined-callee trap. The fixture `issue1744_qualified_collision_ir`
+holds that: before the check, the twins answered the root's `f` for `b::f`.
+
+A resolved callee is still refused by name in three cases: it is generic; it is a member of an overload
+set (its symbol carries the per-signature suffix, `docs/ir-slice-2.md` Q3); or it comes from another
+module and its signature reaches a type name declared more than once in the program (`call: callee from
+another module whose signature names a type declared more than once`). "Reaches" follows what the layout
+follows: the names the signature spells, and from each name declared once, its alias right-hand side, its
+struct field types and its enum variant payloads, each declaration entered once and at most 256 of them
+(past that it refuses). The fixture `issue1744_sig_alias_ir` holds a result type `T` declared once that
+aliases an `Inner` both modules declare. The guard exists because the builder lays out a callee's
+signature types from the caller's module (#1734, #1737). Once #1743 lands, the guard and its helpers are
+deleted.
 
 ### 3.8 Signedness and width are attributes of the value, derived once
 
