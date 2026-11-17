@@ -4606,7 +4606,7 @@ ambig_enum_collision_test() {
       if [ "$rc" = 0 ] && [ -s "$d/$name.$b.out" ]; then
         echo "ok   ambig_enum_collision/$name($b): emitted"
       else
-        echo "FAIL ambig_enum_collision/$name($b): emit rc=$rc, due an emitted program"; sed 's/^/     /' "$d/$name.$b.err" | head -3; fail=1
+        echo "FAIL ambig_enum_collision/$name($b): emit rc=$rc, due an emitted program"; head -2 "$d/$name.$b.err" | cut -c1-200 | sed 's/^/     /'; fail=1
       fi
     done
   done
