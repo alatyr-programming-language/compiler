@@ -921,14 +921,42 @@ qual_call_head := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize
 ## with a re-export's target. x86 sees every module, so its head always has its declarations; a cut-down
 ## vector does not (`driver::d_resolve_and_prune`'s collision fallback keeps the entry module alone), and
 ## there `b::f` would bind the entry module's own `f`. A caller that must not call another module's
-## function asks this, and refuses on `false`.
+## function asks this, and refuses on `false`. A one-segment module alias `strbuf := rt` (Modules §4.1),
+## which `qual_call_head` leaves as spelled, is read as the module it names (`plain_module_alias`).
 pub qual_callee_in_head := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, ri : i64) -> bool {
   if ri < 0 { return false }
   cp := driver::d_colon_pos(src, cs, cl)
   if cp < 0 { return false }
   h := qual_call_head(decls, src, cs, usize(cp), ms, ml)
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ri))))
-  mod_head_rank(src, d.mod_start, d.mod_len, h.s, h.n, ms, ml) >= 0
+  if mod_head_rank(src, d.mod_start, d.mod_len, h.s, h.n, ms, ml) >= 0 { return true }
+  ma := plain_module_alias(decls, src, h.s, h.n, ms, ml)
+  ma.n != 0 and mod_head_rank(src, d.mod_start, d.mod_len, ma.s, ma.n, ms, ml) >= 0
+}
+## The module a one-segment alias `m := M` declared in module `[cs, cl)` gives the name `[ns, nl)`: the
+## span of `M` when it is a bare module name (no `::`, no call), else 0/0. A qualified right-hand side
+## (`gc := geo::child`) is `binding_rhs_span`'s.
+plain_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, cs : usize, cl : usize) -> CSpan {
+  z := CSpan(s = 0, n = 0)
+  if nl == 0 or cl == 0 { return z }
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(lower_ctx::decl_get(decls, i))
+    if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0 and d.name_len != 0
+       and mod_seg_eq(src, d.mod_start, d.mod_len, cs, cl)
+       and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) {
+      mut k : usize = 0
+      mut plain := true
+      while k < d.ret_tl {
+        if not lower_layout::ll_ident_byte(src, d.ret_ts + k) { plain = false }
+        k += 1
+      }
+      if plain { return CSpan(s = d.ret_ts, n = d.ret_tl) }
+    }
+    i += 1
+  }
+  z
 }
 ## The shared body. `bare` selects the §3 ancestor ranking (a bare call) over the historical
 ## head-preference-then-first-definition resolution (a qualified call).
