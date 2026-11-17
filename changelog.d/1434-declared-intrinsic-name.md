@@ -5,7 +5,8 @@
   (exit 139) or was silently replaced by the built-in (`align(10)` answered a type's alignment, and
   `forget()` dropped the call). Grammar §2.3 makes built-ins prelude identifiers, not keywords. An
   undeclared call keeps its built-in meaning unchanged. A declared `bitcast` is still parsed as the
-  reinterpret (#1718). A call whose arguments the declared function does not accept, such as a `str`
-  passed to `len := fn(x : u64)`, is refused with `type mismatch` at the argument (#1719). The
+  reinterpret (#1718). Such a call is accepted only when the declared function is shown to accept every
+  argument; any other call, such as a `str` field passed to `len := fn(x : u64)` or a `u64` passed to
+  `len := fn(s : str)`, is refused with `type mismatch` at the argument (#1719). The
   specification has not yet decided whether such a declaration replaces the built-in or adds to it
   (spec#166).

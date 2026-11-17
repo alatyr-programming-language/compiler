@@ -13470,6 +13470,27 @@ check_build_located reject_issue1719_declared_len_str_param_ufcs 7 "type mismatc
 check_build_located reject_issue1719_declared_len_view 8 "type mismatch"
 run accept_issue1719_declared_len_u64 42
 run accept_issue1719_declared_len_array_param 42
+check_build_located reject_issue1719_fc_align_u64_to_str 12 "type mismatch"
+check_build_located reject_issue1719_fc_byte_at_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_len_deref_field 12 "type mismatch"
+check_build_located reject_issue1719_fc_len_slice_field 14 "type mismatch"
+check_build_located reject_issue1719_fc_len_str_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_len_str_to_ptr 12 "type mismatch"
+check_build_located reject_issue1719_fc_len_u64_to_str 12 "type mismatch"
+check_build_located reject_issue1719_fc_len_ufcs_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_len_view_expr 12 "type mismatch"
+check_build_located reject_issue1719_fc_panic_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_shl_str_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_size_u64_to_str 12 "type mismatch"
+check_build_located reject_issue1719_fc_str_at_str_to_ptr 12 "type mismatch"
+check_build_located reject_issue1719_fc_str_eq_fields 13 "type mismatch"
+run accept_issue1719_fc_len_deref_u64_field 42
+run accept_issue1719_fc_len_ptr_u8 42
+run accept_issue1719_fc_len_str_field_str 42
+run accept_issue1719_fc_len_u64_call 42
+run accept_issue1719_fc_len_u8_widen 42
+run accept_issue1719_fc_len_ufcs_u64 42
+run accept_issue1719_fc_str_eq_str_fields 42
 
 ## #992 — `alloc::with(ar)` inside a match arm, and a match inside `alloc::with`, pass the ambient
 ## `ptr(ar)` to a call that omits its allocator (Memory §5.2.1); the splice never walked a `match`.

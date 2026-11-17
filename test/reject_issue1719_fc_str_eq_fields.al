@@ -1,0 +1,16 @@
+## #1719 / spec#166, fail closed. A program declaration under a prelude intrinsic's name, called with
+## an argument it does not accept. Under shadowing the call is ill-formed; under overloading it is the
+## prelude's own call. Under neither is it a call of this declaration with that argument, which is what
+## it compiled to once #1434 routed it here. Until spec#166 is decided it is refused, located at the
+## argument, because the argument's type is not PROVEN accepted.
+## Shape: two `str` fields into `str_eq(a : u64, b : u64)`.
+## Native x86_64 (omen, tree Stage1): parent 8375ac06 compared the strings and answered 42; the first
+## #1719 refusal (6b43c402) built it with no diagnostic and answered 7 (the declaration's `false`).
+R := struct { a : str, b : str }
+str_eq := fn(a : u64, b : u64) -> bool { false }
+main := fn() -> u64 {
+  r := R(a = "abcd", b = "abcd")
+  if str_eq(r.a, r.b) { return 42 }
+  7
+}
+## expect: reject "type mismatch" "at line 13"
