@@ -864,6 +864,17 @@ with an array of 1-byte elements (`[bool; N]` too) at stride 1 (Types §6.4) and
 struct child only when it is word-granular, so that its word and byte layouts coincide. A levered struct
 still never crosses a call, a result or a pointer (`CSigParamLevered`, `CSigResultLevered`, `ib_bx_addr_of`).
 
+A **qualified callee** (`m::f(…)`) that the front half did not rewrite to a declaration's name span (on
+x86, the compiler's own build, and `alatyr ir --modules`) is taken from the resolver x86's own call
+emission uses, `lower::resolve_callee_idx`, which is what `emit_mangled_call` binds the path to (#1744).
+The builder therefore runs no resolver of its own, and the IR and the legacy emitter cannot name two
+different functions for one call. A resolved callee is still refused by name in three cases: it is
+generic; it is a member of an overload set (its symbol carries the per-signature suffix,
+`docs/ir-slice-2.md` Q3); or it comes from another module and its signature names a type that is declared
+more than once in the program (`call: callee from another module whose signature names a type declared
+more than once`). That last guard exists because the builder lays out a callee's signature types from the
+caller's module (#1734, #1737). #1743 and #1731 fix that, and the guard goes with them.
+
 ### 3.8 Signedness and width are attributes of the value, derived once
 
 Today signedness is decided **by the shape of the expression**, separately in each emitter: a bare

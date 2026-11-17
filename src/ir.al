@@ -1752,7 +1752,7 @@ pub Construct := enum {
   ## cause was found for, so an unclassified one shows up as a row of its own.
   ECallGeneric, ECallOverload, ECallBuiltin, ECallFnValue, ECallQualified, ECallMethod, ECallTypeName,
   ECallUnresolved, ECallArity, ECallManyArgs, ECallExtern, ECallResult, ECallResultAgg, ECallAggValue,
-  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer,
+  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer, ECallSigModule,
   ## The assignment family: one arm per cause an `x = e` / `x := e` / `mut x : T` statement is refused for
   ## (`ir::build`'s `ib_bs_assign` and the declaration and store builders it hands to), as for calls.
   ## `SAssign` stays the label of an assignment refused for a cause with no arm of its own.
@@ -1841,6 +1841,7 @@ pub construct_name := fn(c : Construct) -> str {
     ECallLayoutQ => { "call: size/align of a bound value or a type the builder does not lay out" }
     ECallAggPos => { "call: in aggregate position with no aggregate result the builder receives" }
     ECallDefer => { "call: defer marker (the deferred-exit drain is not built)" }
+    ECallSigModule => { "call: callee from another module whose signature names a type declared more than once (#1734)" }
     SAssignTakenNarrow => { "assign: address-taken local of a scalar narrower than a word" }
     SAssignArrInf => { "assign: whole value into an unannotated array local" }
     SAssignRefParam => { "assign: whole value into an out/in out parameter of a type the builder does not lay out" }
