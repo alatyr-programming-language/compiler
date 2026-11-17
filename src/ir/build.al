@@ -2108,7 +2108,8 @@ ib_sig_walk_span := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena
     else if not (p + 1 < n and str_at((src + s + p), 2) == "::") {
       hh : lower_layout::LNameHits = lower_layout::ll_nonfn_named(decls, src, s + q0, p - q0)
       if hh.hits > 1 { return false }
-      match hh.last {
+      lo : Option(u64) = hh.last
+      match lo {
         Some(di) => {
           mut known := false
           mut k : usize = 0
