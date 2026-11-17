@@ -802,6 +802,18 @@ class no selector models: the legacy emitters pass it in a float register, and t
 parameter from an integer one. So a function with one is refused (`CSigParamFloat`), and so is an
 IR-built call that would pass a float argument (#1728).
 
+A call the builder does not build is refused with the cause that stopped it, one `call: …` label per
+cause (#1733), so the census ranks them: the callee is generic, an overload set, a built-in, a value
+rather than a declaration, a qualified or method form left unresolved, a type's name, a `defer` marker
+(the parser's `__defer…` calls, a statement rather than a callee), or nothing; the
+argument count differs or exceeds eight; the callee is an extern; the result is neither a kernel scalar
+nor a register-returned aggregate, or is an aggregate of a type the builder does not lay out; an argument
+is not a place an `out` / `in out` parameter needs, or has a type the convention does not pass; or the
+call is a conversion, a brand or `@require`, or a layout query the builder does not build. The function
+that finds the cause returns it (`ib_callee` answers `CeNo(<cause>)`), so no refusal re-derives it. A
+call refused for a reason with no such label keeps `expr Call`, and a sema gap at a call keeps
+`sema-gap …: expr Call`. The golden `ig_callwhy` pins three of the labels.
+
 ### 3.8 Signedness and width are attributes of the value, derived once
 
 Today signedness is decided **by the shape of the expression**, separately in each emitter: a bare
