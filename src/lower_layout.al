@@ -959,6 +959,12 @@ binding_type_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
 ## fail-loud before `variant_index` can turn the ambiguity into a value. A module-qualified span,
 ## an in-scope candidate, or a §4.1 binding is already enough identity and stays accepted.
 enum_ref_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  type_ref_ambiguous(decls, src, s, n, DECL_KIND_ENUM)
+}
+## The same question for a declaration of kind `k` (`DECL_KIND_STRUCT` or `DECL_KIND_ENUM`): true for
+## every bare reference `type_decl_ranked` would reject, and for the public ones it answers by
+## declaration order, so asking first never reaches the reject.
+type_ref_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, k : u8) -> bool {
   if type_path_head(src, s, n).n != 0 { return false }
   if TRM_SET == false { return false }
   nm := name_tail(src, s, n)
@@ -973,7 +979,7 @@ enum_ref_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
     j = j + 1
     if lni_skip(decls, cnt, i, th) == false {
       d := deref(decl_get(decls, i))
-      if d.kind == 3 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+      if d.kind == k and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         hits = hits + 1
         r := type_mod_rank(src, d.mod_start, d.mod_len)
         if r > best { best = r }
@@ -981,7 +987,41 @@ enum_ref_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
     }
   }
   if hits <= 1 or best >= 0 { return false }
-  binding_type_idx(decls, src, nm.s, nm.n, 3) < 0
+  binding_type_idx(decls, src, nm.s, nm.n, usize(k)) < 0
+}
+
+## Whether every struct and enum name in the type span `[s, s+n)` — its base name and, to `depth` levels,
+## the names in its type arguments — means the SAME declaration from the published naming module as from
+## module `[ms, ms+ml)`, where the span is written. The shared-IR builder asks this of a callee's
+## signature before an IR-built call: it resolves the callee's result and parameter types, and the
+## payloads it binds out of them, from the CALLER's module, and Modules §3 answers a bare name where it
+## is written. A name that is ambiguous from here answers false without resolving it, because resolving
+## it rejects (`type_decl_ranked`), and so does a name the two modules resolve to two declarations: in
+## either case the caller is not built, rather than built against another module's type (#1731's
+## review, B1). The same module, or no published module, answers true: nothing to compare.
+pub type_span_resolves_alike := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, ms : usize, ml : usize, depth : usize) -> bool {
+  if n == 0 or TRM_SET == false { return true }
+  if ml == TRM_L and type_module_eq(src, ms, ml, TRM_S, TRM_L) { return true }
+  ## `ptr(mut P)`'s argument is spelled `mut P`: the name is `P`.
+  if n > 4 and str_at((src + s), 4) == "mut " { return type_span_resolves_alike(decls, src, s + 4, n - 4, ms, ml, depth) }
+  bn := base_type_name(src, s, n)
+  if type_ref_ambiguous(decls, src, bn.s, bn.n, DECL_KIND_STRUCT) or type_ref_ambiguous(decls, src, bn.s, bn.n, DECL_KIND_ENUM) { return false }
+  hs := struct_decl_of(decls, src, bn.s, bn.n)
+  he := qualified_enum_decl_of(decls, src, bn.s, bn.n)
+  sv := enter_decl_module(ms, ml)
+  ts := struct_decl_of(decls, src, bn.s, bn.n)
+  te := qualified_enum_decl_of(decls, src, bn.s, bn.n)
+  leave_decl_module(sv)
+  if hs != ts or he != te { return false }
+  if depth == 0 { return typearg_at(src, bn.s, bn.n, 0).n == 0 }
+  mut k : usize = 0
+  loop {
+    ta := typearg_at(src, bn.s, bn.n, k)
+    if ta.n == 0 { break }
+    if not type_span_resolves_alike(decls, src, ta.s, ta.n, ms, ml, depth - 1) { return false }
+    k = k + 1
+  }
+  true
 }
 
 ## Find the kind-2 (struct) `Decl` whose TYPE name matches `[s, s+n)` (by tail name, so a

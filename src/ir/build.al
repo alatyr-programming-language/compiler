@@ -1474,12 +1474,40 @@ ib_call_user := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : 
   ib_refuse_expr(bp, e, NyWhy.NwOutside)
   CallOut.CoRefused
 }
+## Whether every type in `d`'s signature means, from the module being built, the declaration it means in
+## `d`'s own module (`lower_layout::type_span_resolves_alike`, four levels of type arguments deep).
+ib_sig_resolves_here := fn(bp : ptr(mut IbB), d : Decl) -> bool {
+  decls := ib_b_decls(bp)
+  src := ib_b_src(bp)
+  if not lower_layout::type_span_resolves_alike(decls, src, d.ret_ts, d.ret_tl, d.mod_start, d.mod_len, 4) { return false }
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if not lower_layout::type_span_resolves_alike(decls, src, pm.ts, pm.tl, d.mod_start, d.mod_len, 4) { return false }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  true
+}
 ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : usize, na : usize, ah : Option(ptr(mut Arg))) -> CallOut {
   src := ib_b_src(bp)
   d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), di))
   ## Only an Alatyr function with a body is called through the Alatyr convention; a syscall or an extern
   ## is slice 2's `syscall` / `call_c`, and more than 8 arguments are not modelled (docs/ir-slice-1.md §3).
   if d.arity != na or na > 8 or lower::extern_symbol(src, d.name_start, d.name_len).n != 0 {
+    ib_refuse_expr(bp, e, NyWhy.NwOutside)
+    return CallOut.CoRefused
+  }
+  ## The callee's result and parameter types are resolved below, and the payloads bound out of them in
+  ## the caller's arms, from the CALLER's module, while they are written in the callee's. A callee from
+  ## another module whose signature names a struct or enum that does not mean the same declaration from
+  ## here, or that is ambiguous from here, is not called from the IR: the caller stays legacy, rather
+  ## than resolve another module's `Error` or reject a valid program as ambiguous (#1731's review, B1).
+  if not ib_sig_resolves_here(bp, d) {
     ib_refuse_expr(bp, e, NyWhy.NwOutside)
     return CallOut.CoRefused
   }
