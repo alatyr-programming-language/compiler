@@ -5167,7 +5167,7 @@ str_arg_tmp_off := fn(args_head : Option(ptr(mut Arg)), skip : i64, skip2 : i64,
 ## qualified `mod::f` resolves `f` by its TAIL name preferring the head module; a bare `f`
 ## resolves preferring the caller's module. -1 if no matching decl (an intrinsic / unknown call).
 ## Used to read the callee's parameter modes for the out-scalar by-reference ABI.
-resolve_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize) -> i64 {
+pub resolve_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize) -> i64 {
   cp := driver::d_colon_pos(src, cs, cl)
   if cp >= 0 {
     hl := usize(cp)
@@ -18704,7 +18704,7 @@ range_bound_is_unsigned := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
 ## no suffix → fixpoint byte-identical.
 
 ## Count NON-generic fn (kind 1) / syscall-fn (kind 4) decls named (ns,nl) in module (ms,ml).
-overload_set_count := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, ms : usize, ml : usize) -> usize {
+pub overload_set_count := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, ms : usize, ml : usize) -> usize {
   cnt := rt::vec_len(deref(decls))
   mut c : usize = 0
   th := name_hash(src, ns, nl)
