@@ -702,7 +702,7 @@ ib_bx_brand_ctor := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), c
 ## the one non-generic function of that name, of one immediate parameter of `v`'s type, returning `bool`.
 ib_require_gate := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ps : usize, pn : usize, v : VRegId, uk : IbKS) -> bool {
   bv : IbB = deref(bp)
-  pdo : Option(u64) = ib_callee_decl(bp, ps, pn)
+  pdo : Option(u64) = ib_callee_decl(bp, a, ps, pn)
   match pdo {
     Some(pdi) => {
       d : Decl = deref(ib_decl_ptr(bv.decls, usize(pdi)))
@@ -1515,7 +1515,7 @@ ib_rotate := fn(bp : ptr(mut IbB), in out a : rt::Arena, sk : ShiftK, k : IbKS, 
 ## `ib_coerce` when sema accepted a narrower integer); the result is sema's record of the call, and it
 ## must be the callee's declared result.
 ib_call_user := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg))) -> CallOut {
-  ce : IbCallee = ib_callee(bp, cs, cl)
+  ce : IbCallee = ib_callee(bp, a, cs, cl)
   match ce {
     CeFn(x) => { return ib_call_decl(bp, a, e, usize(x), na, ah) }
     CeNo(c) => { ib_refuse_call(bp, e, NyWhy.NwOutside, c) }
@@ -1986,13 +1986,13 @@ ib_decl_named_at := fn(decls : ptr(rt::Vec), s : usize, n : usize, want_fn : boo
 ## The function a call to `[cs, cs+cl)` names: the declaration the call's span IS (resolved by the front
 ## half), else the ONE non-generic function declaration of that name; none when there is no such function
 ## or several (an overload set is the mangling's, `docs/ir-slice-2.md`, so it is refused here).
-ib_callee_decl := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
-  ce : IbCallee = ib_callee(bp, cs, cl)
+ib_callee_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize) -> Option(u64) {
+  ce : IbCallee = ib_callee(bp, a, cs, cl)
   match ce { CeFn(x) => { Option(u64).Some(x) }; CeNo(c) => { Option(u64).None } }
 }
 ## What a callee span resolves to: the declaration a direct call is built against, or why there is none.
 IbCallee := enum { CeFn(u64), CeNo(Construct) }
-ib_callee := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> IbCallee {
+ib_callee := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize) -> IbCallee {
   decls := ib_b_decls(bp)
   src := ib_b_src(bp)
   idc : Option(u64) = ib_decl_named_at(decls, cs, cl, true)
@@ -2020,7 +2020,7 @@ ib_callee := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> IbCallee {
   if hits == 1 {
     match found { Some(x) => { return IbCallee.CeFn(x) }; None => { return IbCallee.CeNo(Construct.ECallGeneric) } }
   }
-  qo : Option(IbCallee) = ib_callee_qual(bp, cs, cl)
+  qo : Option(IbCallee) = ib_callee_qual(bp, a, cs, cl)
   match qo { Some(q) => { return q }; None => {} }
   IbCallee.CeNo(ib_callee_none_why(bp, cs, cl))
 }
@@ -2034,26 +2034,31 @@ ib_span_is_qualified := fn(src : ptr(u8), cs : usize, cl : usize) -> bool {
   false
 }
 ## A qualified callee `m::f` that the front half did not rewrite to a declaration's name span (x86, the
-## self-build, `alatyr ir --modules`) (#1744, `docs/ir.md` §3.7 "one mangling"). The function is the one
+## self-build, `alatyr ir --modules`, and a twin build whose declaration set `driver::d_resolve_and_prune`
+## cut down to the entry module) (#1744, `docs/ir.md` §3.7 "one mangling"). The function is the one
 ## x86's own call emission binds the path to: `lower::resolve_callee_idx`, the resolver
-## `lower::emit_mangled_call` and the call's parameter-mode queries use. So the IR and the legacy emitter
-## call the same declaration, and the selectors name it through their usual symbol path
-## (`ir::put_symbol_name` / `put_fn_symbol`). The builder runs no resolver of its own and looks up no name
-## by its string. `None` covers three cases: the span is not a module path, it is a method (UFCS) form
-## (#1366), or nothing resolves. The caller names the cause in each case. A resolved callee is still
-## refused, by name, when its identity is not one symbol the builder may call:
+## `lower::emit_mangled_call` and the call's parameter-mode queries use, and the selectors name it
+## through their usual symbol path (`ir::put_symbol_name` / `put_fn_symbol`). The builder runs no
+## resolver of its own and looks up no function by its string. The answer is taken only when the
+## declaration belongs to a module the head names (`lower::qual_callee_in_head`): the resolver's
+## fallbacks answer an unmatched head with a same-named function of ANOTHER module, and on a cut-down set
+## `b::f` would call the entry module's `f` where the legacy emitter traps (review of PR #1748, B1).
+## `None` covers four cases: the span is not a module path, it is a method (UFCS) form (#1366), nothing
+## resolves, or what resolves is not in the head's module. The caller names the cause in each case
+## (`ECallQualified` for the last two). A resolved callee is still refused, by name, when its identity is
+## not one symbol the builder may call:
 ## - a generic one, which needs a mono instance;
 ## - a member of an overload set, whose symbol carries the per-signature suffix (Q3 of
 ##   `docs/ir-slice-2.md`);
-## - one from another module whose signature names a type the two modules might resolve differently
+## - one from another module whose signature reaches a type the two modules might resolve differently
 ##   (`ib_sig_types_unique`).
-ib_callee_qual := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(IbCallee) {
+ib_callee_qual := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize) -> Option(IbCallee) {
   bv : IbB = deref(bp)
   src := bv.src
   if not ib_span_is_qualified(src, cs, cl) { return Option(IbCallee).None }
   if cs != 0 and str_at((src + cs - 1), 1) == "." { return Option(IbCallee).None }
   ri : i64 = lower::resolve_callee_idx(bv.decls, src, cs, cl, bv.mod_s, bv.mod_n)
-  if ri < 0 { return Option(IbCallee).None }
+  if not lower::qual_callee_in_head(bv.decls, src, cs, cl, bv.mod_s, bv.mod_n, ri) { return Option(IbCallee).None }
   d : Decl = deref(ib_decl_ptr(bv.decls, usize(ri)))
   if not d.is_fn { return Option(IbCallee).None }
   if d.is_generic { return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallGeneric)) }
@@ -2061,57 +2066,125 @@ ib_callee_qual := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(IbCall
     return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallOverload))
   }
   same_mod := d.mod_len == bv.mod_n and streq(src, d.mod_start, d.mod_len, bv.mod_s, bv.mod_n)
-  if not same_mod and not ib_sig_types_unique(bv.decls, src, d) {
+  if not same_mod and not ib_sig_types_unique(bv.decls, src, a, d) {
     return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallSigModule))
   }
   Option(IbCallee).Some(IbCallee.CeFn(u64(ri)))
 }
-## Whether every type `d`'s signature names is declared ONCE in the program. The builder resolves a callee's
-## parameter and result types through `lower_layout` from the module being BUILT, the caller's. Modules §3
-## resolves a bare name where it is written, in the callee's module. That is #1734 and #1737, fixed by
-## #1743 (it resolves a span in its spelling module) and guarded by #1731 (`ib_sig_resolves_here`). Neither
-## is on main yet. A name declared once means the same declaration from either module, so the call is safe
-## to build. A name declared twice may not, so the call is refused rather than laid out against another
-## module's type. This is the interim, conservative form: when #1731's guard lands in `ib_call_decl` for
-## every call, this check is subsumed and goes.
-ib_sig_types_unique := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
-  if not ib_type_names_unique(decls, src, d.ret_ts, d.ret_tl) { return false }
+## Whether every type `d`'s signature REACHES is declared once in the program. The builder resolves a
+## callee's parameter and result types through `lower_layout` from the module being BUILT, the caller's.
+## Modules §3 resolves a bare name where it is written, in the callee's module. That is #1734 and #1737,
+## fixed by #1743 (it resolves a span in its spelling module) and guarded by #1731
+## (`ib_sig_resolves_here`). Neither is on main yet. A name declared once means the same declaration from
+## either module. A name declared twice may not, so the call is refused rather than laid out against
+## another module's type.
+## The walk follows what the layout follows, not only the names the signature spells (review of PR #1748,
+## B2: `pub mk := fn() -> T` with `T := Inner` in `m` and a different `Inner` in the caller's module was
+## built and answered garbage): each name declared once is entered, and its alias right-hand side, its
+## struct field types and its enum variant payloads are walked in turn. Each declaration is entered once
+## (the `seen` set; a recursive type ends there), and the walk enters at most `IB_SIG_WALK_MAX`
+## declarations: past that it answers no, so the bound refuses rather than admits.
+## Interim and conservative: once #1743 lands, `Construct.ECallSigModule`, this check and its helpers
+## (`ib_sig_queue`, `ib_sig_walk_span`, `ib_payload_list_end`, `lower_layout::ll_nonfn_named`) are deleted.
+IB_SIG_WALK_MAX : usize = 256
+ib_sig_types_unique := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, d : Decl) -> bool {
+  ## `work` holds pending type spans as (start, length) pairs; `seen` the declarations entered.
+  work := wb_new(a, 16)
+  seen := wb_new(a, 16)
+  ib_sig_queue(work, a, d.ret_ts, d.ret_tl)
   mut pp := d.params_head
   loop {
     match pp {
       Some(pq) => {
         pm := deref(param_p(pq))
         ## A pointer parameter's `ts` is `ptr` alone; its pointee is `pps`/`ppl` (`ast::Param`).
-        if not ib_type_names_unique(decls, src, pm.ts, pm.tl) or not ib_type_names_unique(decls, src, pm.pps, pm.ppl) { return false }
+        ib_sig_queue(work, a, pm.ts, pm.tl)
+        ib_sig_queue(work, a, pm.pps, pm.ppl)
         pp = pm.next
       }
       None => { break }
     }
   }
+  while wb_len(work) != 0 {
+    wn := wb_get(work, wb_len(work) - 1)
+    p1 := wb_pop(work)
+    ws := wb_get(work, wb_len(work) - 1)
+    p2 := wb_pop(work)
+    if not ib_sig_walk_span(decls, src, a, work, seen, ws, wn) { return false }
+  }
   true
 }
-## Whether each identifier of the type span `[s, s+n)` (its base name, its type arguments, a path's
-## tail) names at most one non-function declaration. A segment followed by `::` is a module, not a type,
-## and is skipped. A built-in type (`u64`, `ptr`, `mut`) names no declaration and passes.
-ib_type_names_unique := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
-  cnt := rt::vec_len(deref(decls))
+## Queue the type span `[s, s+n)` on the walk's `work` list; an empty span names no type.
+ib_sig_queue := fn(work : ptr(mut WBuf), in out a : rt::Arena, s : usize, n : usize) {
+  if n == 0 { return }
+  k1 := wb_push(work, a, s)
+  k2 := wb_push(work, a, n)
+}
+## One span of `ib_sig_types_unique`'s walk: each identifier of the type span `[s, s+n)` (its base name,
+## its type arguments, a path's tail) names at most one non-function declaration, and a declaration it
+## names that `seen` does not hold yet is entered: its spans join `work`. A segment followed by `::` is a
+## module, not a type, and is skipped. A built-in type (`u64`, `ptr`, `mut`) names no declaration.
+ib_sig_walk_span := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, work : ptr(mut WBuf), seen : ptr(mut WBuf), s : usize, n : usize) -> bool {
   mut p : usize = 0
   while p < n {
     q0 := p
     while p < n and lower_layout::ll_ident_byte(src, s + p) { p = p + 1 }
     if p == q0 { p = p + 1 }
     else if not (p + 1 < n and str_at((src + s + p), 2) == "::") {
-      mut hits : usize = 0
-      mut i : usize = 0
-      while i < cnt {
-        dd : Decl = deref(ib_decl_ptr(decls, i))
-        if not dd.is_fn and dd.name_len == p - q0 and streq(src, dd.name_start, dd.name_len, s + q0, p - q0) { hits = hits + 1 }
-        i = i + 1
+      hh : lower_layout::LNameHits = lower_layout::ll_nonfn_named(decls, src, s + q0, p - q0)
+      if hh.hits > 1 { return false }
+      match hh.last {
+        Some(di) => {
+          mut known := false
+          mut k : usize = 0
+          while k < wb_len(seen) {
+            if wb_get(seen, k) == usize(di) { known = true }
+            k = k + 1
+          }
+          if not known {
+            if wb_len(seen) >= IB_SIG_WALK_MAX { return false }
+            ks := wb_push(seen, a, usize(di))
+            dd : Decl = deref(ib_decl_ptr(decls, usize(di)))
+            ib_sig_queue(work, a, dd.ret_ts, dd.ret_tl)
+            ib_sig_queue(work, a, dd.alias_ts, dd.alias_tl)
+            mut fh := dd.fields_head
+            loop {
+              match fh {
+                Some(fq) => {
+                  fd := deref(ast::fld_p(fq))
+                  ## An enum variant records only its FIRST payload type (`ast::FieldDecl`); a variant of
+                  ## several walks the whole payload list, up to its closing parenthesis.
+                  mut fl := fd.tl
+                  if fd.arity > 1 { fl = ib_payload_list_end(src, fd.ts) - fd.ts }
+                  ib_sig_queue(work, a, fd.ts, fl)
+                  fh = fd.next
+                }
+                None => { break }
+              }
+            }
+          }
+        }
+        None => {}
       }
-      if hits > 1 { return false }
     }
   }
   true
+}
+## Where the payload list that starts at `s` ends: the offset of the `)` that closes it (the first one
+## at bracket depth zero), or of the `}` / end of line that ends the variant if the source is cut short.
+ib_payload_list_end := fn(src : ptr(u8), s : usize) -> usize {
+  mut p := s
+  mut depth : usize = 0
+  loop {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" { depth = depth + 1 }
+    else if c == ")" or c == "]" {
+      if depth == 0 { return p }
+      depth = depth - 1
+    } else if c == "}" or c == "\n" or c == ";" { return p }
+    p = p + 1
+  }
+  p
 }
 ## Why no function declaration has the name `[cs, cs+cl)`: a built-in (`sema::is_builtin_callee`, the
 ## checker's one list), a value bound in the function or a module value (a fn value or a closure), a
@@ -2433,7 +2506,7 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
     }
     Expr::Call(cs, cl, na, ah) => {
       ## Slice 3d: the callee's declared struct result (slice 4b: or enum result).
-      ci : Option(u64) = ib_callee_decl(bp, cs, cl)
+      ci : Option(u64) = ib_callee_decl(bp, a, cs, cl)
       match ci {
         Some(di) => {
           d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
@@ -2468,7 +2541,7 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
 ## declared `ptr(T)`, a call to a concrete function declared `-> ptr(T)`, or `bitcast(ptr(T), x)`. A
 ## binding with no spelled type (an inferred local, a payload binding) answers `None`. Asking emits
 ## nothing.
-ib_deref_pointee := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> Option(IbSpan) {
+ib_deref_pointee := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> Option(IbSpan) {
   match deref(pe) {
     Expr::Var(s, n) => {
       if ib_names_global(bp, s, n) { return Option(IbSpan).None }
@@ -2487,7 +2560,7 @@ ib_deref_pointee := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> Option(IbSpan) {
       }
     }
     Expr::Call(cs, cl, na, ah) => {
-      ci : Option(u64) = ib_ptr_callee(bp, cs, cl)
+      ci : Option(u64) = ib_ptr_callee(bp, a, cs, cl)
       match ci {
         Some(di) => {
           d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
@@ -2498,7 +2571,7 @@ ib_deref_pointee := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> Option(IbSpan) {
         None => {}
       }
     }
-    Expr::Unchecked(inner) => { return ib_deref_pointee(bp, inner) }
+    Expr::Unchecked(inner) => { return ib_deref_pointee(bp, a, inner) }
     Expr::Bitcast(inner, ts, tl) => { return ib_pointee(bp, ts, tl) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
@@ -2508,8 +2581,8 @@ ib_deref_pointee := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> Option(IbSpan) {
 }
 ## The concrete function a call to `[cs, cs+cl)` names when its declaration spells a result type: a
 ## generic callee's `ptr(T)` names its own parameter, not the instance's type, so it answers `None`.
-ib_ptr_callee := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
-  ci : Option(u64) = ib_callee_decl(bp, cs, cl)
+ib_ptr_callee := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize) -> Option(u64) {
+  ci : Option(u64) = ib_callee_decl(bp, a, cs, cl)
   match ci {
     Some(di) => {
       d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
@@ -2522,10 +2595,10 @@ ib_ptr_callee := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
 ## #1725 review: is `deref(pe)` a call whose callee is declared in ANOTHER module (reached through an
 ## import alias, `get := m::get`, Modules §4.1) with a pointee that is not proven to be the same type here
 ## (`ib_callee_pointee_foreign`)? Asking emits nothing.
-ib_deref_foreign := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> bool {
+ib_deref_foreign := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> bool {
   match deref(pe) {
     Expr::Call(cs, cl, na, ah) => {
-      ci : Option(u64) = ib_ptr_callee(bp, cs, cl)
+      ci : Option(u64) = ib_ptr_callee(bp, a, cs, cl)
       match ci {
         Some(di) => {
           d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
@@ -2535,7 +2608,7 @@ ib_deref_foreign := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> bool {
         None => {}
       }
     }
-    Expr::Unchecked(inner) => { return ib_deref_foreign(bp, inner) }
+    Expr::Unchecked(inner) => { return ib_deref_foreign(bp, a, inner) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
@@ -2559,7 +2632,7 @@ ib_callee_pointee_foreign := fn(bp : ptr(mut IbB), d : Decl, ps : IbSpan) -> boo
 ## builder lays out or a WORD-tier struct (the only struct a place through a pointer may be, see
 ## "places"). Asking emits nothing.
 ib_deref_agg_type := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> Option(IbSt) {
-  po : Option(IbSpan) = ib_deref_pointee(bp, pe)
+  po : Option(IbSpan) = ib_deref_pointee(bp, a, pe)
   match po {
     Some(ps) => {
       sto : Option(IbSt) = ib_agg_named(bp, a, ps.s, ps.n)
@@ -2577,7 +2650,7 @@ ib_deref_agg_type := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr))
 ## (`EDerefUnlaid`), is a struct outside the WORD tier (`EDerefTier`), or is a call's pointee spelled in
 ## another module and not proven to be the same type here (`EDerefForeign`).
 ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> Construct {
-  po : Option(IbSpan) = ib_deref_pointee(bp, pe)
+  po : Option(IbSpan) = ib_deref_pointee(bp, a, pe)
   match po {
     Some(ps) => {
       sto : Option(IbSt) = ib_agg_named(bp, a, ps.s, ps.n)
@@ -2591,7 +2664,7 @@ ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> C
     }
     None => {}
   }
-  if ib_deref_foreign(bp, pe) { return Construct.EDerefForeign }
+  if ib_deref_foreign(bp, a, pe) { return Construct.EDerefForeign }
   Construct.EDerefPointee
 }
 ## Refuse the aggregate expression `e` for reason `w`: a `deref` under the cause `ib_deref_why` names
@@ -2641,7 +2714,7 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
     None => {
       ## #1723: a `deref(p)` names the `deref`'s own cause (`ib_refuse_agg`); anything else is a call
       ## in aggregate position, named by `ib_agg_call_why`.
-      if ib_is_deref(e) { ib_refuse_agg(bp, a, e, NyWhy.NwOutside) } else { ib_refuse_call(bp, e, NyWhy.NwOutside, ib_agg_call_why(bp, e)) }
+      if ib_is_deref(e) { ib_refuse_agg(bp, a, e, NyWhy.NwOutside) } else { ib_refuse_call(bp, e, NyWhy.NwOutside, ib_agg_call_why(bp, a, e)) }
       return Option(IbObj).None
     }
   }
@@ -2747,10 +2820,10 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
 }
 ## Why a call in aggregate position has no aggregate type: its callee's own cause when it resolves to no
 ## function, else a result the builder does not receive as an aggregate.
-ib_agg_call_why := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> Construct {
+ib_agg_call_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> Construct {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => {
-      ce : IbCallee = ib_callee(bp, cs, cl)
+      ce : IbCallee = ib_callee(bp, a, cs, cl)
       match ce { CeFn(x) => { Construct.ECallAggPos }; CeNo(c) => { c } }
     }
     Expr::Var | Expr::StructLit | Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit
@@ -3064,7 +3137,7 @@ ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
     None => {
       ## #1723: `v := deref(p)` names the `deref`'s own cause, not the declaration's.
       if lts.n == 0 and ib_is_deref(v) { ib_refuse_agg(bp, a, v, NyWhy.NwOutside); return }
-      if lts.n != 0 { ib_refuse_assign(bp, h, Construct.SAssignAggNamed) } else { ib_refuse_assign(bp, h, ib_decl_init_why(bp, v)) }
+      if lts.n != 0 { ib_refuse_assign(bp, h, Construct.SAssignAggNamed) } else { ib_refuse_assign(bp, h, ib_decl_init_why(bp, a, v)) }
     }
   }
 }
@@ -3211,10 +3284,12 @@ ib_enum_may_hold := fn(bp : ptr(mut IbB), in out a : rt::Arena, et : IbSt, pdi :
 ## Why an unannotated aggregate declaration's initializer `v` names no type the builder lays out
 ## (`ib_agg_type_of` answered `None`), by the initializer's shape: a call (its callee's own cause when it
 ## resolves to no function, `ib_callee`), a name, a place, a literal, a `?`, an `if` / `match`.
-ib_decl_init_why := fn(bp : ptr(mut IbB), v : ptr(Expr)) -> Construct {
+## It takes the walk's arena because `ib_callee` resolves a qualified callee through
+## `lower::resolve_callee_idx`, which reads the declaration vector (#1744).
+ib_decl_init_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : ptr(Expr)) -> Construct {
   match deref(v) {
     Expr::Call(cs, cl, na, ah) => {
-      ce : IbCallee = ib_callee(bp, cs, cl)
+      ce : IbCallee = ib_callee(bp, a, cs, cl)
       match ce { CeFn(x) => { Construct.SAssignInitCall }; CeNo(c) => { c } }
     }
     Expr::Var(s, n) => { Construct.SAssignInitName }
@@ -5191,7 +5266,7 @@ ib_bind_view_el := fn(bp : ptr(mut IbB), in out a : rt::Arena, ns : usize, nl : 
 
 ## The element layout of the view callee `d` returns, when the builder builds that result.
 ib_call_view_el := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize) -> Option(IbVEl) {
-  ci : Option(u64) = ib_callee_decl(bp, cs, cl)
+  ci : Option(u64) = ib_callee_decl(bp, a, cs, cl)
   match ci {
     Some(di) => {
       d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
