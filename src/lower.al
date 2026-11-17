@@ -890,33 +890,45 @@ callee_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
 ## symbol for the alias spelling. An unqualified alias (`strbuf := rt`) keeps the historical unique-name
 ## fallback because binding_head_span has no qualified RHS to expand.
 callee_decl_idx_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, caller_s : usize, caller_l : usize) -> i64 {
-  mut hs := ms
-  mut hl := ml
-  rhs := binding_rhs_span(decls, src, ms, ml, caller_s, caller_l)
-  if rhs.n != 0 {
-    hs = rhs.s
-    hl = rhs.n
-  } else {
-    bh := binding_head_span(decls, src, ms, ml, caller_s, caller_l)
-    if bh.n == 0 { hs = ms; hl = ml }
-    ## A named `x := M::y` stores M and y separately. A listed projection stores the full RHS in
-    ## `s/n` and the projected name before it, so only the named-alias shape can be recombined.
-    else {
-      if bh.tn != 0 and bh.ts >= bh.s {
-        hs = bh.s
-        hl = bh.ts + bh.tn - bh.s
-      } else {
-        hs = bh.s
-        hl = bh.n
-      }
-    }
-  }
+  h := qual_call_head(decls, src, ms, ml, caller_s, caller_l)
+  hs := h.s
+  hl := h.n
   idx := callee_decl_ranked(decls, src, cs, cl, hs, hl, false, caller_s, caller_l)
   if idx >= 0 { return idx }
   ## The module path may name a comptime re-export rather than a function declaration. Resolve that
   ## alias to its defining declaration; this is the same binding path used by bare imported calls.
   bi := binding_callee_idx(decls, src, cs, cl, hs, hl)
   bi
+}
+## The module path a qualified call's spelled HEAD `[ms, ms+ml)`, written in module `[caller_s, caller_l)`,
+## stands for: a one-segment module alias (`gc := geo::child`) expanded to its RHS path, else the head as
+## spelled. `callee_decl_idx_qual` resolves the tail in it, and `qual_callee_in_head` asks it of a
+## resolved declaration, so both read the head one way.
+qual_call_head := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, caller_s : usize, caller_l : usize) -> CSpan {
+  rhs := binding_rhs_span(decls, src, ms, ml, caller_s, caller_l)
+  if rhs.n != 0 { return CSpan(s = rhs.s, n = rhs.n) }
+  bh := binding_head_span(decls, src, ms, ml, caller_s, caller_l)
+  if bh.n == 0 { return CSpan(s = ms, n = ml) }
+  ## A named `x := M::y` stores M and y separately. A listed projection stores the full RHS in
+  ## `s/n` and the projected name before it, so only the named-alias shape can be recombined.
+  if bh.tn != 0 and bh.ts >= bh.s { return CSpan(s = bh.s, n = bh.ts + bh.tn - bh.s) }
+  CSpan(s = bh.s, n = bh.n)
+}
+## #1744 — whether the declaration `ri` that `resolve_callee_idx` gave the QUALIFIED callee `[cs, cs+cl)`,
+## written in module `[ms, ms+ml)`, belongs to a module the call's head can name (`mod_head_rank`, the rank
+## `qual_head_pick` resolves by). The resolver's later steps answer a head no declaration in the vector
+## belongs to with a same-named function of ANOTHER module (`callee_decl_ranked`'s first-hit `found`) or
+## with a re-export's target. x86 sees every module, so its head always has its declarations; a cut-down
+## vector does not (`driver::d_resolve_and_prune`'s collision fallback keeps the entry module alone), and
+## there `b::f` would bind the entry module's own `f`. A caller that must not call another module's
+## function asks this, and refuses on `false`.
+pub qual_callee_in_head := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, ri : i64) -> bool {
+  if ri < 0 { return false }
+  cp := driver::d_colon_pos(src, cs, cl)
+  if cp < 0 { return false }
+  h := qual_call_head(decls, src, cs, usize(cp), ms, ml)
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ri))))
+  mod_head_rank(src, d.mod_start, d.mod_len, h.s, h.n, ms, ml) >= 0
 }
 ## The shared body. `bare` selects the §3 ancestor ranking (a bare call) over the historical
 ## head-preference-then-first-definition resolution (a qualified call).
