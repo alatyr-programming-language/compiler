@@ -1734,7 +1734,7 @@ pub Construct := enum {
   ## cause was found for, so an unclassified one shows up as a row of its own.
   ECallGeneric, ECallOverload, ECallBuiltin, ECallFnValue, ECallQualified, ECallMethod, ECallTypeName,
   ECallUnresolved, ECallArity, ECallManyArgs, ECallExtern, ECallResult, ECallResultAgg, ECallAggValue,
-  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer,
+  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer, ECallSigModule,
   ENum, EBoolLit, EVar, EBin, EIf, EMatch, ECall, EStructLit, EField, EEnumLit, EAddrOf, EDeref, EStrLit,
   EArrayLit, EIndex, ETry, EFloatLit, ESlice, ECompField, EUnchecked, ELambda, EFnRef, EBitcast, ELoop,
 }
@@ -1807,6 +1807,7 @@ pub construct_name := fn(c : Construct) -> str {
     ECallLayoutQ => { "call: size/align of an operand the builder does not lay out" }
     ECallAggPos => { "call: in aggregate position with no aggregate result the builder receives" }
     ECallDefer => { "call: defer marker (the deferred-exit drain is not built)" }
+    ECallSigModule => { "call: callee from another module whose signature names a type declared more than once (#1734)" }
   }
 }
 
