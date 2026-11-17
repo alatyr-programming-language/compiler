@@ -52,7 +52,6 @@ stmt_label_span := ast::stmt_label_span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
 ## which enum is rejected.
 (enum_repr_ty, repr_ty_is_integer, repr_ty_capacity) := lower_layout
-(type_naming_at, type_mod_rank_in) := lower_layout
 (ct_width, ct_signed, ct_fits, ct_min, ct_ult, ct_umulov, ct_smulov, ct_arith_ovf) := lower_layout
 ## #602 — "was this `Num` written with a leading `-`?" is decided ONCE, in `lower_layout`, because
 ## the four emitters ask it too; re-deriving it here would let the two passes drift.
@@ -2666,16 +2665,16 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
   mut alias_ts := 0
   mut alias_tl := 0
   ## #1734 — Modules §3, Types §4.1: same-named candidates are ranked from the module that SPELLS the
-  ## name (`lower_layout::type_naming_at`), the rule the layout resolvers use, so a callee's `-> S`
-  ## reached from another module (`mk := m::mk`) is `m`'s `S`, not the caller's. Equal ranks keep the
+  ## name (`sema_span_module`, the file table the layout resolvers read), so a callee's `-> S` reached
+  ## from another module (`mk := m::mk`) is `m`'s `S`, not the caller's. Equal ranks keep the
   ## historical last-declared answer (`>=`), which is every case with no spelling module.
-  nmod := type_naming_at(src, bn.s)
+  nmod := sema_span_module(decls, src, bn.s)
   mut tbest : i64 = -1
   mut abest : i64 = -1
   for i in 0..ncnt {
     d := deref(decl_get(decls, i))
     if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, bn.s, bn.n) {
-      tr := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+      tr := sema_span_rank(src, d.mod_start, d.mod_len, nmod)
       if tr >= tbest {
         tbest = tr
         if d.kind == 2 { r = Ty(kind = TyKind.TyStruct, ns = d.name_start, nl = d.name_len) }
@@ -2683,7 +2682,7 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
       }
     }
     if d.kind == 0 and streq(src, d.name_start, d.name_len, bn.s, bn.n) {
-      ar := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+      ar := sema_span_rank(src, d.mod_start, d.mod_len, nmod)
       if ar >= abest {
         if d.ret_tl != 0 { abest = ar; alias_ts = d.ret_ts; alias_tl = d.ret_tl }
         else if d.alias_tl != 0 {
@@ -2696,7 +2695,7 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
   if kind_is_unknown(r.kind) and alias_tl != 0 {
     at := base_type_name(src, alias_ts, alias_tl)
     ## The alias's RHS is spelled in the alias's own module, and ranked from there.
-    anmod := type_naming_at(src, at.s)
+    anmod := sema_span_module(decls, src, at.s)
     mut atbest : i64 = -1
     mut j : usize = 0
     while j < ncnt {
@@ -2704,7 +2703,7 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
       if (d.kind == 2 or d.kind == 3) {
         target := name_tail(src, at.s, at.n)
         if streq(src, d.name_start, d.name_len, target.s, target.n) {
-          atr := type_mod_rank_in(src, d.mod_start, d.mod_len, anmod)
+          atr := sema_span_rank(src, d.mod_start, d.mod_len, anmod)
           if atr >= atbest {
             atbest = atr
             if d.kind == 2 { r = Ty(kind = TyKind.TyStruct, ns = d.name_start, nl = d.name_len) }
@@ -4011,14 +4010,21 @@ type_decl_index := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
   0
 }
 
-## #762 — the module that WRITES source offset `s`: the owner of the declaration whose name starts
-## nearest at or before `s`. The modules reach sema concatenated into one buffer, each file's
-## declarations contiguous in it, so the nearest preceding declaration name lies in the same file as
-## any span inside that file's declarations. `found = false` for a synthetic span or an offset before
-## every declaration — the caller then keeps its historical answer.
+## #762 — the module that WRITES source offset `s`. The driver's file table answers it outright
+## (`lower_layout::spelling_module_at`, #1734, the answer the layout resolvers read too). Without one
+## (a single-source pipeline), it is the owner of the declaration whose name starts nearest at or
+## before `s`: the modules reach sema concatenated into one buffer, each file's declarations
+## contiguous in it, so the nearest preceding declaration name lies in the same file as any span
+## inside that file's declarations. `found = false` for a synthetic span or an offset before every
+## declaration — the caller then keeps its historical answer.
 SpanMod := struct { found : bool, s : usize, n : usize }
 sema_span_module := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize) -> SpanMod {
   if ast::span_is_synthetic(s) { return SpanMod(found = false, s = 0, n = 0) }
+  tm := lower_layout::spelling_module_at(src, s)
+  match tm {
+    Some(m) => { return SpanMod(found = true, s = m.s, n = m.l) }
+    None => {}
+  }
   cnt := rt::vec_len(deref(decls))
   mut found := false
   mut best : usize = 0
@@ -4036,6 +4042,13 @@ sema_span_module := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize) -> SpanMo
     i += 1
   }
   SpanMod(found = found, s = ms, n = ml)
+}
+
+## The rank of candidate module `[as_, al)` from the writing module `wm` (`type_mod_rank_from`); -1 for
+## every candidate when no writer is recoverable, which keeps the historical answer.
+sema_span_rank := fn(src : ptr(u8), as_ : usize, al : usize, wm : SpanMod) -> i64 {
+  if not wm.found { return 0 - 1 }
+  lower_layout::type_mod_rank_from(src, as_, al, wm.s, wm.n)
 }
 
 ## #762 — `type_decl_index`'s answer when [s, s+n) names two or more struct/enum declarations: the one

@@ -518,7 +518,8 @@ pub type_mod_rank_from := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize,
 ## module spelled. A callee's signature (`mk := m::mk`, then `v := mk()` — `-> S` is `m`'s text), a
 ## foreign struct's field types and an enum's payload types are spans of ANOTHER module, and resolving
 ## them under the caller's module gave the caller's same-named `S` its layout: a wrong field offset, a
-## wrong value (measured: 0 for 42 on x86_64, qualified call and alias alike, before this).
+## wrong value (measured on x86_64 before this, due 42: 87 through an alias, 215 through a qualified
+## call, 0 for a foreign struct's field, #1737; the twins answered 23 for the qualified call).
 ##
 ## The driver publishes its file table here: per file, the module IDENTITY span it stamps on that
 ## file's declarations, and the file's extent in the buffer. A span inside a file is named by that
@@ -580,17 +581,19 @@ spelling_file := fn(so : ptr(rt::Vec), sl : ptr(rt::Vec), off : usize) -> Option
   Option(u64).None
 }
 
-## The naming module for a type name spelled at offset `s` of `src`: the module whose text holds it,
-## else the published one. ONE answer, read by every ranked resolver below.
-pub type_naming_at := fn(src : ptr(u8), s : usize) -> Option(ModSpan) {
-  pub_n := type_naming_published()
-  if ast::span_is_synthetic(s) { return pub_n }
+## The module whose TEXT holds offset `s` of `src`, read off the published file table: `None` for a
+## synthetic span, an offset outside every file, a buffer the table was not published for, or no
+## table. The one answer to "which module wrote this span", read by `type_naming_at` below and by
+## sema's `sema_span_module`.
+pub spelling_module_at := fn(src : ptr(u8), s : usize) -> Option(ModSpan) {
+  none := Option(ModSpan).None
+  if ast::span_is_synthetic(s) { return none }
   srco : Option(ptr(u8)) = TSM_SRC
   mso : Option(ptr(rt::Vec)) = TSM_MS
   mlo : Option(ptr(rt::Vec)) = TSM_ML
   soo : Option(ptr(rt::Vec)) = TSM_SO
   slo : Option(ptr(rt::Vec)) = TSM_SL
-  match srco { Some(ps) => { if ps != src { return pub_n } }; None => { return pub_n } }
+  match srco { Some(ps) => { if ps != src { return none } }; None => { return none } }
   match mso {
     Some(ms) => {
       match mlo {
@@ -616,7 +619,17 @@ pub type_naming_at := fn(src : ptr(u8), s : usize) -> Option(ModSpan) {
     }
     None => {}
   }
-  pub_n
+  none
+}
+
+## The naming module for a type name spelled at offset `s` of `src`: the module whose text holds it,
+## else the published one. ONE answer, read by every ranked resolver below.
+pub type_naming_at := fn(src : ptr(u8), s : usize) -> Option(ModSpan) {
+  sm := spelling_module_at(src, s)
+  match sm {
+    Some(m) => { return Option(ModSpan).Some(m) }
+    None => { return type_naming_published() }
+  }
 }
 
 ## `type_mod_rank_from` against one query's naming module (`type_naming_at`'s answer); -1 for every
@@ -872,12 +885,13 @@ LNI_D = unchecked bitcast(usize, deref(decls).data)
 
 ## ---- the shared RANKED selector ----------------------------------------------------------------
 ## The declaration of kind `k` (2 = struct, 3 = enum OR raw union) whose TYPE tail-name matches, as
-## seen from the PUBLISHED naming module. Preference order, applied once for every type-shaped query
-## so struct, enum, union, alias, brand and `@require` cannot disagree with one another:
+## seen from the module that SPELLS the name (`type_naming_at`, #1734). Preference order, applied
+## once for every type-shaped query so struct, enum, union, alias, brand and `@require` cannot
+## disagree with one another:
 ##
 ##   (1) a QUALIFIED spelling names its module outright (Modules §2) — nominal identity beats every
 ##       rank, and it is what keeps `rt::Arena` off `base::alloc`'s same-named struct;
-##   (2) the §3 chain — this module, then its ancestors NEAREST-first (`type_mod_rank`), which
+##   (2) the §3 chain — this module, then its ancestors NEAREST-first (`type_mod_rank_in`), which
 ##       includes the own-module / last-segment lib-path head match above the chain;
 ##   (3) no naming module published (an early pass) OR the name has exactly ONE declaration in the
 ##       whole program: the historical answer stands. Both are PRESERVED DELIBERATELY — the second is
@@ -931,7 +945,7 @@ type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
       if ai >= 0 { return ai }
     }
   }
-  bi := binding_type_idx(decls, src, nm.s, nm.n, k, nmod_s)
+  bi := binding_type_idx(decls, src, nm.s, nm.n, k)
   if bi >= 0 { return bi }
   ## (6) At least one candidate is `pub`. §3 makes a `pub` declaration reachable from anywhere
   ## THROUGH A PATH, so a reference that reaches here MAY be a legitimate qualified one whose head
@@ -1024,8 +1038,15 @@ ll_projection_head_for := fn(src : ptr(u8), rs : usize, rl : usize, ns : usize, 
 ## `lower_layout`'s `(Decl, Expr, FieldDecl, Param) := ast` mean `ast`'s declarations rather than a
 ## declaration-order lottery. Consulted ONLY after the §3 ranking found nothing AND the name is
 ## declared in more than one module, i.e. only on the path that used to guess.
-binding_type_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, k : usize, nmod : ModSpan) -> i64 {
+binding_type_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, k : usize) -> i64 {
   if nl == 0 { return 0 - 1 }
+  ## #1734: the binding is looked up in the module that spells `[ns, ns+nl)`.
+  mut nmod := ModSpan(s = 0, l = 0)
+  nmo := type_naming_at(src, ns)
+  match nmo {
+    Some(m) => { nmod = m }
+    None => { return 0 - 1 }
+  }
   if nmod.l == 0 { return 0 - 1 }
   cnt := rt::vec_len(deref(decls))
   mut hs := 0
@@ -1066,11 +1087,7 @@ binding_type_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
 enum_ref_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
   if type_path_head(src, s, n).n != 0 { return false }
   nmod := type_naming_at(src, s)
-  mut nmod_s := ModSpan(s = 0, l = 0)
-  match nmod {
-    Some(m) => { nmod_s = m }
-    None => { return false }
-  }
+  match nmod { Some(_) => {}; None => { return false } }
   nm := name_tail(src, s, n)
   cnt := rt::vec_len(deref(decls))
   th := _fnv_name(src, nm.s, nm.n)
@@ -1091,7 +1108,7 @@ enum_ref_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
     }
   }
   if hits <= 1 or best >= 0 { return false }
-  binding_type_idx(decls, src, nm.s, nm.n, 3, nmod_s) < 0
+  binding_type_idx(decls, src, nm.s, nm.n, 3) < 0
 }
 
 ## Find the kind-2 (struct) `Decl` whose TYPE name matches `[s, s+n)` (by tail name, so a
