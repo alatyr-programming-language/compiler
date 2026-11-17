@@ -1725,7 +1725,7 @@ pub Construct := enum {
   CSigResultView, CSigResultArray, CSigResultScalarAlias, CSigResultFloat, CSigResultFnType, CSigResultNever,
   CSigResultEnumInstance, CSigResultEnum, CSigResultTuple,
   CSigParamMode, CSigParamTaken, CSigParamLevered, CSigParamNestedField,
-  CSigParamPadded, CSigParamUnresolved, CSigSyscall,
+  CSigParamPadded, CSigParamUnresolved, CSigParamFloat, CSigSyscall,
   SAssign, SWhile, SFieldAssign, SReturn, SIf, SMatch, SFor, SDerefAssign, SIndexAssign, SIndexFieldAssign,
   SFieldPathAssign, SLoop, SBreak, SContinue, SExprStmt, SCompIf, SCompFor, SCompMatch, SCompForRange,
   SUnchecked, SAllocWith,
@@ -1761,6 +1761,7 @@ pub construct_name := fn(c : Construct) -> str {
     CSigParamNestedField => { "signature: struct parameter with an array or aggregate field" }
     CSigParamPadded => { "signature: padded struct parameter" }
     CSigParamUnresolved => { "signature: parameter type names no struct or enum resolvable here" }
+    CSigParamFloat => { "signature: floating-point parameter" }
     CSigSyscall => { "signature: a syscall declaration the builder cannot tramp" }
     CBodyless => { "a declaration with no body (an `@extern` import: slice 2's `call_c`)" }
     SAssign => { "stmt Assign" }; SWhile => { "stmt While" }; SFieldAssign => { "stmt FieldAssign" }

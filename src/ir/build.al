@@ -303,6 +303,26 @@ ib_type_ks := fn(decls : ptr(rt::Vec), src : ptr(u8), s0 : usize, n0 : usize) ->
   }
   Option(IbKS).None
 }
+## Whether a declared type is a float, or a brand chain over one (`Meters := brand(f64)`): the class
+## no selector passes in a register (#1728). The kernel type cannot tell, because the library declares
+## `f64 := brand(bits64)` and `ib_type_ks` follows that brand to a 64-bit word. So the question goes to
+## sema's scalar table at each name of the chain `ib_type_ks` walks.
+ib_type_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), s0 : usize, n0 : usize) -> bool {
+  mut s := s0
+  mut n := n0
+  mut depth : usize = 0
+  while depth < 8 {
+    t : VTy = sema::sema_vty_scalar(src, s, n)
+    c : VCls = t.cls
+    match c { VcFloat => { return true }; VcAbsent | VcUnknown | VcLit | VcInt | VcBool | VcPtr | VcAgg => {} }
+    bu := lower_layout::brand_underlying(decls, src, s, n)
+    if bu.n == 0 { return false }
+    s = bu.s
+    n = bu.n
+    depth = depth + 1
+  }
+  false
+}
 ib_vreg_ks := fn(f : ptr(mut IrFn), v : VRegId) -> IbKS {
   t : Kty = vreg_ty(f, usize(v))
   s : Sgn = vreg_sg(f, usize(v))
@@ -1720,6 +1740,9 @@ ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param,
   pk : Option(IbKS) = ib_type_ks(ib_b_decls(bp), ib_b_src(bp), pm.ts, pm.tl)
   match pk {
     Some(want) => {
+      ## #1728: a float argument would leave in an integer register, where a legacy callee does not
+      ## look for it; the callee's float parameter is refused on the IR side (`CSigParamFloat`).
+      if ib_type_is_float(ib_b_decls(bp), ib_b_src(bp), pm.ts, pm.tl) { ib_refuse_expr(bp, ae, NyWhy.NwOutside); return Option(VRegId).None }
       if pm.pmode == 0 { return ib_value_at(bp, a, ae, want) }
       ## #1626: a fixed-array parameter takes an address, the callee's convention (`ib_build_one`).
       ## #1632: which one is the parameter's direction (Functions §4.1, docs/ir.md §3.7). An `out` /
@@ -5890,6 +5913,11 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
               }
             } else {
               if pm.pmode != 0 { why.c = Construct.CSigParamMode; return BuildOut.Refused }
+              ## #1728: the selectors take every parameter from an integer argument register — the legacy
+              ## convention for the scalar class (docs/ir.md §3.7) — and the legacy emitters pass a float
+              ## in a float register (x86_64 `%xmm0`), so a float parameter is a class that does not cross.
+              ## `kk` cannot say so: `f64` is `brand(bits64)` (`lib/base/num.al`), a 64-bit word here.
+              if ib_type_is_float(decls, src, pm.ts, pm.tl) { why.c = Construct.CSigParamFloat; return BuildOut.Refused }
               pv := new_param(f, a, kk.ty, kk.sg)
               if ib_is_taken(bp, pm.ns, pm.nl) {
                 if not ib_ks_word(kk) { why.c = Construct.EAddrOf; return BuildOut.Refused }
