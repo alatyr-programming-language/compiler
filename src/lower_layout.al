@@ -848,6 +848,31 @@ lni_skip := fn(decls : ptr(rt::Vec), cnt : usize, i : usize, th : usize) -> bool
 if lni_live(decls, cnt) == false { return false }
 rt::rec_get(unchecked bitcast(ptr(mut u8), LNH), i) != th
 }
+## How many NON-function declarations (a struct, an enum, an alias, a value) are named `[s, s+n)` in the
+## whole vector, whatever their module, and the index of the last one (`None` when there is none). Read
+## through the name index when it is live, else by a full scan.
+## `ir::build`'s guard on a cross-module callee's signature types (#1744) asks it.
+pub LNameHits := struct { hits : usize, last : Option(u64) }
+pub ll_nonfn_named := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LNameHits {
+  cnt := rt::vec_len(deref(decls))
+  th := _fnv_name(src, s, n)
+  mut hits : usize = 0
+  mut last : Option(u64) = Option(u64).None
+  mut jc := lni_lo(decls, cnt, th)
+  jce := lni_hi(decls, cnt, th)
+  while jc < jce {
+    i := lni_at(decls, cnt, jc)
+    jc = jc + 1
+    if lni_skip(decls, cnt, i, th) == false {
+      d := deref(decl_get(decls, i))
+      if d.is_fn == false and streq(src, d.name_start, d.name_len, s, n) {
+        hits = hits + 1
+        last = Option(u64).Some(u64(i))
+      }
+    }
+  }
+  LNameHits(hits = hits, last = last)
+}
 ## Build `LNH` + the `LNI` buckets over `decls`. Called from `lower::decl_index::build_decl_name_hash` (once per
 ## `emit_program`, after lambda lifting finalizes `decls`) so both indexes cover the same decl vector.
 pub build_layout_name_index := fn(decls : ptr(rt::Vec), src : ptr(u8), in out mar : rt::Arena) {
