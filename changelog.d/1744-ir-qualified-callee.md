@@ -3,4 +3,7 @@
   call emission uses. On x86_64 that moves more functions of the compiler's own build, and of
   any multi-module program, from the legacy emitter to the IR. Three kinds of callee are still
   refused, each with a named cause: an overload set, a generic, and a callee from another
-  module whose signature names a type declared more than once.
+  module whose signature reaches a type name declared more than once (through an alias, a
+  field or a variant payload too). On aarch64, riscv64 and wasm, a module-path call whose
+  module was dropped because two functions would share a bare label (#41) stays refused, so
+  it keeps its trap rather than calling the caller's same-named function.

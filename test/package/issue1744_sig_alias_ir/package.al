@@ -1,10 +1,14 @@
-## Issue #1744, review of PR #1748 (B2): a callee from another module whose signature spells a name
-## declared once (`T`), which is an alias of a name declared in both modules (`Inner`). The IR builder
-## lays a callee's signature types out from the caller's module (#1734), so it must follow `T` to
-## `Inner` and refuse the call, not lay `m::mk`'s result out as the root's three-word `Inner`.
-## NON-VACUOUS: on the PR's first head 0f90e2a9 `main::use` was built from the IR, and x86_64 answered
-## a value that changed from run to run.
-## Expected exit 42: the two fields of `m::mk`'s result, 20 and 22.
+## Issue #1744, review of PR #1748 (B2): callees from another module whose signatures spell only names
+## declared once, but REACH a name both modules declare: `T` aliases `Inner`, a `Box` field and an `E`
+## payload after the first are `Word`. The IR builder lays a callee's signature types out from the
+## caller's module (#1734), so it must follow the alias, the field and the payload list, and refuse each
+## call by its named cause (`alatyr ir --modules`, the check in scripts/e2e.sh). The three callers read
+## no field of `m`'s values, so x86_64's legacy path answers right on both sides of the fix (a field read
+## of `m::mk()` in the root is the legacy defect #1734 itself, fixed by #1743, and is not measured here).
+## NON-VACUOUS: on the PR's first head 0f90e2a9 `main::use` was Built; and the review's probe, which
+## reads `t.a + t.b` of `m::mk()` against the root's three-word `Inner`, answered a different value on
+## each x86_64 run through the IR-built caller.
+## Expected exit 42: 42 from `m::sum(m::mk())`, 7 from the box, 9 from the payload, less 16.
 app := Package(
   version = "0.1.0",
   source_dir = "src",
