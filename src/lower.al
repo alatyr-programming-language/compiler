@@ -11789,9 +11789,12 @@ fn_returns_enum_sret := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), a : rt
 ## SAME register-return convention as a small struct (word k → %rax/%rdx/%rcx/…). Disjoint from
 ## `fn_returns_struct` (a named struct never starts with `(`), so all existing returns are unchanged;
 ## `src/` returns no tuples → fixpoint-neutral.
-pub fn_returns_tuple := fn(d : Decl, src : ptr(u8)) -> bool {
-  if d.ret_tl == 0 { return false }
-  str_at((src + d.ret_ts), 1) == "("
+pub fn_returns_tuple := fn(d : Decl, src : ptr(u8)) -> bool { type_span_is_tuple(src, d.ret_ts, d.ret_tl) }
+## Whether the type span `[s, s+n)` is a tuple type `(T0, …)`; the one test `fn_returns_tuple` and the
+## IR builder's result refusal (#1033) share.
+pub type_span_is_tuple := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 0 { return false }
+  str_at((src + s), 1) == "("
 }
 ## The COMPONENT count (= word count, scalar components) of a tuple return-type span `(T0, …, TN)`:
 ## count the top-level (paren-depth 1) commas + 1. A single-component `(T)` has 0 commas → 1 word.
@@ -16244,7 +16247,7 @@ slice_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
 ## local to the lower fence: changing parser-wide return spans would widen a high-conflict surface for a
 ## boundary that only needs to reject direct indexing. The bounded scan handles nested array element types
 ## and stops at the matching `]`; malformed/incomplete spans remain unknown and follow existing paths.
-fixed_array_return_span := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
+pub fixed_array_return_span := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
   if tl == 0 or str_at((src + ts), 1) != "[" { return CSpan(s = 0, n = 0) }
   mut i := ts
   mut depth := 0

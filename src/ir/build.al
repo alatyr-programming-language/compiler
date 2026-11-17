@@ -1458,7 +1458,10 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
   ## Slice 3d: a one- or two-word struct result is received in a fresh frame object.
   mut agg : Option(IbSt) = Option(IbSt).None
   if d.ret_tl != 0 {
-    if ib_agg_ret_words(ib_b_decls(bp), src, d.ret_ts, d.ret_tl, a) > 0 {
+    mut agg_ret := false
+    aro : IbAggRet = ib_agg_ret(ib_b_decls(bp), src, d.ret_ts, d.ret_tl, a)
+    match aro { ArWords(w) => { agg_ret = true }; ArNo(c) => {} }
+    if agg_ret {
       ## #1622: a view result is received in a fresh `{ptr, len}` object.
       vro : Option(IbVEl) = ib_view_type_elem(ib_b_decls(bp), src, a, d.ret_ts, d.ret_tl)
       match vro { Some(vr) => { agg = Option(IbSt).Some(ib_view_st()) }; None => { agg = ib_agg_named(bp, a, d.ret_ts, d.ret_tl) } }
@@ -2651,7 +2654,7 @@ ib_folded_comp_fld := fn() -> IbFld { IbFld(off = ByteOff(0), ty = Kty.KPtr, sg 
 ## payload's null pattern, which IS the absent case — with NO components, and the other exactly one, and
 ## `lower_layout`'s own byte size of the instance — the size every emitter sizes the slot by — exactly one
 ## pointer word. Any other shape answers `None` and stays refused where it was asked (`CSigParamUnresolved`,
-## `CSigResultWide`): the builder never guesses a folded layout.
+## `CSigResultEnumInstance`): the builder never guesses a folded layout.
 ## The discriminant-0 variant is asked to have been SEEN, not merely to have left `null_arity` at zero
 ## (#1687): an enum whose variants all pin a non-zero discriminant would answer `null_arity == 0` for
 ## never having met one, and the fold would be taken for a type whose null pattern is not its absent
@@ -5127,10 +5130,12 @@ ib_ret_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
   vo : Option(VRegId) = ib_bx(bp, a, e)
   match vo { Some(v) => { ib_ret_value(bp, a, v, e) }; None => {} }
 }
-## The word count of an aggregate result type `[s, s+n)` the convention supports — a struct the builder
-## lays out in the WORD tier of one or two words (every legacy emitter returns those in two result
-## registers); 0 otherwise.
-ib_agg_ret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, in out a : rt::Arena) -> usize {
+## What the result convention says of an aggregate result type `[s, s+n)`: the word count it is
+## returned in (a view, an enum, or a WORD-tier struct of one to eight word scalars, the register set),
+## or the one construct that names why it cannot be (#1033: each refusal below is its own cause, so the
+## census ranks causes rather than one label that blamed width for all of them).
+IbAggRet := enum { ArWords(usize), ArNo(Construct) }
+ib_agg_ret := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, in out a : rt::Arena) -> IbAggRet {
   ## #1622: a `Slice(T)` / `[T]` result is its two-word `{ptr, len}` pair (Types §7), returned like a
   ## two-word struct: x86_64's legacy emitter returns it in %rax/%rdx (measured), wasm's as the address
   ## of a block (the 4c convention). The register twins' legacy emitters return the pair's ADDRESS in
@@ -5138,35 +5143,53 @@ ib_agg_ret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   ## Agreeing on where the pair travels is not agreeing on its elements: a narrow-element view never
   ## crosses to legacy code at all (`ir::sig_has_narrow_view`).
   vo : Option(IbVEl) = ib_view_type_elem(decls, src, a, s, n)
-  match vo { Some(ve) => { return 2 }; None => {} }
+  match vo { Some(ve) => { return IbAggRet.ArWords(2) }; None => {} }
   vw := lower_layout::sig_type_span(src, s, n)
-  if lower_layout::is_view_type(src, vw.s, vw.n) or lower_layout::view_elem_span(src, vw.s, vw.n).n != 0 { return 0 }
+  if lower_layout::is_view_type(src, vw.s, vw.n) or lower_layout::view_elem_span(src, vw.s, vw.n).n != 0 {
+    ## The parser records a `[T; N]` result by its `[` head alone, which the view test above reads as a
+    ## bare `[T]`; a fixed array is not a view (Types §7), so it is named for what it is.
+    if ib_span_is_fixed_array(src, s, n) { return IbAggRet.ArNo(Construct.CSigResultArray) }
+    return IbAggRet.ArNo(Construct.CSigResultView)
+  }
   ## Slice 4b: an enum result is returned in up to eight result registers, tag first — the legacy
   ## emitters' register enum-return convention (measured: aarch64 x0..x7, riscv64 a0..a7).
   eo : Option(IbSt) = ib_enum_named_in(decls, src, a, s, n)
   match eo {
     Some(est) => {
+      ## `ib_enum_named_in` answers a size of one word per tag and widest-variant component, or the
+      ## one folded word, so `ew` is never 0; the `== 0` only keeps the bound the convention always had.
       ew := est.size / 8
-      if ew >= 1 and ew <= 8 { return ew }
-      return 0
+      if ew == 0 or ew > 8 { return IbAggRet.ArNo(Construct.CSigResultWide) }
+      return IbAggRet.ArWords(ew)
     }
-    None => {}
+    None => {
+      ## A result that names an enum the register tier above refused, or a tuple, is resolvable: it
+      ## is refused for its own reason, never as "unresolved" (#1033).
+      full : IbSpan = ib_type_span_full(src, s, n)
+      if lower::type_span_is_tuple(src, full.s, full.n) { return IbAggRet.ArNo(Construct.CSigResultTuple) }
+      bn := lower_layout::base_type_name(src, full.s, full.n)
+      edi := lower_layout::enum_decl_of(decls, src, bn.s, bn.n)
+      if edi >= 0 {
+        ed : Decl = deref(ib_decl_ptr(decls, usize(edi)))
+        if ed.is_generic { return IbAggRet.ArNo(Construct.CSigResultEnumInstance) }
+        return IbAggRet.ArNo(Construct.CSigResultEnum)
+      }
+    }
   }
   lk := lower_layout::layout_kind(decls, src, s, n, a)
-  if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return 0 }
+  if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return IbAggRet.ArNo(Construct.CSigResultLevered) }
   sdi := lower_layout::struct_decl_of(decls, src, s, n)
-  if sdi < 0 { return 0 }
+  if sdi < 0 { return IbAggRet.ArNo(ib_agg_ret_nonstruct(decls, src, s, n)) }
   d : Decl = deref(ib_decl_ptr(decls, usize(sdi)))
-  if d.is_generic { return 0 }
+  if d.is_generic { return IbAggRet.ArNo(Construct.CSigResultGeneric) }
   mut nf : usize = 0
   mut f := d.fields_head
   loop {
     match f {
       Some(fq) => {
         fd := deref(ast::fld_p(fq))
-        if fd.wsize != 1 { return 0 }
-        ko : Option(IbKS) = ib_name_ks(src, fd.ts, fd.tl)
-        match ko { Some(k) => { if not ib_ks_word(k) { return 0 } }; None => { return 0 } }
+        fo : Option(Construct) = ib_agg_fld_why(decls, src, fd)
+        match fo { Some(c) => { return IbAggRet.ArNo(c) }; None => {} }
         nf = nf + 1
         f = fd.next
       }
@@ -5176,8 +5199,67 @@ ib_agg_ret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   ## The ceiling is the register-return set: aarch64 x0..x7 and riscv64 a0..a7, which is what
   ## `sa_agg_ret` / `sr_agg_ret` emit (their `if w == 0 or w > 8` is the same bound). Widened
   ## from two words by owner decision on #1026; `ig_notyet`'s golden moved with it.
-  if nf == 0 or nf > 8 { return 0 }
-  nf
+  if nf == 0 { return IbAggRet.ArNo(Construct.CSigResultEmpty) }
+  if nf > 8 { return IbAggRet.ArNo(Construct.CSigResultWide) }
+  IbAggRet.ArWords(nf)
+}
+## Is the type spelled at `[s, s+n)` (or by its `[` head there) a fixed array `[T; N]`, not a view `[T]`?
+ib_span_is_fixed_array := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  fs := lower::fixed_array_return_span(src, s, n)
+  fs.n != 0 and not lower_layout::is_view_type(src, fs.s, fs.n)
+}
+## Why a result `[s, s+n)` that names no struct, enum, tuple or view the convention takes is refused
+## (#1033). The kernel scalar table (`ib_type_ks`) has already said no, so a scalar here is reached only
+## through a type alias, which the builder does not follow yet; a float, a function type and `Never` are
+## named as themselves. Only what names nothing resolvable from here stays "unresolved".
+ib_agg_ret_nonstruct := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> Construct {
+  if ib_span_is_fixed_array(src, s, n) { return Construct.CSigResultArray }
+  full : IbSpan = ib_type_span_full(src, s, n)
+  if sema::sema_ty_span_is_fn(src, full.s, full.n) { return Construct.CSigResultFnType }
+  bn := lower_layout::base_type_name(src, full.s, full.n)
+  if bn.n == 5 and str_at((src + bn.s), 5) == "Never" { return Construct.CSigResultNever }
+  vt : VTy = sema::sema_vty_name(src, full.s, full.n, decls)
+  c : VCls = vt.cls
+  match c {
+    VcInt | VcBool | VcPtr => {
+      ko : Option(IbKS) = ib_vty_ks(vt)
+      match ko { Some(k) => { return Construct.CSigResultScalarAlias }; None => {} }
+    }
+    VcFloat => { return Construct.CSigResultFloat }
+    VcAbsent | VcUnknown | VcLit | VcAgg => {}
+  }
+  Construct.CSigResultUnresolved
+}
+## Why the field typed `[ts, ts+tl)` (`wsize` words, `ast::FieldDecl`) keeps a struct result out of the
+## register convention, or `None` when it is a one-word scalar the convention takes. The `None` test is
+## the convention's own (a one-word field whose type name is a word scalar); every other answer only
+## names the cause (#1033): a fixed array, a sub-word scalar, a brand or alias of a scalar (the field
+## test reads scalar names, not `ib_type_ks`'s brand follow), a float, or a type that is no scalar at all.
+ib_agg_fld_why := fn(decls : ptr(rt::Vec), src : ptr(u8), fd : ast::FieldDecl) -> Option(Construct) {
+  ko : Option(IbKS) = ib_name_ks(src, fd.ts, fd.tl)
+  match ko { Some(k) => { if fd.wsize == 1 and ib_ks_word(k) { return Option(Construct).None } }; None => {} }
+  ## `wsize` counts words only for an array field (`[T; N]` is N, a computed length 0).
+  if fd.wsize != 1 or ib_span_is_fixed_array(src, fd.ts, fd.tl) { return Option(Construct).Some(Construct.CSigResultArrayField) }
+  ## A float first: `lib/base/num.al` declares `f64 := brand(bits64)`, which `ib_type_ks` would follow.
+  vt : VTy = sema::sema_vty_name(src, fd.ts, fd.tl, decls)
+  c : VCls = vt.cls
+  match c {
+    VcFloat => { return Option(Construct).Some(Construct.CSigResultFloatField) }
+    VcInt | VcBool | VcPtr | VcAbsent | VcUnknown | VcLit | VcAgg => {}
+  }
+  bo : Option(IbKS) = ib_type_ks(decls, src, fd.ts, fd.tl)
+  match bo {
+    Some(k) => {
+      if not ib_ks_word(k) { return Option(Construct).Some(Construct.CSigResultNarrowField) }
+      return Option(Construct).Some(Construct.CSigResultBrandField)
+    }
+    None => {}
+  }
+  match c {
+    VcInt | VcBool | VcPtr => { return Option(Construct).Some(Construct.CSigResultBrandField) }
+    VcFloat | VcAbsent | VcUnknown | VcLit | VcAgg => {}
+  }
+  Option(Construct).Some(Construct.CSigResultAggField)
 }
 ## Return `v` as the function's result, at its declared type.
 ib_ret_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : VRegId, at : ptr(Expr)) {
@@ -5577,13 +5659,13 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
     match rko { Some(kk) => { rk = kk; has_ret = true }; None => {} }
   }
   fnm := str_at((src + d.name_start), d.name_len)
-  ## Slice 2: an aggregate RESULT of ONE TO EIGHT words (`ib_agg_ret_words`) is returned in the result
+  ## Slice 2: an aggregate RESULT of ONE TO EIGHT words (`ib_agg_ret`) is returned in the result
   ## registers, the convention every legacy emitter shares; the function's IR result is the `ptr` to the
   ## value and `ret_words` tells the selector to return the words.
   mut rwords : usize = 0
   if d.ret_tl != 0 and not has_ret {
-    rwords = ib_agg_ret_words(decls, src, d.ret_ts, d.ret_tl, a)
-    if rwords == 0 { why.c = Construct.CSigResultWide; return BuildOut.Refused }
+    rr : IbAggRet = ib_agg_ret(decls, src, d.ret_ts, d.ret_tl, a)
+    match rr { ArWords(w) => { rwords = w }; ArNo(c) => { why.c = c; return BuildOut.Refused } }
     has_ret = true
     rk = IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)
   }
