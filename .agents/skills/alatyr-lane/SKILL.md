@@ -493,8 +493,8 @@ oracle in a separate one-file commit after the local merge. This first run is pr
 a green or publishable gate; the lane never regenerates the oracle and never pushes `main`.
 
 Emission changed? Measure the GAS delta with the **input tree held fixed, in both directions**, with
-the `.L<N>` and `.Lra<N>_<k>` label families normalized. Comparing your tree against the old one
-compares a longer source with a shorter one and proves nothing.
+the label families listed in `scripts/gas_normalize.sh` normalized. Comparing your tree against the
+old one compares a longer source with a shorter one and proves nothing.
 
 ## 6 · What you may not touch
 

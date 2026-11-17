@@ -49,7 +49,7 @@ ulimit -c 0
 M="$ROOT/package.al"   # absolute: the tree compiler's emit form refuses a relative manifest
 O="$ROOT/target/ir_selfhost"
 rm -rf "$O"; mkdir -p "$O"
-## the one normalization (`.L<N>`, `.Lra<N>_<k>`, `.Lxir<N>_<k>`, `.Lxir<N>_ret`), shared with promote.sh
+## the one normalization (`.L<N>`, `.Lra<N>_<k>`, `.Lxir<N>_<k>`, `.Lxir<N>_ret`, `.Lxir<N>_s<k>`), shared with promote.sh
 . "$ROOT/scripts/gas_normalize.sh"
 same_gas() { cmp -s <(normalize_gas < "$1") <(normalize_gas < "$2"); }
 verdict() { if "$@"; then echo SAME; else echo DIFFER; fi; }

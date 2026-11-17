@@ -17,6 +17,19 @@
 #                      `sx_lbl`: N is the selected function's number, k the
 #                      instruction that opens the region)                        -> .LxirN_K
 #   .Lxir<N>_ret       the same selector's one return label per function         -> .LxirN_ret
+#   .Lxir<N>_s<k>      the same selector's string-pool label of function N's
+#                      `str` literal k (src/lower/isel.al `sx_lit_lbl`, #1576)   -> .LxirN_s<k>
+#
+# The string-pool family folds N and KEEPS k (#1732). k is already the function's own literal index:
+# `sx_lits` defines the function's literals in k order from 0, and on the tree's own GAS the order in
+# which a function first loads its literals is k in every one of the 176 functions that have any
+# (measured on main 8375ac06). So the fold is a bijection on each function's literals: two files that
+# differ only in N compare equal, while a load moved to another literal of the same function
+# (`leaq .Lxir3_s1` where `.Lxir3_s0` was) or a literal's bytes moved under another label still
+# compares different, at the line that changed. Blanking k like `.LxirN_K` would hide exactly that:
+# every string load of a function would read alike. N is folded like the other `.Lxir` families: the
+# selector loads a literal only from its own function, and a load from another function's pool is
+# not told apart from one from its own.
 #
 # `.Lra` and `.Lxir` are folded first: `.L[0-9]+` cannot match them (a letter follows `.L`), but the
 # order keeps that true by construction rather than by the shape of today's names. Every other number —
@@ -29,6 +42,7 @@
 ## normalize_gas < GAS -> GAS with the compiler-numbered label families renumbered away
 normalize_gas() {
   sed -E \
+    -e 's/\.Lxir[0-9]+_s([0-9]+)/.LxirN_s\1/g' \
     -e 's/\.Lxir[0-9]+_[0-9]+/.LxirN_K/g' \
     -e 's/\.Lxir[0-9]+_ret/.LxirN_ret/g' \
     -e 's/\.Lra[0-9]+_[0-9]+/.LraN_K/g' \

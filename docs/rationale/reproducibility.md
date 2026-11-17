@@ -13,9 +13,9 @@ text, with the reasons, measurements and history. Line citations are as of the m
   never a recovery path.
 - If the frozen seed cannot reproduce a source change, the integrator owes a self-promotion: the
   version bump comes **first**, then Stage1 → Stage2 → Stage3 are built from that tree and must emit
-  byte-identical GAS once the `.L<N>` and `.Lra<N>_<k>` label families are normalized, with the
-  Stage2 and Stage3 **binaries** matching, and full e2e and sweeps; read the normalized
-  seed-to-Stage1 delta, promote **Stage2**, append evidence to `seed/VERSION`, and re-run the
+  byte-identical GAS once the label families listed in `scripts/gas_normalize.sh` are normalized,
+  with the Stage2 and Stage3 **binaries** matching, and full e2e and sweeps; read the normalized
+  seed-to-Stage1 delta, promote **Stage2**, append evidence to `seed/HISTORY.md`, and re-run the
   post-promotion fixpoint. A lane never promotes the seed.
 - Stage1's binary is expected to differ, and requiring all three of them to match asks for something
   no version-releasing promotion can deliver: the 0.1.0 → 0.2.0 promotion left `seed/alatyr`

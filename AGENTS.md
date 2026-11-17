@@ -21,8 +21,8 @@ procedures in `.agents/skills/`. At most 150 lines (`scripts/agents_size_check.s
 - `seed/alatyr` is a frozen static bootstrap; the unpublished Rust ancestor is never an input or fallback.
 - A lane never promotes the seed. When the seed cannot reproduce a change, the integrator promotes:
   bump the version **first** (`package.al`, `current-seed-version`, `scripts/package_cli_test.sh`),
-  then build Stage1 → Stage2 → Stage3. They must emit byte-identical GAS once the `.L<N>` and
-  `.Lra<N>_<k>` labels are normalized, and the Stage2 and Stage3 binaries must match.
+  then build Stage1 → Stage2 → Stage3. They must emit byte-identical GAS once the label families of
+  `scripts/gas_normalize.sh` are normalized, and the Stage2 and Stage3 binaries must match.
 - Run the full e2e and sweeps, and read the normalized seed-to-Stage1 delta: it must be describable in
   one sentence, or stop. Promote **Stage2**, append the evidence to `seed/HISTORY.md`, and re-run
   `scripts/fixpoint.sh` on the promoted tree.

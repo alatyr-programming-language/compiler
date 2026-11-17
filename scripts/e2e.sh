@@ -8542,6 +8542,12 @@ root_package_test fn_value_qualified "T _start" "T main__main" "T main__apply" "
 ## `h := lower::a::a_helper; h()` must call `lower__a__a_helper`, not an undefined alias symbol in
 ## `lower__b` (or a caller-module fallback). The row also proves reachability retains the resolved fn.
 root_package_test qualified_fn_alias "T _start" "T main__main" "T lower__b__run" "T lower__a__a_helper"
+## #1734 / Modules §4.1, Types §4.1 — a callee's `-> S` is the `S` of the module that spells it, when the
+## caller declares its own `S`. Each call is reached through an alias, a caller `S` without the
+## field (the checker's half), or a qualified path (the control), on the check, run and build paths.
+root_package_test issue1734_alias_callee_agg_result "T _start" "T main__main" "T m__mk" "T m__weigh"
+root_package_test issue1734_alias_callee_agg_result_check "T _start" "T main__main" "T m__mk" "T m__weigh"
+root_package_test issue1734_qualified_callee_agg_result "T _start" "T main__main" "T m__mk" "T m__weigh"
 issue11_signature_type_name_test
 issue11_package_type_name_test
 ## Modules §§4.1/4.1.1 — a one-element listed projection after a bare module alias must remain a
@@ -13676,6 +13682,45 @@ run issue1434_declared_shl_value 42
 run issue1434_declared_shr_value 42
 run issue1434_declared_shl_two_args 42
 run issue1434_declared_shr_two_args 42
+## #1434 (the rest of it) — every name-keyed intrinsic arm asks one predicate, `lower_layout::intrinsic_callee`;
+## each fixture reaches the legacy x86_64 path (an f64 literal) and failed on the parent (139, 40, 32 or 1).
+run issue1434_declared_size_legacy 42
+run issue1434_declared_align_legacy 42
+run issue1434_declared_len_legacy 42
+run issue1434_declared_str_at_legacy 42
+run issue1434_declared_str_eq_legacy 42
+run issue1434_declared_byte_at_legacy 42
+run issue1434_declared_bytes_legacy 42
+run issue1434_declared_panic_legacy 42
+run issue1434_declared_forget_legacy 42
+## #1719 — a call to such a program-declared fn whose arguments it does not accept is refused, located,
+## until spec#166 decides shadowing against overloading; each reject row compiled silently on the parent.
+check_build_located reject_issue1719_declared_len_str 11 "type mismatch"
+check_build_located reject_issue1719_declared_len_str_param_ufcs 7 "type mismatch"
+check_build_located reject_issue1719_declared_len_view 8 "type mismatch"
+run accept_issue1719_declared_len_u64 42
+run accept_issue1719_declared_len_array_param 42
+check_build_located reject_issue1719_fc_align_u64_to_str 12 "type mismatch"
+check_build_located reject_issue1719_fc_byte_at_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_len_deref_field 12 "type mismatch"
+check_build_located reject_issue1719_fc_len_slice_field 14 "type mismatch"
+check_build_located reject_issue1719_fc_len_str_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_len_str_to_ptr 12 "type mismatch"
+check_build_located reject_issue1719_fc_len_u64_to_str 12 "type mismatch"
+check_build_located reject_issue1719_fc_len_ufcs_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_len_view_expr 12 "type mismatch"
+check_build_located reject_issue1719_fc_panic_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_shl_str_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_size_u64_to_str 12 "type mismatch"
+check_build_located reject_issue1719_fc_str_at_str_to_ptr 12 "type mismatch"
+check_build_located reject_issue1719_fc_str_eq_fields 13 "type mismatch"
+run accept_issue1719_fc_len_deref_u64_field 42
+run accept_issue1719_fc_len_ptr_u8 42
+run accept_issue1719_fc_len_str_field_str 42
+run accept_issue1719_fc_len_u64_call 42
+run accept_issue1719_fc_len_u8_widen 42
+run accept_issue1719_fc_len_ufcs_u64 42
+run accept_issue1719_fc_str_eq_str_fields 42
 
 ## #992 — `alloc::with(ar)` inside a match arm, and a match inside `alloc::with`, pass the ambient
 ## `ptr(ar)` to a call that omits its allocator (Memory §5.2.1); the splice never walked a `match`.
