@@ -5923,6 +5923,23 @@ check_ra_imm64_widen() {
   if [ "$got" = 42 ]; then echo "ok   ra_imm64_widen: widened GAS assembles, run == build, fallback 42"; else echo "FAIL ra_imm64_widen: fallback got $got want 42"; fail=1; fi
 }
 
+## The named functions of a fixture must be ones the shared-IR x86 selector TOOK (`alatyr x86-ir`, a
+## `# ir: selected` marker before the label). A `run` row alone cannot tell: when the builder declines a
+## shape, the legacy emitter answers the same value and the row stays green (#1033, #1726).
+check_ir_took() { # name, fn...
+  local name="$1" src asm sel f
+  shift
+  src="$E2E_TEST/$name.al"
+  [ -f "$src" ] || { echo "MISS $name: no $src"; fail=1; return; }
+  asm="$T/e2e_${name}_took.s"
+  "$CC" x86-ir "$src" > "$asm" 2>/dev/null || { echo "FAIL $name(ir-took): emit"; fail=1; return; }
+  sel="$(awk -v p="${name}__" '/^# ir: selected from the shared IR$/ { s = 1; next } index($0, p) == 1 && /:$/ { if (s) print substr($0, length(p) + 1, length($0) - length(p) - 1); s = 0 }' "$asm" | tr '\n' ' ')"
+  for f in "$@"; do
+    case " $sel" in *" $f "*) ;; *) echo "FAIL $name(ir-took): $f not selected from the IR (selected: $sel)"; fail=1; return ;; esac
+  done
+  echo "ok   $name(ir-took): $* selected from the shared IR on x86_64"
+}
+
 ## The same imm32 boundary on the shared-IR selector (`alatyr x86-ir`, #1073). The legacy assertions above
 ## never read this path, so they stay green whatever it emits. The boundary helpers must be ones the selector
 ## TOOK (a `# ir: selected` marker before their label): a helper the selector declines is emitted the legacy
@@ -9332,6 +9349,13 @@ run_rv64 ir_enum_inst_local 42
 run_wat ir_enum_inst_local 42
 run_x86 ir_enum_inst 42
 run_x86 ir_enum_inst_cross 42
+check_ir_took ir_enum_inst sum pass code depth ident
+check_ir_took ir_enum_inst_cross sum code wrap unwrap flag fcode
+## #1726: a narrow signed payload component crosses to a legacy caller as its canonical word.
+run_x86 ir_enum_narrow_payload 42
+check_ir_took ir_enum_narrow_payload mk mk8 mk16 bad pass sz
+## #1728: a float parameter keeps its function, and every call to it, legacy-emitted.
+run_x86 ir_float_param 42
 ## IR slice 4c: `?` on an Option and a Result, success and failure paths.
 run ir_try 42
 run_a64 ir_try 42

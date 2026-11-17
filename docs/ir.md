@@ -795,6 +795,13 @@ the crossing (both measured). So `ir::sig_pins_legacy` keeps every signature tha
 instance on those three targets legacy (`span_is_enum_inst_agg`). On x86_64 an instance of one or two
 words crosses in `%rax`/`%rdx`, where both layouts agree; a wider one does not cross there.
 
+Two more rules hold at every crossing. A scalar payload component is written as the whole word of its
+slot, sign-extended when the component is a narrow signed integer (`ib_store_comp`, #1726). The bytes
+above it are padding to Types §6.2, but the legacy readers load the slot whole. A float parameter is a
+class no selector models: the legacy emitters pass it in a float register, and the selectors take every
+parameter from an integer one. So a function with one is refused (`CSigParamFloat`), and so is an
+IR-built call that would pass a float argument (#1728).
+
 ### 3.8 Signedness and width are attributes of the value, derived once
 
 Today signedness is decided **by the shape of the expression**, separately in each emitter: a bare
