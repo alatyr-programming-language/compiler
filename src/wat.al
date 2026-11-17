@@ -2619,6 +2619,33 @@ wat_param_shadow_enter := fn(list : Option(ptr(mut Stmt)), fn_head : Option(ptr(
   }
 }
 
+## Is `[ns, ns+nl)` a SCALAR `out` / `in out` parameter of the function being emitted? Functions §2.3
+## binds one to the caller's place, read and written in place. This backend receives every scalar
+## argument as an `i64` VALUE and has no place-passing for one, so a write to it would stay in the
+## callee and the caller would answer a quiet wrong value (#1692); the write site traps instead. A read
+## of the copied value is exact, so a callee that only reads its `in out` scalar keeps running. An
+## aggregate by-place parameter already travels as its base address and is not asked about; the
+## aggregate test is the one `aarch64::a64_param_is_out_scalar` makes.
+wat_param_out_scalar := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec)) -> bool {
+  mut p := params_head
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if ast::param_by_place(pm) and streq(src, pm.ns, pm.nl, ns, nl) {
+          mut agg := struct_decl_of(decls, src, pm.ts, pm.tl) >= 0 or enum_decl_of(decls, src, pm.ts, pm.tl) >= 0
+          if str_at((src + pm.ts), pm.tl) == "str" { agg = true }
+          if str_at((src + pm.ts), pm.tl) == "ptr" and (struct_decl_of(decls, src, pm.pps, pm.ppl) >= 0 or enum_decl_of(decls, src, pm.pps, pm.ppl) >= 0) { agg = true }
+          return not agg
+        }
+        p = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+
 ## Does the fn (its param list) have a `T : type` comptime type-param?
 wat_fn_is_generic := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), a : rt::Arena) -> bool {
   mut p := params_head
@@ -6631,6 +6658,10 @@ emit_wat_stmts := fn(list_head : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut
             ## the block or in another function, would answer the dead local. Fail loud instead.
             if nested and ast::assign_is_decl(src, ns, nl) and lower_ctx::names_module_data(decls, src, ns, nl) {
               push_str(sb, "    (unreachable) (; unsupported: block-local declaration shadowing a module binding (#1502) ;)\n")
+            }
+            ## #1692 — a write to a scalar `out`/`in out` parameter cannot reach the caller's place here.
+            if (not ast::assign_is_decl(src, ns, nl)) and wat_param_out_scalar(params_head, src, ns, nl, decls) {
+              push_str(sb, "    (unreachable) (; unsupported: write to a scalar out/in-out parameter, no place passing (#1692) ;)\n")
             }
             if lami >= 0 {
               idx := name_local_index(fn_head, src, ns, nl, pcount, a, decls)

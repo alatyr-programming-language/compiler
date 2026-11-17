@@ -265,6 +265,8 @@ aarch64	test/issue1497_block_scoped_shadow_const.al	run/133	#1502
 aarch64	test/issue1502_block_local_module_binding.al	run/133	#1502
 aarch64	test/issue1514_word_array_range_slice.al	run/133	#1288
 aarch64	test/issue1622_narrow_view_legacy_reslice.al	run/133	#1288
+aarch64	test/issue1684_out_u8_elem_last.al	run/139	#1692
+aarch64	test/issue1684_out_u8_elem_mid.al	run/139	#1692
 aarch64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 aarch64	test/issue169_wasm_nested_return.al	run/133	#1191
 aarch64	test/issue171_global_const_str.al	run/133	#1200
@@ -833,6 +835,8 @@ riscv64	test/issue1497_block_scoped_shadow_const.al	run/133	#1502
 riscv64	test/issue1502_block_local_module_binding.al	run/133	#1502
 riscv64	test/issue1514_word_array_range_slice.al	run/133	#1288
 riscv64	test/issue1622_narrow_view_legacy_reslice.al	run/133	#1288
+riscv64	test/issue1684_out_u8_elem_last.al	run/139	#1692
+riscv64	test/issue1684_out_u8_elem_mid.al	run/139	#1692
 riscv64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200
@@ -1402,6 +1406,8 @@ wasm	test/issue1497_block_scoped_shadow_const.al	run/134	#1502
 wasm	test/issue1502_block_local_module_binding.al	run/134	#1502
 wasm	test/issue1514_word_array_range_slice.al	run/134	#1288
 wasm	test/issue1622_narrow_view_legacy_reslice.al	run/134	#1288
+wasm	test/issue1684_out_u8_elem_last.al	run/134	#1692
+wasm	test/issue1684_out_u8_elem_mid.al	run/134	#1692
 wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
 wasm	test/issue169_wasm_array_write.al	run/134	#1194
 wasm	test/issue169_wasm_nested_return.al	run/134	#1191

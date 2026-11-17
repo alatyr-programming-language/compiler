@@ -13468,6 +13468,29 @@ run issue1256_generic_ret_arg 42
 ## (x86_64) the bound form built and returned 10 (a wrong value), the passed form ran to SIGSEGV (139).
 build_reject_has issue1324_wide_gen_enum_bound "generic call returning an enum wider than seven words is not supported yet"
 build_reject_has issue1324_wide_gen_enum_arg "generic call returning an enum wider than seven words is not supported yet"
+## #1684 — an `out` / `in out` SCALAR bound to a place that is not a plain frame local: the x86_64
+## `emit_out_scalar_arg` claimed only a `Var` and asked `entry_of`, whose unbound sentinel is frame entry
+## 0. A module GLOBAL therefore passed `leaq -8(%rbp)` — the caller's own first frame word — and the
+## callee wrote THERE while the global kept its old value (a silent wrong value); an array ELEMENT fell to
+## the value path, which loaded THROUGH the element address, so the callee stored through the element's
+## VALUE as a pointer. NON-VACUOUS: on the parent `1b3b22e0` (native x86_64) the element fixture exits
+## **139 (SIGSEGV)** and the two global fixtures answer **12** and **105** where 21 and 111 are due.
+## x86_64-scoped (`run_x86`, sweep-excluded): the fix is in the legacy x86 lower, and `alatyr ir`
+## declines every one of these functions (`NotYet(signature: parameter with a mode)` / `NotYet(expr
+## Call)`), so no IR shape is being papered over (#980). aarch64 answers 139 for the element shape too —
+## measured on this tree, filed as #1692; it is not this row's claim.
+run_x86 issue1684_out_array_elem 21
+run_x86 issue1684_out_global_scalar 22
+run_x86 issue1684_inout_global 111
+## #1684, review of PR #1694 (B1): a ONE-BYTE element (`[u8; N]`, packed) bound to an out/in-out u8. The
+## x86_64 callee stores a whole word through its place, so passing the element's address wrote eight bytes
+## over one: the PR's first head d4461e92 answered 3 (`b[2]` zeroed) and 5 (the next local overwritten),
+## where its parent 1b3b22e0 died with SIGSEGV (139). Refused at the argument until the callee writes at
+## the declared width. The control row holds the refusal to one-byte elements: u16/u32/i32/bool elements
+## sit in 8-byte cells and still answer 42.
+build_reject_has issue1684_out_u8_elem_mid "a byte-packed array element is not supported as an out/in-out place argument on x86_64 yet"
+build_reject_has issue1684_out_u8_elem_last "a byte-packed array element is not supported as an out/in-out place argument on x86_64 yet"
+run_x86 issue1684_out_narrow_word_elem 42
 ## #1681 — an `@inline` callee that is ALSO comptime-variadic. The call-site dispatch took the `@inline`
 ## expander first, and `emit_inline_call` binds every parameter as an ordinary value: it never set
 ## `cx.pack_args`, so the body's `comptime for a in args` unrolled ZERO times and only the trailing
