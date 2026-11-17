@@ -8611,7 +8611,7 @@ sema_package_type_builtin_arg_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), src
 ## layout/pointer METHODS reached via UFCS `x.m()` → `Call(m, [x])` (`ptr`/`len`/`size`/`align`),
 ## `typeinfo`, and the lower's special-cased intrinsics (`bytes`/`sub`/`expect`). A call to one of
 ## these is legal even though no `fn` declares it, so the undefined-callee diagnostic must exempt it.
-is_builtin_callee := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+pub is_builtin_callee := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   ## match on the TAIL name (after the last `::`) so a QUALIFIED intrinsic (`atomic::load`,
   ## `atomic::fetch_add`) resolves like its bare form — mirrors name_matches' tail logic.
   mut tail := s
