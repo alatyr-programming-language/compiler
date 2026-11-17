@@ -5433,6 +5433,88 @@ agg_scalar_bad := fn(ss : usize, sn : usize, v : ptr(Expr), decls : ptr(rt::Vec)
   bad
 }
 
+## #1719 / spec#166 — a call to a fn the PROGRAM declared under a prelude intrinsic's name (`len`, `size`,
+## `str_eq`, …) reaches that declaration on every backend: `lower_layout::callee_is_program_fn` is the
+## one predicate #1434 routes such a call through. Whether that declaration SHADOWS the prelude name or
+## JOINS its overload set is undecided (spec#166). The two readings agree where the declaration accepts
+## the arguments; where it does not, the call is ill-formed under shadowing and the prelude's own call
+## under overloading. Under neither is it a call to the declaration with an argument it does not accept,
+## and that is what the lowering emits: `len(s)` with `len := fn(x : u64)` read the str's first word
+## (166 where the parent's intrinsic answered 42). So until spec#166 is decided such a call is REFUSED,
+## at the first argument no program declaration of that name and arity accepts. The answer is that
+## argument's span (the call's when it has none); 0 = accepted, or not such a call.
+##
+## Judged only on a CONFIDENT mismatch, so it never refuses what it cannot see: a multi-word value
+## (`sema_arg_multiword`) into a builtin scalar parameter, or `agg_scalar_bad`'s aggregate↔scalar pair. A
+## generic declaration of the name is never judged, and a call no declaration has the arity for is left
+## to the arity check. The general form of this hole, for every callee, is #519.
+sema_program_intrinsic_call_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+  ecs := expr_call_callee_span(e)
+  if ecs.n == 0 or ecallee_is(ecs.s) { return 0 }
+  if not lower_layout::callee_is_program_fn(decls, src, ecs.s, ecs.n) { return 0 }
+  nargs := expr_call_arity(e)
+  cnt := rt::vec_len(deref(decls))
+  mut first_bad : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    dp := decl_get(decls, i)
+    if lower_layout::decl_is_program_fn_named(dp, src, ecs.s, ecs.n) {
+      d := deref(dp)
+      if d.is_generic { return 0 }
+      if d.arity == nargs {
+        bs := sema_decl_args_bad(d.params_head, e, ecs.s, decls, upto, src, locals, nloc, a)
+        if bs == 0 { return 0 }
+        if first_bad == 0 { first_bad = bs }
+      }
+    }
+    i += 1
+  }
+  first_bad
+}
+## The span of the first argument of call `e` that the declaration whose parameters start at `ph` confidently
+## does not accept, else 0.
+sema_decl_args_bad := fn(ph : Option(ptr(mut Param)), e : ptr(Expr), cs : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+  mut pp : Option(ptr(mut Param)) = ph
+  mut ag : Option(ptr(mut Arg)) = expr_call_args_head(e)
+  loop {
+    match ag {
+      Some(agq) => {
+        ca := deref(arg_p(agq))
+        match pp {
+          Some(ppq) => {
+            pm := deref(param_p(ppq))
+            wide := is_builtin_scalar_name(src, pm.ts, pm.tl) and sema_arg_multiword(ca.e, src, locals, nloc)
+            if wide or agg_scalar_bad(pm.ts, pm.tl, ca.e, decls, upto, src, locals, nloc) {
+              bs := s_of(ca.e, a)
+              if bs == 0 { return cs }
+              return bs
+            }
+            pp = pm.next
+          }
+          None => { return 0 }
+        }
+        ag = ca.next
+      }
+      None => { return 0 }
+    }
+  }
+  0
+}
+## Is the value `v` CONFIDENTLY a multi-word one: a string, array or aggregate literal, or a local recorded
+## as a `str` (its type or the #429 str-view provenance), a range view, an array or an aggregate? Anything
+## else, a call or an unrecorded local included, answers false.
+sema_arg_multiword := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
+  lt := lbv_lit_tag(v)
+  if kind_is_str(lt) or kind_is_array(lt) or kind_is_struct(lt) or kind_is_enum(lt) { return true }
+  vs := expr_var_span(v)
+  if vs.n == 0 or nloc == 0 or not local_in(locals, nloc, src, vs.s, vs.n) { return false }
+  if sema_place_is_str_view(locals, nloc, src, vs) { return true }
+  if prov_is_view(local_prov(locals, nloc, src, vs.s, vs.n)) { return true }
+  raw := local_lookup(locals, nloc, src, vs.s, vs.n)
+  k : TyKind = raw.ty.kind
+  kind_is_array(k) or kind_is_struct(k) or kind_is_enum(k) or kind_is_hidden_struct(k) or kind_is_hidden_enum(k)
+}
+
 ## Issue #269 — compare only a DIRECT, uniquely resolved call against a concrete by-value parameter.
 ## The ordinary sema resolver intentionally treats unresolved generic instances as unknown, which is
 ## still the right poison-tolerant rule for most callers. This lane needs one stricter, isolated query:
@@ -11897,6 +11979,11 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       None => {}
     }
   }
+  ## #1719 — the block above is tolerant of an overloaded name, and a prelude intrinsic's name is one
+  ## (the ambient library declares `len` four times), so a program-declared `len(x : u64)` called on a
+  ## `str` reached the lowering. Until spec#166 decides shadowing against overloading, refuse it here.
+  pib := sema_program_intrinsic_call_bad(e, decls, upto, src, locals, nloc, a)
+  if pib != 0 { mark_failed(locals, mismatch_err(pib, 0)) }
   ## EXHAUSTIVENESS for a VALUE match (§60/CF-1) — the dual of the `check_stmts` statement-match check.
   ## Done here (BEFORE the big `match deref(e)`) as a side-effect + fall-through, because the big match's
   ## payload-heavy `Expr::Match` arm is not dispatched under the seed (scar #2, same as `Var`); poison

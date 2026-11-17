@@ -4192,12 +4192,18 @@ pub callee_is_program_fn := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, 
   while j < je {
     i := lni_at(decls, cnt, j)
     if not lni_skip(decls, cnt, i, th) {
-      d := deref(decl_get(decls, i))
-      if d.kind == DECL_KIND_FN and streq(src, d.name_start, d.name_len, cs, cl) and not module_spelled_ambient(src, d.mod_start, d.mod_len) { return true }
+      if decl_is_program_fn_named(decl_get(decls, i), src, cs, cl) { return true }
     }
     j += 1
   }
   false
+}
+## Is `d` a fn the PROGRAM wrote under the name `[cs, cs+cl)`: an ambient-library module's declaration
+## (`dir__stem`) does not count. The one per-declaration test `callee_is_program_fn` asks, and the walk
+## sema's #1719 refusal makes over the same declarations asks it too.
+pub decl_is_program_fn_named := fn(dp : ptr(Decl), src : ptr(u8), cs : usize, cl : usize) -> bool {
+  d := deref(dp)
+  d.kind == DECL_KIND_FN and streq(src, d.name_start, d.name_len, cs, cl) and not module_spelled_ambient(src, d.mod_start, d.mod_len)
 }
 ## The spelling an intrinsic arm may match: the callee's text, or the empty str when the callee resolves
 ## to a declaration the program wrote (`callee_is_program_fn`), so that no name-keyed arm matches it.

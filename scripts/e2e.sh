@@ -13463,6 +13463,12 @@ run issue1434_declared_byte_at_legacy 42
 run issue1434_declared_bytes_legacy 42
 run issue1434_declared_panic_legacy 42
 run issue1434_declared_forget_legacy 42
+## #1719 — a call to such a program-declared fn whose arguments it does not accept is refused, located,
+## until spec#166 decides shadowing against overloading; each reject row compiled silently on the parent.
+check_build_located reject_issue1719_declared_len_str 11 "type mismatch"
+check_build_located reject_issue1719_declared_len_str_param_ufcs 7 "type mismatch"
+check_build_located reject_issue1719_declared_len_view 8 "type mismatch"
+run accept_issue1719_declared_len_u64 42
 
 ## #992 — `alloc::with(ar)` inside a match arm, and a match inside `alloc::with`, pass the ambient
 ## `ptr(ar)` to a call that omits its allocator (Memory §5.2.1); the splice never walked a `match`.
