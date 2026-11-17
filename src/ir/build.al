@@ -1995,7 +1995,98 @@ ib_callee := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> IbCallee {
   if hits == 1 {
     match found { Some(x) => { return IbCallee.CeFn(x) }; None => { return IbCallee.CeNo(Construct.ECallGeneric) } }
   }
+  qo : Option(IbCallee) = ib_callee_qual(bp, cs, cl)
+  match qo { Some(q) => { return q }; None => {} }
   IbCallee.CeNo(ib_callee_none_why(bp, cs, cl))
+}
+## Whether the callee span `[cs, cs+cl)` is a module path (`m::f`, `a::b::f`).
+ib_span_is_qualified := fn(src : ptr(u8), cs : usize, cl : usize) -> bool {
+  mut i : usize = 0
+  while i + 1 < cl {
+    if str_at((src + cs + i), 2) == "::" { return true }
+    i = i + 1
+  }
+  false
+}
+## A qualified callee `m::f` that the front half did not rewrite to a declaration's name span (x86, the
+## self-build, `alatyr ir --modules`) (#1744, `docs/ir.md` §3.7 "one mangling"). The function is the one
+## x86's own call emission binds the path to: `lower::resolve_callee_idx`, the resolver
+## `lower::emit_mangled_call` and the call's parameter-mode queries use. So the IR and the legacy emitter
+## call the same declaration, and the selectors name it through their usual symbol path
+## (`ir::put_symbol_name` / `put_fn_symbol`). The builder runs no resolver of its own and looks up no name
+## by its string. `None` covers three cases: the span is not a module path, it is a method (UFCS) form
+## (#1366), or nothing resolves. The caller names the cause in each case. A resolved callee is still
+## refused, by name, when its identity is not one symbol the builder may call:
+## - a generic one, which needs a mono instance;
+## - a member of an overload set, whose symbol carries the per-signature suffix (Q3 of
+##   `docs/ir-slice-2.md`);
+## - one from another module whose signature names a type the two modules might resolve differently
+##   (`ib_sig_types_unique`).
+ib_callee_qual := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(IbCallee) {
+  bv : IbB = deref(bp)
+  src := bv.src
+  if not ib_span_is_qualified(src, cs, cl) { return Option(IbCallee).None }
+  if cs != 0 and str_at((src + cs - 1), 1) == "." { return Option(IbCallee).None }
+  ri : i64 = lower::resolve_callee_idx(bv.decls, src, cs, cl, bv.mod_s, bv.mod_n)
+  if ri < 0 { return Option(IbCallee).None }
+  d : Decl = deref(ib_decl_ptr(bv.decls, usize(ri)))
+  if not d.is_fn { return Option(IbCallee).None }
+  if d.is_generic { return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallGeneric)) }
+  if lower::overload_set_count(bv.decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) > 1 {
+    return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallOverload))
+  }
+  same_mod := d.mod_len == bv.mod_n and streq(src, d.mod_start, d.mod_len, bv.mod_s, bv.mod_n)
+  if not same_mod and not ib_sig_types_unique(bv.decls, src, d) {
+    return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallSigModule))
+  }
+  Option(IbCallee).Some(IbCallee.CeFn(u64(ri)))
+}
+## Whether every type `d`'s signature names is declared ONCE in the program. The builder resolves a callee's
+## parameter and result types through `lower_layout` from the module being BUILT, the caller's. Modules §3
+## resolves a bare name where it is written, in the callee's module. That is #1734 and #1737, fixed by
+## #1743 (it resolves a span in its spelling module) and guarded by #1731 (`ib_sig_resolves_here`). Neither
+## is on main yet. A name declared once means the same declaration from either module, so the call is safe
+## to build. A name declared twice may not, so the call is refused rather than laid out against another
+## module's type. This is the interim, conservative form: when #1731's guard lands in `ib_call_decl` for
+## every call, this check is subsumed and goes.
+ib_sig_types_unique := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
+  if not ib_type_names_unique(decls, src, d.ret_ts, d.ret_tl) { return false }
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        ## A pointer parameter's `ts` is `ptr` alone; its pointee is `pps`/`ppl` (`ast::Param`).
+        if not ib_type_names_unique(decls, src, pm.ts, pm.tl) or not ib_type_names_unique(decls, src, pm.pps, pm.ppl) { return false }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  true
+}
+## Whether each identifier of the type span `[s, s+n)` (its base name, its type arguments, a path's
+## tail) names at most one non-function declaration. A segment followed by `::` is a module, not a type,
+## and is skipped. A built-in type (`u64`, `ptr`, `mut`) names no declaration and passes.
+ib_type_names_unique := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut p : usize = 0
+  while p < n {
+    q0 := p
+    while p < n and lower_layout::ll_ident_byte(src, s + p) { p = p + 1 }
+    if p == q0 { p = p + 1 }
+    else if not (p + 1 < n and str_at((src + s + p), 2) == "::") {
+      mut hits : usize = 0
+      mut i : usize = 0
+      while i < cnt {
+        dd : Decl = deref(ib_decl_ptr(decls, i))
+        if not dd.is_fn and dd.name_len == p - q0 and streq(src, dd.name_start, dd.name_len, s + q0, p - q0) { hits = hits + 1 }
+        i = i + 1
+      }
+      if hits > 1 { return false }
+    }
+  }
+  true
 }
 ## Why no function declaration has the name `[cs, cs+cl)`: a built-in (`sema::is_builtin_callee`, the
 ## checker's one list), a value bound in the function or a module value (a fn value or a closure), a
@@ -2024,11 +2115,7 @@ ib_callee_none_why := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Construct
   if bound { return Construct.ECallFnValue }
   d : Decl = deref(ib_decl_ptr(bv.decls, bv.di))
   if ib_is_param_of(src, d, cs, cl) { return Construct.ECallFnValue }
-  mut i : usize = 0
-  while i + 1 < cl {
-    if str_at((src + cs + i), 2) == "::" { return Construct.ECallQualified }
-    i = i + 1
-  }
+  if ib_span_is_qualified(src, cs, cl) { return Construct.ECallQualified }
   if cs != 0 and str_at((src + cs - 1), 1) == "." { return Construct.ECallMethod }
   cnt := rt::vec_len(deref(bv.decls))
   mut j : usize = 0
