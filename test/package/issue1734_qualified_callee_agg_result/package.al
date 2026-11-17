@@ -3,7 +3,8 @@
 ## §3), so the caller's own `S` cannot lay out `m`'s result whatever path reaches the callee.
 ## Answers 10 + 1 + 21 + 10 = 42.
 ##
-## Base `b74089f3` (omen): x86_64 exits 39, and aarch64, riscv64 and wasm exit 23. The qualified
+## Base `740c73fe` (omen): x86_64 exits 215 (39 at `b74089f3`), and aarch64, riscv64 and wasm
+## exit 23. The qualified
 ## call was no safer than the alias.
 app := Package(
   version = "0.1.0",

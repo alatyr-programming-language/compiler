@@ -4,7 +4,8 @@
 ## is read by value off a bound local, off the call itself, and passed on to another aliased callee.
 ## Answers 10 + 1 + 21 + 10 = 42.
 ##
-## Base `b74089f3` (omen): x86_64 exits 71, not 42, because the caller's `S` laid out `m`'s result.
+## Base `740c73fe` (omen): x86_64 exits 87 (71 at `b74089f3`), not 42, because the caller's `S`
+## laid out `m`'s result.
 ## aarch64 and riscv64 trap with 133 and wasm with 134: the twins do not call through a named
 ## function alias at all (#1740). A caller `S` that lacks the field is refused at check instead (the
 ## sema half, `issue1734_alias_callee_agg_result_check`).
