@@ -4671,23 +4671,25 @@ issue697_qualified_test() {
 ## its declaration spells is `m`'s `E`. The shared IR resolves a type name from the module being built, so
 ## with a root type of the same name it laid the root's out: `match deref(get(q))` answered 1 and
 ## `v := deref(get(p)); v.a * 2` answered 2, where 42 is due (measured on 307ea2f2). The builder now refuses
-## such a read under its own cause unless the name denotes one declaration from both modules. The enum
-## package is then refused by the legacy lowering at its `match` (#716), which names the line; the struct
-## package answers 42 (`root_package_test` rows). `ir1723_alias_deref_same` keeps both reads built when the
-## root declares no such type, and `ir1723_qualified_deref_struct` is the qualified-call control.
+## such a read under its own cause unless the name denotes one declaration from both modules. #1743
+## landed the missing half: a callee reached through an import alias now has its signature types
+## resolved in the module that declared it (`spelling_module_at`), so the name IS proven to denote one
+## declaration from both modules and both reads build: `main::rd` in the enum package and
+## `main::viadecl` in the struct package, each Built, and the enum package answers 42
+## (`root_package_test` rows). `ir1723_alias_deref_same` keeps both reads built as the no-collision
+## control, and `ir1723_qualified_deref_struct` is the qualified-call control.
 ir1723_alias_deref_test() {
   local pk; pk="$(_fixture_tree package)"
   local en="$pk/ir1723_alias_deref_enum" st="$pk/ir1723_alias_deref_struct" sm="$pk/ir1723_alias_deref_same"
   local rep="$T/ir1723_alias_deref.ir" err="$T/ir1723_alias_deref.err" ok=1
   for p in "$en" "$st" "$sm"; do [ -f "$p/package.al" ] || { echo "MISS ir1723_alias_deref: no $p/package.al"; fail=1; return; }; done
-  local why="callee's pointee type not proven to be the same type in this module"
   "$CC" ir --modules "$en/src/m.al" "$en/src/main.al" > "$rep" 2>/dev/null || ok=0
   "$CC" ir --modules "$st/src/m.al" "$st/src/main.al" >> "$rep" 2>/dev/null || ok=0
   "$CC" ir --modules "$sm/src/m.al" "$sm/src/main.al" >> "$rep" 2>/dev/null || ok=0
-  grep -qE "^fn main::rd NotYet\(expr Deref: $why, .*ir1723_alias_deref_enum/src/main\.al:6:15\)\$" "$rep" || ok=0
-  grep -qE "^fn main::viadecl NotYet\(expr Deref: $why, .*ir1723_alias_deref_struct/src/main\.al:6:14\)\$" "$rep" || ok=0
-  grep -q '^fn main::rd Built$' "$rep" && grep -q '^fn main::viadecl Built$' "$rep" || ok=0
-  if [ "$ok" = 1 ]; then echo "ok   ir1723_alias_deref/ir: a colliding pointee name refuses under its cause; no collision stays built"
+  [ "$(grep -c '^fn main::rd Built$' "$rep")" = 2 ] || ok=0
+  [ "$(grep -c '^fn main::viadecl Built$' "$rep")" = 2 ] || ok=0
+  grep -qE "^fn main::(rd|viadecl) NotYet" "$rep" && ok=0
+  if [ "$ok" = 1 ]; then echo "ok   ir1723_alias_deref/ir: a colliding pointee name resolves in the callee's module, both reads Built; no collision stays built"
   else echo "FAIL ir1723_alias_deref/ir:"; grep -E '^fn main::(rd|viadecl) ' "$rep" | sed 's/^/     /'; fail=1; fi
   rm -rf "$en/target"
   ( cd "$en" && "$CC" build package.al ) >/dev/null 2>"$err"; local rc=$?
