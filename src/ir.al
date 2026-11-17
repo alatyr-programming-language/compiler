@@ -1826,12 +1826,12 @@ pub construct_name := fn(c : Construct) -> str {
     ECallResultAgg => { "call: aggregate result of a type the builder does not lay out" }
     ECallAggValue => { "call: aggregate result where a scalar is due" }
     ECallArgMode => { "call: argument to an out/in out parameter that is not a place the builder passes" }
-    ECallArgType => { "call: argument to a parameter whose type the convention does not pass" }
+    ECallArgType => { "call: argument to a parameter whose type or mode the convention does not pass" }
     ECallConvert => { "call: @convert inside unchecked or of a generic conversion" }
-    ECallCast => { "call: scalar conversion of a non-integer" }
+    ECallCast => { "call: scalar conversion to or from a non-integer or with other than one argument" }
     ECallBrand => { "call: brand or required-type construction the builder does not build" }
     ECallRequire => { "call: @require predicate the builder does not call" }
-    ECallLayoutQ => { "call: size/align of an operand the builder does not lay out" }
+    ECallLayoutQ => { "call: size/align of a bound value or a type the builder does not lay out" }
     ECallAggPos => { "call: in aggregate position with no aggregate result the builder receives" }
     ECallDefer => { "call: defer marker (the deferred-exit drain is not built)" }
   }
@@ -2444,9 +2444,15 @@ ap_synth_name := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   nm := str_at((src + s), n)
   nm == "at" or nm == "index_set" or nm == "index_range" or nm == "iter" or nm == "next" or nm == "unwrap"
     or nm == "Some" or nm == "None" or nm == "eq" or nm == "lt" or nm == "alloc_into" or nm == "isize"
-    or nm == "__defer" or nm == "__deferblk" or nm == "__deferblkend" or nm == "print" or nm == "print_one"
+    or ap_defer_marker(src, s, n) or nm == "print" or nm == "print_one"
     or nm == "print_one_int" or nm == "print_one_float" or nm == "main" or nm == "_start" or nm == "sort"
     or nm == "display"
+}
+## Whether `src[s .. s+n]` is one of the parser's `defer` marker calls (`parser.al`'s defer desugar): a
+## statement, not a callee. Part of `ap_synth_name`'s list, and the builder's `ECallDefer` cause.
+ap_defer_marker := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  nm := str_at((src + s), n)
+  nm == "__defer" or nm == "__deferblk" or nm == "__deferblkend"
 }
 ## Whether the identifier ending at `q` is called directly: the next byte in `[q, hi)` past blanks is `(`.
 ap_called_at := fn(src : ptr(u8), q : usize, hi : usize) -> bool {

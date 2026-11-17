@@ -31,7 +31,7 @@ extract_used() {
 }
 
 extract_listed() {
-  awk '/^ap_synth_name := fn/{on=1} on{print} on && /^}/{exit}' "$1"/src/ir.al \
+  awk '/^(ap_synth_name|ap_defer_marker) := fn/{on=1} on{print} on && /^}/{on=0}' "$1"/src/ir.al \
     | grep -oE 'nm == "[A-Za-z_][A-Za-z0-9_]*"' | grep -oE '"[^"]*"' | tr -d '"' | sort -u
 }
 
