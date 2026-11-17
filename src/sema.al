@@ -3359,17 +3359,11 @@ sema_arg_place_ptr_seam := fn(at : Ty, pt : Ty) -> bool { kind_is_ptr(at.kind) a
 ## `ptr(… Arena)` parameter, exactly one argument short); a unique callee only.
 callee_elided_alloc_idx := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, nargs : usize) -> i64 {
   mut r : i64 = 0 - 1
-  cnt := rt::vec_len(deref(decls))
-  th := sema_name_hash(src, s, n)
-  mut jc := sni_lo(cnt, th)
-  jce := sni_hi(cnt, th)
-  mut i : usize = 0
-  while jc < jce {
-    i = sni_at(cnt, jc)
-    jc = jc + 1
-    if i < upto and (SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th) {
+  di : Option(usize) = sema_call_fn_decl(decls, src, s, n)
+  match di {
+    Some(i) => {
       d := deref(decl_get(decls, i))
-      if d.kind == 1 and streq(src, d.name_start, d.name_len, s, n) and d.arity == nargs + 1 {
+      if d.arity == nargs + 1 {
         mut pp := d.params_head
         mut k : i64 = 0
         loop {
@@ -3385,6 +3379,7 @@ callee_elided_alloc_idx := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
         }
       }
     }
+    None => {}
   }
   r
 }
@@ -5756,12 +5751,40 @@ sema_wrapper_payload_returns_err := fn(head : Option(ptr(mut Stmt)), rts : usize
 ## The raw TYPE-annotation span `[ts,tl)` of the i-th parameter of the top-level fn named [s,n) (walk
 ## order); {0,0} if absent. The NAME half of `callee_param_ty` — the conformance check needs the raw
 ## name to see a float/char scalar sink that `resolve_ty` reports as tag 0.
-## How many top-level fns among `[0..upto)` match the callee name [s,n) (by tail name)? 1 = an
-## UNAMBIGUOUS callee whose parameter types are safe to consult; >1 = an overload set (sema does not
-## resolve overloads → the aggregate↔scalar call-arg check stays tolerant, so `overload_three` builds).
+## How many top-level fns can the call [s,n) name (`sema_call_fn_scan`: the whole list, a qualified call
+## in its own module)? 1 = an UNAMBIGUOUS callee whose parameter types are safe to consult; >1 = an
+## overload set (sema does not resolve overloads → the aggregate↔scalar call-arg check stays tolerant,
+## so `overload_three` builds). `upto` is no longer read (#1746, Declarations §7.1).
 callee_fn_name_count := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize) -> usize {
-  mut c : usize = 0
-  th := sema_tail_hash(src, s, n)
+  sema_call_fn_scan(decls, src, s, n).hits
+}
+## Issue #1746 — what the function declarations a direct call `[cs, cs+cl)` can name come to: how many
+## there are, and the last of them. `sema_call_fn_decl` below is the one question every argument check
+## asks; this is its walk, kept apart so the overload gates can read the count.
+SemaCallFns := struct { hits : usize, last : usize }
+## Issue #1746 / Declarations §7.1, Modules §2 (MOD-3) — the function declarations a direct call names.
+## ORDER-INDEPENDENT: the whole declaration list, never the caller's `upto` prefix. A module-level
+## declaration is visible before it is written (§7.1), and a qualified call names a declaration of
+## another module, which sorts after the caller's as often as not; the prefix made every such call's
+## arguments go unchecked (`util::len(mk())` passed a struct to `x : u64` and answered 62).
+## A QUALIFIED spelling `m::f` names `f` in module `m`, or in the module one alias hop names (as a
+## qualified type does, `lower_layout::qualified_type_decl`), never a same-named `f` of another module.
+## An unqualified spelling keeps the name rule the checker has always used: every fn of that name.
+sema_call_fn_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> SemaCallFns {
+  if cl == 0 { return SemaCallFns(hits = 0, last = 0) }
+  qh := lower_layout::type_path_head(src, cs, cl)
+  nm := lower_layout::name_tail(src, cs, cl)
+  r := sema_call_fn_scan_in(decls, src, nm.s, nm.n, qh.n != 0, qh.s, qh.n)
+  if qh.n == 0 or r.hits != 0 { return r }
+  ah := lower_layout::qualified_module_alias(decls, src, qh.s, qh.n)
+  if ah.n == 0 { return r }
+  sema_call_fn_scan_in(decls, src, nm.s, nm.n, true, ah.s, ah.n)
+}
+## The fns named `[ns, ns+nl)`, in the module `[ms, ms+ml)` spells when `in_mod`, else in any module.
+sema_call_fn_scan_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, in_mod : bool, ms : usize, ml : usize) -> SemaCallFns {
+  mut hits : usize = 0
+  mut last : usize = 0
+  th := sema_name_hash(src, ns, nl)
   cnt := rt::vec_len(deref(decls))
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
@@ -5769,12 +5792,24 @@ callee_fn_name_count := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s 
   while jc < jce {
     i = sni_at(cnt, jc)
     jc = jc + 1
-    if i < upto and (SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th) {
+    if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
       d := deref(decl_get(decls, i))
-      if d.kind == 1 and name_matches(src, d.name_start, d.name_len, s, n) { c += 1 }
+      if d.kind == lower_layout::DECL_KIND_FN and streq(src, d.name_start, d.name_len, ns, nl) {
+        if not in_mod or lower_layout::type_module_eq(src, d.mod_start, d.mod_len, ms, ml) {
+          hits += 1
+          last = i
+        }
+      }
     }
   }
-  c
+  SemaCallFns(hits = hits, last = last)
+}
+## Issue #1746 — the ONE function declaration a direct call names (`sema_call_fn_scan`), or `None` when it
+## names none or an overload set, which sema does not resolve: every argument check then stays tolerant.
+sema_call_fn_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> Option(usize) {
+  sc := sema_call_fn_scan(decls, src, cs, cl)
+  if sc.hits == 1 { return Option(usize).Some(sc.last) }
+  Option(usize).None
 }
 ## Is an ordinary SAME-MODULE call provably ambiguous under the lower's current literal-category
 ## overload resolver? This deliberately covers only the genuine, spec-called-out case where EVERY
@@ -5854,35 +5889,39 @@ literal_overload_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize
   nfound > 1
 }
 callee_param_type_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, pidx : usize, a : ptr(mut rt::Arena)) -> VSpan {
-  mut r := VSpan(s = 0, n = 0)
-  th := sema_tail_hash(src, s, n)
-  cnt := rt::vec_len(deref(decls))
-  mut jc := sni_lo(cnt, th)
-  jce := sni_hi(cnt, th)
-  mut i : usize = 0
-  while jc < jce {
-    i = sni_at(cnt, jc)
-    jc = jc + 1
-    if i < upto and (SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th) {
+  pm : Option(ptr(mut Param)) = sema_call_param(decls, src, s, n, pidx)
+  match pm {
+    Some(pq) => {
+      p := deref(param_p(pq))
+      VSpan(s = p.ts, n = p.tl)
+    }
+    None => { VSpan(s = 0, n = 0) }
+  }
+}
+## Issue #1746 — the `pidx`-th parameter (walk order) of the ONE fn the call `[cs, cs+cl)` names
+## (`sema_call_fn_decl`); `None` when the call names no single fn or that fn has fewer parameters.
+sema_call_param := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, pidx : usize) -> Option(ptr(mut Param)) {
+  di : Option(usize) = sema_call_fn_decl(decls, src, cs, cl)
+  match di {
+    Some(i) => {
       d := deref(decl_get(decls, i))
-      if d.kind == 1 and name_matches(src, d.name_start, d.name_len, s, n) {
-        mut pp := d.params_head
-        mut k : usize = 0
-        loop {
-          match pp {
-            Some(ppq) => {
-              pm := deref(param_p(ppq))
-              if k == pidx { r = VSpan(s = pm.ts, n = pm.tl) }
-              k += 1
-              pp = pm.next
-            }
-            None => { break }
+      mut pp := d.params_head
+      mut k : usize = 0
+      loop {
+        match pp {
+          Some(ppq) => {
+            pm := deref(param_p(ppq))
+            if k == pidx { return Option(ptr(mut Param)).Some(ppq) }
+            k += 1
+            pp = pm.next
           }
+          None => { break }
         }
       }
+      Option(ptr(mut Param)).None
     }
+    None => { Option(ptr(mut Param)).None }
   }
-  r
 }
 ## The raw TYPE-annotation span `[ts,tl)` of field [fns,fnl) within struct/enum [sns,snl); {0,0} if
 ## absent. The NAME half of `field_ty`, for the field-assign conformance check.
@@ -8230,35 +8269,16 @@ comptime_binding_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, s
 ## The declared `Ty` of the i-th parameter of the top-level fn named [s, s+n) (param index by
 ## walk order); unknown if the fn/param is absent. Used to type-check a `Call`'s i-th argument.
 callee_param_ty := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, pidx : usize, a : ptr(mut rt::Arena)) -> Ty {
-  mut r := Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)
-  cnt := rt::vec_len(deref(decls))
-  th := sema_name_hash(src, s, n)
-  mut jc := sni_lo(cnt, th)
-  jce := sni_hi(cnt, th)
-  mut i : usize = 0
-  while jc < jce {
-    i = sni_at(cnt, jc)
-    jc = jc + 1
-    if i < upto and (SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th) {
-    d := deref(decl_get(decls, i))
-    if d.kind == 1 and streq(src, d.name_start, d.name_len, s, n) {
-      mut pp := d.params_head
-      mut k : usize = 0
-      loop {
-        match pp {
-          Some(ppq) => {
-            pm := deref(param_p(ppq))
-            if k == pidx { r = resolve_ty(src, pm.ts, pm.tl, decls, upto) }
-            k += 1
-            pp = pm.next
-          }
-          None => { break }
-        }
-      }
+  pm : Option(ptr(mut Param)) = sema_call_param(decls, src, s, n, pidx)
+  ## Issue #1746 — the parameter's type is resolved over the whole declaration list, as its fn was found:
+  ## a type the callee's module declares after the caller is still that parameter's type (§7.1).
+  match pm {
+    Some(pq) => {
+      p := deref(param_p(pq))
+      resolve_ty(src, p.ts, p.tl, decls, rt::vec_len(deref(decls)))
     }
-    }
+    None => { Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0) }
   }
-  r
 }
 
 ## Does the decl's LAST parameter use the bare comptime-variadic rest type `...`? The parser records it
@@ -11821,7 +11841,7 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   }
   ## CALL-ARG aggregate↔scalar conformance (TYP-6) — the retired `check_agg_arg_scalar_param` emit
   ## net PLUS the REVERSE (a scalar literal into an aggregate param) the net could not do. Gated to an
-  ## UNAMBIGUOUS callee (exactly one same-name fn among `[0..upto)`): sema does not model overload
+  ## UNAMBIGUOUS callee (exactly one fn the call names, #1746): sema does not model overload
   ## resolution, so an overloaded name is left tolerant (post-resolution — the fix that keeps
   ## `overload_three` building). Not gated on `nloc` (the reverse `f(42)` sits in a body with no locals).
   if ecs.n != 0 and (not cgen) and callee_fn_name_count(decls, upto, src, ecs.s, ecs.n) == 1 {
@@ -13508,10 +13528,11 @@ ann_lit_incompatible := fn(dtag : TyKind, ltag : TyKind) -> bool {
 ## from the EXHAUSTIVE `lbv_lit_tag`.
 ##
 ## Every gate below is a REFUSAL TO JUDGE, never a reject:
-##  - `hits != 1` — the name must resolve to EXACTLY ONE top-level fn (`streq`, exact). sema does not
-##    model overload resolution, so with `f(u64)` + `f(str)` in scope a parameter type read off "one
-##    of them" would false-reject the other one's legal call. An overloaded, qualified, UFCS-through-
-##    a-field, fn-VALUE or local callee finds 0 or >1 and is left alone.
+##  - `hits != 1` — the call must name EXACTLY ONE top-level fn (`sema_call_fn_decl`; a qualified
+##    `m::f` names `f` in `m`, #1746). sema does not model overload resolution, so with `f(u64)` +
+##    `f(str)` in scope a parameter type read off "one of them" would false-reject the other one's
+##    legal call. An overloaded, UFCS-through-a-field, fn-VALUE or local callee finds 0 or >1 and is
+##    left alone.
 ##  - `is_generic` — a generic parameter's declared type is the type-PARAMETER `T`; monomorphization
 ##    at the call binds it, so `id(str, "ok")` is conforming for every T (§1.3).
 ##  - variadic (comptime `...` and §7.2 slice `...T`) — the trailing arguments do not map
@@ -13532,47 +13553,41 @@ call_arg_lit_incompatible := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
   mut isagg := false
   mut pts : usize = 0
   mut ptl : usize = 0
-  cnt := rt::vec_len(deref(decls))
-  th := sema_name_hash(src, s, n)
-  mut jc := sni_lo(cnt, th)
-  jce := sni_hi(cnt, th)
-  mut i : usize = 0
-  while jc < jce {
-    i = sni_at(cnt, jc)
-    jc = jc + 1
-    if i < upto and (SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th) {
+  ## Issue #1746 — the ONE fn the call names, found as every argument check finds it (`sema_call_fn_decl`).
+  di : Option(usize) = sema_call_fn_decl(decls, src, s, n)
+  match di {
+    Some(i) => {
       d := deref(decl_get(decls, i))
-      if d.kind == 1 and streq(src, d.name_start, d.name_len, s, n) {
-        hits += 1
-        if d.is_generic { giveup = true }
-        if decl_is_variadic(d, src) { giveup = true }
-        if decl_is_slice_variadic(d) { giveup = true }
-        mut pp := d.params_head
-        mut k : usize = 0
-        loop {
-          match pp {
-            Some(ppq) => {
-              pm := deref(param_p(ppq))
-              if k == pidx and pm.pmode == 0 { found = true; pts = pm.ts; ptl = pm.tl }
-              ## pmode 1 = an ARRAY `[T; N]`, SLICE `[T]` or TUPLE `(T0, …)` parameter — an N-word
-              ## BY-REFERENCE aggregate whose `ts`/`tl` holds only the ELEMENT type (ast.al `Param`), so the
-              ## whitelist cannot be asked about it. What IS provable without the element type is the
-              ## `ltag 1 / dtag 7` row itself: a bare integer or bool literal is ONE word, and §3.4's "a
-              ## literal takes its type from context" is about the numeric TYPE it takes, never about
-              ## becoming an aggregate (Types §9.4). Every other literal form still gives up here — in
-              ## particular a StrLit, because `embed(path)` folds to a StrLit NODE whose spec surface IS
-              ## `[u8; N]` (Comptime §2.4), and because `str` is itself a `{ptr, len}` two-word value.
-              ## The same holds for the `out` / `in out` array-shaped parameter (`pmode` 4, #1632).
-              if k == pidx and param_is_array(pm) { isagg = true }
-              if k == pidx and pm.pmode != 0 and not param_is_array(pm) { giveup = true }
-              k += 1
-              pp = pm.next
-            }
-            None => { break }
+      hits = 1
+      if d.is_generic { giveup = true }
+      if decl_is_variadic(d, src) { giveup = true }
+      if decl_is_slice_variadic(d) { giveup = true }
+      mut pp := d.params_head
+      mut k : usize = 0
+      loop {
+        match pp {
+          Some(ppq) => {
+            pm := deref(param_p(ppq))
+            if k == pidx and pm.pmode == 0 { found = true; pts = pm.ts; ptl = pm.tl }
+            ## pmode 1 = an ARRAY `[T; N]`, SLICE `[T]` or TUPLE `(T0, …)` parameter — an N-word
+            ## BY-REFERENCE aggregate whose `ts`/`tl` holds only the ELEMENT type (ast.al `Param`), so the
+            ## whitelist cannot be asked about it. What IS provable without the element type is the
+            ## `ltag 1 / dtag 7` row itself: a bare integer or bool literal is ONE word, and §3.4's "a
+            ## literal takes its type from context" is about the numeric TYPE it takes, never about
+            ## becoming an aggregate (Types §9.4). Every other literal form still gives up here — in
+            ## particular a StrLit, because `embed(path)` folds to a StrLit NODE whose spec surface IS
+            ## `[u8; N]` (Comptime §2.4), and because `str` is itself a `{ptr, len}` two-word value.
+            ## The same holds for the `out` / `in out` array-shaped parameter (`pmode` 4, #1632).
+            if k == pidx and param_is_array(pm) { isagg = true }
+            if k == pidx and pm.pmode != 0 and not param_is_array(pm) { giveup = true }
+            k += 1
+            pp = pm.next
           }
+          None => { break }
         }
       }
     }
+    None => {}
   }
   if giveup { return false }
   if hits != 1 { return false }
@@ -13583,7 +13598,7 @@ call_arg_lit_incompatible := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
   ## same compile error as `x : u8 = 300`. Read off the parameter's type NAME, behind every gate
   ## above (unambiguous non-generic non-variadic callee, a real `in` parameter at this index).
   if ann_lit_range_bad(src, pts, ptl, e) { return true }
-  dt := resolve_ty(src, pts, ptl, decls, upto)
+  dt := resolve_ty(src, pts, ptl, decls, rt::vec_len(deref(decls)))
   ann_lit_incompatible(dt.kind, ltag)
 }
 

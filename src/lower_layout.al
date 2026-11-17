@@ -388,7 +388,7 @@ pub name_tail := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
 ## stores a qualified VALUE path as only its tail (`Var(T)`); when such a span reaches a type-shaped
 ## consumer, recover the head from the adjacent source `::` exactly as the global-reference resolver
 ## does. This keeps `codec::Error` nominal without rejecting the legal generic-call form.
-type_path_head := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+pub type_path_head := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
   mut i : usize = 0
   mut cp := -1
   while i + 1 < n {
@@ -413,7 +413,7 @@ type_path_head := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
 ## Compare a source module path (`a::b`) with the parser's declaration module (`a__b`). Both
 ## separators are two bytes; ordinary identifier bytes must match exactly. This is the lower-layout
 ## twin of lower::mod_seg_eq, local here to keep the dependency edge lower -> lower_layout acyclic.
-type_module_eq := fn(src : ptr(u8), ds : usize, dn : usize, qs : usize, qn : usize) -> bool {
+pub type_module_eq := fn(src : ptr(u8), ds : usize, dn : usize, qs : usize, qn : usize) -> bool {
   if dn != qn { return false }
   mut i : usize = 0
   while i < dn {
@@ -577,7 +577,7 @@ reject_type_ambiguous := fn(src : ptr(u8), s : usize, n : usize, what : str) {
 ## qualified type path. Different declarations of the same short alias may coexist only when they
 ## name the same module; conflicting targets are ambiguous and stay unresolved. The returned RHS is
 ## consumed as a literal module path, never followed again, so alias-of-alias remains unsupported.
-qualified_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hn : usize) -> LSpan {
+pub qualified_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hn : usize) -> LSpan {
   if type_path_head(src, hs, hn).n != 0 { return LSpan(s = 0, n = 0) }
   cnt := rt::vec_len(deref(decls))
   mut rs := 0

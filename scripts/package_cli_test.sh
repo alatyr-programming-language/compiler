@@ -2716,6 +2716,14 @@ run_pkg_check_build_located issue703_global_module_scope_qualified 2 a
 # answered 0 (exit 34) and the store landed nowhere (exit 39).
 run_pkg_check_build_located issue703_qualified_scalar_read_reject 1 a "a FIELD ACCESS on a SCALAR value: \`.\` selects a struct or union field, a tuple position \`.N\`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name"
 run_pkg_check_build_located issue703_qualified_scalar_store_reject 2 a "a FIELD ACCESS on a SCALAR value: \`.\` selects a struct or union field, a tuple position \`.N\`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name"
+# Issue #1746 / Functions §2.2, Types §4.1, §4.3, Declarations §7.1 — a QUALIFIED call's arguments are
+# judged against the declaration it names, in its own module, wherever that module sorts. The parent
+# (main 637366a9) checked both reject packages at rc 0 and ran them (`util::len`, an intrinsic name;
+# `util::pick`) to values read off a struct passed to `x : u64`. The control passes conforming arguments,
+# a struct among them whose type `util` declares, and answers 42.
+run_pkg_check_build_located issue1746_qualified_arg_intrinsic_reject 3 main "type mismatch"
+run_pkg_check_build_located issue1746_qualified_arg_plain_reject 3 main "type mismatch"
+run_pkg_exit issue1746_qualified_arg_control issue1746-qualified-arg-control 42
 
 run_tool15_manifest_handle
 
