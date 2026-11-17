@@ -15,7 +15,9 @@
 # ── GAP — narrow field through a slice or a struct-field array, owned by #263 (priority-0) ──────
 # Already a reproduced wrong value, not a coverage question: writing a narrow field through these two
 # paths destroys its neighbour. The cells stay listed so the gate does not report them twice.
-field-layout eightbytexpath narrow-then-widexarray-element
+# The narrow-then-wide x array-element cell is filled: test/ir_agg_arr_local.al writes a `u8` field of a
+# `[P; 3]` element (`P := struct { a : u8, b : u32 }`) through a literal and a runtime index and checks
+# its `u32` neighbour (#1705). #263 stays open for the other paths.
 field-layout eightbytexpath narrow-then-widexslice-element
 field-layout eightbytexpath wide-then-narrowxarray-element
 field-layout eightbytexpath wide-then-narrowxslice-element
