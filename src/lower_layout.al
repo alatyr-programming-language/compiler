@@ -932,6 +932,10 @@ type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   }
   if qi >= 0 { return qi }
   if besti >= 0 { return besti }
+  ## No lowering module published (sema's `check`, an early pass): the historical answer, so the
+  ## checker's own located diagnostic speaks rather than this layout reject. Ranking above still
+  ## used the spelling module (#1734).
+  if TRM_SET == false { return res }
   mut nmod_s := ModSpan(s = 0, l = 0)
   match nmod {
     Some(m) => { nmod_s = m }
@@ -1086,8 +1090,8 @@ binding_type_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
 ## an in-scope candidate, or a §4.1 binding is already enough identity and stays accepted.
 enum_ref_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
   if type_path_head(src, s, n).n != 0 { return false }
+  if TRM_SET == false { return false }
   nmod := type_naming_at(src, s)
-  match nmod { Some(_) => {}; None => { return false } }
   nm := name_tail(src, s, n)
   cnt := rt::vec_len(deref(decls))
   th := _fnv_name(src, nm.s, nm.n)
