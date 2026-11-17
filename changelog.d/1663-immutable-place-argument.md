@@ -8,5 +8,4 @@
   receiver keep compiling. A **generic** callee is not judged at all, so a call to one — including
   most of `lib/`, whose place-parameter APIs are generic (`Vec`, `Deque`, the `fmt` writers) — stays
   open; the non-generic ones (`StrBuf`'s eight `in out s : StrBuf` methods) are covered. That
-  residual, and `ptr(mut …)` over an immutable place, whose rule spec#152 has now settled in favour
-  of `ptr(store)` but whose fence lands with the pin, are tracked on #1663.
+  residual is tracked on #1663; `ptr(mut …)` over an immutable place has its own entry.
