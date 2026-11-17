@@ -13469,6 +13469,7 @@ check_build_located reject_issue1719_declared_len_str 11 "type mismatch"
 check_build_located reject_issue1719_declared_len_str_param_ufcs 7 "type mismatch"
 check_build_located reject_issue1719_declared_len_view 8 "type mismatch"
 run accept_issue1719_declared_len_u64 42
+run accept_issue1719_declared_len_array_param 42
 
 ## #992 — `alloc::with(ar)` inside a match arm, and a match inside `alloc::with`, pass the ambient
 ## `ptr(ar)` to a call that omits its allocator (Memory §5.2.1); the splice never walked a `match`.

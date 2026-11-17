@@ -5483,8 +5483,11 @@ sema_decl_args_bad := fn(ph : Option(ptr(mut Param)), e : ptr(Expr), cs : usize,
         match pp {
           Some(ppq) => {
             pm := deref(param_p(ppq))
-            wide := is_builtin_scalar_name(src, pm.ts, pm.tl) and sema_arg_multiword(ca.e, src, locals, nloc)
-            if wide or agg_scalar_bad(pm.ts, pm.tl, ca.e, decls, upto, src, locals, nloc) {
+            ## An array-shaped parameter (`xs : [T; N]`) records its ELEMENT span in `ts`/`tl`, not the
+            ## array's, so neither test below can read it: it is never judged.
+            arrp := param_is_array(pm)
+            wide := not arrp and is_builtin_scalar_name(src, pm.ts, pm.tl) and sema_arg_multiword(ca.e, src, locals, nloc)
+            if wide or (not arrp and agg_scalar_bad(pm.ts, pm.tl, ca.e, decls, upto, src, locals, nloc)) {
               bs := s_of(ca.e, a)
               if bs == 0 { return cs }
               return bs
