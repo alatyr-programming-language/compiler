@@ -1743,7 +1743,7 @@ pub Construct := enum {
   SUnchecked, SAllocWith,
   ENum, EBoolLit, EVar, EBin, EIf, EMatch, ECall, EStructLit, EField, EEnumLit, EAddrOf, EDeref,
   ## The `deref` family (#1723): `EDeref` stays the label of a refusal no cause was found for.
-  EDerefPointee, EDerefUnlaid, EDerefTier, EDerefNarrow,
+  EDerefPointee, EDerefUnlaid, EDerefTier, EDerefNarrow, EDerefForeign,
   EStrLit, EArrayLit, EIndex, ETry, EFloatLit, ESlice, ECompField, EUnchecked, ELambda, EFnRef, EBitcast, ELoop,
 }
 pub construct_name := fn(c : Construct) -> str {
@@ -1775,6 +1775,7 @@ pub construct_name := fn(c : Construct) -> str {
     EDerefUnlaid => { "expr Deref: pointee aggregate the builder does not lay out" }
     EDerefTier => { "expr Deref: struct pointee not in the WORD tier" }
     EDerefNarrow => { "expr Deref: scalar narrower than a word through a pointer" }
+    EDerefForeign => { "expr Deref: callee's pointee type not proven to be the same type in this module" }
     EStrLit => { "expr StrLit" }; EArrayLit => { "expr ArrayLit" }
     EIndex => { "expr Index" }; ETry => { "expr Try" }; EFloatLit => { "expr FloatLit" }; ESlice => { "expr Slice" }
     ECompField => { "expr CompField" }; EUnchecked => { "expr Unchecked" }; ELambda => { "expr Lambda" }

@@ -2212,12 +2212,13 @@ ib_deref_pointee := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> Option(IbSpan) {
       }
     }
     Expr::Call(cs, cl, na, ah) => {
-      ci : Option(u64) = ib_callee_decl(bp, cs, cl)
+      ci : Option(u64) = ib_ptr_callee(bp, cs, cl)
       match ci {
         Some(di) => {
           d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
-          ## A generic callee's `ptr(T)` names its own parameter, not the instance's type.
-          if d.ret_tl != 0 and not d.is_generic { return ib_pointee(bp, d.ret_ts, d.ret_tl) }
+          po : Option(IbSpan) = ib_pointee(bp, d.ret_ts, d.ret_tl)
+          match po { Some(ps) => { if ib_callee_pointee_foreign(bp, d, ps) { return Option(IbSpan).None } }; None => {} }
+          return po
         }
         None => {}
       }
@@ -2229,6 +2230,69 @@ ib_deref_pointee := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> Option(IbSpan) {
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
   Option(IbSpan).None
+}
+## The concrete function a call to `[cs, cs+cl)` names when its declaration spells a result type: a
+## generic callee's `ptr(T)` names its own parameter, not the instance's type, so it answers `None`.
+ib_ptr_callee := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
+  ci : Option(u64) = ib_callee_decl(bp, cs, cl)
+  match ci {
+    Some(di) => {
+      d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
+      if d.ret_tl != 0 and not d.is_generic { return ci }
+    }
+    None => {}
+  }
+  Option(u64).None
+}
+## #1725 review: is `deref(pe)` a call whose callee is declared in ANOTHER module (reached through an
+## import alias, `get := m::get`, Modules §4.1) with a pointee that is not proven to be the same type here
+## (`ib_callee_pointee_foreign`)? Asking emits nothing.
+ib_deref_foreign := fn(bp : ptr(mut IbB), pe : ptr(Expr)) -> bool {
+  match deref(pe) {
+    Expr::Call(cs, cl, na, ah) => {
+      ci : Option(u64) = ib_ptr_callee(bp, cs, cl)
+      match ci {
+        Some(di) => {
+          d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), usize(di)))
+          po : Option(IbSpan) = ib_pointee(bp, d.ret_ts, d.ret_tl)
+          match po { Some(ps) => { return ib_callee_pointee_foreign(bp, d, ps) }; None => {} }
+        }
+        None => {}
+      }
+    }
+    Expr::Unchecked(inner) => { return ib_deref_foreign(bp, inner) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  false
+}
+## #1725 review: callee `d`'s declared pointee `ps` is spelled in `d`'s own module (Modules §3), but the
+## builder resolves every type name from the module being built (`build_one`), and each later layout query
+## (`variant_disc`, `enum_layout_words`, `field_byte_place`) re-resolves the same span from there. So when
+## `d` is declared in another module, the pointee is taken only when it is PROVEN to denote one type from
+## both: a bare name (a type argument would need the same proof, so it refuses) that resolves to the same
+## declaration from each module. Measured without this: a root `E` (`S`) of the same name was laid out in
+## place of `m::E` (`m::S`), and `deref(get(q))` answered 1 (2) where 42 was due.
+ib_callee_pointee_foreign := fn(bp : ptr(mut IbB), d : Decl, ps : IbSpan) -> bool {
+  bv : IbB = deref(bp)
+  if d.mod_len == bv.mod_n and streq(bv.src, d.mod_start, d.mod_len, bv.mod_s, bv.mod_n) { return false }
+  full : IbSpan = ib_type_span_full(bv.src, ps.s, ps.n)
+  bn := lower_layout::base_type_name(bv.src, full.s, full.n)
+  if bn.s != full.s or bn.n != full.n { return true }
+  here : i64 = ib_type_decl_of(bv.decls, bv.src, bn.s, bn.n)
+  ## Asked from the callee's module, then the builder's module (`build_one` published it) put back.
+  lower_layout::set_type_ref_module(d.mod_start, d.mod_len, lower::root_mod_s(), lower::root_mod_l())
+  there : i64 = ib_type_decl_of(bv.decls, bv.src, bn.s, bn.n)
+  lower_layout::set_type_ref_module(bv.mod_s, bv.mod_n, lower::root_mod_s(), lower::root_mod_l())
+  here != there
+}
+## The struct, else enum, declaration the type name `[s, s+n)` resolves to from the published module; -1
+## for none (the resolvers `ib_struct_named` and `ib_enum_named_in` start from).
+ib_type_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  sdi := lower_layout::struct_decl_of(decls, src, s, n)
+  if sdi >= 0 { return sdi }
+  lower_layout::enum_decl_of(decls, src, s, n)
 }
 ## #1723: the aggregate type `deref(pe)` reads whole — its declared pointee, when that is an enum the
 ## builder lays out or a WORD-tier struct (the only struct a place through a pointer may be, see
@@ -2249,7 +2313,8 @@ ib_deref_agg_type := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr))
 }
 ## #1723: why `deref(pe)` read whole is not built — the construct a refusal names — or `EDeref` when it
 ## can be: the pointee is not spelled (`EDerefPointee`), names no aggregate the builder lays out
-## (`EDerefUnlaid`), or is a struct outside the WORD tier (`EDerefTier`).
+## (`EDerefUnlaid`), is a struct outside the WORD tier (`EDerefTier`), or is a call's pointee spelled in
+## another module and not proven to be the same type here (`EDerefForeign`).
 ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> Construct {
   po : Option(IbSpan) = ib_deref_pointee(bp, pe)
   match po {
@@ -2265,6 +2330,7 @@ ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> C
     }
     None => {}
   }
+  if ib_deref_foreign(bp, pe) { return Construct.EDerefForeign }
   Construct.EDerefPointee
 }
 ## Refuse the aggregate expression `e` for reason `w`: a `deref` under the cause `ib_deref_why` names

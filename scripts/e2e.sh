@@ -4649,6 +4649,40 @@ issue697_qualified_test() {
   done
 }
 
+## #1725 review (#1723) / Modules §3, §4.1 — `get := m::get` binds a callee declared in `m`, so the `ptr(E)`
+## its declaration spells is `m`'s `E`. The shared IR resolves a type name from the module being built, so
+## with a root type of the same name it laid the root's out: `match deref(get(q))` answered 1 and
+## `v := deref(get(p)); v.a * 2` answered 2, where 42 is due (measured on 307ea2f2). The builder now refuses
+## such a read under its own cause unless the name denotes one declaration from both modules. The enum
+## package is then refused by the legacy lowering at its `match` (#716), which names the line; the struct
+## package answers 42 (`root_package_test` rows). `ir1723_alias_deref_same` keeps both reads built when the
+## root declares no such type, and `ir1723_qualified_deref_struct` is the qualified-call control.
+ir1723_alias_deref_test() {
+  local pk; pk="$(_fixture_tree package)"
+  local en="$pk/ir1723_alias_deref_enum" st="$pk/ir1723_alias_deref_struct" sm="$pk/ir1723_alias_deref_same"
+  local rep="$T/ir1723_alias_deref.ir" err="$T/ir1723_alias_deref.err" ok=1
+  for p in "$en" "$st" "$sm"; do [ -f "$p/package.al" ] || { echo "MISS ir1723_alias_deref: no $p/package.al"; fail=1; return; }; done
+  local why="callee's pointee type not proven to be the same type in this module"
+  "$CC" ir --modules "$en/src/m.al" "$en/src/main.al" > "$rep" 2>/dev/null || ok=0
+  "$CC" ir --modules "$st/src/m.al" "$st/src/main.al" >> "$rep" 2>/dev/null || ok=0
+  "$CC" ir --modules "$sm/src/m.al" "$sm/src/main.al" >> "$rep" 2>/dev/null || ok=0
+  grep -qE "^fn main::rd NotYet\(expr Deref: $why, .*ir1723_alias_deref_enum/src/main\.al:6:15\)\$" "$rep" || ok=0
+  grep -qE "^fn main::viadecl NotYet\(expr Deref: $why, .*ir1723_alias_deref_struct/src/main\.al:6:14\)\$" "$rep" || ok=0
+  grep -q '^fn main::rd Built$' "$rep" && grep -q '^fn main::viadecl Built$' "$rep" || ok=0
+  if [ "$ok" = 1 ]; then echo "ok   ir1723_alias_deref/ir: a colliding pointee name refuses under its cause; no collision stays built"
+  else echo "FAIL ir1723_alias_deref/ir:"; grep -E '^fn main::(rd|viadecl) ' "$rep" | sed 's/^/     /'; fail=1; fi
+  rm -rf "$en/target"
+  ( cd "$en" && "$CC" build package.al ) >/dev/null 2>"$err"; local rc=$?
+  if [ "$rc" = 0 ]; then
+    _e2e_exec "$en/target/debug/ir1723-alias-deref-enum" >/dev/null 2>&1; local got=$?
+    if _e2e_runtime_failure "ir1723_alias_deref/enum" "$got"; then return; fi
+    if [ "$got" = 42 ]; then echo "ok   ir1723_alias_deref/enum: built, artifact 42"; else echo "FAIL ir1723_alias_deref/enum: artifact=$got want=42"; fail=1; fi
+  elif grep -qF 'match deref(get(q)) { A => { return 1 }' "$err" && grep -qF "cannot see the scrutinee's enum type" "$err"; then
+    echo "ok   ir1723_alias_deref/enum: refused at the match line"
+  else echo "FAIL ir1723_alias_deref/enum: build rc=$rc, neither 42 nor the located refusal: $(head -c 300 "$err")"; fail=1; fi
+  rm -rf "$en/target"
+}
+
 ## Modules §1/§4 + Types §4.1 — same-named nominal enums must never let declaration order choose a
 ## variant layout. The fixture lives outside test/package because it is also part of the corpus; copy it
 ## into this row's private scratch before every build. Both unequal-count orders must preserve the
@@ -8493,6 +8527,12 @@ standard_tuple_global_module_test
 ambig_pub_test
 ambig_enum_collision_test
 issue697_qualified_test
+## #1725 review (#1723): a callee reached through an import alias reads its pointee as its own module's
+## type; see `ir1723_alias_deref_test`. The struct package answered 2 on 307ea2f2, the controls 42.
+ir1723_alias_deref_test
+root_package_test ir1723_alias_deref_struct "T main__main" "T m__get"
+root_package_test ir1723_alias_deref_same "T main__main" "T m__gete" "T m__gets"
+root_package_test ir1723_qualified_deref_struct "T main__main" "T m__get"
 check_located reject_qualified_generic_unknown 3
 no_input_diag_test
 tool16_no_vendor_test

@@ -12,5 +12,6 @@
   so an IR-built reader would see a half-written value. wasm keeps the folded-component functions
   legacy too (#1724).
   Every remaining refusal names its cause instead of a bare `expr Deref`: the pointee type is not
-  spelled, the builder does not lay out the pointee, the struct is not in the WORD tier, or the scalar is
-  narrower than a word.
+  spelled, the builder does not lay out the pointee, the struct is not in the WORD tier, the scalar is
+  narrower than a word, or the callee is declared in another module (reached through an import alias)
+  and its pointee name is not proven to denote the same type in the calling module (Modules §3, §4.1).
