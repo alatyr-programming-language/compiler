@@ -944,7 +944,7 @@ plain_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
   mut i : usize = 0
   while i < cnt {
     d := deref(lower_ctx::decl_get(decls, i))
-    if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl == 0 and d.name_len != 0
+    if d.is_fn == false and d.kind == lower_layout::DECL_KIND_VALUE and d.arity == 0 and d.ret_tl == 0 and d.name_len != 0
        and mod_seg_eq(src, d.mod_start, d.mod_len, cs, cl)
        and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) {
       ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
