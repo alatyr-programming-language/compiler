@@ -1,0 +1,12 @@
+mk := m::mk
+weigh := m::weigh
+## The caller's own `S`: a different declaration of the same name, with neither of `m`'s fields.
+S := struct { z : u64 }
+
+main := fn() -> u64 {
+  v := mk()
+  w := S(z = 0)
+  return v.a + v.b + weigh(v) + mk().a + w.z
+}
+## Compiled alone (the corpus walk), this file names a module `m` it does not have.
+## expect: reject

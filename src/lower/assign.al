@@ -2791,7 +2791,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     ## a `name := "…"` binding stores the {ptr, len} pair into the str local's slots
     base := slot_of(cx.slots, cx.src, ns, nl2)
     emit_str_assign(v, base, sb)
-  } else if is_strat_call(v, cx.src) {
+  } else if is_strat_call(v, cx.decls, cx.src) {
     ## a `name := str_at(base, len)` binding materializes the view's {ptr, len} pair and stores
     ## it into the str local's slots (the same layout as a literal / `sub` binding).
     base := slot_of(cx.slots, cx.src, ns, nl2)
@@ -2811,7 +2811,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     ## stores it into the str local's slots (the same layout as a literal binding).
     base := slot_of(cx.slots, cx.src, ns, nl2)
     emit_sub_assign(v, base, sb, cx, a, nl)
-  } else if is_bytes_call(v, cx.src) {
+  } else if is_bytes_call(v, cx.decls, cx.src) {
     ## a `name := bytes(x)` binding — the str→`[u8]` view (identical `{ptr, len}` repr).
     ## `emit_str_pair` emits `x`'s pair (it recognizes `bytes`); store it into the str
     ## local's slots (len at base+1, ptr at base — the same layout as a `sub` binding).
@@ -2958,7 +2958,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     ## The register convention carries the discriminant plus six payload words (%rdx … %r11); a wider
     ## payload would come back through SRET, which this binding does not stage. Refuse it, located.
     if tw > 6 { panic("selfhost: `x := <call>?` over an Ok payload wider than six words is not lowered yet (#752); bind the Result and `match` it") }
-    tbu := try_bind_unwrap(v, cx.src, deref(cx.mar))
+    tbu := try_bind_unwrap(v, cx.decls, cx.src, deref(cx.mar))
     if unwrap_is_expect(tbu.kind) {
       emit_unwrap_check(tbu.recv, Option(ptr(Expr)).Some(tbu.msg), sb, cx, a, nl)
     } else {
