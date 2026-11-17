@@ -5517,13 +5517,23 @@ sema_arg_fits_param := fn(pm : Param, v : ptr(Expr), decls : ptr(rt::Vec), src :
   if not sema_spell_text(psp) { return false }
   asp : ir::TySpell = sema_spell_norm(sema_sty_spell_get(v), decls, src)
   if pm.pmode == 0 and is_builtin_scalar_name(src, psp.s, psp.n) {
-    if sema_spell_text(asp) {
-      if sema_brand_underlying(decls, rt::vec_len(deref(decls)), src, asp.s, asp.n).n != 0 { return false }
-    }
     pv : ir::VTy = sema_vty_scalar(src, psp.s, psp.n)
     vt : ir::VTy = sema_sty_get(v)
     pc : ir::VCls = pv.cls
     vc : ir::VCls = vt.cls
+    ## The value class alone is not proof: a range-view local recorded `VcInt` and passed into `x : u64`.
+    ## Where sema spelled the argument's type, that spelling must name a scalar of the same class too —
+    ## not a wrapper (a pointer to, an array or a view of something), not the byte view `str`, not a
+    ## brand (never implicit, Types §4.3), not a type with no scalar value class.
+    if sema_spell_known(asp) {
+      if not (ir::spell_i64(asp) or ir::spell_u8(asp) or sema_spell_text(asp)) { return false }
+      if sema_spell_text(asp) {
+        if sema_brand_underlying(decls, rt::vec_len(deref(decls)), src, asp.s, asp.n).n != 0 { return false }
+        sv : ir::VTy = sema_vty_name(src, asp.s, asp.n, decls)
+        svc : ir::VCls = sv.cls
+        if not ir::vty_known(sv) or not sema_vcls_same(svc, vc) { return false }
+      }
+    }
     match pc {
       VcInt => {
         match vc {
@@ -5573,7 +5583,17 @@ sema_spell_fits := fn(asp : ir::TySpell, ts : usize, tn : usize, decls : ptr(rt:
   if not sema_spell_text(asp) or sema_spell_mentions_env(asp, decls, src) { return false }
   sema_type_text_same(src, asp.s, asp.n, ts, tn)
 }
-## Are the type texts `[as, as+an)` and `[bs, bs+bn)` the same apart from spaces (`[u64; 4]` / `[u64;4]`)?
+## Are `x` and `y` the same known value class (an unknown, absent or literal-only class is never proof)?
+sema_vcls_same := fn(x : ir::VCls, y : ir::VCls) -> bool {
+  match x {
+    VcInt => { match y { VcInt => { true }; VcAbsent | VcUnknown | VcLit | VcBool | VcPtr | VcFloat | VcAgg => { false } } }
+    VcBool => { match y { VcBool => { true }; VcAbsent | VcUnknown | VcLit | VcInt | VcPtr | VcFloat | VcAgg => { false } } }
+    VcFloat => { match y { VcFloat => { true }; VcAbsent | VcUnknown | VcLit | VcInt | VcBool | VcPtr | VcAgg => { false } } }
+    VcPtr => { match y { VcPtr => { true }; VcAbsent | VcUnknown | VcLit | VcInt | VcBool | VcFloat | VcAgg => { false } } }
+    VcAbsent | VcUnknown | VcLit | VcAgg => { false }
+  }
+}
+## Are the type texts `[xs, xs+xn)` and `[ys, ys+yn)` the same apart from spaces (`[u64; 4]` / `[u64;4]`)?
 sema_type_text_same := fn(src : ptr(u8), xs : usize, xn : usize, ys : usize, yn : usize) -> bool {
   mut i : usize = 0
   mut j : usize = 0
