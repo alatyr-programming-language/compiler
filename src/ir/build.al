@@ -2331,6 +2331,8 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
           cfr := ib_new_obj(bp, a, st)
           opv := o_vreg(pv)
           ib_copy_into(bp, a, cfr, opv, st.size)
+          ## Two legacy emitters store such a pointee as one word (#1727): `ir::fn_deref_whole`.
+          fn_set_deref_whole(ib_b_f(bp))
           return Option(IbObj).Some(IbObj(fr = cfr, fresh = true))
         }
         None => { return Option(IbObj).None }

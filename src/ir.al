@@ -525,6 +525,8 @@ pub IrFn := struct {
   nlabels : usize,
   ## #1723: the builder laid out an enum with a niche-folded `Option(ptr(T))` component (`fn_folded_comp`).
   folded_comp : bool,
+  ## #1723: the builder read an aggregate whole through `deref(p)` (`fn_deref_whole`).
+  deref_whole : bool,
 }
 
 ## A program: its functions, in order (an `OkFn` operand is an index into `fns`), and the symbols its
@@ -622,7 +624,8 @@ pub fn_new := fn(in out a : rt::Arena, name_p : ptr(u8), name_n : usize, has_ret
   iw := wb_new(a, 32)
   pw := wb_new(a, 8)
   nf := IrFn(name_p = name_p, name_n = name_n, nparams = 0, has_ret = has_ret, ret_ty = ret_ty, ret_sg = ret_sg,
-             ret_words = 0, vregs = vw, frames = fw, insts = iw, pool = pw, nlabels = 0, folded_comp = false)
+             ret_words = 0, vregs = vw, frames = fw, insts = iw, pool = pw, nlabels = 0, folded_comp = false,
+             deref_whole = false)
   deref(f) = nf
   f
 }
@@ -645,6 +648,12 @@ pub fn_set_ret_words := fn(f : ptr(mut IrFn), n : usize) { deref(f).ret_words = 
 ## therefore leave such a function to the legacy emitter.
 pub fn_folded_comp := fn(f : ptr(mut IrFn)) -> bool { fv : IrFn = deref(f); fv.folded_comp }
 pub fn_set_folded_comp := fn(f : ptr(mut IrFn)) { deref(f).folded_comp = true }
+## #1723: whether `f` reads an aggregate whole through `deref(p)`. The aarch64 and riscv64 legacy
+## emitters store `deref(dst) = <aggregate>` as ONE word (#1727). An IR-built reader of such a pointee then
+## answered a wrong value (`test/issue790_enum_copy_through_deref.al`: 2 where 42 was due, measured; the
+## legacy reader trapped). Those two selectors therefore leave such a function to the legacy emitter.
+pub fn_deref_whole := fn(f : ptr(mut IrFn)) -> bool { fv : IrFn = deref(f); fv.deref_whole }
+pub fn_set_deref_whole := fn(f : ptr(mut IrFn)) { deref(f).deref_whole = true }
 fn_nlabels := fn(f : ptr(mut IrFn)) -> usize { fv : IrFn = deref(f); fv.nlabels }
 fn_vregs := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.vregs }
 fn_frames := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.frames }

@@ -7,6 +7,10 @@
   `f(deref(g()))` are built where they were refused. An enum whose variant carries a niche-folded
   `Option(ptr(T))` component is laid out too: the component is the one pointer word in its slot
   (Types §6.2), and a match binding over it is an `Option` value that can be matched again.
+  On aarch64 and riscv64 such functions stay with the legacy emitter for now: it stores
+  `deref(dst) = <aggregate>` as one word (#1727) and lays the folded component out differently (#1724),
+  so an IR-built reader would see a half-written value. wasm keeps the folded-component functions
+  legacy too (#1724).
   Every remaining refusal names its cause instead of a bare `expr Deref`: the pointee type is not
   spelled, the builder does not lay out the pointee, the struct is not in the WORD tier, or the scalar is
   narrower than a word.
