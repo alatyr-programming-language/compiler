@@ -796,8 +796,9 @@ call is a scalar conversion to or from a non-integer or with other than one argu
 that finds the cause returns it (`ib_callee` answers `CeNo(<cause>)`). A call in aggregate position asks
 `ib_callee` once more (`ib_agg_call_why`) for the callee's cause, rather than keeping a copy of its tests. A
 call refused for a reason with no such label keeps `expr Call`, and a sema gap at a call keeps
-`sema-gap …: expr Call`. The golden `ig_callwhy` pins five of the labels: a generic callee, more than
-eight arguments, an extern callee, and an `in` array and a `...T` rest argument.
+`sema-gap …: expr Call`. The golden `ig_callwhy` pins four labels across five calls: a generic callee,
+more than eight arguments, an extern callee, and an `in` array and a `...T` rest argument, which share
+the parameter type-or-mode label.
 
 ### 3.8 Signedness and width are attributes of the value, derived once
 
