@@ -1841,15 +1841,10 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
   ## BYTE-PACKED LOCAL ARRAY / TYPED BYTE-SLICE WRITE. The address helper leaves the exact byte
   ## address in %rax; evaluate the value first so index lowering cannot consume it, then store
   ## only `%bl` and preserve the seven neighbouring bytes.
-  pbe := packed_byte_base_entry(ib, cx)
-  pbfe := packed_byte_field_eek(ib, cx)
-  sbfe := standard_byte_field_eek(ib, cx)
-  ## CLAYOUT S3(d) — `xs[i].data[j] = v`: the store dual of the byte-tier element's byte-array read.
-  ## `emit_index_addr` leaves the exact byte address, so a single `movb` is the whole store and the
-  ## seven neighbouring bytes are preserved.
-  sdbe := std_idx_byte_field_eek(ib, cx.slots, cx.decls, cx.src, a)
-  tbfe := tuple_byte_component_base(ib, cx)
-  if pbe >= 0 or pbfe != 0 or sbfe != 0 or sdbe != 0 or tbfe.ok {
+  ## CLAYOUT S3(d) — `xs[i].data[j] = v` is one of them: the store dual of the byte-tier element's
+  ## byte-array read. `emit_index_addr` leaves the exact byte address, so a single `movb` is the whole
+  ## store and the seven neighbouring bytes are preserved. `index_base_is_byte` names every such base.
+  if index_base_is_byte(ib, cx, a) {
     emit_store_value(iv, fidt, sb, cx, a, nl)
     emit_index_addr(ib, ii, sb, cx, a, nl)
     push_str(sb, "  popq %rbx\n  movb %bl, (%rax)\n")

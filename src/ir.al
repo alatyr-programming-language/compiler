@@ -1718,7 +1718,13 @@ pub Construct := enum {
   ## could be cut for 12 paths. Each arm below is the shape the builder actually met; `CSignature`
   ## stays as the label of a refusal no shape was found for, so an unclassified refusal is visible
   ## rather than folded into a family.
-  CSigResultWide, CSigParamMode, CSigParamTaken, CSigParamLevered, CSigParamNestedField,
+  ## The aggregate-result family (#1033): one arm per cause `ir::build`'s `ib_agg_ret` refuses, so the
+  ## census ranks the causes instead of one label that named width for all of them.
+  CSigResultWide, CSigResultEmpty, CSigResultLevered, CSigResultUnresolved, CSigResultGeneric,
+  CSigResultArrayField, CSigResultNarrowField, CSigResultBrandField, CSigResultFloatField, CSigResultAggField,
+  CSigResultView, CSigResultArray, CSigResultScalarAlias, CSigResultFloat, CSigResultFnType, CSigResultNever,
+  CSigResultEnumInstance, CSigResultEnum, CSigResultTuple,
+  CSigParamMode, CSigParamTaken, CSigParamLevered, CSigParamNestedField,
   CSigParamPadded, CSigParamUnresolved, CSigSyscall,
   SAssign, SWhile, SFieldAssign, SReturn, SIf, SMatch, SFor, SDerefAssign, SIndexAssign, SIndexFieldAssign,
   SFieldPathAssign, SLoop, SBreak, SContinue, SExprStmt, SCompIf, SCompFor, SCompMatch, SCompForRange,
@@ -1736,7 +1742,25 @@ pub construct_name := fn(c : Construct) -> str {
   match c {
     CGeneric => { "generic function (needs a mono instance)" }; CEmpty => { "empty body" }
     CSignature => { "signature (a parameter or result that is not a kernel scalar)" }
-    CSigResultWide => { "signature: aggregate result wider than two words" }
+    CSigResultWide => { "signature: aggregate result wider than eight words" }
+    CSigResultEmpty => { "signature: aggregate result with no fields" }
+    CSigResultLevered => { "signature: byte-layout (@packed/@offset/@endian or narrow-tier) struct result" }
+    CSigResultUnresolved => { "signature: result type names nothing the builder resolves here" }
+    CSigResultGeneric => { "signature: generic struct result" }
+    CSigResultArrayField => { "signature: struct result with a fixed-array field" }
+    CSigResultNarrowField => { "signature: struct result with a sub-word scalar field" }
+    CSigResultBrandField => { "signature: struct result with a brand or alias field the builder does not follow" }
+    CSigResultFloatField => { "signature: struct result with a floating-point field" }
+    CSigResultAggField => { "signature: struct result with a field whose type is not a scalar" }
+    CSigResultView => { "signature: view result the builder cannot type" }
+    CSigResultArray => { "signature: fixed-array result" }
+    CSigResultScalarAlias => { "signature: result is a scalar through a type alias the builder does not follow" }
+    CSigResultFloat => { "signature: floating-point result" }
+    CSigResultFnType => { "signature: function-type result" }
+    CSigResultNever => { "signature: Never result" }
+    CSigResultEnumInstance => { "signature: generic enum instance result the builder cannot lay out" }
+    CSigResultEnum => { "signature: enum result the builder cannot lay out" }
+    CSigResultTuple => { "signature: tuple result" }
     CSigParamMode => { "signature: parameter with a mode (in/out/by-ref)" }
     CSigParamTaken => { "signature: address-taken aggregate parameter" }
     CSigParamLevered => { "signature: @packed/@offset/@endian (byte-layout) struct parameter" }

@@ -16,7 +16,7 @@
 ## One golden: its module name (the file stem), its source, and the report it must print.
 Golden := struct { name : str, src : str, want : str }
 
-golden_count := fn() -> usize { 12 }
+golden_count := fn() -> usize { 13 }
 golden_at := fn(i : usize) -> Golden {
   if i == 0 { return Golden(name = "ig_arith", src = g_arith_src(), want = g_arith_want()) }
   if i == 1 { return Golden(name = "ig_logic", src = g_logic_src(), want = g_logic_want()) }
@@ -28,7 +28,8 @@ golden_at := fn(i : usize) -> Golden {
   if i == 7 { return Golden(name = "ig_agg", src = g_agg_src(), want = g_agg_want()) }
   if i == 8 { return Golden(name = "ig_place", src = g_place_src(), want = g_place_want()) }
   if i == 9 { return Golden(name = "ig_aggret", src = g_aggret_src(), want = g_aggret_want()) }
-  if i == 10 { return Golden(name = "ig_notyet", src = g_notyet_src(), want = g_notyet_want()) }
+  if i == 10 { return Golden(name = "ig_aggwhy", src = g_aggwhy_src(), want = g_aggwhy_want()) }
+  if i == 11 { return Golden(name = "ig_notyet", src = g_notyet_src(), want = g_notyet_want()) }
   Golden(name = "ig_callwhy", src = g_callwhy_src(), want = g_callwhy_want())
 }
 
@@ -120,6 +121,19 @@ g_aggret_src := fn() -> str {
 }
 g_aggret_want := fn() -> str {
   "fn ig_aggret::mk Built\nfn mk(%0 : i64 u) -> agg 16 {\n  $0 : frame 16 align 8\n  store i64 [$0 + 0], %0\n  %1 = const.u i64 1\n  %2 = add.chk.u i64 %0, %1 overflow  @15488\n  store i64 [$0 + 8], %2\n  %3 = addr $0\n  ret %3\n}\nfn ig_aggret::get Built\nfn get(%0 : i64 u) -> i64 u {\n  $0 : frame 16 align 8\n  $0 = call @mk(%0)\n  %1 = load.u i64 [$0 + 8]\n  ret %1\n}\nir: functions=2 built=2 notyet=0 sema_gaps=0 verify_failed=0\n"
+}
+
+## #1033: every cause the aggregate-result convention refuses names itself, never "wider than two words"
+## (`inc` and `r2` are the built controls): a struct result by the first field it cannot take (`rt` a
+## struct field, `ra`/`ra1` a fixed array of any length, `rb` a brand of a word, `rh` a sub-word scalar,
+## `rf` a float), and a result that is no struct by what it is (`rarr` a fixed array, not a view; `rw` an
+## alias of a word scalar; `rfn` a function type). A float, `Never` or unresolved RESULT has no shape a
+## self-contained program shows (`f64` follows `lib/base/num.al`'s brand); the census measures those.
+g_aggwhy_src := fn() -> str {
+  "W2 := struct { a : u64, b : u64 }\nN := struct { a : u32, b : u32 }\nT := struct { inner : W2, tail : u64 }\nA := struct { items : [u64; 4] }\nA1 := struct { one : [u64; 1], n : u64 }\nId := brand(u64)\nB := struct { i : Id, n : u64 }\nH := struct { x : u64, y : u8 }\nF := struct { x : f64, n : u64 }\nZ := struct {}\nX := struct { a : u64, b : u64, c : u64, d : u64, e : u64, f : u64, g : u64, h : u64, i : u64 }\nP := @packed struct { a : u8, b : u64 }\nK := enum { One(W2), Two }\nWord := u64\ninc := fn(x : u64) -> u64 { x }\nr2 := fn() -> W2 { W2(a = 1, b = 2) }\nrn := fn() -> N { N(a = 1, b = 2) }\nrt := fn() -> T { T(inner = W2(a = 1, b = 2), tail = 3) }\nra := fn() -> A { A(items = [1, 2, 3, 4]) }\nra1 := fn() -> A1 { A1(one = [1], n = 2) }\nrb := fn() -> B { B(i = Id(1), n = 2) }\nrh := fn() -> H { H(x = 1, y = 2) }\nrf := fn() -> F { F(x = 1.5, n = 2) }\nrz := fn() -> Z { Z() }\nrx := fn() -> X { X(a = 1, b = 1, c = 1, d = 1, e = 1, f = 1, g = 1, h = 1, i = 1) }\nrp := fn() -> P { P(a = 1, b = 2) }\nrk := fn() -> K { K.Two }\nro := fn() -> Option(W2) { Option(W2).None }\nru := fn() -> (u64, bool) { return (1, true) }\nrarr := fn() -> [u64; 4] { [1, 2, 3, 4] }\nrw := fn() -> Word { 7 }\nrfn := fn() -> fn(u64) -> u64 { inc }\nrv := fn(s : Slice(W2)) -> Slice(W2) { s }\n"
+}
+g_aggwhy_want := fn() -> str {
+  "fn ig_aggwhy::inc Built\nfn inc(%0 : i64 u) -> i64 u {\n  ret %0\n}\nfn ig_aggwhy::r2 Built\nfn r2() -> agg 16 {\n  $0 : frame 16 align 8\n  %0 = const.u i64 1\n  store i64 [$0 + 0], %0\n  %1 = const.u i64 2\n  store i64 [$0 + 8], %1\n  %2 = addr $0\n  ret %2\n}\nfn ig_aggwhy::rn NotYet(signature: byte-layout (@packed/@offset/@endian or narrow-tier) struct result, ig_aggwhy.al:17:1)\nfn ig_aggwhy::rt NotYet(signature: struct result with a field whose type is not a scalar, ig_aggwhy.al:18:1)\nfn ig_aggwhy::ra NotYet(signature: struct result with a fixed-array field, ig_aggwhy.al:19:1)\nfn ig_aggwhy::ra1 NotYet(signature: struct result with a fixed-array field, ig_aggwhy.al:20:1)\nfn ig_aggwhy::rb NotYet(signature: struct result with a brand or alias field the builder does not follow, ig_aggwhy.al:21:1)\nfn ig_aggwhy::rh NotYet(signature: struct result with a sub-word scalar field, ig_aggwhy.al:22:1)\nfn ig_aggwhy::rf NotYet(signature: struct result with a floating-point field, ig_aggwhy.al:23:1)\nfn ig_aggwhy::rz NotYet(signature: aggregate result with no fields, ig_aggwhy.al:24:1)\nfn ig_aggwhy::rx NotYet(signature: aggregate result wider than eight words, ig_aggwhy.al:25:1)\nfn ig_aggwhy::rp NotYet(signature: byte-layout (@packed/@offset/@endian or narrow-tier) struct result, ig_aggwhy.al:26:1)\nfn ig_aggwhy::rk NotYet(signature: enum result the builder cannot lay out, ig_aggwhy.al:27:1)\nfn ig_aggwhy::ro NotYet(signature: generic enum instance result the builder cannot lay out, ig_aggwhy.al:28:1)\nfn ig_aggwhy::ru NotYet(signature: tuple result, ig_aggwhy.al:29:1)\nfn ig_aggwhy::rarr NotYet(signature: fixed-array result, ig_aggwhy.al:30:1)\nfn ig_aggwhy::rw NotYet(signature: result is a scalar through a type alias the builder does not follow, ig_aggwhy.al:31:1)\nfn ig_aggwhy::rfn NotYet(signature: function-type result, ig_aggwhy.al:32:1)\nfn ig_aggwhy::rv NotYet(signature: view result the builder cannot type, ig_aggwhy.al:33:1)\nir: functions=19 built=2 notyet=17 sema_gaps=0 verify_failed=0\n"
 }
 
 ## Refusals: constructs outside the subset, and sema gaps (D6).
