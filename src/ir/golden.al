@@ -16,7 +16,7 @@
 ## One golden: its module name (the file stem), its source, and the report it must print.
 Golden := struct { name : str, src : str, want : str }
 
-golden_count := fn() -> usize { 11 }
+golden_count := fn() -> usize { 12 }
 golden_at := fn(i : usize) -> Golden {
   if i == 0 { return Golden(name = "ig_arith", src = g_arith_src(), want = g_arith_want()) }
   if i == 1 { return Golden(name = "ig_logic", src = g_logic_src(), want = g_logic_want()) }
@@ -28,7 +28,8 @@ golden_at := fn(i : usize) -> Golden {
   if i == 7 { return Golden(name = "ig_agg", src = g_agg_src(), want = g_agg_want()) }
   if i == 8 { return Golden(name = "ig_place", src = g_place_src(), want = g_place_want()) }
   if i == 9 { return Golden(name = "ig_aggret", src = g_aggret_src(), want = g_aggret_want()) }
-  Golden(name = "ig_notyet", src = g_notyet_src(), want = g_notyet_want())
+  if i == 10 { return Golden(name = "ig_notyet", src = g_notyet_src(), want = g_notyet_want()) }
+  Golden(name = "ig_callwhy", src = g_callwhy_src(), want = g_callwhy_want())
 }
 
 ## Checked arithmetic and its traps, narrow widths, `unchecked`, width conversions. The `%` carries the
@@ -127,6 +128,15 @@ g_notyet_src := fn() -> str {
 }
 g_notyet_want := fn() -> str {
   "fn ig_notyet::mk Built\nfn mk(%0 : i64 u) -> agg 24 {\n  $0 : frame 24 align 8\n  store i64 [$0 + 0], %0\n  store i64 [$0 + 8], %0\n  store i64 [$0 + 16], %0\n  %1 = addr $0\n  ret %1\n}\nfn ig_notyet::pair Built\nfn pair(%0 : i64 u) -> i64 u {\n  $0 : frame 8 align 8\n  store i64 [$0 + 0], %0\n  %1 = load.u i64 [$0 + 0]\n  ret %1\n}\nfn ig_notyet::dflt Built\nfn dflt(%0 : i64 u) -> i64 u {\n  ret %0\n}\nfn ig_notyet::fill NotYet(sema-gap absent: expr Num, ig_notyet.al:11:22)\nfn ig_notyet::first Built\nfn first(%0 : i64 u) -> i64 u {\n  %1 = const.u i64 0\n  %2 = mov i64 %1\n  block L0 {\n    loop L1 {\n      %4 = mul.chk.u i64 %2, %2 overflow  @16005\n      %5 = cmp.>.u i64 %4, %0\n      if %5 {\n        %3 = mov i64 %2\n        br L0\n      } else {\n      }\n      %6 = const.u i64 1\n      %7 = add.chk.u i64 %2, %6 overflow  @16035\n      %2 = mov i64 %7\n      br L1\n    }\n  }\n  %8 = mov i64 %3\n  ret %8\n}\nir: functions=5 built=4 notyet=1 sema_gaps=1 verify_failed=0\n"
+}
+
+## #1733: a refused call names its cause — here a generic callee, more than eight arguments and an
+## extern callee — rather than one `expr Call` for all of them.
+g_callwhy_src := fn() -> str {
+  "## each caller is refused at its call, for the cause its name says; the callees build\nid := fn(T : type, x : T) -> T { x }\ngeneric := fn(x : u64) -> u64 { id(u64, x) }\nnine := fn(a : u64, b : u64, c : u64, d : u64, e : u64, f : u64, g : u64, h : u64, i : u64) -> u64 { a + i }\nmany := fn(x : u64) -> u64 { nine(x, x, x, x, x, x, x, x, x) }\nadd1 := @extern @abi(c) fn(a : i64) -> i64\next := fn(x : i64) -> i64 { add1(x) }\n"
+}
+g_callwhy_want := fn() -> str {
+  "fn ig_callwhy::id NotYet(generic function (needs a mono instance), ig_callwhy.al:2:1)\nfn ig_callwhy::generic NotYet(call: generic callee (needs a mono instance), ig_callwhy.al:3:33)\nfn ig_callwhy::nine Built\nfn nine(%0 : i64 u, %1 : i64 u, %2 : i64 u, %3 : i64 u, %4 : i64 u, %5 : i64 u, %6 : i64 u, %7 : i64 u, %8 : i64 u) -> i64 u {\n  %9 = add.chk.u i64 %0, %8 overflow  @279\n  ret %9\n}\nfn ig_callwhy::many NotYet(call: more than eight arguments, ig_callwhy.al:5:30)\nfn ig_callwhy::add1 NotYet(a declaration with no body (an `@extern` import: slice 2's `call_c`), ig_callwhy.al:6:1)\nfn ig_callwhy::ext NotYet(call: extern callee (slice 2's call_c), ig_callwhy.al:7:29)\nir: functions=6 built=1 notyet=5 sema_gaps=0 verify_failed=0\n"
 }
 
 ## ── the runner ──
