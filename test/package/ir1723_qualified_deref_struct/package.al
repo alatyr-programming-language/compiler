@@ -14,3 +14,5 @@ app := Package(
     ),
   ],
 )
+## Due 42 everywhere. aarch64, riscv64 and wasm trap at `ptr(mut t)` (#1188).
+## expect: run 42

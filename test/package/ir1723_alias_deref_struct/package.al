@@ -14,3 +14,6 @@ app := Package(
     ),
   ],
 )
+## Due 42 everywhere. aarch64, riscv64 and wasm trap first at `main`'s call to `m`, an undefined
+## callee beside the alias (#1739).
+## expect: run 42

@@ -1,4 +1,4 @@
-11
+12
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -53,13 +53,20 @@
 # answers the fixture's `## expect: run 42`, as wasm does:
 #     test/ir_deref_agg_call.al                         legacy run 139   default run 42   (#1345)
 # Legacy x86 cannot see the enum type of `match deref(gp(q))` and refuses the build (#716). The default
-# reads it from `gp`'s declared `-> ptr(mut C)` and answers 42, which `scripts/e2e.sh` registers:
+# reads it from `gp`'s declared `-> ptr(mut C)` and answers the fixture's `## expect: run 42`:
 #     test/reject_enum_match_generic_deref.al           legacy build 1   default run 42   (#716)
 #
-# ir_diff prints the first six, and the ninth, as UNEXPLAINED: its `oracle` (scripts/fixture_oracle.sh)
-# reads only the legacy header shapes (`## build_reject`, `## Expected exit: N`) in the first 30 lines,
-# never the `## expect:` directive these files state. #1626's and #1632's files also say `Expected exit
-# 42` in their headers, so ir_diff attributes those rows itself (LEGACY-WRONG; attributed=2
-# unexplained=7). Every row is explained above, by its file's own directive.
+# It was 11 and it is 12 because #1725's review asked for package fixtures of a callee reached through
+# an import alias (gate run 44019297309 on 9b44c338, part ir, the only new row). In the control package
+# whose aliased callees' pointee types are the same in both modules, legacy x86 cannot see the enum
+# type of `match deref(gete(q))` and refuses the build, as for #716. The default reads it from the
+# callee's declared `-> ptr(mut E)` and answers the package's `## expect: run 42`:
+#     test/package/ir1723_alias_deref_same/package.al   legacy build 1   default run 42   (#716)
+#
+# ir_diff prints every row but #1626's and #1632's as UNEXPLAINED: its `oracle`
+# (scripts/fixture_oracle.sh) reads only the legacy header shapes (`## build_reject`, `## Expected exit:
+# N`) in the first 30 lines, never the `## expect:` directive these files state. #1626's and #1632's
+# files also say `Expected exit 42` in their headers, so ir_diff attributes those rows itself
+# (LEGACY-WRONG; attributed=2 unexplained=10). Every row is explained above, by its file's own directive.
 #
 # Lowering the number means fixing a row, not editing this file.

@@ -9,3 +9,5 @@ main := fn() -> u64 {
   mine := S(a = 0)
   viaqual(ptr(mut t)) + mine.a
 }
+## Compiled alone (the corpus walk), this file names a module `m` it does not have.
+## expect: reject
