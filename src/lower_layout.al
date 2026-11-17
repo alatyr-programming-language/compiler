@@ -459,6 +459,20 @@ pub clear_type_ref_module := fn() { TRM_SET = false }
 pub type_ref_mod_on := fn() -> bool { TRM_SET }
 pub type_ref_mod_s := fn() -> usize { TRM_S }
 pub type_ref_mod_l := fn() -> usize { TRM_L }
+## The published naming module, saved across a query asked from ANOTHER module (`enter_decl_module`).
+pub TrmSaved := struct { s : usize, l : usize, on : bool }
+## Publish module `[ms, ms+ml)` — a declaration's own `mod_start`/`mod_len` — as the naming module for a
+## query about a type name WRITTEN IN that declaration, and hand back the caller's for
+## `leave_decl_module`. The discipline `max_enum_arity_all` keeps for a whole-program pass, for one
+## declaration: a selector deciding a CALL asks about the callee's signature, whose bare names §3
+## resolves in the callee's module. Asked from the caller's module instead, a name declared in two
+## modules is unnameable there, and the resolver's ambiguity reject fires on a valid program (#1731).
+pub enter_decl_module := fn(ms : usize, ml : usize) -> TrmSaved {
+  sv := TrmSaved(s = TRM_S, l = TRM_L, on = TRM_SET)
+  TRM_S = ms ; TRM_L = ml ; TRM_SET = true
+  sv
+}
+pub leave_decl_module := fn(sv : TrmSaved) { TRM_S = sv.s ; TRM_L = sv.l ; TRM_SET = sv.on }
 
 ## Does the candidate module `[as_, al)` match the naming module `[ms, ml)` outright — a full
 ## segment-aware match, OR the naming module equalling the candidate's LAST SEGMENT (a BARE lib

@@ -4596,6 +4596,20 @@ ambig_enum_collision_test() {
   d="$T/ambig_enum_name_collision"
   [ -d "$src" ] || { echo "FAIL ambig_enum_collision: fixture tree missing"; fail=1; return; }
   cp -r "$src" "$d" || { echo "FAIL ambig_enum_collision: could not snapshot fixture"; fail=1; return; }
+  # #1731's review, B1: the twins' selectors ask `ir::sig_pins_legacy` about the CALLEE `wide::fail`,
+  # whose `Result(u64, Error)` names `wide`'s own `Error`; resolved from the caller `main`, where two
+  # modules declare one, the resolver refused this valid program at compile time. Each twin must emit it.
+  local b rc
+  for name in failing reverse; do
+    for b in aarch64 riscv64 wat; do
+      "$CC" "$b" "$d/$name/package.al" > "$d/$name.$b.out" 2> "$d/$name.$b.err"; rc=$?
+      if [ "$rc" = 0 ] && [ -s "$d/$name.$b.out" ]; then
+        echo "ok   ambig_enum_collision/$name($b): emitted"
+      else
+        echo "FAIL ambig_enum_collision/$name($b): emit rc=$rc, due an emitted program"; sed 's/^/     /' "$d/$name.$b.err" | head -3; fail=1
+      fi
+    done
+  done
   for name in failing reverse; do
     case "$name" in
       failing) output="ambig-enum-name-collision" ;;

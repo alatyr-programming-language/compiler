@@ -323,6 +323,17 @@ ib_type_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), s0 : usize, n0 : usi
   }
   false
 }
+## Whether parameter `pm` of function `d` may hold a float (#1728), the refusal both ends of a crossing
+## ask: the callee's own build (`ib_build_one`, `CSigParamFloat`) and an IR-built call (`ib_arg`).
+## `ib_type_is_float` reads the DECLARED span, which is the parameter's type only while `d` is not
+## generic: in a generic function a `T` bound to `f64` names no float there (#1731's review, N4). Neither
+## a generic function nor a call to one is built today (`CGeneric`; `ib_callee_decl` skips a generic
+## declaration), so a generic `d` answers true here, refused by name rather than read off a type
+## parameter. When mono instances are built, this must ask the instance's SUBSTITUTED parameter type.
+ib_param_may_be_float := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl, pm : Param) -> bool {
+  if d.is_generic { return true }
+  ib_type_is_float(decls, src, pm.ts, pm.tl)
+}
 ib_vreg_ks := fn(f : ptr(mut IrFn), v : VRegId) -> IbKS {
   t : Kty = vreg_ty(f, usize(v))
   s : Sgn = vreg_sg(f, usize(v))
@@ -1504,7 +1515,7 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
         match pp {
           Some(pq) => {
             pm := deref(param_p(pq))
-            avo : Option(VRegId) = ib_arg(bp, a, e, pm, ga.e)
+            avo : Option(VRegId) = ib_arg(bp, a, e, d, pm, ga.e)
             match avo { Some(av) => { k1 := wb_push(args, a, usize(av)) }; None => { return CallOut.CoRefused } }
             pp = pm.next
           }
@@ -1736,13 +1747,13 @@ ib_call_result_is := fn(bp : ptr(mut IbB), e : ptr(Expr), kr : IbKS) -> Option(I
   Option(IbKS).None
 }
 ## One argument `ae` of the call `e`, at its parameter `pm`'s declared kernel type.
-ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param, ae : ptr(Expr)) -> Option(VRegId) {
+ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cd : Decl, pm : Param, ae : ptr(Expr)) -> Option(VRegId) {
   pk : Option(IbKS) = ib_type_ks(ib_b_decls(bp), ib_b_src(bp), pm.ts, pm.tl)
   match pk {
     Some(want) => {
       ## #1728: a float argument would leave in an integer register, where a legacy callee does not
       ## look for it; the callee's float parameter is refused on the IR side (`CSigParamFloat`).
-      if ib_type_is_float(ib_b_decls(bp), ib_b_src(bp), pm.ts, pm.tl) { ib_refuse_expr(bp, ae, NyWhy.NwOutside); return Option(VRegId).None }
+      if ib_param_may_be_float(ib_b_decls(bp), ib_b_src(bp), cd, pm) { ib_refuse_expr(bp, ae, NyWhy.NwOutside); return Option(VRegId).None }
       if pm.pmode == 0 { return ib_value_at(bp, a, ae, want) }
       ## #1626: a fixed-array parameter takes an address, the callee's convention (`ib_build_one`).
       ## #1632: which one is the parameter's direction (Functions §4.1, docs/ir.md §3.7). An `out` /
@@ -2672,6 +2683,13 @@ ib_enum_named_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena
   ## The shared layout must be exactly the tag word plus the payload words of the widest variant.
   w := lower_layout::enum_layout_words(decls, src, s, n, a)
   if w != 1 + mx { return Option(IbSt).None }
+  ## #1731's review, N2: a scalar component is placed at `ib_comp_fld`'s fixed offsets and the tag at
+  ## `ib_tag_fld`'s, while an aggregate one is placed at the layout's `payload_offset`
+  ## (`ib_variant_agg_in`). They agree only while the layout puts the tag at byte 0 and the payload at
+  ## byte 8, so that is checked here, once, for every enum the builder takes: a layout that ever moves
+  ## either one leaves the type refused (its census cause), never built at offsets the layout disowns.
+  el := lower_layout::enum_layout(decls, src, s, n, a)
+  if el.is_union or el.tag_offset != 0 or el.payload_offset != ib_comp_fld_off(0) { return Option(IbSt).None }
   Option(IbSt).Some(IbSt(di = usize(edi), s = s, n = n, size = w * 8, align = 8))
 }
 ## Is `st` a niche-folded enum (`ib_folded_shape`): one word, no discriminant?
@@ -2863,7 +2881,10 @@ ib_variant_of := fn(bp : ptr(mut IbB), st : IbSt, vs : usize, vl : usize) -> Opt
 }
 ## The place of the tag, and of payload component `i` at kernel type `k`.
 ib_tag_fld := fn() -> IbFld { IbFld(off = ByteOff(0), ty = Kty.KI64, sg = Sgn.SgS, be = false) }
-ib_comp_fld := fn(i : usize, k : IbKS) -> IbFld { IbFld(off = ByteOff(8 + 8 * i), ty = k.ty, sg = k.sg, be = false) }
+ib_comp_fld := fn(i : usize, k : IbKS) -> IbFld { IbFld(off = ByteOff(ib_comp_fld_off(i)), ty = k.ty, sg = k.sg, be = false) }
+## The byte offset of scalar payload component `i`: the payload starts at byte 8, one word per component
+## (`ib_enum_named_in` checks the layout agrees).
+ib_comp_fld_off := fn(i : usize) -> usize { 8 + 8 * i }
 ## Write scalar payload component `v` at its place `fd` (`ib_comp_fld`) as the WHOLE word its slot is in
 ## the tag-word-plus-one-word-per-component layout `ib_enum_named_in` accepts. The bytes above a narrow
 ## integer are padding (Types §6.2), but the legacy emitters read the slot whole as a canonical word, so
@@ -5917,7 +5938,7 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
               ## convention for the scalar class (docs/ir.md §3.7) — and the legacy emitters pass a float
               ## in a float register (x86_64 `%xmm0`), so a float parameter is a class that does not cross.
               ## `kk` cannot say so: `f64` is `brand(bits64)` (`lib/base/num.al`), a 64-bit word here.
-              if ib_type_is_float(decls, src, pm.ts, pm.tl) { why.c = Construct.CSigParamFloat; return BuildOut.Refused }
+              if ib_param_may_be_float(decls, src, d, pm) { why.c = Construct.CSigParamFloat; return BuildOut.Refused }
               pv := new_param(f, a, kk.ty, kk.sg)
               if ib_is_taken(bp, pm.ns, pm.nl) {
                 if not ib_ks_word(kk) { why.c = Construct.EAddrOf; return BuildOut.Refused }

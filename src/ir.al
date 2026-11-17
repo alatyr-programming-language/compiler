@@ -2230,7 +2230,10 @@ span_is_folded_option := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 ## legacy caller lost its last word, wrong value 1 on both), and the legacy wasm emitter trapped on the
 ## same crossing (measured, 134). Any type argument of that kind answers true, whether or not a
 ## one-component variant carries it: an over-approximation that keeps more functions legacy, never one
-## fewer. Any other type answers false.
+## fewer. Any other type answers false. An instance with more type arguments than the walk reads
+## answers true, for the same reason. The names resolve in the naming module PUBLISHED by the caller;
+## for a signature that is the declaring function's own module (`sig_pins_legacy`), never the module of
+## a function that calls it.
 span_is_enum_inst_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> bool {
   if tl == 0 { return false }
   tw := lower_layout::sig_type_span(src, ts, tl)
@@ -2245,7 +2248,8 @@ span_is_enum_inst_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl 
     if lower_layout::struct_decl_of(decls, src, tb.s, tb.n) >= 0 or lower_layout::qualified_enum_decl_of(decls, src, tb.s, tb.n) >= 0 { return true }
     k = k + 1
   }
-  false
+  ## #1731's review, N1: a ninth argument was not read, so "false" here would under-approximate.
+  lower_layout::typearg_at(src, bn.s, bn.n, k).n != 0
 }
 
 ## Whether `d`'s signature keeps it, and every call to it, to the legacy emitter on aarch64, riscv64 and
@@ -2269,7 +2273,18 @@ span_is_enum_inst_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl 
 ## that would pass one. A generic enum instance with an aggregate payload (`span_is_enum_inst_agg`,
 ## #1033) is pinned the same way, for the same reason: those legacy emitters lay it out differently. Such
 ## an instance that no signature mentions — a local built and matched in one function — is not pinned.
+## The selectors ask this about a CALLEE too, from the caller's module, so `d`'s type names are resolved
+## in `d`'s own module (`lower_layout::enter_decl_module`), as Modules §3 resolves them where they are
+## written: from `main`, a payload `Error` that `wide` declares while another module declares one too is
+## nameable from neither, and resolving it there refused a valid program as ambiguous (#1731's review, B1).
 pub sig_pins_legacy := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
+  sv := lower_layout::enter_decl_module(d.mod_start, d.mod_len)
+  r := sig_pins_legacy_here(decls, src, d)
+  lower_layout::leave_decl_module(sv)
+  r
+}
+## `sig_pins_legacy`'s answer, with `d`'s own module published as the naming module.
+sig_pins_legacy_here := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
   if sig_has_narrow_view(src, d) or type_is_str(src, d.ret_ts, d.ret_tl) { return true }
   if span_is_folded_option(src, d.ret_ts, d.ret_tl) or span_is_enum_inst_agg(decls, src, d.ret_ts, d.ret_tl) { return true }
   mut pp := d.params_head
