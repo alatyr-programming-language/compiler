@@ -914,7 +914,7 @@ check_ir_build() {
     grep -q "^ok   golden $g: " "$out" || ok=0
   done
   if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 13 ]; then
-    echo "ok   ir golden builds: 12 programs built, verified and printed exactly as reviewed"
+    echo "ok   ir golden builds: 13 programs built, verified and printed exactly as reviewed"
   else
     echo "FAIL ir golden builds: rc=$rc"; grep -E '^(FAIL|ok   golden)' "$out" | head -13 | sed 's/^/     /'; fail=1
   fi

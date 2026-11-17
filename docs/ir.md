@@ -789,11 +789,15 @@ rather than a declaration, a qualified or method form left unresolved, a type's 
 (the parser's `__defer…` calls, a statement rather than a callee), or nothing; the
 argument count differs or exceeds eight; the callee is an extern; the result is neither a kernel scalar
 nor a register-returned aggregate, or is an aggregate of a type the builder does not lay out; an argument
-is not a place an `out` / `in out` parameter needs, or has a type the convention does not pass; or the
-call is a conversion, a brand or `@require`, or a layout query the builder does not build. The function
-that finds the cause returns it (`ib_callee` answers `CeNo(<cause>)`), so no refusal re-derives it. A
+is not a place an `out` / `in out` parameter (scalar or array-shaped) needs, or goes to a parameter whose
+type or mode the convention does not pass (an `in` array and a `...T` rest are refused here); or the
+call is a scalar conversion to or from a non-integer or with other than one argument, a brand or
+`@require`, or a layout query of a bound value or of a type the builder does not lay out. The function
+that finds the cause returns it (`ib_callee` answers `CeNo(<cause>)`). A call in aggregate position asks
+`ib_callee` once more (`ib_agg_call_why`) for the callee's cause, rather than keeping a copy of its tests. A
 call refused for a reason with no such label keeps `expr Call`, and a sema gap at a call keeps
-`sema-gap …: expr Call`. The golden `ig_callwhy` pins three of the labels.
+`sema-gap …: expr Call`. The golden `ig_callwhy` pins five of the labels: a generic callee, more than
+eight arguments, an extern callee, and an `in` array and a `...T` rest argument.
 
 A **qualified callee** (`m::f(…)`) that the front half did not rewrite to a declaration's name span (on
 x86, the compiler's own build, and `alatyr ir --modules`) is taken from the resolver x86's own call
