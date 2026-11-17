@@ -1458,7 +1458,10 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
   ## Slice 3d: a one- or two-word struct result is received in a fresh frame object.
   mut agg : Option(IbSt) = Option(IbSt).None
   if d.ret_tl != 0 {
-    if ib_agg_ret_words(ib_b_decls(bp), src, d.ret_ts, d.ret_tl, a) > 0 {
+    mut rfc := false
+    rw := ib_agg_ret_words(ib_b_decls(bp), src, d.ret_ts, d.ret_tl, a, rfc)
+    ib_note_folded(bp, rfc)
+    if rw > 0 {
       ## #1622: a view result is received in a fresh `{ptr, len}` object.
       vro : Option(IbVEl) = ib_view_type_elem(ib_b_decls(bp), src, a, d.ret_ts, d.ret_tl)
       match vro { Some(vr) => { agg = Option(IbSt).Some(ib_view_st()) }; None => { agg = ib_agg_named(bp, a, d.ret_ts, d.ret_tl) } }
@@ -2787,11 +2790,19 @@ ib_bs_agg_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt
 ## The enum type named `[s, s+n)`, when 4a builds it (see the band comment).
 ib_enum_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize) -> Option(IbSt) {
   bv : IbB = deref(bp)
-  ib_enum_named_in(bv.decls, bv.src, a, s, n)
+  mut fc := false
+  r : Option(IbSt) = ib_enum_named_in(bv.decls, bv.src, a, s, n, fc)
+  ib_note_folded(bp, fc)
+  r
+}
+## #1723: record on the function being built that it laid out an enum with a niche-folded component
+## (`ir::fn_folded_comp`), when `fc` says the layout just asked did.
+ib_note_folded := fn(bp : ptr(mut IbB), fc : bool) {
+  if fc { fn_set_folded_comp(ib_b_f(bp)) }
 }
 ## The same, from the declarations and source alone (a function's result type is asked before its
-## builder exists).
-ib_enum_named_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, s0 : usize, n0 : usize) -> Option(IbSt) {
+## builder exists). `fc` is set when the layout takes a niche-folded component (#1723).
+ib_enum_named_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, s0 : usize, n0 : usize, in out fc : bool) -> Option(IbSt) {
   full : IbSpan = ib_type_span_full(src, s0, n0)
   s := full.s
   n := full.n
@@ -2825,7 +2836,7 @@ ib_enum_named_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena
             Some(k) => {}
             None => {
               ## #1723: or a folded `Option(ptr(T))` — one pointer word, which the width check below holds to.
-              fo : Option(IbSt) = ib_variant_comp_folded_in(decls, src, a, st0, fq, i)
+              fo : Option(IbSt) = ib_variant_comp_folded_in(decls, src, a, st0, fq, i, fc)
               match fo { Some(fst) => {}; None => { return Option(IbSt).None } }
             }
           }
@@ -2914,12 +2925,14 @@ ib_variant_comp_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Are
 ## admits. A folded `st`'s own payload is the kernel `ptr` above, never this.
 ib_variant_comp_folded := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbSt) {
   bv : IbB = deref(bp)
-  ib_variant_comp_folded_in(bv.decls, bv.src, a, st, vq, i)
+  mut fc := false
+  r : Option(IbSt) = ib_variant_comp_folded_in(bv.decls, bv.src, a, st, vq, i, fc)
+  ib_note_folded(bp, fc)
+  r
 }
-## Set while a function is built when a folded component was laid out (`ib_variant_comp_folded_in`);
-## `build_one` clears it and records it on the built function (`ir::fn_folded_comp`).
-mut IB_FOLDED_COMP : bool = false
-ib_variant_comp_folded_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize) -> Option(IbSt) {
+## The same, from the declarations and source alone; `fc` is set when a folded component is laid out,
+## and the function being built records it (`ib_note_folded`, `ir::fn_folded_comp`).
+ib_variant_comp_folded_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, st : IbSt, vq : ptr(mut FieldDecl), i : usize, in out fc : bool) -> Option(IbSt) {
   fd := deref(ast::fld_p(vq))
   if i >= fd.arity { return Option(IbSt).None }
   if lower_layout::is_niche_folded(src, st.s, st.n) { return Option(IbSt).None }
@@ -2927,11 +2940,11 @@ ib_variant_comp_folded_in := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : 
   match so {
     Some(sp) => {
       if not lower_layout::is_niche_folded(src, sp.s, sp.n) { return Option(IbSt).None }
-      fo : Option(IbSt) = ib_enum_named_in(decls, src, a, sp.s, sp.n)
+      fo : Option(IbSt) = ib_enum_named_in(decls, src, a, sp.s, sp.n, fc)
       match fo {
         Some(fst) => {
           if fst.size == 8 {
-            IB_FOLDED_COMP = true
+            fc = true
             return fo
           }
         }
@@ -5407,8 +5420,8 @@ ib_ret_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
 }
 ## The word count of an aggregate result type `[s, s+n)` the convention supports — a struct the builder
 ## lays out in the WORD tier of one or two words (every legacy emitter returns those in two result
-## registers); 0 otherwise.
-ib_agg_ret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, in out a : rt::Arena) -> usize {
+## registers); 0 otherwise. `fc` is set when an enum result's layout takes a niche-folded component (#1723).
+ib_agg_ret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, in out a : rt::Arena, in out fc : bool) -> usize {
   ## #1622: a `Slice(T)` / `[T]` result is its two-word `{ptr, len}` pair (Types §7), returned like a
   ## two-word struct: x86_64's legacy emitter returns it in %rax/%rdx (measured), wasm's as the address
   ## of a block (the 4c convention). The register twins' legacy emitters return the pair's ADDRESS in
@@ -5421,7 +5434,7 @@ ib_agg_ret_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   if lower_layout::is_view_type(src, vw.s, vw.n) or lower_layout::view_elem_span(src, vw.s, vw.n).n != 0 { return 0 }
   ## Slice 4b: an enum result is returned in up to eight result registers, tag first — the legacy
   ## emitters' register enum-return convention (measured: aarch64 x0..x7, riscv64 a0..a7).
-  eo : Option(IbSt) = ib_enum_named_in(decls, src, a, s, n)
+  eo : Option(IbSt) = ib_enum_named_in(decls, src, a, s, n, fc)
   match eo {
     Some(est) => {
       ew := est.size / 8
@@ -5831,9 +5844,7 @@ pub build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize,
   was_s := lower_layout::type_ref_mod_s()
   was_l := lower_layout::type_ref_mod_l()
   lower_layout::set_type_ref_module(d.mod_start, d.mod_len, lower::root_mod_s(), lower::root_mod_l())
-  IB_FOLDED_COMP = false
   out : BuildOut = ib_build_one(p, decls, src, di, a, why)
-  match out { Built(fid) => { if IB_FOLDED_COMP { fn_set_folded_comp(prog_fn(p, fid)) } }; Refused => {} }
   if was_on { lower_layout::set_type_ref_module(was_s, was_l, lower::root_mod_s(), lower::root_mod_l()) } else { lower_layout::clear_type_ref_module() }
   out
 }
@@ -5861,14 +5872,16 @@ ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, 
   ## registers, the convention every legacy emitter shares; the function's IR result is the `ptr` to the
   ## value and `ret_words` tells the selector to return the words.
   mut rwords : usize = 0
+  mut sig_fc := false
   if d.ret_tl != 0 and not has_ret {
-    rwords = ib_agg_ret_words(decls, src, d.ret_ts, d.ret_tl, a)
+    rwords = ib_agg_ret_words(decls, src, d.ret_ts, d.ret_tl, a, sig_fc)
     if rwords == 0 { why.c = Construct.CSigResultWide; return BuildOut.Refused }
     has_ret = true
     rk = IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)
   }
   f := fn_new(a, fnm.ptr, fnm.len, has_ret, rk.ty, rk.sg)
   if rwords > 0 { fn_set_ret_words(f, rwords) }
+  if sig_fc { fn_set_folded_comp(f) }
   nb := IbB(f = f, p = p, src = src, decls = decls, mod_s = d.mod_start, mod_n = d.mod_len,
           bnames = wb_new(a, 16), blens = wb_new(a, 16), bvregs = wb_new(a, 16),
           bagg = wb_new(a, 16), bmem = wb_new(a, 16), barr = wb_new(a, 16), bsd = wb_new(a, 16), bts = wb_new(a, 16), btn = wb_new(a, 16),
