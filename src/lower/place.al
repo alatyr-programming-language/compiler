@@ -867,7 +867,7 @@ pub emit_elem_copy_in := fn(arr : ptr(Expr), idx : ptr(Expr), dst : i64, in out 
 ## `xs[lo..hi][i]` blames `xs`'s line and `arr[0][1..4][i]` blames `arr`'s. A shape that carries a name
 ## span of its own (a field, a str literal, a struct literal, a call, a fn reference) blames that name;
 ## `ArrayLit` / `If` / `Match` / `Bin` have no span in the AST at all and fall through to 0.
-index_base_blame_off := fn(base : ptr(Expr)) -> usize {
+pub index_base_blame_off := fn(base : ptr(Expr)) -> usize {
   mut res : usize = 0
   match deref(base) {
     Expr::Var(vs, vn) => { res = vs }
