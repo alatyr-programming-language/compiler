@@ -3102,6 +3102,7 @@ pub compile := fn(src : str, in out a : Arena) -> strbuf::StrBuf {
   ## to the real end of the source rather than a fixed window past a name span. Zero admits no
   ## recovery, so a pipeline that forgets to publish fails closed instead of reading past the buffer.
   ast::set_src_extent(src.len)
+  lower_layout::clear_spelling_modules()  ## #1734: one module, the published one names every type
   ## --- lex: source -> rt token store (the MIGRATED lexer lexrt, off alloc::vec) ---
   ## lexrt reads via `bytes(src)[i]` and writes each token as a 3-word arena record
   ## {kind,start,len} with its handle in an `rt::Vec` (the parser reads it via `tok_at`). The
@@ -3214,6 +3215,7 @@ pub compile_pair := fn(sa : str, sb_src : str, in out a : Arena) -> strbuf::StrB
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
+  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(name_start), ptr(name_len), ptr(src_off), ptr(src_len))  ## #1734
   sa_off := la + lb               ## source A begins after the two names
   sb_off := la + lb + lsa         ## source B begins after source A
   ## --- module A: lex its region [sa_off, sa_off+lsa) with lexrt (base_off = sa_off → token
@@ -3306,6 +3308,7 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
+  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(name_start), ptr(name_len), ptr(src_off), ptr(src_len))  ## #1734
   ## --- lex + parse each module's region into ONE rt Decl-handle Vec, threading nstr (all token
   ## records + the shared decls handle Vec + records live in `tar`, created above). ---
   ## Caps reserved from source size (rt::vec_push does not grow): decls ≤ total tokens ≤ total
@@ -5477,6 +5480,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
+  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(mod_start), ptr(mod_len), ptr(src_off), ptr(src_len))  ## #1734
   if manifest_len != 0 {
     d_manifest_scan(str_at(base + manifest_off, manifest_len), manifest_off)
     if MANIFEST_HAS {
@@ -6958,6 +6962,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
+  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(mod_start), ptr(mod_len), ptr(src_off), ptr(src_len))  ## #1734
   dcap := strbuf::buf_len(bld) + 16
   mut decls := rt::Vec(data = rt::bump(tar, dcap * 8), len = 0, cap = dcap)
   parser::set_structs_tbl(0)
@@ -7368,6 +7373,7 @@ pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
+  lower_layout::clear_spelling_modules()  ## #1734: one module, the published one names every type
   tcap := nread + 16
   mut rt_toks := rt::Vec(data = rt::bump(tokar, tcap * 8), len = 0, cap = tcap)
   zt := lexrt::lex_rt(str_at(base, nread), 0, rt_toks, tokar)
@@ -7699,6 +7705,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
+  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(mod_start), ptr(mod_len), ptr(src_off), ptr(src_len))  ## #1734
   if manifest_len != 0 {
     d_manifest_scan(str_at(base + manifest_off, manifest_len), manifest_off)
     if MANIFEST_HAS {
@@ -8137,6 +8144,7 @@ pub check := fn(src : str, in out a : Arena) -> usize {
   base := unchecked bitcast(usize, src.ptr)
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(src.len)
+  lower_layout::clear_spelling_modules()  ## #1734: one module, the published one names every type
   mut tar := rt::Arena(base = 0, off = 0, cap = 0)
   rt::arena_init(tar, 16777216)
   mut na := rt::Arena(base = 0, off = 0, cap = 0)

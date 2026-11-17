@@ -8379,6 +8379,12 @@ root_package_test fn_value_qualified "T _start" "T main__main" "T main__apply" "
 ## `h := lower::a::a_helper; h()` must call `lower__a__a_helper`, not an undefined alias symbol in
 ## `lower__b` (or a caller-module fallback). The row also proves reachability retains the resolved fn.
 root_package_test qualified_fn_alias "T _start" "T main__main" "T lower__b__run" "T lower__a__a_helper"
+## #1734 / Modules §4.1, Types §4.1 — a callee's `-> S` is the `S` of the module that spells it, when the
+## caller declares its own `S`. Each call is reached through an alias, a caller `S` without the
+## field (the checker's half), or a qualified path (the control), on the check, run and build paths.
+root_package_test issue1734_alias_callee_agg_result "T _start" "T main__main" "T m__mk" "T m__weigh"
+root_package_test issue1734_alias_callee_agg_result_check "T _start" "T main__main" "T m__mk" "T m__weigh"
+root_package_test issue1734_qualified_callee_agg_result "T _start" "T main__main" "T m__mk" "T m__weigh"
 issue11_signature_type_name_test
 issue11_package_type_name_test
 ## Modules §§4.1/4.1.1 — a one-element listed projection after a bare module alias must remain a
