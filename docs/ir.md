@@ -758,7 +758,16 @@ IR signature onto registers or wasm params:
   words to eight by the owner on #1026, after measuring that the selectors already emitted eight
   (`sa_agg_ret` / `sr_agg_ret`: `if w == 0 or w > 8`) while the builder refused past two, leaving
   **1022 refusals** in the family `signature: aggregate result wider than two words`. The golden
-  `ig_notyet`, which pinned the refusal, moved with it;
+  `ig_notyet`, which pinned the refusal, moved with it. That family was one label for every reason
+  the builder answered "no word count" (#1033), and only one of them was width: `ib_agg_ret` now names
+  each cause as its own `CSigResult*` construct. A struct result is refused as wider than eight words,
+  with no fields, byte-layout, generic, or by the first field the convention cannot take: a fixed array,
+  a sub-word scalar, a brand or alias of a scalar (the field test reads scalar names only), a float, or a
+  type that is no scalar at all (a struct, an enum, a view). Any other result is refused as what it is: a
+  view the builder cannot type, a fixed array (the parser records `[T; N]` by its `[` head), an enum or
+  generic enum instance the register tier cannot lay out, a tuple, a scalar reached only through a type
+  alias, a float, a function type, `Never`, and last a type that names nothing the builder resolves
+  there. Only the label moves: every one of these was refused before, and still is;
 - an aggregate result **wider than eight words**, or one the caller asks to receive by address, through a
   hidden first `ptr` parameter (sret) into a caller frame object;
 - the callee symbol — module path, overload suffix, generic instance tag — is computed by the builder,
@@ -773,6 +782,25 @@ IR signature onto registers or wasm params:
 During the migration an IR-built function and a legacy-emitted function must be able to call each
 other, so each selector adopts **its target's existing convention** for every signature class it
 supports; the convention is unified only when the last legacy caller of that class is gone.
+
+Where a target's legacy emitter lays a signature class out differently from the shared layout, the class
+does not cross on that target: the function and every call to it stay legacy, rather than either side
+adopting the other's layout. A generic enum instance whose one-component variant holds a struct or an
+enum (`Option(P)`, `Result(u64, E)`, `Option(Option(u64))`, #1033) is one such class. The builder lays
+its payload out as the layout authority does (`lower_layout::enum_layout` and `agg_words`, Types §6.2):
+the component is a sub-object at the payload offset, a struct one only when `layout_struct_is_word_stored`
+holds. The aarch64 and riscv64 legacy emitters size the same enum by variant arity instead
+(`1 + enum_max_arity`), two words for `Option(P)` where the layout has three, and legacy wasm traps on
+the crossing (both measured). So `ir::sig_pins_legacy` keeps every signature that carries such an
+instance on those three targets legacy (`span_is_enum_inst_agg`). On x86_64 an instance of one or two
+words crosses in `%rax`/`%rdx`, where both layouts agree; a wider one does not cross there.
+
+Two more rules hold at every crossing. A scalar payload component is written as the whole word of its
+slot, sign-extended when the component is a narrow signed integer (`ib_store_comp`, #1726). The bytes
+above it are padding to Types §6.2, but the legacy readers load the slot whole. A float parameter is a
+class no selector models: the legacy emitters pass it in a float register, and the selectors take every
+parameter from an integer one. So a function with one is refused (`CSigParamFloat`), and so is an
+IR-built call that would pass a float argument (#1728).
 
 ### 3.8 Signedness and width are attributes of the value, derived once
 

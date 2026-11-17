@@ -606,7 +606,7 @@ sw_call := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool
       ## emitter builds none; a niche-folded option: this emitter reads an aggregate parameter's payload
       ## at byte 8 of the unfolded pair, where the folded shape has only one word — so neither end of
       ## such a call is taken from the IR here (`ir::sig_pins_legacy`, #1576).
-      if ir::sig_pins_legacy(x.src, cd) { return false }
+      if ir::sig_pins_legacy(x.decls, x.src, cd) { return false }
       n := ir::i_n(ip)
       mut j : usize = 0
       while j < n {
@@ -772,7 +772,7 @@ sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> 
   ## function stays legacy — with the refusal in `sw_call` it keeps BOTH ends of every such call on one
   ## convention (`ir::sig_pins_legacy`, #1576). An enum with a folded `Option(ptr(T))` component: this
   ## emitter does not lay it out as the IR does (`ir::fn_folded_comp`, #1723).
-  if ir::sig_pins_legacy(x.src, d) or ir::fn_folded_comp(x.f) { return false }
+  if ir::sig_pins_legacy(x.decls, x.src, d) or ir::fn_folded_comp(x.f) { return false }
   ## Slice 3w: frame objects live on the shadow stack in linear memory (`docs/ir.md` §6), laid out from
   ## `fp`, the value of the module's `$__sp` at entry. This first step does not pop the frame on return:
   ## the legacy emitter bump-allocates the same way and never reclaims, and a legacy callee may hand back

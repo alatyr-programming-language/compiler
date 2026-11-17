@@ -910,13 +910,13 @@ check_large_source() {
 check_ir_build() {
   local out="$T/ir_golden.out" rep="$T/ir_build.out" rc g ok=1
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_litfold ig_sys ig_agg ig_place ig_aggret ig_notyet; do
+  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_litfold ig_sys ig_agg ig_place ig_aggret ig_aggwhy ig_notyet; do
     grep -q "^ok   golden $g: " "$out" || ok=0
   done
-  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 11 ]; then
-    echo "ok   ir golden builds: 11 programs built, verified and printed exactly as reviewed"
+  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 12 ]; then
+    echo "ok   ir golden builds: 12 programs built, verified and printed exactly as reviewed"
   else
-    echo "FAIL ir golden builds: rc=$rc"; grep -E '^(FAIL|ok   golden)' "$out" | head -12 | sed 's/^/     /'; fail=1
+    echo "FAIL ir golden builds: rc=$rc"; grep -E '^(FAIL|ok   golden)' "$out" | head -13 | sed 's/^/     /'; fail=1
   fi
   ## A struct LOCAL builds since slice 3a; a struct PARAMETER (read through the address the caller
   ## passed) and a struct ARGUMENT (the address of a caller-owned copy) since 3d step 1.
@@ -1129,6 +1129,24 @@ EOF
   if [ "$dok" = 1 ]; then
     echo "ok   ir #1723 deref fixtures: the read-whole and folded-component functions are built"
   else echo "FAIL ir #1723 deref fixtures:"; grep -hE '^fn ir_deref_(agg_read|folded_comp)::' "$rep" "$rep.2" | sed 's/^/     /'; fail=1; fi
+  ## #1711: a niche-folded `Option(ptr(T))` whose enum declares `Some` FIRST (as `src/ast.al` does) is
+  ## the one-word folded shape too (Types §6.2), so a function with it in a parameter, a result or a
+  ## local is BUILT — read over each package's modules, as the census reads `src/`. The parent refused
+  ## every one (`signature: parameter type names no struct or enum resolvable here`). The values are
+  ## the packages' own `## expect:` directives; `ir1711_some_first_u64` (not folded) stays Built.
+  local k f ok1711=1 bad1711=""
+  for k in cross:rd cross:rd_none_first cross:mk cross:main local:main try:rd try:fwd try:main \
+           u64:mk u64:rd u64:rd_none_first u64:main; do
+    f="${k#*:}"; k="${k%%:*}"
+    "$CC" ir --modules "$E2E_TEST/package/ir1711_some_first_$k/src/opt.al" "$E2E_TEST/package/ir1711_some_first_$k/src/main.al" \
+      > "$rep" 2>/dev/null; rc=$?
+    if [ "$rc" != 0 ] || ! grep -q "^fn main::$f Built\$" "$rep" || ! grep -q 'verify_failed=0$' "$rep"; then
+      ok1711=0; bad1711="$bad1711 $k:$f(rc=$rc)"
+    fi
+  done
+  if [ "$ok1711" = 1 ]; then
+    echo "ok   ir #1711 Some-first folded option: parameter, result, local, match in both orders and ? build"
+  else echo "FAIL ir #1711 Some-first folded option: not Built:$bad1711"; fail=1; fi
   ## #1662: two callers the text attributes to another declaration. (a) A call inside a HOF `hof` that
   ## the driver clones for a capturing closure (`__hoflam<N>`) is also the clone's call, so `rd` is held
   ## on every target; the parent left it to the per-target rule. (b) x86's legacy emitter expands an
@@ -1203,7 +1221,7 @@ EOF
 check_ir_dev_verb() {
   local out="$T/ir_selftest.out" rc
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 28 passed, 0 failed' "$out" \
+  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 29 passed, 0 failed' "$out" \
     && [ "$(grep -c '^ok   planted #' "$out")" = 14 ]; then
     echo "ok   ir --self-test: storage, verify, print, 14 planted violations each refused by its rule"
   else
@@ -4692,6 +4710,20 @@ ambig_enum_collision_test() {
   d="$T/ambig_enum_name_collision"
   [ -d "$src" ] || { echo "FAIL ambig_enum_collision: fixture tree missing"; fail=1; return; }
   cp -r "$src" "$d" || { echo "FAIL ambig_enum_collision: could not snapshot fixture"; fail=1; return; }
+  # #1731's review, B1: the twins' selectors ask `ir::sig_pins_legacy` about the CALLEE `wide::fail`,
+  # whose `Result(u64, Error)` names `wide`'s own `Error`; resolved from the caller `main`, where two
+  # modules declare one, the resolver refused this valid program at compile time. Each twin must emit it.
+  local b rc
+  for name in failing reverse; do
+    for b in aarch64 riscv64 wat; do
+      "$CC" "$b" "$d/$name/package.al" > "$d/$name.$b.out" 2> "$d/$name.$b.err"; rc=$?
+      if [ "$rc" = 0 ] && [ -s "$d/$name.$b.out" ]; then
+        echo "ok   ambig_enum_collision/$name($b): emitted"
+      else
+        echo "FAIL ambig_enum_collision/$name($b): emit rc=$rc, due an emitted program"; head -2 "$d/$name.$b.err" | cut -c1-200 | sed 's/^/     /'; fail=1
+      fi
+    done
+  done
   for name in failing reverse; do
     case "$name" in
       failing) output="ambig-enum-name-collision" ;;
@@ -6017,6 +6049,23 @@ check_ra_imm64_widen() {
   _e2e_exec "$fallback" >/dev/null 2>&1; got=$?
   if _e2e_runtime_failure "ra_imm64_widen(fallback)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   ra_imm64_widen: widened GAS assembles, run == build, fallback 42"; else echo "FAIL ra_imm64_widen: fallback got $got want 42"; fail=1; fi
+}
+
+## The named functions of a fixture must be ones the shared-IR x86 selector TOOK (`alatyr x86-ir`, a
+## `# ir: selected` marker before the label). A `run` row alone cannot tell: when the builder declines a
+## shape, the legacy emitter answers the same value and the row stays green (#1033, #1726).
+check_ir_took() { # name, fn...
+  local name="$1" src asm sel f
+  shift
+  src="$E2E_TEST/$name.al"
+  [ -f "$src" ] || { echo "MISS $name: no $src"; fail=1; return; }
+  asm="$T/e2e_${name}_took.s"
+  "$CC" x86-ir "$src" > "$asm" 2>/dev/null || { echo "FAIL $name(ir-took): emit"; fail=1; return; }
+  sel="$(awk -v p="${name}__" '/^# ir: selected from the shared IR$/ { s = 1; next } index($0, p) == 1 && /:$/ { if (s) print substr($0, length(p) + 1, length($0) - length(p) - 1); s = 0 }' "$asm" | tr '\n' ' ')"
+  for f in "$@"; do
+    case " $sel" in *" $f "*) ;; *) echo "FAIL $name(ir-took): $f not selected from the IR (selected: $sel)"; fail=1; return ;; esac
+  done
+  echo "ok   $name(ir-took): $* selected from the shared IR on x86_64"
 }
 
 ## The same imm32 boundary on the shared-IR selector (`alatyr x86-ir`, #1073). The legacy assertions above
@@ -9439,6 +9488,22 @@ run ir_enum_cross 42
 run_a64 ir_enum_cross 42
 run_rv64 ir_enum_cross 42
 run_wat ir_enum_cross 42
+## #1033 step 2: a generic enum instance with a struct or enum payload, built by the shared IR. Locals
+## on all four; results, parameters, `?` and crossings to legacy code on x86_64, where such a
+## signature is not pinned legacy (`ir::sig_pins_legacy`).
+run ir_enum_inst_local 42
+run_a64 ir_enum_inst_local 42
+run_rv64 ir_enum_inst_local 42
+run_wat ir_enum_inst_local 42
+run_x86 ir_enum_inst 42
+run_x86 ir_enum_inst_cross 42
+check_ir_took ir_enum_inst sum pass code depth ident
+check_ir_took ir_enum_inst_cross sum code wrap unwrap flag fcode
+## #1726: a narrow signed payload component crosses to a legacy caller as its canonical word.
+run_x86 ir_enum_narrow_payload 42
+check_ir_took ir_enum_narrow_payload mk mk8 mk16 bad pass sz
+## #1728: a float parameter keeps its function, and every call to it, legacy-emitted.
+run_x86 ir_float_param 42
 ## IR slice 4c: `?` on an Option and a Result, success and failure paths.
 run ir_try 42
 run_a64 ir_try 42
@@ -12082,6 +12147,9 @@ run_x86 ir_deref_agg_call 42
 run_wat ir_deref_agg_call 42
 run_x86 ir_deref_agg_read 42
 run_x86 ir_deref_folded_comp 42
+# #1711 — `?` on a folded `Option(ptr(T))` tests the variant by its meaning and reads the one word; the
+# parent compared the word with `Some`'s discriminant and loaded byte 8, an IR verifier refusal (70).
+run_x86 ir_option_ptr_try 42
 # #1497 / Declarations §5+§6.1 — after the block that declared a local `C` closes, `C.k` is the module
 # constant's field again. `lower::slot_declared_before` asked only whether the slot was declared EARLIER,
 # not whether its block was still open, so the read took the dead local's slot. Fails on the parent

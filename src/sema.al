@@ -6946,7 +6946,7 @@ sema_field_is_fn_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, 
 ## itself: every function-value owner whose type is declared — a parameter, an annotated local or
 ## global, a struct field — is decided here. (A named alias of a function type does not parse today:
 ## `F := fn() -> u64` is refused as a signature without a body, so no alias step is owed.)
-sema_ty_span_is_fn := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+pub sema_ty_span_is_fn := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   if sema_ann_is_fn_type(src, s, n) { return true }
   ## A PARAMETER's function type is captured as the bare keyword `fn` (parser.al, the FUNCTION-VALUE
   ## parameter type: it consumes `(…) -> R` and keeps `pts`/`ptl` = "fn"). `fn` is reserved, so no
@@ -9658,8 +9658,10 @@ sema_vty_kind := fn(k : TyKind) -> ir::VTy {
   }
 }
 ## The kernel value type a type NAME `[s, s+n)` denotes: a scalar by its name, a brand by its
-## underlying type (one level, Types §4.2), anything else unknown to this slice.
-sema_vty_name := fn(src : ptr(u8), s : usize, n : usize, decls : ptr(rt::Vec)) -> ir::VTy {
+## underlying type (one level, Types §4.2), anything else unknown to this slice. The IR builder asks it
+## for an enum payload component's kernel type (`ir::build`'s `ib_variant_comp_in`), so a brand, a
+## required type or an alias payload has one answer for sema and the builder.
+pub sema_vty_name := fn(src : ptr(u8), s : usize, n : usize, decls : ptr(rt::Vec)) -> ir::VTy {
   sv : ir::VTy = sema_vty_scalar(src, s, n)
   if ir::vty_known(sv) { return sv }
   ## A QUALIFIED brand or alias name names one declaration of the module its head names.

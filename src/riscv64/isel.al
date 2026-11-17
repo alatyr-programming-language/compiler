@@ -546,7 +546,7 @@ sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool
       ## A view result (legacy returns its address, the IR its two words) or a narrow-element view (legacy
       ## steps it by the word) or a `str` (legacy builds none) or a niche-folded option (legacy passes
       ## the unfolded tag and payload words): `ir::ret_is_view`, `ir::sig_pins_legacy` (#1622, #1576).
-      if ir::ret_is_view(x.src, cd) or ir::sig_pins_legacy(x.src, cd) { return false }
+      if ir::ret_is_view(x.src, cd) or ir::sig_pins_legacy(x.decls, x.src, cd) { return false }
       sr_args(sb, x, ip)
       sr_put(sb, "  call ")
       sr_put_label(sb, x.src, cd)
@@ -767,7 +767,7 @@ sr_fn := fn(in out sb : rt::StrBuf, x : SrX, d : Decl, in out a : rt::Arena) -> 
   ## target's legacy emitter does not lay it out as the IR does (`ir::fn_folded_comp`, #1723).
   ## A whole aggregate read through `deref`: this target's legacy emitter stores such a pointee as one
   ## word, so an IR-built reader would see a half-written value (`ir::fn_deref_whole`, #1727).
-  if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.src, d) or ir::fn_folded_comp(x.f) or ir::fn_deref_whole(x.f) { return false }
+  if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.decls, x.src, d) or ir::fn_folded_comp(x.f) or ir::fn_deref_whole(x.f) { return false }
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > 8 { return false }

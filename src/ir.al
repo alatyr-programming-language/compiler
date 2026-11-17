@@ -1736,8 +1736,14 @@ pub Construct := enum {
   ## could be cut for 12 paths. Each arm below is the shape the builder actually met; `CSignature`
   ## stays as the label of a refusal no shape was found for, so an unclassified refusal is visible
   ## rather than folded into a family.
-  CSigResultWide, CSigParamMode, CSigParamTaken, CSigParamLevered, CSigParamNestedField,
-  CSigParamPadded, CSigParamUnresolved, CSigSyscall,
+  ## The aggregate-result family (#1033): one arm per cause `ir::build`'s `ib_agg_ret` refuses, so the
+  ## census ranks the causes instead of one label that named width for all of them.
+  CSigResultWide, CSigResultEmpty, CSigResultLevered, CSigResultUnresolved, CSigResultGeneric,
+  CSigResultArrayField, CSigResultNarrowField, CSigResultBrandField, CSigResultFloatField, CSigResultAggField,
+  CSigResultView, CSigResultArray, CSigResultScalarAlias, CSigResultFloat, CSigResultFnType, CSigResultNever,
+  CSigResultEnumInstance, CSigResultEnum, CSigResultTuple,
+  CSigParamMode, CSigParamTaken, CSigParamLevered, CSigParamNestedField,
+  CSigParamPadded, CSigParamUnresolved, CSigParamFloat, CSigSyscall,
   SAssign, SWhile, SFieldAssign, SReturn, SIf, SMatch, SFor, SDerefAssign, SIndexAssign, SIndexFieldAssign,
   SFieldPathAssign, SLoop, SBreak, SContinue, SExprStmt, SCompIf, SCompFor, SCompMatch, SCompForRange,
   SUnchecked, SAllocWith,
@@ -1750,13 +1756,32 @@ pub construct_name := fn(c : Construct) -> str {
   match c {
     CGeneric => { "generic function (needs a mono instance)" }; CEmpty => { "empty body" }
     CSignature => { "signature (a parameter or result that is not a kernel scalar)" }
-    CSigResultWide => { "signature: aggregate result wider than two words" }
+    CSigResultWide => { "signature: aggregate result wider than eight words" }
+    CSigResultEmpty => { "signature: aggregate result with no fields" }
+    CSigResultLevered => { "signature: byte-layout (@packed/@offset/@endian or narrow-tier) struct result" }
+    CSigResultUnresolved => { "signature: result type names nothing the builder resolves here" }
+    CSigResultGeneric => { "signature: generic struct result" }
+    CSigResultArrayField => { "signature: struct result with a fixed-array field" }
+    CSigResultNarrowField => { "signature: struct result with a sub-word scalar field" }
+    CSigResultBrandField => { "signature: struct result with a brand or alias field the builder does not follow" }
+    CSigResultFloatField => { "signature: struct result with a floating-point field" }
+    CSigResultAggField => { "signature: struct result with a field whose type is not a scalar" }
+    CSigResultView => { "signature: view result the builder cannot type" }
+    CSigResultArray => { "signature: fixed-array result" }
+    CSigResultScalarAlias => { "signature: result is a scalar through a type alias the builder does not follow" }
+    CSigResultFloat => { "signature: floating-point result" }
+    CSigResultFnType => { "signature: function-type result" }
+    CSigResultNever => { "signature: Never result" }
+    CSigResultEnumInstance => { "signature: generic enum instance result the builder cannot lay out" }
+    CSigResultEnum => { "signature: enum result the builder cannot lay out" }
+    CSigResultTuple => { "signature: tuple result" }
     CSigParamMode => { "signature: parameter with a mode (in/out/by-ref)" }
     CSigParamTaken => { "signature: address-taken aggregate parameter" }
     CSigParamLevered => { "signature: @packed/@offset/@endian (byte-layout) struct parameter" }
     CSigParamNestedField => { "signature: struct parameter with an array or aggregate field" }
     CSigParamPadded => { "signature: padded struct parameter" }
     CSigParamUnresolved => { "signature: parameter type names no struct or enum resolvable here" }
+    CSigParamFloat => { "signature: floating-point parameter" }
     CSigSyscall => { "signature: a syscall declaration the builder cannot tramp" }
     CBodyless => { "a declaration with no body (an `@extern` import: slice 2's `call_c`)" }
     SAssign => { "stmt Assign" }; SWhile => { "stmt While" }; SFieldAssign => { "stmt FieldAssign" }
@@ -2223,6 +2248,35 @@ span_is_folded_option := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   tw := lower_layout::sig_type_span(src, ts, tl)
   lower_layout::is_niche_folded(src, tw.s, tw.n)
 }
+## Whether `[ts, ts+tl)` names an instance of a generic ENUM with a type argument that is a struct or an
+## enum (`Option(P)`, `Result(u64, E)`, `Option(Option(u64))`) — the instances whose payload holds an
+## aggregate sub-object the IR builder lays out by `lower_layout::agg_words` (#1033). The aarch64 and
+## riscv64 legacy emitters size such an enum by its variants' ARITY (`1 + enum_max_arity`: two words
+## for `Option(P)` where the layout has three, measured: an IR-built `Option(P)` result read back by a
+## legacy caller lost its last word, wrong value 1 on both), and the legacy wasm emitter trapped on the
+## same crossing (measured, 134). Any type argument of that kind answers true, whether or not a
+## one-component variant carries it: an over-approximation that keeps more functions legacy, never one
+## fewer. Any other type answers false. An instance with more type arguments than the walk reads
+## answers true, for the same reason. The names resolve in the naming module PUBLISHED by the caller;
+## for a signature that is the declaring function's own module (`sig_pins_legacy`), never the module of
+## a function that calls it.
+span_is_enum_inst_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> bool {
+  if tl == 0 { return false }
+  tw := lower_layout::sig_type_span(src, ts, tl)
+  bn := lower_layout::base_type_name(src, tw.s, tw.n)
+  ## A signature keeps the instance's HEAD span (`Option`); its `(…)` arguments follow it in `src`.
+  if lower_layout::qualified_enum_decl_of(decls, src, bn.s, bn.n) < 0 { return false }
+  mut k : usize = 0
+  while k < 8 {
+    ta := lower_layout::typearg_at(src, bn.s, bn.n, k)
+    if ta.n == 0 { return false }
+    tb := lower_layout::base_type_name(src, ta.s, ta.n)
+    if lower_layout::struct_decl_of(decls, src, tb.s, tb.n) >= 0 or lower_layout::qualified_enum_decl_of(decls, src, tb.s, tb.n) >= 0 { return true }
+    k = k + 1
+  }
+  ## #1731's review, N1: a ninth argument was not read, so "false" here would under-approximate.
+  lower_layout::typearg_at(src, bn.s, bn.n, k).n != 0
+}
 
 ## Whether `d`'s signature keeps it, and every call to it, to the legacy emitter on aarch64, riscv64 and
 ## wasm: a narrow-element view (`sig_has_narrow_view`), a `str` (#1576), or a niche-folded option
@@ -2242,16 +2296,30 @@ span_is_folded_option := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 ## passes such a folded option as one word and returns it as one word in rax, measured right in both
 ## directions on the default and the `x86-legacy` plans (#1576).
 ## A parameter past the six argument registers never crosses: `lower::isel` refuses a call or a function
-## that would pass one.
-pub sig_pins_legacy := fn(src : ptr(u8), d : Decl) -> bool {
+## that would pass one. A generic enum instance with an aggregate payload (`span_is_enum_inst_agg`,
+## #1033) is pinned the same way, for the same reason: those legacy emitters lay it out differently. Such
+## an instance that no signature mentions — a local built and matched in one function — is not pinned.
+## The selectors ask this about a CALLEE too, from the caller's module, so `d`'s type names are resolved
+## in `d`'s own module (`lower_layout::enter_decl_module`), as Modules §3 resolves them where they are
+## written: from `main`, a payload `Error` that `wide` declares while another module declares one too is
+## nameable from neither, and resolving it there refused a valid program as ambiguous (#1731's review, B1).
+pub sig_pins_legacy := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
+  sv := lower_layout::enter_decl_module(d.mod_start, d.mod_len)
+  r := sig_pins_legacy_here(decls, src, d)
+  lower_layout::leave_decl_module(sv)
+  r
+}
+## `sig_pins_legacy`'s answer, with `d`'s own module published as the naming module.
+sig_pins_legacy_here := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
   if sig_has_narrow_view(src, d) or type_is_str(src, d.ret_ts, d.ret_tl) { return true }
-  if span_is_folded_option(src, d.ret_ts, d.ret_tl) { return true }
+  if span_is_folded_option(src, d.ret_ts, d.ret_tl) or span_is_enum_inst_agg(decls, src, d.ret_ts, d.ret_tl) { return true }
   mut pp := d.params_head
   loop {
     match pp {
       Some(pq) => {
         pm := deref(ast::param_p(pq))
         if type_is_str(src, pm.ts, pm.tl) or span_is_folded_option(src, pm.ts, pm.tl) { return true }
+        if span_is_enum_inst_agg(decls, src, pm.ts, pm.tl) { return true }
         pp = pm.next
       }
       None => { break }
