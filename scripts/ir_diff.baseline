@@ -1,4 +1,4 @@
-9
+11
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -45,6 +45,16 @@
 # default builds both functions from the shared IR and traps as the fixture's `## expect: trap` states,
 # as aarch64, riscv64 and wasm do (the IR track takes no legacy-x86 fixes, #980):
 #     test/ir_str_index_mid_codepoint.al                legacy run 169   default run 132  (#1550)
+#
+# It was 9 and it is 11 because #1723 builds `deref(p)` read whole on the shared IR (gate run
+# 43982404790 on 089936fd, part ir, the only two new rows; the IR track takes no legacy-x86 fixes,
+# #980). Legacy x86 passes the first word of a struct read through `deref(<call>)` where the struct's
+# address is due (#1345) and dies with SIGSEGV. The default copies the pointee out (Memory §4.3) and
+# answers the fixture's `## expect: run 42`, as wasm does:
+#     test/ir_deref_agg_call.al                         legacy run 139   default run 42   (#1345)
+# Legacy x86 cannot see the enum type of `match deref(gp(q))` and refuses the build (#716). The default
+# reads it from `gp`'s declared `-> ptr(mut C)` and answers 42, which `scripts/e2e.sh` registers:
+#     test/reject_enum_match_generic_deref.al           legacy build 1   default run 42   (#716)
 #
 # ir_diff prints the first six, and the ninth, as UNEXPLAINED: its `oracle` (scripts/fixture_oracle.sh)
 # reads only the legacy header shapes (`## build_reject`, `## Expected exit: N`) in the first 30 lines,
