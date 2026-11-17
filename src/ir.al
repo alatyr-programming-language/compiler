@@ -1723,6 +1723,12 @@ pub Construct := enum {
   SAssign, SWhile, SFieldAssign, SReturn, SIf, SMatch, SFor, SDerefAssign, SIndexAssign, SIndexFieldAssign,
   SFieldPathAssign, SLoop, SBreak, SContinue, SExprStmt, SCompIf, SCompFor, SCompMatch, SCompForRange,
   SUnchecked, SAllocWith,
+  ## The call family: one arm per cause a call is refused for (`ir::build`'s `ib_callee` and the call
+  ## builders), so the census ranks the causes. `ECall` stays the label of a refusal at a call that no
+  ## cause was found for, so an unclassified one shows up as a row of its own.
+  ECallGeneric, ECallOverload, ECallBuiltin, ECallFnValue, ECallQualified, ECallMethod, ECallTypeName,
+  ECallUnresolved, ECallArity, ECallManyArgs, ECallExtern, ECallResult, ECallResultAgg, ECallAggValue,
+  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos,
   ENum, EBoolLit, EVar, EBin, EIf, EMatch, ECall, EStructLit, EField, EEnumLit, EAddrOf, EDeref, EStrLit,
   EArrayLit, EIndex, ETry, EFloatLit, ESlice, ECompField, EUnchecked, ELambda, EFnRef, EBitcast, ELoop,
 }
@@ -1754,6 +1760,28 @@ pub construct_name := fn(c : Construct) -> str {
     EIndex => { "expr Index" }; ETry => { "expr Try" }; EFloatLit => { "expr FloatLit" }; ESlice => { "expr Slice" }
     ECompField => { "expr CompField" }; EUnchecked => { "expr Unchecked" }; ELambda => { "expr Lambda" }
     EFnRef => { "expr FnRef" }; EBitcast => { "expr Bitcast" }; ELoop => { "expr Loop" }
+    ECallGeneric => { "call: generic callee (needs a mono instance)" }
+    ECallOverload => { "call: several functions of that name (an overload set)" }
+    ECallBuiltin => { "call: built-in or intrinsic callee" }
+    ECallFnValue => { "call: callee is a value, not a function declaration" }
+    ECallQualified => { "call: qualified callee that resolves to no function here" }
+    ECallMethod => { "call: method form whose callee resolves to no function here" }
+    ECallTypeName => { "call: callee names a type" }
+    ECallUnresolved => { "call: callee resolves to no declaration" }
+    ECallArity => { "call: argument count differs from the callee's parameter count" }
+    ECallManyArgs => { "call: more than eight arguments" }
+    ECallExtern => { "call: extern callee (slice 2's call_c)" }
+    ECallResult => { "call: callee result is neither a kernel scalar nor a register-returned aggregate" }
+    ECallResultAgg => { "call: aggregate result of a type the builder does not lay out" }
+    ECallAggValue => { "call: aggregate result where a scalar is due" }
+    ECallArgMode => { "call: argument to an out/in out parameter that is not a place the builder passes" }
+    ECallArgType => { "call: argument to a parameter whose type the convention does not pass" }
+    ECallConvert => { "call: @convert inside unchecked or of a generic conversion" }
+    ECallCast => { "call: scalar conversion of a non-integer" }
+    ECallBrand => { "call: brand or required-type construction the builder does not build" }
+    ECallRequire => { "call: @require predicate the builder does not call" }
+    ECallLayoutQ => { "call: size/align of an operand the builder does not lay out" }
+    ECallAggPos => { "call: in aggregate position, with no aggregate result the builder receives" }
   }
 }
 

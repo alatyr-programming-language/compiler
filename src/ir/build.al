@@ -221,6 +221,28 @@ ib_no := fn(bp : ptr(mut IbB), e : ptr(Expr), w : NyWhy) -> Option(VRegId) {
   ib_refuse_expr(bp, e, w)
   Option(VRegId).None
 }
+## Is `e` a call?
+ib_is_call := fn(e : ptr(Expr)) -> bool {
+  match deref(e) {
+    Expr::Call(cs, cl, na, ah) => { true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+## Refuse at `e` for reason `w`, naming the call cause `c` when `e` is a call (`e`'s own construct
+## otherwise), so the census ranks why calls are refused instead of one `expr Call` label.
+ib_refuse_call := fn(bp : ptr(mut IbB), e : ptr(Expr), w : NyWhy, c : Construct) {
+  if not ib_is_call(e) { ib_refuse_expr(bp, e, w); return }
+  sp : Option(u64) = expr_span(e)
+  ib_refuse(bp, c, w, sp)
+}
+## A call refused for cause `c`, as an expression builder's answer.
+ib_no_call := fn(bp : ptr(mut IbB), e : ptr(Expr), c : Construct) -> Option(VRegId) {
+  ib_refuse_call(bp, e, NyWhy.NwOutside, c)
+  Option(VRegId).None
+}
 ## The source offset a checked op carries (V9): its expression's, else the function's name.
 ib_span_of := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> usize {
   sp : Option(u64) = expr_span(e)
@@ -594,7 +616,7 @@ ib_bx_brand_ctor := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), c
   bv : IbB = deref(bp)
   uko : Option(IbKS) = ib_name_ks(bv.src, us, un)
   mut uk : IbKS = IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
-  match uko { Some(k) => { uk = k }; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
+  match uko { Some(k) => { uk = k }; None => { return ib_no_call(bp, e, Construct.ECallBrand) } }
   ke := ib_ty(bp, e)?
   if not ib_ks_eq(ke, uk) { return ib_no(bp, e, NyWhy.NwDisagree) }
   mut ae : Option(ptr(Expr)) = Option(ptr(Expr)).None
@@ -618,7 +640,7 @@ ib_bx_brand_ctor := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), c
     }
     None => {}
   }
-  ib_no(bp, e, NyWhy.NwOutside)
+  ib_no_call(bp, e, Construct.ECallBrand)
 }
 ## The `@require` gate on `v`: `%ok = call pred(v)`, `trap_if not %ok require`. The predicate must be
 ## the one non-generic function of that name, of one immediate parameter of `v`'s type, returning `bool`.
@@ -631,7 +653,7 @@ ib_require_gate := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ps
       rko : Option(IbKS) = ib_name_ks(bv.src, d.ret_ts, d.ret_tl)
       mut rok := false
       match rko { Some(rk) => { rok = kty_is_bool(rk.ty) }; None => {} }
-      if d.arity != 1 or not rok or lower::extern_symbol(bv.src, d.name_start, d.name_len).n != 0 { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+      if d.arity != 1 or not rok or lower::extern_symbol(bv.src, d.name_start, d.name_len).n != 0 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallRequire); return false }
       mut pok := false
       match d.params_head {
         Some(pq) => {
@@ -641,7 +663,7 @@ ib_require_gate := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ps
         }
         None => {}
       }
-      if not pok { ib_refuse_expr(bp, e, NyWhy.NwOutside); return false }
+      if not pok { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallRequire); return false }
       f := ib_b_f(bp)
       mut it := inst0(Op.OpCall)
       dnm := str_at((bv.src + d.name_start), d.name_len)
@@ -660,7 +682,7 @@ ib_require_gate := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ps
     }
     None => {}
   }
-  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallRequire)
   false
 }
 ## A call in value position: it must have a result.
@@ -670,7 +692,7 @@ ib_bx_callv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : u
     CoValue(v) => { Option(VRegId).Some(v) }
     CoVoid => { ib_no(bp, e, NyWhy.NwDisagree) }
     CoRefused => { Option(VRegId).None }
-    CoAgg(rf) => { ib_no(bp, e, NyWhy.NwOutside) }
+    CoAgg(rf) => { ib_no_call(bp, e, Construct.ECallAggValue) }
   }
 }
 
@@ -1292,7 +1314,7 @@ ib_call_brand_convert := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Exp
   if ci < 0 { return Option(CallOut).None }
   cd : Decl = deref(ib_decl_ptr(decls, usize(ci)))
   if ib_b_unch(bp) or cd.is_generic {
-    ib_refuse_expr(bp, e, NyWhy.NwOutside)
+    ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallConvert)
     return Option(CallOut).Some(CallOut.CoRefused)
   }
   Option(CallOut).Some(ib_call_decl(bp, a, e, usize(ci), na, ah))
@@ -1303,7 +1325,7 @@ ib_call_brand_convert := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Exp
 ## An integer is widened, or narrowed by `fit` (`narrow` trap) — `ext` inside `unchecked` (§4). A `bool`
 ## becomes 0 or 1.
 ib_bx_conv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), to : IbKS, na : usize, ah : Option(ptr(mut Arg))) -> Option(VRegId) {
-  if na != 1 or not kty_is_int(to.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
+  if na != 1 or not kty_is_int(to.ty) { return ib_no_call(bp, e, Construct.ECallCast) }
   a0 := deref(arg_at(ah, "argument list ended early"))
   lk : VTy = sty_get(a0.e)
   if vty_is_lit(lk) {
@@ -1323,7 +1345,7 @@ ib_bx_conv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), to : Ib
     ib_plain(bp, a, Op.OpEnd)
     return Option(VRegId).Some(res)
   }
-  if not kty_is_int(from.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
+  if not kty_is_int(from.ty) { return ib_no_call(bp, e, Construct.ECallCast) }
   w := ib_ext_to(bp, a, xv, ib_ks_i64(from.sg))
   sp := ib_span_of(bp, e)
   nw := ib_narrow_to(bp, a, w, to, TrapKind.TkNarrow, sp)
@@ -1435,12 +1457,11 @@ ib_rotate := fn(bp : ptr(mut IbB), in out a : rt::Arena, sk : ShiftK, k : IbKS, 
 ## `ib_coerce` when sema accepted a narrower integer); the result is sema's record of the call, and it
 ## must be the callee's declared result.
 ib_call_user := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg))) -> CallOut {
-  ci : Option(u64) = ib_callee_decl(bp, cs, cl)
-  match ci {
-    Some(x) => { return ib_call_decl(bp, a, e, usize(x), na, ah) }
-    None => {}
+  ce : IbCallee = ib_callee(bp, cs, cl)
+  match ce {
+    CeFn(x) => { return ib_call_decl(bp, a, e, usize(x), na, ah) }
+    CeNo(c) => { ib_refuse_call(bp, e, NyWhy.NwOutside, c) }
   }
-  ib_refuse_expr(bp, e, NyWhy.NwOutside)
   CallOut.CoRefused
 }
 ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : usize, na : usize, ah : Option(ptr(mut Arg))) -> CallOut {
@@ -1448,8 +1469,10 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
   d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), di))
   ## Only an Alatyr function with a body is called through the Alatyr convention; a syscall or an extern
   ## is slice 2's `syscall` / `call_c`, and more than 8 arguments are not modelled (docs/ir-slice-1.md §3).
-  if d.arity != na or na > 8 or lower::extern_symbol(src, d.name_start, d.name_len).n != 0 {
-    ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  if d.arity != na { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallArity); return CallOut.CoRefused }
+  if na > 8 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallManyArgs); return CallOut.CoRefused }
+  if lower::extern_symbol(src, d.name_start, d.name_len).n != 0 {
+    ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallExtern)
     return CallOut.CoRefused
   }
   ## The result first: a callee whose result is not a kernel scalar is outside the subset, and sema's
@@ -1462,7 +1485,7 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
       ## #1622: a view result is received in a fresh `{ptr, len}` object.
       vro : Option(IbVEl) = ib_view_type_elem(ib_b_decls(bp), src, a, d.ret_ts, d.ret_tl)
       match vro { Some(vr) => { agg = Option(IbSt).Some(ib_view_st()) }; None => { agg = ib_agg_named(bp, a, d.ret_ts, d.ret_tl) } }
-      match agg { Some(st) => {}; None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return CallOut.CoRefused } }
+      match agg { Some(st) => {}; None => { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallResultAgg); return CallOut.CoRefused } }
     } else {
       res = ib_call_result(bp, e, d)
       if ib_b_failed(bp) { return CallOut.CoRefused }
@@ -1703,7 +1726,7 @@ ib_call_result := fn(bp : ptr(mut IbB), e : ptr(Expr), d : Decl) -> Option(IbKS)
     Some(kr) => { return ib_call_result_is(bp, e, kr) }
     None => {}
   }
-  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallResult)
   Option(IbKS).None
 }
 ib_call_result_is := fn(bp : ptr(mut IbB), e : ptr(Expr), kr : IbKS) -> Option(IbKS) {
@@ -1798,7 +1821,10 @@ ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param,
       }
     }
   }
-  ib_no(bp, e, NyWhy.NwOutside)
+  ## Refused: a by-place parameter whose argument is not a place passed here, else a parameter type
+  ## the convention does not pass.
+  if pm.pmode != 0 { return ib_no_call(bp, e, Construct.ECallArgMode) }
+  ib_no_call(bp, e, Construct.ECallArgType)
 }
 ## The place an `out` / `in out` aggregate argument `ae` names: a struct or enum local, a by-reference
 ## parameter passed on, `deref(q)`, or a field of one of those. A bare POINTER name is not a place of the
@@ -1867,14 +1893,20 @@ ib_decl_named_at := fn(decls : ptr(rt::Vec), s : usize, n : usize, want_fn : boo
 ## half), else the ONE non-generic function declaration of that name; none when there is no such function
 ## or several (an overload set is the mangling's, `docs/ir-slice-2.md`, so it is refused here).
 ib_callee_decl := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
+  ce : IbCallee = ib_callee(bp, cs, cl)
+  match ce { CeFn(x) => { Option(u64).Some(x) }; CeNo(c) => { Option(u64).None } }
+}
+## What a callee span resolves to: the declaration a direct call is built against, or why there is none.
+IbCallee := enum { CeFn(u64), CeNo(Construct) }
+ib_callee := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> IbCallee {
   decls := ib_b_decls(bp)
   src := ib_b_src(bp)
   idc : Option(u64) = ib_decl_named_at(decls, cs, cl, true)
   match idc {
     Some(x) => {
       dx : Decl = deref(ib_decl_ptr(decls, usize(x)))
-      if dx.is_generic { return Option(u64).None }
-      return idc
+      if dx.is_generic { return IbCallee.CeNo(Construct.ECallGeneric) }
+      return IbCallee.CeFn(x)
     }
     None => {}
   }
@@ -1890,8 +1922,53 @@ ib_callee_decl := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
     }
     i = i + 1
   }
-  if hits != 1 { return Option(u64).None }
-  found
+  if hits > 1 { return IbCallee.CeNo(Construct.ECallOverload) }
+  if hits == 1 {
+    match found { Some(x) => { return IbCallee.CeFn(x) }; None => { return IbCallee.CeNo(Construct.ECallGeneric) } }
+  }
+  IbCallee.CeNo(ib_callee_none_why(bp, cs, cl))
+}
+## Why no function declaration has the name `[cs, cs+cl)`: a built-in (`sema::is_builtin_callee`, the
+## checker's one list), a value bound in the function or a module value (a fn value or a closure), a
+## qualified path or a method (UFCS) form the front half left unresolved, a type's name, or nothing.
+ib_callee_none_why := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Construct {
+  bv : IbB = deref(bp)
+  src := bv.src
+  if sema::is_builtin_callee(src, cs, cl) { return Construct.ECallBuiltin }
+  bd : IbBind = ib_lookup(bp, cs, cl)
+  mut bound : bool = true
+  match bd {
+    BdNone => { bound = false }
+    BdVal(v, vts, vtn) => {}
+    BdAgg(fr, sd, ts, tn) => {}
+    BdMem(mf, mns) => {}
+    BdArr(af, ats, atn) => {}
+    BdRef(rv, rsd, rts, rtn) => {}
+    BdView(wf, wes, wen) => {}
+    BdArrI(xf, xn, xes, xen) => {}
+    BdArrRef(qv, qn, qes, qel) => {}
+    BdStr(sf) => {}
+  }
+  if bound { return Construct.ECallFnValue }
+  d : Decl = deref(ib_decl_ptr(bv.decls, bv.di))
+  if ib_is_param_of(src, d, cs, cl) { return Construct.ECallFnValue }
+  mut i : usize = 0
+  while i + 1 < cl {
+    if str_at((src + cs + i), 2) == "::" { return Construct.ECallQualified }
+    i = i + 1
+  }
+  if cs != 0 and str_at((src + cs - 1), 1) == "." { return Construct.ECallMethod }
+  cnt := rt::vec_len(deref(bv.decls))
+  mut j : usize = 0
+  while j < cnt {
+    dj : Decl = deref(ib_decl_ptr(bv.decls, j))
+    if not dj.is_fn and dj.name_len == cl and streq(src, dj.name_start, dj.name_len, cs, cl) {
+      if dj.kind == lower_layout::DECL_KIND_VALUE { return Construct.ECallFnValue }
+      return Construct.ECallTypeName
+    }
+    j = j + 1
+  }
+  Construct.ECallUnresolved
 }
 
 ## ── aggregates (slice 3a, `docs/ir-slice-3.md` §1) ──
@@ -2215,7 +2292,7 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
       }
     }
     None => {
-      ib_refuse_expr(bp, e, NyWhy.NwOutside)
+      ib_refuse_call(bp, e, NyWhy.NwOutside, ib_agg_call_why(bp, e))
       return Option(IbObj).None
     }
   }
@@ -2277,8 +2354,23 @@ ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) 
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
-  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallAggPos)
   Option(IbObj).None
+}
+## Why a call in aggregate position has no aggregate type: its callee's own cause when it resolves to no
+## function, else a result the builder does not receive as an aggregate.
+ib_agg_call_why := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> Construct {
+  match deref(e) {
+    Expr::Call(cs, cl, na, ah) => {
+      ce : IbCallee = ib_callee(bp, cs, cl)
+      match ce { CeFn(x) => { Construct.ECallAggPos }; CeNo(c) => { c } }
+    }
+    Expr::Var | Expr::StructLit | Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Field
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {
+      Construct.ECallAggPos
+    }
+  }
 }
 ## Is the place expression `b` rooted at a name through field steps only (so resolving it emits nothing)?
 ib_place_pure := fn(b : ptr(Expr)) -> bool {
@@ -5003,7 +5095,7 @@ ib_bx_layout_q := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), q :
   match deref(ae) {
     Expr::Var(s, n) => {
       bd : IbBind = ib_lookup(bp, s, n)
-      match bd { BdNone => {}; BdRef(rv, rsd, rts, rtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdVal(v, vts, vtn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdMem(mf, mns) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdArr(af, ats, atn) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdView(wf, wes, wen) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdStr(sf) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdArrI(xf, xn, xes, xen) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdArrRef(qv, qn, qes, qel) => { return ib_no(bp, e, NyWhy.NwOutside) } }
+      match bd { BdNone => {}; BdRef(rv, rsd, rts, rtn) => { return ib_no_call(bp, e, Construct.ECallLayoutQ) }; BdVal(v, vts, vtn) => { return ib_no_call(bp, e, Construct.ECallLayoutQ) }; BdAgg(fr, sd, ts, tn) => { return ib_no_call(bp, e, Construct.ECallLayoutQ) }; BdMem(mf, mns) => { return ib_no_call(bp, e, Construct.ECallLayoutQ) }; BdArr(af, ats, atn) => { return ib_no_call(bp, e, Construct.ECallLayoutQ) }; BdView(wf, wes, wen) => { return ib_no_call(bp, e, Construct.ECallLayoutQ) }; BdStr(sf) => { return ib_no_call(bp, e, Construct.ECallLayoutQ) }; BdArrI(xf, xn, xes, xen) => { return ib_no_call(bp, e, Construct.ECallLayoutQ) }; BdArrRef(qv, qn, qes, qel) => { return ib_no_call(bp, e, Construct.ECallLayoutQ) } }
       src := ib_b_src(bp)
       mut bytes : usize = 0
       ko : Option(IbKS) = ib_name_ks(src, s, n)
@@ -5018,7 +5110,7 @@ ib_bx_layout_q := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), q :
           sto : Option(IbSt) = ib_struct_named(bp, a, s, n)
           match sto {
             Some(st) => { match q { LqSize => { bytes = st.size }; LqAlign => { bytes = st.align } } }
-            None => { return ib_no(bp, e, NyWhy.NwOutside) }
+            None => { return ib_no_call(bp, e, Construct.ECallLayoutQ) }
           }
         }
       }
@@ -5031,7 +5123,7 @@ ib_bx_layout_q := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), q :
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => {}
   }
-  ib_no(bp, e, NyWhy.NwOutside)
+  ib_no_call(bp, e, Construct.ECallLayoutQ)
 }
 
 ## ── statements ──
