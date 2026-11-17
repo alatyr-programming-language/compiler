@@ -2704,6 +2704,10 @@ run_pkg_exit issue403_bare_private_legal issue403-bare-private-legal 42
 # reject package reads a field of `a`'s own scalar `cfg` while `z` declares a struct `cfg`: the seed
 # refuses it only as `unbound name`, this slice with its own located class.
 run_pkg_exit issue703_global_module_scope issue703-global-module-scope 42
+# #1744: module-path calls the shared IR now builds on x86_64, beside one it still refuses for a type
+# both modules declare, and a module-path call into an overload set the IR refuses (legacy picks the member).
+run_pkg_exit issue1744_qualified_callee_ir issue1744-qualified-callee-ir 42
+run_pkg_exit issue1744_qualified_overload_ir issue1744-qualified-overload-ir 42
 run_pkg_check_build_located issue703_global_module_scope_reject 2 a "a FIELD ACCESS on a SCALAR value: \`.\` selects a struct or union field, a tuple position \`.N\`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name"
 # A QUALIFIED owner is never decided by the scalar check: `z::cfg.x` names `z`'s struct global
 # (Modules §2, MOD-3) although `a` declares a scalar `cfg`. The previous head of #1309 refused it with
