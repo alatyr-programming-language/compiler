@@ -454,6 +454,10 @@ pub set_type_ref_module := fn(s : usize, l : usize, rs : usize, rl : usize) {
   TRM_S = s ; TRM_L = l ; TRM_SET = true ; TRM_RS = rs ; TRM_RL = rl
 }
 pub clear_type_ref_module := fn() { TRM_SET = false }
+## The root span alone, published by `lower::set_root_module` and `sema::set_root_module`: since #1734
+## a query is ranked from its spelling module even in a pass that never publishes a lowering module,
+## and the root must rank 0 there too.
+pub set_type_root := fn(rs : usize, rl : usize) { TRM_RS = rs ; TRM_RL = rl }
 ## Read the published pair. `lower`'s `@convert` scope rank needs it because that resolution runs BOTH
 ## from `emit_fn` and from the DCE mark walk, and only this pair is published in both.
 pub type_ref_mod_on := fn() -> bool { TRM_SET }
@@ -495,23 +499,146 @@ type_anc_rank_from := fn(src : ptr(u8), ms : usize, ml : usize, cs : usize, cl :
   i64(ml)
 }
 
-## The rank of a candidate TYPE declaration's module as seen from the published naming module — the
-## own-module/lib-path head match ABOVE the whole ancestor chain (ranks are path LENGTHS, so
-## `TRM_L + 1` outranks every ancestor), then the §3 chain nearest-first. -1 = §3 makes it
-## unnameable from here. One helper so struct, enum, union, alias, brand and `@require` order their
-## candidates by exactly the same rule.
-pub type_mod_rank := fn(src : ptr(u8), as_ : usize, al : usize) -> i64 {
-  if TRM_SET == false { return -1 }
-  type_mod_rank_from(src, as_, al, TRM_S, TRM_L)
-}
-
-## The same rank against an EXPLICIT naming module — for the one consumer that knows its module
-## outright rather than reading the published one: the PARSER's struct field-order table, which
-## resolves a struct literal's `f = v` names while `pc.mod_s`/`pc.mod_l` name the module being parsed.
-## Published so the ranking rule lives in exactly ONE place across the whole compiler.
+## The rank of a candidate TYPE declaration's module `[as_, al)` as seen from the naming module
+## `[ms, ml)` — the own-module/lib-path head match ABOVE the whole ancestor chain (ranks are path
+## LENGTHS, so `ml + 1` outranks every ancestor), then the §3 chain nearest-first. -1 = §3 makes it
+## unnameable from there. The ONE ranking rule: struct, enum, union, alias, brand and `@require` reach
+## it through `type_mod_rank_in` below, and the PARSER's struct field-order table calls it directly
+## with `pc.mod_s`/`pc.mod_l`, the module being parsed.
 pub type_mod_rank_from := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : usize) -> i64 {
   if type_mod_head_matches(src, as_, al, ms, ml) { return i64(ml) + 1 }
   type_anc_rank_from(src, as_, al, ms, ml)
+}
+
+## ---------------------------------------------------------------------------------------------
+## #1734 — Modules §3, Types §4.1: a bare type NAME is resolved in the module whose TEXT spells it.
+## Every span the resolvers here are asked about is an offset into the driver's ONE concatenated
+## buffer, so the span itself says which module wrote it. The published module above (TRM) is the
+## module of the function being LOWERED, which is the right answer only for a name that function's own
+## module spelled. A callee's signature (`mk := m::mk`, then `v := mk()` — `-> S` is `m`'s text), a
+## foreign struct's field types and an enum's payload types are spans of ANOTHER module, and resolving
+## them under the caller's module gave the caller's same-named `S` its layout: a wrong field offset, a
+## wrong value (measured on x86_64 before this, due 42: 87 through an alias, 215 through a qualified
+## call, 0 for a foreign struct's field, #1737; the twins answered 23 for the qualified call).
+##
+## The driver publishes its file table here: per file, the module IDENTITY span it stamps on that
+## file's declarations, and the file's extent in the buffer. A span inside a file is named by that
+## file's module; a span outside every file (a compiler-synthesized one, an early pass with no table,
+## or a buffer this table was not published for) falls back to the published module, unchanged.
+mut TSM_SRC : Option(ptr(u8)) = Option.None
+mut TSM_MS : Option(ptr(rt::Vec)) = Option.None
+mut TSM_ML : Option(ptr(rt::Vec)) = Option.None
+mut TSM_SO : Option(ptr(rt::Vec)) = Option.None
+mut TSM_SL : Option(ptr(rt::Vec)) = Option.None
+pub set_spelling_modules := fn(src : ptr(u8), ms : ptr(rt::Vec), ml : ptr(rt::Vec), so : ptr(rt::Vec), sl : ptr(rt::Vec)) {
+  TSM_SRC = Option(ptr(u8)).Some(src)
+  TSM_MS = Option(ptr(rt::Vec)).Some(ms)
+  TSM_ML = Option(ptr(rt::Vec)).Some(ml)
+  TSM_SO = Option(ptr(rt::Vec)).Some(so)
+  TSM_SL = Option(ptr(rt::Vec)).Some(sl)
+}
+## A single-source pipeline has one module, so the published module already answers every name.
+pub clear_spelling_modules := fn() {
+  TSM_SRC = Option(ptr(u8)).None
+  TSM_MS = Option(ptr(rt::Vec)).None
+  TSM_ML = Option(ptr(rt::Vec)).None
+  TSM_SO = Option(ptr(rt::Vec)).None
+  TSM_SL = Option(ptr(rt::Vec)).None
+}
+
+## The naming module of one type query, a module identity span `[s, s+l)`. A query has none (`None`)
+## only when no table and no lowering module are published: the historical unranked answer.
+pub ModSpan := struct { s : usize, l : usize }
+## The published (lowering) module.
+type_naming_published := fn() -> Option(ModSpan) {
+  if TRM_SET { return Option(ModSpan).Some(ModSpan(s = TRM_S, l = TRM_L)) }
+  Option(ModSpan).None
+}
+
+## Whether a resolver cache line keyed `(ctx, ms, ml)` was filled under the naming module `nm`. The
+## cache arrays are flat words, so a line stores `ctx = true` and the span for `Some`, `ctx = false`
+## for `None`; this is the one place that reads that key back.
+naming_hit := fn(src : ptr(u8), nm : Option(ModSpan), ctx : bool, ms : usize, ml : usize) -> bool {
+  match nm {
+    Some(m) => { return ctx and ml == m.l and streq(src, ms, ml, m.s, m.l) }
+    None => { return ctx == false }
+  }
+}
+
+## The file index whose extent holds offset `off` in the published table: the last file starting at
+## or before `off` (files are appended in order, so their offsets ascend), if `off` is inside it.
+spelling_file := fn(so : ptr(rt::Vec), sl : ptr(rt::Vec), off : usize) -> Option(u64) {
+  n := rt::vec_len(deref(so))
+  mut lo : usize = 0
+  mut hi : usize = n
+  while lo < hi {
+    mid := lo + (hi - lo) / 2
+    if rt::vec_get(deref(so), mid) <= off { lo = mid + 1 } else { hi = mid }
+  }
+  if lo == 0 { return Option(u64).None }
+  k := lo - 1
+  if off < rt::vec_get(deref(so), k) + rt::vec_get(deref(sl), k) { return Option(u64).Some(u64(k)) }
+  Option(u64).None
+}
+
+## The module whose TEXT holds offset `s` of `src`, read off the published file table: `None` for a
+## synthetic span, an offset outside every file, a buffer the table was not published for, or no
+## table. The one answer to "which module wrote this span", read by `type_naming_at` below and by
+## sema's `sema_span_module`.
+pub spelling_module_at := fn(src : ptr(u8), s : usize) -> Option(ModSpan) {
+  none := Option(ModSpan).None
+  if ast::span_is_synthetic(s) { return none }
+  srco : Option(ptr(u8)) = TSM_SRC
+  mso : Option(ptr(rt::Vec)) = TSM_MS
+  mlo : Option(ptr(rt::Vec)) = TSM_ML
+  soo : Option(ptr(rt::Vec)) = TSM_SO
+  slo : Option(ptr(rt::Vec)) = TSM_SL
+  match srco { Some(ps) => { if ps != src { return none } }; None => { return none } }
+  match mso {
+    Some(ms) => {
+      match mlo {
+        Some(ml) => {
+          match soo {
+            Some(so) => {
+              match slo {
+                Some(sl) => {
+                  fo : Option(u64) = spelling_file(so, sl, s)
+                  match fo {
+                    Some(k) => { return Option(ModSpan).Some(ModSpan(s = rt::vec_get(deref(ms), usize(k)), l = rt::vec_get(deref(ml), usize(k)))) }
+                    None => {}
+                  }
+                }
+                None => {}
+              }
+            }
+            None => {}
+          }
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  none
+}
+
+## The naming module for a type name spelled at offset `s` of `src`: the module whose text holds it,
+## else the published one. ONE answer, read by every ranked resolver below.
+pub type_naming_at := fn(src : ptr(u8), s : usize) -> Option(ModSpan) {
+  sm := spelling_module_at(src, s)
+  match sm {
+    Some(m) => { return Option(ModSpan).Some(m) }
+    None => { return type_naming_published() }
+  }
+}
+
+## `type_mod_rank_from` against one query's naming module (`type_naming_at`'s answer); -1 for every
+## candidate when there is none, which keeps the historical unranked answer.
+pub type_mod_rank_in := fn(src : ptr(u8), as_ : usize, al : usize, nm : Option(ModSpan)) -> i64 {
+  match nm {
+    Some(m) => { return type_mod_rank_from(src, as_, al, m.s, m.l) }
+    None => { return -1 }
+  }
 }
 
 ## Write the SOURCE LINE containing byte offset `off` to stderr, then a span / a literal — the
@@ -560,14 +687,14 @@ pub ll_show_str := fn(m : str) {
 ## of them on this module's §3 chain. Picking one by declaration order is what produced the measured
 ## wrong LAYOUT (a sibling's struct sized instead of the ancestor's), so the ambiguity is rejected
 ## rather than guessed — Types §4.1: a named declaration is NOMINAL, its identity is the declaration.
-reject_type_ambiguous := fn(src : ptr(u8), s : usize, n : usize, what : str) {
+reject_type_ambiguous := fn(src : ptr(u8), s : usize, n : usize, what : str, nmod : ModSpan) {
   ll_show_src_line(src, s)
   ll_show_str("selfhost: the bare type name `")
   ll_show_span(src, s, n)
   ll_show_str("` on the source line above names a ")
   ll_show_str(what)
   ll_show_str(" declared in MORE THAN ONE module, and Modules §3 lets module `")
-  ll_show_span(src, TRM_S, TRM_L)
+  ll_show_span(src, nmod.s, nmod.l)
   ll_show_str("` name none of them.\n")
   panic("selfhost: Modules §3 — a bare type name resolves in the naming module and then UP its ancestor chain, nearest first; a sibling's, a descendant's or an unrelated module's declaration is reachable only through a path, and only when it is `pub`. Types §4.1 makes a named declaration NOMINAL, so picking the first or the last declaration in declaration order would give this reference a DIFFERENT type's layout (a silent wrong size, offset or variant tag): qualify the type with the module path it means.")
 }
@@ -758,12 +885,13 @@ LNI_D = unchecked bitcast(usize, deref(decls).data)
 
 ## ---- the shared RANKED selector ----------------------------------------------------------------
 ## The declaration of kind `k` (2 = struct, 3 = enum OR raw union) whose TYPE tail-name matches, as
-## seen from the PUBLISHED naming module. Preference order, applied once for every type-shaped query
-## so struct, enum, union, alias, brand and `@require` cannot disagree with one another:
+## seen from the module that SPELLS the name (`type_naming_at`, #1734). Preference order, applied
+## once for every type-shaped query so struct, enum, union, alias, brand and `@require` cannot
+## disagree with one another:
 ##
 ##   (1) a QUALIFIED spelling names its module outright (Modules §2) — nominal identity beats every
 ##       rank, and it is what keeps `rt::Arena` off `base::alloc`'s same-named struct;
-##   (2) the §3 chain — this module, then its ancestors NEAREST-first (`type_mod_rank`), which
+##   (2) the §3 chain — this module, then its ancestors NEAREST-first (`type_mod_rank_in`), which
 ##       includes the own-module / last-segment lib-path head match above the chain;
 ##   (3) no naming module published (an early pass) OR the name has exactly ONE declaration in the
 ##       whole program: the historical answer stands. Both are PRESERVED DELIBERATELY — the second is
@@ -775,6 +903,8 @@ type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   cnt := rt::vec_len(deref(decls))
   nm := name_tail(src, s, n)
   qh := type_path_head(src, s, n)
+  ## #1734: ranked from the module that SPELLS the name, not the one being lowered.
+  nmod := type_naming_at(src, s)
   mut res := 0 - 1
   mut hits := 0
   mut best := 0 - 1
@@ -793,7 +923,7 @@ type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
       if d.kind == k and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         res = i64(i)
         hits = hits + 1
-        r := type_mod_rank(src, d.mod_start, d.mod_len)
+        r := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
         if r > best { best = r ; besti = i64(i) }
         if qh.n != 0 and type_module_eq(src, d.mod_start, d.mod_len, qh.s, qh.n) { qi = i64(i) }
         if lower_attrs::decl_is_pub(src, d.name_start) { anypub = true }
@@ -802,7 +932,15 @@ type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   }
   if qi >= 0 { return qi }
   if besti >= 0 { return besti }
+  ## No lowering module published (sema's `check`, an early pass): the historical answer, so the
+  ## checker's own located diagnostic speaks rather than this layout reject. Ranking above still
+  ## used the spelling module (#1734).
   if TRM_SET == false { return res }
+  mut nmod_s := ModSpan(s = 0, l = 0)
+  match nmod {
+    Some(m) => { nmod_s = m }
+    None => { return res }
+  }
   if hits <= 1 { return res }
   if qh.n != 0 {
     ah := qualified_module_alias(decls, src, qh.s, qh.n)
@@ -824,7 +962,7 @@ type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   if anypub { return res }
   ## (7) Every candidate is NON-`pub`: §3 makes each one unnameable from here in ANY spelling, so no
   ## path could have meant it and no head can have been lost. The reference is unanswerable.
-  reject_type_ambiguous(src, s, n, what)
+  reject_type_ambiguous(src, s, n, what, nmod_s)
   0 - 1
 }
 
@@ -906,8 +1044,14 @@ ll_projection_head_for := fn(src : ptr(u8), rs : usize, rl : usize, ns : usize, 
 ## declared in more than one module, i.e. only on the path that used to guess.
 binding_type_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, k : usize) -> i64 {
   if nl == 0 { return 0 - 1 }
-  if TRM_SET == false { return 0 - 1 }
-  if TRM_L == 0 { return 0 - 1 }
+  ## #1734: the binding is looked up in the module that spells `[ns, ns+nl)`.
+  mut nmod := ModSpan(s = 0, l = 0)
+  nmo := type_naming_at(src, ns)
+  match nmo {
+    Some(m) => { nmod = m }
+    None => { return 0 - 1 }
+  }
+  if nmod.l == 0 { return 0 - 1 }
   cnt := rt::vec_len(deref(decls))
   mut hs := 0
   mut hl := 0
@@ -917,7 +1061,7 @@ binding_type_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0
-       and type_module_eq(src, d.mod_start, d.mod_len, TRM_S, TRM_L) {
+       and type_module_eq(src, d.mod_start, d.mod_len, nmod.s, nmod.l) {
       if d.name_len == 0 {
         pr := ll_projection_head_for(src, d.ret_ts, d.ret_tl, ns, nl)
         if pr.n != 0 { hs = pr.s; hl = pr.n; ts = ns; tl = nl }
@@ -947,6 +1091,7 @@ binding_type_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
 enum_ref_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
   if type_path_head(src, s, n).n != 0 { return false }
   if TRM_SET == false { return false }
+  nmod := type_naming_at(src, s)
   nm := name_tail(src, s, n)
   cnt := rt::vec_len(deref(decls))
   th := _fnv_name(src, nm.s, nm.n)
@@ -961,7 +1106,7 @@ enum_ref_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
       d := deref(decl_get(decls, i))
       if d.kind == 3 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         hits = hits + 1
-        r := type_mod_rank(src, d.mod_start, d.mod_len)
+        r := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
         if r > best { best = r }
       }
     }
@@ -979,8 +1124,9 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   h := _name_hash(src, s, n)
   cnt := rt::vec_len(deref(decls))
   layout_cache_use(decls, cnt)
-  if _sdc_n[h] == n and _sdc_src[h] == src and _sdc_ctx[h] == TRM_SET
-     and _sdc_ml[h] == TRM_L and streq(src, _sdc_ms[h], _sdc_ml[h], TRM_S, TRM_L)
+  ## #1734: the cache is keyed by the naming module of THIS span, which is what the answer depends on.
+  nmod := type_naming_at(src, s)
+  if _sdc_n[h] == n and _sdc_src[h] == src and naming_hit(src, nmod, _sdc_ctx[h], _sdc_ms[h], _sdc_ml[h])
      and streq(src, _sdc_s[h], _sdc_n[h], s, n) { return _sdc_i[h] }
   nm := name_tail(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 2, "struct")
@@ -1001,14 +1147,14 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
     ## alias declarations are ranked by the SAME §3 rule as the struct itself: an ancestor's alias
     ## shadows an unrelated module's same-named one instead of losing to declaration order.
     if d.kind == 0 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-      ar := type_mod_rank(src, d.mod_start, d.mod_len)
+      ar := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
       if ar >= a_best { a_best = ar; alias_ts = d.ret_ts; alias_tl = d.ret_tl }
     }
     ## a GENERIC-INSTANCE type alias (TYP-10 slice C, `u128 := uint(128)`, Types §7) — the same
     ## one-level follow, keyed on the parser-recorded alias span: its BASE HEAD names the aliased
     ## generic struct (`uint`). (`alias_rhs` below recovers the FULL span, value args included.)
     if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-      ar2 := type_mod_rank(src, d.mod_start, d.mod_len)
+      ar2 := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
       if ar2 >= a_best {
         abh := base_type_name(src, d.alias_ts, d.alias_tl)
         a_best = ar2; alias_ts = abh.s; alias_tl = abh.n
@@ -1019,7 +1165,10 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   ## no direct struct of this name, but the name is a type alias -> resolve its RHS (tail name).
   if res < 0 and alias_tl != 0 { res = type_decl_ranked(decls, src, alias_ts, alias_tl, 2, "struct") }
   _sdc_s[h] = s; _sdc_n[h] = n; _sdc_src[h] = src; _sdc_i[h] = res
-  _sdc_ms[h] = TRM_S; _sdc_ml[h] = TRM_L; _sdc_ctx[h] = TRM_SET
+  match nmod {
+    Some(m) => { _sdc_ms[h] = m.s; _sdc_ml[h] = m.l; _sdc_ctx[h] = true }
+    None => { _sdc_ms[h] = 0; _sdc_ml[h] = 0; _sdc_ctx[h] = false }
+  }
   res
 }
 
@@ -1036,6 +1185,7 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
 pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
   cnt := rt::vec_len(deref(decls))
   nm := name_tail(src, s, n)
+  nmod := type_naming_at(src, s)
   mut rs := s
   mut rn := n
   ## Modules §3: the alias declarations of one name are ranked, so an unrelated module's same-named
@@ -1051,8 +1201,8 @@ pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
     jc = jc + 1
     d := deref(decl_get(decls, i))
     if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n)
-       and type_mod_rank(src, d.mod_start, d.mod_len) >= a_best {
-      a_best = type_mod_rank(src, d.mod_start, d.mod_len)
+       and type_mod_rank_in(src, d.mod_start, d.mod_len, nmod) >= a_best {
+      a_best = type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
       bh := base_type_name(src, d.alias_ts, d.alias_tl)
       sdi := struct_decl_of(decls, src, bh.s, bh.n)
       edi := enum_decl_of(decls, src, bh.s, bh.n)
@@ -1083,6 +1233,7 @@ pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
 pub brand_underlying := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
   cnt := rt::vec_len(deref(decls))
   nm := name_tail(src, s, n)
+  nmod := type_naming_at(src, s)
   mut best := 0 - 1
   mut found := false
   mut rs := 0
@@ -1101,7 +1252,7 @@ pub brand_underlying := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
       ## the underlying type. `>=` keeps the last of equal-rank candidates, i.e. the historical
       ## answer (the FIRST match) whenever no naming module is published (every rank -1).
       if d.kind == 0 and d.arity == 1 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-        r := type_mod_rank(src, d.mod_start, d.mod_len)
+        r := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
         if r > best or found == false { best = r; found = true; rs = d.ret_ts; rn = d.ret_tl }
       }
     }
@@ -2546,6 +2697,7 @@ pub is_packed := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
 ## u64` sorting BEFORE the ancestor's ran the WRONG predicate (measured: a trap instead of 42).
 unary_type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> i64 {
   cnt := rt::vec_len(deref(decls))
+  nmod := type_naming_at(src, ns)
   mut best := 0 - 1
   mut besti := 0 - 1
   th := _fnv_name(src, ns, nl)
@@ -2558,7 +2710,7 @@ unary_type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl
     if lni_skip(decls, cnt, i, th) == false {
       d := deref(decl_get(decls, i))
       if d.kind == 0 and d.arity == 1 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, ns, nl) {
-        r := type_mod_rank(src, d.mod_start, d.mod_len)
+        r := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
         if r >= 0 and r > best { best = r; besti = i64(i) }
       }
     }
@@ -5412,8 +5564,9 @@ pub enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   h := _name_hash(src, s, n)
   cnt := rt::vec_len(deref(decls))
   layout_cache_use(decls, cnt)
-  if _edc_n[h] == n and _edc_src[h] == src and _edc_ctx[h] == TRM_SET
-     and _edc_ml[h] == TRM_L and streq(src, _edc_ms[h], _edc_ml[h], TRM_S, TRM_L)
+  ## #1734: keyed by the naming module of THIS span, as `struct_decl_of` is.
+  nmod := type_naming_at(src, s)
+  if _edc_n[h] == n and _edc_src[h] == src and naming_hit(src, nmod, _edc_ctx[h], _edc_ms[h], _edc_ml[h])
      and streq(src, _edc_s[h], _edc_n[h], s, n) { return _edc_i[h] }
   nm := name_tail(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 3, "enum or union")
@@ -5429,7 +5582,7 @@ pub enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
     if lni_skip(decls, cnt, i, th) == false {
       d := deref(decl_get(decls, i))
       if d.kind == 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-        ar := type_mod_rank(src, d.mod_start, d.mod_len)
+        ar := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
         if ar >= a_best {
           if d.ret_tl != 0 { a_best = ar; alias_ts = d.ret_ts; alias_tl = d.ret_tl }
           else if d.alias_tl != 0 {
@@ -5444,7 +5597,10 @@ pub enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   ## generic callers recover the full RHS through alias_rhs below.
   if res < 0 and alias_tl != 0 { res = type_decl_ranked(decls, src, alias_ts, alias_tl, 3, "enum or union") }
   _edc_s[h] = s; _edc_n[h] = n; _edc_src[h] = src; _edc_i[h] = res
-  _edc_ms[h] = TRM_S; _edc_ml[h] = TRM_L; _edc_ctx[h] = TRM_SET
+  match nmod {
+    Some(m) => { _edc_ms[h] = m.s; _edc_ml[h] = m.l; _edc_ctx[h] = true }
+    None => { _edc_ms[h] = 0; _edc_ml[h] = 0; _edc_ctx[h] = false }
+  }
   res
 }
 

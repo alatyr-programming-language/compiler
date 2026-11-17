@@ -323,7 +323,7 @@ arena_base := fn(a : ptr(mut rt::Arena)) -> usize { return unchecked bitcast(usi
 ## the self-build: not one emitted symbol moves, and the TOOL-1 fixpoint is unaffected.
 mut ROOT_MOD_S : usize = 0
 mut ROOT_MOD_L : usize = 0
-pub set_root_module := fn(s : usize, l : usize) -> i64 { ROOT_MOD_S = s ; ROOT_MOD_L = l ; return 0 }
+pub set_root_module := fn(s : usize, l : usize) -> i64 { ROOT_MOD_S = s ; ROOT_MOD_L = l ; lower_layout::set_type_root(s, l) ; return 0 }
 ## #987 — the AMBIENT stdlib's module name spans, published by `driver::d_publish_lib_modules` for the
 ## files under the stdlib root the resolver loads from (`driver::d_path_is_ambient_lib`, the classifier
 ## `check`'s trust shares): a `(mod_start, mod_len)` word-pair table of `n`
