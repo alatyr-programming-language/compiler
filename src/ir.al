@@ -1728,7 +1728,7 @@ pub Construct := enum {
   ## cause was found for, so an unclassified one shows up as a row of its own.
   ECallGeneric, ECallOverload, ECallBuiltin, ECallFnValue, ECallQualified, ECallMethod, ECallTypeName,
   ECallUnresolved, ECallArity, ECallManyArgs, ECallExtern, ECallResult, ECallResultAgg, ECallAggValue,
-  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos,
+  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer,
   ENum, EBoolLit, EVar, EBin, EIf, EMatch, ECall, EStructLit, EField, EEnumLit, EAddrOf, EDeref, EStrLit,
   EArrayLit, EIndex, ETry, EFloatLit, ESlice, ECompField, EUnchecked, ELambda, EFnRef, EBitcast, ELoop,
 }
@@ -1763,7 +1763,7 @@ pub construct_name := fn(c : Construct) -> str {
     ECallGeneric => { "call: generic callee (needs a mono instance)" }
     ECallOverload => { "call: several functions of that name (an overload set)" }
     ECallBuiltin => { "call: built-in or intrinsic callee" }
-    ECallFnValue => { "call: callee is a value, not a function declaration" }
+    ECallFnValue => { "call: callee is a value rather than a function declaration" }
     ECallQualified => { "call: qualified callee that resolves to no function here" }
     ECallMethod => { "call: method form whose callee resolves to no function here" }
     ECallTypeName => { "call: callee names a type" }
@@ -1781,7 +1781,8 @@ pub construct_name := fn(c : Construct) -> str {
     ECallBrand => { "call: brand or required-type construction the builder does not build" }
     ECallRequire => { "call: @require predicate the builder does not call" }
     ECallLayoutQ => { "call: size/align of an operand the builder does not lay out" }
-    ECallAggPos => { "call: in aggregate position, with no aggregate result the builder receives" }
+    ECallAggPos => { "call: in aggregate position with no aggregate result the builder receives" }
+    ECallDefer => { "call: defer marker (the deferred-exit drain is not built)" }
   }
 }
 

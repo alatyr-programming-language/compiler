@@ -776,7 +776,8 @@ supports; the convention is unified only when the last legacy caller of that cla
 
 A call the builder does not build is refused with the cause that stopped it, one `call: …` label per
 cause (#1733), so the census ranks them: the callee is generic, an overload set, a built-in, a value
-rather than a declaration, a qualified or method form left unresolved, a type's name, or nothing; the
+rather than a declaration, a qualified or method form left unresolved, a type's name, a `defer` marker
+(the parser's `__defer…` calls, a statement rather than a callee), or nothing; the
 argument count differs or exceeds eight; the callee is an extern; the result is neither a kernel scalar
 nor a register-returned aggregate, or is an aggregate of a type the builder does not lay out; an argument
 is not a place an `out` / `in out` parameter needs, or has a type the convention does not pass; or the

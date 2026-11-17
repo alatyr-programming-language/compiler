@@ -1935,6 +1935,9 @@ ib_callee_none_why := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Construct
   bv : IbB = deref(bp)
   src := bv.src
   if sema::is_builtin_callee(src, cs, cl) { return Construct.ECallBuiltin }
+  ## `defer e` / `defer { … }` reach the builder as the parser's marker calls (`__defer(e)`,
+  ## `__deferblk()`, `__deferblkend()`, `parser.al`'s defer desugar): a statement, not a callee.
+  if cl >= 7 and str_at((src + cs), 7) == "__defer" { return Construct.ECallDefer }
   bd : IbBind = ib_lookup(bp, cs, cl)
   mut bound : bool = true
   match bd {
