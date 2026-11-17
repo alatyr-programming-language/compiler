@@ -438,6 +438,7 @@ aarch64	test/reject_comptime_for_unchecked_min_div_neg1.al	run/133	#1232
 aarch64	test/reject_comptime_for_unchecked_min_mod_neg1.al	run/133	#1232
 aarch64	test/reject_comptime_for_unchecked_mod_zero.al	run/133	#1232
 aarch64	test/reject_comptime_for_wrap_then_overflow_i32.al	run/133	#1232
+aarch64	test/reject_enum_match_generic_deref.al	run/133	#1727
 aarch64	test/reject_slice_wide_array_elem.al	run/133	#1191
 aarch64	test/reject_slice_wide_param_elem.al	run/133	#1187
 aarch64	test/reject_view_field_array_len.al	run/133	#1191
@@ -1013,6 +1014,7 @@ riscv64	test/reject_comptime_for_unchecked_min_div_neg1.al	run/133	#1232
 riscv64	test/reject_comptime_for_unchecked_min_mod_neg1.al	run/133	#1232
 riscv64	test/reject_comptime_for_unchecked_mod_zero.al	run/133	#1232
 riscv64	test/reject_comptime_for_wrap_then_overflow_i32.al	run/133	#1232
+riscv64	test/reject_enum_match_generic_deref.al	run/133	#1727
 riscv64	test/reject_slice_wide_array_elem.al	run/133	#1191
 riscv64	test/reject_slice_wide_param_elem.al	run/133	#1187
 riscv64	test/reject_view_field_array_len.al	run/133	#1191
@@ -1572,6 +1574,7 @@ wasm	test/reject_comptime_for_unchecked_min_div_neg1.al	run/134	#1232
 wasm	test/reject_comptime_for_unchecked_min_mod_neg1.al	run/134	#1232
 wasm	test/reject_comptime_for_unchecked_mod_zero.al	run/134	#1232
 wasm	test/reject_comptime_for_wrap_then_overflow_i32.al	run/134	#1232
+wasm	test/reject_enum_match_generic_deref.al	run/134	#1188
 wasm	test/reject_slice_wide_array_elem.al	run/134	#1194
 wasm	test/reject_slice_wide_param_elem.al	run/134	#1205
 wasm	test/reject_view_field_array_len.al	run/134	#1187
