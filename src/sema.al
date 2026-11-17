@@ -3845,7 +3845,16 @@ sema_module_is_lib := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
 ## (use-before-decl, mirroring `callee_declared_anywhere`) OR be a driver-SYNTHESIZED generic clone
 ## (`__hoflam<fnpos>`, FN-6 §6.2) appended AFTER the caller. Missing it would treat the call as
 ## non-generic and check its type-arg (`u64`) as a value → a false "unbound name".
+## Issue #1753 — when the call names exactly ONE fn (`sema_call_fn_decl`, the resolver every argument
+## check asks), that fn answers. A same-named generic of a module the call cannot name (a library
+## `get(T : type, …)` beside the root's own `get(u64)`) no longer makes the call generic, which left
+## its arguments unchecked. A call naming none or an overload set keeps the name rule below.
 callee_is_generic := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize) -> bool {
+  one : Option(usize) = sema_call_fn_decl(decls, src, s, n)
+  match one {
+    Some(di) => { return deref(decl_get(decls, di)).is_generic }
+    None => {}
+  }
   mut res := false
   cnt := rt::vec_len(deref(decls))
   th := sema_tail_hash(src, s, n)
@@ -5769,13 +5778,14 @@ SemaCallFns := struct { hits : usize, last : usize }
 ## arguments go unchecked (`util::len(mk())` passed a struct to `x : u64` and answered 62).
 ## A QUALIFIED spelling `m::f` names `f` in module `m`, or in the module one alias hop names (as a
 ## qualified type does, `lower_layout::qualified_type_decl`), never a same-named `f` of another module.
-## An unqualified spelling keeps the name rule the checker has always used: every fn of that name.
+## An UNQUALIFIED spelling names the fns of the module the lower binds it in (`sema_bare_call_scan`).
 sema_call_fn_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> SemaCallFns {
   if cl == 0 { return SemaCallFns(hits = 0, last = 0) }
   qh := lower_layout::type_path_head(src, cs, cl)
   nm := lower_layout::name_tail(src, cs, cl)
   r := sema_call_fn_scan_in(decls, src, nm.s, nm.n, qh.n != 0, qh.s, qh.n)
-  if qh.n == 0 or r.hits != 0 { return r }
+  if qh.n == 0 { return sema_bare_call_scan(decls, src, cs, nm.s, nm.n, r) }
+  if r.hits != 0 { return r }
   ah := lower_layout::qualified_module_alias(decls, src, qh.s, qh.n)
   if ah.n == 0 { return r }
   sema_call_fn_scan_in(decls, src, nm.s, nm.n, true, ah.s, ah.n)
@@ -5802,6 +5812,52 @@ sema_call_fn_scan_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl :
       }
     }
   }
+  SemaCallFns(hits = hits, last = last)
+}
+## Issue #1753 / Modules §3, §5; Functions §1.4 (FN-7), MOD-3 — the fns an UNQUALIFIED call names, given
+## `all`, every fn of that name in any module. A module's scope holds its own declarations (§5), and a
+## module nested in it sees them too (§3); a same-named fn of a sibling or child module is reached only
+## by a path. So the call names the fns of the module the lower binds it in (`lower::callee_decl_ranked`):
+## the caller's own module (with the lower's last-segment lib leniency, `sema_mod_head_matches`), else the
+## nearest ancestor that declares the name. UFCS is the same call (`w.get()` is `get(w)`, MOD-3), keyed on
+## the receiver as the first argument. Before this, a root `get(u64)` and a module's `get(W)` counted as
+## one overload set, sema left the arguments unchecked, and the lower bound the root's `get(u64)` to a
+## `W` receiver: 241 on x86_64, a trap on the twins, depending on which module sorted first.
+## No candidate on the caller's chain, or a caller the span cannot place, keeps `all`, the historical
+## name rule. A single candidate needs no ranking, which keeps the module walk off the common path.
+sema_bare_call_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, ns : usize, nl : usize, all : SemaCallFns) -> SemaCallFns {
+  if all.hits < 2 { return all }
+  wm := sema_span_module(decls, src, cs)
+  if not wm.found { return all }
+  mut best : i64 = 0 - 1
+  mut hits : usize = 0
+  mut last : usize = 0
+  th := sema_name_hash(src, ns, nl)
+  cnt := rt::vec_len(deref(decls))
+  mut jc := sni_lo(cnt, th)
+  jce := sni_hi(cnt, th)
+  mut i : usize = 0
+  while jc < jce {
+    i = sni_at(cnt, jc)
+    jc = jc + 1
+    ## unchecked-ok: the `SDNH` name-hash table, read as every sema name walk reads it
+    if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
+      d := deref(decl_get(decls, i))
+      if d.kind == lower_layout::DECL_KIND_FN and streq(src, d.name_start, d.name_len, ns, nl) {
+        mut rk : i64 = sema_mod_anc_rank(src, d.mod_start, d.mod_len, wm.s, wm.n)
+        if sema_mod_head_matches(src, d.mod_start, d.mod_len, wm.s, wm.n) { rk = i64(wm.n) + 1 }
+        if rk > best {
+          best = rk
+          hits = 0
+        }
+        if rk >= 0 and rk == best {
+          hits += 1
+          last = i
+        }
+      }
+    }
+  }
+  if best < 0 { return all }
   SemaCallFns(hits = hits, last = last)
 }
 ## Issue #1746 — the ONE function declaration a direct call names (`sema_call_fn_scan`), or `None` when it

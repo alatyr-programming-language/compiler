@@ -2724,6 +2724,16 @@ run_pkg_check_build_located issue703_qualified_scalar_store_reject 2 a "a FIELD 
 run_pkg_check_build_located issue1746_qualified_arg_intrinsic_reject 3 main "type mismatch"
 run_pkg_check_build_located issue1746_qualified_arg_plain_reject 3 main "type mismatch"
 run_pkg_exit issue1746_qualified_arg_control issue1746-qualified-arg-control 42
+# Issue #1753 / Functions §1.4 (FN-7), Modules §2 (MOD-3), §3, §5 — an unqualified call, UFCS included,
+# names the fns of the caller's own module (else its nearest declaring ancestor), never a same-named fn
+# of a child module. The parent (#1755 head e43bebee) checked all three reject packages at rc 0 and ran
+# them to values read off a `W` passed to the root's `get(u64)` (129, 113, SIGSEGV on x86_64; traps on
+# the twins), in either module order and with a library generic `get` present. The control reaches
+# each module's own `get` by UFCS and answers 42.
+run_pkg_check_build_located issue1753_method_recv_reject 5 main "type mismatch"
+run_pkg_check_build_located issue1753_method_recv_reject_late 4 main "type mismatch"
+run_pkg_check_build_located issue1753_method_recv_reject_libgen 6 main "type mismatch"
+run_pkg_exit issue1753_method_recv_scoped issue1753-method-recv-scoped 42
 
 run_tool15_manifest_handle
 
