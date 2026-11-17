@@ -5439,41 +5439,42 @@ agg_scalar_bad := fn(ss : usize, sn : usize, v : ptr(Expr), decls : ptr(rt::Vec)
 ## JOINS its overload set is undecided (spec#166). The two readings agree where the declaration accepts
 ## the arguments; where it does not, the call is ill-formed under shadowing and the prelude's own call
 ## under overloading. Under neither is it a call to the declaration with an argument it does not accept,
-## and that is what the lowering emits: `len(s)` with `len := fn(x : u64)` read the str's first word
-## (166 where the parent's intrinsic answered 42). So until spec#166 is decided such a call is REFUSED,
-## at the first argument no program declaration of that name and arity accepts. The answer is that
-## argument's span (the call's when it has none); 0 = accepted, or not such a call.
+## and that is what the lowering emits: `len(s)` with `len := fn(x : u64)` read the str's first word.
 ##
-## Judged only on a CONFIDENT mismatch, so it never refuses what it cannot see: a multi-word value
-## (`sema_arg_multiword`) into a builtin scalar parameter, or `agg_scalar_bad`'s aggregate↔scalar pair. A
-## generic declaration of the name is never judged, and a call no declaration has the arity for is left
-## to the arity check. The general form of this hole, for every callee, is #519.
-sema_program_intrinsic_call_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
-  ecs := expr_call_callee_span(e)
-  if ecs.n == 0 or ecallee_is(ecs.s) { return 0 }
-  if not lower_layout::callee_is_program_fn(decls, src, ecs.s, ecs.n) { return 0 }
+## FAIL CLOSED. The call is accepted only when some non-generic, non-variadic program declaration of the
+## name has the call's arity and PROVABLY accepts every argument (`sema_arg_fits_param`), judged from the
+## types sema recorded for the arguments (`ir::sty_*`: the value class and the type spelling). The
+## `Expr::Call` arm of `check_expr_arms` checks, and so records, every argument of such a call before it
+## asks. Anything not proven is refused: an argument whose type sema did not recover, a generic or
+## variadic declaration (no unification is attempted here), a call no declaration has the arity for. The
+## first version of this refusal judged the other way round, refusing only a CONFIDENT mismatch, and every
+## argument shape it could not see (`len(r.s)`, `len(deref(p).s)`, `r.s.len()`, `panic(r.s)`,
+## `str_eq(r.a, r.b)`) reached the declaration with a str's first word: a silent wrong value (#1722
+## review). The answer is the span to report — the first unproven argument of the first declaration of
+## the call's arity, else the callee's — and 0 when the call is accepted.
+sema_program_intrinsic_call_bad := fn(e : ptr(Expr), cs : usize, cl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
   nargs := expr_call_arity(e)
   cnt := rt::vec_len(deref(decls))
   mut first_bad : usize = 0
   mut i : usize = 0
   while i < cnt {
     dp := decl_get(decls, i)
-    if lower_layout::decl_is_program_fn_named(dp, src, ecs.s, ecs.n) {
+    if lower_layout::decl_is_program_fn_named(dp, src, cs, cl) {
       d := deref(dp)
-      if d.is_generic { return 0 }
-      if d.arity == nargs {
-        bs := sema_decl_args_bad(d.params_head, e, ecs.s, decls, upto, src, locals, nloc, a)
+      if not d.is_generic and d.arity == nargs and not decl_is_variadic(d, src) and not decl_is_slice_variadic(d) {
+        bs := sema_decl_args_unproven(d.params_head, e, cs, decls, src, a)
         if bs == 0 { return 0 }
         if first_bad == 0 { first_bad = bs }
       }
     }
     i += 1
   }
+  if first_bad == 0 { first_bad = cs }
   first_bad
 }
-## The span of the first argument of call `e` that the declaration whose parameters start at `ph` confidently
-## does not accept, else 0.
-sema_decl_args_bad := fn(ph : Option(ptr(mut Param)), e : ptr(Expr), cs : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+## The span of the first argument of call `e` that the parameter list `ph` is not PROVEN to accept (the
+## callee's `cs` when that argument has none, or when the two lists differ in length), else 0.
+sema_decl_args_unproven := fn(ph : Option(ptr(mut Param)), e : ptr(Expr), cs : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
   mut pp : Option(ptr(mut Param)) = ph
   mut ag : Option(ptr(mut Arg)) = expr_call_args_head(e)
   loop {
@@ -5483,39 +5484,108 @@ sema_decl_args_bad := fn(ph : Option(ptr(mut Param)), e : ptr(Expr), cs : usize,
         match pp {
           Some(ppq) => {
             pm := deref(param_p(ppq))
-            ## An array-shaped parameter (`xs : [T; N]`) records its ELEMENT span in `ts`/`tl`, not the
-            ## array's, so neither test below can read it: it is never judged.
-            arrp := param_is_array(pm)
-            wide := not arrp and is_builtin_scalar_name(src, pm.ts, pm.tl) and sema_arg_multiword(ca.e, src, locals, nloc)
-            if wide or (not arrp and agg_scalar_bad(pm.ts, pm.tl, ca.e, decls, upto, src, locals, nloc)) {
+            if not sema_arg_fits_param(pm, ca.e, decls, src) {
               bs := s_of(ca.e, a)
               if bs == 0 { return cs }
               return bs
             }
             pp = pm.next
           }
-          None => { return 0 }
+          None => { return cs }
         }
         ag = ca.next
       }
-      None => { return 0 }
+      None => {
+        match pp {
+          Some(_q) => { return cs }
+          None => { return 0 }
+        }
+      }
     }
   }
-  0
+  cs
 }
-## Is the value `v` CONFIDENTLY a multi-word one: a string, array or aggregate literal, or a local recorded
-## as a `str` (its type or the #429 str-view provenance), a range view, an array or an aggregate? Anything
-## else, a call or an unrecorded local included, answers false.
-sema_arg_multiword := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
-  lt := lbv_lit_tag(v)
-  if kind_is_str(lt) or kind_is_array(lt) or kind_is_struct(lt) or kind_is_enum(lt) { return true }
-  vs := expr_var_span(v)
-  if vs.n == 0 or nloc == 0 or not local_in(locals, nloc, src, vs.s, vs.n) { return false }
-  if sema_place_is_str_view(locals, nloc, src, vs) { return true }
-  if prov_is_view(local_prov(locals, nloc, src, vs.s, vs.n)) { return true }
-  raw := local_lookup(locals, nloc, src, vs.s, vs.n)
-  k : TyKind = raw.ty.kind
-  kind_is_array(k) or kind_is_struct(k) or kind_is_enum(k) or kind_is_hidden_struct(k) or kind_is_hidden_enum(k)
+## Is the argument `v` PROVEN to be accepted by the parameter `pm`, from what sema recorded for `v`?
+## A builtin integer, float or bool parameter taken by value is judged by value class (Types §4.2/§4.3:
+## only widening — the same domain and signedness, no fewer bytes — is implicit; a brand never is): an
+## integer literal fits an integer parameter its value is in range of (Declarations §3.4, Types §9.1).
+## Every other parameter — `str`, `ptr(T)`, `Slice(T)`, an array, a named type, any `out`/`in out` one —
+## is judged by the argument's recorded type spelling against the parameter's written type
+## (`sema_spell_fits`). Unknown is never accepted.
+sema_arg_fits_param := fn(pm : Param, v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  psp : ir::TySpell = sema_spell_param(pm, src)
+  if not sema_spell_text(psp) { return false }
+  asp : ir::TySpell = sema_spell_norm(sema_sty_spell_get(v), decls, src)
+  if pm.pmode == 0 and is_builtin_scalar_name(src, psp.s, psp.n) {
+    if sema_spell_text(asp) {
+      if sema_brand_underlying(decls, rt::vec_len(deref(decls)), src, asp.s, asp.n).n != 0 { return false }
+    }
+    pv : ir::VTy = sema_vty_scalar(src, psp.s, psp.n)
+    vt : ir::VTy = sema_sty_get(v)
+    pc : ir::VCls = pv.cls
+    vc : ir::VCls = vt.cls
+    match pc {
+      VcInt => {
+        match vc {
+          VcLit => { return expr_is_num_lit(v) == false or not ann_lit_range_bad(src, psp.s, psp.n, v) }
+          VcInt => { return ir::vty_same_sign(vt, pv) and vt.bytes <= pv.bytes }
+          VcAbsent | VcUnknown | VcBool | VcPtr | VcFloat | VcAgg => { return false }
+        }
+      }
+      VcBool => {
+        match vc {
+          VcBool => { return true }
+          VcAbsent | VcUnknown | VcLit | VcInt | VcPtr | VcFloat | VcAgg => { return false }
+        }
+      }
+      VcFloat => {
+        if sema_is_float_lit(v) { return true }
+        match vc {
+          VcFloat => { return vt.bytes <= pv.bytes }
+          VcAbsent | VcUnknown | VcLit | VcInt | VcBool | VcPtr | VcAgg => { return false }
+        }
+      }
+      VcAbsent | VcUnknown | VcLit | VcPtr | VcAgg => { return false }
+    }
+  }
+  sema_spell_fits(asp, psp.s, psp.n, decls, src, 0)
+}
+## Does a value whose recorded type spelling is `asp` have the written type `[ts, ts+tn)`? Only a spelling
+## that names the type is proof: the byte view is `str`; a pointer to a value fits `ptr(T)` when the value
+## fits `T` (never `ptr(mut T)`: the wrapper does not record mutability); a view of an array's elements
+## fits `Slice(T)` when the elements fit `T`; a written type fits when it is the same text, spaces aside.
+## An array literal's spelling carries no length, and a spelling that mentions a type parameter of the
+## generic declaration it is read in names no type yet: neither is proof.
+sema_spell_fits := fn(asp : ir::TySpell, ts : usize, tn : usize, decls : ptr(rt::Vec), src : ptr(u8), depth : usize) -> bool {
+  if tn == 0 or depth > 6 or not sema_spell_known(asp) { return false }
+  if ir::spell_bytes_view(asp) { return str_at((src + ts), tn) == "str" }
+  if ir::spell_ptr_layer(asp) or ir::spell_view_layer(asp) {
+    bn := base_type_name(src, ts, tn)
+    if bn.n == tn { return false }
+    head := str_at((src + bn.s), bn.n)
+    if ir::spell_ptr_layer(asp) and head != "ptr" { return false }
+    if ir::spell_view_layer(asp) and head != "Slice" { return false }
+    ta := typearg_at(src, bn.s, bn.n, 0)
+    um := sema_spell_unmut(ta.s, ta.n, src)
+    if ta.n == 0 or um.n != ta.n { return false }
+    return sema_spell_fits(sema_spell_norm(sema_spell_unwrap(asp), decls, src), ta.s, ta.n, decls, src, depth + 1)
+  }
+  if not sema_spell_text(asp) or sema_spell_mentions_env(asp, decls, src) { return false }
+  sema_type_text_same(src, asp.s, asp.n, ts, tn)
+}
+## Are the type texts `[as, as+an)` and `[bs, bs+bn)` the same apart from spaces (`[u64; 4]` / `[u64;4]`)?
+sema_type_text_same := fn(src : ptr(u8), xs : usize, xn : usize, ys : usize, yn : usize) -> bool {
+  mut i : usize = 0
+  mut j : usize = 0
+  loop {
+    while i < xn and str_at((src + xs + i), 1) == " " { i += 1 }
+    while j < yn and str_at((src + ys + j), 1) == " " { j += 1 }
+    if i == xn or j == yn { return i == xn and j == yn }
+    if str_at((src + xs + i), 1) != str_at((src + ys + j), 1) { return false }
+    i += 1
+    j += 1
+  }
+  false
 }
 
 ## Issue #269 — compare only a DIRECT, uniquely resolved call against a concrete by-value parameter.
@@ -11982,11 +12052,6 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       None => {}
     }
   }
-  ## #1719 — the block above is tolerant of an overloaded name, and a prelude intrinsic's name is one
-  ## (the ambient library declares `len` four times), so a program-declared `len(x : u64)` called on a
-  ## `str` reached the lowering. Until spec#166 decides shadowing against overloading, refuse it here.
-  pib := sema_program_intrinsic_call_bad(e, decls, upto, src, locals, nloc, a)
-  if pib != 0 { mark_failed(locals, mismatch_err(pib, 0)) }
   ## EXHAUSTIVENESS for a VALUE match (§60/CF-1) — the dual of the `check_stmts` statement-match check.
   ## Done here (BEFORE the big `match deref(e)`) as a side-effect + fall-through, because the big match's
   ## payload-heavy `Expr::Match` arm is not dispatched under the seed (scar #2, same as `Var`); poison
@@ -12195,6 +12260,11 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       ## arguments past its parameter.
       qov := callee_fn_name_count(decls, upto, src, qcs, qcl) > 1
       qel := callee_elided_alloc_idx(decls, upto, src, qcs, qcl, qnargs)
+      ## #1719 — a call the lowering routes to a PROGRAM-declared fn with a prelude intrinsic's name
+      ## (`lower_layout::callee_is_program_fn`). The ambient library declares some of these names
+      ## generically (`len(T : type, …)`), which made argument 0 read as a type argument above and go
+      ## unchecked; here every argument is a value checked and recorded, and the call is judged below.
+      qprog := not ecallee_is(qcs) and lower_layout::callee_is_program_fn(decls, src, qcs, qcl)
       mut g : Option(ptr(mut Arg)) = qargs_head
       mut pidx := 0
       mut bad := false
@@ -12213,7 +12283,7 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
             if qgen and ir::sty_on() and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a) and callee_type_args_implicit(decls, upto, src, qcs, qcl, qnargs) {
               sema_ct_record(CtWalk.WkValue(ga.e), CtVar.CvNone, 0, 0, ir::expr_span(ga.e), decls, upto, src, a, locals, nloc)
             }
-            if not (qgen and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a)) {
+            if qprog or not (qgen and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a)) {
               ## #726 — the argument's KIND only. Its pointee name would make this compare discriminate
               ## `ptr(X)` from `ptr(Y)`, and the parser erases a word-sized `unchecked bitcast(ptr(X), p)`
               ## to `p` itself, so a written reinterpretation reached this compare as the un-cast pointer
@@ -12244,6 +12314,14 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         }
       }
       if bad { er := Result(Ty, CheckErr).Err(mismatch_err(bad_span, 0)); return er }
+      ## #1719 / spec#166 — fail closed: refused unless a program declaration of the name provably accepts
+      ## every argument (`sema_program_intrinsic_call_bad`). RETURNED, like the mismatch above, so it
+      ## outranks a sticky `mark_failed` code an earlier fence in `check_expr_core` recorded for the same
+      ## call (#1663's immutable place argument): which declaration the call reaches comes first.
+      if qprog {
+        pib := sema_program_intrinsic_call_bad(e, qcs, qcl, decls, src, a)
+        if pib != 0 { pe := Result(Ty, CheckErr).Err(mismatch_err(pib, 0)); return pe }
+      }
       if qov { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
       else { Result(Ty, CheckErr).Ok(callee_ret_ty(decls, upto, src, qcs, qcl)) }
     }
