@@ -230,7 +230,7 @@ Three things follow from how the delta is checked:
       measures what you named it" is the local proverb, and it was earned the hard way.
 - [ ] Emission changed? The GAS delta was measured with the **input tree held fixed**, in both
       directions — otherwise you compared a longer source against a shorter one and proved nothing.
-      Normalize the `.L<N>` **and** `.Lra<N>_<k>` label families first.
+      Normalize the label families listed in `scripts/gas_normalize.sh` first (`normalize_gas`).
 - [ ] Fixpoint still green. If it is not, a reseed may be owed — that is the maintainer's call, never
       a contributor's, and it needs three-stage evidence.
 - [ ] The manifest either matches, or the PR carries a `scripts/corpus.expected-delta` emitted
