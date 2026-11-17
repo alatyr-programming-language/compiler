@@ -934,8 +934,9 @@ pub qual_callee_in_head := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
   ma.n != 0 and mod_head_rank(src, d.mod_start, d.mod_len, ma.s, ma.n, ms, ml) >= 0
 }
 ## The module a one-segment alias `m := M` declared in module `[cs, cl)` gives the name `[ns, nl)`: the
-## span of `M` when it is a bare module name (no `::`, no call), else 0/0. A qualified right-hand side
-## (`gc := geo::child`) is `binding_rhs_span`'s.
+## span of `M` when it is a bare name, else 0/0. The parser records such an alias as an ordinary kind-0
+## value binding with no type and a `Var` value (as `sema_rec_head_alias_in` reads it); a qualified
+## right-hand side (`gc := geo::child`) is `binding_rhs_span`'s.
 plain_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, cs : usize, cl : usize) -> CSpan {
   z := CSpan(s = 0, n = 0)
   if nl == 0 or cl == 0 { return z }
@@ -943,16 +944,14 @@ plain_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
   mut i : usize = 0
   while i < cnt {
     d := deref(lower_ctx::decl_get(decls, i))
-    if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0 and d.name_len != 0
+    if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl == 0 and d.name_len != 0
        and mod_seg_eq(src, d.mod_start, d.mod_len, cs, cl)
        and lower_ctx::streq(src, d.name_start, d.name_len, ns, nl) {
-      mut k : usize = 0
-      mut plain := true
-      while k < d.ret_tl {
-        if not lower_layout::ll_ident_byte(src, d.ret_ts + k) { plain = false }
-        k += 1
+      ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
+      if unchecked bitcast(usize, d.value) != 0 {
+        vs := lower_ctx::var_name_span(d.value)
+        if vs.n != 0 { return vs }
       }
-      if plain { return CSpan(s = d.ret_ts, n = d.ret_tl) }
     }
     i += 1
   }
