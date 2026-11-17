@@ -7,8 +7,9 @@
 ## committed seed 0.3.2): this program answered **12** where 22 was due — a silent wrong value, not a
 ## trap. The callee's `y = 10` now lands in `g`: 10 + 12 = 22.
 ## x86_64-scoped: the fix is in the legacy x86 lower and the shared IR declines both functions
-## (`alatyr ir`: callee `NotYet(signature: parameter with a mode)`, caller `NotYet(expr Call)`), so the
-## default route takes this lowering; the twins' surface is a separate question (#1684's note).
+## (`alatyr ir`: callee `NotYet(signature: parameter with a mode)`, caller `NotYet(call: argument to an
+## out/in out parameter that is not a place the builder passes)`), so the default route takes this
+## lowering; the twins' surface is a separate question (#1684's note).
 ## spec: Functions §2.3, Memory §3.1
 ## expect(x86_64): run 22
 mut g : u64 = 0

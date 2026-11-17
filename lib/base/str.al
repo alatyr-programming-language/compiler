@@ -396,7 +396,7 @@ pub strip_prefix := fn(s : str, prefix : str) -> str {
 ## VIEW (keeps the start, so no pointer arithmetic).
 pub strip_suffix := fn(s : str, suffix : str) -> str {
   if not ends_with(s, suffix) { return s }
-  str_at(s.ptr, s.len - suffix.len)
+  str_at(bitcast(usize, s.ptr), s.len - suffix.len)
 }
 
 ## `trim_start_matches` / `trim_end_matches` / `trim_matches` — like `trim*` but strip a SPECIFIC byte
@@ -413,7 +413,7 @@ pub trim_end_matches := fn(s : str, b : u8) -> str {
   bs := bytes(s)
   mut n : usize = s.len
   while n > 0 and bs[n - 1] == b { n -= 1 }
-  str_at(s.ptr, n)
+  str_at(bitcast(usize, s.ptr), n)
 }
 pub trim_matches := fn(s : str, b : u8) -> str {
   t := trim_start_matches(s, b)
@@ -438,7 +438,7 @@ pub trim_end := fn(s : str) -> str {
   bs := bytes(s)
   mut n : usize = s.len
   while n > 0 and is_ascii_ws(bs[n - 1]) { n -= 1 }
-  str_at(s.ptr, n)
+  str_at(bitcast(usize, s.ptr), n)
 }
 
 ## `s` with BOTH leading and trailing ASCII whitespace removed. The intermediate `trim_start` result is
