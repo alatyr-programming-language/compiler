@@ -1824,9 +1824,9 @@ ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param,
       }
     }
   }
-  ## Refused: a by-place parameter whose argument is not a place passed here, else a parameter type
-  ## the convention does not pass.
-  if pm.pmode != 0 { return ib_no_call(bp, e, Construct.ECallArgMode) }
+  ## Refused: an `out` / `in out` parameter whose argument is not a place passed here, else a parameter
+  ## the convention does not pass — its type, or its mode (an `in` array, a `...T` rest).
+  if ast::param_by_place(pm) or ast::param_array_by_place(pm) { return ib_no_call(bp, e, Construct.ECallArgMode) }
   ib_no_call(bp, e, Construct.ECallArgType)
 }
 ## The place an `out` / `in out` aggregate argument `ae` names: a struct or enum local, a by-reference
@@ -1940,7 +1940,7 @@ ib_callee_none_why := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Construct
   if sema::is_builtin_callee(src, cs, cl) { return Construct.ECallBuiltin }
   ## `defer e` / `defer { … }` reach the builder as the parser's marker calls (`__defer(e)`,
   ## `__deferblk()`, `__deferblkend()`, `parser.al`'s defer desugar): a statement, not a callee.
-  if cl >= 7 and str_at((src + cs), 7) == "__defer" { return Construct.ECallDefer }
+  if ap_defer_marker(src, cs, cl) { return Construct.ECallDefer }
   bd : IbBind = ib_lookup(bp, cs, cl)
   mut bound : bool = true
   match bd {
