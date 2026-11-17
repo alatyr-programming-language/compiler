@@ -3019,7 +3019,7 @@ rv_operand_unsigned := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), b
 ## matches: float, `str` and aggregate holes still reach the one integer renderer here, unchanged and
 ## still out of scope.
 rv_hole_signed := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), body_head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
-  if lower_layout::operand_signed(e, params_head, body_head, src, a) { return true }
+  if lower_layout::operand_signed(e, params_head, body_head, decls, src, a) { return true }
   if rv_operand_unsigned(e, params_head, body_head, src, a) { return false }
   mut r := false
   if lit_arith_i64(e, src) { r = true }
@@ -4309,8 +4309,8 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         push_str(sb, "  fmv.x.d a0, ft0\n")
       }
       if (not iscmp) and (not isflt) and (not isnot) {
-        dl := lower_layout::operand_signed(l, params_head, body_head, src, a)
-        dr := lower_layout::operand_signed(r, params_head, body_head, src, a)
+        dl := lower_layout::operand_signed(l, params_head, body_head, decls, src, a)
+        dr := lower_layout::operand_signed(r, params_head, body_head, decls, src, a)
         ## #964 — the rule and its reason are written out in `aarch64.al`: `/ %` read sema's RECORD of
         ## the operator (`lower_layout::ir_arith_signed`, docs/ir.md §3.8 e3) as x86_64 does. The shape
         ## query proved nothing about a literal-only `Bin` dividend and answered unsigned — a silent wrong
@@ -4370,7 +4370,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       push_str(sb, ".Lend") ; push_int(sb, id) ; push_str(sb, ":\n")
     }
     Expr::Call(cs, cl, nargs, args_head) => {
-      nm := str_at((src + cs), cl)
+      nm := lower_layout::intrinsic_callee(decls, src, cs, cl)   ## #1434: a program-declared `len`/`shl`/… is its own call
       srs_call := rv_call_ret_sret_span(e, decls, src, a)
       ers_call := rv_call_ret_enum_sret_span(e, decls, src, a)
       direct_sretcall := srs_call.n != 0 or ers_call.n != 0
@@ -4449,7 +4449,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
         emit_rv_expr(rsn, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "  mv a1, a0\n  ld a0, 0(sp)\n  addi sp, sp, 16\n")
-        rssigned := lower_layout::operand_signed(rsv, params_head, body_head, src, a)
+        rssigned := lower_layout::operand_signed(rsv, params_head, body_head, decls, src, a)
         if nm == "shr" { ir::sign_row("riscv64", 0, rsv, rsn, src, rssigned) }
         ## A SUB-WORD operand bounds the count by ITS width (Concurrency §6.1) and its result is
         ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual (#683).

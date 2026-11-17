@@ -9403,6 +9403,25 @@ run_x86_trap ir_array_bound 132
 run_a64 ir_array_bound 133
 run_rv64 ir_array_bound 133
 run_wat ir_array_bound 134
+## IR #1705: fixed arrays of struct and enum elements (one frame object, element `i` at `i * stride`,
+## Types §6.4) and aggregate locals declared without an initializer (Declarations §4, §5), built from the
+## shared IR on every backend; the index of a struct-element array is checked like a scalar array's.
+run ir_agg_arr_local 42
+run_a64 ir_agg_arr_local 42
+run_rv64 ir_agg_arr_local 42
+run_wat ir_agg_arr_local 42
+run ir_agg_arr_enum 42
+run_a64 ir_agg_arr_enum 42
+run_rv64 ir_agg_arr_enum 42
+run_wat ir_agg_arr_enum 42
+run ir_uninit_agg 42
+run_a64 ir_uninit_agg 42
+run_rv64 ir_uninit_agg 42
+run_wat ir_uninit_agg 42
+run_x86_trap ir_agg_arr_bound 132
+run_a64 ir_agg_arr_bound 133
+run_rv64 ir_agg_arr_bound 133
+run_wat ir_agg_arr_bound 134
 ## Explicit overflow-policy operations (Concurrency §6.3 / CG-8): wrapping_*/saturating_*/checked_* (->
 ## Option)/overflowing_* (-> (T,bool)) on the integer interpretations, exercised at the u8/u64/i32
 ## boundaries. A NEUTRAL library addition (lib/base/num.al) resting on the x86_64-gated scalar
@@ -13452,6 +13471,45 @@ run issue1434_declared_shl_value 42
 run issue1434_declared_shr_value 42
 run issue1434_declared_shl_two_args 42
 run issue1434_declared_shr_two_args 42
+## #1434 (the rest of it) — every name-keyed intrinsic arm asks one predicate, `lower_layout::intrinsic_callee`;
+## each fixture reaches the legacy x86_64 path (an f64 literal) and failed on the parent (139, 40, 32 or 1).
+run issue1434_declared_size_legacy 42
+run issue1434_declared_align_legacy 42
+run issue1434_declared_len_legacy 42
+run issue1434_declared_str_at_legacy 42
+run issue1434_declared_str_eq_legacy 42
+run issue1434_declared_byte_at_legacy 42
+run issue1434_declared_bytes_legacy 42
+run issue1434_declared_panic_legacy 42
+run issue1434_declared_forget_legacy 42
+## #1719 — a call to such a program-declared fn whose arguments it does not accept is refused, located,
+## until spec#166 decides shadowing against overloading; each reject row compiled silently on the parent.
+check_build_located reject_issue1719_declared_len_str 11 "type mismatch"
+check_build_located reject_issue1719_declared_len_str_param_ufcs 7 "type mismatch"
+check_build_located reject_issue1719_declared_len_view 8 "type mismatch"
+run accept_issue1719_declared_len_u64 42
+run accept_issue1719_declared_len_array_param 42
+check_build_located reject_issue1719_fc_align_u64_to_str 12 "type mismatch"
+check_build_located reject_issue1719_fc_byte_at_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_len_deref_field 12 "type mismatch"
+check_build_located reject_issue1719_fc_len_slice_field 14 "type mismatch"
+check_build_located reject_issue1719_fc_len_str_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_len_str_to_ptr 12 "type mismatch"
+check_build_located reject_issue1719_fc_len_u64_to_str 12 "type mismatch"
+check_build_located reject_issue1719_fc_len_ufcs_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_len_view_expr 12 "type mismatch"
+check_build_located reject_issue1719_fc_panic_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_shl_str_field 13 "type mismatch"
+check_build_located reject_issue1719_fc_size_u64_to_str 12 "type mismatch"
+check_build_located reject_issue1719_fc_str_at_str_to_ptr 12 "type mismatch"
+check_build_located reject_issue1719_fc_str_eq_fields 13 "type mismatch"
+run accept_issue1719_fc_len_deref_u64_field 42
+run accept_issue1719_fc_len_ptr_u8 42
+run accept_issue1719_fc_len_str_field_str 42
+run accept_issue1719_fc_len_u64_call 42
+run accept_issue1719_fc_len_u8_widen 42
+run accept_issue1719_fc_len_ufcs_u64 42
+run accept_issue1719_fc_str_eq_str_fields 42
 
 ## #992 — `alloc::with(ar)` inside a match arm, and a match inside `alloc::with`, pass the ambient
 ## `ptr(ar)` to a call that omits its allocator (Memory §5.2.1); the splice never walked a `match`.

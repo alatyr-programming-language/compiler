@@ -29,6 +29,9 @@ aarch64	test/accept_enum_match_param_deref.al	run/133	#577
 aarch64	test/accept_issue1663_expr_callee.al	run/133	#1189
 aarch64	test/accept_issue1663_mutable_place_args.al	run/133	#1194
 aarch64	test/accept_issue1663_param_shadows_callee.al	run/133	#1189
+aarch64	test/accept_issue1719_declared_len_array_param.al	run/133	#1194
+aarch64	test/accept_issue1719_fc_len_str_field_str.al	run/133	#1203
+aarch64	test/accept_issue1719_fc_str_eq_str_fields.al	run/133	#1203
 aarch64	test/accept_neg_unsigned_hof_clone.al	run/133	#1196
 aarch64	test/agg_arr_elem_arg.al	run/133	#1194
 aarch64	test/agg_arr_slice_elem.al	run/133	#1187
@@ -57,7 +60,6 @@ aarch64	test/ambient_strmap.al	run/133	#1188
 aarch64	test/ambient_vec_set.al	run/133	#1200
 aarch64	test/arch_intrinsic.al	run/133	#1191
 aarch64	test/arr_elem_agg_from_call.al	run/133	#1194
-aarch64	test/arr_elem_enum.al	run/133	#1191
 aarch64	test/array_enum_match.al	run/133	#577
 aarch64	test/array_of_tuples.al	run/133	#1194
 aarch64	test/array_slice_struct.al	run/133	#1187
@@ -146,7 +148,6 @@ aarch64	test/enum_sret_wide.al	run/133	#1191
 aarch64	test/enum_sret_wide_match_call.al	run/133	#577
 aarch64	test/enum_str_payload.al	run/133	#1203
 aarch64	test/enum_struct_payload.al	run/133	#1191
-aarch64	test/fixed_array_copy_local_wide.al	run/133	#1191
 aarch64	test/fixed_array_len.al	run/133	#1187
 aarch64	test/fn_value_bound_callee.al	run/133	#1189
 aarch64	test/fn_value_enum_ret.al	run/133	#1189
@@ -597,6 +598,9 @@ riscv64	test/accept_enum_match_param_deref.al	run/133	#577
 riscv64	test/accept_issue1663_expr_callee.al	run/133	#1189
 riscv64	test/accept_issue1663_mutable_place_args.al	run/133	#1194
 riscv64	test/accept_issue1663_param_shadows_callee.al	run/133	#1189
+riscv64	test/accept_issue1719_declared_len_array_param.al	run/133	#1194
+riscv64	test/accept_issue1719_fc_len_str_field_str.al	run/133	#1203
+riscv64	test/accept_issue1719_fc_str_eq_str_fields.al	run/133	#1203
 riscv64	test/accept_neg_unsigned_hof_clone.al	run/133	#1196
 riscv64	test/agg_arr_elem_arg.al	run/133	#1194
 riscv64	test/agg_arr_slice_elem.al	run/133	#1187
@@ -625,7 +629,6 @@ riscv64	test/ambient_strmap.al	run/133	#1188
 riscv64	test/ambient_vec_set.al	run/133	#1200
 riscv64	test/arch_intrinsic.al	run/133	#1191
 riscv64	test/arr_elem_agg_from_call.al	run/133	#1194
-riscv64	test/arr_elem_enum.al	run/133	#1191
 riscv64	test/array_enum_match.al	run/133	#577
 riscv64	test/array_of_tuples.al	run/133	#1191
 riscv64	test/array_slice_struct.al	run/133	#1187
@@ -716,7 +719,6 @@ riscv64	test/enum_sret_wide.al	run/133	#1191
 riscv64	test/enum_sret_wide_match_call.al	run/133	#577
 riscv64	test/enum_str_payload.al	run/133	#1203
 riscv64	test/enum_struct_payload.al	run/133	#1191
-riscv64	test/fixed_array_copy_local_wide.al	run/133	#1191
 riscv64	test/fixed_array_len.al	run/133	#1187
 riscv64	test/fn_value_bound_callee.al	run/133	#1189
 riscv64	test/fn_value_enum_ret.al	run/133	#1189
@@ -1172,9 +1174,12 @@ wasm	test/accept_enum_match_param_deref.al	run/134	#1188
 wasm	test/accept_issue1663_expr_callee.al	run/134	#1189
 wasm	test/accept_issue1663_mutable_place_args.al	run/134	#1194
 wasm	test/accept_issue1663_param_shadows_callee.al	assemble/1	#1196
+wasm	test/accept_issue1719_declared_len_array_param.al	run/134	#1194
+wasm	test/accept_issue1719_fc_len_ptr_u8.al	run/134	#1188
+wasm	test/accept_issue1719_fc_len_str_field_str.al	run/134	#1184
+wasm	test/accept_issue1719_fc_str_eq_str_fields.al	run/134	#1184
 wasm	test/accept_neg_unsigned_hof_clone.al	run/134	#1195
 wasm	test/agg_arr_elem_arg.al	run/134	#1194
-wasm	test/agg_arr_elem_matrix.al	run/134	#1194
 wasm	test/agg_cmp_not_address.al	run/134	#1192
 wasm	test/agg_cmp_param_not_address.al	run/134	#1192
 wasm	test/agg_elem_compare.al	run/134	#1192
@@ -1199,7 +1204,6 @@ wasm	test/ambient_strmap.al	run/134	#1186
 wasm	test/ambient_vec_set.al	run/134	#1186
 wasm	test/arch_intrinsic.al	run/134	#1191
 wasm	test/arr_elem_agg_from_call.al	run/134	#1194
-wasm	test/arr_elem_enum.al	run/134	#1194
 wasm	test/arr_elem_local_after_ifassign.al	run/134	#1187
 wasm	test/array_enum_match.al	run/134	#1190
 wasm	test/array_of_tuples.al	run/134	#1191
@@ -1248,7 +1252,6 @@ wasm	test/comptime_if_facts.al	run/134	#1193
 wasm	test/comptime_resolves_args.al	run/134	#1193
 wasm	test/comptime_target_facets.al	run/134	#1193
 wasm	test/comptime_typeinfo_arg.al	run/134	#1193
-wasm	test/da_field_join_ok.al	run/134	#1187
 wasm	test/deep_arr_field_agg_elem.al	run/134	#1194
 wasm	test/deep_arr_field_global.al	run/134	#1194
 wasm	test/deep_arr_field_roots.al	run/134	#1194
@@ -1409,7 +1412,6 @@ wasm	test/issue1622_narrow_view_legacy_reslice.al	run/134	#1288
 wasm	test/issue1684_out_u8_elem_last.al	run/134	#1692
 wasm	test/issue1684_out_u8_elem_mid.al	run/134	#1692
 wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
-wasm	test/issue169_wasm_array_write.al	run/134	#1194
 wasm	test/issue169_wasm_nested_return.al	run/134	#1191
 wasm	test/issue171_global_const_str.al	run/134	#1200
 wasm	test/issue263_slice_narrow_field_write.al	run/134	#263
