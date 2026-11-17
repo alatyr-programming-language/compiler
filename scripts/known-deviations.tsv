@@ -30,6 +30,8 @@ aarch64	test/accept_issue1663_expr_callee.al	run/133	#1189
 aarch64	test/accept_issue1663_mutable_place_args.al	run/133	#1194
 aarch64	test/accept_issue1663_param_shadows_callee.al	run/133	#1189
 aarch64	test/accept_issue1719_declared_len_array_param.al	run/133	#1194
+aarch64	test/accept_issue1719_fc_len_str_field_str.al	run/133	#1203
+aarch64	test/accept_issue1719_fc_str_eq_str_fields.al	run/133	#1203
 aarch64	test/accept_neg_unsigned_hof_clone.al	run/133	#1196
 aarch64	test/agg_arr_elem_arg.al	run/133	#1194
 aarch64	test/agg_arr_slice_elem.al	run/133	#1187
@@ -597,6 +599,8 @@ riscv64	test/accept_issue1663_expr_callee.al	run/133	#1189
 riscv64	test/accept_issue1663_mutable_place_args.al	run/133	#1194
 riscv64	test/accept_issue1663_param_shadows_callee.al	run/133	#1189
 riscv64	test/accept_issue1719_declared_len_array_param.al	run/133	#1194
+riscv64	test/accept_issue1719_fc_len_str_field_str.al	run/133	#1203
+riscv64	test/accept_issue1719_fc_str_eq_str_fields.al	run/133	#1203
 riscv64	test/accept_neg_unsigned_hof_clone.al	run/133	#1196
 riscv64	test/agg_arr_elem_arg.al	run/133	#1194
 riscv64	test/agg_arr_slice_elem.al	run/133	#1187
@@ -1171,6 +1175,9 @@ wasm	test/accept_issue1663_expr_callee.al	run/134	#1189
 wasm	test/accept_issue1663_mutable_place_args.al	run/134	#1194
 wasm	test/accept_issue1663_param_shadows_callee.al	assemble/1	#1196
 wasm	test/accept_issue1719_declared_len_array_param.al	run/134	#1194
+wasm	test/accept_issue1719_fc_len_ptr_u8.al	run/134	#1188
+wasm	test/accept_issue1719_fc_len_str_field_str.al	run/134	#1184
+wasm	test/accept_issue1719_fc_str_eq_str_fields.al	run/134	#1184
 wasm	test/accept_neg_unsigned_hof_clone.al	run/134	#1195
 wasm	test/agg_arr_elem_arg.al	run/134	#1194
 wasm	test/agg_arr_elem_matrix.al	run/134	#1194
