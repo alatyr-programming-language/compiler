@@ -1587,7 +1587,6 @@ wasm	test/package/ir1723_alias_deref_same/package.al	run/134	#1739
 wasm	test/package/ir1723_alias_deref_same/src/m.al	assemble/1	#3
 wasm	test/package/ir1723_alias_deref_struct/package.al	run/134	#1739
 wasm	test/package/ir1723_alias_deref_struct/src/m.al	assemble/1	#3
-wasm	test/package/ir1723_qualified_deref_struct/package.al	run/134	#1188
 wasm	test/package/ir1723_qualified_deref_struct/src/m.al	assemble/1	#3
 wasm	test/package/issue1734_alias_callee_agg_result/package.al	run/134	#1740
 wasm	test/package/issue1734_alias_callee_agg_result/src/m.al	assemble/1	#3
