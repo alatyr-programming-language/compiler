@@ -800,6 +800,19 @@ call refused for a reason with no such label keeps `expr Call`, and a sema gap a
 more than eight arguments, an extern callee, and an `in` array and a `...T` rest argument, which share
 the parameter type-or-mode label.
 
+An assignment or declaration the builder does not build is refused the same way (#1758), one
+`assign: …` or `declaration: …` label per cause instead of one `stmt Assign` for all of them
+(`ib_refuse_assign`): a whole value into an unannotated array local, an `out` / `in out` aggregate parameter (#1633) or an array
+parameter; a re-pointed view or `str` local; an address-taken local narrower than a word; a module
+binding with no one-word scalar cell, or a name bound to nothing; and, for a declaration, an annotated
+aggregate type, an uninitialized local, an array literal, an array or a view of an element type the
+builder does not lay out, a floating-point or other non-kernel local, or an unannotated initializer of
+no aggregate type the builder lays out — split by the initializer's shape (a call result, a name, a
+field, element or pointee, a struct or enum literal, a `?`, an `if` / `match`). An initializer that is a
+call to no resolvable function takes the callee's own `call: …` cause (`ib_callee`), as
+`ib_agg_call_why` does. A label never holds a comma: the census reads the label up to the first `, `.
+The golden `ig_asgwhy` pins four of them.
+
 ### 3.8 Signedness and width are attributes of the value, derived once
 
 Today signedness is decided **by the shape of the expression**, separately in each emitter: a bare
