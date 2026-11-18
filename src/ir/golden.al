@@ -154,14 +154,15 @@ g_callwhy_want := fn() -> str {
   "fn ig_callwhy::id NotYet(generic function (needs a mono instance), ig_callwhy.al:2:1)\nfn ig_callwhy::generic NotYet(call: generic callee (needs a mono instance), ig_callwhy.al:3:33)\nfn ig_callwhy::nine Built\nfn nine(%0 : i64 u, %1 : i64 u, %2 : i64 u, %3 : i64 u, %4 : i64 u, %5 : i64 u, %6 : i64 u, %7 : i64 u, %8 : i64 u) -> i64 u {\n  %9 = add.chk.u i64 %0, %8 overflow  @279\n  ret %9\n}\nfn ig_callwhy::many NotYet(call: more than eight arguments, ig_callwhy.al:5:30)\nfn ig_callwhy::add1 NotYet(a declaration with no body (an `@extern` import: slice 2's `call_c`), ig_callwhy.al:6:1)\nfn ig_callwhy::ext NotYet(call: extern callee (slice 2's call_c), ig_callwhy.al:7:29)\nfn ig_callwhy::sum NotYet(signature: parameter with a mode (in/out/by-ref), ig_callwhy.al:8:1)\nfn ig_callwhy::rest NotYet(call: argument to a parameter whose type or mode the convention does not pass, ig_callwhy.al:9:30)\n## ig_callwhy::firstb: IR-selected on a target only when every caller is (per-target fixpoint, not run here)\nfn ig_callwhy::firstb NotYet(signature: parameter with a mode (in/out/by-ref), ig_callwhy.al:10:1)\nfn ig_callwhy::inarr NotYet(call: argument to a parameter whose type or mode the convention does not pass, ig_callwhy.al:11:30)\nir: functions=10 built=1 notyet=9 sema_gaps=0 verify_failed=0\n"
 }
 
-## #1733's sibling for assignments: a refused assignment or declaration names its cause — a whole value
-## into an `in out` aggregate parameter (#1633), a re-pointed `str` local, a store to a module aggregate,
-## and a copy of an aggregate out of a pointee — rather than one `stmt Assign` for all of them.
+## #1733's sibling for assignments: a refused assignment or declaration names its cause — a re-pointed
+## `str` local, a store to a module aggregate, and a copy of an aggregate out of a pointee — rather than
+## one `stmt Assign` for all of them. A whole value into an `in out` struct parameter is built (#1633):
+## the literal in its own frame object, then copied whole through the caller's address.
 g_asgwhy_src := fn() -> str {
-  "## each function is refused at its assignment, for the cause its name says\nP := struct { a : u64, b : u64 }\nmut G : P = P(a = 1, b = 2)\nwhole := fn(in out p : P) -> u64 { p = P(a = 3, b = 4)  0 }\nrepoint := fn(x : u64) -> u64 { mut s := \"ab\"  s = \"cd\"  x }\nglobal := fn(x : u64) -> u64 { G = P(a = x, b = x)  x }\nthrough := fn(q : ptr(P)) -> u64 { v := deref(q)  v.a }\n"
+  "## each function but `whole` is refused at its assignment, for the cause its name says\nP := struct { a : u64, b : u64 }\nmut G : P = P(a = 1, b = 2)\nwhole := fn(in out p : P) -> u64 { p = P(a = 3, b = 4)  0 }\nrepoint := fn(x : u64) -> u64 { mut s := \"ab\"  s = \"cd\"  x }\nglobal := fn(x : u64) -> u64 { G = P(a = x, b = x)  x }\nthrough := fn(q : ptr(P)) -> u64 { v := deref(q)  v.a }\n"
 }
 g_asgwhy_want := fn() -> str {
-  "fn ig_asgwhy::whole NotYet(assign: whole value into an out/in out aggregate parameter, ig_asgwhy.al:4:36)\nfn ig_asgwhy::repoint NotYet(assign: re-pointing a str local, ig_asgwhy.al:5:48)\nfn ig_asgwhy::global NotYet(assign: module binding with no one-word scalar cell the builder stores, ig_asgwhy.al:6:32)\nfn ig_asgwhy::through NotYet(declaration: copy out of a field or element or pointee the builder does not type, ig_asgwhy.al:7:36)\nir: functions=4 built=0 notyet=4 sema_gaps=0 verify_failed=0\n"
+  "fn ig_asgwhy::whole Built\nfn whole(%0 : ptr) -> i64 u {\n  $0 : frame 16 align 8\n  %1 = const.u i64 3\n  store i64 [$0 + 0], %1\n  %2 = const.u i64 4\n  store i64 [$0 + 8], %2\n  copy %0, $0, 16\n  %3 = const.u i64 0\n  ret %3\n}\nfn ig_asgwhy::repoint NotYet(assign: re-pointing a str local, ig_asgwhy.al:5:48)\nfn ig_asgwhy::global NotYet(assign: module binding with no one-word scalar cell the builder stores, ig_asgwhy.al:6:32)\nfn ig_asgwhy::through NotYet(declaration: copy out of a field or element or pointee the builder does not type, ig_asgwhy.al:7:36)\nir: functions=4 built=1 notyet=3 sema_gaps=0 verify_failed=0\n"
 }
 
 ## ── the runner ──

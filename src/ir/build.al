@@ -2730,6 +2730,25 @@ ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
     }
   }
 }
+## #1633: `p = v` into an `out` / `in out` struct or enum parameter, whose address `rv` the caller passed
+## (its own place, Functions §2.1, §2.3, §4.1): the value in its own object first (a literal reading `p`
+## itself sees the old value, as `ib_bs_agg_assign`), then copied whole into the caller's place.
+ib_bs_ref_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), rv : VRegId, sd : usize, ts : usize, tn : usize, v : ptr(Expr)) {
+  sto : Option(IbSt) = ib_agg_bound(bp, a, sd, ts, tn)
+  match sto {
+    Some(st) => {
+      oo : Option(IbObj) = ib_agg(bp, a, v, st)
+      match oo {
+        Some(o) => {
+          pl := IbPlace(bk = OpndK.OkVReg, bv = i64(usize(rv)), di = sd, s = ts, n = tn, off = 0)
+          ib_copy_to_place(bp, a, pl, o.fr, st.size)
+        }
+        None => {}
+      }
+    }
+    None => { ib_refuse_assign(bp, h, Construct.SAssignRefParam) }
+  }
+}
 ## Why an unannotated aggregate declaration's initializer `v` names no type the builder lays out
 ## (`ib_agg_type_of` answered `None`), by the initializer's shape: a call (its callee's own cause when it
 ## resolves to no function, `ib_callee`), a name, a place, a literal, a `?`, an `if` / `match`.
@@ -5996,8 +6015,7 @@ ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), n
     BdArr(af, ats, atn) => { ib_bs_arr_assign(bp, a, h, af, ats, atn, v) }
     ## Re-assigning an unannotated array local is not built yet (#1622 builds it at its declaration).
     BdArrI(xf, xn, xes, xen) => { ib_refuse_assign(bp, h, Construct.SAssignArrInf) }
-    ## #1633: a whole `p = v` into an `out` / `in out` aggregate parameter is not built.
-    BdRef(rv, rsd, rts, rtn) => { ib_refuse_assign(bp, h, Construct.SAssignRefParam) }
+    BdRef(rv, rsd, rts, rtn) => { ib_bs_ref_assign(bp, a, h, rv, rsd, rts, rtn, v) }
     ## Re-pointing a view local is not built yet (#1576 step 1 builds a view only at its declaration).
     BdView(wf, wes, wen) => { ib_refuse_assign(bp, h, Construct.SAssignView) }
     BdStr(sf) => { ib_refuse_assign(bp, h, Construct.SAssignStr) }
