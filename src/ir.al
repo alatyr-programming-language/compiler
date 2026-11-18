@@ -1753,6 +1753,13 @@ pub Construct := enum {
   ECallGeneric, ECallOverload, ECallBuiltin, ECallFnValue, ECallQualified, ECallMethod, ECallTypeName,
   ECallUnresolved, ECallArity, ECallManyArgs, ECallExtern, ECallResult, ECallResultAgg, ECallAggValue,
   ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer,
+  ## The assignment family: one arm per cause an `x = e` / `x := e` / `mut x : T` statement is refused for
+  ## (`ir::build`'s `ib_bs_assign` and the declaration and store builders it hands to), as for calls.
+  ## `SAssign` stays the label of an assignment refused for a cause with no arm of its own.
+  SAssignTakenNarrow, SAssignArrInf, SAssignRefParam, SAssignView, SAssignStr, SAssignArrParam,
+  SAssignGlobal, SAssignUnbound, SAssignArrLit, SAssignAggNamed, SAssignAggInfer, SAssignAggBound,
+  SAssignAgArr, SAssignUninit, SAssignViewElem, SAssignFloat, SAssignNoKernel, SAssignInitCall,
+  SAssignInitName, SAssignInitPlace, SAssignInitLit, SAssignInitTry, SAssignInitBranch,
   ENum, EBoolLit, EVar, EBin, EIf, EMatch, ECall, EStructLit, EField, EEnumLit, EAddrOf, EDeref,
   ## The `deref` family (#1723): `EDeref` stays the label of a refusal no cause was found for.
   EDerefPointee, EDerefUnlaid, EDerefTier, EDerefNarrow, EDerefForeign,
@@ -1834,6 +1841,29 @@ pub construct_name := fn(c : Construct) -> str {
     ECallLayoutQ => { "call: size/align of a bound value or a type the builder does not lay out" }
     ECallAggPos => { "call: in aggregate position with no aggregate result the builder receives" }
     ECallDefer => { "call: defer marker (the deferred-exit drain is not built)" }
+    SAssignTakenNarrow => { "assign: address-taken local of a scalar narrower than a word" }
+    SAssignArrInf => { "assign: whole value into an unannotated array local" }
+    SAssignRefParam => { "assign: whole value into an out/in out aggregate parameter" }
+    SAssignView => { "assign: re-pointing a view local" }
+    SAssignStr => { "assign: re-pointing a str local" }
+    SAssignArrParam => { "assign: whole value into an array parameter" }
+    SAssignGlobal => { "assign: module binding with no one-word scalar cell the builder stores" }
+    SAssignUnbound => { "assign: name bound to nothing the builder tracks" }
+    SAssignArrLit => { "declaration: array literal whose element type the builder does not lay out" }
+    SAssignAggNamed => { "declaration: annotated aggregate type the builder does not lay out" }
+    SAssignAggInfer => { "declaration: initializer of no aggregate type the builder lays out" }
+    SAssignAggBound => { "assign: aggregate local of a type the builder does not lay out" }
+    SAssignAgArr => { "declaration or assign: array of an element type the builder does not lay out" }
+    SAssignUninit => { "declaration: uninitialized local of a type the builder does not lay out" }
+    SAssignViewElem => { "declaration: view of an element type the builder does not lay out" }
+    SAssignFloat => { "declaration: floating-point local" }
+    SAssignNoKernel => { "declaration: local of a type that is no kernel scalar" }
+    SAssignInitCall => { "declaration: call result of an aggregate type the builder does not lay out" }
+    SAssignInitName => { "declaration: copy of a name holding no aggregate the builder lays out" }
+    SAssignInitPlace => { "declaration: copy out of a field or element or pointee the builder does not type" }
+    SAssignInitLit => { "declaration: struct or enum literal of a type the builder does not lay out" }
+    SAssignInitTry => { "declaration: `?` of an aggregate payload" }
+    SAssignInitBranch => { "declaration: aggregate value of an if or match" }
   }
 }
 
