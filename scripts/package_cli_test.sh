@@ -2734,6 +2734,10 @@ run_pkg_check_build_located issue1753_method_recv_reject 5 main "type mismatch"
 run_pkg_check_build_located issue1753_method_recv_reject_late 4 main "type mismatch"
 run_pkg_check_build_located issue1753_method_recv_reject_libgen 6 main "type mismatch"
 run_pkg_exit issue1753_method_recv_scoped issue1753-method-recv-scoped 42
+# #1755 review B1 / Modules §3, §5 — an unqualified call never names a same-named fn of an unrelated
+# module: `pick(mk())` is judged against the root's own `pick(u64)` and refused. #1755's first head
+# (e43bebee) counted `zed::pick` into an overload set, skipped the check and answered 206.
+run_pkg_check_build_located issue1746_bare_call_foreign_module_reject 4 main "type mismatch"
 
 run_tool15_manifest_handle
 
