@@ -7,3 +7,8 @@
   and a qualified `m::f` names `f` in module `m`. Such a call is refused with `type mismatch` at the
   argument, exactly as the same call to a function written earlier always was (Functions §2.2,
   Types §4.1, §4.3). No program in the test corpus changed its answer apart from the new fixtures.
+- **A call through a local or parameter is no longer judged against a same-named module-level
+  function.** `f(s)` for a parameter `f : fn(S) -> u64`, or `pick(s)` after `pick := g`, was refused
+  with `type mismatch` when the module also declared `f(x : u64)` or `pick(x : u64)` above the caller,
+  because the checker read the module-level function's parameters. The inner name wins within its
+  scope (Declarations §6.1), so such a call now compiles and runs the bound function.
