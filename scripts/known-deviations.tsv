@@ -271,6 +271,8 @@ aarch64	test/issue1684_out_u8_elem_mid.al	run/139	#1692
 aarch64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 aarch64	test/issue169_wasm_nested_return.al	run/133	#1191
 aarch64	test/issue171_global_const_str.al	run/133	#1200
+aarch64	test/issue1746_shadow_callee_earlier.al	run/133	#1189
+aarch64	test/issue1746_shadow_callee_later.al	run/133	#1189
 aarch64	test/issue263_slice_narrow_field_write.al	run/133	#263
 aarch64	test/issue345_ptr_target_spacing.al	run/133	#550
 aarch64	test/issue349_arena_bad_alignment.al	run/133	#1199
@@ -390,6 +392,7 @@ aarch64	test/overload_scalar_agg.al	assemble/1	#1206
 aarch64	test/overload_second_arg.al	assemble/1	#1206
 aarch64	test/overload_str_literal_arg.al	assemble/1	#1206
 aarch64	test/overload_three.al	assemble/1	#1206
+aarch64	test/package/issue1746_bare_call_foreign_module_reject/src/zed.al	link/1	#3
 aarch64	test/package/issue1746_qualified_arg_control/src/util.al	link/1	#3
 aarch64	test/package/issue1746_qualified_arg_intrinsic_reject/src/util.al	link/1	#3
 aarch64	test/package/issue1746_qualified_arg_plain_reject/src/util.al	link/1	#3
@@ -857,6 +860,8 @@ riscv64	test/issue1684_out_u8_elem_mid.al	run/139	#1692
 riscv64	test/issue169_native_byte_abi_unsupported.al	run/133	#1191
 riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200
+riscv64	test/issue1746_shadow_callee_earlier.al	run/133	#1189
+riscv64	test/issue1746_shadow_callee_later.al	run/133	#1189
 riscv64	test/issue263_slice_narrow_field_write.al	run/133	#263
 riscv64	test/issue345_ptr_target_spacing.al	run/133	#550
 riscv64	test/issue349_arena_bad_alignment.al	run/133	#1199
@@ -980,6 +985,7 @@ riscv64	test/overload_scalar_agg.al	assemble/1	#1206
 riscv64	test/overload_second_arg.al	assemble/1	#1206
 riscv64	test/overload_str_literal_arg.al	assemble/1	#1206
 riscv64	test/overload_three.al	assemble/1	#1206
+riscv64	test/package/issue1746_bare_call_foreign_module_reject/src/zed.al	link/1	#3
 riscv64	test/package/issue1746_qualified_arg_control/src/util.al	link/1	#3
 riscv64	test/package/issue1746_qualified_arg_intrinsic_reject/src/util.al	link/1	#3
 riscv64	test/package/issue1746_qualified_arg_plain_reject/src/util.al	link/1	#3
@@ -1444,6 +1450,8 @@ wasm	test/issue1684_out_u8_elem_mid.al	run/134	#1692
 wasm	test/issue169_native_byte_abi_unsupported.al	run/134	#1191
 wasm	test/issue169_wasm_nested_return.al	run/134	#1191
 wasm	test/issue171_global_const_str.al	run/134	#1200
+wasm	test/issue1746_shadow_callee_earlier.al	run/134	#1189
+wasm	test/issue1746_shadow_callee_later.al	run/134	#1189
 wasm	test/issue263_slice_narrow_field_write.al	run/134	#263
 wasm	test/issue345_ptr_target_spacing.al	run/134	#1186
 wasm	test/issue349_arena_bad_alignment.al	run/134	#1186
@@ -1559,6 +1567,7 @@ wasm	test/overload_scalar_agg.al	assemble/1	#1206
 wasm	test/overload_second_arg.al	assemble/1	#1206
 wasm	test/overload_str_literal_arg.al	assemble/1	#1206
 wasm	test/overload_three.al	assemble/1	#1206
+wasm	test/package/issue1746_bare_call_foreign_module_reject/src/zed.al	assemble/1	#3
 wasm	test/package/issue1746_qualified_arg_control/src/util.al	assemble/1	#3
 wasm	test/package/issue1746_qualified_arg_intrinsic_reject/src/util.al	assemble/1	#3
 wasm	test/package/issue1746_qualified_arg_plain_reject/src/util.al	assemble/1	#3
