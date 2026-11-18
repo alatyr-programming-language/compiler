@@ -2042,4 +2042,27 @@ The original reading note, verbatim:
 #
 # VERSION 0.3.1 -> 0.3.2, PATCH by CHANGELOG.md "Versioning policy": every entry since 0.3.1 is a defect fixed with no new surface. #1576 turns the twins' runtime trap on a `str` value into the correct value, and makes x86_64 trap where #1550 answered a continuation byte; #1626/#1632 fix array-parameter reads and newly refuse a write through an `in` parameter, which the specification declares invalid (Memory § 3.4) - the defect was accepting it; #1577 types a `when`-alternative constant; #1662 holds two callers the array-parameter plan missed. No program the specification calls valid stops compiling, and no construct, backend shape or CLI verb appears.
 # The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.3.2 -> 0.4.0   promoted 2026-11-18   seed/alatyr := Stage2
+#
+# WHY: #1711 (carried by #1717) lets the shared IR take a niche-folded `Option(ptr(T))` whatever its variant order; the compiler's own `src/ast.al` declares `Option` with `Some` first, so until now every compiler function with an `Option(ptr(T))` parameter or result was NotYet and stayed on the legacy emitter. With #1731 (generic enum instances with an aggregate payload, #1033) and #1725 (`deref(p)` read whole, #1723) also building, and the fixes landed on main since 0.3.2 (#1576, #1705, #1663, #1684, #1726, #1728), 299 of the compiler's own functions moved to the IR, so the seed has to carry that emission or TOOL-1 cannot hold (gate run 44325246154 on e5ec3431's parent 08d1af63: full_fp DIFFER seed=1748931 gas1=gas2=1804326).
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 7653 hunks, 99446 added, 44051 removed. One sentence:
+# 299 more compiler functions are emitted from the shared IR (715 -> 1014 marked `# ir: selected from the shared IR`, of 5889 global symbols): each was emitted by the legacy x86_64 path and is now built, verified and selected by the shared IR, which since this set takes the shapes those functions carry (`Some`-first folded `Option(ptr(T))`, enum instances with aggregate payloads, aggregate `deref(p)` reads, aggregate arrays; the per-function cause was not measured); the other 5590 symbols, including all 715 already IR-emitted, are byte-identical once labels are normalized.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1804326 lines.
+# GAS SHA-256 (Stage2): 8b09cafbaa0b3370d29893a1a3530bd9fd6146c08f78e06afd0ecef3fe2e54b4.
+# Stage2 == Stage3 BINARY SHA-256:
+# 211c1de9b80d732e1f079137bc16f8b15f885d9ffa713b7789a53095a2a98d05 (7045880 B).
+# All three answer `alatyr 0.4.0, spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.3.2) SHA-256:
+# 91f3be63ff867fedd4e266b4a9eaa5aa3f70f3a4ac693019a0c1809895cd63e1.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1804326 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.3.2 -> 0.4.0, MINOR by CHANGELOG.md "Versioning policy": a construct that used to be rejected now works. Measured on omen 2026-11-17: seed 0.3.2 refuses test/ir_agg_arr_local.al (`selfhost: tuple/array element field not resolvable — mixed-kind tuple PARAM field access`, rc 1) and Stage1 of this tree builds it and answers 42; #1705 makes fixed arrays of struct elements and uninitialized aggregate locals run where x86_64 refused them, the class 0.3.0 was MINOR for. Not MAJOR: the new refusals reject programs the specification declares invalid (#1663, #1434/#1719, Memory §3-§4.4, Functions §2.3) or turn a crash or a lost write into a located failure (#1684's one-byte and module-global-array element places, which died with SIGSEGV; wasm's scalar `out` write, which was lost, now traps — the policy's PATCH rule for a loud failure, residual published as #1692). #1728 moves float-parameter functions back to the legacy emitter, which compiles them; no program the specification calls valid stops compiling. #1033's label split, #1675 and #1687 change no build.
+# The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```

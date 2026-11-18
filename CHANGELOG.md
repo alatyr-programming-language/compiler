@@ -134,6 +134,176 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.4.0 — 2026-11-18
+
+- **`alatyr ir` names why an aggregate result keeps a function out of the shared IR (#1033).** Every
+  such refusal used to read `signature: aggregate result wider than two words`, although the builder has
+  taken results of up to eight words since #1026 and width was only one of the reasons. Each cause now has
+  its own label. A struct result: wider than eight words, no fields, a byte-layout struct, a generic
+  struct, or the first field the convention cannot take (a fixed array, a sub-word scalar, a brand or
+  alias of a scalar, a float, or a type that is no scalar). Any other result: a view, a fixed array, an
+  enum or generic enum instance the register tier cannot lay out, a tuple, a scalar reached only through
+  a type alias, a float, a function type, `Never`, and a type that is really unresolved. What builds is
+  unchanged; only the report of what does not, and so `scripts/ir_census.sh`'s ranking, moves.
+- **The shared IR builds a generic enum instance whose payload is a struct or an enum (#1033).**
+  `Option(P)`, `Result(u64, E)` and `Option(Option(u64))` were refused as results, locals, parameters
+  and payloads with the label "generic enum instance result the builder cannot lay out". The builder
+  now lays such a payload out as a sub-object at the offset and size the layout authority gives
+  (`lower_layout::enum_layout`, `agg_words`): it builds it in place in a variant literal, copies it
+  out at a `match` binding, and passes an enum error through `?` unconverted. A payload whose type is a
+  brand, a required type or an alias over a scalar takes sema's kernel type for that name. On aarch64,
+  riscv64 and wasm, whose legacy emitters lay these instances out differently, a function whose
+  signature carries one stays legacy, as does every call to it.
+- A program that declares its own function named like a built-in the compiler recognised by spelling
+  (`size`, `align`, `len`, `str_at`, `str_eq`, `byte_at`, `bytes`, `panic`, `forget`, `expect`, `sub`,
+  `shl`, `shr`, `rotl`, `rotr`) now has its calls reach that function on every path (#1434). On the
+  x86_64 path a function takes when the shared IR does not build it, such a call crashed the compiler
+  (exit 139) or was silently replaced by the built-in (`align(10)` answered a type's alignment, and
+  `forget()` dropped the call). Grammar §2.3 makes built-ins prelude identifiers, not keywords. An
+  undeclared call keeps its built-in meaning unchanged. A declared `bitcast` is still parsed as the
+  reinterpret (#1718). Such a call is accepted only when the declared function is shown to accept every
+  argument; any other call, such as a `str` field passed to `len := fn(x : u64)` or a `u64` passed to
+  `len := fn(s : str)`, is refused with `type mismatch` at the argument (#1719). The
+  specification has not yet decided whether such a declaration replaces the built-in or adds to it
+  (spec#166).
+- **The shared IR builds a niche-folded `Option(ptr(T))` — one pointer word, no discriminant
+  (#1576).** A local of that type, a parameter and argument, a result and a call to such a function,
+  and a `match` over one are now built from the IR. Before, the builder refused every one of them —
+  a parameter was `signature: parameter type names no struct or enum resolvable here`, a result
+  `signature: aggregate result wider than two words` — and the legacy emitter took them over.
+  `Option(ptr(T))` is exactly pointer-width (Types §6.2/§7, Memory §4.2): `None` is the payload's
+  null pattern and `Some(p)` is the pointer itself, so a `match` tests that one word against zero and
+  the absent case writes it. On x86_64 it crosses a call as every aggregate does — in as the address
+  of a caller-owned copy, out as one word in the result register — which is the convention x86_64's
+  legacy emitter already uses, so an IR-built function and a legacy one exchange folded options in both
+  directions there at the same value (measured 42 on the default, `x86-legacy` and `x86-ir` plans).
+  The aarch64, riscv64 and wasm selectors keep such a signature, and every call to one, on the legacy
+  emitter (`ir::sig_pins_legacy`): theirs reads an aggregate parameter's payload at `[#8]`, the
+  unfolded tag and payload pair, a different shape from the folded word. A folded option whose signature
+  mentions none — a local read with `match` — is IR-built there too, and that moves a value: where the
+  parent refused it and each of those legacy emitters trapped (`unsupported match statement`, 133 on
+  aarch64 and riscv64; `unreachable`, 134, on wasm), all four backends now answer 42. An `Option` or
+  `Result` over a struct, an enum, a slice or a `bool` payload is not built yet and keeps its located
+  refusal.
+- `check` now refuses an immutable place bound to an `out` / `in out` parameter — newly rejecting
+  programs the specification declares invalid (Functions §2.3, Memory §3.1/§3.3/§3.4), so this is a
+  patch. An immutable local, an `in` parameter handed on, a literal, a field of an immutable struct,
+  an immutable fixed array, an element of an immutable array and an immutable module global were all
+  accepted there, and the callee wrote through them; the direct store `x = v` / `x[i] = v` /
+  `s.f = v` already answered `check: immutable binding`, and this route now asks that same question of
+  the same root. A `mut` local, an `in out` parameter re-passed, a whole `mut` array and the UFCS
+  receiver keep compiling. A **generic** callee is not judged at all, so a call to one — including
+  most of `lib/`, whose place-parameter APIs are generic (`Vec`, `Deque`, the `fmt` writers) — stays
+  open; the non-generic ones (`StrBuf`'s eight `in out s : StrBuf` methods) are covered. That
+  residual is tracked on #1663; `ptr(mut …)` over an immutable place has its own entry.
+- `check` now refuses `ptr(mut …)` taken to a place whose write path is not writable — newly rejecting
+  programs the specification declares invalid (Memory §4.4, §3.1/§3.3), so this is a patch. Memory
+  §4.4: "an immutable place yields only `ptr(T)`", and a permission "may only be dropped, never
+  gained". `ptr(mut v)` of a local declared without `mut`, of an `in` parameter, of an element of an
+  `in` array parameter or of an immutable struct local were all accepted, and a write through the
+  pointer then changed an immutable place; the refusal is `check: immutable binding` at the place's
+  root, the direct store's own wording. `ptr(x)` of any place, and `ptr(mut x)` of a `mut` local, a
+  `mut` global or an element of a `mut` array, keep compiling.
+  - `dyn_over` has no carve-out (Functions §1.6, as spec#152 decided): `dyn_over(ptr(mut s))` over a
+    store declared without `mut` is refused like any other such address. Write the canonical
+    `dyn_over(ptr(s))`, which builds the same `dyn` value over any store; the `mut` form stays
+    admissible over a `mut` store.
+- `alatyr fmt` keeps the `mut` qualifier on `ptr(mut xs[1])` and any other postfix-chain operand. It
+  rendered `ptr(xs[1])`, which since the entry above is a different program: the formatted text of a
+  refused source compiled.
+- **An `@inline` call expanded into a caller the legacy x86_64 emitter builds answers the body's final expression (#1664).** A block is an expression whose value is its final expression (Control Flow §3), and a `-> T` body fills its anonymous output from that expression exactly as it does with `return` (Functions §3.3, §3.4), so the expanded call owes the value of the body's last expression. The expansion emitted only the body's statements, so `@inline mid := fn(k : u64) -> u64 { b : u64 = k + 1; g(b) }` answered `b` where `g(b)` was due. The tail expression is now delivered by the same convention an explicit `return` of it uses; a result shape the expansion does not deliver at its inline-end label — a byte array, a niche-folded `Option`, a `str` or slice, an enum with a payload — is refused with a located diagnostic rather than answering a wrong value. The shared IR already substituted the whole body and answered correctly (#1074, #1084), so this is the legacy half of one rule.
+- The fixed-array parameter plan now derives its caller edges from the tree the emitters actually see,
+  after the driver's rewrites, and not from the source text alone (#1675): a `__hoflam<N>` clone and a
+  lifted lambda are callers in their own right, each tried by the fixpoint with its own answer, and a
+  call the text scan cannot attribute to the declaration that makes it — an index or iterator desugar, a
+  call inside a clone whose callee's name is in no source file — now reaches the plan as an edge of its
+  own. No function is freed by this today: the walk only ever adds edges, and where the walk and the scan
+  disagree the plan holds, so every program selects exactly what it selected before. What the tree cannot
+  see stays held and stays with the text scan — a name the emitters pick by its literal spelling, a
+  `@convert`, an occurrence outside every declaration.
+- **An `@inline` comptime-variadic call answers the pack, not just the tail (#1681).** A callee marked
+  `@inline` whose last parameter is a bare `...` rest is expanded at its call site by both markers:
+  Codegen §3.5 (CG-10) substitutes the body with no `call`, and Functions §7.1 monomorphizes it over
+  the trailing arguments, which form the comptime pack its `comptime for` walks. The call site chose the
+  `@inline` expander, and that expander binds every parameter as an ordinary value — it never handed the
+  pack over, so the loop unrolled zero times and only the body's final expression survived:
+  `@inline sum := fn(args : ...) -> u64 { mut t : u64 = 0; comptime for a in args { t = t + a }; t + 2`
+  `}` with `sum(20, 20)` answered 2 where 42 was due, on the default, `x86-legacy` and `x86-ir` plans
+  alike. A comptime-variadic callee now goes to the variadic expander, which threads the pack and still
+  emits no `call`, so both contracts hold; a plain `@inline` callee keeps its own expander unchanged.
+- **An `out` / `in out` scalar bound to a module global or an array element reaches that place
+  (#1684).** Functions §2.3 binds an `in out` parameter by a place argument — "a place-expression the
+  callee reads and writes **in place**" — and requires it to be a mutable place (Memory §3), which an
+  element of a `mut` array and a `mut` module global both are. Neither was written: the x86_64 emitter
+  passed the address of the caller's first frame word for a global, so `give(g)` stored 10 into the
+  caller's frame while `g` kept its old value and `g + 12` answered 12 where 22 was due, and it passed
+  the element's VALUE for an array element, so `put(a[0])` stored through the integer 1 and died with
+  SIGSEGV. Both now pass the place's own address — the global's `.data` label, the element address the
+  index machinery already composes for every base — so the callee's write is visible to the caller. A
+  name that is neither a bound local nor a `mut` global is refused with a located diagnostic instead of
+  silently addressing frame slot 0. The shared IR declines these signatures, so this is the legacy
+  emitter honouring the same rule. Two element places are refused with a located diagnostic for now:
+  a one-byte element (`[u8; N]`, `[i8; N]`, a byte field or view), because the callee still writes
+  its place a whole word wide and would overwrite the neighbouring bytes, and an element of a
+  module-global array.
+  On wasm, which passes every scalar argument by value and has no place passing for one, a write to a
+  scalar `out` / `in out` parameter now traps instead of being lost: `give(g)` answered 12 there too,
+  and `bump(g)` twice answered 105 where 111 was due (#1692). A callee that only reads its `in out`
+  scalar is unaffected.
+- **The shared IR's niche-folded `Option(ptr(T))` shape now asks that the absent variant was seen
+  (#1687).** The builder takes the one-word folded layout — no discriminant, `None` the all-zero word,
+  `Some(p)` the pointer itself (Types §6.2/§8, Memory §4.2) — only for the shape that claim rests on:
+  exactly two variants, one carrying discriminant 0 with no components and the other exactly one. It
+  asked that the discriminant-0 variant carry no components by reading back a counter left at zero, which
+  answers zero both when that variant was seen with no components and when no variant carried discriminant
+  0 at all; the second answer passed the guard and folded a type whose null pattern is not its absent case.
+  The variant is now counted explicitly and required to have been seen. No program the compiler accepts
+  today reaches the difference — the prelude's `Option` puts `None` first, at discriminant 0 — so every
+  build is unchanged; the guard now means what its prose says, one declaration before it could fire.
+- A fixed array of struct or enum elements, `[P; N]`, and an aggregate local declared without an
+  initializer (`mut p : P`, `mut xs : [P; 2]`) are now built from the shared IR on every backend (#1705):
+  one frame object of `N * stride` bytes, the stride the element's size rounded up to its alignment
+  (Types §6.4), indices checked like a scalar array's. Programs that aarch64, riscv64 and wasm answered
+  with a fail-loud stub, and that x86_64 refused, now run; an uninitialized `[T; N]` no longer writes its
+  elements over the x86_64 frame when its function is built from the IR (#1708). Arrays of `@packed` or
+  otherwise levered structs keep their refusal.
+- **The shared IR takes a niche-folded `Option(ptr(T))` whatever its variant order (#1711).** Types
+  §6.2 folds the single extra variant into the payload's niche whatever its position, but the builder
+  took the one-word folded layout only when the nullary variant was discriminant 0. The compiler's own
+  `src/ast.al` declares `Option` with `Some` first, so every function in `src/` with an `Option(ptr(T))`
+  parameter was refused. The shape is now one nullary and one single-component variant in either order,
+  and every folded variant test goes through one helper that tests by meaning (`None` is `word == 0`,
+  `Some` is `word != 0`), never by discriminant: a `match` arm and the `?` operator. `?` on a folded
+  operand also stopped reading its payload at byte 8 of the one-word object, which the IR verifier
+  refused as an internal error (exit 70) even for the prelude's `None`-first `Option`.
+- **The shared IR builds `deref(p)` read whole, and names why it does not (#1723).** In value context
+  `deref(p)` loads the pointee (Memory §4.3). When the pointee is an aggregate, the builder now copies it
+  out of the address into a fresh value of its own, as it already did for a parameter passed by reference.
+  It does this only when the operand's declaration spells the pointee type: a pointer name declared
+  `ptr(T)`, a call declared `-> ptr(T)`, or `bitcast(ptr(T), x)`. The pointee must also be an enum in the
+  shared layout or a struct in the WORD tier. So `v : S = deref(p)`, `match deref(q) { … }` and
+  `f(deref(g()))` are built where they were refused. An enum whose variant carries a niche-folded
+  `Option(ptr(T))` component is laid out too: the component is the one pointer word in its slot
+  (Types §6.2), and a match binding over it is an `Option` value that can be matched again.
+  On aarch64 and riscv64 such functions stay with the legacy emitter for now: it stores
+  `deref(dst) = <aggregate>` as one word (#1727) and lays the folded component out differently (#1724),
+  so an IR-built reader would see a half-written value. wasm keeps the folded-component functions
+  legacy too (#1724).
+  Every remaining refusal names its cause instead of a bare `expr Deref`: the pointee type is not
+  spelled, the builder does not lay out the pointee, the struct is not in the WORD tier, the scalar is
+  narrower than a word, or the callee is declared in another module (reached through an import alias)
+  and its pointee name is not proven to denote the same type in the calling module (Modules §3, §4.1).
+- **x86_64: a negative narrow signed payload no longer reaches a legacy caller zero-extended (#1726).**
+  A function built by the shared IR wrote an `i8`, `i16` or `i32` enum payload component at its own
+  width into a zeroed word, so a legacy-emitted caller read `Result(i32, u64).Ok(-12345)` as
+  `4294954951`. The builder now writes such a component as its whole canonical word, sign-extended,
+  in a variant literal and in `?`'s error pass-through.
+- **x86_64: a function with a float parameter is no longer built by the shared IR (#1728).** The
+  selectors took the parameter from an integer register while a legacy caller passed it in `%xmm0`, so
+  `bits(x : f64)` called from legacy code read the wrong bits. The function, and an IR-built call that
+  would pass a float argument, are refused with "signature: floating-point parameter" and stay
+  legacy-emitted.
+
 ## 0.3.2 — 2026-11-15
 
 - **A `Vec` element read as `v[i]`, `v.at(i)` or `v[a..b]` keeps its whole struct, `str` or enum value on
