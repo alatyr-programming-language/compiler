@@ -840,8 +840,9 @@ follows: the names the signature spells, and from each name declared once, its a
 struct field types and its enum variant payloads, each declaration entered once and at most 256 of them
 (past that it refuses). The fixture `issue1744_sig_alias_ir` holds a result type `T` declared once that
 aliases an `Inner` both modules declare. The guard exists because the builder lays out a callee's
-signature types from the caller's module (#1734, #1737). Once #1743 lands, the guard and its helpers are
-deleted.
+signature types from the caller's module (#1734, #1737). #1743 and #1731 resolve the names a signature
+spells in the callee's module, but a struct field's type is still resolved in the caller's (#1737, open);
+once #1737 is fixed, the guard and its helpers are deleted.
 
 ### 3.8 Signedness and width are attributes of the value, derived once
 
