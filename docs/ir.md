@@ -802,6 +802,23 @@ class no selector models: the legacy emitters pass it in a float register, and t
 parameter from an integer one. So a function with one is refused (`CSigParamFloat`), and so is an
 IR-built call that would pass a float argument (#1728).
 
+A call the builder does not build is refused with the cause that stopped it, one `call: …` label per
+cause (#1733), so the census ranks them: the callee is generic, an overload set, a built-in, a value
+rather than a declaration, a qualified or method form left unresolved, a type's name, a `defer` marker
+(the parser's `__defer…` calls, a statement rather than a callee), or nothing; the
+argument count differs or exceeds eight; the callee is an extern; the result is neither a kernel scalar
+nor a register-returned aggregate, or is an aggregate of a type the builder does not lay out; an argument
+is not a place an `out` / `in out` parameter (scalar or array-shaped) needs, or goes to a parameter whose
+type or mode the convention does not pass (an `in` array and a `...T` rest are refused here); or the
+call is a scalar conversion to or from a non-integer or with other than one argument, a brand or
+`@require`, or a layout query of a bound value or of a type the builder does not lay out. The function
+that finds the cause returns it (`ib_callee` answers `CeNo(<cause>)`). A call in aggregate position asks
+`ib_callee` once more (`ib_agg_call_why`) for the callee's cause, rather than keeping a copy of its tests. A
+call refused for a reason with no such label keeps `expr Call`, and a sema gap at a call keeps
+`sema-gap …: expr Call`. The golden `ig_callwhy` pins four labels across five calls: a generic callee,
+more than eight arguments, an extern callee, and an `in` array and a `...T` rest argument, which share
+the parameter type-or-mode label.
+
 ### 3.8 Signedness and width are attributes of the value, derived once
 
 Today signedness is decided **by the shape of the expression**, separately in each emitter: a bare

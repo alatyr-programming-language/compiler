@@ -30,9 +30,22 @@ extract_used() {
   } | grep -oE '"[A-Za-z_][A-Za-z0-9_]*"' | tr -d '"' | sort -u
 }
 
+# One function's body in src/ir.al, from its `NAME := fn` line to the first `}` at column 0.
+fn_body() {
+  awk -v f="$2" '$0 ~ "^" f " := fn" {on=1} on{print} on && /^}/{exit}' "$1"/src/ir.al
+}
+
+# The names `ap_synth_name` holds: its own `nm == "…"` tests, plus `ap_defer_marker`'s, but those only
+# while `ap_synth_name`'s own body still calls `ap_defer_marker(` (#1736 review: a dropped call passed).
 extract_listed() {
-  awk '/^ap_synth_name := fn/{on=1} on{print} on && /^}/{exit}' "$1"/src/ir.al \
-    | grep -oE 'nm == "[A-Za-z_][A-Za-z0-9_]*"' | grep -oE '"[^"]*"' | tr -d '"' | sort -u
+  local synth
+  synth="$(fn_body "$1" ap_synth_name)"
+  {
+    echo "$synth"
+    if echo "$synth" | grep -v '^ap_synth_name := fn' | grep -qE '(^|[^A-Za-z0-9_])ap_defer_marker\('; then
+      fn_body "$1" ap_defer_marker
+    fi
+  } | grep -oE 'nm == "[A-Za-z_][A-Za-z0-9_]*"' | grep -oE '"[^"]*"' | tr -d '"' | sort -u
 }
 
 check() {
@@ -80,7 +93,18 @@ self_test() {
   # plant: a name dropped from the list
   sed -i.bak 's/nm == "index_set" or //' "$t/src/ir.al"
   if check "$t" > /dev/null; then echo "self-test FAIL: a name dropped from ap_synth_name passed"; fails=1; fi
-  if [ "$fails" = 0 ]; then echo "ir_ap_names self-test: OK (1 control, 5 plants)"; fi
+  cp "$here/src/ir.al" "$t/src/ir.al"
+  # plant: a defer marker dropped from ap_defer_marker's list
+  sed -i.bak 's/ or nm == "__deferblk" or / or /' "$t/src/ir.al"
+  if check "$t" > /dev/null; then echo "self-test FAIL: a name dropped from ap_defer_marker passed"; fails=1; fi
+  cp "$here/src/ir.al" "$t/src/ir.al"
+  # plant: ap_synth_name no longer calls ap_defer_marker, so the defer markers are held by nothing
+  sed -i.bak 's/or ap_defer_marker(src, s, n) //' "$t/src/ir.al"
+  if fn_body "$t" ap_synth_name | grep -q 'ap_defer_marker('; then
+    echo "self-test FAIL: the dropped-call plant did not apply"; fails=1
+  fi
+  if check "$t" > /dev/null; then echo "self-test FAIL: ap_synth_name without its ap_defer_marker call passed"; fails=1; fi
+  if [ "$fails" = 0 ]; then echo "ir_ap_names self-test: OK (1 control, 7 plants)"; fi
   return "$fails"
 }
 
