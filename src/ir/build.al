@@ -2049,6 +2049,8 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
   ## answer for every tier), `@offset` and `@endian` fields included. It stays a LOCAL value: every place
   ## through a pointer and every call crossing requires the WORD tier (`ib_struct_word`, Q4).
   packed := lower_layout::layout_kind_is_packed(lk)
+  ## #1758: a LEVERED struct — `@packed`, or the BYTE tier — is laid out byte-exactly, LOCAL only.
+  lev := packed or lower_layout::layout_kind_is_byte(lk)
   ## A raised `@align` is answered by the BYTE tier's own single source: `standard_struct_align` reads
   ## the attribute itself (`if sa >= 1 { mx = usize(sa) }`) and the alignment below comes from that call,
   ## so refusing every `@align` struct refused what the one answer already gave. A WORD-tier struct keeps
@@ -2068,8 +2070,9 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
         match ko {
           Some(k) => { if fd.wsize != 1 { return Option(IbSt).None } }
           None => {
-            ## Slice 3c: an array field of 8-byte kernel scalars (`ib_arr_field`).
-            ro : Option(IbArr) = ib_arr_of(bp, a, fd.ts, fd.tl, true)
+            ## Slice 3c: an array field of 8-byte kernel scalars (`ib_arr_field`); #1758: of bytes in a
+            ## levered struct (`ib_arr_field_ty`).
+            ro : Option(IbArr) = ib_arr_field_ty(bp, a, lev, fd.ts, fd.tl)
             match ro {
               Some(r) => { if fd.wsize != r.n { return Option(IbSt).None } }
               None => {
@@ -2079,6 +2082,11 @@ ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : us
                 fsp : IbSpan = ib_type_span_full(bv.src, fd.ts, fd.tl)
                 so : Option(IbSt) = ib_agg_named(bp, a, fsp.s, fsp.n)
                 match so { Some(sub) => {}; None => { return Option(IbSt).None } }
+                ## #1758: inside a BYTE-tier struct the field's slot is the child's §6.1 size, while the
+                ## builder lays a WORD-tier child out a word per field: the two coincide only for a
+                ## WORD-GRANULAR struct child (`lower_layout::std_struct_is_word_granular`, CLAYOUT S3),
+                ## so any other child (an enum, a narrower field) keeps the refusal.
+                if lev and not lower_layout::std_struct_is_word_granular(bv.decls, bv.src, fsp.s, fsp.n, a) { return Option(IbSt).None }
               }
             }
           }
@@ -2112,6 +2120,7 @@ ib_struct_bound := fn(bp : ptr(mut IbB), in out a : rt::Arena, sd : usize, ts : 
 ib_struct_padded := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> bool {
   bv : IbB = deref(bp)
   d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  lev := ib_st_levered(bp, a, st)
   mut f := d.fields_head
   mut w : usize = 0
   loop {
@@ -2122,7 +2131,7 @@ ib_struct_padded := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> bo
         match ko {
           Some(k) => { w = w + usize(kty_bytes(k.ty)) }
           None => {
-            ro : Option(IbArr) = ib_arr_of(bp, a, fd.ts, fd.tl, true)
+            ro : Option(IbArr) = ib_arr_field_ty(bp, a, lev, fd.ts, fd.tl)
             match ro { Some(r) => { w = w + ib_arr_bytes(r) }; None => { return true } }
           }
         }
@@ -3914,6 +3923,28 @@ ib_arr_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, ts : usize, tn : usize,
   if stride != usize(kty_bytes(k.ty)) { return Option(IbArr).None }
   Option(IbArr).Some(IbArr(n = n, ty = k.ty, sg = k.sg, stride = stride))
 }
+## Is struct `st` LEVERED — `@packed`, or in the BYTE tier (`lower_layout::layout_kind`)? Such a struct
+## is laid out byte-exactly by `field_byte_place` and stays a LOCAL value (`ib_struct_word_why`).
+ib_st_levered := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> bool {
+  bv : IbB = deref(bp)
+  lk := lower_layout::layout_kind(bv.decls, bv.src, st.s, st.n, a)
+  lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk)
+}
+## The array FIELD type spelled `[ts, ts+tn)`, when the builder lays it out: 8-byte elements in any
+## struct (the stride every model agrees on, see the band comment), and — #1758 — 1-byte elements in a
+## LEVERED struct (`lev`). There the layout is the byte one every reader of a levered struct uses: a
+## `[u8|i8|bits8; N]` field is a blob of `N` bytes at stride 1 (`lower_layout::field_byte_size`, Types
+## §6.4), the very field that puts a struct in the BYTE tier; and a levered struct never crosses a call
+## or a pointer, so no legacy reader meets the IR's bytes. A wider narrow element stays refused: a packed
+## struct lays it out as a word-model blob (`field_byte_size`).
+ib_arr_field_ty := fn(bp : ptr(mut IbB), in out a : rt::Arena, lev : bool, ts : usize, tn : usize) -> Option(IbArr) {
+  wo : Option(IbArr) = ib_arr_of(bp, a, ts, tn, true)
+  match wo { Some(w) => { return wo }; None => {} }
+  if not lev { return Option(IbArr).None }
+  ro : Option(IbArr) = ib_arr_of(bp, a, ts, tn, false)
+  match ro { Some(r) => { if r.stride == 1 { return ro } }; None => {} }
+  Option(IbArr).None
+}
 ## The layout of an UNANNOTATED array local (`BdArrI`): `n` elements of the kernel scalar spelled
 ## `[es, es+en)`, at its own stride (Types §6.4) — the same element rule as `ib_arr_of`.
 ib_arr_inf_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, n : usize, es : usize, en : usize) -> Option(IbArr) {
@@ -4147,7 +4178,7 @@ ib_arr_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, base : Opnd, st : Ib
       Some(fq) => {
         fd := deref(ast::fld_p(fq))
         if fd.nl == fl and streq(bv.src, fd.ns, fd.nl, fs, fl) {
-          ro : Option(IbArr) = ib_arr_of(bp, a, fd.ts, fd.tl, true)
+          ro : Option(IbArr) = ib_arr_field_ty(bp, a, ib_st_levered(bp, a, st), fd.ts, fd.tl)
           match ro {
             Some(r) => {
               if fd.wsize != r.n { return Option(IbArrAt).None }
@@ -4467,11 +4498,97 @@ ib_is_view_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) ->
       match vo { Some(v) => { true }; None => { false } }
     }
     Expr::StrLit(ss, sl, lbl, ps, pn) => { true }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+    Expr::StructLit(ls, ll, lnf, lfh) => {
+      lo : Option(IbVEl) = ib_view_lit_el(bp, a, ls, ll, lnf)
+      match lo { Some(l) => { true }; None => { false } }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => { false }
   }
+}
+
+## #1758 (IR-33): `Slice(T)(ptr = p, len = n)` — a view built from its two words. Stdlib appendix §3.5
+## declares the slice as the library pair `Slice := fn(T : type) -> type { struct { ptr : ptr(T), len :
+## usize } }`, so the literal IS the view's `{ptr, len}` pair (`ptr` at byte 0, `len` at byte 8, Types
+## §6.1 declaration order) — the layout every view local already has here. Taken only when the literal's
+## type is the view `lower_layout::view_elem_span` reads off `Slice(…)` AND the struct the name resolves
+## to declares exactly that pair, in that order, with both fields written: a program declaring its own
+## `Slice` of another shape keeps its refusal. The element must be one the builder builds a view of.
+ib_view_lit_el := fn(bp : ptr(mut IbB), in out a : rt::Arena, ls : usize, ll : usize, nf : usize) -> Option(IbVEl) {
+  if nf != 2 { return Option(IbVEl).None }
+  bv : IbB = deref(bp)
+  src := bv.src
+  full : IbSpan = ib_type_span_full(src, ls, ll)
+  es := lower_layout::view_elem_span(src, full.s, full.n)
+  if es.n == 0 or str_at((src + full.s), 6) != "Slice(" { return Option(IbVEl).None }
+  bn := lower_layout::base_type_name(src, full.s, full.n)
+  sdi := lower_layout::struct_decl_of(bv.decls, src, bn.s, bn.n)
+  if sdi < 0 { return Option(IbVEl).None }
+  d : Decl = deref(ib_decl_ptr(bv.decls, usize(sdi)))
+  if not d.is_generic { return Option(IbVEl).None }
+  ## Exactly `ptr : ptr(…)` then `len : usize`.
+  mut f := d.fields_head
+  mut k : usize = 0
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        ## A field's type span is its head (`ptr`); `ib_ptr_type_span` restores the `( … )` group.
+        pts : IbSpan = ib_ptr_type_span(src, fd.ts, fd.tl)
+        if k == 0 and not (fd.nl == 3 and str_at((src + fd.ns), 3) == "ptr" and pts.n > 4 and str_at((src + pts.s), 4) == "ptr(") { return Option(IbVEl).None }
+        if k == 1 and not (fd.nl == 3 and str_at((src + fd.ns), 3) == "len" and fd.tl == 5 and str_at((src + fd.ts), 5) == "usize") { return Option(IbVEl).None }
+        if k > 1 { return Option(IbVEl).None }
+        k = k + 1
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  if k != 2 { return Option(IbVEl).None }
+  ib_view_elem(bp, a, es.s, es.n)
+}
+## The view literal `e` (`ib_view_lit_el`) into a fresh `{ptr, len}` object: the pointer, then the
+## length, each built at its field's kernel type and stored in source order of the declaration (the
+## parser hands the written fields over in declaration order).
+ib_view_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), ls : usize, ll : usize, nf : usize, fh : Option(ptr(mut Arg))) -> Option(IbVObj) {
+  elo : Option(IbVEl) = ib_view_lit_el(bp, a, ls, ll, nf)
+  match elo {
+    Some(el) => {
+      match fh {
+        Some(pq) => {
+          pa := deref(arg_p(pq))
+          match pa.next {
+            Some(lq) => {
+              la := deref(arg_p(lq))
+              mut pvo : Option(VRegId) = Option(VRegId).None
+              if ib_is_addr_of_index(pa.e) { pvo = ib_view_lit_elem_ptr(bp, a, pa.e, el) } else { pvo = ib_value_ctx(bp, a, pa.e, IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)) }
+              match pvo {
+                Some(pv) => {
+                  lvo : Option(VRegId) = ib_value_ctx(bp, a, la.e, ib_ks_i64(Sgn.SgU))
+                  match lvo {
+                    Some(lv) => {
+                      fr := ib_new_obj(bp, a, ib_view_st())
+                      ib_store_field(bp, a, fr, ib_view_ptr_fld(), pv)
+                      ib_store_field(bp, a, fr, ib_view_len_fld(), lv)
+                      return Option(IbVObj).Some(ib_vobj(fr, true, el))
+                    }
+                    None => {}
+                  }
+                }
+                None => {}
+              }
+            }
+            None => {}
+          }
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  Option(IbVObj).None
 }
 
 ## The view value `e`, at the element layout `want` its position gives it (an annotation, a parameter,
@@ -4510,7 +4627,8 @@ ib_view_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), want
       }
     }
     Expr::StrLit(ss, sl, lbl, ps, pn) => { got = ib_view_strlit(bp, a, ss, sl, lbl) }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+    Expr::StructLit(ls, ll, lnf, lfh) => { got = ib_view_lit(bp, a, e, ls, ll, lnf, lfh) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => {}
@@ -4614,6 +4732,72 @@ ib_view_range := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), sb :
     None => {}
   }
   Option(IbVObj).None
+}
+## Is `e` the address of an element, `ptr(b[k])`?
+ib_is_addr_of_index := fn(e : ptr(Expr)) -> bool {
+  match deref(e) {
+    Expr::AddrOf(pl) => {
+      match deref(pl) {
+        Expr::Index(xb, xi) => { true }
+        Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+          | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try
+          | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+          | Expr::Loop => { false }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => { false }
+  }
+}
+## `ptr(b[k])` as a view literal's `ptr` (`ib_view_lit`): the address of element `k` of a whole array
+## local `b` held in a frame object, with a LITERAL `k` in `0 <= k < N` (so the place `b[k]` is proved in
+## range and owes no check), and the array's element laid out exactly as the view's (`el`: kernel type,
+## signedness, stride). That is the address `b[k..]` would start at (`ib_view_range`), so the view it
+## starts is one the builder already builds, under the same rules: a view of an IR-laid-out array never
+## crosses to a legacy-emitted function at a narrow stride (`ir::sig_has_narrow_view`). `ptr(b[k])`
+## anywhere else is not built (`ib_bx_addr_of`: an IR array's address handed to legacy code, Q4).
+ib_view_lit_elem_ptr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), el : IbVEl) -> Option(VRegId) {
+  match deref(e) {
+    Expr::AddrOf(pl) => {
+      match deref(pl) {
+        Expr::Index(xb, xi) => {
+          k := ib_ty(bp, e)?
+          if not kty_is_ptr(k.ty) { return ib_no(bp, e, NyWhy.NwDisagree) }
+          if lower_layout::ex_var_nl(xb) == 0 { return ib_no(bp, e, NyWhy.NwOutside) }
+          apo : Option(IbArrAt) = ib_arr_place(bp, a, xb)
+          match apo {
+            Some(ap) => {
+              if not opndk_is_frame(ap.bk) { return ib_no(bp, e, NyWhy.NwOutside) }
+              if not kty_eq(el.ty, ap.ty) or not sgn_eq(el.sg, ap.sg) or el.stride != ap.stride { return ib_no(bp, e, NyWhy.NwDisagree) }
+              kvo : Option(i64) = ib_num_value(xi)
+              match kvo {
+                Some(kv) => {
+                  if kv < 0 or usize(kv) >= ap.n { return ib_no(bp, e, NyWhy.NwOutside) }
+                  base := ib_addr_obj(bp, a, FrameId(usize(ap.bv)))
+                  po := ib_ptr_plus(bp, a, base, usize(ap.off) + usize(kv) * ap.stride)
+                  ## `ib_ptr_plus` answers a vreg operand (the base itself at offset 0, else a `gep`).
+                  return Option(VRegId).Some(VRegId(usize(po.v)))
+                }
+                None => {}
+              }
+            }
+            None => {}
+          }
+        }
+        Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+          | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try
+          | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+          | Expr::Loop => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  ib_no(bp, e, NyWhy.NwOutside)
 }
 ## The view value `e` in an object of its own: a fresh one as it is, anything else copied (a local never
 ## shares another's memory, and an argument is a caller-owned copy, docs/ir.md §3.7).
