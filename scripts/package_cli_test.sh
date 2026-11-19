@@ -2708,6 +2708,10 @@ run_pkg_exit issue703_global_module_scope issue703-global-module-scope 42
 # both modules declare, and a module-path call into an overload set the IR refuses (legacy picks the member).
 run_pkg_exit issue1744_qualified_callee_ir issue1744-qualified-callee-ir 42
 run_pkg_exit issue1744_qualified_overload_ir issue1744-qualified-overload-ir 42
+# #1772: bare calls to a name several modules declare, built through the shared IR on x86_64 as the
+# calling module binds them (own declaration, alias import, projection), beside decoys that would change
+# the answer, and a bare call into the module's own overload set that keeps the legacy emitter.
+run_pkg_exit issue1772_bare_callee_ir issue1772-bare-callee-ir 42
 run_pkg_check_build_located issue703_global_module_scope_reject 2 a "a FIELD ACCESS on a SCALAR value: \`.\` selects a struct or union field, a tuple position \`.N\`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name"
 # A QUALIFIED owner is never decided by the scalar check: `z::cfg.x` names `z`'s struct global
 # (Modules §2, MOD-3) although `a` declares a scalar `cfg`. The previous head of #1309 refused it with

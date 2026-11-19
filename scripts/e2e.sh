@@ -1295,6 +1295,34 @@ check_ir_dev_verb() {
   if [ "$rc" = 0 ] && [ "$ok" = 1 ] && grep -q 'verify_failed=0$' "$rep"; then
     echo "ok   ir --modules #1744 signature walk: an alias, a field and a later payload reaching a twice-declared type are refused"
   else echo "FAIL ir --modules #1744 signature walk: rc=$rc"; grep '^fn main::' "$rep" | sed 's/^/     /'; fail=1; fi
+  # #1772: a bare callee whose name several modules declare is the one the calling module's own scope
+  # binds (Modules §4.1, §4.1.1, §5) — its own `twice`, the alias `step := a::step`, the projection
+  # `(half, dec) := b`, and `b`'s own `twice` inside `b::useb`. A bare call into the module's own
+  # overload set (`pick`) stays refused by that cause. On the parent each of the first three callers
+  # answered `several functions of that name (an overload set)`.
+  local b1772="$E2E_TEST/package/issue1772_bare_callee_ir/src"
+  "$CC" ir --modules "$b1772/main.al" "$b1772/a.al" "$b1772/b.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -qx 'fn main::mine Built' "$rep" && grep -qx 'fn main::imported Built' "$rep" \
+     && grep -qx 'fn b::useb Built' "$rep" && grep -q '^fn main::over NotYet(call: several functions of that name' "$rep" \
+     && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir --modules #1772 bare callee: own, aliased and projected names built, an own overload set refused"
+  else echo "FAIL ir --modules #1772 bare callee: rc=$rc"; grep -E '^fn (main|b)::' "$rep" | sed 's/^/     /'; fail=1; fi
+  # #1772, the shapes left out, asked of the builder directly (`ir --modules` does not stop at the
+  # checker): a name the calling module `v` neither declares nor imports, which x86's resolver would
+  # answer with another module's `helper`, and a parameter named like `u`'s own `helper` (it shadows
+  # it, Declarations §6.1; the checker would refuse calling a `u64`). Each is refused by its own cause,
+  # never built as a call to one of the declared functions; `u::user` beside them is built.
+  local w1772="$T/ir1772"; mkdir -p "$w1772"
+  printf 'helper := fn(x : u64) -> u64 { x + 1 }\n' > "$w1772/p.al"
+  printf 'helper := fn(x : u64) -> u64 { x + 2 }\n' > "$w1772/q.al"
+  printf 'helper := fn(x : u64) -> u64 { x + 5 }\nuser := fn(x : u64) -> u64 { helper(x) }\napply := fn(helper : u64, x : u64) -> u64 { helper(x) }\n' > "$w1772/u.al"
+  printf 'stray := fn(x : u64) -> u64 { helper(x) }\n' > "$w1772/v.al"
+  "$CC" ir --modules "$w1772/u.al" "$w1772/v.al" "$w1772/p.al" "$w1772/q.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -qx 'fn u::user Built' "$rep" \
+     && grep -q '^fn v::stray NotYet(call: bare name the calling module neither declares nor imports' "$rep" \
+     && grep -q '^fn u::apply NotYet(call: callee is a value rather than a function declaration' "$rep"; then
+    echo "ok   ir --modules #1772 bare callee: an unbound name and a shadowing parameter stay refused by name"
+  else echo "FAIL ir --modules #1772 bare callee refusals: rc=$rc"; grep -E '^fn (u|v)::' "$rep" | sed 's/^/     /'; fail=1; fi
   "$CC" help > "$rep" 2>&1; rc=$?
   if [ "$rc" = 0 ] && grep -q '^  ir       ' "$rep"; then echo "ok   help: lists the \`ir\` dev verb (D5, TOOL-21)"
   else echo "FAIL help: no \`ir\` line"; fail=1; fi
