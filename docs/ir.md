@@ -855,10 +855,12 @@ Two shapes behind "a struct or enum literal of a type the builder does not lay o
 `{ ptr : ptr(T), len : usize }`, Types §6.1 places the fields in that order): the builder stores both
 words into a fresh 16-byte view object, and only when the declaration is that generic two-field struct
 and `T` is an element type it lays out. Its `ptr` field may be `ptr(b[k])` for a frame array `b`, a literal
-`k` inside it and an element of the view's own type and stride — the same address `ib_view_range` makes
-for `b[k..]`; any other address of an element or array stays refused (`ib_bx_addr_of`, Q4). A struct with a direct
-`[u8|i8|bits8; N]` field is laid out in the byte tier (`lower_layout::layout_kind`), and a `@packed` one
-byte by byte; the builder now lays out both as locals, with a byte array at stride 1 (Types §6.4) and a
+`k` inside it and an element of the view's own type, signedness (`sgn_eq`) and stride — the same
+address `ib_view_range` makes for `b[k..]`; any other element or array address as a view literal's `ptr`
+is refused in `ib_view_lit_elem_ptr`, and `ptr(b[k])` anywhere else stays refused in `ib_bx_addr_of`
+(Q4). A struct with a direct `[u8|i8|bits8; N]` field is laid out in the byte tier
+(`lower_layout::layout_kind`), and a `@packed` one byte by byte; the builder now lays out both as locals,
+with an array of 1-byte elements (`[bool; N]` too) at stride 1 (Types §6.4) and a
 struct child only when it is word-granular, so that its word and byte layouts coincide. A levered struct
 still never crosses a call, a result or a pointer (`CSigParamLevered`, `CSigResultLevered`, `ib_bx_addr_of`).
 
