@@ -308,16 +308,21 @@ ib_bind_ty := fn(bp : ptr(mut IbB), h : ptr(mut Stmt), ns : usize) -> Option(IbK
   Option(IbKS).None
 }
 ## `ib_bind_ty` for a declaration `h`: a type sema recorded but the builder does not build is refused
-## with its assignment cause (a float, or another non-kernel type); a sema gap stays a sema gap.
+## with its assignment cause (a float, or another non-kernel type); a sema gap stays a sema gap, as
+## `ib_vty_why` and `nywhy_is_gap` decide it.
 ib_decl_ty := fn(bp : ptr(mut IbB), h : ptr(mut Stmt), ns : usize) -> Option(IbKS) {
   t : VTy = sty_bind_get(ns)
   ko : Option(IbKS) = ib_vty_ks(t)
   match ko { Some(k) => { return ko }; None => {} }
+  w : NyWhy = ib_vty_why(t)
+  if nywhy_is_gap(w) {
+    ib_refuse_stmt(bp, h, w)
+    return Option(IbKS).None
+  }
   c : VCls = t.cls
   match c {
     VcFloat => { ib_refuse_assign(bp, h, Construct.SAssignFloat) }
-    VcInt | VcBool | VcPtr | VcAgg => { ib_refuse_assign(bp, h, Construct.SAssignNoKernel) }
-    VcAbsent | VcUnknown | VcLit => { ib_refuse_stmt(bp, h, ib_vty_why(t)) }
+    VcInt | VcBool | VcPtr | VcAgg | VcAbsent | VcUnknown | VcLit => { ib_refuse_assign(bp, h, Construct.SAssignNoKernel) }
   }
   Option(IbKS).None
 }
