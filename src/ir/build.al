@@ -1984,8 +1984,9 @@ ib_decl_named_at := fn(decls : ptr(rt::Vec), s : usize, n : usize, want_fn : boo
   Option(u64).None
 }
 ## The function a call to `[cs, cs+cl)` names: the declaration the call's span IS (resolved by the front
-## half), else the ONE non-generic function declaration of that name; none when there is no such function
-## or several (an overload set is the mangling's, `docs/ir-slice-2.md`, so it is refused here).
+## half), else the ONE non-generic function declaration of that name, else the one the calling module's
+## scope binds when several modules declare it (`ib_callee_bare`); none when there is no such function or
+## the module's own binding is an overload set (the mangling's, `docs/ir-slice-2.md`, refused here).
 ib_callee_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize) -> Option(u64) {
   ce : IbCallee = ib_callee(bp, a, cs, cl)
   match ce { CeFn(x) => { Option(u64).Some(x) }; CeNo(c) => { Option(u64).None } }
@@ -2016,7 +2017,7 @@ ib_callee := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize)
     }
     i = i + 1
   }
-  if hits > 1 { return IbCallee.CeNo(Construct.ECallOverload) }
+  if hits > 1 { return ib_callee_bare(bp, a, cs, cl) }
   if hits == 1 {
     match found { Some(x) => { return IbCallee.CeFn(x) }; None => { return IbCallee.CeNo(Construct.ECallGeneric) } }
   }
@@ -2059,6 +2060,33 @@ ib_callee_qual := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : u
   if cs != 0 and str_at((src + cs - 1), 1) == "." { return Option(IbCallee).None }
   ri : i64 = lower::resolve_callee_idx(bv.decls, src, cs, cl, bv.mod_s, bv.mod_n)
   if not lower::qual_callee_in_head(bv.decls, src, cs, cl, bv.mod_s, bv.mod_n, ri) { return Option(IbCallee).None }
+  ib_callee_at(bp, a, ri)
+}
+## A bare callee `f` whose name more than one module declares (#1772). A module scope binds a name once
+## (Modules §5, Declarations §6.2), and an overload set is bindings in ONE scope (Functions §1.4), so
+## `streq` declared in five modules is five unrelated functions: the call means the one the calling
+## module's own scope binds — its own declaration, or the declaration its import binding names
+## (`f := M::f`, `(f, g) := M`; Modules §4.1, §4.1.1). The function is the one x86's call emission binds
+## the name to (`lower::resolve_callee_idx`, as for a qualified callee), taken only when
+## `lower::bare_callee_own` confirms that the calling module binds it: the resolver's later steps answer
+## a name the module does not bind with an ancestor's or the first-declared function, which is a guess
+## here, refused as `ECallUnbound`. A method (UFCS) form (#1366) and a name the function itself binds (a
+## local or parameter shadows the module's, Declarations §6.1) are refused by their own causes.
+ib_callee_bare := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize) -> IbCallee {
+  bv : IbB = deref(bp)
+  src := bv.src
+  if cs != 0 and str_at((src + cs - 1), 1) == "." { return IbCallee.CeNo(Construct.ECallMethod) }
+  if ib_name_local(bp, cs, cl) { return IbCallee.CeNo(Construct.ECallFnValue) }
+  ri : i64 = lower::resolve_callee_idx(bv.decls, src, cs, cl, bv.mod_s, bv.mod_n)
+  if not lower::bare_callee_own(bv.decls, src, cs, cl, bv.mod_s, bv.mod_n, ri) { return IbCallee.CeNo(Construct.ECallUnbound) }
+  co : Option(IbCallee) = ib_callee_at(bp, a, ri)
+  match co { Some(c) => { c }; None => { IbCallee.CeNo(Construct.ECallUnbound) } }
+}
+## The callee a resolver answered with the declaration `ri`, unless its identity is not one symbol the
+## builder may call (the three cases listed at `ib_callee_qual`).
+ib_callee_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, ri : i64) -> Option(IbCallee) {
+  bv : IbB = deref(bp)
+  src := bv.src
   d : Decl = deref(ib_decl_ptr(bv.decls, usize(ri)))
   if not d.is_fn { return Option(IbCallee).None }
   if d.is_generic { return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallGeneric)) }
@@ -2188,16 +2216,10 @@ ib_payload_list_end := fn(src : ptr(u8), s : usize) -> usize {
   }
   p
 }
-## Why no function declaration has the name `[cs, cs+cl)`: a built-in (`sema::is_builtin_callee`, the
-## checker's one list), a value bound in the function or a module value (a fn value or a closure), a
-## qualified path or a method (UFCS) form the front half left unresolved, a type's name, or nothing.
-ib_callee_none_why := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Construct {
+## Whether `[cs, cs+cl)` names a binding of the function being built — a local or a parameter — which
+## shadows a module-level name (Declarations §6.1).
+ib_name_local := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> bool {
   bv : IbB = deref(bp)
-  src := bv.src
-  if sema::is_builtin_callee(src, cs, cl) { return Construct.ECallBuiltin }
-  ## `defer e` / `defer { … }` reach the builder as the parser's marker calls (`__defer(e)`,
-  ## `__deferblk()`, `__deferblkend()`, `parser.al`'s defer desugar): a statement, not a callee.
-  if ap_defer_marker(src, cs, cl) { return Construct.ECallDefer }
   bd : IbBind = ib_lookup(bp, cs, cl)
   mut bound : bool = true
   match bd {
@@ -2212,9 +2234,21 @@ ib_callee_none_why := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Construct
     BdArrRef(qv, qn, qes, qel) => {}
     BdStr(sf) => {}
   }
-  if bound { return Construct.ECallFnValue }
+  if bound { return true }
   d : Decl = deref(ib_decl_ptr(bv.decls, bv.di))
-  if ib_is_param_of(src, d, cs, cl) { return Construct.ECallFnValue }
+  ib_is_param_of(bv.src, d, cs, cl)
+}
+## Why no function declaration has the name `[cs, cs+cl)`: a built-in (`sema::is_builtin_callee`, the
+## checker's one list), a value bound in the function or a module value (a fn value or a closure), a
+## qualified path or a method (UFCS) form the front half left unresolved, a type's name, or nothing.
+ib_callee_none_why := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Construct {
+  bv : IbB = deref(bp)
+  src := bv.src
+  if sema::is_builtin_callee(src, cs, cl) { return Construct.ECallBuiltin }
+  ## `defer e` / `defer { … }` reach the builder as the parser's marker calls (`__defer(e)`,
+  ## `__deferblk()`, `__deferblkend()`, `parser.al`'s defer desugar): a statement, not a callee.
+  if ap_defer_marker(src, cs, cl) { return Construct.ECallDefer }
+  if ib_name_local(bp, cs, cl) { return Construct.ECallFnValue }
   if ib_span_is_qualified(src, cs, cl) { return Construct.ECallQualified }
   if cs != 0 and str_at((src + cs - 1), 1) == "." { return Construct.ECallMethod }
   cnt := rt::vec_len(deref(bv.decls))

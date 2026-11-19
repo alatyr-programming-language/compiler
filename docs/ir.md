@@ -889,6 +889,18 @@ signature types from the caller's module (#1734, #1737). #1743 and #1731 resolve
 spells in the callee's module, but a struct field's type is still resolved in the caller's (#1737, open);
 once #1737 is fixed, the guard and its helpers are deleted.
 
+A **bare callee** (`f(…)`) that several modules declare is not an overload set: Functions §1.4 makes an
+overload set several bindings in **one** scope, and a module scope binds a name once (Modules §5,
+Declarations §6.2). The call means the function the calling module's own scope binds — its own
+declaration, or the declaration its import binding names (`f := M::f`, `(f, g) := M`; Modules §4.1,
+§4.1.1) (#1772). The builder takes it from the same resolver, `lower::resolve_callee_idx`, and only when
+`lower::bare_callee_own` confirms one of those two: the resolver's later steps (the ancestor ranking, the
+first-declared fallback) answer a name the module does not bind, and that answer is refused as `call:
+bare name the calling module neither declares nor imports`. A local or parameter of that name shadows
+the module's function (Declarations §6.1) and is refused as a value callee. The three refusals above
+apply to the function the module binds as they do to a qualified callee: a call into the module's own
+overload set stays `several functions of that name (an overload set)`.
+
 ### 3.8 Signedness and width are attributes of the value, derived once
 
 Today signedness is decided **by the shape of the expression**, separately in each emitter: a bare

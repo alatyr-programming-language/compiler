@@ -933,6 +933,18 @@ pub qual_callee_in_head := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
   ma := plain_module_alias(decls, src, h.s, h.n, ms, ml)
   ma.n != 0 and mod_head_rank(src, d.mod_start, d.mod_len, ma.s, ma.n, ms, ml) >= 0
 }
+## #1772 — whether the declaration `ri` that `resolve_callee_idx` gave the BARE callee `[cs, cs+cl)`,
+## written in module `[ms, ms+ml)`, is the one that module's own scope binds the name to (Modules §5,
+## Declarations §6.2): a function the module declares itself, or the declaration its import binding names
+## (`f := M::g`, `(f, g) := M`; Modules §4.1, §4.1.1 — `binding_callee_idx`). The resolver's later steps,
+## the ancestor ranking and the first-declared fallback, answer a name the module does not bind with
+## another module's function; a caller that must not guess refuses on `false`.
+pub bare_callee_own := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, ri : i64) -> bool {
+  if ri < 0 { return false }
+  d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(ri))))
+  if mod_seg_eq(src, d.mod_start, d.mod_len, ms, ml) { return true }
+  binding_callee_idx(decls, src, cs, cl, ms, ml) == ri
+}
 ## The module a one-segment alias `m := M` declared in module `[cs, cl)` gives the name `[ns, nl)`: the
 ## span of `M` when it is a bare name, else 0/0. The parser records such an alias as an ordinary kind-0
 ## value binding with no type and a `Var` value (as `sema_rec_head_alias_in` reads it); a qualified
