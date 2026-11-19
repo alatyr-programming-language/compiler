@@ -16,7 +16,7 @@
 ## One golden: its module name (the file stem), its source, and the report it must print.
 Golden := struct { name : str, src : str, want : str }
 
-golden_count := fn() -> usize { 13 }
+golden_count := fn() -> usize { 14 }
 golden_at := fn(i : usize) -> Golden {
   if i == 0 { return Golden(name = "ig_arith", src = g_arith_src(), want = g_arith_want()) }
   if i == 1 { return Golden(name = "ig_logic", src = g_logic_src(), want = g_logic_want()) }
@@ -30,7 +30,8 @@ golden_at := fn(i : usize) -> Golden {
   if i == 9 { return Golden(name = "ig_aggret", src = g_aggret_src(), want = g_aggret_want()) }
   if i == 10 { return Golden(name = "ig_aggwhy", src = g_aggwhy_src(), want = g_aggwhy_want()) }
   if i == 11 { return Golden(name = "ig_notyet", src = g_notyet_src(), want = g_notyet_want()) }
-  Golden(name = "ig_callwhy", src = g_callwhy_src(), want = g_callwhy_want())
+  if i == 12 { return Golden(name = "ig_callwhy", src = g_callwhy_src(), want = g_callwhy_want()) }
+  Golden(name = "ig_asgwhy", src = g_asgwhy_src(), want = g_asgwhy_want())
 }
 
 ## Checked arithmetic and its traps, narrow widths, `unchecked`, width conversions. The `%` carries the
@@ -152,6 +153,16 @@ g_callwhy_src := fn() -> str {
 }
 g_callwhy_want := fn() -> str {
   "fn ig_callwhy::id NotYet(generic function (needs a mono instance), ig_callwhy.al:2:1)\nfn ig_callwhy::generic NotYet(call: generic callee (needs a mono instance), ig_callwhy.al:3:33)\nfn ig_callwhy::nine Built\nfn nine(%0 : i64 u, %1 : i64 u, %2 : i64 u, %3 : i64 u, %4 : i64 u, %5 : i64 u, %6 : i64 u, %7 : i64 u, %8 : i64 u) -> i64 u {\n  %9 = add.chk.u i64 %0, %8 overflow  @279\n  ret %9\n}\nfn ig_callwhy::many NotYet(call: more than eight arguments, ig_callwhy.al:5:30)\nfn ig_callwhy::add1 NotYet(a declaration with no body (an `@extern` import: slice 2's `call_c`), ig_callwhy.al:6:1)\nfn ig_callwhy::ext NotYet(call: extern callee (slice 2's call_c), ig_callwhy.al:7:29)\nfn ig_callwhy::sum NotYet(signature: parameter with a mode (in/out/by-ref), ig_callwhy.al:8:1)\nfn ig_callwhy::rest NotYet(call: argument to a parameter whose type or mode the convention does not pass, ig_callwhy.al:9:30)\n## ig_callwhy::firstb: IR-selected on a target only when every caller is (per-target fixpoint, not run here)\nfn ig_callwhy::firstb NotYet(signature: parameter with a mode (in/out/by-ref), ig_callwhy.al:10:1)\nfn ig_callwhy::inarr NotYet(call: argument to a parameter whose type or mode the convention does not pass, ig_callwhy.al:11:30)\nir: functions=10 built=1 notyet=9 sema_gaps=0 verify_failed=0\n"
+}
+
+## #1733's sibling for assignments: a refused assignment or declaration names its cause — a whole value
+## into an `in out` aggregate parameter (#1633), a re-pointed `str` local, a store to a module aggregate,
+## and an aggregate declared from an `if` — rather than one `stmt Assign` for all of them.
+g_asgwhy_src := fn() -> str {
+  "## each function is refused at its assignment, for the cause its name says\nP := struct { a : u64, b : u64 }\nmut G : P = P(a = 1, b = 2)\nwhole := fn(in out p : P) -> u64 { p = P(a = 3, b = 4)  0 }\nrepoint := fn(x : u64) -> u64 { mut s := \"ab\"  s = \"cd\"  x }\nglobal := fn(x : u64) -> u64 { G = P(a = x, b = x)  x }\nbranch := fn(x : u64) -> u64 { v := if x > 0 { P(a = x, b = x) } else { P(a = 1, b = 1) }  v.a }\n"
+}
+g_asgwhy_want := fn() -> str {
+  "fn ig_asgwhy::whole NotYet(assign: whole value into an out/in out aggregate parameter, ig_asgwhy.al:4:36)\nfn ig_asgwhy::repoint NotYet(assign: re-pointing a str local, ig_asgwhy.al:5:48)\nfn ig_asgwhy::global NotYet(assign: module binding with no one-word scalar cell the builder stores, ig_asgwhy.al:6:32)\nfn ig_asgwhy::branch NotYet(declaration: aggregate value of an if or match, ig_asgwhy.al:7:32)\nir: functions=4 built=0 notyet=4 sema_gaps=0 verify_failed=0\n"
 }
 
 ## ── the runner ──

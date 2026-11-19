@@ -216,6 +216,12 @@ ib_refuse_stmt := fn(bp : ptr(mut IbB), h : ptr(mut Stmt), w : NyWhy) {
   sp : Option(u64) = stmt_span(h)
   ib_refuse(bp, c, w, sp)
 }
+## Refuse the assignment statement `h` for cause `c` (one of the `SAssign…` arms), so the census ranks
+## why assignments and declarations are refused instead of one `stmt Assign` label.
+ib_refuse_assign := fn(bp : ptr(mut IbB), h : ptr(mut Stmt), c : Construct) {
+  sp : Option(u64) = stmt_span(h)
+  ib_refuse(bp, c, NyWhy.NwOutside, sp)
+}
 ## A refused expression, as an expression builder's answer.
 ib_no := fn(bp : ptr(mut IbB), e : ptr(Expr), w : NyWhy) -> Option(VRegId) {
   ib_refuse_expr(bp, e, w)
@@ -299,6 +305,25 @@ ib_bind_ty := fn(bp : ptr(mut IbB), h : ptr(mut Stmt), ns : usize) -> Option(IbK
   match ko { Some(k) => { return ko }; None => {} }
   w : NyWhy = ib_vty_why(t)
   ib_refuse_stmt(bp, h, w)
+  Option(IbKS).None
+}
+## `ib_bind_ty` for a declaration `h`: a type sema recorded but the builder does not build is refused
+## with its assignment cause (a float, or another non-kernel type); a sema gap stays a sema gap, as
+## `ib_vty_why` and `nywhy_is_gap` decide it.
+ib_decl_ty := fn(bp : ptr(mut IbB), h : ptr(mut Stmt), ns : usize) -> Option(IbKS) {
+  t : VTy = sty_bind_get(ns)
+  ko : Option(IbKS) = ib_vty_ks(t)
+  match ko { Some(k) => { return ko }; None => {} }
+  w : NyWhy = ib_vty_why(t)
+  if nywhy_is_gap(w) {
+    ib_refuse_stmt(bp, h, w)
+    return Option(IbKS).None
+  }
+  c : VCls = t.cls
+  match c {
+    VcFloat => { ib_refuse_assign(bp, h, Construct.SAssignFloat) }
+    VcInt | VcBool | VcPtr | VcAgg | VcAbsent | VcUnknown | VcLit => { ib_refuse_assign(bp, h, Construct.SAssignNoKernel) }
+  }
   Option(IbKS).None
 }
 ## The kernel type a declared type NAME `[s, s+n)` denotes, by sema's one table of scalar names.
@@ -2914,7 +2939,7 @@ ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
           }
           None => {}
         }
-        ib_refuse_stmt(bp, h, NyWhy.NwOutside)
+        ib_refuse_assign(bp, h, Construct.SAssignArrLit)
         return
       }
       Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
@@ -2943,7 +2968,7 @@ ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
     None => {
       ## #1723: `v := deref(p)` names the `deref`'s own cause, not the declaration's.
       if lts.n == 0 and ib_is_deref(v) { ib_refuse_agg(bp, a, v, NyWhy.NwOutside); return }
-      ib_refuse_stmt(bp, h, NyWhy.NwOutside)
+      if lts.n != 0 { ib_refuse_assign(bp, h, Construct.SAssignAggNamed) } else { ib_refuse_assign(bp, h, ib_decl_init_why(bp, v)) }
     }
   }
 }
@@ -2957,6 +2982,26 @@ ib_is_deref := fn(e : ptr(Expr)) -> bool {
       | Expr::Bitcast | Expr::Loop => { false }
   }
 }
+## Why an unannotated aggregate declaration's initializer `v` names no type the builder lays out
+## (`ib_agg_type_of` answered `None`), by the initializer's shape: a call (its callee's own cause when it
+## resolves to no function, `ib_callee`), a name, a place, a literal, a `?`, an `if` / `match`.
+ib_decl_init_why := fn(bp : ptr(mut IbB), v : ptr(Expr)) -> Construct {
+  match deref(v) {
+    Expr::Call(cs, cl, na, ah) => {
+      ce : IbCallee = ib_callee(bp, cs, cl)
+      match ce { CeFn(x) => { Construct.SAssignInitCall }; CeNo(c) => { c } }
+    }
+    Expr::Var(s, n) => { Construct.SAssignInitName }
+    Expr::Field | Expr::Index | Expr::Deref => { Construct.SAssignInitPlace }
+    Expr::StructLit | Expr::EnumLit => { Construct.SAssignInitLit }
+    Expr::Try => { Construct.SAssignInitTry }
+    Expr::If | Expr::Match => { Construct.SAssignInitBranch }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {
+      Construct.SAssignAggInfer
+    }
+  }
+}
 ## `s = e` into the struct local in object `fr`: the value is built in its own object first (a literal
 ## reading `s` itself sees the old value), then copied.
 ib_bs_agg_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), fr : FrameId, sd : usize, ts : usize, tn : usize, v : ptr(Expr)) {
@@ -2966,7 +3011,7 @@ ib_bs_agg_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt
       oo : Option(IbObj) = ib_agg(bp, a, v, st)
       match oo { Some(o) => { ib_copy_obj(bp, a, fr, o.fr, st.size) }; None => {} }
     }
-    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    None => { ib_refuse_assign(bp, h, Construct.SAssignAggBound) }
   }
 }
 ## ── enums and `match` (slice 4a, `docs/ir-slice-4.md`) ──
@@ -5097,7 +5142,7 @@ ib_bs_view_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)
   if lts.n != 0 {
     if lower_layout::view_elem_span(src, lts.s, lts.n).n == 0 and not ib_spells_str(src, lts.s, lts.n) { return false }
     want = ib_view_type_elem(ib_b_decls(bp), src, a, lts.s, lts.n)
-    match want { Some(w0) => {}; None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return true } }
+    match want { Some(w0) => {}; None => { ib_refuse_assign(bp, h, Construct.SAssignViewElem); return true } }
   } else {
     if not ib_is_view_expr(bp, a, v) { return false }
   }
@@ -5566,7 +5611,7 @@ ib_bs_agarr_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt
       fro : Option(FrameId) = ib_agarr_value(bp, a, v, r)
       match fro { Some(fr) => { ib_bind_arr(bp, a, ns, nl, fr, ts, tn) }; None => {} }
     }
-    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    None => { ib_refuse_assign(bp, h, Construct.SAssignAgArr) }
   }
 }
 ## `xs = v` into the aggregate-element array local in object `fr`, annotated `[ts, ts+tn)`: the value in
@@ -5578,7 +5623,7 @@ ib_bs_agarr_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut St
       fro : Option(FrameId) = ib_agarr_value(bp, a, v, r)
       match fro { Some(sf) => { ib_copy_obj(bp, a, fr, sf, ib_agarr_bytes(r)) }; None => {} }
     }
-    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    None => { ib_refuse_assign(bp, h, Construct.SAssignAgArr) }
   }
 }
 ## `xs[i] = v` into an aggregate-element array local, in `ib_bs_index_assign`'s order: the index, then the
@@ -5683,7 +5728,7 @@ ib_bs_uninit_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stm
       }
     }
   }
-  ib_refuse_stmt(bp, h, NyWhy.NwOutside)
+  ib_refuse_assign(bp, h, Construct.SAssignUninit)
 }
 
 ## A one-word kernel scalar (8 bytes): what a pointer or an address-taken local may move (see above).
@@ -5981,10 +6026,10 @@ ib_bs_global_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut S
           None => {}
         }
       }
+      ib_refuse_assign(bp, h, Construct.SAssignGlobal)
     }
-    None => {}
+    None => { ib_refuse_assign(bp, h, Construct.SAssignUnbound) }
   }
-  ib_refuse_stmt(bp, h, NyWhy.NwOutside)
 }
 ib_store_global := fn(bp : ptr(mut IbB), in out a : rt::Arena, di : usize, d : Decl, k : IbKS, v : ptr(Expr)) {
   vo : Option(VRegId) = ib_value_ctx(bp, a, v, k)
@@ -6456,7 +6501,7 @@ ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), n
       Some(nv) => {
         if ib_is_taken(bp, ns, nl) {
           ## An address-taken local lives in memory; only a one-word scalar (see "places").
-          if not ib_ks_word(ib_vreg_ks(ib_b_f(bp), nv)) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
+          if not ib_ks_word(ib_vreg_ks(ib_b_f(bp), nv)) { ib_refuse_assign(bp, h, Construct.SAssignTakenNarrow); return }
           ib_mem_local(bp, a, ns, nl, ns, nv)
           return
         }
@@ -6474,20 +6519,21 @@ ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), n
     BdMem(mf, mns) => { ib_bs_mem_assign(bp, a, h, mf, mns, v) }
     BdArr(af, ats, atn) => { ib_bs_arr_assign(bp, a, h, af, ats, atn, v) }
     ## Re-assigning an unannotated array local is not built yet (#1622 builds it at its declaration).
-    BdArrI(xf, xn, xes, xen) => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
-    BdRef(rv, rsd, rts, rtn) => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    BdArrI(xf, xn, xes, xen) => { ib_refuse_assign(bp, h, Construct.SAssignArrInf) }
+    ## #1633: a whole `p = v` into an `out` / `in out` aggregate parameter is not built.
+    BdRef(rv, rsd, rts, rtn) => { ib_refuse_assign(bp, h, Construct.SAssignRefParam) }
     ## Re-pointing a view local is not built yet (#1576 step 1 builds a view only at its declaration).
-    BdView(wf, wes, wen) => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
-    BdStr(sf) => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    BdView(wf, wes, wen) => { ib_refuse_assign(bp, h, Construct.SAssignView) }
+    BdStr(sf) => { ib_refuse_assign(bp, h, Construct.SAssignStr) }
     ## A whole `xs = v` into an array parameter is not built (only element writes go through it).
-    BdArrRef(qv, qn, qes, qel) => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    BdArrRef(qv, qn, qes, qel) => { ib_refuse_assign(bp, h, Construct.SAssignArrParam) }
     BdNone => { ib_bs_global_assign(bp, a, h, ns, nl, v) }
   }
 }
 ## A declaration's fresh vreg, holding its initializer at the binding's type.
 ib_decl_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, v : ptr(Expr)) -> Option(VRegId) {
   vv := ib_bx(bp, a, v)?
-  bk := ib_bind_ty(bp, h, ns)?
+  bk := ib_decl_ty(bp, h, ns)?
   cv := ib_coerce(bp, a, vv, bk, v)?
   nv := ib_fresh(bp, a, bk)
   ib_mov(bp, a, nv, cv)
