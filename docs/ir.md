@@ -850,6 +850,18 @@ field-by-field stores, which show through the `in` parameter the same way
 `test/inout_agg_whole_assign_in_alias_part.al`, refused today by the signature gate before the guard).
 The refusal goes when every legacy caller copies an `in` aggregate.
 
+Two shapes behind "a struct or enum literal of a type the builder does not lay out" are built (IR-33,
+#1758). A `Slice(T)(ptr = p, len = n)` literal is a view (Stdlib §3.5 declares `Slice` as the struct
+`{ ptr : ptr(T), len : usize }`, Types §6.1 places the fields in that order): the builder stores both
+words into a fresh 16-byte view object, and only when the declaration is that generic two-field struct
+and `T` is an element type it lays out. Its `ptr` field may be `ptr(b[k])` for a frame array `b`, a literal
+`k` inside it and an element of the view's own type and stride — the same address `ib_view_range` makes
+for `b[k..]`; any other address of an element or array stays refused (`ib_bx_addr_of`, Q4). A struct with a direct
+`[u8|i8|bits8; N]` field is laid out in the byte tier (`lower_layout::layout_kind`), and a `@packed` one
+byte by byte; the builder now lays out both as locals, with a byte array at stride 1 (Types §6.4) and a
+struct child only when it is word-granular, so that its word and byte layouts coincide. A levered struct
+still never crosses a call, a result or a pointer (`CSigParamLevered`, `CSigResultLevered`, `ib_bx_addr_of`).
+
 ### 3.8 Signedness and width are attributes of the value, derived once
 
 Today signedness is decided **by the shape of the expression**, separately in each emitter: a bare
