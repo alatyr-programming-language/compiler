@@ -139,11 +139,15 @@ pub local_decl_assign := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : us
 ## #1633 — a whole-value assignment `p = v` to an `out` / `in out` STRUCT or ENUM parameter. No legacy
 ## emitter writes it back to the caller's place: aarch64, riscv64 and wasm answered the caller's old value
 ## (2 where 42 is due), and x86_64 refused it only by accident (`require_reservation`'s slot-width
-## check). The shared IR declines it (`assign: whole value into an out/in out aggregate parameter`),
-## so every function holding one reaches a legacy emitter, and each calls
-## `refuse_inout_agg_whole_assign` at its entry: one located refusal, never a wrong value (I11). The IR
-## building the store lifts it. The match is by NAME, so a same-named local or match binding that
-## shadows the parameter is refused too: a refusal of a valid program, not a wrong value.
+## check). The shared IR builds the store (`ir::build`'s `ib_bs_ref_assign`), so a function holding one
+## reaches a legacy emitter only when the IR does not select it for another reason, and each legacy
+## emitter calls `refuse_inout_agg_whole_assign` at its entry: one located refusal, never a wrong value
+## (I11). The IR also leaves the store unbuilt beside an `in` parameter that may alias the target (#1637,
+## `ir::build`'s `ib_in_param_may_hold`), so the message never advises storing the fields one by one:
+## on that shape every legacy caller lets those stores show through the `in` parameter, a wrong value
+## (#1760's review, probe p10: 120 for 42 on all four backends). The match is by NAME, so a same-named
+## local or match binding that shadows the parameter is refused too: a refusal of a valid program, not a
+## wrong value.
 ## A parameter whose type is a type parameter (`in out p : T`) names no struct or enum here.
 pub refuse_inout_agg_whole_assign := fn(d : Decl, src : ptr(u8), decls : ptr(rt::Vec)) {
   if not wa_any_agg_param(d.params_head, src, decls) { return }
@@ -155,7 +159,7 @@ pub refuse_inout_agg_whole_assign := fn(d : Decl, src : ptr(u8), decls : ptr(rt:
   match at {
     Some(o) => {
       ll_show_src_line(src, o)
-      panic("selfhost: a whole-value assignment to an `out` / `in out` struct or enum parameter is not lowered yet (the source line above): the backend would not write it back to the caller's place, so it is refused rather than answer the caller's old value (#1633). Assign its fields one by one.")
+      panic("selfhost: a whole-value assignment to an `out` / `in out` struct or enum parameter is not lowered by the legacy emitter this function reached (the source line above; `alatyr ir <file>` says why the shared IR did not build it): it is refused rather than answer the caller's old value. When the function also takes an `in` parameter that may alias this one, storing the fields one by one is no workaround: a legacy caller passes an `in` aggregate as its own place, not a copy, so the stores show through it (#1637).")
     }
     None => {}
   }
