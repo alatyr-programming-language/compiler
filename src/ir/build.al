@@ -2073,18 +2073,19 @@ ib_callee_qual := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : u
 }
 ## Whether every type `d`'s signature REACHES is declared once in the program. The builder resolves a
 ## callee's parameter and result types through `lower_layout` from the module being BUILT, the caller's.
-## Modules §3 resolves a bare name where it is written, in the callee's module. That is #1734 and #1737,
-## fixed by #1743 (it resolves a span in its spelling module) and guarded by #1731
-## (`ib_sig_resolves_here`). Neither is on main yet. A name declared once means the same declaration from
-## either module. A name declared twice may not, so the call is refused rather than laid out against
-## another module's type.
+## Modules §3 resolves a bare name where it is written, in the callee's module. That is #1734 and #1737.
+## Both #1743 (a span resolved in its spelling module) and #1731 (`ib_sig_resolves_here`, the names a
+## signature spells) are on main, but a struct field's type is still resolved in the caller's module
+## when another module's struct is laid out (#1737, open), which is what this walk guards. A name
+## declared once means the same declaration from either module. A name declared twice may not, so the
+## call is refused rather than laid out against another module's type.
 ## The walk follows what the layout follows, not only the names the signature spells (review of PR #1748,
 ## B2: `pub mk := fn() -> T` with `T := Inner` in `m` and a different `Inner` in the caller's module was
 ## built and answered garbage): each name declared once is entered, and its alias right-hand side, its
 ## struct field types and its enum variant payloads are walked in turn. Each declaration is entered once
 ## (the `seen` set; a recursive type ends there), and the walk enters at most `IB_SIG_WALK_MAX`
 ## declarations: past that it answers no, so the bound refuses rather than admits.
-## Interim and conservative: once #1743 lands, `Construct.ECallSigModule`, this check and its helpers
+## Interim and conservative: once #1737 is fixed, `Construct.ECallSigModule`, this check and its helpers
 ## (`ib_sig_queue`, `ib_sig_walk_span`, `ib_payload_list_end`, `lower_layout::ll_nonfn_named`) are deleted.
 IB_SIG_WALK_MAX : usize = 256
 ib_sig_types_unique := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, d : Decl) -> bool {

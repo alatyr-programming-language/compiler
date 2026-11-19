@@ -937,6 +937,9 @@ pub qual_callee_in_head := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
 ## span of `M` when it is a bare name, else 0/0. The parser records such an alias as an ordinary kind-0
 ## value binding with no type and a `Var` value (as `sema_rec_head_alias_in` reads it); a qualified
 ## right-hand side (`gc := geo::child`) is `binding_rhs_span`'s.
+## A second reader of the alias shape `sema::sema_rec_head_alias_in` reads (the review of PR #1748): #1756
+## moves the alias reading into `lower_layout`, one reader that sema's call resolver and this lower share,
+## and deletes this copy.
 plain_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, cs : usize, cl : usize) -> CSpan {
   z := CSpan(s = 0, n = 0)
   if nl == 0 or cl == 0 { return z }
