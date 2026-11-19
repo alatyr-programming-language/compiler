@@ -1267,6 +1267,34 @@ check_ir_dev_verb() {
   if [ "$rc" = 0 ] && grep -qx 'fn later::add Built' "$rep"; then
     echo "ok   ir --modules #1028 refusal: a later module's function still has its records"
   else echo "FAIL ir --modules #1028 refusal: rc=$rc"; grep '^fn ' "$rep" | sed 's/^/     /'; fail=1; fi
+  # #1744: a module-path callee (`m::add(…)`) is resolved by x86's own resolver
+  # (`lower::resolve_callee_idx`), so the caller builds. A callee whose signature names a type both
+  # modules declare (`m::get(s : S)`), and one of an overload set (`m::pick`), stay refused by
+  # their named causes. On the parent every one of these callers answered `qualified callee … no function here`.
+  local q1744="$E2E_TEST/package/issue1744_qualified_callee_ir/src" o1744="$E2E_TEST/package/issue1744_qualified_overload_ir/src"
+  "$CC" ir --modules "$q1744/main.al" "$q1744/m.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -qx 'fn main::sum Built' "$rep" && grep -qx 'fn main::fields Built' "$rep" \
+     && grep -q '^fn main::theirs NotYet(call: callee from another module whose signature names a type declared more than once' "$rep" \
+     && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir --modules #1744 qualified callee: m::add and m::mkq callers built, a colliding signature type refused"
+  else echo "FAIL ir --modules #1744 qualified callee: rc=$rc"; grep '^fn main::' "$rep" | sed 's/^/     /'; fail=1; fi
+  "$CC" ir --modules "$o1744/main.al" "$o1744/m.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^fn main::wide NotYet(call: several functions of that name' "$rep" \
+     && grep -qx 'fn main::main Built' "$rep"; then
+    echo "ok   ir --modules #1744 qualified overload: a module-path call into an overload set stays refused by name"
+  else echo "FAIL ir --modules #1744 qualified overload: rc=$rc"; grep '^fn main::' "$rep" | sed 's/^/     /'; fail=1; fi
+  # #1744, review of PR #1748 (B2): the signature guard follows what the layout follows. `m::sum(t : T)`
+  # with `T := Inner`, a `Box` field and an `E` payload after the first reach a name both modules declare,
+  # so each caller is refused by the named cause. On the PR's first head 0f90e2a9 `main::use` was Built.
+  local s1744="$E2E_TEST/package/issue1744_sig_alias_ir/src" c ok
+  "$CC" ir --modules "$s1744/main.al" "$s1744/m.al" > "$rep" 2>/dev/null; rc=$?
+  ok=1
+  for c in use boxed payload; do
+    grep -q "^fn main::$c NotYet(call: callee from another module whose signature names a type declared more than once" "$rep" || ok=0
+  done
+  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir --modules #1744 signature walk: an alias, a field and a later payload reaching a twice-declared type are refused"
+  else echo "FAIL ir --modules #1744 signature walk: rc=$rc"; grep '^fn main::' "$rep" | sed 's/^/     /'; fail=1; fi
   "$CC" help > "$rep" 2>&1; rc=$?
   if [ "$rc" = 0 ] && grep -q '^  ir       ' "$rep"; then echo "ok   help: lists the \`ir\` dev verb (D5, TOOL-21)"
   else echo "FAIL help: no \`ir\` line"; fail=1; fi
