@@ -1756,7 +1756,7 @@ pub Construct := enum {
   ## The assignment family: one arm per cause an `x = e` / `x := e` / `mut x : T` statement is refused for
   ## (`ir::build`'s `ib_bs_assign` and the declaration and store builders it hands to), as for calls.
   ## `SAssign` stays the label of an assignment refused for a cause with no arm of its own.
-  SAssignTakenNarrow, SAssignArrInf, SAssignRefParam, SAssignView, SAssignStr, SAssignArrParam,
+  SAssignTakenNarrow, SAssignArrInf, SAssignRefParam, SAssignRefAlias, SAssignView, SAssignStr, SAssignArrParam,
   SAssignGlobal, SAssignUnbound, SAssignArrLit, SAssignAggNamed, SAssignAggInfer, SAssignAggBound,
   SAssignAgArr, SAssignUninit, SAssignViewElem, SAssignFloat, SAssignNoKernel, SAssignInitCall,
   SAssignInitName, SAssignInitPlace, SAssignInitLit, SAssignInitTry, SAssignInitBranch,
@@ -1843,7 +1843,8 @@ pub construct_name := fn(c : Construct) -> str {
     ECallDefer => { "call: defer marker (the deferred-exit drain is not built)" }
     SAssignTakenNarrow => { "assign: address-taken local of a scalar narrower than a word" }
     SAssignArrInf => { "assign: whole value into an unannotated array local" }
-    SAssignRefParam => { "assign: whole value into an out/in out aggregate parameter" }
+    SAssignRefParam => { "assign: whole value into an out/in out parameter of a type the builder does not lay out" }
+    SAssignRefAlias => { "assign: whole value into an out/in out parameter that an in parameter may alias" }
     SAssignView => { "assign: re-pointing a view local" }
     SAssignStr => { "assign: re-pointing a str local" }
     SAssignArrParam => { "assign: whole value into an array parameter" }

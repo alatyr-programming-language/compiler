@@ -2982,6 +2982,136 @@ ib_is_deref := fn(e : ptr(Expr)) -> bool {
       | Expr::Bitcast | Expr::Loop => { false }
   }
 }
+## #1633: `p = v` into an `out` / `in out` struct or enum parameter, whose address `rv` the caller passed
+## (its own place, Functions §2.1, §2.3, §4.1): the value in its own object first (a literal reading `p`
+## itself sees the old value, as `ib_bs_agg_assign`), then copied whole into the caller's place.
+ib_bs_ref_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), rv : VRegId, sd : usize, ts : usize, tn : usize, v : ptr(Expr)) {
+  sto : Option(IbSt) = ib_agg_bound(bp, a, sd, ts, tn)
+  match sto {
+    Some(st) => {
+      if ib_in_param_may_hold(bp, a, st.di, ts, tn) { ib_refuse_assign(bp, h, Construct.SAssignRefAlias); return }
+      oo : Option(IbObj) = ib_agg(bp, a, v, st)
+      match oo {
+        Some(o) => {
+          pl := IbPlace(bk = OpndK.OkVReg, bv = i64(usize(rv)), di = sd, s = ts, n = tn, off = 0)
+          ib_copy_to_place(bp, a, pl, o.fr, st.size)
+        }
+        None => {}
+      }
+    }
+    None => { ib_refuse_assign(bp, h, Construct.SAssignRefParam) }
+  }
+}
+## #1760's review: every legacy caller passes an `in` aggregate argument as its own place rather than a
+## copy (#1637), so with `inc := fn(in out p : P, x : P)` a legacy `inc(s, s)` lets the whole store through
+## `p` show through `x`, a silent wrong value where Functions §4.1 makes `x` a copy. A callee cannot know
+## whether its caller is legacy, so the whole store is not built while the function being built takes an
+## `in` or by-value parameter (or array of them) that may share storage with the target, in either
+## direction: its type may hold the target's type `pdi` (that type itself, or one with a field or a variant
+## component that may hold it: `x` passed `s` or `t.pp`), or the target's type `[ps, ps+pn)` may hold the
+## parameter's struct or enum type (`x` passed `q.inner`). The function then reaches a legacy emitter,
+## which refuses it at its entry (`lower_layout::refuse_inout_agg_whole_assign`), located. The guard goes
+## when every legacy caller copies an `in` aggregate (#1637).
+ib_in_param_may_hold := fn(bp : ptr(mut IbB), in out a : rt::Arena, pdi : usize, ps : usize, pn : usize) -> bool {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, bv.di))
+  mut pp := d.params_head
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        ## `ts`/`tl` is the type of a plain parameter and the element type of an array-shaped one.
+        if not ast::param_by_place(pm) and not ast::param_array_by_place(pm) {
+          if ib_span_may_hold(bp, a, pm.ts, pm.tl, pdi, 8) { return true }
+          ## The reverse: `x` a part of the target. Any other type of `x` answered above (a scalar,
+          ## a pointer or a view holds nothing; an unresolved type may).
+          xo : Option(IbSt) = ib_agg_named(bp, a, pm.ts, pm.tl)
+          match xo {
+            Some(xt) => { if ib_span_may_hold(bp, a, ps, pn, xt.di, 8) { return true } }
+            None => {}
+          }
+        }
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+## May a value of the type spelled `[s, s+n)` hold a value of the aggregate type `pdi` by value? A scalar,
+## a pointer and a view hold none (a pointer or a view refers to the place, so a write through `p` shows
+## through it by the language's own meaning). A struct or an enum holds it when it is that type or a field
+## or a variant component may hold it. Any type the walk cannot resolve, and a nesting deeper than `depth`,
+## answer that it may: the guard refuses rather than guess.
+ib_span_may_hold := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, pdi : usize, depth : usize) -> bool {
+  bv : IbB = deref(bp)
+  ko : Option(IbKS) = ib_type_ks(bv.decls, bv.src, s, n)
+  match ko { Some(k) => { return false }; None => {} }
+  vo : Option(IbVEl) = ib_view_type_elem(bv.decls, bv.src, a, s, n)
+  match vo { Some(ve) => { return false }; None => {} }
+  if depth == 0 { return true }
+  so : Option(IbSt) = ib_struct_named(bp, a, s, n)
+  match so {
+    Some(st) => {
+      if st.di == pdi { return true }
+      return ib_struct_may_hold(bp, a, st, pdi, depth - 1)
+    }
+    None => {}
+  }
+  mut fc := false
+  eo : Option(IbSt) = ib_enum_named_in(bv.decls, bv.src, a, s, n, fc)
+  match eo {
+    Some(et) => {
+      if et.di == pdi { return true }
+      return ib_enum_may_hold(bp, a, et, pdi, depth - 1)
+    }
+    None => {}
+  }
+  true
+}
+ib_struct_may_hold := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, pdi : usize, depth : usize) -> bool {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        fsp : IbSpan = ib_type_span_full(bv.src, fd.ts, fd.tl)
+        if ib_span_may_hold(bp, a, fsp.s, fsp.n, pdi, depth) { return true }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+ib_enum_may_hold := fn(bp : ptr(mut IbB), in out a : rt::Arena, et : IbSt, pdi : usize, depth : usize) -> bool {
+  bv : IbB = deref(bp)
+  ## A niche-folded `Option(ptr(T))` holds one pointer word (Types §6.2).
+  if lower_layout::is_niche_folded(bv.src, et.s, et.n) { return false }
+  d : Decl = deref(ib_decl_ptr(bv.decls, et.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(vq) => {
+        vd := deref(ast::fld_p(vq))
+        mut i : usize = 0
+        while i < vd.arity {
+          spo : Option(IbSpan) = ib_variant_comp_span_in(bv.decls, bv.src, a, et, vq, i)
+          match spo {
+            Some(sp) => { if ib_span_may_hold(bp, a, sp.s, sp.n, pdi, depth) { return true } }
+            None => { return true }
+          }
+          i = i + 1
+        }
+        f = vd.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
 ## Why an unannotated aggregate declaration's initializer `v` names no type the builder lays out
 ## (`ib_agg_type_of` answered `None`), by the initializer's shape: a call (its callee's own cause when it
 ## resolves to no function, `ib_callee`), a name, a place, a literal, a `?`, an `if` / `match`.
@@ -6520,8 +6650,7 @@ ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), n
     BdArr(af, ats, atn) => { ib_bs_arr_assign(bp, a, h, af, ats, atn, v) }
     ## Re-assigning an unannotated array local is not built yet (#1622 builds it at its declaration).
     BdArrI(xf, xn, xes, xen) => { ib_refuse_assign(bp, h, Construct.SAssignArrInf) }
-    ## #1633: a whole `p = v` into an `out` / `in out` aggregate parameter is not built.
-    BdRef(rv, rsd, rts, rtn) => { ib_refuse_assign(bp, h, Construct.SAssignRefParam) }
+    BdRef(rv, rsd, rts, rtn) => { ib_bs_ref_assign(bp, a, h, rv, rsd, rts, rtn, v) }
     ## Re-pointing a view local is not built yet (#1576 step 1 builds a view only at its declaration).
     BdView(wf, wes, wen) => { ib_refuse_assign(bp, h, Construct.SAssignView) }
     BdStr(sf) => { ib_refuse_assign(bp, h, Construct.SAssignStr) }

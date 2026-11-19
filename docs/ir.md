@@ -819,18 +819,36 @@ call refused for a reason with no such label keeps `expr Call`, and a sema gap a
 more than eight arguments, an extern callee, and an `in` array and a `...T` rest argument, which share
 the parameter type-or-mode label.
 
-An assignment or declaration the builder does not build is refused the same way (#1758), one
-`assign: …` or `declaration: …` label per cause instead of one `stmt Assign` for all of them
-(`ib_refuse_assign`): a whole value into an unannotated array local, an `out` / `in out` aggregate parameter (#1633) or an array
-parameter; a re-pointed view or `str` local; an address-taken local narrower than a word; a module
-binding with no one-word scalar cell, or a name bound to nothing; and, for a declaration, an annotated
-aggregate type, an uninitialized local, an array literal, an array or a view of an element type the
-builder does not lay out, a floating-point or other non-kernel local, or an unannotated initializer of
-no aggregate type the builder lays out — split by the initializer's shape (a call result, a name, a
-field, element or pointee, a struct or enum literal, a `?`, an `if` / `match`). An initializer that is a
-call to no resolvable function takes the callee's own `call: …` cause (`ib_callee`), as
-`ib_agg_call_why` does. A label never holds a comma: the census reads the label up to the first `, `.
-The golden `ig_asgwhy` pins four of them.
+An assignment or declaration the builder does not build is refused the same way (#1758), one `assign: …`
+or `declaration: …` label per cause instead of one `stmt Assign` for all of them (`ib_refuse_assign`): a
+whole value into an unannotated array local, an `out` / `in out` parameter of a type the builder does
+not lay out (one it lays out is built, #1633: the value in its own object, then copied whole through the
+caller's address) or that an `in` or by-value parameter of the same function may alias, or an array
+parameter; a re-pointed view or `str` local; an address-taken local
+narrower than a word; a module binding with no one-word scalar cell, or a name bound to nothing; and,
+for a declaration, an annotated aggregate type, an uninitialized local, an array literal, an array or a
+view of an element type the builder does not lay out, a floating-point or other non-kernel local, or an
+unannotated initializer of no aggregate type the builder lays out — split by the initializer's shape (a
+call result, a name, a field, element or pointee, a struct or enum literal, a `?`, an `if` / `match`).
+An initializer that is a call to no resolvable function takes the callee's own `call: …` cause
+(`ib_callee`), as `ib_agg_call_why` does. A label never holds a comma: the census reads the label up to
+the first `, `. The golden `ig_asgwhy` pins four of them, and the built store.
+
+The alias refusal stands in for #1637. Every legacy caller passes an `in` aggregate argument as its own
+place, not as a copy. So with `inc := fn(in out p : P, x : P)`, a legacy `inc(s, s)` would let the
+whole store through `p` show through `x`, a silent wrong value where Functions §4.1 makes `x` a copy.
+A callee cannot know whether its caller is legacy. So `ib_in_param_may_hold` keeps the store unbuilt
+while the function takes an `in` or by-value parameter, or an array of them, that may share storage
+with the target in either direction. Its type may hold the target's type: that type itself, or a
+struct or enum with a field or variant component that may hold it (`x` passed `s` or `t.pp`). Or the
+target's type may hold the parameter's struct or enum type (`inc(q, q.inner)`). A type the walk cannot
+resolve counts as one that may. A scalar, a pointer or a view never holds the target, since a write
+through `p` showing through a pointer or a view is what those types mean. The legacy emitter then
+refuses the function at its entry, located, and its message cites #1637 rather than advising
+field-by-field stores, which show through the `in` parameter the same way
+(`test/inout_agg_whole_assign_in_alias.al`; the reverse direction is
+`test/inout_agg_whole_assign_in_alias_part.al`, refused today by the signature gate before the guard).
+The refusal goes when every legacy caller copies an `in` aggregate.
 
 ### 3.8 Signedness and width are attributes of the value, derived once
 

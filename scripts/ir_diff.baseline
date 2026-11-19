@@ -1,4 +1,4 @@
-17
+21
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -83,10 +83,24 @@
 # the promoted Stage2, `x86-legacy`); the default answers the package's `## expect: run 42`:
 #     test/package/ir1723_alias_deref_enum/package.al   legacy build 1   default run 42   (#716)
 #
+# It was 17 and it is 21 because #1633's whole-value store into an `out` / `in out` struct or enum
+# parameter is built from the shared IR (predicted from the corpus census, where exactly these two
+# existing fixtures carried the refusal, plus the two new ones; GitHub gate run 44440968703 on #1760,
+# part ir: disagree=21, the only new rows these four). Each fixture states
+# `## expect: run 42`; the default answers it, and so do aarch64, riscv64 and wasm. Legacy x86 still
+# refuses the store at the callee's entry (`lower_layout::refuse_inout_agg_whole_assign`), as it did on
+# the parent where both paths refused and agreed (the IR track takes no legacy-x86 fixes, #980):
+#     test/inout_agg_whole_assign_struct.al             legacy build 1   default run 42   (#1633)
+#     test/inout_agg_whole_assign_enum.al               legacy build 1   default run 42   (#1633)
+#     test/inout_agg_whole_assign_ir_caller.al          legacy build 1   default run 42   (#1633)
+#     test/inout_agg_whole_assign_legacy_caller.al      legacy build 1   default run 42   (#1633)
+# The two alias fixtures, test/inout_agg_whole_assign_in_alias{,_part}.al (#1637), refuse on both paths
+# and add no row.
+#
 # ir_diff prints every row but #1626's and #1632's as UNEXPLAINED: its `oracle`
 # (scripts/fixture_oracle.sh) reads only the legacy header shapes (`## build_reject`, `## Expected exit:
 # N`) in the first 30 lines, never the `## expect:` directive these files state. #1626's and #1632's
 # files also say `Expected exit 42` in their headers, so ir_diff attributes those rows itself
-# (LEGACY-WRONG; attributed=2 unexplained=15). Every row is explained above, by its file's own directive.
+# (LEGACY-WRONG; attributed=2 unexplained=19). Every row is explained above, by its file's own directive.
 #
 # Lowering the number means fixing a row, not editing this file.
