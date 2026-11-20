@@ -1050,12 +1050,14 @@ EOF
     echo "ok   ir #1676 str escapes: a literal with \\u{…} or an unlisted escape refuses at the literal; the listed ones build"
   else echo "FAIL ir #1676 str escapes: rc=$rc"; grep -E '^fn ir_str_escape::' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
   ## #1723: `deref(p)` read whole. A pointee the operand's declaration spells, an enum in the shared layout
-  ## or a WORD-tier struct, is built. The parent refused it as a bare `expr Deref`. Every other cause names
-  ## its own refusal: a struct outside the WORD tier, an enum the builder does not lay out (a `str`
-  ## component), a pointer with no spelled type (a payload binding), and a scalar narrower than a word.
+  ## or a struct laid out one word per field (IR-37: narrow fields too, `word`, and a narrow field written
+  ## through the pointer, `fieldw`), is built. The parent refused it as a bare `expr Deref`. Every other
+  ## cause names its own refusal: a byte-layout or `@packed` struct (`tier`, `packed`), an enum the
+  ## builder does not lay out (a `str` component), a pointer with no spelled type (a payload binding), a
+  ## scalar narrower than a word, and a struct with an aggregate field (`nested`).
   local dw="$T/ir_deref_why.al"
   cat > "$dw" <<'EOF'
-P := struct { a : u64, b : u8 }
+P := struct { a : u64, b : [u8; 2] }
 U := enum { A(str), B }
 Q := enum { A, B(u64) }
 tier := fn(p : ptr(P)) -> u64 {
@@ -1075,15 +1077,31 @@ narrow := fn(p : ptr(u8)) -> u8 { deref(p) }
 whole := fn(p : ptr(Q)) -> u64 {
   match deref(p) { Q.A => { return 1 }; Q.B(x) => { return x } }
 }
+W := struct { a : u64, b : u8 }
+word := fn(p : ptr(W)) -> u64 {
+  v : W = deref(p)
+  v.a
+}
+M := struct { a : u64, q : Q }
+nested := fn(p : ptr(M)) -> u64 {
+  v : M = deref(p)
+  v.a
+}
+K := @packed struct { a : u8, b : u16 }
+packed := fn(p : ptr(K)) -> u64 { v : K = deref(p); 0 }
+fieldw := fn(p : ptr(mut W)) { p.b = 7 }
 main := fn() -> u64 { 0 }
 EOF
   "$CC" ir "$dw" > "$rep" 2>/dev/null; rc=$?
-  if [ "$rc" = 0 ] && grep -qE '^fn ir_deref_why::tier NotYet\(expr Deref: struct pointee not in the WORD tier, .*ir_deref_why\.al:5:17\)$' "$rep" \
+  if [ "$rc" = 0 ] && grep -qE '^fn ir_deref_why::tier NotYet\(expr Deref: @packed or byte-layout struct pointee, .*ir_deref_why\.al:5:17\)$' "$rep" \
+     && grep -q '^fn ir_deref_why::word Built$' "$rep" && grep -q '^fn ir_deref_why::fieldw Built$' "$rep" \
+     && grep -qE '^fn ir_deref_why::packed NotYet\(expr Deref: @packed or byte-layout struct pointee, .*ir_deref_why\.al:32:49\)$' "$rep" \
+     && grep -qE '^fn ir_deref_why::nested NotYet\(expr Deref: struct pointee with an array or aggregate field, .*ir_deref_why\.al:28:17\)$' "$rep" \
      && grep -qE '^fn ir_deref_why::unlaid NotYet\(expr Deref: pointee aggregate the builder does not lay out, .*ir_deref_why\.al:9:15\)$' "$rep" \
      && grep -qE "^fn ir_deref_why::unspelled NotYet\(expr Deref: pointee type not spelled by the operand's declaration, .*ir_deref_why\.al:13:30\)$" "$rep" \
      && grep -qE '^fn ir_deref_why::narrow NotYet\(expr Deref: scalar narrower than a word through a pointer, .*ir_deref_why\.al:17:41\)$' "$rep" \
      && grep -q '^fn ir_deref_why::whole Built$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
-    echo "ok   ir #1723 deref read whole: built for a spelled enum pointee; each other cause names its refusal"
+    echo "ok   ir #1723 deref read whole: built for a spelled enum pointee and a word-per-field struct (read and narrow write); each other cause names its refusal"
   else echo "FAIL ir #1723 deref read whole: rc=$rc"; grep -E '^fn ir_deref_why::' "$rep" | head -5 | sed 's/^/     /'; fail=1; fi
   ## #1723: an enum with a niche-folded `Option(ptr(T))` component. x86_64's legacy emitter lays the
   ## component out as the IR does, one pointer word (#852), so x86_64 selects `walk` from the IR. The

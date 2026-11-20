@@ -2673,7 +2673,7 @@ ib_deref_agg_type := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr))
     Some(ps) => {
       sto : Option(IbSt) = ib_agg_named(bp, a, ps.s, ps.n)
       match sto {
-        Some(st) => { if ib_st_is_enum(bp, st) or ib_struct_word(bp, a, st) { return sto } }
+        Some(st) => { if ib_st_is_enum(bp, st) or ib_struct_ptr_ok(bp, a, st) { return sto } }
         None => {}
       }
     }
@@ -2683,8 +2683,9 @@ ib_deref_agg_type := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr))
 }
 ## #1723: why `deref(pe)` read whole is not built — the construct a refusal names — or `EDeref` when it
 ## can be: the pointee is not spelled (`EDerefPointee`), names no aggregate the builder lays out
-## (`EDerefUnlaid`), is a struct outside the WORD tier (`EDerefTier`), or is a call's pointee spelled in
-## another module and not proven to be the same type here (`EDerefForeign`).
+## (`EDerefUnlaid`), is a struct no pointer may reach (`ib_struct_ptr_why`: `EDerefLevered`,
+## `EDerefNested`, `EDerefTier`), or is a call's pointee spelled in another module and not proven to be
+## the same type here (`EDerefForeign`).
 ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> Construct {
   po : Option(IbSpan) = ib_deref_pointee(bp, a, pe)
   match po {
@@ -2692,8 +2693,9 @@ ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> C
       sto : Option(IbSt) = ib_agg_named(bp, a, ps.s, ps.n)
       match sto {
         Some(st) => {
-          if ib_st_is_enum(bp, st) or ib_struct_word(bp, a, st) { return Construct.EDeref }
-          return Construct.EDerefTier
+          if ib_st_is_enum(bp, st) { return Construct.EDeref }
+          wo : Option(Construct) = ib_struct_ptr_why(bp, a, st)
+          match wo { Some(wc) => { return wc }; None => { return Construct.EDeref } }
         }
         None => { return Construct.EDerefUnlaid }
       }
@@ -4311,10 +4313,11 @@ ib_bx_try_build := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), in
 ## vreg whose declared type is `ptr(S)` / `ptr(mut S)` — and the struct type there. Through a pointer
 ## the memory may have been written, or may be read, by a legacy-emitted function, so the IR must use
 ## the layout the twin's legacy emitter uses for that type (`docs/ir.md` §3.7, rule 7.1.1). That
-## agreement is PROVED only for the WORD tier with 8-byte scalar fields — every model places field `i`
+## agreement is PROVED for the WORD tier with 8-byte scalar fields — every model places field `i`
 ## at byte `8 * i` and moves the whole word (`test/ir_ptr_agree.al` writes in each and reads in the
-## other) — so a struct reached through a pointer must be WORD tier; a BYTE-tier struct is `NotYet`
-## there. A struct local's own fields (slice 3a) never cross, so any tier 3a builds is fine there.
+## other) — and, since IR-37, for the WORD tier with narrow scalar fields, one word each
+## (`ib_struct_ptr_why`); a BYTE-tier, `@packed` or nested struct is `NotYet` there. A struct local's
+## own fields (slice 3a) never cross, so any tier 3a builds is fine there.
 ## Likewise a scalar read or written through `deref(p)`, or an address-taken scalar local, must be an
 ## 8-byte kernel type: a narrower store through a pointer would leave the upper bytes of a word a
 ## legacy reader loads whole.
@@ -4387,7 +4390,7 @@ ib_type_span_full := fn(src : ptr(u8), ts : usize, tn : usize) -> IbSpan {
   IbSpan(s = ts, n = tn)
 }
 ## The place a struct named `[s, s+n)` occupies: a struct local's object, or the struct a pointer
-## local or parameter (declared `ptr(S)`) points at — WORD tier only through a pointer (see above).
+## local or parameter (declared `ptr(S)`) points at — one word per field through a pointer (see above).
 ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize) -> Option(IbPlace) {
   if ib_names_global(bp, s, n) { return Option(IbPlace).None }
   bd : IbBind = ib_lookup(bp, s, n)
@@ -4401,7 +4404,7 @@ ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
           sto : Option(IbSt) = ib_struct_named(bp, a, ps.s, ps.n)
           match sto {
             Some(st) => {
-              if not ib_struct_word(bp, a, st) { return Option(IbPlace).None }
+              if not ib_struct_ptr_ok(bp, a, st) { return Option(IbPlace).None }
               return Option(IbPlace).Some(IbPlace(bk = OpndK.OkVReg, bv = i64(usize(v)), di = st.di, s = st.s, n = st.n, off = 0))
             }
             None => {}
@@ -4465,7 +4468,7 @@ ib_place_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> Opt
     }
     Expr::Field(fb, ffs, ffl) => {
       ## Slice 3n: `o.inner` — a struct sub-object, one place deeper (only inside a frame object: a struct
-      ## reached through a pointer is WORD tier, which holds no sub-object).
+      ## reached through a pointer has scalar fields only, `ib_struct_ptr_why`, so it holds no sub-object).
       plo : Option(IbPlace) = ib_place_of(bp, a, fb)
       match plo {
         Some(pl) => {
@@ -4519,6 +4522,71 @@ ib_struct_word_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> 
   Option(Construct).None
 }
 
+## IR-37 (#1786): may struct `st` be reached through a pointer — read in place, written in place, or
+## copied whole by `deref(p)`? The WORD tier may (above), and so may a struct whose fields are narrower
+## scalars when the layout gives each one a word of its own: `lower_layout::field_byte_place` answers
+## field `i` at byte `8 * i` and the size is a word per field. Measured on the legacy emitters at
+## `6d3b6386` (`deref(p).f` and `p.f`, read and write, every integer width and `bool`): x86_64 and
+## aarch64 move the field's whole word at byte `8 * i`, which is why a store through a pointer writes
+## the canonical word (`ib_store_slot`); riscv64 and wasm trap at every such access, so nothing they
+## write can disagree. Refused, by name: a levered struct — BYTE tier or `@packed`, where x86_64's
+## `p.f = v` writes at the word offset while its reads take the §6.1 offset (#1790), and every twin
+## traps — and a struct with an array or aggregate field, whose sub-object x86_64 refuses to write
+## through a pointer.
+ib_struct_ptr_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> Option(Construct) {
+  wo : Option(Construct) = ib_struct_word_why(bp, a, st)
+  match wo { None => { return wo }; Some(wc) => {} }
+  bv : IbB = deref(bp)
+  lk := lower_layout::layout_kind(bv.decls, bv.src, st.s, st.n, a)
+  if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) {
+    return Option(Construct).Some(Construct.EDerefLevered)
+  }
+  if not ib_struct_scalar_fields(bp, st) { return Option(Construct).Some(Construct.EDerefNested) }
+  if not ib_struct_word_slots(bp, a, st) { return Option(Construct).Some(Construct.EDerefTier) }
+  Option(Construct).None
+}
+ib_struct_ptr_ok := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> bool {
+  wo : Option(Construct) = ib_struct_ptr_why(bp, a, st)
+  match wo { None => { true }; Some(wc) => { false } }
+}
+## Does the layout give every field of struct `st` a word of its own — field `i` at byte `8 * i`, and
+## the struct a word per field? Asked of a struct with scalar fields only.
+ib_struct_word_slots := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> bool {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  mut i : usize = 0
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        fp := lower_layout::field_byte_place(bv.decls, bv.src, st.s, st.n, fd.ns, fd.nl, a)
+        if not fp.addressable or fp.off != i64(8 * i) { return false }
+        i = i + 1
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  i != 0 and st.size == 8 * i
+}
+## Store `v` at field place `fd` of a struct reached through a pointer (`ib_struct_ptr_why`): a narrow
+## field as the canonical WORD its slot is, sign-extended if signed (`ib_store_comp`'s rule, #1726),
+## and a `bool` as a zeroed word with its low byte set (the four targets are little-endian), because
+## the legacy readers load the slot whole. Any other field is stored at its own width.
+ib_store_slot := fn(bp : ptr(mut IbB), in out a : rt::Arena, base : Opnd, fd : IbFld, v : VRegId) {
+  if kty_is_narrow(fd.ty) and not fd.be {
+    w := ib_ext_to(bp, a, v, IbKS(ty = Kty.KI64, sg = fd.sg))
+    ib_store_at(bp, a, base, IbFld(off = fd.off, ty = Kty.KI64, sg = fd.sg, be = false), w)
+    return
+  }
+  if kty_is_bool(fd.ty) and not fd.be {
+    z := ib_konst(bp, a, IbKS(ty = Kty.KI64, sg = Sgn.SgU), 0)
+    ib_store_at(bp, a, base, IbFld(off = fd.off, ty = Kty.KI64, sg = Sgn.SgU, be = false), z)
+  }
+  ib_store_at(bp, a, base, fd, v)
+}
+
 ## `s.f = v` / `p.f = v` (FieldAssign): a `store` at the field's place, the value at its declared type.
 ib_bs_field_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), bns : usize, bnl : usize, fns : usize, fnl : usize, fv : ptr(Expr)) {
   plo : Option(IbPlace) = ib_place_name(bp, a, bns, bnl)
@@ -4553,7 +4621,14 @@ ib_bs_store_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stm
           match flo {
             Some(fld) => {
               vo : Option(VRegId) = ib_value_ctx(bp, a, fv, IbKS(ty = fld.ty, sg = fld.sg))
-              match vo { Some(v) => { pb := ib_place_base(pl); ib_store_at(bp, a, pb, ib_fld_plus(fld, pl.off), v) }; None => {} }
+              ## IR-37: through a pointer, a narrow field is written as its whole word (`ib_store_slot`).
+              match vo {
+                Some(v) => {
+                  pb := ib_place_base(pl)
+                  if opndk_is_frame(pl.bk) { ib_store_at(bp, a, pb, ib_fld_plus(fld, pl.off), v) } else { ib_store_slot(bp, a, pb, ib_fld_plus(fld, pl.off), v) }
+                }
+                None => {}
+              }
               return
             }
             None => {}
