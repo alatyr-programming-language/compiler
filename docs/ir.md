@@ -905,8 +905,8 @@ One **built-in callee** is built, `str_at(p, n)` (IR-36, #980), with the two ope
 need. The compiler's own source names a lexeme as `str_at((src + p), n)` and compares it at once with
 `==` against a literal; that shape was the largest share of `call: built-in or intrinsic callee` in
 src/ (about 400 of 446 at `6d3b6386`). With the three built, the src census counts 1723 built
-functions where it counted 1358 (of 5310), and 61 functions stay refused at a call to another
-built-in.
+functions of 5312, where it counted 1353 of 5299 at `6d3b6386`, and 61 functions stay refused at a
+call to another built-in.
 - **`str_at`** is a raw view of `n` bytes at `p`, with no copy (Stdlib appendix §3.6). The builder
   stores the address and the length into a fresh 16-byte view object, the same pair as a `str`
   literal's, and the view reads as a UTF-8 `str`. Its address must be a pointer: a `usize` address
