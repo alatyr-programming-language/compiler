@@ -134,6 +134,65 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.5.0 — 2026-11-20
+
+- A whole-value assignment `p = v` to an `out` / `in out` struct or enum parameter now reaches the
+  caller's place on every backend (#1633; Functions §2.1, §2.3, §4.1): the shared IR builds it, as the
+  value in its own object copied whole through the caller's address, so such a function no longer
+  refuses to build. The legacy emitters still refuse it (`alatyr x86-legacy`). Beside an `in` or
+  by-value parameter that may alias the target the store stays refused on every backend (#1637), and the
+  refusal no longer advises assigning the fields one by one, which answers the aliased value there.
+- `alatyr ir` names the cause of a refused call instead of reporting `expr Call` for all of them
+  (#1733): `call: generic callee`, `call: several functions of that name`, `call: built-in or intrinsic
+  callee`, `call: extern callee`, `call: more than eight arguments` and the other `call: …` labels, one per
+  cause, so the IR census ranks them. Which functions build, and what they build to, is unchanged.
+- The shared IR builder now builds a call spelled with a module path (`m::f(…)`) when the
+  rest of the call is in its subset (#1744). It takes the callee from the resolver x86's own
+  call emission uses. On x86_64 that moves more functions of the compiler's own build, and of
+  any multi-module program, from the legacy emitter to the IR. Three kinds of callee are still
+  refused, each with a named cause: an overload set, a generic, and a callee from another
+  module whose signature reaches a type name declared more than once (through an alias, a
+  field or a variant payload too). On aarch64, riscv64 and wasm, a module-path call whose
+  module was dropped because two functions would share a bare label (#41) stays refused, so
+  it keeps its trap rather than calling the caller's same-named function.
+- **A call's arguments are now judged against the declaration it names, wherever that declaration is
+  written (#1746).** A module-qualified call `util::f(x)`, and an unqualified call to a function written
+  after its caller, had their arguments checked against nothing: sema looked the callee up only among
+  the declarations before the caller, and by a spelling a qualified name never matched. A struct passed
+  to `x : u64` compiled and every backend answered a value read off the struct's bits. Module-level
+  declarations are order-independent (Declarations §7.1), so the callee is now found among all of them,
+  and a qualified `m::f` names `f` in module `m`. Such a call is refused with `type mismatch` at the
+  argument, exactly as the same call to a function written earlier always was (Functions §2.2,
+  Types §4.1, §4.3). No program in the test corpus changed its answer apart from the new fixtures.
+- **A call through a local or parameter is no longer judged against a same-named module-level
+  function.** `f(s)` for a parameter `f : fn(S) -> u64`, or `pick(s)` after `pick := g`, was refused
+  with `type mismatch` when the module also declared `f(x : u64)` or `pick(x : u64)` above the caller,
+  because the checker read the module-level function's parameters. The inner name wins within its
+  scope (Declarations §6.1), so such a call now compiles and runs the bound function.
+- **An unqualified call, a method call `w.get()` included, is now checked against the function the
+  caller's own module names (#1753).** With `get(u64)` in the package root and `get(W)` in its module
+  `m`, the root's `w.get()` passed sema's check as if the two formed one overload set, and every backend
+  ran the root's `get(u64)` on the `W`: x86_64 answered a value read off the struct's address, which
+  moved with the program around it, or crashed; the other backends trapped. A module's scope holds its own
+  declarations and its ancestors', not a child's (Modules §3, §5), and `w.get()` is the call `get(w)`
+  (MOD-3), so no `get` the root can name accepts a `W`. Such a call is now refused with `type mismatch`
+  at the call, in either module order (Functions §1.4). The specification's spelling for `m`'s
+  function is the qualified `w.m::get()`, which the compiler does not accept yet (#1366).
+- `alatyr ir` names the cause of a refused assignment or declaration instead of reporting `stmt Assign`
+  for all of them: `assign: whole value into an out/in out aggregate parameter`, `declaration: struct or
+  enum literal of a type the builder does not lay out` and the other `assign: …` / `declaration: …`
+  labels, one per cause (#1758), so the IR census ranks them. Which functions build, and what they build to, is
+  unchanged.
+- The shared IR builder now builds a bare call `f(…)` when other modules also declare a function
+  named `f` (#1772). It used to refuse every such call as an overload set, but an overload set
+  is several functions in one scope (Functions §1.4), and a module binds a name only once
+  (Modules §5). The call now means the function the calling module binds: its own declaration,
+  or the one its import names (`f := M::f`, `(f, g) := M`). The builder takes it from the
+  resolver x86's own call emission uses. On x86_64 that moves 51 more of the compiler's own
+  functions, and the same shape in any multi-module program, from the legacy emitter to the IR.
+  A bare name the calling module neither declares nor imports stays refused with a cause of its
+  own, and so does a call into the module's own overload set.
+
 ## 0.4.0 — 2026-11-18
 
 - **`alatyr ir` names why an aggregate result keeps a function out of the shared IR (#1033).** Every

@@ -2065,4 +2065,77 @@ The original reading note, verbatim:
 #
 # VERSION 0.3.2 -> 0.4.0, MINOR by CHANGELOG.md "Versioning policy": a construct that used to be rejected now works. Measured on omen 2026-11-17: seed 0.3.2 refuses test/ir_agg_arr_local.al (`selfhost: tuple/array element field not resolvable — mixed-kind tuple PARAM field access`, rc 1) and Stage1 of this tree builds it and answers 42; #1705 makes fixed arrays of struct elements and uninitialized aggregate locals run where x86_64 refused them, the class 0.3.0 was MINOR for. Not MAJOR: the new refusals reject programs the specification declares invalid (#1663, #1434/#1719, Memory §3-§4.4, Functions §2.3) or turn a crash or a lost write into a located failure (#1684's one-byte and module-global-array element places, which died with SIGSEGV; wasm's scalar `out` write, which was lost, now traps — the policy's PATCH rule for a loud failure, residual published as #1692). #1728 moves float-parameter functions back to the legacy emitter, which compiles them; no program the specification calls valid stops compiling. #1033's label split, #1675 and #1687 change no build.
 # The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.4.0 -> 0.5.0   promoted 2026-11-20   seed/alatyr := Stage2
+#
+# WHY: #1748 (Closes #1744) lets the shared IR build a call spelled with a module path (`m::f`):
+# `ib_callee` takes the declaration from `lower::resolve_callee_idx`, the one resolver x86's
+# `emit_mangled_call` already uses, and prints the symbol from that index through the one mangling
+# table (`ir::put_fn_symbol`) — no second resolver, no re-lookup by string in the caller's module.
+# #1773 (Refs #1772) lets it build a bare call `f(...)` whose name several modules declare, accepting
+# that resolver's answer only when the calling module binds the name (`lower::bare_callee_own`: its
+# own declaration, or what its alias or listed projection import names); until then the builder counted
+# name-hits across ALL modules and refused them as an "overload set", where Functions §1.4 FN-7 makes
+# an overload set the bindings in ONE scope. Until this pair every function carrying such a call stayed
+# on the legacy emitter: `qualified callee that resolves to no function here` was the largest single
+# call refusal in the compiler (625 src functions at #1748's base, none at its head) and `overload
+# set` was the second (187, none at #1773's head), so the frozen seed must carry the IR's emission
+# of them or TOOL-1 cannot hold. Census at this head (omen, native x86_64, `alatyr ir --modules` over
+# the 41 src files): seed 0.4.0 builds 1151 of 5299 src functions, Stage2 of this tree builds 1353
+# (+202, none lost), verify_failed=0. Gate evidence: run 44592824379 on the stack head 5a6f5c23 — the
+# content this merged object carries, differing from it only by scripts/ir_census.targets.baseline,
+# which main moved with #1778 — was red ONLY at `full_fp DIFFER seed=1815672 gas1=gas2=1821288` in
+# all four parts: the seed's emission is 5616 lines short of Stage1's, and that gap is what this
+# promotion closes. The promoted object's own full gate is `scripts/promote.sh gate` on the committed
+# promotion; its run is named in the PR.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 2342 hunks, 17837 added, 12221 removed. One sentence:
+# 147 more of the compiler's own functions are emitted from the shared IR (1021 -> 1168 marked
+# `# ir: selected from the shared IR`, of the same 5935 global symbols on both sides, none added and
+# none dropped): each is a function carrying a call the builder refused until #1748 (a callee spelled
+# `m::f`) or until #1773 (a bare callee several modules declare, bound by the calling module), and its
+# body is now the IR's — values pass through frame slots (`movq %rax, -N(%rbp)` 3320 added,
+# `movq -N(%rbp), %rax` 1630) where legacy staged them on the stack (`pushq %rax` 1394 removed,
+# `popq %rdi` 539), its blocks carry `.LxirN_K` labels (1200) where legacy carried `.LN` (988), and a
+# condition is materialized with `cmpq`/`sete`/`movzbl` and then tested (`testq %rax, %rax` 589,
+# `jz .LxirN_K` 582) where legacy fused the two (`je .LN` 525). Every other symbol is byte-identical
+# once labels are normalized: 5788 of the 5935, and the file preamble — measured per symbol with
+# scripts/gas_normalize.sh over target/promote/gas_seed.s and target/promote/gas1.s with the selector's
+# marker line excluded from the bodies, which leaves no differing symbol outside those 147 (all 147
+# contain at least one `call`; which of the two causes each one is was not measured per function).
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1821288 lines.
+# GAS SHA-256 (Stage2): 55c423ac3be0e49b5d2b613bd742182d7d3659b5756fe448a6f40d21ebb50356.
+# Stage2 == Stage3 BINARY SHA-256:
+# f11233069581b87805f16f4878ddb0e3eb79103ea41bb2a178585f62b9b1b379 (7150600 B).
+# All three answer `alatyr 0.5.0, spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.4.0) SHA-256:
+# 211c1de9b80d732e1f079137bc16f8b15f885d9ffa713b7789a53095a2a98d05.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1821288 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.4.0 -> 0.5.0, MINOR by CHANGELOG.md "Versioning policy": a construct that used to be
+# rejected now works. Measured on omen 2026-11-20 with the superseded seed binary (0.4.0, sha256
+# 211c1de9b80d732e1f079137bc16f8b15f885d9ffa713b7789a53095a2a98d05) against Stage2 of this tree: seed
+# 0.4.0 refuses test/inout_agg_whole_assign_struct.al, test/inout_agg_whole_assign_enum.al and
+# test/inout_agg_whole_assign_ir_caller.al (`selfhost: a whole-value assignment to an `out` / `in out`
+# struct or enum parameter is not lowered yet`, rc 1) and this tree builds all three and answers 42
+# (#1633, landed as #1760); seed 0.4.0 refuses test/issue1746_shadow_callee_earlier.al (`check: type
+# mismatch at line 10 in issue1746_shadow_callee_earlier`, rc 1) and this tree builds it and answers 42
+# (#1746, landed as #1755). The five #1744/#1772 package fixtures do NOT by themselves move the class:
+# seed 0.4.0 builds and runs every one of them at 42 on x86_64 and emits them for the twins with the
+# same line counts as 0.5.0 (aarch64/riscv64/wat 226/276/287, 71/91/52, 58/76/42, 282/347/350,
+# 202/258/187 lines) — what #1748 and #1773 move is which emitter builds the compiler's own functions,
+# not what the compiler accepts. Newly refusing is PATCH: seed 0.4.0 accepted
+# test/package/issue1753_method_recv_reject, issue1753_method_recv_reject_late,
+# issue1746_qualified_arg_plain_reject and issue1746_qualified_arg_intrinsic_reject (build rc 0, each
+# running a same-named function of another type), and 0.5.0 refuses each with a located `type mismatch`
+# at the call — programs the specification declares invalid (Modules §3, §5; Functions §2.2;
+# Declarations §7.1), so the defect was accepting them. Not MAJOR: no program the specification calls
+# valid stops compiling or changes its answer — the corpus manifest held at match and ir_diff held at
+# its baseline in run 44592824379 — and #1733, #1758 only name refusal causes.
+# The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
