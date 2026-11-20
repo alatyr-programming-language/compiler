@@ -1299,13 +1299,14 @@ ib_bx_bitcast := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), inne
   ## Equal bit-width is the class's own condition (Types §4.4); no width here is ever adjusted.
   if kty_bytes(from.ty) != kty_bytes(k.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
   ## Exactly one side a pointer: the integer↔pointer crossing of Memory §4.5, one word unchanged. The
-  ## other side must be an INTEGER of the pointer's own width — a float is `bits` for slice 8 (and the
-  ## specification does not decide a float against a pointer), and a narrow integer is not the pointer's
-  ## register class (ABI §6), so neither crosses here.
+  ## other side must be an INTEGER — a float is `bits` for slice 8 (and the specification does not
+  ## decide a float against a pointer). Its width is already the pointer's own, `kty_bytes(KPtr)`, by
+  ## the equal-width test above, so a narrow integer (not the pointer's register class, ABI §6) never
+  ## reaches here.
   if kty_is_ptr(from.ty) != kty_is_ptr(k.ty) {
     mut other : Kty = k.ty
     if kty_is_ptr(k.ty) { other = from.ty }
-    if not kty_is_int(other) or kty_bytes(other) != 8 { return ib_no(bp, e, NyWhy.NwOutside) }
+    if not kty_is_int(other) { return ib_no(bp, e, NyWhy.NwOutside) }
     ## Memory §4.5: "Outside such a grant they are ill-formed." `check` does not refuse the ungranted
     ## form yet (#1780), so the builder holds the line itself and never builds the crossing outside an
     ## `unchecked` expression or block — the mode its `Unchecked` arms set.

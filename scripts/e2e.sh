@@ -9749,6 +9749,16 @@ run ir_bitcast_ptr_user 42
 run_a64 ir_bitcast_ptr_user 42
 run_rv64 ir_bitcast_ptr_user 42
 run_wat ir_bitcast_ptr_user 42
+## ...and an access through a fabricated address at or above 2^32 traps on wasm, as it faults natively,
+## rather than reading the location its low 32 bits name (Memory §1.4, I11).
+run_x86_trap ir_bitcast_ptr_high 139
+run_a64 ir_bitcast_ptr_high 139
+run_rv64 ir_bitcast_ptr_high 139
+run_wat ir_bitcast_ptr_high 134
+run_x86_trap ir_bitcast_ptr_wrap 139
+run_a64 ir_bitcast_ptr_wrap 139
+run_rv64 ir_bitcast_ptr_wrap 139
+run_wat ir_bitcast_ptr_wrap 134
 ## Explicit overflow-policy operations (Concurrency §6.3 / CG-8): wrapping_*/saturating_*/checked_* (->
 ## Option)/overflowing_* (-> (T,bool)) on the integer interpretations, exercised at the u8/u64/i32
 ## boundaries. A NEUTRAL library addition (lib/base/num.al) resting on the x86_64-gated scalar

@@ -8,8 +8,8 @@
 ## The pointee is never dereferenced: the null base is inert and only the outer struct's scalar fields
 ## are read, so this measures the reinterpret and nothing about pointee layout.
 ##
-## The wasm backend still refuses this shape (its own stub, a clean trap the sweeps accept) while it
-## already lowers the sub-word pointee spelling — so this file deliberately carries no wasm assertion.
+## On wasm the legacy emitter has only a trapping stub for this shape. Since IR-35 (#980) `main` is
+## built from the shared IR and its `bits` selected there, so the `## expect:` below holds on wasm too.
 ##
 ## 42 means both arms lowered; each miss owns its own code, both below 126.
 Node := struct { v : u64, n : u64 }
