@@ -1752,7 +1752,7 @@ pub Construct := enum {
   ## cause was found for, so an unclassified one shows up as a row of its own.
   ECallGeneric, ECallOverload, ECallBuiltin, ECallFnValue, ECallQualified, ECallMethod, ECallTypeName,
   ECallUnresolved, ECallArity, ECallManyArgs, ECallExtern, ECallResult, ECallResultAgg, ECallAggValue,
-  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer, ECallSigModule, ECallUnbound,
+  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer, ECallSigModule, ECallUnbound, ECallStrAtAddr,
   ## The assignment family: one arm per cause an `x = e` / `x := e` / `mut x : T` statement is refused for
   ## (`ir::build`'s `ib_bs_assign` and the declaration and store builders it hands to), as for calls.
   ## `SAssign` stays the label of an assignment refused for a cause with no arm of its own.
@@ -1763,6 +1763,8 @@ pub Construct := enum {
   ENum, EBoolLit, EVar, EBin, EIf, EMatch, ECall, EStructLit, EField, EEnumLit, EAddrOf, EDeref,
   ## The `deref` family (#1723): `EDeref` stays the label of a refusal no cause was found for.
   EDerefPointee, EDerefUnlaid, EDerefTier, EDerefNarrow, EDerefForeign,
+  ## Address arithmetic (IR-36): `EBin` stays the label of a refusal no cause was found for.
+  EBinPtrOp, EBinPtrPointee, EBinPtrWide, EBinPtrOffset, EBinViewEq,
   EStrLit, EArrayLit, EIndex, ETry, EFloatLit, ESlice, ECompField, EUnchecked, ELambda, EFnRef, EBitcast, ELoop,
 }
 pub construct_name := fn(c : Construct) -> str {
@@ -1814,6 +1816,11 @@ pub construct_name := fn(c : Construct) -> str {
     EDerefTier => { "expr Deref: struct pointee not in the WORD tier" }
     EDerefNarrow => { "expr Deref: scalar narrower than a word through a pointer" }
     EDerefForeign => { "expr Deref: callee's pointee type not proven to be the same type in this module" }
+    EBinPtrOp => { "expr Bin: pointer arithmetic other than `p + n`" }
+    EBinPtrPointee => { "expr Bin: pointer arithmetic whose pointee the operand's declaration does not spell" }
+    EBinPtrWide => { "expr Bin: pointer arithmetic over a pointee other than a one-byte integer" }
+    EBinPtrOffset => { "expr Bin: pointer offset that is not an unsigned integer" }
+    EBinViewEq => { "expr Bin: equality of views other than `str`" }
     EStrLit => { "expr StrLit" }; EArrayLit => { "expr ArrayLit" }
     EIndex => { "expr Index" }; ETry => { "expr Try" }; EFloatLit => { "expr FloatLit" }; ESlice => { "expr Slice" }
     ECompField => { "expr CompField" }; EUnchecked => { "expr Unchecked" }; ELambda => { "expr Lambda" }
@@ -1842,6 +1849,7 @@ pub construct_name := fn(c : Construct) -> str {
     ECallAggPos => { "call: in aggregate position with no aggregate result the builder receives" }
     ECallDefer => { "call: defer marker (the deferred-exit drain is not built)" }
     ECallSigModule => { "call: callee from another module whose signature names a type declared more than once (#1734)" }
+    ECallStrAtAddr => { "call: `str_at` at an integer address (an integer-to-pointer crossing)" }
     ECallUnbound => { "call: bare name the calling module neither declares nor imports, declared in several modules" }
     SAssignTakenNarrow => { "assign: address-taken local of a scalar narrower than a word" }
     SAssignArrInf => { "assign: whole value into an unannotated array local" }
