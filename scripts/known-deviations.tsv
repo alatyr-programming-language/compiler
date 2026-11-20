@@ -1385,7 +1385,6 @@ wasm	test/deep_field_agg_if.al	run/134	#1187
 wasm	test/deque_of_str_roundtrip.al	run/134	#1186
 wasm	test/deque_ops.al	run/134	#1186
 wasm	test/deref_deref_field.al	run/134	#1188
-wasm	test/deref_field.al	run/134	#1188
 wasm	test/deref_field_direct.al	run/134	#1188
 wasm	test/deref_nested_field.al	run/134	#1188
 wasm	test/deref_nested_field_write.al	run/134	#1188
