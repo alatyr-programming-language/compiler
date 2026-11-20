@@ -734,7 +734,7 @@ bash scripts/ir_census.sh --self-test > "$IRV_LOG" 2>&1
 irv_st_rc=$?
 ALATYR="$ROOT/target/debug/alatyr" bash scripts/ir_census.sh --gate --quiet --jobs "${ALATYR_IR_JOBS:-8}" >> "$IRV_LOG" 2>&1
 irv_rc=$?
-grep -E "^(ir_census self-test:|ir self-test:|  (set|corpus|lib/|src/) |ir census gate:|\*\*\* ir census gate|ir coverage per backend:|  backend |  (x86_64|aarch64|riscv64|wasm) +[0-9]|ir targets gate:|\*\*\* ir targets)" "$IRV_LOG"
+grep -E "^(ir_census self-test:|ir self-test:|  (set|corpus|lib/|src/) |ir census gate:|\*\*\* ir census gate|ir coverage per backend:|  backend |  (x86_64|aarch64|riscv64|wasm) +[0-9]|ir targets gate:|\*\*\* ir targets|ir src ratchet:|\*\*\* ir src ratchet|  ack: )" "$IRV_LOG"
 irv_cover="$(grep -E "^ir census gate: " "$IRV_LOG" | tail -1 | sed 's/^ir census gate: //')"
 # The per-backend coverage line (`--targets`, implied by --gate): the number that says each of the four
 # emitters really lowers from the shared IR, and the one §7.2 needs before it may delete a backend's

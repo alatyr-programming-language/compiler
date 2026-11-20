@@ -73,15 +73,25 @@
 # may delete its private copies. A backend at ZERO is printed as such and fails the gate: a selector
 # that selects nothing is not "lowering from the shared IR", whatever its file weighs.
 #
+# ## The builder's coverage of the compiler (`scripts/ir_census.src.baseline`)
+#
+# The per-backend ratchet holds the corpus; the src/ and lib/ "built" columns are held by a second one:
+# under `--gate` each may not fall below its floor (`src=N`, `lib=N`), with the same issue-citing ack for
+# an honest correction; growth passes with a NOTE, and the integrator raises the floor when landing. The
+# gate line prints `src=<built>/<functions>=<P>%` (and `lib=`), so every gate log shows the progress
+# toward the milestone stated in that ratio. See `src_ratchet` below.
+#
 # ## Usage
 #
 #   scripts/ir_census.sh [--gate] [--targets] [--jobs N] [--reasons N] [--quiet]
 #   scripts/ir_census.sh --self-test
-#     --gate       fail on any verifier refusal or failed run (the full gate's IR stage); implies
-#                  --targets, so the gate line carries the per-backend coverage it holds
+#     --gate       fail on any verifier refusal or failed run (the full gate's IR stage), or on src/ or
+#                  lib/ builder coverage below its baseline; implies --targets, so the gate line carries
+#                  the per-backend coverage it holds
 #     --targets    measure per-BACKEND selection — how many functions each of the four emitters takes
 #                  from the shared IR (see "Per-backend coverage" above)
-#     --ratchet-write  write the per-backend baseline from this run (a deliberate, reviewable act)
+#     --ratchet-write  write both baselines (per-backend, and src/ + lib/ built) from this run (a
+#                  deliberate, reviewable act)
 #     --jobs N     parallel `alatyr ir` invocations over the corpus (default 8)
 #     --reasons N  how many ranked reasons to print per set and kind (default 12; 0 = all)
 #     --quiet      print only the summary table
@@ -99,6 +109,7 @@ TARGETS=0
 RATCHET_WRITE=0
 SELFTEST=0
 BASELINE="$ROOT/scripts/ir_census.targets.baseline"
+SRC_BASELINE="$ROOT/scripts/ir_census.src.baseline"
 while [ $# -gt 0 ]; do
   case "$1" in
     --gate) GATE=1; TARGETS=1; shift ;;
@@ -273,6 +284,79 @@ targets_ratchet() {
   return $rc
 }
 
+# ---- the builder's own coverage of src/ and lib/ (`scripts/ir_census.src.baseline`) ------------------
+# The targets ratchet above holds what each BACKEND selects from the corpus. Nothing held what the
+# BUILDER builds of the compiler itself, and that is the number the shared-IR milestone is stated in
+# ("the IR builds at least half of src/"): a slice could lose src/ functions to NotYet and the gate
+# would stay green. This ratchet holds it, per set, with the same discipline as the targets ratchet:
+#
+#   src=<built>     the src/ functions the builder builds; it may not fall below this
+#   lib=<built>     the same for lib/
+#   ## <set>-coverage-ok: #<issue> — <reason>   an acknowledged CORRECTION (see targets_ratchet)
+#
+# Both sets must be named; a malformed line, an unknown set, or an ack citing no issue is rc 2. Below
+# the floor without an ack is rc 1. ABOVE the floor passes with a note: an IR slice that grows coverage
+# is not blocked, and the integrator raises the floor in the landing (`--ratchet-write`).
+#
+# set_built <set> / set_fns <set> — the counts analyse() wrote to `$W/<set>.fns`.
+set_built() { count_re "$W/$1.fns" '	fn [^ ]+ Built$'; }
+set_fns() { wc -l < "$W/$1.fns" | tr -d ' '; }
+# ratio <built> <functions> — `built/functions=P%`, one decimal; a set of zero functions is 0.0%.
+ratio() { awk -v b="$1" -v f="$2" 'BEGIN { printf "%d/%d=%.1f%%", b, f, (f > 0 ? 100 * b / f : 0) }'; }
+
+src_ratchet() {
+  local f="$1" line key want have rc=0 seen="" ack short
+  [ -s "$f" ] || { echo "ir src ratchet: NO baseline at $f — write it with:" \
+    ; echo "  scripts/ir_census.sh --targets --ratchet-write" >&2; return 2; }
+  while read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      \#\#[[:space:]]*[a-z]*-coverage-ok:*)
+        key="${line#\#\# }"; key="${key%%-coverage-ok:*}"
+        case "$key" in src|lib) ;; *) echo "ir src ratchet: ack names no known set: '$line'" >&2; return 2 ;; esac
+        ack="${line#*-coverage-ok:}"
+        case "$ack" in *'#'[0-9]*) ;; *) echo "ir src ratchet: the $key ack cites no issue — a reason must name one" >&2; return 2 ;; esac
+        continue ;;
+      *=*) ;; *) echo "ir src ratchet: malformed baseline line '$line'" >&2; return 2 ;;
+    esac
+    key="${line%%=*}"; want="${line#*=}"
+    case "$want" in ''|*[!0-9]*) echo "ir src ratchet: malformed baseline line '$line'" >&2; return 2 ;; esac
+    case "$key" in src|lib) ;; *) echo "ir src ratchet: unknown set '$key' in baseline" >&2; return 2 ;; esac
+    case " $seen " in *" $key "*) echo "ir src ratchet: $key named twice in baseline" >&2; return 2 ;; esac
+    seen="$seen $key"
+  done < "$f"
+  for key in src lib; do
+    case " $seen " in *" $key "*) ;; *) echo "ir src ratchet: baseline names no $key — that set is unheld" >&2; return 2 ;; esac
+  done
+  for key in src lib; do
+    want="$(awk -F= -v k="$key" '$1 == k {print $2; exit}' "$f")"
+    have="$(set_built "$key")"
+    ack="$(awk -v k="$key" '$0 ~ "^## "k"-coverage-ok:" {sub("^## [^-]*-coverage-ok:[[:space:]]*",""); print; exit}' "$f")"
+    if [ "$have" -lt "$want" ]; then
+      short=$((want - have))
+      if [ -n "$ack" ]; then
+        echo "ir src ratchet: $key/ is $short BELOW the baseline $want -> $have, ACKNOWLEDGED."
+        echo "  ack: $ack"
+        echo "  The shortfall is a debt, not a new floor: it closes when $key/ returns to $want, or the"
+        echo "  baseline is lowered by $short in its own reviewed commit."
+        continue
+      fi
+      echo "ir src ratchet: FAIL — the IR builder builds FEWER $key/ functions than the baseline: $want -> $have"
+      echo "  Losing builder coverage of the compiler is a regression to explain, not a pass."
+      echo "  If the baseline was inflated — those functions were built wrongly and the builder now refuses"
+      echo "  them per the spec — RECORD that, do not hide it. Add to scripts/ir_census.src.baseline:"
+      echo "    ## $key-coverage-ok: #<issue> — <what was wrong, and what restores the coverage>"
+      rc=1
+    else
+      if [ "$have" -gt "$want" ]; then
+        echo "ir src ratchet: NOTE — $key/ GREW its builder coverage $want -> $have; raise the floor when landing."
+      fi
+      [ -z "$ack" ] || echo "  NOTE: $key carries a coverage ack but is AT or ABOVE the baseline ($want -> $have); remove the stale line."
+    fi
+  done
+  return $rc
+}
+
 # analyse <dir> — read a collected census from <dir> (corpus.list, c.<key>.out/.rc, lib.out/.rc,
 # src.out/.rc), print it, and answer 0 when the census was taken (and, under --gate, when nothing
 # failed), 1 otherwise. Every `<set>.fns` line is `<source>\t<report line>`.
@@ -347,7 +431,7 @@ analyse() {
   if [ "$GATE" = 1 ]; then
     local nb_all
     nb_all=$(cat "$W/corpus.fns" "$W/lib.fns" "$W/src.fns" | grep -cE '	fn [^ ]+ Built$' || true)
-    echo "ir census gate: programs=$ncorpus refused-by-check=$refused failed=$failed verify_runs=$vruns lib_rc=$lib_rc src_rc=$src_rc built=$nb_all verify_failed=$bad"
+    echo "ir census gate: programs=$ncorpus refused-by-check=$refused failed=$failed verify_runs=$vruns lib_rc=$lib_rc src_rc=$src_rc built=$nb_all verify_failed=$bad src=$(ratio "$(set_built src)" "$(set_fns src)") lib=$(ratio "$(set_built lib)" "$(set_fns lib)")"
     if [ "$failed" = 0 ] && [ "$vruns" = 0 ] && [ "$bad" = 0 ] && [ "$lib_ok" = 1 ] && [ "$src_ok" = 1 ]; then
       echo "*** ir census gate: the verifier accepted all $nb_all built functions, and every run reported ***"
       return 0
@@ -496,6 +580,66 @@ if [ "$SELFTEST" = 1 ]; then
   chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir targets ratchet self-test: a malformed baseline is not a pass (rc=$rc)"
   targets_ratchet "$T/nope" >/dev/null 2>&1; rc=$?
   chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir targets ratchet self-test: no baseline is not a pass (rc=$rc)"
+
+  ## ── the builder's src/ and lib/ coverage: a floor per set, never silently lower. ──
+  ## A planted census whose src/ builds 2 of 3 and lib/ 1 of 1.
+  plant srccov "fn p::f Built" 0 "fn base::g Built" 0
+  { echo "fn src::a Built"; echo "fn src::b Built"; echo "fn src::c NotYet(expr Index, src/s.al:1:1)"; echo "ir: functions=3"; } > "$T/srccov/src.out"
+  out="$(GATE=1 QUIET=1 analyse "$T/srccov" 2>&1)"; rc=$?
+  c=0; [ "$rc" = 0 ] || c=1
+  printf '%s\n' "$out" | grep -qE '^ir census gate: .* src=2/3=66\.7% lib=1/1=100\.0%$' || c=1
+  [ "$c" = 0 ] || printf '%s\n' "$out" | sed 's/^/     /'
+  chk "$c" "ir src ratchet self-test: the gate line prints src= and lib= built/functions=P% (rc=$rc)"
+  W="$T/srccov"
+  printf 'src=2\nlib=1\n' > "$T/sbase_at"
+  out="$(src_ratchet "$T/sbase_at" 2>&1)"; rc=$?
+  c=0; [ "$rc" = 0 ] || c=1; ! printf '%s\n' "$out" | grep -q 'NOTE' || c=1
+  chk "$c" "ir src ratchet self-test: held at the floor, silently (rc=$rc)"
+  printf 'src=3\nlib=1\n' > "$T/sbase_below"
+  out="$(src_ratchet "$T/sbase_below" 2>&1)"; rc=$?
+  c=0; [ "$rc" = 1 ] || c=1
+  printf '%s\n' "$out" | grep -q 'FEWER src/ functions than the baseline: 3 -> 2' || c=1
+  printf '%s\n' "$out" | grep -q 'src-coverage-ok: #<issue>' || c=1
+  chk "$c" "ir src ratchet self-test: FAIL below the floor, naming the set and how to record a correction (rc=$rc)"
+  printf 'src=2\nlib=2\n' > "$T/sbase_below_lib"
+  out="$(src_ratchet "$T/sbase_below_lib" 2>&1)"; rc=$?
+  c=0; [ "$rc" = 1 ] || c=1; printf '%s\n' "$out" | grep -q 'FEWER lib/ functions' || c=1
+  chk "$c" "ir src ratchet self-test: lib/ below its floor fails too (rc=$rc)"
+  printf 'src=1\nlib=0\n' > "$T/sbase_above"
+  out="$(src_ratchet "$T/sbase_above" 2>&1)"; rc=$?
+  c=0; [ "$rc" = 0 ] || c=1
+  printf '%s\n' "$out" | grep -q 'NOTE — src/ GREW its builder coverage 1 -> 2; raise the floor' || c=1
+  chk "$c" "ir src ratchet self-test: growth passes with a note to raise the floor (rc=$rc)"
+  printf 'src=3\n## src-coverage-ok: #1084 — planted: two functions were built wrongly; slice N restores them.\nlib=1\n' > "$T/sbase_ack"
+  out="$(src_ratchet "$T/sbase_ack" 2>&1)"; rc=$?
+  c=0; [ "$rc" = 0 ] || c=1
+  printf '%s\n' "$out" | grep -q 'src/ is 1 BELOW the baseline 3 -> 2, ACKNOWLEDGED' || c=1
+  printf '%s\n' "$out" | grep -q '#1084' || c=1
+  chk "$c" "ir src ratchet self-test: a cited ack holds the shortfall and prints the reason (rc=$rc)"
+  printf 'src=2\n## src-coverage-ok: #1084 — planted.\nlib=1\n' > "$T/sbase_stale"
+  out="$(src_ratchet "$T/sbase_stale" 2>&1)"; rc=$?
+  c=0; [ "$rc" = 0 ] || c=1; printf '%s\n' "$out" | grep -q 'stale line' || c=1
+  chk "$c" "ir src ratchet self-test: an ack excusing nothing is flagged stale (rc=$rc)"
+  printf 'src=3\n## src-coverage-ok: it is fine.\nlib=1\n' > "$T/sbase_nocite"
+  src_ratchet "$T/sbase_nocite" >/dev/null 2>&1; rc=$?
+  chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir src ratchet self-test: an ack citing no issue is refused (rc=$rc)"
+  printf 'src=3\n## corpus-coverage-ok: #1 — nope.\nlib=1\n' > "$T/sbase_ackset"
+  src_ratchet "$T/sbase_ackset" >/dev/null 2>&1; rc=$?
+  chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir src ratchet self-test: an ack naming an unknown set is refused (rc=$rc)"
+  printf 'src=x\nlib=1\n' > "$T/sbase_bad"
+  src_ratchet "$T/sbase_bad" >/dev/null 2>&1; rc=$?
+  chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir src ratchet self-test: a malformed baseline is not a pass (rc=$rc)"
+  printf 'src=2\n' > "$T/sbase_nolib"
+  src_ratchet "$T/sbase_nolib" >/dev/null 2>&1; rc=$?
+  chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir src ratchet self-test: a baseline naming no lib is unusable (rc=$rc)"
+  printf 'src=2\nlib=1\nx86_64=5\n' > "$T/sbase_key"
+  src_ratchet "$T/sbase_key" >/dev/null 2>&1; rc=$?
+  chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir src ratchet self-test: an unknown key is refused, not ignored (rc=$rc)"
+  src_ratchet "$T/nope" >/dev/null 2>&1; rc=$?
+  chk "$([ "$rc" = 2 ] && echo 0 || echo 1)" "ir src ratchet self-test: no baseline is not a pass (rc=$rc)"
+  ## The committed baseline itself parses: a broken one would only show up on the gate machine.
+  out="$(src_ratchet "$SRC_BASELINE" 2>&1)"; rc=$?
+  chk "$([ "$rc" != 2 ] && echo 0 || echo 1)" "ir src ratchet self-test: the committed scripts/ir_census.src.baseline parses (rc=$rc)"
   # The four selectors must each write their marker exactly once in the tree as committed — the check
   # the gate runs before it believes any count. A renamed marker would read as "selects nothing".
   m_bad=0
@@ -548,6 +692,18 @@ echo "$?" > "$W/src.rc"
 
 analyse_rc=0
 analyse "$W" || analyse_rc=$?
+
+# ---- the builder's coverage of src/ and lib/, held (`--gate`) or written (`--ratchet-write`) ----
+if [ "$RATCHET_WRITE" = 1 ]; then
+  printf 'src=%s\nlib=%s\n' "$(set_built src)" "$(set_built lib)" > "$SRC_BASELINE" || exit 2
+  echo "ir src ratchet: WROTE $SRC_BASELINE ($(tr '\n' ' ' < "$SRC_BASELINE"))"
+elif [ "$GATE" = 1 ]; then
+  if src_ratchet "$SRC_BASELINE"; then
+    echo "ir src ratchet: src/ and lib/ builder coverage at or above the baseline ($(grep -v '^##' "$SRC_BASELINE" | tr '\n' ' ' | sed 's/ *$//'))"
+  else
+    echo "*** ir src ratchet: FAIL — the builder's coverage of src/ or lib/ (above) ***"; analyse_rc=1
+  fi
+fi
 
 # ---- per-backend coverage (`--targets`) ----
 if [ "$TARGETS" = 1 ]; then
