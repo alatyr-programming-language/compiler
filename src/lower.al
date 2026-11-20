@@ -14957,6 +14957,12 @@ deref_field_type_is_aggregate := fn(cx : ptr(LCtx), fty : CSpan) -> bool {
 ## offset, a field with no word offset. The ek-7 `deref(p).f` arm passes false and keeps its historical
 ## word fallback byte-identically; that fallback is its own residual, not this function's decision.
 emit_deref_field_read_rax := fn(in out sb : strbuf::StrBuf, cx : ptr(LCtx), sty : CSpan, fs : usize, fl : usize, strict : bool) {
+  ## A raw union's member is its bytes at offset 0 read as the member's type (Types §6.3); a word load
+  ## answers a wider value for a narrow member. The strict arm has no sized member read, so it refuses.
+  if strict and is_union_decl(cx.decls, cx.src, sty.s, sty.n) {
+    lower_show_src_line(cx.src, fs)
+    panic("selfhost: a raw union member read through deref(ptr(local)) has no sized member read here (Types §6.3: the member's bytes at offset 0, at the member's width)")
+  }
   ppk := is_packed(cx.decls, cx.src, sty.s, sty.n)
   mut bo := i64(-1)
   mut fty := CSpan(s = 0, n = 0)
