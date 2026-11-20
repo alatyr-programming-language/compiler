@@ -1809,11 +1809,11 @@ pub construct_name := fn(c : Construct) -> str {
     EIf => { "expr If" }; EMatch => { "expr Match" }; ECall => { "expr Call" }; EStructLit => { "expr StructLit" }
     EField => { "expr Field" }; EEnumLit => { "expr EnumLit" }; EAddrOf => { "expr AddrOf" }
     EDeref => { "expr Deref" }
-    EDerefPointee => { "expr Deref: pointee type not spelled by the operand's declaration" }
+    EDerefPointee => { "expr Deref: pointee type neither spelled by the operand's declaration nor recorded by sema" }
     EDerefUnlaid => { "expr Deref: pointee aggregate the builder does not lay out" }
     EDerefTier => { "expr Deref: struct pointee not in the WORD tier" }
     EDerefNarrow => { "expr Deref: scalar narrower than a word through a pointer" }
-    EDerefForeign => { "expr Deref: callee's pointee type not proven to be the same type in this module" }
+    EDerefForeign => { "expr Deref: pointee type written in another module and not proven to be the same type in this module" }
     EStrLit => { "expr StrLit" }; EArrayLit => { "expr ArrayLit" }
     EIndex => { "expr Index" }; ETry => { "expr Try" }; EFloatLit => { "expr FloatLit" }; ESlice => { "expr Slice" }
     ECompField => { "expr CompField" }; EUnchecked => { "expr Unchecked" }; ELambda => { "expr Lambda" }
@@ -3695,10 +3695,12 @@ sty_get_key := fn(sp : StySpace, k : usize, iw : usize, tw : usize) -> VTy {
 ## docs/ir.md §3.8 item 8 — the SPELLING of the type sema resolved for a node or a binding: the source
 ## span `[s, s+n)` of the declaration text that names it (a parameter's or a field's annotation, a
 ## callee's `-> R`, a pointer's pointee inside `ptr(…)`), `n == 0` when sema resolved none. It is the
-## recorder's own companion, never read by a builder: a value type (`VTy`) is enough to emit a scalar,
-## but reaching the scalar a field, a `deref` or an element holds needs the aggregate or pointer it is
-## read from, and only its spelling names that. Same table, own record space (`StySpace`, #1108), so a
-## spelling key meets neither a node key nor a binding key whatever bits its word carries. `SfBytesView` marks the
+## recorder's own companion: a value type (`VTy`) is enough to emit a scalar, but reaching the scalar a
+## field, a `deref` or an element holds needs the aggregate or pointer it is read from, and only its
+## spelling names that. The builder reads it in one place: the pointee of a `deref` whose operand's
+## declaration spells none (`ir::build::ib_deref_recorded`, IR-38). Same table, own record space
+## (`StySpace`, #1108), so a spelling key meets neither a node key nor a binding key whatever bits its
+## word carries. `SfBytesView` marks the
 ## one type a builtin produces that no declaration spells: a byte view — `str`, which is `[u8]` (Types
 ## §7) — answered by `str_at`/`bytes` or a string literal; `s`/`n` are then 0.
 ## `SfArrayOf` marks an array whose ELEMENT is spelled `[s, s+n)`: an unannotated `[e0, e1, …]` has no text
