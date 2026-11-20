@@ -619,6 +619,19 @@ refuse again, so the batch is not re-gated every pass. A hand
 landing gated elsewhere (omen, or `gate.yml`'s `gate.log`) runs that same command on the gated
 object, or on its oracle commit after a hand PHASE 6a, and publishes the commit it prints.
 
+**The IR coverage floors follow a landing that grows them** (#1786). The full gate's IR stage holds
+`scripts/ir_census.src.baseline` (src/ and lib/ functions the shared IR builds) and
+`scripts/ir_census.targets.baseline` (per-backend selections) as floors. Coverage above a floor passes
+with a note, `ir src ratchet: NOTE — <set>/ GREW its builder coverage A -> B` or `ir targets ratchet:
+<backend> GREW …`, so a floor left where it was lets a later slice fall back to it with the gate green.
+Neither land.sh nor the queue moves these floors. After every landing whose gate log carries such a
+line, the integrator commits `chore(gates): IR coverage floors follow the landing of #PR` on the
+published `main`: the floor files only, every number set to the gate line's `B`, the lines quoted
+verbatim in the body. Check it with `scripts/ir_census.sh --gate --quiet` (it must hold), then push it
+like any other follow commit. `--ratchet-write` rewrites BOTH files from one local run. Keep a file whose
+gate printed no GREW line out of the commit (`git checkout -- <file>`). A floor never goes down
+without a `## <set>-coverage-ok: #<issue>` ack, and a feature PR never moves one.
+
 When the gate ran on `.github/workflows/gate.yml` rather than locally, do PHASE 6a by hand on the
 detached merge. Run `--check-delta "$BASE_MANIFEST" corpus.manifest scripts/corpus.expected-delta`
 on the artifact (it must exit 0), copy the artifact over `scripts/corpus.manifest`, and commit that

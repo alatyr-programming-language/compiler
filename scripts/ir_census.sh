@@ -265,7 +265,7 @@ targets_ratchet() {
       echo "    ## $be-coverage-ok: #<issue> — <what was wrong, and what restores the coverage>"
       rc=1
     elif [ "$have" -gt "$want" ]; then
-      echo "ir targets ratchet: $be GREW its IR coverage $want -> $have; lower the baseline."
+      echo "ir targets ratchet: $be GREW its IR coverage $want -> $have; raise the floor when landing."
     fi
   done < "$f"
   for be in x86_64 aarch64 riscv64 wasm; do
