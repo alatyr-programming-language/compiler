@@ -1279,8 +1279,16 @@ ib_bx_value_loop := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b
   Option(VRegId).Some(res)
 }
 
-## `unchecked bitcast(T, x)` between integers of one width re-signs the value: `ext` at the same width
-## (§4 `bitcast` scalar↔scalar). Every other bitcast is outside slice 1.
+## `bitcast(T, x)` — the **reinterpret** class of Types §4.2 and §4.4: "same-size bit reinterpretation", bits
+## unchanged, cost zero, always explicit. Two crossings are built, each at the width the two types share.
+## Between integers of one width the value is re-signed: `ext` at the same width (§4, `bitcast`
+## scalar↔scalar). Between a pointer and a register-width integer — **in either direction**, the crossing
+## Memory §4.5 confines to an `unchecked` grant while Types §4.4 says its mechanics "still apply" — the
+## word is carried unchanged by `bits`: ABI §6 gives `ptr(T)` and a `usize`-width integer one register
+## class, so the crossing is the move itself and no instruction converts it. A float on either side (the
+## `bits` cases slice 8 owns, no selector emitting one yet), a width that differs, a pointer crossing
+## outside an `unchecked` grant, and a target the builder gives no kernel type stay refused, located at
+## the `bitcast`.
 ib_bx_bitcast := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), inner : ptr(Expr), ts : usize, tl : usize) -> Option(VRegId) {
   to : Option(IbKS) = ib_name_ks(ib_b_src(bp), ts, tl)
   match to { Some(tk) => {}; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
@@ -1288,7 +1296,26 @@ ib_bx_bitcast := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), inne
   k := ib_ty(bp, e)?
   match to { Some(tk2) => { if not ib_ks_eq(tk2, k) { return ib_no(bp, e, NyWhy.NwDisagree) } }; None => {} }
   from : IbKS = ib_vreg_ks(ib_b_f(bp), xv)
-  if not kty_is_int(from.ty) or not kty_is_int(k.ty) or kty_bytes(from.ty) != kty_bytes(k.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
+  ## Equal bit-width is the class's own condition (Types §4.4); no width here is ever adjusted.
+  if kty_bytes(from.ty) != kty_bytes(k.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
+  ## Exactly one side a pointer: the integer↔pointer crossing of Memory §4.5, one word unchanged. The
+  ## other side must be an INTEGER — a float is `bits` for slice 8 (and the specification does not
+  ## decide a float against a pointer). Its width is already the pointer's own, `kty_bytes(KPtr)`, by
+  ## the equal-width test above, so a narrow integer (not the pointer's register class, ABI §6) never
+  ## reaches here.
+  if kty_is_ptr(from.ty) != kty_is_ptr(k.ty) {
+    mut other : Kty = k.ty
+    if kty_is_ptr(k.ty) { other = from.ty }
+    if not kty_is_int(other) { return ib_no(bp, e, NyWhy.NwOutside) }
+    ## Memory §4.5: "Outside such a grant they are ill-formed." `check` does not refuse the ungranted
+    ## form yet (#1780), so the builder holds the line itself and never builds the crossing outside an
+    ## `unchecked` expression or block — the mode its `Unchecked` arms set.
+    if not ib_b_unch(bp) { return ib_no(bp, e, NyWhy.NwOutside) }
+    bd := ib_fresh(bp, a, k)
+    i3 := e_width(ib_b_f(bp), a, Op.OpBits, k.sg, k.ty, from.ty, bd, xv)
+    return Option(VRegId).Some(bd)
+  }
+  if not kty_is_int(from.ty) or not kty_is_int(k.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
   rs := ib_ext_to(bp, a, xv, k)
   Option(VRegId).Some(rs)
 }

@@ -76,6 +76,18 @@ sw_trap_on := fn(in out sb : rt::StrBuf, x : SwX, tk : ir::TrapKind, ip : ptr(mu
   sw_trap(sb, x, tk, ip)
   sw_op(sb, "end")
 }
+## Consume the i64 address on the stack and trap `bounds` unless its top 32 bits are zero. Linear memory
+## here is indexed by an i32 (`sw_addr32`'s `i32.wrap_i64`), so an address at or above 2^32 names no
+## location of it; wrapping it would read or write the location its LOW bits name instead. Memory §1.4:
+## a fabricated address "denotes whatever location its bits name", and an access through one naming no
+## valid place is hardware-defined (I11): a trap is this machine's answer, another location is not.
+sw_trap_hi := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) {
+  sw_const(sb, 32)
+  sw_op(sb, "i64.shr_u")
+  sw_const(sb, 0)
+  sw_op(sb, "i64.ne")
+  sw_trap_on(sb, x, ir::TrapKind.TkBounds, ip)
+}
 
 ## The stack top ← canonical(stack top) at type `ty` with signedness `sg` (§3.2): a narrow signed
 ## integer by a shift pair, a narrow unsigned one by a mask; a 64-bit value, a `bool` and a pointer are
@@ -425,7 +437,7 @@ sw_load := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool
     }
     None => {}
   }
-  if not sw_addr32(sb, x, ir::i_ak(ip), ir::i_av(ip), ir::i_off(ip)) { return false }
+  if not sw_addr32(sb, x, ip, ir::i_ak(ip), ir::i_av(ip), ir::i_off(ip)) { return false }
   lio : Option(str) = sw_load_ins(ir::kty_bytes(ty), ir::sgn_eq(sg, ir::Sgn.SgS))
   match lio { Some(ins) => { sw_op(sb, ins) }; None => { return false } }
   sw_setd(sb, ip)
@@ -453,7 +465,7 @@ sw_store := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> boo
     }
     None => {}
   }
-  if not sw_addr32(sb, x, ir::i_ak(ip), ir::i_av(ip), ir::i_off(ip)) { return false }
+  if not sw_addr32(sb, x, ip, ir::i_ak(ip), ir::i_av(ip), ir::i_off(ip)) { return false }
   if not sw_ld(sb, ir::i_bk(ip), ir::i_bv(ip)) { return false }
   sio : Option(str) = sw_store_ins(ir::kty_bytes(ty))
   match sio { Some(ins) => { sw_op(sb, ins) }; None => { return false } }
@@ -511,8 +523,18 @@ sw_addr64 := fn(in out sb : rt::StrBuf, x : SwX, k : ir::OpndK, v : i64, off : i
   }
   true
 }
-## The same address as wasm's i32 memory index.
-sw_addr32 := fn(in out sb : rt::StrBuf, x : SwX, k : ir::OpndK, v : i64, off : i64) -> bool {
+## The same address as wasm's i32 memory index, for the access `ip`. A `ptr` vreg's address may have been
+## fabricated (Memory §1.4, §4.5: from an integer, or by pointer arithmetic, `gep` and the offset here
+## included), so it is computed twice — it is a pure `local.get`/`i64.add` — once to trap when it is at
+## or above 2^32 (`sw_trap_hi`) and once to wrap. A frame object's address is the shadow stack's own.
+sw_addr32 := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst), k : ir::OpndK, v : i64, off : i64) -> bool {
+  match k {
+    OkVReg => {
+      if not sw_addr64(sb, x, k, v, off) { return false }
+      sw_trap_hi(sb, x, ip)
+    }
+    OkNone | OkImm | OkFrame | OkSym | OkFn | OkLabel | OkLit => {}
+  }
   if not sw_addr64(sb, x, k, v, off) { return false }
   sw_op(sb, "i32.wrap_i64")
   true
@@ -559,9 +581,9 @@ sw_mem := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst), copy : b
   if words { lins = "i64.load"; sins = "i64.store" }
   mut o : usize = 0
   while o < n {
-    if not sw_addr32(sb, x, ir::i_ak(ip), ir::i_av(ip), i64(o)) { return false }
+    if not sw_addr32(sb, x, ip, ir::i_ak(ip), ir::i_av(ip), i64(o)) { return false }
     if copy {
-      if not sw_addr32(sb, x, ir::i_bk(ip), ir::i_bv(ip), i64(o)) { return false }
+      if not sw_addr32(sb, x, ip, ir::i_bk(ip), ir::i_bv(ip), i64(o)) { return false }
       sw_op(sb, lins)
     }
     if not copy { sw_const(sb, 0) }
@@ -578,7 +600,7 @@ sw_agg_res := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> b
   sw_set(sb, x.s0)
   mut o : usize = 0
   while o < nb {
-    if not sw_addr32(sb, x, ir::i_dk(ip), ir::i_dv(ip), i64(o)) { return false }
+    if not sw_addr32(sb, x, ip, ir::i_dk(ip), ir::i_dv(ip), i64(o)) { return false }
     sw_get(sb, x.s0)
     if o != 0 {
       sw_const(sb, i64(o))
@@ -692,6 +714,20 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
     OpRotl => { sw_rot(sb, ip, "i64.rotl") }
     OpRotr => { sw_rot(sb, ip, "i64.rotr") }
     OpExt => { sw_ext(sb, x, ip) }
+    ## `bits` between a pointer and a register-width integer (Memory §4.5, ABI §6: one register class):
+    ## every wasm value is an `i64`, so the crossing is the move `Mov` already makes and no instruction
+    ## converts it. A float on either side is slice 8's and this selector emits none: fallback. An
+    ## integer becoming a pointer traps when its top 32 bits are set (`sw_trap_hi`): the pointer may be
+    ## handed to a legacy-emitted function, whose accesses wrap the address to 32 bits unchecked, so
+    ## the guard in `sw_addr32` alone would not hold for it.
+    OpBits => {
+      if ir::kty_is_float(ir::i_ty(ip)) or ir::kty_is_float(ir::i_from(ip)) { return false }
+      if ir::kty_is_ptr(ir::i_ty(ip)) and not ir::kty_is_ptr(ir::i_from(ip)) {
+        if not sw_lda(sb, ip) { return false }
+        sw_trap_hi(sb, x, ip)
+      }
+      sw_mov(sb, ip)
+    }
     OpFit => { sw_fit(sb, x, ip) }
     OpCmp => { sw_cmp(sb, ip) }
     OpAddrSym => { sw_addr(sb, x, a, ip) }
@@ -758,7 +794,7 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpCallInd
       | OpCallC | OpSyscall | OpSwitch => { false }
   }
 }

@@ -775,6 +775,13 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
     OpRotr => { sx_rot(sb, ip, SxRot.XrRotr) }
     OpExt => { sx_ext(sb, x, ip) }
     OpFit => { sx_fit(sb, x, ip) }
+    ## `bits` between a pointer and a register-width integer (Memory §4.5, ABI §6: one register class):
+    ## the word is unchanged, so the crossing is the move `Mov` already makes. A float on either side is
+    ## slice 8's and this selector emits no float instruction, so the function falls back.
+    OpBits => {
+      if ir::kty_is_float(ir::i_ty(ip)) or ir::kty_is_float(ir::i_from(ip)) { return false }
+      sx_move(sb, ip)
+    }
     OpCmp => { sx_cmp(sb, x, ip) }
     OpAddrSym => { sx_addr(sb, x, ip) }
     OpLoad => { sx_load(sb, x, ip) }
@@ -836,7 +843,7 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpCallInd
       | OpCallC | OpSyscall | OpSwitch => { false }
   }
 }

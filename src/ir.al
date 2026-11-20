@@ -1167,7 +1167,17 @@ v1_conv := fn(f : ptr(mut IrFn), ip : ptr(mut IrInst)) -> bool {
     OpFToI => { kty_is_float(s) and kty_is_int(t) }
     OpFExt => { kty_eq(s, Kty.KF32) and kty_eq(t, Kty.KF64) }
     OpFDemote => { kty_eq(s, Kty.KF64) and kty_eq(t, Kty.KF32) }
-    OpBits => { kty_bytes(s) == kty_bytes(t) and (kty_is_float(s) != kty_is_float(t)) }
+    OpBits => {
+      ## A reinterpret crosses between two classes at ONE width (Types §4.2's `reinterpret` row):
+      ## int↔float, or the integer↔pointer crossing of Memory §4.5 — "in either direction", with the
+      ## same mechanics (Types §4.4). A float against a pointer is refused: the specification does not
+      ## decide it (spec #169). Two kinds of one class need no reinterpret at all (`ext` re-signs an
+      ## integer, `Mov` carries a pointer).
+      kty_bytes(s) == kty_bytes(t)
+        and (kty_is_float(s) != kty_is_float(t) or kty_is_ptr(s) != kty_is_ptr(t))
+        and not (kty_is_float(s) and kty_is_ptr(t))
+        and not (kty_is_ptr(s) and kty_is_float(t))
+    }
     OpConst | OpFConst | OpAddrSym | OpAddrFrame | OpFnAddr | OpMov | OpAdd | OpSub | OpMul | OpDiv | OpRem | OpAnd
       | OpOr | OpXor | OpNot | OpNeg | OpShl | OpShr | OpRotl | OpRotr | OpExt | OpFit | OpTrunc | OpCmp | OpFCmp
       | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg | OpLoad | OpStore | OpBSwap | OpCopy | OpZero | OpGep | OpBound
