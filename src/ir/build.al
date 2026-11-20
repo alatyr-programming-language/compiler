@@ -5602,7 +5602,23 @@ ib_view_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), want
 ## literal by `ib_view_value`, is lifted when the parser decodes `\u{…}` per Grammar §2.4 and refuses
 ## the escapes §2.4 does not list.
 ib_view_strlit := fn(bp : ptr(mut IbB), in out a : rt::Arena, ss : usize, sl : usize, lbl : usize) -> Option(IbVObj) {
-  if lbl % 1000000 >= parser::embed_label_base { return Option(IbVObj).None }
+  po : Option(VRegId) = ib_strlit_addr(bp, a, ss, sl, lbl)
+  match po {
+    Some(pa) => {
+      fr := ib_new_obj(bp, a, ib_view_st())
+      ib_store_field(bp, a, fr, ib_view_ptr_fld(), pa)
+      lv := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), i64(sl))
+      ib_store_field(bp, a, fr, ib_view_len_fld(), lv)
+      return Option(IbVObj).Some(ib_vobj(fr, true, ib_str_el()))
+    }
+    None => {}
+  }
+  Option(IbVObj).None
+}
+## The address of a `str` literal's entry in the program's literal table, or `None` for a literal
+## `ib_view_strlit` builds no view of (see there). The caller refuses.
+ib_strlit_addr := fn(bp : ptr(mut IbB), in out a : rt::Arena, ss : usize, sl : usize, lbl : usize) -> Option(VRegId) {
+  if lbl % 1000000 >= parser::embed_label_base { return Option(VRegId).None }
   src := ib_b_src(bp)
   ## `sb_byte` stores a word per byte, so the buffer keeps 8 bytes of slack past the last one.
   mut sb := rt::strbuf(a, sl + 8)
@@ -5610,7 +5626,7 @@ ib_view_strlit := fn(bp : ptr(mut IbB), in out a : rt::Arena, ss : usize, sl : u
   mut n : usize = 0
   while n < sl {
     lb : lower_layout::LitByte = lower_layout::str_lit_byte(src, ss, i)
-    if lb.w == 2 and not lower_layout::str_lit_esc_listed(src, ss, i) { return Option(IbVObj).None }
+    if lb.w == 2 and not lower_layout::str_lit_esc_listed(src, ss, i) { return Option(VRegId).None }
     k := rt::push_byte(sb, lb.b)
     i = i + lb.w
     n = n + 1
@@ -5622,11 +5638,7 @@ ib_view_strlit := fn(bp : ptr(mut IbB), in out a : rt::Arena, ss : usize, sl : u
   set_dst(ai, pa)
   set_a(ai, lo)
   i1 := emit(ib_b_f(bp), a, ai)
-  fr := ib_new_obj(bp, a, ib_view_st())
-  ib_store_field(bp, a, fr, ib_view_ptr_fld(), pa)
-  lv := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), i64(sl))
-  ib_store_field(bp, a, fr, ib_view_len_fld(), lv)
-  Option(IbVObj).Some(ib_vobj(fr, true, ib_str_el()))
+  Option(VRegId).Some(pa)
 }
 ## IR-36: is `[cs, cs+cl)` the built-in `str_at` — the one predicate every name-keyed site asks
 ## (`lower_layout::intrinsic_callee`, #1434), so a program's own `str_at` is a call to that declaration
@@ -5663,6 +5675,43 @@ ib_view_str_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), na 
   }
   Option(IbVObj).None
 }
+## One operand of a `str` equality as the two words the compare reads: its address and its byte length.
+IbStrW := struct { p : VRegId, n : VRegId }
+## The operand `x` of the equality `e`, as its two words, read when it is built, before the other
+## operand is. A literal gives them directly — its table address and its length — with no view object
+## between: a name-table test (`t == "u8" or t == "u16" or …`) is the compiler's most frequent `str`
+## equality, and an object cost each literal a store and a load per word at every compare. Any other
+## operand is the view `ib_view_value` builds at `want`; a view of anything but `str` is refused at `e`.
+ib_str_words := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), x : ptr(Expr), want : Option(IbVEl)) -> Option(IbStrW) {
+  if ib_b_failed(bp) { return Option(IbStrW).None }
+  match deref(x) {
+    Expr::StrLit(ss, sl, lbl, ps, pn) => {
+      po : Option(VRegId) = ib_strlit_addr(bp, a, ss, sl, lbl)
+      match po {
+        Some(pv) => {
+          nv := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), i64(sl))
+          return Option(IbStrW).Some(IbStrW(p = pv, n = nv))
+        }
+        None => { ib_refuse_expr(bp, x, NyWhy.NwOutside); return Option(IbStrW).None }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  wo : Option(IbVObj) = ib_view_value(bp, a, x, want)
+  match wo {
+    Some(w) => {
+      if not w.utf8 { k := ib_no_at(bp, e, Construct.EBinViewEq); return Option(IbStrW).None }
+      nv := ib_load_field(bp, a, w.fr, ib_view_len_fld())
+      pv := ib_load_field(bp, a, w.fr, ib_view_ptr_fld())
+      return Option(IbStrW).Some(IbStrW(p = pv, n = nv))
+    }
+    None => {}
+  }
+  Option(IbStrW).None
+}
 ## IR-36: `a == b` / `a != b` of two `str` views is by content (Stdlib appendix §3.6, STD-4): equal byte
 ## length and equal bytes, the rule `lib/base/str.al`'s `str_eq` and the legacy byte loop
 ## (`lower::emit_str_eq_core`) implement. Both operands are evaluated, left then right, then:
@@ -5671,19 +5720,18 @@ ib_view_str_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), na 
 ## `i < la` holds at each read, and `la` is both lengths, so the reads are in both views and `i + 1`
 ## cannot overflow (a proven `wrap`, V10). A view of anything but `str` (`[u8]` included) is refused.
 ib_bx_str_eq := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
-  lo : Option(IbVObj) = ib_view_value(bp, a, l, Option(IbVEl).None)
-  mut lw : IbVObj = ib_vobj(FrameId(0), false, ib_str_el())
+  lo : Option(IbStrW) = ib_str_words(bp, a, e, l, Option(IbVEl).None)
+  mut lw : IbStrW = IbStrW(p = VRegId(0), n = VRegId(0))
   match lo { Some(x) => { lw = x }; None => { return Option(VRegId).None } }
-  if not lw.utf8 { return ib_no_at(bp, e, Construct.EBinViewEq) }
-  ro : Option(IbVObj) = ib_view_value(bp, a, r, Option(IbVEl).Some(ib_str_el()))
-  mut rw : IbVObj = lw
+  ro : Option(IbStrW) = ib_str_words(bp, a, e, r, Option(IbVEl).Some(ib_str_el()))
+  mut rw : IbStrW = lw
   match ro { Some(y) => { rw = y }; None => { return Option(VRegId).None } }
   f := ib_b_f(bp)
   u := ib_ks_i64(Sgn.SgU)
-  la := ib_load_field(bp, a, lw.fr, ib_view_len_fld())
-  lb := ib_load_field(bp, a, rw.fr, ib_view_len_fld())
-  pa := ib_load_field(bp, a, lw.fr, ib_view_ptr_fld())
-  pb := ib_load_field(bp, a, rw.fr, ib_view_ptr_fld())
+  la := lw.n
+  lb := rw.n
+  pa := lw.p
+  pb := rw.p
   res := ib_fresh(bp, a, ib_bool_ks())
   ola := o_vreg(la)
   olb := o_vreg(lb)

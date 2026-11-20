@@ -924,8 +924,10 @@ built-in.
   The checker records `p + n` as an integer (#529), so the builder recognises address arithmetic by
   its operands, not by sema's type of the sum.
 - **`==` / `!=` over `str`** compare content (STD-4): equal lengths, then a byte loop that leaves at
-  the first difference. An equality of any other view stays refused (``expr Bin: equality of views
-  other than `str` ``).
+  the first difference. A literal operand enters the compare as its two words, its table address and
+  its length, with no view object between: most of the compiler's own equalities test a name against
+  a literal, and an object would cost each of them a store and a load per word. An equality of any
+  other view stays refused (``expr Bin: equality of views other than `str` ``).
 
 On the twins a function with a `str` in its signature stays legacy (`ir::sig_pins_legacy`, #1576), so
 there these forms are taken from the IR only in functions whose signatures carry no view. The fixture
