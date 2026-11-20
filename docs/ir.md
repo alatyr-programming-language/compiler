@@ -256,6 +256,16 @@ baseline must name all four backends or it is unusable — a backend missing fro
 nothing holds. A backend's count reaching the builder's `built` is the point where its legacy emitter
 has nothing left to emit, and §7.2 may delete it.
 
+**The builder's coverage of the compiler is held too.** The ratchet above holds what each backend
+selects from the corpus; it never held what the builder builds of `src/` and `lib/`, so a slice could
+send compiler functions back to `NotYet` with the gate green. `scripts/ir_census.src.baseline` holds
+those two `built` columns (`src=N`, `lib=N`) under `--gate`: below the floor fails, unless a
+`## <set>-coverage-ok: #<issue> — <reason>` line records an honest correction (the same discipline, and
+the same refusal of an ack that cites no issue, as the per-backend ratchet). Above the floor passes with
+a `NOTE`, so a slice that grows coverage is never blocked; the integrator raises the floor in the
+landing (`--ratchet-write` writes both baselines). The gate line prints `src=<built>/<functions>=<P>%`
+and `lib=…`, so every gate log shows how far the builder is toward building half of the compiler.
+
 ### 2.4 The duplicated decisions
 
 Each row is one decision the language makes once and the compiler makes four times.
