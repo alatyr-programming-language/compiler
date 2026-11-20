@@ -1,4 +1,4 @@
-21
+23
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -97,10 +97,23 @@
 # The two alias fixtures, test/inout_agg_whole_assign_in_alias{,_part}.al (#1637), refuse on both paths
 # and add no row.
 #
+# It was 21 and it is 23 because IR-38 (#1786 cause 4) builds a whole `deref(q)` read whose operand's
+# declaration spells no pointee from the pointee sema recorded for the `deref` node, and both its new
+# fixtures are new rows (GitHub gate run 44817927281 on 166070e4, part ir: disagree=23, the only new
+# rows these two; both sides re-measured on omen with that tree's Stage1, `x86-legacy` and `run`). A
+# `deref` loads the whole pointee (Memory §4.3) and `hp.p` reaches the field through the pointer
+# (auto-deref, Type System §4.5), so `deref(hp.p)` is the struct `S(a = 4, b = 2)`; legacy x86 reads the
+# wrong pointee and answers 1, a silent wrong value it keeps (#1799; the IR track takes no legacy-x86
+# fixes, #980). In the enum fixture legacy x86 cannot see the enum type of `match deref(r)` when `r` is
+# an inferred local, a payload binding or a field, and refuses the build with #716's diagnostic. The
+# default answers each fixture's `## expect: run 42`, as wasm does for the first:
+#     test/ir38_deref_field_ptr.al                      legacy run 1     default run 42   (#1799)
+#     test/ir38_deref_recorded_enum.al                  legacy build 1   default run 42   (#716)
+#
 # ir_diff prints every row but #1626's and #1632's as UNEXPLAINED: its `oracle`
 # (scripts/fixture_oracle.sh) reads only the legacy header shapes (`## build_reject`, `## Expected exit:
 # N`) in the first 30 lines, never the `## expect:` directive these files state. #1626's and #1632's
 # files also say `Expected exit 42` in their headers, so ir_diff attributes those rows itself
-# (LEGACY-WRONG; attributed=2 unexplained=19). Every row is explained above, by its file's own directive.
+# (LEGACY-WRONG; attributed=2 unexplained=21). Every row is explained above, by its file's own directive.
 #
 # Lowering the number means fixing a row, not editing this file.
