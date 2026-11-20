@@ -209,6 +209,10 @@ aarch64	test/hof_float_pool_shared_cell.al	run/133	#1196
 aarch64	test/if_return_agg.al	run/133	#1184
 aarch64	test/inout_agg_whole_assign_in_alias.al	compile/1	#1637
 aarch64	test/inout_agg_whole_assign_in_alias_part.al	compile/1	#1637
+aarch64	test/ir38_deref_field_ptr.al	run/133	#1727
+aarch64	test/ir38_deref_inferred_local.al	run/133	#1727
+aarch64	test/ir38_deref_payload_ptr.al	run/133	#1188
+aarch64	test/ir38_deref_recorded_enum.al	run/133	#1727
 aarch64	test/ir_array_param_convert_caller.al	run/133	#1194
 aarch64	test/ir_array_param_legacy_caller.al	run/133	#1194
 aarch64	test/ir_array_param_legacy_copy.al	run/133	#1194
@@ -407,6 +411,12 @@ aarch64	test/package/ir1723_alias_deref_struct/package.al	run/133	#1739
 aarch64	test/package/ir1723_alias_deref_struct/src/m.al	link/1	#3
 aarch64	test/package/ir1723_qualified_deref_struct/package.al	run/133	#1188
 aarch64	test/package/ir1723_qualified_deref_struct/src/m.al	link/1	#3
+aarch64	test/package/ir38_deref_foreign_amb/package.al	run/133	#1797
+aarch64	test/package/ir38_deref_foreign_amb/src/a.al	link/1	#3
+aarch64	test/package/ir38_deref_foreign_amb/src/b.al	link/1	#3
+aarch64	test/package/ir38_deref_foreign_amb/src/m.al	link/1	#3
+aarch64	test/package/ir38_deref_foreign_same/package.al	run/133	#1727
+aarch64	test/package/ir38_deref_foreign_same/src/m.al	link/1	#3
 aarch64	test/package/issue1734_alias_callee_agg_result/package.al	run/133	#1740
 aarch64	test/package/issue1734_alias_callee_agg_result/src/m.al	link/1	#3
 aarch64	test/package/issue1734_alias_callee_agg_result/src/main.al	run/133	#1741
@@ -823,6 +833,10 @@ riscv64	test/hof_float_pool_shared_cell.al	run/133	#1196
 riscv64	test/if_return_agg.al	run/133	#1191
 riscv64	test/inout_agg_whole_assign_in_alias.al	compile/1	#1637
 riscv64	test/inout_agg_whole_assign_in_alias_part.al	compile/1	#1637
+riscv64	test/ir38_deref_field_ptr.al	run/133	#1727
+riscv64	test/ir38_deref_inferred_local.al	run/133	#1727
+riscv64	test/ir38_deref_payload_ptr.al	run/133	#1188
+riscv64	test/ir38_deref_recorded_enum.al	run/133	#1727
 riscv64	test/ir_array_param_convert_caller.al	run/133	#1194
 riscv64	test/ir_array_param_legacy_caller.al	run/133	#1194
 riscv64	test/ir_array_param_legacy_copy.al	run/133	#1194
@@ -1026,6 +1040,12 @@ riscv64	test/package/ir1723_alias_deref_struct/package.al	run/133	#1739
 riscv64	test/package/ir1723_alias_deref_struct/src/m.al	link/1	#3
 riscv64	test/package/ir1723_qualified_deref_struct/package.al	run/133	#1188
 riscv64	test/package/ir1723_qualified_deref_struct/src/m.al	link/1	#3
+riscv64	test/package/ir38_deref_foreign_amb/package.al	run/133	#1797
+riscv64	test/package/ir38_deref_foreign_amb/src/a.al	link/1	#3
+riscv64	test/package/ir38_deref_foreign_amb/src/b.al	link/1	#3
+riscv64	test/package/ir38_deref_foreign_amb/src/m.al	link/1	#3
+riscv64	test/package/ir38_deref_foreign_same/package.al	run/133	#1727
+riscv64	test/package/ir38_deref_foreign_same/src/m.al	link/1	#3
 riscv64	test/package/issue1734_alias_callee_agg_result/package.al	run/133	#1740
 riscv64	test/package/issue1734_alias_callee_agg_result/src/m.al	link/1	#3
 riscv64	test/package/issue1734_alias_callee_agg_result/src/main.al	run/133	#1741
@@ -1440,6 +1460,8 @@ wasm	test/hof_float_pool_shared_cell.al	run/134	#1195
 wasm	test/if_return_agg.al	run/134	#1184
 wasm	test/inout_agg_whole_assign_in_alias.al	compile/1	#1637
 wasm	test/inout_agg_whole_assign_in_alias_part.al	compile/1	#1637
+wasm	test/ir38_deref_payload_ptr.al	run/134	#1188
+wasm	test/ir38_deref_recorded_enum.al	run/134	#1188
 wasm	test/ir_array_param_convert_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_copy.al	run/134	#1194
@@ -1632,6 +1654,11 @@ wasm	test/package/ir1723_alias_deref_same/src/m.al	assemble/1	#3
 wasm	test/package/ir1723_alias_deref_struct/package.al	run/134	#1739
 wasm	test/package/ir1723_alias_deref_struct/src/m.al	assemble/1	#3
 wasm	test/package/ir1723_qualified_deref_struct/src/m.al	assemble/1	#3
+wasm	test/package/ir38_deref_foreign_amb/package.al	run/134	#1797
+wasm	test/package/ir38_deref_foreign_amb/src/a.al	assemble/1	#3
+wasm	test/package/ir38_deref_foreign_amb/src/b.al	assemble/1	#3
+wasm	test/package/ir38_deref_foreign_amb/src/m.al	assemble/1	#3
+wasm	test/package/ir38_deref_foreign_same/src/m.al	assemble/1	#3
 wasm	test/package/issue1734_alias_callee_agg_result/package.al	run/134	#1740
 wasm	test/package/issue1734_alias_callee_agg_result/src/m.al	assemble/1	#3
 wasm	test/package/issue1734_alias_callee_agg_result/src/main.al	run/134	#1741
@@ -1848,5 +1875,6 @@ x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
 x86_64	test/issue926_const_qualified_same_name_ok.al	compile/139	#1567
 x86_64	test/issue987_user_generic_ufcs_not_completed.al	run/139	#1654
+x86_64	test/package/ir38_deref_foreign_amb/package.al	run/41	#1797
 x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
 x86_64	test/package/issue987_user_module_alloc__vec_not_completed/package.al	run/139	#1654
