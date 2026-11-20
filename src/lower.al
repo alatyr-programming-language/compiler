@@ -12489,6 +12489,19 @@ lit_has_byref_agg_value := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> b
   }
   res
 }
+## #1688: does the struct literal `e` have a field VALUE that is an enum constructor with a payload
+## (`E.V(x, …)`)? `emit_gas` has no word for such a value in a one-word field position (a niche-folded
+## `Option(ptr(T))`, Memory §4.2), so `emit_struct_value` materializes the literal whole instead.
+lit_has_payload_enum_value := fn(e : ptr(Expr), a : rt::Arena) -> bool {
+  nfv := struct_lit_nf(e)
+  fhv := struct_lit_fields(e)
+  mut res := false
+  for k in 0..nfv {
+    ef := enum_lit_full(arg_expr_at(fhv, k, a))
+    if ef.is_e and ef.np > 0 { res = true }
+  }
+  res
+}
 ## Does struct `[s, s+n)` have a field that `emit_struct_value`'s per-field word push cannot lower:
 ## a multi-word non-`str` field (enum with payload, array, wide struct) OR a field of STRUCT type at
 ## any width. The second half is #913: a one-word nested struct (`W { k : K }`, `K { ty : i64 }`)
@@ -12711,6 +12724,11 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       ## trap: without a reserved aggregate scratch there is nowhere to materialize, so panic rather
       ## than emit the address.
       mut matz := struct_has_nonstr_agg_field(cx.decls, cx.src, irs.s, irs.n, a)
+      ## #1688: …and when a field VALUE is a payloaded enum constructor. A niche-folded `Option(ptr(T))`
+      ## field is ONE word and an enum (Memory §4.2), so neither clause above fires, and its `Some(p)`
+      ## reached `emit_gas`'s `EnumLit` arm, which pushes the `$0` placeholder: the pointer was lost.
+      ## Every other payloaded enum field is wider than a word and was already materialized.
+      if matz == false and lit_has_payload_enum_value(e, a) { matz = true }
       if matz == false and lit_has_byref_agg_value(e, cx, a) {
         if cx.agg_tmp < 0 { panic("selfhost: a struct literal returned by value with a by-reference aggregate field value has no aggregate scratch to materialize into") }
         matz = true
