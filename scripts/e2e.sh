@@ -6434,6 +6434,74 @@ EOF
   [ "$bad" = 0 ] || fail=1
 }
 
+## IR-35 (#980): the `bitcast` crossing between a pointer and a register-width integer, in either
+## direction, is `OpBits` at the width the two types share (Types §4.2 `reinterpret`, §4.4 "in either
+## direction", Memory §4.5, ABI §6 one integer register class). `ir_bitcast_ptr_usize` round-trips an
+## address through the crossing and back and returns only a count, so it is stable under ASLR.
+## The four shapes the builder must REFUSE are generated here rather than kept as corpus fixtures: two
+## are ill-formed (Types §4.4: `bitcast` "requires equal bit-width"; that `check` still accepts them is
+## #1747), one is ill-formed for want of an `unchecked` grant (Memory §4.5; accepted by `check`, #1780),
+## and one, a float against a pointer, is a shape the specification does not decide, so no fixture may
+## state a run value for any of them. Each must never be `Built`: either `check` refuses the
+## program (once #1747 is fixed) or the builder answers `NotYet(expr Bitcast, ...)` located at the
+## `bitcast` itself. MEASURED on this lane: the emit path erases an identity-class `bitcast` (a word
+## scalar or `ptr(<scalar>)` target) into its operand at every emit entry (`ast::bitcast_identity_erase`,
+## #529) while sema's record stays the target's, so `ir_bitcast_ptr_usize`'s `cross` is refused there as
+## a sema-gap and stays legacy on every backend (#1781); `alatyr ir` does not erase, and shows
+## the builder's rule. A `ptr(<user type>)` target is kept, so `ir_bitcast_ptr_user`'s `get` is built
+## on the emit path, and the helper asserts that each of the four backends selects it.
+check_ir_bitcast_ptr() {
+  local rep rc bad=0 d="$T/ir_bitcast_ptr"
+  rm -rf "$d"; mkdir -p "$d" || { echo "FAIL ir #980 ptr<->integer bitcast: scratch"; fail=1; return; }
+  rep="$d/usize.out"
+  "$CC" ir "$E2E_TEST/ir_bitcast_ptr_usize.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" != 0 ] || ! grep -q '^fn ir_bitcast_ptr_usize::cross Built$' "$rep" \
+     || ! grep -q '^fn ir_bitcast_ptr_usize::main Built$' "$rep" || ! grep -q 'verify_failed=0$' "$rep"; then
+    echo "FAIL ir #980 ptr<->usize built: rc=$rc"; grep -E '^fn |^ir:' "$rep" | head -4 | sed 's/^/     /'; bad=1
+  fi
+  ## line 1 of each generated source holds the `bitcast` the refusal must name
+  printf '%s\n' 'narrow := fn(p : ptr(u64)) -> u32 { unchecked bitcast(u32, p) }' \
+    'main := fn() -> u64 { x : u64 = 1000; w := narrow(ptr(x)); if w == 0 { return 41 }; 42 }' > "$d/bc_narrow.al"
+  printf '%s\n' 'wide := fn(a : u64) -> u32 { unchecked bitcast(u32, a) }' \
+    'main := fn() -> u64 { w := wide(7); if w == 7 { return 42 }; 1 }' > "$d/bc_wide.al"
+  ## (the float stays inside an integer function: a float signature would be refused before the bitcast)
+  printf '%s\n' 'pf := fn(p : ptr(u64)) -> u64 { unchecked bitcast(f64, p); 42 }' \
+    'main := fn() -> u64 { x : u64 = 1000; pf(ptr(x)) }' > "$d/bc_pf.al"
+  ## Memory §4.5: outside an `unchecked` grant the crossing is ill-formed; `check` accepts it (#1780), so
+  ## the builder must refuse it on its own.
+  printf '%s\n' 'ng := fn(p : ptr(u64)) -> u64 { bitcast(usize, p) + 39 }' \
+    'main := fn() -> u64 { x : u64 = 1000; ng(ptr(x)) }' > "$d/bc_ng.al"
+  ## ...and a block grant covers every crossing inside its block (Memory §4.5), so this one is built.
+  printf '%s\n' 'bg := fn(p : ptr(u64)) -> u64 { mut n : u64 = 1; unchecked { a := bitcast(usize, p); if a != 0 { n = 42 } }; n }' \
+    'main := fn() -> u64 { x : u64 = 1000; bg(ptr(x)) }' > "$d/bc_bg.al"
+  rep="$d/bc_bg.out"
+  "$CC" ir "$d/bc_bg.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" != 0 ] || ! grep -q '^fn bc_bg::bg Built$' "$rep" || ! grep -q 'verify_failed=0$' "$rep"; then
+    echo "FAIL ir #980 block-granted crossing built: rc=$rc"; grep -E '^fn |^ir:' "$rep" | head -3 | sed 's/^/     /'; bad=1
+  fi
+  for spec in "bc_narrow|narrow" "bc_wide|wide" "bc_pf|pf" "bc_ng|ng"; do
+    local stem="${spec%%|*}" fn="${spec##*|}"
+    rep="$d/$stem.out"
+    "$CC" ir "$d/$stem.al" > "$rep" 2>/dev/null; rc=$?
+    if [ "$rc" = 0 ] && ! grep -qE "^fn ${stem}::${fn} NotYet\(expr Bitcast, .*${stem}\.al:1:[0-9]+\)$" "$rep"; then
+      echo "FAIL ir #980 ${stem}::${fn} must refuse at the bitcast: rc=$rc"; grep -E '^fn ' "$rep" | head -3 | sed 's/^/     /'; bad=1
+    fi
+  done
+  ## `ir_bitcast_ptr_user`'s `get` fabricates a `ptr(S)` (a target the emit path keeps, unlike the
+  ## identity class): every backend must TAKE it from the shared IR, so its `bits` reaches each selector.
+  local v asm
+  for v in x86-ir aarch64 riscv64 wat; do
+    asm="$d/user.$v"
+    "$CC" "$v" "$E2E_TEST/ir_bitcast_ptr_user.al" > "$asm" 2>/dev/null; rc=$?
+    if [ "$rc" != 0 ] || ! awk '/ir: selected from the shared IR/ { s = 1; next }
+        s && /^[[:space:]]*\.(globl|global|type|p2align|align)/ { next }
+        s { if ($0 ~ /(^|__|[$])get([: ]|$)/) f = 1; s = 0 } END { exit !f }' "$asm"; then
+      echo "FAIL ir #980 ir_bitcast_ptr_user::get not selected from the shared IR on $v: rc=$rc"; bad=1
+    fi
+  done
+  if [ "$bad" = 0 ]; then echo "ok   ir #980 ptr<->integer bitcast: built under a grant and selected on four backends; narrow, unequal, float and ungranted shapes are never built"; else fail=1; fi
+}
+
 _e2e_arm() {
   local f body n=0
   while read -r _ _ f; do
@@ -9671,6 +9739,16 @@ run_x86_trap ir_agg_arr_bound 132
 run_a64 ir_agg_arr_bound 133
 run_rv64 ir_agg_arr_bound 133
 run_wat ir_agg_arr_bound 134
+## IR-35 (#980): the pointer<->integer `bitcast`; `check_ir_bitcast_ptr` (HELPERS region) says what it pins.
+check_ir_bitcast_ptr
+run ir_bitcast_ptr_usize 42
+run_a64 ir_bitcast_ptr_usize 42
+run_rv64 ir_bitcast_ptr_usize 42
+run_wat ir_bitcast_ptr_usize 42
+run ir_bitcast_ptr_user 42
+run_a64 ir_bitcast_ptr_user 42
+run_rv64 ir_bitcast_ptr_user 42
+run_wat ir_bitcast_ptr_user 42
 ## Explicit overflow-policy operations (Concurrency §6.3 / CG-8): wrapping_*/saturating_*/checked_* (->
 ## Option)/overflowing_* (-> (T,bool)) on the integer interpretations, exercised at the u8/u64/i32
 ## boundaries. A NEUTRAL library addition (lib/base/num.al) resting on the x86_64-gated scalar

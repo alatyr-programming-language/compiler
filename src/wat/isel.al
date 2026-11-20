@@ -692,6 +692,13 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
     OpRotl => { sw_rot(sb, ip, "i64.rotl") }
     OpRotr => { sw_rot(sb, ip, "i64.rotr") }
     OpExt => { sw_ext(sb, x, ip) }
+    ## `bits` between a pointer and a register-width integer (Memory §4.5, ABI §6: one register class):
+    ## every wasm value is an `i64`, so the crossing is the move `Mov` already makes and no instruction
+    ## converts it. A float on either side is slice 8's and this selector emits none: fallback.
+    OpBits => {
+      if ir::kty_is_float(ir::i_ty(ip)) or ir::kty_is_float(ir::i_from(ip)) { return false }
+      sw_mov(sb, ip)
+    }
     OpFit => { sw_fit(sb, x, ip) }
     OpCmp => { sw_cmp(sb, ip) }
     OpAddrSym => { sw_addr(sb, x, a, ip) }
@@ -758,7 +765,7 @@ sw_inst := fn(in out sb : rt::StrBuf, x : SwX, in out a : rt::Arena, i : usize) 
       true
     }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpCallInd
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpCallInd
       | OpCallC | OpSyscall | OpSwitch => { false }
   }
 }
