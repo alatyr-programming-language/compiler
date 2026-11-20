@@ -220,6 +220,7 @@ aarch64	test/ir_bare_callee_lib_clash.al	run/133	#41
 aarch64	test/ir_deref_agg_call.al	run/133	#1727
 aarch64	test/ir_deref_agg_read.al	run/133	#1188
 aarch64	test/ir_deref_folded_comp.al	run/133	#1724
+aarch64	test/ir_str_at_view_eq.al	run/133	#1188
 aarch64	test/ir_str_param_cross.al	run/133	#1184
 aarch64	test/issue1065_het_eq_declared.al	run/133	#1192
 aarch64	test/issue1065_het_eq_undeclared.al	run/133	#1065
@@ -843,6 +844,7 @@ riscv64	test/ir_deref_agg_call.al	run/133	#1727
 riscv64	test/ir_deref_agg_read.al	run/133	#1188
 riscv64	test/ir_deref_folded_comp.al	run/133	#1724
 riscv64	test/ir_ptr_agree.al	run/133	#1187
+riscv64	test/ir_str_at_view_eq.al	run/133	#1188
 riscv64	test/ir_str_param_cross.al	run/133	#1184
 riscv64	test/issue1065_het_eq_declared.al	run/133	#1192
 riscv64	test/issue1065_het_eq_undeclared.al	run/133	#1065
@@ -1467,6 +1469,7 @@ wasm	test/ir_bare_callee_lib_clash.al	run/134	#41
 wasm	test/ir_deref_agg_read.al	run/134	#1188
 wasm	test/ir_deref_folded_comp.al	run/134	#1724
 wasm	test/ir_ptr_agree.al	run/134	#1187
+wasm	test/ir_str_at_view_eq.al	run/134	#1188
 wasm	test/ir_str_param_cross.al	run/134	#1184
 wasm	test/issue1065_het_eq_declared.al	run/134	#1192
 wasm	test/issue1065_het_eq_undeclared.al	run/134	#1065

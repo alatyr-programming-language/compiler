@@ -1074,6 +1074,8 @@ ib_bool_operand := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) ->
 ## A comparison. Both operands carry sema's types and must agree; the predicate's `s`/`u` is theirs.
 ib_bx_cmp := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
   cc : Cc = ib_bin_cc(b)
+  ## IR-36: an equality over views compares content, not words.
+  if ib_bin_is_eqne(b) and (ib_is_view_expr(bp, a, l) or ib_is_view_expr(bp, a, r)) { return ib_bx_str_eq(bp, a, e, b, l, r) }
   lv := ib_bx(bp, a, l)?
   rv := ib_bx(bp, a, r)?
   lk : IbKS = ib_vreg_ks(ib_b_f(bp), lv)
@@ -1121,12 +1123,112 @@ ib_int_ty := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> Option(IbKS) {
   Option(IbKS).Some(k)
 }
 
+## Is a recorded value type a pointer?
+ib_vty_is_ptr := fn(t : VTy) -> bool {
+  c : VCls = t.cls
+  match c { VcPtr => { true }; VcAbsent | VcUnknown | VcLit | VcInt | VcBool | VcFloat | VcAgg => { false } }
+}
+## Refuse at `e` for cause `c`, as an expression builder's answer.
+ib_no_at := fn(bp : ptr(mut IbB), e : ptr(Expr), c : Construct) -> Option(VRegId) {
+  sp : Option(u64) = expr_span(e)
+  ib_refuse(bp, c, NyWhy.NwOutside, sp)
+  Option(VRegId).None
+}
+## Is the operator `e` address arithmetic — an operand a pointer, or itself address arithmetic? Asked of
+## the operands, not of `e`'s own record: the checker types `p + n` as an integer (the `usize`/`ptr` seam
+## of #529), so sema records the sum at `usize`, and `src + p + 1` is `(src + p) + 1`. Asking emits
+## nothing.
+ib_is_ptr_arith := fn(e : ptr(Expr)) -> bool {
+  match deref(e) {
+    Expr::Bin(op, l, r) => {
+      if ib_vty_is_ptr(sty_get(e)) or ib_vty_is_ptr(sty_get(l)) or ib_vty_is_ptr(sty_get(r)) { return true }
+      bo : Option(AstBin) = ib_bin_of(op)
+      match bo {
+        Some(b) => {
+          k : AstBinK = ib_bin_kind(b)
+          match k { BkArith => { return ib_is_ptr_arith(l) }; BkLogic | BkCmp | BkBits => {} }
+        }
+        None => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  false
+}
+## The pointee of the pointer operand `l` of address arithmetic: the one its declaration spells
+## (`ib_deref_pointee`), through any number of `+` steps (`src + p + 1` is `(src + p) + 1`). Asking emits
+## nothing.
+ib_arith_pointee := fn(bp : ptr(mut IbB), in out a : rt::Arena, l : ptr(Expr)) -> Option(IbSpan) {
+  match deref(l) {
+    Expr::Bin(op, bl, br) => {
+      if not ib_is_ptr_arith(l) { return Option(IbSpan).None }
+      bo : Option(AstBin) = ib_bin_of(op)
+      match bo {
+        Some(b) => { if ib_bin_is_add(b) { return ib_arith_pointee(bp, a, bl) } }
+        None => {}
+      }
+      return Option(IbSpan).None
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  ib_deref_pointee(bp, a, l)
+}
+ib_bin_is_add := fn(b : AstBin) -> bool {
+  match b {
+    BAdd => { true }
+    BSub | BMul | BDiv | BRem | BBand | BBor | BBxor | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { false }
+  }
+}
+## IR-36: `p + n` for `p : ptr(B)`, `B` a one-byte integer as `p`'s declaration spells it, and `n` an
+## unsigned integer — `gep p, n, 1`. Pointer arithmetic is address arithmetic (Memory §4.5): an overflow is
+## the ISA's answer, so no guard is owed in any scope, and the legacy lowering emits none either (a plain
+## address add). The scale is one byte, which is also one element of `B`, so the address is the same
+## whichever unit the offset counts. Any other shape is refused under its own cause: another operator
+## (`p - n`, `p - q`), a pointee the declaration does not spell, a wider pointee (whose scale the spec
+## does not state), or an offset that is not an unsigned integer.
+ib_bx_ptr_add := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  if not ib_bin_is_add(b) or ib_vty_is_ptr(sty_get(r)) { return ib_no_at(bp, e, Construct.EBinPtrOp) }
+  po : Option(IbSpan) = ib_arith_pointee(bp, a, l)
+  match po {
+    Some(ps) => {
+      ko : Option(IbKS) = ib_name_ks(ib_b_src(bp), ps.s, ps.n)
+      match ko {
+        Some(k) => { if not kty_is_int(k.ty) or kty_bytes(k.ty) != 1 { return ib_no_at(bp, e, Construct.EBinPtrWide) } }
+        None => { return ib_no_at(bp, e, Construct.EBinPtrWide) }
+      }
+    }
+    None => { return ib_no_at(bp, e, Construct.EBinPtrPointee) }
+  }
+  pv := ib_bx(bp, a, l)?
+  f := ib_b_f(bp)
+  if not kty_is_ptr(vreg_ty(f, usize(pv))) { return ib_no(bp, l, NyWhy.NwDisagree) }
+  ## A literal offset takes `usize` from its position; any other is built at its own type and must be an
+  ## unsigned integer, widened to the address width.
+  mut no : Option(VRegId) = Option(VRegId).None
+  if vty_is_lit(sty_get(r)) { no = ib_value_ctx(bp, a, r, ib_ks_i64(Sgn.SgU)) } else { no = ib_bx(bp, a, r) }
+  mut nv0 : VRegId = VRegId(0)
+  match no { Some(x) => { nv0 = x }; None => { return Option(VRegId).None } }
+  nk : IbKS = ib_vreg_ks(f, nv0)
+  if not kty_is_int(nk.ty) or not sgn_eq(nk.sg, Sgn.SgU) { return ib_no_at(bp, r, Construct.EBinPtrOffset) }
+  nv := ib_ext_to(bp, a, nv0, ib_ks_i64(Sgn.SgU))
+  q := ib_gep(bp, a, pv, nv, 1)
+  Option(VRegId).Some(q)
+}
+
 ## Integer arithmetic. The result type is sema's record of `e`. A 64-bit op is emitted at its type; a
 ## narrow one widens its operands, operates at 64 bits, and narrows back (`fit` checked / `ext`
 ## wrapping, V3). Checked `+ - *` trap `overflow`; `/` and `%` trap `div_zero`, and `/` traps `div_overflow`
 ## for a signed `MIN / -1` (§4); a checked `MIN % -1` is `0` (Concurrency §6.1). Inside `unchecked`,
 ## `+ - *` wrap and `/ %` are the hardware op (D1, CG-7).
 ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  ## IR-36: an operator over a pointer is address arithmetic, not an integer operation.
+  if ib_is_ptr_arith(e) { return ib_bx_ptr_add(bp, a, e, b, l, r) }
   ## A literal-only `+ - *` is a comptime number (Types §2.3): its exact value takes the type the
   ## context gave the expression, never each literal's. `a : i8 = 0 - 128` is -128, although sema types
   ## the literal `128` at `i8` too, where it does not fit.
@@ -5424,6 +5526,7 @@ ib_is_view_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) ->
       match wo { Some(w) => { true }; None => { false } }
     }
     Expr::Call(cs, cl, na, ah) => {
+      if ib_is_str_at(bp, cs, cl) { return true }
       vo : Option(IbVEl) = ib_call_view_el(bp, a, cs, cl)
       match vo { Some(v) => { true }; None => { false } }
     }
@@ -5432,9 +5535,11 @@ ib_is_view_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) ->
       lo : Option(IbVEl) = ib_view_lit_el(bp, a, ls, ll, lnf)
       match lo { Some(l) => { true }; None => { false } }
     }
+    ## IR-36: `unchecked str_at(p, n)` — the view its operand is.
+    Expr::Unchecked(inner) => { ib_is_view_expr(bp, a, inner) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try
-      | Expr::FloatLit | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => { false }
   }
 }
@@ -5542,25 +5647,38 @@ ib_view_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), want
       }
     }
     Expr::Call(cs, cl, na, ah) => {
-      vo : Option(IbVEl) = ib_call_view_el(bp, a, cs, cl)
-      match vo {
-        Some(vel) => {
-          co : CallOut = ib_call(bp, a, e, cs, cl, na, ah)
-          match co {
-            CoAgg(rf) => { got = Option(IbVObj).Some(ib_vobj(rf, true, vel)) }
-            CoRefused => { return Option(IbVObj).None }
-            CoValue(cv) => {}
-            CoVoid => {}
+      if ib_is_str_at(bp, cs, cl) { got = ib_view_str_at(bp, a, e, na, ah) } else {
+        vo : Option(IbVEl) = ib_call_view_el(bp, a, cs, cl)
+        match vo {
+          Some(vel) => {
+            co : CallOut = ib_call(bp, a, e, cs, cl, na, ah)
+            match co {
+              CoAgg(rf) => { got = Option(IbVObj).Some(ib_vobj(rf, true, vel)) }
+              CoRefused => { return Option(IbVObj).None }
+              CoValue(cv) => {}
+              CoVoid => {}
+            }
           }
+          None => {}
         }
-        None => {}
       }
     }
     Expr::StrLit(ss, sl, lbl, ps, pn) => { got = ib_view_strlit(bp, a, ss, sl, lbl) }
     Expr::StructLit(ls, ll, lnf, lfh) => { got = ib_view_lit(bp, a, e, ls, ll, lnf, lfh) }
+    ## IR-36: `unchecked <view>` (`unchecked str_at(p, n)`) — its operand's view, built inside the
+    ## `unchecked` region, as `ib_bx` builds a scalar operand.
+    Expr::Unchecked(inner) => {
+      ou := ib_b_unch(bp)
+      it := inst0(Op.OpUnch)
+      k := emit(ib_b_f(bp), a, it)
+      ib_b_set_unch(bp, true)
+      got = ib_view_value(bp, a, inner, want)
+      ib_b_set_unch(bp, ou)
+      ib_plain(bp, a, Op.OpEnd)
+    }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try
-      | Expr::FloatLit | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => {}
   }
   if ib_b_failed(bp) { return Option(IbVObj).None }
@@ -5586,7 +5704,23 @@ ib_view_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), want
 ## literal by `ib_view_value`, is lifted when the parser decodes `\u{…}` per Grammar §2.4 and refuses
 ## the escapes §2.4 does not list.
 ib_view_strlit := fn(bp : ptr(mut IbB), in out a : rt::Arena, ss : usize, sl : usize, lbl : usize) -> Option(IbVObj) {
-  if lbl % 1000000 >= parser::embed_label_base { return Option(IbVObj).None }
+  po : Option(VRegId) = ib_strlit_addr(bp, a, ss, sl, lbl)
+  match po {
+    Some(pa) => {
+      fr := ib_new_obj(bp, a, ib_view_st())
+      ib_store_field(bp, a, fr, ib_view_ptr_fld(), pa)
+      lv := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), i64(sl))
+      ib_store_field(bp, a, fr, ib_view_len_fld(), lv)
+      return Option(IbVObj).Some(ib_vobj(fr, true, ib_str_el()))
+    }
+    None => {}
+  }
+  Option(IbVObj).None
+}
+## The address of a `str` literal's entry in the program's literal table, or `None` for a literal
+## `ib_view_strlit` builds no view of (see there). The caller refuses.
+ib_strlit_addr := fn(bp : ptr(mut IbB), in out a : rt::Arena, ss : usize, sl : usize, lbl : usize) -> Option(VRegId) {
+  if lbl % 1000000 >= parser::embed_label_base { return Option(VRegId).None }
   src := ib_b_src(bp)
   ## `sb_byte` stores a word per byte, so the buffer keeps 8 bytes of slack past the last one.
   mut sb := rt::strbuf(a, sl + 8)
@@ -5594,7 +5728,7 @@ ib_view_strlit := fn(bp : ptr(mut IbB), in out a : rt::Arena, ss : usize, sl : u
   mut n : usize = 0
   while n < sl {
     lb : lower_layout::LitByte = lower_layout::str_lit_byte(src, ss, i)
-    if lb.w == 2 and not lower_layout::str_lit_esc_listed(src, ss, i) { return Option(IbVObj).None }
+    if lb.w == 2 and not lower_layout::str_lit_esc_listed(src, ss, i) { return Option(VRegId).None }
     k := rt::push_byte(sb, lb.b)
     i = i + lb.w
     n = n + 1
@@ -5606,12 +5740,167 @@ ib_view_strlit := fn(bp : ptr(mut IbB), in out a : rt::Arena, ss : usize, sl : u
   set_dst(ai, pa)
   set_a(ai, lo)
   i1 := emit(ib_b_f(bp), a, ai)
-  fr := ib_new_obj(bp, a, ib_view_st())
-  ib_store_field(bp, a, fr, ib_view_ptr_fld(), pa)
-  lv := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), i64(sl))
-  ib_store_field(bp, a, fr, ib_view_len_fld(), lv)
-  Option(IbVObj).Some(ib_vobj(fr, true, ib_str_el()))
+  Option(VRegId).Some(pa)
 }
+## IR-36: is `[cs, cs+cl)` the built-in `str_at` — the one predicate every name-keyed site asks
+## (`lower_layout::intrinsic_callee`, #1434), so a program's own `str_at` is a call to that declaration
+## here exactly as in the legacy lowering (`lower::is_strat_call`)?
+ib_is_str_at := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> bool {
+  lower_layout::intrinsic_callee(ib_b_decls(bp), ib_b_src(bp), cs, cl) == "str_at"
+}
+## IR-36: `str_at(p, n)` (Stdlib appendix §3.6) — the `str` view of the `n` bytes at `p`, no copy: `p`
+## and `n`, evaluated left to right, stored as the `{ptr, len}` pair of a fresh view object, which is the
+## pair the legacy lowering pushes (`lower::emit_strat_pair`). The appendix declares `in p : usize`;
+## src/ passes a `ptr(u8)`, which `check` accepts there (#529), and only that pointer form is built. A
+## `usize` address is an integer-to-pointer crossing (Memory §4.5) the builder does not build, so it is
+## refused under its own cause. The `unchecked` the call requires is sema's to
+## enforce; a built call inside one is in the `unchecked` region its `Unchecked` node opens.
+ib_view_str_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), na : usize, ah : Option(ptr(mut Arg))) -> Option(IbVObj) {
+  if na != 2 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallArity); return Option(IbVObj).None }
+  a0 := deref(arg_at(ah, "argument list ended early"))
+  a1 := deref(arg_at(a0.next, "argument list ended early"))
+  pvo : Option(VRegId) = ib_bx(bp, a, a0.e)
+  match pvo {
+    Some(pv) => {
+      if not kty_is_ptr(vreg_ty(ib_b_f(bp), usize(pv))) { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallStrAtAddr); return Option(IbVObj).None }
+      lvo : Option(VRegId) = ib_value_ctx(bp, a, a1.e, ib_ks_i64(Sgn.SgU))
+      match lvo {
+        Some(lv) => {
+          fr := ib_new_obj(bp, a, ib_view_st())
+          ib_store_field(bp, a, fr, ib_view_ptr_fld(), pv)
+          ib_store_field(bp, a, fr, ib_view_len_fld(), lv)
+          return Option(IbVObj).Some(ib_vobj(fr, true, ib_str_el()))
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  Option(IbVObj).None
+}
+## One operand of a `str` equality as the two words the compare reads: its address and its byte length.
+IbStrW := struct { p : VRegId, n : VRegId }
+## The operand `x` of the equality `e`, as its two words, read when it is built, before the other
+## operand is. A literal gives them directly — its table address and its length — with no view object
+## between: a name-table test (`t == "u8" or t == "u16" or …`) is the compiler's most frequent `str`
+## equality, and an object cost each literal a store and a load per word at every compare. Any other
+## operand is the view `ib_view_value` builds at `want`; a view of anything but `str` is refused at `e`.
+ib_str_words := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), x : ptr(Expr), want : Option(IbVEl)) -> Option(IbStrW) {
+  if ib_b_failed(bp) { return Option(IbStrW).None }
+  match deref(x) {
+    Expr::StrLit(ss, sl, lbl, ps, pn) => {
+      po : Option(VRegId) = ib_strlit_addr(bp, a, ss, sl, lbl)
+      match po {
+        Some(pv) => {
+          nv := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), i64(sl))
+          return Option(IbStrW).Some(IbStrW(p = pv, n = nv))
+        }
+        None => { ib_refuse_expr(bp, x, NyWhy.NwOutside); return Option(IbStrW).None }
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  wo : Option(IbVObj) = ib_view_value(bp, a, x, want)
+  match wo {
+    Some(w) => {
+      if not w.utf8 { k := ib_no_at(bp, e, Construct.EBinViewEq); return Option(IbStrW).None }
+      nv := ib_load_field(bp, a, w.fr, ib_view_len_fld())
+      pv := ib_load_field(bp, a, w.fr, ib_view_ptr_fld())
+      return Option(IbStrW).Some(IbStrW(p = pv, n = nv))
+    }
+    None => {}
+  }
+  Option(IbStrW).None
+}
+## IR-36: `a == b` / `a != b` of two `str` views is by content (Stdlib appendix §3.6, STD-4): equal byte
+## length and equal bytes, the rule `lib/base/str.al`'s `str_eq` and the legacy byte loop
+## (`lower::emit_str_eq_core`) implement. Both operands are evaluated, left then right, then:
+##   r = (la == lb); if r { i = 0; block X { loop T { if i >= la { br X }
+##     if load u8 [gep pa, i, 1] != load u8 [gep pb, i, 1] { r = false; br X }; i = i + 1; br T } } }
+## `i < la` holds at each read, and `la` is both lengths, so the reads are in both views and `i + 1`
+## cannot overflow (a proven `wrap`, V10). A view of anything but `str` (`[u8]` included) is refused.
+ib_bx_str_eq := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  lo : Option(IbStrW) = ib_str_words(bp, a, e, l, Option(IbVEl).None)
+  mut lw : IbStrW = IbStrW(p = VRegId(0), n = VRegId(0))
+  match lo { Some(x) => { lw = x }; None => { return Option(VRegId).None } }
+  ro : Option(IbStrW) = ib_str_words(bp, a, e, r, Option(IbVEl).Some(ib_str_el()))
+  mut rw : IbStrW = lw
+  match ro { Some(y) => { rw = y }; None => { return Option(VRegId).None } }
+  f := ib_b_f(bp)
+  u := ib_ks_i64(Sgn.SgU)
+  la := lw.n
+  lb := rw.n
+  pa := lw.p
+  pb := rw.p
+  res := ib_fresh(bp, a, ib_bool_ks())
+  ola := o_vreg(la)
+  olb := o_vreg(lb)
+  i1 := e_cmp(f, a, Cc.CcEq, Sgn.SgNone, Kty.KI64, res, ola, olb)
+  ib_open_if(bp, a, res)
+  iv := ib_konst(bp, a, u, 0)
+  lx := new_label(f)
+  lt := new_label(f)
+  i2 := e_open(f, a, Op.OpBlock, lx)
+  i3 := e_open(f, a, Op.OpLoop, lt)
+  done := ib_fresh(bp, a, ib_bool_ks())
+  oi := o_vreg(iv)
+  ola2 := o_vreg(la)
+  i4 := e_cmp(f, a, Cc.CcGe, Sgn.SgU, Kty.KI64, done, oi, ola2)
+  odone := o_vreg(done)
+  i5 := e_br(f, a, Op.OpBrIf, odone, lx)
+  byte := IbFld(off = ByteOff(0), ty = Kty.KI8, sg = Sgn.SgU, be = false)
+  qa := ib_gep(bp, a, pa, iv, 1)
+  oqa := o_vreg(qa)
+  xa := ib_load_at(bp, a, oqa, byte)
+  qb := ib_gep(bp, a, pb, iv, 1)
+  oqb := o_vreg(qb)
+  xb := ib_load_at(bp, a, oqb, byte)
+  diff := ib_fresh(bp, a, ib_bool_ks())
+  oxa := o_vreg(xa)
+  oxb := o_vreg(xb)
+  i6 := e_cmp(f, a, Cc.CcNe, Sgn.SgNone, Kty.KI8, diff, oxa, oxb)
+  ib_open_if(bp, a, diff)
+  no := ib_konst(bp, a, ib_bool_ks(), 0)
+  ib_mov(bp, a, res, no)
+  ib_br(bp, a, lx)
+  ib_plain(bp, a, Op.OpElse)
+  ib_plain(bp, a, Op.OpEnd)
+  one := o_imm(1)
+  step := ib_proven(bp, a, Op.OpAdd, u, iv, one)
+  ib_mov(bp, a, iv, step)
+  ib_br(bp, a, lt)
+  ib_plain(bp, a, Op.OpEnd)
+  ib_plain(bp, a, Op.OpEnd)
+  ib_plain(bp, a, Op.OpElse)
+  ib_plain(bp, a, Op.OpEnd)
+  if ib_bin_is_eq(b) { return Option(VRegId).Some(res) }
+  ## `!=` is the negation of the same content test.
+  neg := ib_fresh(bp, a, ib_bool_ks())
+  ib_open_if(bp, a, res)
+  t0 := ib_konst(bp, a, ib_bool_ks(), 0)
+  ib_mov(bp, a, neg, t0)
+  ib_plain(bp, a, Op.OpElse)
+  t1 := ib_konst(bp, a, ib_bool_ks(), 1)
+  ib_mov(bp, a, neg, t1)
+  ib_plain(bp, a, Op.OpEnd)
+  Option(VRegId).Some(neg)
+}
+ib_bin_is_eq := fn(b : AstBin) -> bool {
+  match b {
+    BEq => { true }
+    BNe | BAdd | BSub | BMul | BDiv | BRem | BBand | BBor | BBxor | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { false }
+  }
+}
+ib_bin_is_eqne := fn(b : AstBin) -> bool {
+  match b {
+    BEq | BNe => { true }
+    BAdd | BSub | BMul | BDiv | BRem | BBand | BBor | BBxor | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { false }
+  }
+}
+
 ## `xs[lo..hi]` over a whole array local, into a fresh view object (see `ib_view_value`).
 ib_view_range := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), sb : ptr(Expr), lo : ptr(Expr), hi : ptr(Expr), want : Option(IbVEl)) -> Option(IbVObj) {
   ## Only a whole array local: a field's run lives in a struct `lower_layout` lays out.
