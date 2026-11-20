@@ -909,9 +909,12 @@ functions of 5312, where it counted 1353 of 5299 at `6d3b6386`, and 61 functions
 call to another built-in.
 - **`str_at`** is a raw view of `n` bytes at `p`, with no copy (Stdlib appendix §3.6). The builder
   stores the address and the length into a fresh 16-byte view object, the same pair as a `str`
-  literal's, and the view reads as a UTF-8 `str`. Its address must be a pointer: a `usize` address
-  is the integer-to-pointer crossing Memory §4.5 names, which this builder does not build, and it is
-  refused as ``call: `str_at` at an integer address (an integer-to-pointer crossing)``.
+  literal's, and the view reads as a UTF-8 `str`. The appendix declares the address `in p : usize`;
+  the compiler's own source passes a `ptr(u8)`, which `check` accepts there (#529). The builder builds
+  only the pointer form, where the address is already a pointer. A `usize` address is the
+  integer-to-pointer crossing Memory §4.5 names, which this builder does not build, and it is refused
+  as ``call: `str_at` at an integer address (an integer-to-pointer crossing)``; such a call stays with
+  the legacy emitter, whose `str_at` result is wrong today (#1782).
 - **`p + n`**, pointer arithmetic (Memory §4.5, a raw operation), is `gep p, n, 1`. It is built only
   when the pointee is a one-byte integer, where an offset in bytes and an offset in elements are the
   same address. The spec does not yet say which of the two `p + n` means for a wider pointee

@@ -5648,9 +5648,10 @@ ib_is_str_at := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> bool {
 }
 ## IR-36: `str_at(p, n)` (Stdlib appendix §3.6) — the `str` view of the `n` bytes at `p`, no copy: `p`
 ## and `n`, evaluated left to right, stored as the `{ptr, len}` pair of a fresh view object, which is the
-## pair the legacy lowering pushes (`lower::emit_strat_pair`). The address must be a pointer: the
-## appendix's `in p : usize` is an integer-to-pointer crossing (Memory §4.5) the builder does not build,
-## so a `usize` address is refused under its own cause. The `unchecked` the call requires is sema's to
+## pair the legacy lowering pushes (`lower::emit_strat_pair`). The appendix declares `in p : usize`;
+## src/ passes a `ptr(u8)`, which `check` accepts there (#529), and only that pointer form is built. A
+## `usize` address is an integer-to-pointer crossing (Memory §4.5) the builder does not build, so it is
+## refused under its own cause. The `unchecked` the call requires is sema's to
 ## enforce; a built call inside one is in the `unchecked` region its `Unchecked` node opens.
 ib_view_str_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), na : usize, ah : Option(ptr(mut Arg))) -> Option(IbVObj) {
   if na != 2 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallArity); return Option(IbVObj).None }

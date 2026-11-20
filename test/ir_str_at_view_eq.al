@@ -1,5 +1,6 @@
 ## e2e — #980 (IR-36): the source-scan shape the compiler's own src/ is written in. `str_at(p, n)` is a
-## raw view of `n` bytes at `p` with no copy (Stdlib appendix §3.6), its call raw (Memory §4.5); its
+## raw view of `n` bytes at `p` with no copy (Stdlib appendix §3.6), its call raw (Memory §4.5); `p` is
+## a `ptr(u8)` here, which `check` accepts for the appendix's `in p : usize` (#529); its
 ## address is `p + i`, pointer arithmetic over a one-byte pointee, where a byte offset and an element
 ## offset are the same address; and two `str` compare equal when their lengths and bytes are (STD-4). The
 ## shared IR builds all three: the scan below counts by a one-byte view per position, a nested `p + 1 + i`
