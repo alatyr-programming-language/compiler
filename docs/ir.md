@@ -1129,6 +1129,17 @@ removes the question instead:
      by sharing one result spelling; a fn-typed local or field is called through its `fn(…) -> R`;
      `size(T)`/`align(T)` are `usize`; an `atomic::` or `volatile::load` operation reads its
      operand's pointee; an arithmetic operator over an aggregate is the operator fn declared for it.
+   - **The builder's one reader (IR-38, #1786).** When `deref(q)` is read whole, the builder first
+     uses the pointee written in the declaration that `q` names (a parameter's or local's
+     `ptr(T)`, or a callee's `-> ptr(T)`). If that declaration spells no type (an inferred local, a
+     payload binding, a field), the builder takes the spelling recorded for the `deref` node itself
+     (`ir::build::ib_deref_recorded`). It accepts only plain text, with no wrapper layer and no
+     enclosing type parameter. It resolves that text in the module that writes it, and it accepts the
+     text only when `lower_layout::type_span_resolves_alike` proves that it names the same declaration
+     there and in the module being built. Text that fails the proof is refused `EDerefForeign`, never
+     laid out from a guess. With no record, the read is refused `EDerefPointee`. At 6d3b6386 this
+     moved all 395 `src/` functions that cause 4 refused to their next refusal (231 to
+     `EDerefTier`, 158 to a generic callee); two of them now build.
 
    Measured with the 1e probe (operand records at x86's legacy signedness decisions, the
    self-build plus every corpus program through x86_64), distinct source lines with an operand sema
