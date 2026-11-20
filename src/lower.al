@@ -14918,8 +14918,8 @@ deref_addrof_byref_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr
 ## slot (`movq -off(%rbp), %rax`) and follows it; here the slot IS the struct, so the address is a
 ## `leaq` of the frame — which is exactly what `emit_gas` already emits for `ptr(loc)` (ast.al: the
 ## POINTER tier "`ptr(<place>)` … lower `leaq`s its frame slot"). So this arm re-enters on the inner
-## `AddrOf` node to get that address into %rax, then loads the field at its ASCENDING word offset,
-## the same `fi*8(%rax)` the direct read of that struct's field uses.
+## `AddrOf` node to get that address into %rax, then reads the field through
+## `emit_deref_field_read_rax` (strict), the same tier decision the `deref(p).f` arm makes.
 deref_addrof_local_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan {
   av := deref_addrof_var_span(e)
   if av.n == 0 { return CSpan(s = 0, n = 0) }
@@ -14929,6 +14929,78 @@ deref_addrof_local_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr
   if ent.is_ref { return CSpan(s = 0, n = 0) }
   if ent.snl == 0 { return CSpan(s = 0, n = 0) }
   CSpan(s = ent.sns, n = ent.snl)
+}
+
+## Is a field of type `fty` an AGGREGATE value (array, `str`, struct, an enum with payload words, raw
+## union, tuple) rather than one scalar word? A payload-less enum is its discriminant, one word, so it
+## is not. An empty span (the field was not found) answers true, so a strict caller refuses it instead
+## of guessing.
+deref_field_type_is_aggregate := fn(cx : ptr(LCtx), fty : CSpan) -> bool {
+  if fty.n == 0 { return true }
+  if array_elem_span(cx.src, fty.s, fty.n).n != 0 { return true }
+  if str_at((cx.src + fty.s), 1) == "(" { return true }
+  if fty.n == 3 and str_at((cx.src + fty.s), 3) == "str" { return true }
+  if struct_decl_of(cx.decls, cx.src, fty.s, fty.n) >= 0 { return true }
+  if enum_decl_of(cx.decls, cx.src, fty.s, fty.n) >= 0 { return enum_inst_words(cx.decls, cx.src, fty.s, fty.n, deref(cx.mar)) != 0 }
+  is_union_decl(cx.decls, cx.src, fty.s, fty.n)
+}
+
+## THE field read through a struct ADDRESS already in %rax (the struct's lowest byte; the layout
+## ascends from it), pushing the value — the ONE layout/offset/width/sign decision of every
+## `deref(<root>).f` arm whose root yields that address (#554). PACKED (§8) wins over the standard
+## byte tier (Types §6.1): each reads the field at its byte offset with a SIZED, sign- or zero-extending
+## load (`emit_packed_load_rax`), the packed one honouring `@endian`. A standard-tier aggregate field
+## has no value path here and is refused. Every other struct is the word model: `fi*8(%rax)`.
+##
+## `strict` refuses every read this ladder cannot prove: an aggregate field in any tier (the arm pushes
+## ONE word, and a multi-word value copied as one word is a wrong value), a packed field with no byte
+## offset, a field with no word offset. The ek-7 `deref(p).f` arm passes false and keeps its historical
+## word fallback byte-identically; that fallback is its own residual, not this function's decision.
+emit_deref_field_read_rax := fn(in out sb : strbuf::StrBuf, cx : ptr(LCtx), sty : CSpan, fs : usize, fl : usize, strict : bool) {
+  ppk := is_packed(cx.decls, cx.src, sty.s, sty.n)
+  mut bo := i64(-1)
+  mut fty := CSpan(s = 0, n = 0)
+  if ppk {
+    bo = packed_field_byte_offset(cx.decls, cx.src, sty.s, sty.n, fs, fl, deref(cx.mar))
+    fty = field_type_span(cx.decls, cx.src, sty.s, sty.n, fs, fl, deref(cx.mar))
+  }
+  ## PACKED has precedence over the standard direct-scalar predicate: the same scalar fields
+  ## must still use the packed cursor when reached through `deref(p)`.
+  pstd := not ppk and std_struct_has_direct_byte_layout(cx.decls, cx.src, sty.s, sty.n, deref(cx.mar))
+  if pstd {
+    bo = standard_field_byte_offset(cx.decls, cx.src, sty.s, sty.n, fs, fl, deref(cx.mar))
+    fty = field_type_span(cx.decls, cx.src, sty.s, sty.n, fs, fl, deref(cx.mar))
+  }
+  aes := array_elem_span(cx.src, fty.s, fty.n)
+  agg := aes.n != 0 or (fty.n != 0 and (str_at((cx.src + fty.s), fty.n) == "str" or struct_decl_of(cx.decls, cx.src, fty.s, fty.n) >= 0 or enum_decl_of(cx.decls, cx.src, fty.s, fty.n) >= 0))
+  if ppk and bo >= 0 and not agg {
+    emit_packed_load_rax(sb, scalar_byte_size(cx.src, fty.s, fty.n), fty.n != 0 and str_at((cx.src + fty.s), 1) == "i", bo, packed_field_endian(cx.decls, cx.src, sty.s, sty.n, fs, fl) == 1)
+    return
+  }
+  if pstd and bo >= 0 and not agg {
+    emit_packed_load_rax(sb, scalar_byte_size(cx.src, fty.s, fty.n), fty.n != 0 and str_at((cx.src + fty.s), 1) == "i", bo, false)
+    return
+  }
+  if pstd {
+    lower_show_src_line(cx.src, fs)
+    panic("selfhost: a standard-layout aggregate field read through deref needs a byte-aware aggregate value path; use indexing for byte arrays or bind a supported scalar field")
+  }
+  if strict and ppk {
+    lower_show_src_line(cx.src, fs)
+    panic("selfhost: a field of a @packed struct read through deref(ptr(local)) has no sized scalar read here (an aggregate field, or no packed byte offset); read the field directly from the local (`loc.f`) or bind it first")
+  }
+  if strict and deref_field_type_is_aggregate(cx, field_type_span(cx.decls, cx.src, sty.s, sty.n, fs, fl, deref(cx.mar))) {
+    lower_show_src_line(cx.src, fs)
+    panic("selfhost: reading a whole AGGREGATE field (struct, str, enum, union, tuple or array) through deref(ptr(local)) has no multi-word value path here; read a scalar leaf directly (`loc.f.x`) or bind the local's field (`w := loc.f`)")
+  }
+  fi := field_word_offset(cx.decls, cx.src, sty.s, sty.n, fs, fl, deref(cx.mar))
+  if strict and fi < 0 {
+    lower_show_src_line(cx.src, fs)
+    panic("selfhost: no word offset for a field of a struct reached through deref(ptr(local)) — the pointee type span and the field name disagree")
+  }
+  push_str(sb, "  movq ")
+  push_int(sb, fi * 8)
+  push_str(sb, "(%rax), %rax\n  pushq %rax\n")
 }
 
 ## The base-`Var` span + field-name span of `deref(<Var>.<field>)` (e.g. `ab := deref(v.arena)`).
@@ -23045,60 +23117,22 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## pointer-holding slot of the `Deref(AddrOf(Var))` shape is named by the AddrOf peel.
         if pv.n == 0 { pv = deref_addrof_var_span(base) }
         pent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, pv.s, pv.n)))
-        ## §8 pointer-to-@packed (ek 7 MMIO map): if the pointee struct is `@packed`, read the field at
-        ## its PACKED byte offset with a correctly-SIZED load (movzbl/movzwl/movl), NOT the word offset —
-        ## the MMIO / register-map pattern. Gated on `is_packed(pointee)` + a SCALAR field (not str/struct/
-        ## enum), so a non-packed pointee (the whole existing corpus) keeps the word `movq` → byte-identical.
-        ppk := is_packed(cx.decls, cx.src, dsb.s, dsb.n)
-        mut pdbo := i64(-1)
-        mut pdfty := CSpan(s = 0, n = 0)
-        if ppk {
-          pdbo = packed_field_byte_offset(cx.decls, cx.src, dsb.s, dsb.n, fs, fl, deref(cx.mar))
-          pdfty = field_type_span(cx.decls, cx.src, dsb.s, dsb.n, fs, fl, deref(cx.mar))
-        }
-        ## PACKED has precedence over the standard direct-scalar predicate: the same scalar fields
-        ## must still use the packed cursor when reached through `deref(p)`.
-        pstd := not ppk and std_struct_has_direct_byte_layout(cx.decls, cx.src, dsb.s, dsb.n, deref(cx.mar))
-        if pstd {
-          pdbo = standard_field_byte_offset(cx.decls, cx.src, dsb.s, dsb.n, fs, fl, deref(cx.mar))
-          pdfty = field_type_span(cx.decls, cx.src, dsb.s, dsb.n, fs, fl, deref(cx.mar))
-        }
-        pdaes := array_elem_span(cx.src, pdfty.s, pdfty.n)
-        pd_agg := pdaes.n != 0 or (pdfty.n != 0 and (str_at((cx.src + pdfty.s), pdfty.n) == "str" or struct_decl_of(cx.decls, cx.src, pdfty.s, pdfty.n) >= 0 or enum_decl_of(cx.decls, cx.src, pdfty.s, pdfty.n) >= 0))
-        if ppk and pdbo >= 0 and not pd_agg {
-          push_str(sb, "  movq -")
-          push_int(sb, i64((pent.off + 1) * 8))
-          push_str(sb, "(%rbp), %rax\n")
-          emit_packed_load_rax(sb, scalar_byte_size(cx.src, pdfty.s, pdfty.n), pdfty.n != 0 and str_at((cx.src + pdfty.s), 1) == "i", pdbo, packed_field_endian(cx.decls, cx.src, dsb.s, dsb.n, fs, fl) == 1)
-          return
-        }
-        if pstd and pdbo >= 0 and not pd_agg {
-          push_str(sb, "  movq -")
-          push_int(sb, i64((pent.off + 1) * 8))
-          push_str(sb, "(%rbp), %rax\n")
-          emit_packed_load_rax(sb, scalar_byte_size(cx.src, pdfty.s, pdfty.n), pdfty.n != 0 and str_at((cx.src + pdfty.s), 1) == "i", pdbo, false)
-          return
-        }
-        if pstd { panic("selfhost: a standard-layout aggregate field read through deref needs a byte-aware aggregate value path; use indexing for byte arrays or bind a supported scalar field") }
-        fi := field_word_offset(cx.decls, cx.src, dsb.s, dsb.n, fs, fl, deref(cx.mar))
         push_str(sb, "  movq -")
         push_int(sb, i64((pent.off + 1) * 8))
-        push_str(sb, "(%rbp), %rax\n  movq ")
-        push_int(sb, fi * 8)
-        push_str(sb, "(%rax), %rax\n  pushq %rax\n")
+        push_str(sb, "(%rbp), %rax\n")
+        emit_deref_field_read_rax(sb, cx, dsb, fs, fl, false)
       } else if dals.n != 0 {
         ## #554 — `deref(ptr(loc)).f` where `loc` is a struct LOCAL (`ek = 2`, `is_ref = false`). The
         ## inner node is an `AddrOf`, so `emit_gas` on it yields the struct's frame ADDRESS (`leaq`),
         ## NOT a loaded pointer — which is why the by-ref arm above cannot serve this root: that one
-        ## loads its slot and follows it, but here the slot IS the struct. Pop the address, load the
-        ## field at its ascending word offset: the same `fi*8(%rax)` the direct `loc.f` read emits.
+        ## loads its slot and follows it, but here the slot IS the struct. Only the address source
+        ## differs; the layout, offset, width and sign of the read are the ONE decision both arms ask
+        ## `emit_deref_field_read_rax`, in its strict mode: a field it cannot place exactly, or an
+        ## aggregate field (whose value is more than the one word this arm pushes), is refused.
         dalsinner := deref_inner_expr(base)
-        dalsfi := field_word_offset(cx.decls, cx.src, dals.s, dals.n, fs, fl, deref(cx.mar))
-        if dalsfi < 0 { panic("selfhost: no word offset for a field of a struct reached through deref(ptr(local)) — the pointee type span and the field name disagree") }
         emit_gas(dalsinner, sb, cx, a, nl)
-        push_str(sb, "  popq %rax\n  movq ")
-        push_int(sb, dalsfi * 8)
-        push_str(sb, "(%rax), %rax\n  pushq %rax\n")
+        push_str(sb, "  popq %rax\n")
+        emit_deref_field_read_rax(sb, cx, dals, fs, fl, true)
       } else if dcf.n != 0 {
         ## `deref(<call: node_ptr/decl_at/get(S, …)>).f` — a field read INLINE off a deref of a
         ## CALL that returns a pointer-to-struct, with no intermediate `x := deref(…)` binding.

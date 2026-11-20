@@ -2,7 +2,7 @@
 ## field read `l.field`, and must answer the field's value. `ptr(x)` "takes a memory-resident place `x` …
 ## and yields an address value"; `deref(p)` "takes an address `p` and yields the place it denotes". On such a
 ## place the two are INVERSE, so there is nothing to follow: `deref(ptr(loc)).b` IS `loc.b`. DECIDED at the
-## pinned revision 1.8.0 (tag v1.8.0, commit 8da0372); no clause was invented.
+## pinned revision 1.10.0 (tag v1.10.0, commit 624f476); no clause was invented.
 ##
 ## On the parent it answered NOTHING. `emit_gas`' `Expr::Field` arm resolves the pointee through
 ## `deref_struct_span`, and that helper peels `Deref(Var)` — here the inner node is an `AddrOf`, so it
@@ -17,7 +17,9 @@
 ## The fix is NOT #506's emission. A by-ref parameter's slot HOLDS a pointer, so that arm loads the slot and
 ## follows it; here the slot IS the struct, so its address is a `leaq` of the frame — which is what
 ## `emit_gas` already emits for `ptr(loc)`. The new arm re-enters on the inner `AddrOf` to get that address
-## into %rax, then loads the field at its ascending word offset, the same `fi*8(%rax)` the direct read uses.
+## into %rax, then reads the field with the same layout decision as the `deref(p).f` arm. This fixture's
+## fields are all full words; the narrow, packed and aggregate-field shapes have their own issue554_
+## fixtures.
 ##
 ## Every case is CLASSIFIED into the four outcomes the issue asks for, because "not 40" is not evidence:
 ## class 0 the CORRECT value; class 1 the ZERO CONTRIBUTION, the defect itself (the addend alone survived);

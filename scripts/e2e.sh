@@ -7310,9 +7310,11 @@ run_x86 issue598_shadowed_str_struct_const 99
 ## comment names as "every other `ek = 2` binding", i.e. exactly this struct local. `field_slot` fell
 ## through and the read contributed a literal 0: `40 + deref(ptr(loc)).b` answered 40 where the direct
 ## `loc.b` answered 101 on the SAME binary. The new arm re-enters on the inner `AddrOf` (which `leaq`s
-## the frame — the slot IS the struct, unlike #506's by-ref param whose slot HOLDS a pointer) and loads
-## the field at its ascending word offset. Seven classified cases across three field offsets, a mut rebind
-## and two controls (direct read, by-value param). REGISTERED x86_64 ONLY: the shape traps identically on
+## the frame — the slot IS the struct, unlike #506's by-ref param whose slot HOLDS a pointer) and reads
+## the field with the `deref(p).f` arm's layout decision (`emit_deref_field_read_rax`). Seven classified
+## cases across three field offsets, a mut rebind and two controls (direct read, by-value param); the
+## narrow, packed and aggregate-field shapes are the issue554_deref_ptr_local_* fixtures, judged by their
+## `## expect:` on every backend. REGISTERED x86_64 ONLY: the shape traps identically on
 ## all three twins before AND after (aarch64 133, riscv64 133, wasm 134) while the direct read runs on all
 ## four — reported as twins' emitter residuals, not registered as permissions. Fails on main 2d6e05f41 with
 ## 11 = case 1, class 1, the zero contribution.
