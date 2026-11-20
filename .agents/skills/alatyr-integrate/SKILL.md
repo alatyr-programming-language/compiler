@@ -628,7 +628,8 @@ Neither land.sh nor the queue moves these floors. After every landing whose gate
 line, the integrator commits `chore(gates): IR coverage floors follow the landing of #PR` on the
 published `main`: the floor files only, every number set to the gate line's `B`, the lines quoted
 verbatim in the body. Check it with `scripts/ir_census.sh --gate --quiet` (it must hold), then push it
-like any other follow commit. `--ratchet-write` rewrites BOTH files from one local run. Keep a file whose
+like any other follow commit. `--ratchet-write` rewrites BOTH files from one local run, numbers only:
+it drops any `## …-coverage-ok` ack line, so restore an ack that still applies by hand. Keep a file whose
 gate printed no GREW line out of the commit (`git checkout -- <file>`). A floor never goes down
 without a `## <set>-coverage-ok: #<issue>` ack, and a feature PR never moves one.
 
