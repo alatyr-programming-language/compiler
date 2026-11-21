@@ -99,9 +99,10 @@
 #
 # It was 21 and it is 22 because IR-39 (#1786) builds a struct parameter with a nested struct field of
 # a payload-less enum from the shared IR (GitHub gate run 44838352627 on bd722719, part ir, the only new
-# row). The program is valid at the pinned spec 1.10.0 (a by-value struct parameter, Functions §4.1, and
-# a `match` on its field `o.inner.t`), and the default answers 22, `Tag.Green`, its value. Legacy x86
-# keeps its located fence at `resolve_nested_ptr_field` (the fixture header and its e2e rows record
+# row). The program is valid at the pinned spec 1.10.0 (a by-value struct parameter, Functions §4.1,
+# and an exhaustive `match` on its field `o.inner.t`, one arm per line, no comma and no unreachable `_`,
+# Control Flow §5.3), and the default answers 22, `Tag.Green`, its value. Legacy x86 keeps its located
+# fence at `resolve_nested_ptr_field` (the fixture header and its e2e rows record
 # both); the twins trap. No legacy-x86 fixes on the IR track (#980):
 #     test/issue447_nested_enum_place_byref_reject.al  legacy build 1   default run 22   (#1786)
 #
