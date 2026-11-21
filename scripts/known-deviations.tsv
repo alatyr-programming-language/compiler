@@ -280,6 +280,7 @@ aarch64	test/issue169_wasm_nested_return.al	run/133	#1191
 aarch64	test/issue171_global_const_str.al	run/133	#1200
 aarch64	test/issue1746_shadow_callee_earlier.al	run/133	#1189
 aarch64	test/issue1746_shadow_callee_later.al	run/133	#1189
+aarch64	test/issue1822_binding_controls.al	run/133	#1199
 aarch64	test/issue263_slice_narrow_field_write.al	run/133	#263
 aarch64	test/issue345_ptr_target_spacing.al	run/133	#550
 aarch64	test/issue349_arena_bad_alignment.al	run/133	#1199
@@ -905,6 +906,7 @@ riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200
 riscv64	test/issue1746_shadow_callee_earlier.al	run/133	#1189
 riscv64	test/issue1746_shadow_callee_later.al	run/133	#1189
+riscv64	test/issue1822_binding_controls.al	run/133	#1199
 riscv64	test/issue263_slice_narrow_field_write.al	run/133	#263
 riscv64	test/issue345_ptr_target_spacing.al	run/133	#550
 riscv64	test/issue349_arena_bad_alignment.al	run/133	#1199
@@ -1530,6 +1532,7 @@ wasm	test/issue169_wasm_nested_return.al	run/134	#1191
 wasm	test/issue171_global_const_str.al	run/134	#1200
 wasm	test/issue1746_shadow_callee_earlier.al	run/134	#1189
 wasm	test/issue1746_shadow_callee_later.al	run/134	#1189
+wasm	test/issue1822_binding_controls.al	run/134	#1186
 wasm	test/issue263_slice_narrow_field_write.al	run/134	#263
 wasm	test/issue345_ptr_target_spacing.al	run/134	#1186
 wasm	test/issue349_arena_bad_alignment.al	run/134	#1186
