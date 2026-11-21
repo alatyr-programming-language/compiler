@@ -17,6 +17,7 @@
   compiler cannot follow (a tuple or an array) is identified by its own declaration rather than its
   name. A generic's type parameter `T` still shadows a module-level `T := u8` inside that generic
   (Declarations §6.1): `inner(T, h)` and `ptr(T)` in its body name the instance's argument, not the
-  alias.
+  alias. Only a declaration the spelling module can name takes part (Modules §3): `pub u64 := u8` in
+  a sibling module no longer turns `u64` written in another module into `u8`.
   aarch64, riscv64 and wasm do not yet call a generic in these shapes and still stop at their
   stubs there, a trap rather than a value.

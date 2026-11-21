@@ -6227,7 +6227,14 @@ targ_tail := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
 pub targ_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
   if n == 0 { return 0 - 1 }
   if not spelled_in_file(src, s) { return targ_decl_by_name(decls, src, s, n) }
-  if targ_is_tparam(decls, src, s, n) { return 0 - 1 }
+  di := targ_decl_named(decls, src, s, n)
+  ## Asked only when a declaration answers, so a name that names none pays no scan (`targ_is_tparam`).
+  if di >= 0 and targ_is_tparam(decls, src, s, n) { return 0 - 1 }
+  di
+}
+
+## `targ_decl`'s answer for a head spelled in a module's text, before a type parameter shadows it.
+targ_decl_named := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
   tl := targ_tail(src, s, n)
   si := struct_decl_of(decls, src, s, n)
   if si >= 0 {
@@ -6261,41 +6268,25 @@ pub targ_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
 ## of its name within that declaration (Declarations §6.1), so it is not resolved to one: `T` in
 ## `inner(T, h)` within `outer := fn(T : type, …)` beside a module-level `T := u8` is `outer`'s parameter,
 ## which the instance's substitution replaces. Resolved as the alias, `inner` was registered at `u8`, the
-## call named `…__inner__u64`, and the link failed (#1808). `_tpn_has` holds the names any declaration
-## gives a type parameter, so a name that is none pays one lookup and no scan.
+## call named `…__inner__u64`, and the link failed (#1808). One scan of the declarations finds the
+## enclosing one; the callers ask only when a module-level declaration of the name answers.
 targ_is_tparam := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
   tl := targ_tail(src, s, n)
   if tl.s != s or n == 0 { return false }
   cnt := rt::vec_len(deref(decls))
-  tpn_use(decls, src, cnt)
-  if not _tpn_has[tpn_bucket(src, s, n)] { return false }
-  ## The enclosing declaration of the last query covers `[_tpn_lo, _tpn_hi)`; queries come in runs from
-  ## one body, so most reuse it.
-  if not (_tpn_lo <= s and s < _tpn_hi) {
-    ## Assigned constructor by constructor: the seed copies only a literal enum into a mutable global.
-    _tpn_enc = Option.None
-    mut lo : usize = 0
-    mut hi : usize = 0
-    mut bounded := false
-    mut i : usize = 0
-    while i < cnt {
-      d := deref(decl_get(decls, i))
-      if d.name_start <= s and d.name_start >= lo {
-        _tpn_enc = Option(usize).Some(i)
-        lo = d.name_start
-      }
-      if d.name_start > s and (not bounded or d.name_start < hi) {
-        hi = d.name_start
-        bounded = true
-      }
-      i += 1
+  mut enc : Option(usize) = Option.None
+  mut lo : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.name_start <= s and d.name_start >= lo {
+      enc = Option(usize).Some(i)
+      lo = d.name_start
     }
-    if not bounded { hi = s + 1 }
-    _tpn_lo = lo
-    _tpn_hi = hi
+    i += 1
   }
   mut pq : Option(ptr(mut Param)) = Option.None
-  match _tpn_enc {
+  match enc {
     Some(ei) => {
       ed := deref(decl_get(decls, ei))
       pq = ed.params_head
@@ -6315,55 +6306,15 @@ targ_is_tparam := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) 
   false
 }
 
-## The set of names some declaration gives a type parameter, as 4096 hash buckets, rebuilt when the
-## declaration vector changes (the `layout_cache_use` key).
-mut _tpn_has : [bool; 4096] = [false; 4096]
-mut _tpn_d : usize = 0
-mut _tpn_dc : usize = 0
-mut _tpn_enc : Option(usize) = Option.None
-mut _tpn_lo : usize = 0
-mut _tpn_hi : usize = 0
-tpn_bucket := fn(src : ptr(u8), s : usize, n : usize) -> usize {
-  h : usize = _fnv_name(src, s, n)
-  h % 4096
-}
-tpn_use := fn(decls : ptr(rt::Vec), src : ptr(u8), cnt : usize) {
-  layout_cache_use(decls, cnt)
-  if _tpn_d == _layout_cache_d and _tpn_dc == _layout_cache_dc { return }
-  mut k : usize = 0
-  while k < 4096 {
-    _tpn_has[k] = false
-    k += 1
-  }
-  mut i : usize = 0
-  while i < cnt {
-    di := deref(decl_get(decls, i))
-    mut pq := di.params_head
-    loop {
-      match pq {
-        Some(pqq) => {
-          pm := deref(param_p(pqq))
-          if str_at((src + pm.ts), pm.tl) == "type" { _tpn_has[tpn_bucket(src, pm.ns, pm.nl)] = true }
-          pq = pm.next
-        }
-        None => { break }
-      }
-    }
-    i += 1
-  }
-  _tpn_d = _layout_cache_d
-  _tpn_dc = _layout_cache_dc
-  _tpn_lo = 0
-  _tpn_hi = 0
-}
-
 ## The best-ranked (Modules §3) value declaration (kind 0) named by the head `[s, s+n)`, from the module
 ## that spells it, else -1. Its right-hand side may be recorded as a path in `ret_ts/ret_tl`
 ## (`A := m::Node`, arity 0; `Id := brand(U)`, arity 1), as a one-token or call-shaped right-hand side in
 ## `alias_ts/alias_tl` (`A := Node`, `u128 := uint(128)`, `P := m::Box(u8)`), or not at all. Every
 ## same-named declaration competes, recorded or not: a module's own `P` must answer for `P` spelled
 ## there even when only another module's `P` has a recorded right-hand side (#1808). Ranked as
-## `brand_underlying`.
+## `brand_underlying`, but only a declaration the spelling module can name competes (`kind0_visible`):
+## `pub u64 := u8` in a sibling module `z` is not `m`'s `u64` (Modules §3), so `rd(u64, h)` written in
+## `m` is the prelude's `u64`, not an instance at `u8` (#1808, a one-byte read).
 targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
   cnt := rt::vec_len(deref(decls))
   nm := name_tail(src, s, n)
@@ -6381,11 +6332,21 @@ targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize)
       d := deref(decl_get(decls, i))
       if d.kind == DECL_KIND_VALUE and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         r := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, kqh)
-        if r > best or res < 0 { best = r; res = i64(i) }
+        if kind0_visible(nmod, r) and (r > best or res < 0) { best = r; res = i64(i) }
       }
     }
   }
   res
+}
+
+## Whether a candidate of rank `r` (`alias_cand_rank`) is nameable from the naming module `nmod`: a
+## qualified spelling's module or the §3 chain (`r >= 0`). With no naming module published every rank is
+## -1 and the historical unranked answer stands, as in `type_decl_ranked`.
+kind0_visible := fn(nmod : Option(ModSpan), r : i64) -> bool {
+  match nmod {
+    Some(m) => { return r >= 0 }
+    None => { return true }
+  }
 }
 
 ## The type a bare alias head `[s, s+n)` stands for, else `[s, s+n)` itself (#1808). A declaration binds
@@ -6400,9 +6361,9 @@ targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize)
 pub targ_alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
   same := LSpan(s = s, n = n)
   if n == 0 or not spelled_in_file(src, s) { return same }
-  if targ_is_tparam(decls, src, s, n) { return same }
   ki := targ_kind0_decl(decls, src, s, n)
   if ki < 0 { return same }
+  if targ_is_tparam(decls, src, s, n) { return same }
   d := deref(decl_get(decls, usize(ki)))
   if d.arity != 0 { return same }
   if d.ret_tl != 0 { return LSpan(s = d.ret_ts, n = d.ret_tl) }
