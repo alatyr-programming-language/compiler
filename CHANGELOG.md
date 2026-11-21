@@ -134,6 +134,40 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.7.0 — 2026-11-21
+
+- **A whole struct read after `p.xs[j] = …` and leaf writes `p.xs[i].f = …` is no longer refused
+  (#1507).** The checker discharged the element's definite-assignment marker with a call that passed
+  seven arguments to a five-parameter function, so `q := p` failed `check` with `unbound name`
+  although every field was written (Type System §9.4). Six more calls in the compiler's own source
+  omitted a parameter (`in out nl` in three code-generator calls, an arena in two, a module span in
+  a layout diagnostic) and read it from a stray register; they now pass the value in scope, and
+  `defer_stmts_clean` drops a parameter it never used.
+- x86_64: a struct literal with a niche-folded `Option(ptr(T))` field set to `Some(p)`, returned by
+  value, kept its pointer. It was written as 0 and read back as `None` (#1688).
+- **The shared IR builds `deref(q)` read whole when `q`'s declaration spells no type (#1786).** The
+  builder now takes the pointee type from the one sema recorded for the `deref` node. That covers a local
+  bound by inference (`q := get(p)`, `q := ptr(s)`), a match payload binding (`Some(q)` of an
+  `Option(ptr(S))`, a payload of a program's generic enum instance), and a struct field (`deref(h.p)`,
+  `deref(hp.p)`). Until now each of these was refused, so on x86_64 the function took the legacy path.
+  That path answered a wrong value for `deref(hp.p)` through a `ptr(H)` (1 for 42 in
+  `test/ir38_deref_field_ptr.al`); the default x86_64 path and wasm now answer 42 (#1799 keeps the
+  legacy half). A type that another module writes is used only once it is proven to name the same
+  declaration in this module; otherwise the read is still refused, under its own cause.
+- The shared IR builds a read, a write or a whole copy through a pointer to a struct with an enum
+  field, a niche-folded `Option(ptr(T))` field, a nested struct of word-wide fields or a fixed array of
+  words, and passes such a struct by value. Each child sits at the place `lower_layout::field_byte_place`
+  gives it, the image x86_64's legacy emitter reads and writes (#1786). The twins keep such functions
+  on their legacy emitters. A child the image does not cover stays refused under its own cause: a
+  sub-word scalar inside a nested aggregate (or a signed one in a by-value parameter), or an enum whose
+  payload holds an aggregate.
+- The shared IR builds functions that return, or call a function returning, a struct whose fields are
+  sub-word scalars, `bool`, fixed arrays of word scalars, word-stored nested structs or scalar-only
+  enums (#1786). A narrow field is returned as its canonical whole word, as the legacy emitters read
+  it; on x86_64 a struct result of up to seven words travels in the legacy register set. A struct
+  field that is not stored word by word, or an enum field that is generic, folded or holds an
+  aggregate, is refused at build with its own located label.
+
 ## 0.6.0 — 2026-11-21
 
 - **`deref(ptr(loc)).field` on a struct local reads the field (#554).** On x86_64 the read

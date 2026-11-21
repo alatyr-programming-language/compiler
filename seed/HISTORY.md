@@ -2202,4 +2202,65 @@ The original reading note, verbatim:
 # test/issue926_const_qualified_same_name_ok.al under seed 0.5.0 and under Stage2 alike (#1567, a
 # known-deviations row).
 # The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.6.0 -> 0.7.0   promoted 2026-11-21   seed/alatyr := Stage2
+#
+# WHY: five PRs landed together, because four of them change the compiler's own emission and owe a
+# reseed. #1801 (IR-38, Refs #1786) builds a whole `deref(q)` read whose operand's declaration spells
+# no pointee from the pointee sema recorded for the `deref` node; #1805 (IR-40, Refs #1786) calls a
+# generic function's instance from an IR-built function by its shared mangled symbol; #1807 (IR-39,
+# Refs #1786) builds a struct with an array or aggregate field through a pointer, and keeps a folded
+# `Option(ptr)` field of a returned struct literal (#1688); #1832 (IR-41, Refs #1786) returns a struct
+# of one to seven words in registers exactly as legacy x86 does (eight words stay legacy, through the
+# hidden pointer) and widens every narrow field to a word before the return. Together they let the
+# shared IR build 996 more of the compiler's own functions: `alatyr ir --modules` over the src
+# files held 1885 of 5320 at main 035f7d43 (its floor, scripts/ir_census.src.baseline) and builds
+# 2881 of 5349 under Stage2 of this tree (53.9%), verify_failed=0 (scripts/ir_census.sh with
+# ALATYR=target/stage2). #1826 (Refs #1507) passes every
+# required argument at seven of the compiler's own calls that bound fewer or more arguments than their
+# callee declares — the shape (#1822) that turned the first 0.6.0 candidate red, here removed before a
+# newly IR-built neighbour could expose it (its edits are source, so they sit on both sides of the
+# delta below).
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 19028 hunks, 226759 added, 136982 removed. One sentence:
+# 771 more of the compiler's own functions are emitted from the shared IR (1568 -> 2339 marked
+# `# ir: selected from the shared IR`, of the same 5986 symbols on both sides, none added, none
+# dropped, none that was IR-selected falling back): their bodies are now the IR's — values pass through
+# frame slots (`movq %rax, -N(%rbp)` 42622 added, `movq -N(%rbp), %rax` 24353) where legacy staged them
+# on the stack (`pushq %rax` 11136 removed), blocks carry `.LxirN_K` labels (17507 added) where legacy
+# carried `.LN` (12865 removed), and a condition is materialized and then tested (`testq %rax, %rax`
+# 8378, `jz .LxirN_K` 8048, `movzbl %al, %eax` 6808). Every other symbol is byte-identical once labels
+# are normalized (`.LxirN_ret` included): 5215 of the 5986 — measured per symbol over
+# target/promote/gas_seed.s and target/promote/gas1.s with the selector's marker line excluded, and
+# the set of differing symbols equals the set of newly marked ones exactly (both files are this tree,
+# emitted by the 0.6.0 seed and by Stage1, so the batch's source edits are on both sides).
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 2027330 lines.
+# GAS SHA-256 (Stage2): 466c4486934624bcfa05b7417cc70cc3c732c1679588c046e6aeaf18f05cb0ca.
+# Stage2 == Stage3 BINARY SHA-256:
+# 37849383daa5dc485e937452b4355b1108b0459ed97536c384a8950f3c2a3689 (8484328 B).
+# All three answer `alatyr 0.7.0, spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.6.0) SHA-256:
+# bb7c59b4ef6e6583bf53edf00dff797a0a3e8fffb70b609ad919e8a5a15965a2.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (2027330 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.6.0 -> 0.7.0, MINOR by CHANGELOG.md "Versioning policy": a backend gains a shape.
+# Measured on omen 2026-11-21 with scripts/corroboration.sh: under the superseded seed binary (0.6.0,
+# sha256 bb7c59b4ef6e6583bf53edf00dff797a0a3e8fffb70b609ad919e8a5a15965a2) test/struct_enum_field_return.al
+# answers x86=RUN42 x86-ir=RUN42 aarch64=TRAP(5) riscv64=TRAP(5) wat=TRAP(6); under Stage2 of this tree
+# it answers RUN42 on all five columns (#1832: the twins and wasm now take the struct result with an
+# enum field from the IR). test/issue447_nested_enum_place_byref_reject.al, which legacy x86 refuses,
+# now runs on the default x86_64 path and answers 22, its value (#1807; the twins still trap there).
+# The corpus manifest moves only by the twelve declared pairs of scripts/corpus.expected-delta, taken
+# from a fresh walk of the merged tree: #1793's four live rows from 0.6.0, the three EXIT-CHANGED rows
+# above, the x86_64 NOW-RUNS row, and the four REMOVED rows of test/reject_narrow_slot_rebind.al, which
+# now states its `## expect: run 42` and is judged by fixture_expect.sh instead of the oracle (legacy
+# x86 refuses it, located; ir_diff explains the row, Declarations §5, §6.1). The rest is PATCH: #1826
+# passes required arguments the compiler's own calls omitted. Not MAJOR: no program the specification
+# calls valid stops compiling or changes its answer.
+# The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
