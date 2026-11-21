@@ -7097,9 +7097,37 @@ reject_deref_arr_decl_unknown := fn(src : ptr(u8), ns : usize) {
   panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs the target's declaration in effect, and this backend could not identify it with certainty (#1844): a binding of the same name that is not a local declaration (a lambda parameter, a destructuring) is in scope here as far as its scan can tell; rename one of them. Refused rather than copying with a guessed type")
 }
 
-## Is the assigned value a `deref(…)` — the value half of `deref_arr_shape`.
+## The value the whole-array copy reads: `v` with every `unchecked` around it peeled. Grammar §3.7 makes
+## `unchecked e` yield `e`'s value, and Memory §5.2 asks for that grant to dereference a `manual`
+## provider's pointer, so `v = unchecked deref(p)` is the same copy as `v = deref(p)` (round-4 review of
+## #1821: it moved one word, 40 where 42 was due). The binder, the emitter and the twins' refusal all
+## take the shape through `is_deref_value`, and the emitter its pointer through this.
+deref_arr_value := fn(v : ptr(Expr)) -> ptr(Expr) {
+  mut e := v
+  loop {
+    nx : Option(ptr(Expr)) = unchecked_operand(e)
+    match nx {
+      Some(inner) => { e = inner }
+      None => { break }
+    }
+  }
+  e
+}
+
+## The operand of an `unchecked e` expression, else `None`.
+unchecked_operand := fn(e : ptr(Expr)) -> Option(ptr(Expr)) {
+  match deref(e) {
+    Expr::Unchecked(inner) => { Option(ptr(Expr)).Some(inner) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Deref
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Option(ptr(Expr)).None }
+  }
+}
+
+## Is the assigned value a `deref(…)`, bare or under `unchecked` — the value half of `deref_arr_shape`.
 is_deref_value := fn(v : ptr(Expr)) -> bool {
-  match deref(v) {
+  match deref(deref_arr_value(v)) {
     Expr::Deref(dp) => { true }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
@@ -7113,6 +7141,8 @@ is_deref_value := fn(v : ptr(Expr)) -> bool {
 ## not wider reuses it with the first one's element tier (a `[u64; 2]` after a loop-scoped `[u8; 16]`
 ## keeps the byte tier, so word elements were written where byte reads look: 2 where 42 was due). Copy
 ## only into an entry of the same tier and count; refuse anything else, located.
+## `local_entry` and the emitter's `slot_of` both answer the LAST entry of the name, so this checks the
+## entry the copy writes.
 x86_deref_arr_slot_fits := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize, dac : DerefArrCopy) {
   le : Option(u64) = local_entry(slots, src, ns, nl)
   match le {
@@ -7129,7 +7159,7 @@ x86_deref_arr_slot_fits := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl :
 ## The located refusal of `x86_arr_decl_span` for a reassigned array local declared without `: [T; N]`.
 reject_deref_arr_inferred := fn(src : ptr(u8), ns : usize) {
   lower_show_src_line(src, ns)
-  panic("selfhost: a fixed array copied out of a pointer into a local declared without a type (`v = deref(p)` over `v := [ … ]`) is not supported on this backend yet (#1844): declare it `v : [T; N] = …` with a literal `N`; refused rather than moving one word of the array")
+  panic("selfhost: a fixed array copied out of a pointer into a local declared without a type (`v = deref(p)` over `v := …`) is not supported on this backend yet (#1844): declare it `v : [T; N] = …` with a literal `N`; refused rather than moving one word of the array")
 }
 
 deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, ats : CSpan) -> Option(DerefArrCopy) {

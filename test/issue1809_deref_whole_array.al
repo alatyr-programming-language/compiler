@@ -117,6 +117,16 @@ rdi := fn(h : usize) -> u64 {
   w = deref(q)
   u64(v[0] + v[1]) + u64(w[1]) - 31
 }
+## `unchecked deref(p)` yields the same whole array (Grammar §3.7): a word reassignment and a byte
+## declaration (an earlier draft of #1821 moved one word, 40 where 42 was due).
+rdx := fn(h : usize, hb : usize) -> u64 {
+  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)
+  mut v : [u64; 2] = [0, 0]
+  v = unchecked deref(p)
+  b : ptr([u8; 3]) = unchecked bitcast(ptr([u8; 3]), hb)
+  w : [u8; 3] = unchecked deref(b)
+  v[0] + v[1] + u64(w[0]) + u64(w[1]) + u64(w[2]) - 40
+}
 main := fn() -> u64 {
   mut arr : [u64; 2] = [21, 5]
   mut wv : u64 = 198914
@@ -124,6 +134,6 @@ main := fn() -> u64 {
   hb := unchecked bitcast(usize, ptr(wv))
   mut pa : ptr([u64; 2]) = ptr(arr)
   hp := unchecked bitcast(usize, ptr(pa))
-  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha)
+  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb)
 }
 ## expect: run 42

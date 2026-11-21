@@ -3120,7 +3120,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     match deref_arr_copy(v, cx.src, ns, deref_arr_type(cx.src, ns, nl2, x86_arr_decl_span(v, cx.slots, cx.ctslots, cx.src, ns, nl2))) {
       Some(dac) => {
         x86_deref_arr_slot_fits(cx.slots, cx.src, ns, nl2, dac)
-        emit_gas(deref_inner_expr(v), sb, cx, a, nl)
+        emit_gas(deref_inner_expr(deref_arr_value(v)), sb, cx, a, nl)
         push_str(sb, "  popq %rax\n")
         emit_deref_arr_elems(sb, slot_of(cx.slots, cx.src, ns, nl2), dac)
       }
