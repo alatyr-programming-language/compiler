@@ -7717,7 +7717,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
         d_manifest_duplicate_diag(tar, manifest)
         return 1
       }
-      d_manifest_type_source(bld)
+      d_manifest_type_source(bld, n)
     }
   }
   ## Publish the ANONYMOUS package-ROOT module to sema (Modules §3 / §6.1, Manifest §6): a non-`pub`
