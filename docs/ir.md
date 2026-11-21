@@ -815,9 +815,10 @@ call is a scalar conversion to or from a non-integer or with other than one argu
 that finds the cause returns it (`ib_callee` answers `CeNo(<cause>)`). A call in aggregate position asks
 `ib_callee` once more (`ib_agg_call_why`) for the callee's cause, rather than keeping a copy of its tests. A
 call refused for a reason with no such label keeps `expr Call`, and a sema gap at a call keeps
-`sema-gap …: expr Call`. The golden `ig_callwhy` pins four labels across five calls: a generic callee,
-more than eight arguments, an extern callee, and an `in` array and a `...T` rest argument, which share
-the parameter type-or-mode label.
+`sema-gap …: expr Call`. The golden `ig_callwhy` pins four labels across five calls: a generic callee
+whose type arguments are inferred, more than eight arguments, an extern callee, and an `in` array and a
+`...T` rest argument, which share the parameter type-or-mode label. It also builds one generic call
+whose type arguments are written (below).
 
 An assignment or declaration the builder does not build is refused the same way (#1758), one `assign: …`
 or `declaration: …` label per cause instead of one `stmt Assign` for all of them (`ib_refuse_assign`): a
@@ -877,17 +878,18 @@ the head's module is missing, the builder refuses (`call: qualified callee that 
 here`), and the legacy emitter keeps its undefined-callee trap. The fixture `issue1744_qualified_collision_ir`
 holds that: before the check, the twins answered the root's `f` for `b::f`.
 
-A resolved callee is still refused by name in three cases: it is generic; it is a member of an overload
-set (its symbol carries the per-signature suffix, `docs/ir-slice-2.md` Q3); or it comes from another
-module and its signature reaches a type name declared more than once in the program (`call: callee from
-another module whose signature names a type declared more than once`). "Reaches" follows what the layout
-follows: the names the signature spells, and from each name declared once, its alias right-hand side, its
-struct field types and its enum variant payloads, each declaration entered once and at most 256 of them
-(past that it refuses). The fixture `issue1744_sig_alias_ir` holds a result type `T` declared once that
-aliases an `Inner` both modules declare. The guard exists because the builder lays out a callee's
-signature types from the caller's module (#1734, #1737). #1743 and #1731 resolve the names a signature
-spells in the callee's module, but a struct field's type is still resolved in the caller's (#1737, open);
-once #1737 is fixed, the guard and its helpers are deleted.
+A resolved callee is still refused by name in three cases: it is generic and the call does not meet the
+conditions for an instance call (below); it is a member of an overload set (its symbol carries the
+per-signature suffix, `docs/ir-slice-2.md` Q3); or it comes from another module and its signature reaches
+a type name declared more than once in the program (`call: callee from another module whose signature
+names a type declared more than once`). "Reaches" follows what the layout follows: the names the
+signature spells, and from each name declared once, its alias right-hand side, its struct field types and
+its enum variant payloads, each declaration entered once and at most 256 of them (past that it refuses).
+The fixture `issue1744_sig_alias_ir` holds a result type `T` declared once that aliases an `Inner` both
+modules declare. The guard exists because the builder lays out a callee's signature types from the
+caller's module (#1734, #1737). #1743 and #1731 resolve the names a signature spells in the callee's
+module, but a struct field's type is still resolved in the caller's (#1737, open); once #1737 is fixed,
+the guard and its helpers are deleted.
 
 A **bare callee** (`f(…)`) that several modules declare is not an overload set: Functions §1.4 makes an
 overload set several bindings in **one** scope, and a module scope binds a name once (Modules §5,
@@ -900,6 +902,31 @@ bare name the calling module neither declares nor imports`. A local or parameter
 the module's function (Declarations §6.1) and is refused as a value callee. The three refusals above
 apply to the function the module binds as they do to a qualified callee: a call into the module's own
 overload set stays `several functions of that name (an overload set)`.
+
+A **generic callee** is called at its **instance** (IR-40, #1786). The builder does not build the
+instance; a generic body stays `generic function (needs a mono instance)`. The call names a symbol that
+carries the type arguments as the call writes them (`ir::prog_inst_sym`, printed `@id(u64)`), and the
+target's legacy emitter defines the instance. The builder takes the call only when the instance is
+the call's own text: every type parameter is passed (an inferred one is `call: generic callee whose
+type arguments are inferred rather than written`), and each argument is a written type, not a name the
+caller binds. At most three type parameters are allowed. With the type parameters replaced, every value
+parameter and the result must be a kernel scalar or a pointer passed by value, and not a float; any
+other spelling that names a type parameter is refused (`… outside the scalar convention`). The callee
+is not an extern, `@inline`, `when`-guarded or a generic overload set (`emit_generic_sig_suffix`, #472).
+The legacy instance pass must bind the call to the same declaration (`lower::generic_decl_of`), and no
+non-generic function anywhere may share the name, because the legacy emitter may route such a call to
+that namesake (`nongen_type_match`). Both of those refusals are `… binds to another declaration`.
+Value arguments are passed in order with the type arguments erased, as the legacy caller does.
+
+Each selector names the instance by its own legacy mangling or declines the call, and declining keeps
+the caller legacy. x86_64 calls `emit_generic_label`, the one function its definition and every legacy
+call site use. It does so only when mono's list holds that instance (`x86_inst_label_ok`), so the label
+is defined. aarch64, riscv64 and wasm decline today: each spells an instance's label inline at its
+definition and its legacy call site, and records an instance only at a legacy call site. Naming one from
+a selector would be a third copy of that mangling, and would rely on a legacy call recording the
+instance (#1804). The fixtures `ir40_generic_handle_cast`, `ir40_generic_two_targs_narrow` and the
+package `ir40_generic_cross_module` hold the x86_64 side: two type arguments, narrow results, an
+instance with both an IR-built and a legacy caller, and each module calling its own `at`.
 
 ### 3.8 Signedness and width are attributes of the value, derived once
 

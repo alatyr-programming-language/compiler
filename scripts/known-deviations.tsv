@@ -410,6 +410,8 @@ aarch64	test/package/ir1723_alias_deref_struct/package.al	run/133	#1739
 aarch64	test/package/ir1723_alias_deref_struct/src/m.al	link/1	#3
 aarch64	test/package/ir1723_qualified_deref_struct/package.al	run/133	#1188
 aarch64	test/package/ir1723_qualified_deref_struct/src/m.al	link/1	#3
+aarch64	test/package/ir40_generic_cross_module/package.al	run/133	#41
+aarch64	test/package/ir40_generic_cross_module/src/m.al	link/1	#3
 aarch64	test/package/issue1734_alias_callee_agg_result/package.al	run/133	#1740
 aarch64	test/package/issue1734_alias_callee_agg_result/src/m.al	link/1	#3
 aarch64	test/package/issue1734_alias_callee_agg_result/src/main.al	run/133	#1741
@@ -1032,6 +1034,8 @@ riscv64	test/package/ir1723_alias_deref_struct/package.al	run/133	#1739
 riscv64	test/package/ir1723_alias_deref_struct/src/m.al	link/1	#3
 riscv64	test/package/ir1723_qualified_deref_struct/package.al	run/133	#1188
 riscv64	test/package/ir1723_qualified_deref_struct/src/m.al	link/1	#3
+riscv64	test/package/ir40_generic_cross_module/package.al	run/133	#41
+riscv64	test/package/ir40_generic_cross_module/src/m.al	link/1	#3
 riscv64	test/package/issue1734_alias_callee_agg_result/package.al	run/133	#1740
 riscv64	test/package/issue1734_alias_callee_agg_result/src/m.al	link/1	#3
 riscv64	test/package/issue1734_alias_callee_agg_result/src/main.al	run/133	#1741
@@ -1449,6 +1453,7 @@ wasm	test/inout_agg_whole_assign_in_alias_part.al	compile/1	#1637
 wasm	test/ir37_ptr_agg_field.al	run/134	#1188
 wasm	test/ir37_ptr_byte_tier.al	run/134	#1188
 wasm	test/ir37_ptr_narrow_fields.al	run/134	#1188
+wasm	test/ir40_generic_handle_cast.al	run/134	#1188
 wasm	test/ir_array_param_convert_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_copy.al	run/134	#1194
@@ -1641,6 +1646,8 @@ wasm	test/package/ir1723_alias_deref_same/src/m.al	assemble/1	#3
 wasm	test/package/ir1723_alias_deref_struct/package.al	run/134	#1739
 wasm	test/package/ir1723_alias_deref_struct/src/m.al	assemble/1	#3
 wasm	test/package/ir1723_qualified_deref_struct/src/m.al	assemble/1	#3
+wasm	test/package/ir40_generic_cross_module/package.al	run/134	#41
+wasm	test/package/ir40_generic_cross_module/src/m.al	assemble/1	#3
 wasm	test/package/issue1734_alias_callee_agg_result/package.al	run/134	#1740
 wasm	test/package/issue1734_alias_callee_agg_result/src/m.al	assemble/1	#3
 wasm	test/package/issue1734_alias_callee_agg_result/src/main.al	run/134	#1741

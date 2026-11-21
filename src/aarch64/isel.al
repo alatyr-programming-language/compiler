@@ -529,6 +529,10 @@ sa_args := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) {
 sa_call := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
   n := ir::i_n(ip)
   if n > 8 { return false }
+  ## IR-40 (#1786): a generic instance is declined. This emitter spells an instance's label inline at its
+  ## definition and its legacy call site, and records the instance only at a legacy call site, so naming
+  ## it here would be a second copy of that mangling (#1804).
+  if ir::opnd_is_inst_sym(x.p, ir::i_ak(ip), ir::i_av(ip)) { return false }
   cdo : Option(Decl) = sa_sym_decl(x, ip)
   match cdo {
     Some(cd) => {
