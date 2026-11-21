@@ -660,6 +660,15 @@ pub type_mod_rank_in := fn(src : ptr(u8), as_ : usize, al : usize, nm : Option(M
   }
 }
 
+## The rank of an alias- or brand-shaped candidate declared in module `[ms, ms+ml)`: `type_decl_ranked`'s
+## rule (1) above the §3 chain, so a QUALIFIED spelling (`m::A`, head `qh`) names its module outright.
+## Without it the alias loops ranked by the spelling module alone, and `m::A` written in the root resolved
+## to the root's own `A` (a non-generic read of `m`'s struct with the root's layout, #1808).
+alias_cand_rank := fn(src : ptr(u8), ms : usize, ml : usize, nmod : Option(ModSpan), qh : LSpan) -> i64 {
+  if qh.n != 0 and type_module_eq(src, ms, ml, qh.s, qh.n) { return 1099511627776 }
+  type_mod_rank_in(src, ms, ml, nmod)
+}
+
 ## Write the SOURCE LINE containing byte offset `off` to stderr, then a span / a literal — the
 ## located-diagnostic trio `lower` has (`lower_show_src_line` / `vis_show_span` / `vis_show_str`),
 ## duplicated here because this base module cannot import `lower` back (the cycle `lower_ctx.al`
@@ -1199,6 +1208,18 @@ pub type_span_resolves_alike := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usiz
   true
 }
 
+## Whether two spans of one text carry the same module-path head (`type_path_head`, which reads a
+## qualifier the parser left only in the adjacent source). The resolver caches below key a line on the
+## span's text and naming module; without the head, the tail `Node` of `m::Node` and a bare `Node` in
+## the same module shared a line, so the first answer (`m`'s struct) was every later one's, and the
+## root's struct was read with `m`'s layout (#1808, a wrong value).
+same_path_head := fn(src : ptr(u8), as_ : usize, an : usize, bs : usize, bn : usize) -> bool {
+  ha := type_path_head(src, as_, an)
+  hb := type_path_head(src, bs, bn)
+  if ha.n != hb.n { return false }
+  ha.n == 0 or streq(src, ha.s, ha.n, hb.s, hb.n)
+}
+
 ## Find the kind-2 (struct) `Decl` whose TYPE name matches `[s, s+n)` (by tail name, so a
 ## qualified `mod::P` resolves to struct `P`); returns its index in the decl vector, or -1 if
 ## none. Used to resolve a struct local's layout (field list). Candidates are ordered by
@@ -1211,8 +1232,9 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   ## #1734: the cache is keyed by the naming module of THIS span, which is what the answer depends on.
   nmod := type_naming_at(src, s)
   if _sdc_n[h] == n and _sdc_src[h] == src and naming_hit(src, nmod, _sdc_ctx[h], _sdc_ms[h], _sdc_ml[h])
-     and streq(src, _sdc_s[h], _sdc_n[h], s, n) { return _sdc_i[h] }
+     and streq(src, _sdc_s[h], _sdc_n[h], s, n) and same_path_head(src, _sdc_s[h], _sdc_n[h], s, n) { return _sdc_i[h] }
   nm := name_tail(src, s, n)
+  sqh := type_path_head(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 2, "struct")
   mut alias_ts := 0
   mut alias_tl := 0
@@ -1231,14 +1253,14 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
     ## alias declarations are ranked by the SAME §3 rule as the struct itself: an ancestor's alias
     ## shadows an unrelated module's same-named one instead of losing to declaration order.
     if d.kind == 0 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-      ar := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+      ar := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, sqh)
       if ar >= a_best { a_best = ar; alias_ts = d.ret_ts; alias_tl = d.ret_tl }
     }
     ## a GENERIC-INSTANCE type alias (TYP-10 slice C, `u128 := uint(128)`, Types §7) — the same
     ## one-level follow, keyed on the parser-recorded alias span: its BASE HEAD names the aliased
     ## generic struct (`uint`). (`alias_rhs` below recovers the FULL span, value args included.)
     if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-      ar2 := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+      ar2 := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, sqh)
       if ar2 >= a_best {
         abh := base_type_name(src, d.alias_ts, d.alias_tl)
         a_best = ar2; alias_ts = abh.s; alias_tl = abh.n
@@ -1270,6 +1292,7 @@ pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
   cnt := rt::vec_len(deref(decls))
   nm := name_tail(src, s, n)
   nmod := type_naming_at(src, s)
+  rqh := type_path_head(src, s, n)
   mut rs := s
   mut rn := n
   ## Modules §3: the alias declarations of one name are ranked, so an unrelated module's same-named
@@ -1285,8 +1308,8 @@ pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
     jc = jc + 1
     d := deref(decl_get(decls, i))
     if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n)
-       and type_mod_rank_in(src, d.mod_start, d.mod_len, nmod) >= a_best {
-      a_best = type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+       and alias_cand_rank(src, d.mod_start, d.mod_len, nmod, rqh) >= a_best {
+      a_best = alias_cand_rank(src, d.mod_start, d.mod_len, nmod, rqh)
       bh := base_type_name(src, d.alias_ts, d.alias_tl)
       sdi := struct_decl_of(decls, src, bh.s, bh.n)
       edi := enum_decl_of(decls, src, bh.s, bh.n)
@@ -1317,6 +1340,7 @@ pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
 pub brand_underlying := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
   cnt := rt::vec_len(deref(decls))
   nm := name_tail(src, s, n)
+  bqh := type_path_head(src, s, n)
   nmod := type_naming_at(src, s)
   mut best := 0 - 1
   mut found := false
@@ -1336,7 +1360,7 @@ pub brand_underlying := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
       ## the underlying type. `>=` keeps the last of equal-rank candidates, i.e. the historical
       ## answer (the FIRST match) whenever no naming module is published (every rank -1).
       if d.kind == 0 and d.arity == 1 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-        r := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+        r := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, bqh)
         if r > best or found == false { best = r; found = true; rs = d.ret_ts; rn = d.ret_tl }
       }
     }
@@ -3004,7 +3028,7 @@ pub narrow_signed_min := fn(name : str) -> i64 {
 }
 
 ## Is byte `[p]` a blank inside a TYPE text? Bounded by the caller's `[ts, ts+tl)` extent.
-type_text_blank := fn(src : ptr(u8), p : usize) -> bool {
+pub type_text_blank := fn(src : ptr(u8), p : usize) -> bool {
   c := str_at((src + p), 1)
   c == " " or c == "\n" or c == "\t" or c == "\r"
 }
@@ -5651,8 +5675,9 @@ pub enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   ## #1734: keyed by the naming module of THIS span, as `struct_decl_of` is.
   nmod := type_naming_at(src, s)
   if _edc_n[h] == n and _edc_src[h] == src and naming_hit(src, nmod, _edc_ctx[h], _edc_ms[h], _edc_ml[h])
-     and streq(src, _edc_s[h], _edc_n[h], s, n) { return _edc_i[h] }
+     and streq(src, _edc_s[h], _edc_n[h], s, n) and same_path_head(src, _edc_s[h], _edc_n[h], s, n) { return _edc_i[h] }
   nm := name_tail(src, s, n)
+  eqh := type_path_head(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 3, "enum or union")
   mut alias_ts := 0
   mut alias_tl := 0
@@ -5666,7 +5691,7 @@ pub enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
     if lni_skip(decls, cnt, i, th) == false {
       d := deref(decl_get(decls, i))
       if d.kind == 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-        ar := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+        ar := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, eqh)
         if ar >= a_best {
           if d.ret_tl != 0 { a_best = ar; alias_ts = d.ret_ts; alias_tl = d.ret_tl }
           else if d.alias_tl != 0 {
@@ -6136,6 +6161,375 @@ pub base_type_name := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
     i += 1
   }
   LSpan(s = s, n = n)
+}
+
+## ───────────────────────── the identity of a generic instance's type argument ─────────────────────────
+##
+## #1808, #1810 — Comptime §3.2 gives each distinct comptime-argument set its own instance and §3.4 makes
+## identical ones share one. Mono keyed an instance on the type argument's TEXT, which is wrong both
+## ways: `Node` written in the root and `Node` written in module `m` are two types under one text (one
+## instance, one label `m__at__Node`, and the root's struct read with `m`'s layout: a wrong value), and
+## `ptr(u64)` and `ptr( u64 )` are one type under two texts (two definitions of one label). The answer
+## below is the type's identity: a named struct, enum or union is its DECLARATION, resolved from the
+## module whose text spells it (`type_naming_at`, #1734); everything else is its text with insignificant
+## blanks dropped; type arguments, tuple components and an array's element compare by the same rule.
+## `lower::add_inst` dedups with `targ_same`, and `lower::emit_type_arg_tag` spells the declaring module
+## of each declaration `targ_decl` answers, so two arguments are one instance exactly when they have one
+## label.
+
+## `[s, s+n)` without its leading and trailing blanks.
+pub targ_trim := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut b := s
+  mut e := s + n
+  while b < e and type_text_blank(src, b) { b = b + 1 }
+  while e > b and type_text_blank(src, e - 1) { e = e - 1 }
+  LSpan(s = b, n = e - b)
+}
+
+## Whether `[s, s+n)` (trimmed) is `mut T`, the argument text of a `ptr(mut T)`.
+pub targ_is_mut := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  n > 4 and str_at((src + s), 3) == "mut" and type_text_blank(src, s + 3)
+}
+
+## Whether offset `s` lies in a module's text in the published file table (`spelling_module_at`).
+spelled_in_file := fn(src : ptr(u8), s : usize) -> bool {
+  sm := spelling_module_at(src, s)
+  match sm {
+    Some(m) => { return true }
+    None => { return false }
+  }
+}
+
+## The last path segment of `[s, s+n)`: `a::b::T` → `T`.
+targ_tail := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut t : usize = 0
+  mut i : usize = 0
+  while i + 1 < n {
+    if str_at((src + s + i), 2) == "::" {
+      t = i + 2
+      i = i + 2
+    } else {
+      i = i + 1
+    }
+  }
+  LSpan(s = s + t, n = n - t)
+}
+
+## The struct, enum, union or brand declaration the type head `[s, s+n)` NAMES, or the alias declaration
+## whose right-hand side is not followed, else -1. The declaration must carry the head's own name, so an
+## alias `targ_alias_rhs` follows answers -1 here: it is followed to what it names BEFORE this is asked
+## (`targ_unalias`, Declarations §1.3), not merged into one declaration by it.
+## A head in a module's text resolves from that module. A SYNTHESIZED head (a type text the compiler built
+## by substitution, such as the inferred type of `y := vec::new(Pair, …)`, or a type argument inside an
+## instance) names no module, so it resolves by name alone (`targ_decl_by_name`): without that, one type
+## had two labels, the module-spelled one at the instance's definition and the text one at such a call
+## (`alloc__vec__free__Pair` called, `…__free__<root>__Pair` defined: a link failure).
+pub targ_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  if n == 0 { return 0 - 1 }
+  if not spelled_in_file(src, s) { return targ_decl_by_name(decls, src, s, n) }
+  tl := targ_tail(src, s, n)
+  si := struct_decl_of(decls, src, s, n)
+  if si >= 0 {
+    sd := deref(decl_get(decls, usize(si)))
+    if streq(src, sd.name_start, sd.name_len, tl.s, tl.n) { return si }
+  }
+  ei := qualified_enum_decl_of(decls, src, s, n)
+  if ei >= 0 {
+    ed := deref(decl_get(decls, usize(ei)))
+    if streq(src, ed.name_start, ed.name_len, tl.s, tl.n) { return ei }
+  }
+  ## A brand is its own nominal type (Types §4.1, §5.4): `Id := brand(Node)` in the root and in `m` are
+  ## two types, whatever they brand, so the brand's declaration is the identity.
+  ## An alias whose right-hand side `targ_alias_rhs` does not follow (a tuple `(Node, u64)`, an array
+  ## `[Node; 2]`, a type function whose declaration this program does not load) is identified by its own
+  ## declaration too, never by its text: `P` in the root and `P` in `m` are two declarations that may name
+  ## two types, and one instance for both is a wrong layout (#1808). An alias that does name the same type
+  ## as another spelling then gets one more instance than §3.4 asks for, which costs code, not a value.
+  ki := targ_kind0_decl(decls, src, s, n)
+  if ki >= 0 {
+    kd := deref(decl_get(decls, usize(ki)))
+    if kd.arity == 1 { return ki }
+    fw := targ_alias_rhs(decls, src, s, n)
+    if fw.s == s and fw.n == n { return ki }
+  }
+  0 - 1
+}
+
+## The best-ranked (Modules §3) value declaration (kind 0) named by the head `[s, s+n)`, from the module
+## that spells it, else -1. Its right-hand side may be recorded as a path in `ret_ts/ret_tl`
+## (`A := m::Node`, arity 0; `Id := brand(U)`, arity 1), as a one-token or call-shaped right-hand side in
+## `alias_ts/alias_tl` (`A := Node`, `u128 := uint(128)`, `P := m::Box(u8)`), or not at all. Every
+## same-named declaration competes, recorded or not: a module's own `P` must answer for `P` spelled
+## there even when only another module's `P` has a recorded right-hand side (#1808). Ranked as
+## `brand_underlying`.
+targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  cnt := rt::vec_len(deref(decls))
+  nm := name_tail(src, s, n)
+  kqh := type_path_head(src, s, n)
+  nmod := type_naming_at(src, s)
+  mut best := 0 - 1
+  mut res := 0 - 1
+  th := _fnv_name(src, nm.s, nm.n)
+  mut jc := lni_lo(decls, cnt, th)
+  jce := lni_hi(decls, cnt, th)
+  while jc < jce {
+    i := lni_at(decls, cnt, jc)
+    jc = jc + 1
+    if lni_skip(decls, cnt, i, th) == false {
+      d := deref(decl_get(decls, i))
+      if d.kind == DECL_KIND_VALUE and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        r := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, kqh)
+        if r > best or res < 0 { best = r; res = i64(i) }
+      }
+    }
+  }
+  res
+}
+
+## The type a bare alias head `[s, s+n)` stands for, else `[s, s+n)` itself (#1808). A declaration binds
+## its name to the value of its right-hand side (Declarations §1.3), so `A := Node` makes `A` the type `Node`
+## and `u128 := uint(128)` the type `uint(128)`: an instance at `A` IS the instance at what `A` names,
+## resolved in the module that declares the alias (the right-hand side is that module's text). Two
+## same-named aliases in two modules are therefore two instances when they name two types, and an alias
+## shares its target's instance (Comptime §3.4). A call-shaped right-hand side is followed only when its
+## head constructs a type (`targ_type_ctor_head`: a struct or enum declaration, a type function, or the
+## builtin `ptr`, `uint`, `int`), so a value binding `x := f(1)` stays a name. A brand is not an alias
+## (`targ_decl` answers its declaration).
+pub targ_alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
+  same := LSpan(s = s, n = n)
+  if n == 0 or not spelled_in_file(src, s) { return same }
+  ki := targ_kind0_decl(decls, src, s, n)
+  if ki < 0 { return same }
+  d := deref(decl_get(decls, usize(ki)))
+  if d.arity != 0 { return same }
+  if d.ret_tl != 0 { return LSpan(s = d.ret_ts, n = d.ret_tl) }
+  if d.alias_tl == 0 { return same }
+  bh := base_type_name(src, d.alias_ts, d.alias_tl)
+  if bh.n == d.alias_tl { return LSpan(s = d.alias_ts, n = d.alias_tl) }
+  if targ_type_ctor_head(decls, src, bh.s, bh.n) { return LSpan(s = d.alias_ts, n = d.alias_tl) }
+  same
+}
+
+## Does the head `[s, s+n)` of a call-shaped alias right-hand side construct a type? A struct or enum
+## declaration, which includes a type function (the parser desugars `Box := fn(T : type) -> type {
+## struct {…} }` and `Box(T) := struct {…}` to one, Comptime §3.1), or a builtin type constructor
+## (`ptr(T)`, `uint(N)`, `int(N)`). `Box(u8)` and `Box(u64)`, and `ptr(main::Node)` and `ptr(m::Node)`,
+## are distinct types (Types §4.1), so an alias of one is followed to its own text rather than merged
+## with a same-named alias in another module (#1808).
+targ_type_ctor_head := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  if struct_decl_of(decls, src, s, n) >= 0 or qualified_enum_decl_of(decls, src, s, n) >= 0 { return true }
+  w := str_at((src + s), n)
+  w == "ptr" or w == "uint" or w == "int"
+}
+
+## `targ_alias_rhs` followed through a chain of aliases (`A := B`, `B := Node`), at most 8 links, so a
+## cycle the checker has not refused yet ends at a name rather than looping.
+pub targ_unalias := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut cur := targ_trim(src, s, n)
+  mut k := 0
+  while k < 8 {
+    if not targ_named_shape(src, cur.s, cur.n) { return cur }
+    hd := base_type_name(src, cur.s, cur.n)
+    if hd.n != cur.n { return cur }
+    if targ_decl(decls, src, cur.s, cur.n) >= 0 { return cur }
+    nx := targ_alias_rhs(decls, src, cur.s, cur.n)
+    if nx.s == cur.s and nx.n == cur.n { return cur }
+    cur = targ_trim(src, nx.s, nx.n)
+    k = k + 1
+  }
+  cur
+}
+
+## The ONE struct or enum declaration whose name is the tail of the synthesized head `[s, s+n)`, else -1.
+## Two same-named declarations in different modules leave a synthesized head ambiguous: it keeps its text
+## identity, as before #1808 (the module that spelled it is not recoverable from the text).
+targ_decl_by_name := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  nm := name_tail(src, s, n)
+  cnt := rt::vec_len(deref(decls))
+  th := _fnv_name(src, nm.s, nm.n)
+  mut hits := 0
+  mut res := 0 - 1
+  mut j := lni_lo(decls, cnt, th)
+  je := lni_hi(decls, cnt, th)
+  while j < je {
+    i := lni_at(decls, cnt, j)
+    j = j + 1
+    if lni_skip(decls, cnt, i, th) == false {
+      d := deref(decl_get(decls, i))
+      if (d.kind == DECL_KIND_STRUCT or d.kind == DECL_KIND_ENUM) and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        hits = hits + 1
+        res = i64(i)
+      }
+    }
+  }
+  if hits == 1 { return res }
+  0 - 1
+}
+
+## Whether two type texts are equal once blanks are dropped, except one blank between two identifier
+## bytes (`mut T` is not `mutT`).
+pub targ_text_eq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  mut i := a_s
+  mut j := b_s
+  ae := a_s + a_n
+  be := b_s + b_n
+  mut eq := true
+  mut going := true
+  while going {
+    mut ga := false
+    while i < ae and type_text_blank(src, i) {
+      i = i + 1
+      ga = true
+    }
+    mut gb := false
+    while j < be and type_text_blank(src, j) {
+      j = j + 1
+      gb = true
+    }
+    if i >= ae or j >= be {
+      eq = i >= ae and j >= be
+      going = false
+    } else if ga != gb {
+      eq = false
+      going = false
+    } else if str_at((src + i), 1) != str_at((src + j), 1) {
+      eq = false
+      going = false
+    } else {
+      i = i + 1
+      j = j + 1
+    }
+  }
+  eq
+}
+
+## The element span of an array type `[E; N]` (trimmed), and its length text after the `;`.
+pub targ_arr_elem := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  semi := targ_arr_semi(src, s, n)
+  targ_trim(src, s + 1, semi - s - 1)
+}
+targ_arr_len := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  semi := targ_arr_semi(src, s, n)
+  mut e := s + n
+  if e > semi + 1 and str_at((src + e - 1), 1) == "]" { e = e - 1 }
+  targ_trim(src, semi + 1, e - semi - 1)
+}
+## The offset of the top-level `;` of `[E; N]`, or the closing bracket's when there is none (a view
+## `[E]`, whose length text is then empty).
+targ_arr_semi := fn(src : ptr(u8), s : usize, n : usize) -> usize {
+  mut depth := 0
+  mut p := s + 1
+  mut res := s + n - 1
+  mut going := true
+  while going and p < s + n {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" {
+      depth = depth + 1
+    } else if (c == ")" or c == "]") and depth > 0 {
+      depth = depth - 1
+    } else if c == ";" and depth == 0 {
+      res = p
+      going = false
+    }
+    p = p + 1
+  }
+  res
+}
+
+## Whether the trimmed `[s, s+n)` is a NAMED type: a path (`a::b::T`, identifier bytes and `::`), then
+## nothing or one `( … )` list closing at its end (`Option(u64)`).
+pub targ_named_shape := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 0 or not ll_ident_byte(src, s) { return false }
+  if targ_is_mut(src, s, n) { return false }
+  mut p := s
+  e := s + n
+  while p < e and (ll_ident_byte(src, p) or str_at((src + p), 1) == ":") { p = p + 1 }
+  if p == e { return true }
+  if str_at((src + p), 1) != "(" { return false }
+  mut depth := 0
+  mut close := e
+  while p < e and close == e {
+    c := str_at((src + p), 1)
+    if c == "(" {
+      depth = depth + 1
+    } else if c == ")" {
+      depth = depth - 1
+      if depth == 0 { close = p }
+    }
+    p = p + 1
+  }
+  close == e - 1
+}
+
+## Whether two type-argument spans denote the same type (the rule above). An absent argument (`n == 0`)
+## equals only an absent one.
+pub targ_same := fn(decls : ptr(rt::Vec), src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  a := targ_trim(src, a_s, a_n)
+  b := targ_trim(src, b_s, b_n)
+  if a.n == 0 or b.n == 0 { return a.n == 0 and b.n == 0 }
+  ca := str_at((src + a.s), 1)
+  cb := str_at((src + b.s), 1)
+  if ca == "[" or cb == "[" {
+    if ca != cb { return false }
+    ea := targ_arr_elem(src, a.s, a.n)
+    eb := targ_arr_elem(src, b.s, b.n)
+    la := targ_arr_len(src, a.s, a.n)
+    lb := targ_arr_len(src, b.s, b.n)
+    return targ_text_eq(src, la.s, la.n, lb.s, lb.n) and targ_same(decls, src, ea.s, ea.n, eb.s, eb.n)
+  }
+  if ca == "(" or cb == "(" {
+    if ca != cb { return false }
+    return targ_args_same(decls, src, a.s, 0, b.s, 0)
+  }
+  ma := targ_is_mut(src, a.s, a.n)
+  mb := targ_is_mut(src, b.s, b.n)
+  if ma or mb {
+    if ma != mb { return false }
+    return targ_same(decls, src, a.s + 4, a.n - 4, b.s + 4, b.n - 4)
+  }
+  ## Any other shape (a function type, whose return type follows its parameter list) is its text.
+  if not targ_named_shape(src, a.s, a.n) or not targ_named_shape(src, b.s, b.n) {
+    return targ_text_eq(src, a.s, a.n, b.s, b.n)
+  }
+  ## An alias is the type it names (`targ_alias_rhs`); compare what each side names.
+  ua := targ_unalias(decls, src, a.s, a.n)
+  ub := targ_unalias(decls, src, b.s, b.n)
+  if ua.s != a.s or ua.n != a.n or ub.s != b.s or ub.n != b.n {
+    return targ_same(decls, src, ua.s, ua.n, ub.s, ub.n)
+  }
+  ha := base_type_name(src, a.s, a.n)
+  hb := base_type_name(src, b.s, b.n)
+  hta := targ_trim(src, ha.s, ha.n)
+  htb := targ_trim(src, hb.s, hb.n)
+  da := targ_decl(decls, src, hta.s, hta.n)
+  db := targ_decl(decls, src, htb.s, htb.n)
+  if da >= 0 or db >= 0 {
+    if da != db { return false }
+  } else if not targ_text_eq(src, hta.s, hta.n, htb.s, htb.n) {
+    return false
+  }
+  targ_args_same(decls, src, ha.s, ha.n, hb.s, hb.n)
+}
+
+## Whether the `( … )` lists right after the heads `[a_s, a_s+a_n)` and `[b_s, b_s+b_n)` hold the same
+## types, one by one (`typearg_at`'s reading; a tuple is the list of its own `(`, with `n == 0`).
+targ_args_same := fn(decls : ptr(rt::Vec), src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  mut j : usize = 0
+  mut eq := true
+  mut going := true
+  while going {
+    ta := typearg_at(src, a_s, a_n, j)
+    tb := typearg_at(src, b_s, b_n, j)
+    if ta.n == 0 and tb.n == 0 {
+      going = false
+    } else if not targ_same(decls, src, ta.s, ta.n, tb.s, tb.n) {
+      eq = false
+      going = false
+    } else {
+      j = j + 1
+    }
+  }
+  eq
 }
 
 ## Resolve a comptime-for RANGE BOUND to its constant value: a literal, a module-level const `N := k`
