@@ -2,14 +2,10 @@
 # The feature PR declares the transitions it causes; the gate requires the fresh manifest to differ
 # from the committed one by EXACTLY these rows, and scripts/land.sh then commits that fresh manifest as
 # the oracle. Inert once the committed manifest is no longer base_sha256. Regenerate, never hand-edit.
-#   EXIT-CHANGED       3 pair(s)  [ aarch64 1 riscv64 1 wasm 1 ]
-#   DETAIL-CHANGED     1 pair(s)  [ wasm 1 ]
+#   NOW-RUNS           1 pair(s)  [ x86_64 1 ]
 format=alatyr-corpus-delta-v1
 base_sha256=f5f40875659f4b7979e52a8d022a00ea6e79a774e75785ca1dff8d6a0bd4a9d1
-result_sha256=38389bdcff5aac71d415388b3b72d51bab2fc234b8b44ff2aeedf602e926329b
-pairs=4
+result_sha256=31d38ed1d69cae709c8949e3c2f667af86643cc958b50fad9c7d70b7f894dff9
+pairs=1
 columns=class<TAB>backend<TAB>path<TAB>before<TAB>after
-EXIT-CHANGED	aarch64	test/fmt_operators_enum.al	run/133/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/eaf0528b31c430624b5c4620c9c17389b9f5e75572ddcd4411c932db63e52e76	run/42/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-EXIT-CHANGED	riscv64	test/fmt_operators_enum.al	run/133/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	run/42/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-EXIT-CHANGED	wasm	test/fmt_operators_enum.al	run/134/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/4711e77535490f3dde7c89cc71398b490e56d965e34eca4715dbd0d54d1e85e7	run/42/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-DETAIL-CHANGED	wasm	test/package/visibility_legal/src/geo.al	assemble/1/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/3568cbc6cf1ca55adbe8c0d72aaa54518a1b79e61a6742f10c2bda255aef7231	assemble/1/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/eef57ee246123baca4bc7d96835b241fc0913304f15351ba8bc938c8fc10e2f9
+NOW-RUNS	x86_64	test/issue447_nested_enum_place_byref_reject.al	compile/1/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/59779d1fff243c1169044a1bcec8f759e19ed60e4ff31e495760e9866dc3a958	run/22/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

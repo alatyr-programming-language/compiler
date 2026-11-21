@@ -800,7 +800,9 @@ sa_fn := fn(in out sb : rt::StrBuf, x : SaX, d : Decl, in out a : rt::Arena) -> 
   ## target's legacy emitter does not lay it out as the IR does (`ir::fn_folded_comp`, #1723).
   ## A whole aggregate read through `deref`: this target's legacy emitter stores such a pointee as one
   ## word, so an IR-built reader would see a half-written value (`ir::fn_deref_whole`, #1727).
-  if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.decls, x.src, d) or ir::fn_folded_comp(x.f) or ir::fn_deref_whole(x.f) { return false }
+  ## IR-39 (#1786): a struct with an array or aggregate field reached through a pointer or as a parameter
+  ## is proved against x86_64's legacy layout only (`ir::fn_agg_field`).
+  if ir::ret_is_view(x.src, d) or ir::sig_pins_legacy(x.decls, x.src, d) or ir::fn_folded_comp(x.f) or ir::fn_deref_whole(x.f) or ir::fn_agg_field(x.f) { return false }
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > 8 or nv > SA_MAX_VREGS { return false }

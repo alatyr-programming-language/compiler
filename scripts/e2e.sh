@@ -1053,9 +1053,12 @@ EOF
   ## or a struct laid out one word per field (IR-37: narrow fields too, `word`, and a narrow field written
   ## through the pointer, `fieldw`), is built. The parent refused it as a bare `expr Deref`. Every other
   ## cause names its own refusal: a byte-layout or `@packed` struct (`tier`, `packed`), an enum the
-  ## builder does not lay out (a `str` component), a scalar narrower than a word, and a struct with an
-  ## aggregate field (`nested`). IR-38 (#1786): a pointer with no spelled type (a payload binding) takes
-  ## the pointee sema recorded for the `deref` node, so `recorded` is built.
+  ## builder does not lay out (a `str` component), a scalar narrower than a word. IR-38 (#1786): a pointer
+  ## with no spelled type (a payload binding) takes the pointee sema recorded for the `deref` node, so
+  ## `recorded` is built. IR-39 (#1786): a struct with an enum field of scalar components (`nested`) is
+  ## built; a sub-word scalar inside a nested struct (`nestn`), an enum field whose payload is an
+  ## aggregate (`nestagg`) and a by-value parameter with a signed narrow field beside an aggregate one
+  ## (`pn`) each name their own refusal.
   local dw="$T/ir_deref_why.al"
   cat > "$dw" <<'EOF'
 P := struct { a : u64, b : [u8; 2] }
@@ -1091,18 +1094,35 @@ nested := fn(p : ptr(M)) -> u64 {
 K := @packed struct { a : u8, b : u16 }
 packed := fn(p : ptr(K)) -> u64 { v : K = deref(p); 0 }
 fieldw := fn(p : ptr(mut W)) { p.b = 7 }
+I8 := struct { q : u8, r : u64 }
+N := struct { a : u64, i : I8 }
+nestn := fn(p : ptr(N)) -> u64 {
+  v : N = deref(p)
+  v.a
+}
+V := struct { x : u64 }
+G := struct { a : u64, o : Option(V) }
+nestagg := fn(p : ptr(G)) -> u64 {
+  v : G = deref(p)
+  v.a
+}
+SN := struct { k : i8, q : Q }
+pn := fn(s : SN) -> u64 { 0 }
 main := fn() -> u64 { 0 }
 EOF
   "$CC" ir "$dw" > "$rep" 2>/dev/null; rc=$?
   if [ "$rc" = 0 ] && grep -qE '^fn ir_deref_why::tier NotYet\(expr Deref: @packed or byte-layout struct pointee, .*ir_deref_why\.al:5:17\)$' "$rep" \
      && grep -q '^fn ir_deref_why::word Built$' "$rep" && grep -q '^fn ir_deref_why::fieldw Built$' "$rep" \
      && grep -qE '^fn ir_deref_why::packed NotYet\(expr Deref: @packed or byte-layout struct pointee, .*ir_deref_why\.al:32:49\)$' "$rep" \
-     && grep -qE '^fn ir_deref_why::nested NotYet\(expr Deref: struct pointee with an array or aggregate field, .*ir_deref_why\.al:28:17\)$' "$rep" \
+     && grep -q '^fn ir_deref_why::nested Built$' "$rep" \
+     && grep -qE '^fn ir_deref_why::nestn NotYet\(expr Deref: struct pointee with a sub-word scalar in a nested aggregate field, .*ir_deref_why\.al:37:17\)$' "$rep" \
+     && grep -qE '^fn ir_deref_why::nestagg NotYet\(expr Deref: struct pointee with an enum field holding an aggregate payload, .*ir_deref_why\.al:43:17\)$' "$rep" \
+     && grep -qE '^fn ir_deref_why::pn NotYet\(signature: struct parameter with an aggregate field and a signed or nested sub-word scalar, .*ir_deref_why\.al:47:1\)$' "$rep" \
      && grep -qE '^fn ir_deref_why::unlaid NotYet\(expr Deref: pointee aggregate the builder does not lay out, .*ir_deref_why\.al:9:15\)$' "$rep" \
      && grep -q '^fn ir_deref_why::recorded Built$' "$rep" \
      && grep -qE '^fn ir_deref_why::narrow NotYet\(expr Deref: scalar narrower than a word through a pointer, .*ir_deref_why\.al:17:41\)$' "$rep" \
      && grep -q '^fn ir_deref_why::whole Built$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
-    echo "ok   ir #1723 deref read whole: built for a spelled or recorded enum pointee and a word-per-field struct (read and narrow write); each other cause names its refusal"
+    echo "ok   ir #1723 deref read whole: built for a spelled or recorded enum pointee, a word-per-field struct (read and narrow write) and a struct with a scalar-enum field (IR-39); each other cause names its refusal"
   else echo "FAIL ir #1723 deref read whole: rc=$rc"; grep -E '^fn ir_deref_why::' "$rep" | head -5 | sed 's/^/     /'; fail=1; fi
   ## #1723: an enum with a niche-folded `Option(ptr(T))` component. x86_64's legacy emitter lays the
   ## component out as the IR does, one pointer word (#852), so x86_64 selects `walk` from the IR. The
@@ -1727,6 +1747,21 @@ build_reject_has() { # name, needle
   if [ -e "$out" ]; then echo "FAIL $1: rejected but left an output artifact"; fail=1; return; fi
   if grep -qF "$2" "$err"; then echo "ok   $1: build rejected with the diagnostic"
   else echo "FAIL $1: rc=$got but the diagnostic is missing [$2]"; fail=1; fi
+}
+
+## `build_reject_has` on the LEGACY x86_64 emitter (`x86-legacy`): a fence the shared IR lifted on the
+## default route but the legacy emitter keeps, located (IR-39, #1786; no legacy-x86 fixes, #980).
+legacy_reject_has() { # name, needle
+  src="$E2E_TEST/$1.al"
+  [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
+  key="${1//\//_}"
+  out="$T/e2e_$key.legacy.out"
+  err="$T/e2e_$key.legacy.err"
+  "$CC" x86-legacy -o "$out" "$src" >/dev/null 2>"$err"; got=$?
+  if [ "$got" = 0 ]; then echo "FAIL $1(x86-legacy): build succeeded, want a located reject"; fail=1; return; fi
+  if [ -e "$out" ]; then echo "FAIL $1(x86-legacy): rejected but left an output artifact"; fail=1; return; fi
+  if grep -qF "$2" "$err"; then echo "ok   $1(x86-legacy): build rejected with the diagnostic"
+  else echo "FAIL $1(x86-legacy): rc=$got but the diagnostic is missing [$2]"; fail=1; fi
 }
 
 ## Issue #426, the manifest half. `d_manifest_pub_diag` (512 bytes) and `d_manifest_duplicate_diag`
@@ -11268,7 +11303,10 @@ run_wat issue447_nested_enum_place_match 134
 ## `resolve_nested_ptr_field` refuses out loud. Same located reject on parent 7ed9ffd and on this tree;
 ## the row exists so a future widening of `word_field_path` cannot silently turn it into an unmeasured
 ## emission. `_has`, not a bare `build_reject`, and the needle appears nowhere in the fixture's text.
-build_reject_has issue447_nested_enum_place_byref_reject "leaf of a nested field through a pointer"
+## IR-39 (#1786) lifted it on purpose, measured: the default builds `pick` from the shared IR and answers
+## 22 (`Tag.Green`), while `x86-legacy` keeps the located reject (no legacy-x86 fixes, #980).
+run_x86 issue447_nested_enum_place_byref_reject 22
+legacy_reject_has issue447_nested_enum_place_byref_reject "leaf of a nested field through a pointer"
 run_wat issue449_enum_field_control 42
 ## issue #472 — a GENERIC OVERLOAD SET shared ONE linker symbol, because the instance label
 ## `<module>__<fn>__<typetag>` is built from the TYPE ARGUMENTS ALONE and the value parameters take no
