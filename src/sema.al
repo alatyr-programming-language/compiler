@@ -322,6 +322,48 @@ fnval_field_access_err := fn(s : usize) -> CheckErr { FNVAL_FIELD_ACCESS_DIAG_MA
 ## (#1461 6903500000000000000, #1465 6904000000000000000, #1469 6904500000000000000) and below CT.
 NUMERIC_COND_DIAG_MARKER : usize = 6905000000000000000
 numeric_cond_err := fn(s : usize) -> CheckErr { NUMERIC_COND_DIAG_MARKER + diag_span(s) * 4 }
+## Issue #1822 / Functions §2.3, §5.1 — a direct call that passes MORE arguments than its callee declares
+## parameters: the surplus binds no parameter. The payload is the enum-variant-arity layout, 1024-wide:
+## the low 5 bits the SUPPLIED count, the next 5 the DECLARED count (each clamped to
+## ENUM_VARIANT_ARITY_COUNT_CAP), the rest the callee's source offset. Its window runs up to
+## CALL_UNBOUND_PARAM_DIAG_MARKER; the two classes sit between the numeric-condition class and CT.
+CALL_TOO_MANY_DIAG_MARKER : usize = 6906000000000000000
+call_too_many_err := fn(s : usize, declared : usize, supplied : usize) -> CheckErr {
+  mut dcl := declared
+  mut sup := supplied
+  if dcl > ENUM_VARIANT_ARITY_COUNT_CAP { dcl = ENUM_VARIANT_ARITY_COUNT_CAP }
+  if sup > ENUM_VARIANT_ARITY_COUNT_CAP { sup = ENUM_VARIANT_ARITY_COUNT_CAP }
+  CALL_TOO_MANY_DIAG_MARKER + diag_span(s) * 1024 + dcl * 32 + sup
+}
+## Issue #1822 / Functions §2.3, §5.1, §5.5 — a direct call that leaves a parameter UNBOUND, and which
+## kind of parameter it is (`CallUnbound`): an `in` one with no default, an `out` / `in out` one (the
+## compiler does not project an `out` yet, #1702), an allocator parameter the call elides with no
+## ambient to fill it (§5.5 step 4), or a call that is ambiguous between eliding the allocator and
+## taking a default (spec#171, refused until decided). One word carries the CALL's offset, which
+## locates the diagnostic, the PARAMETER's name offset, which the renderer quotes, and the kind:
+## `(call * CALL_UNBOUND_PARAM_SLOT + param) * 4 + kind`, kind 0 `in`, 1 place, 2 allocator, 3
+## allocator-or-default (the driver's `DIAG_CALL_UNBOUND_KIND_*`). Each
+## offset is into the WHOLE program's source (every file of the file table), and must be below the slot
+## (32 MiB); one that is not is dropped to 0. The driver locates this class only by a non-zero call
+## offset, so a dropped call renders unlocated and a dropped parameter unnamed, never a wrong line or
+## name. The largest payload is (2^50 + 2^25) * 4 + 3 < 2^53, inside the window up to CT_DIAG_MARKER.
+CALL_UNBOUND_PARAM_DIAG_MARKER : usize = 6906500000000000000
+CALL_UNBOUND_PARAM_SLOT : usize = 33554432
+CallUnbound := enum { UnboundIn, UnboundPlace, UnboundAlloc, UnboundAllocOrDefault }
+call_unbound_param_err := fn(s : usize, ps : usize, w : CallUnbound) -> CheckErr {
+  mut cs := diag_span(s)
+  mut pn := ps
+  if cs >= CALL_UNBOUND_PARAM_SLOT { cs = 0 }
+  if pn >= CALL_UNBOUND_PARAM_SLOT { pn = 0 }
+  mut wb : usize = 0
+  match w {
+    CallUnbound::UnboundIn => { wb = 0 }
+    CallUnbound::UnboundPlace => { wb = 1 }
+    CallUnbound::UnboundAlloc => { wb = 2 }
+    CallUnbound::UnboundAllocOrDefault => { wb = 3 }
+  }
+  CALL_UNBOUND_PARAM_DIAG_MARKER + (cs * CALL_UNBOUND_PARAM_SLOT + pn) * 4 + wb
+}
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -3399,6 +3441,83 @@ callee_elided_alloc_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
           }
         }
       }
+    }
+    None => {}
+  }
+  r
+}
+## Issue #1822 / Functions §2.3, §5.1, §5.5 (MEM-5) — is the direct call `[cs, cs+cl)` one whose
+## parameters `sema_call_binding_err` judges: a callee spelled by name or path (not UFCS, not an
+## expression callee, not a local), naming ONE function declaration (`sema_call_fn_decl`: order- and
+## module-aware, through an alias hop) that is neither generic nor variadic? Otherwise sema leaves the
+## count to the name walks' overload check (`call_arity_match`).
+sema_call_binding_judged := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
+  if cl == 0 or ast::span_is_synthetic(cs) or ecallee_is(cs) or not sema_direct_named_call(src, cs, cl) { return false }
+  mut r := false
+  di : Option(usize) = sema_call_fn_decl(decls, src, cs, cl)
+  match di {
+    Some(i) => {
+      d := deref(decl_get(decls, i))
+      if not d.is_generic and not decl_is_variadic(d, src) and not decl_is_slice_variadic(d) { r = true }
+    }
+    None => {}
+  }
+  r
+}
+## Issue #1822 / Functions §2.3, §5.1, §5.5 — the refusal for a judged direct call (above) that binds a
+## different set of parameters than its callee declares, else 0. Arguments bind the parameters in order
+## (the parser has already put named ones in declaration order). A surplus argument is refused, and so
+## is the first parameter left over that is not an `in` one with a §5.1 default: an `in out` parameter
+## is always bound by a place, and an `out` one by a place too until projection is implemented (#1702).
+## Statement and value position alike, the callee declared before or after the caller.
+## An allocator the call elides (§5.5) gets no allowance: `driver::d_elide_alloc_stmts` has already
+## spliced the ambient of an enclosing `alloc::with` (step 1) into the call before sema runs, so an
+## allocator still missing has nothing to fill it — step 4's compile error, or step 2, which is not
+## implemented (#1468). When the in-order reading leaves a parameter unbound and the call has the
+## elision shape (`callee_elided_alloc_idx`), the written arguments are read around the allocator, and
+## the ALLOCATOR is the parameter named. When the in-order reading binds the call whole (the parameter
+## it leaves over has a default) and the call has the elision shape too, either reading binds every
+## parameter, and which one the call means is a spec gap (spec#171): refused, naming the allocator,
+## rather than guessed. Inside `alloc::with` the driver's splice hides that shape from sema (#1845).
+sema_call_binding_err := fn(e : ptr(Expr), cs : usize, cl : usize, decls : ptr(rt::Vec), src : ptr(u8)) -> CheckErr {
+  mut r : CheckErr = 0
+  di : Option(usize) = sema_call_fn_decl(decls, src, cs, cl)
+  match di {
+    Some(i) => {
+      d := deref(decl_get(decls, i))
+      nargs := expr_call_arity(e)
+      if nargs > d.arity { r = call_too_many_err(cs, d.arity, nargs) }
+      mut pp := d.params_head
+      mut bound : usize = 0
+      mut unbound := false
+      el : i64 = callee_elided_alloc_idx(decls, src, cs, cl, nargs)
+      mut k : i64 = 0
+      mut el_name : usize = 0
+      loop {
+        match pp {
+          Some(ppq) => {
+            pm := deref(param_p(ppq))
+            if k == el { el_name = pm.ns }
+            if r == 0 {
+              place := ast::param_by_place(pm) or ast::param_array_by_place(pm)
+              dflt := pm.pmode == 0 and pm.pps != 0 and str_at((src + pm.ts), pm.tl) != "ptr"
+              if bound < nargs { bound += 1 }
+              else if place {
+                r = call_unbound_param_err(cs, pm.ns, CallUnbound.UnboundPlace)
+                unbound = true
+              } else if not dflt {
+                r = call_unbound_param_err(cs, pm.ns, CallUnbound.UnboundIn)
+                unbound = true
+              }
+            }
+            k += 1
+            pp = pm.next
+          }
+          None => { break }
+        }
+      }
+      if unbound and el >= 0 { r = call_unbound_param_err(cs, el_name, CallUnbound.UnboundAlloc) }
+      else if r == 0 and el >= 0 { r = call_unbound_param_err(cs, el_name, CallUnbound.UnboundAllocOrDefault) }
     }
     None => {}
   }
@@ -9319,7 +9438,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       ## module-level fn's arity or parameters judge the call (`sema_callee_is_local`).
       cloc := sema_callee_is_local(src, cs, cl, locals, nloc)
       gen := not cloc and callee_is_generic(decls, upto, src, cs, cl)
-      if not gen and not cloc and call_arity_match(decls, upto, src, cs, cl, na, a) == 0 { bad = true }
+      if not gen and not cloc and not sema_call_binding_judged(decls, src, cs, cl) and call_arity_match(decls, upto, src, cs, cl, na, a) == 0 { bad = true }
       ## an UNDEFINED function call is a name resolving to no declared fn/type AND not
       ## a built-in (a prelude identifier the lower handles) — reject at CHECK time rather than at LINK.
       ## Accumulates into `bad` (the poison path the caller turns into a located `mark_failed`); no early
@@ -11962,6 +12081,15 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   ## Conservative: only Var-local args, only when BOTH pointees resolve to a known struct/enum → never a
   ## false reject. Stepped bools (the isolated `streq` dodges the `cmp-and-fn-call` mis-lower scar).
   ecs := sema_call_decl_span(e, src, locals, nloc)
+  ## #1822 — every parameter of a judged direct call is bound (Functions §2.3, §5.1), in statement and
+  ## value position alike, whatever the callee's place in declaration order.
+  if sema_call_binding_judged(decls, src, ecs.s, ecs.n) {
+    cbe := sema_call_binding_err(e, ecs.s, ecs.n, decls, src)
+    if cbe != 0 {
+      mark_failed(locals, cbe)
+      return Result(Ty, CheckErr).Err(cbe)
+    }
+  }
   cgen := callee_is_generic(decls, upto, src, ecs.s, ecs.n)
   ## Issue #269 — the bounded wrapper-result fence. Run before the broad aggregate↔scalar mirror so
   ## a direct qualified call cannot fall through to the tail-name-based tolerant path. The helper is
@@ -14521,7 +14649,7 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
       if not callee_ok0 and na0 >= 1 and callee_is_fn_valued_field(decls, src, cs0, cl0) { callee_ok0 = true }
       if not callee_ok0 and not synth0 { return cs0 }
       gen0 := callee_is_generic(decls, upto, src, cs0, cl0)
-      if not gen0 and not synth0 and call_arity_match(decls, upto, src, cs0, cl0, na0, a) == 0 { return cs0 }
+      if not gen0 and not synth0 and not sema_call_binding_judged(decls, src, cs0, cl0) and call_arity_match(decls, upto, src, cs0, cl0, na0, a) == 0 { return cs0 }
       tb0 := callee_is_type_builtin(decls, src, cs0, cl0)
       mut ai0 := 0
       mut g0 : Option(ptr(mut Arg)) = ah1
