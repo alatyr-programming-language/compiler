@@ -6431,7 +6431,10 @@ issue1212_located_refusals_test() {
 ## VALID programs, so they are generated here and add no corpus fixture (see #1212 above). A struct
 ## element waits on a per-field copy; a `u16` element on the Types §6.4 stride of `[u16; N]` (#1559).
 ## A length written as a named constant or a constant expression (`[u64; K]`, `[u64; 1 + 1]`) is refused
-## too until the copy evaluates it (#1833): the parent answered garbage and 41 where 42 is due.
+## too until the copy evaluates it (#1833): the parent answered garbage and 41 where 42 is due. A
+## reassigned array local declared without `: [T; N]` (`mut v := [u64(0), u64(0)]`) has no element type
+## or count to read and is refused (the parent moved one word: 40 and 0 where 42 is due), and so is a
+## reassignment whose declaration in effect cannot be told apart from a same-named lambda parameter.
 issue1809_deref_arr_refusals_test() {
   local d="$T/issue1809_deref_arr_refusals" n src out err got
   rm -rf "$d"
@@ -6491,7 +6494,42 @@ issue1809_deref_arr_refusals_test() {
     '  mut arr : [u64; 2] = [40, 2]' \
     '  rd(unchecked bitcast(usize, ptr(arr)))' \
     '}' > "$d/expr_len.al"
-  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len; do
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v := [u64(0), u64(0)]' \
+    '  v = deref(p)' \
+    '  v[0] + v[1]' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/inferred_reassign.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; 2] = [0, 0]' \
+    '  f := fn(v : u64) -> u64 { v }' \
+    '  v = deref(p)' \
+    '  v[0] + v[1] + f(0)' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/decl_unknown.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v := [u64(0), u64(0)]' \
+    '  v[0] = 1' \
+    '  v = deref(p)' \
+    '  v[1] * 21' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/inferred_reassign_idx.al"
+  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown; do
     src="$d/$n.al"; out="$d/$n.out"; err="$d/$n.err"
     "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
     if [ "$got" = 0 ]; then echo "FAIL issue1809_deref_arr_refusals($n): build succeeded, want a located reject"; fail=1; continue; fi
@@ -6502,6 +6540,9 @@ issue1809_deref_arr_refusals_test() {
       named_len) grep -qF 'needs its length' "$err" && grep -qF 'v : [u64; K] = deref(p)' "$err" ;;
       named_len_reassign) grep -qF 'needs its length' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       expr_len) grep -qF 'needs its length' "$err" && grep -qF 'v : [u64; 1 + 1] = deref(p)' "$err" ;;
+      inferred_reassign) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      inferred_reassign_idx) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      decl_unknown) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
     esac
     if [ $? = 0 ]; then echo "ok   issue1809_deref_arr_refusals($n): refused, located"
     else echo "FAIL issue1809_deref_arr_refusals($n): rc=$got but the reason or its source line is missing"; fail=1; fi
