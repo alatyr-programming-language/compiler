@@ -2689,8 +2689,8 @@ ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> 
         match plo { Some(pl) => { return ib_agg_bound(bp, a, pl.di, pl.s, pl.n) }; None => {} }
       }
     }
-    ## #1723: `deref(p)` — the pointee its operand's declaration spells.
-    Expr::Deref(pe) => { return ib_deref_agg_type(bp, a, pe) }
+    ## #1723: `deref(p)` — the pointee its operand's declaration spells, else the one sema recorded (IR-38).
+    Expr::Deref(pe) => { return ib_deref_agg_type(bp, a, e, pe) }
     ## #1705: `xs[i]` of an aggregate-element array local — its element type (asking emits nothing).
     Expr::Index(gb, gix) => {
       gpo : Option(IbAgAt) = ib_agarr_place(bp, a, gb)
@@ -2793,11 +2793,50 @@ ib_callee_pointee_foreign := fn(bp : ptr(mut IbB), d : Decl, ps : IbSpan) -> boo
   bv : IbB = deref(bp)
   not lower_layout::type_span_resolves_alike(bv.decls, bv.src, ps.s, ps.n, d.mod_start, d.mod_len, 4)
 }
-## #1723: the aggregate type `deref(pe)` reads whole — its declared pointee, when that is an enum the
-## builder lays out or a WORD-tier struct (the only struct a place through a pointer may be, see
-## "places"). Asking emits nothing.
-ib_deref_agg_type := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> Option(IbSt) {
+## IR-38 (#1786 cause 4): what sema recorded as the type `deref(pe)` reads, for the `deref` node `de`.
+## `RpType`: the pointee, proven to name one type here. `RpForeign`: a pointee written in another module
+## whose names are not proven to mean the same declarations here. `RpNone`: no record to take.
+IbRecPt := enum { RpType(IbSpan), RpForeign, RpNone }
+## The record is the spelling sema keeps for the `deref` node itself (docs/ir.md §3.8 item 8): the
+## pointee inside its operand's recorded type, with a bare type parameter of a generic declaration
+## replaced by what the instance at hand binds it to (`sema_spell_pointee`). It is taken only as a bare
+## text spelling (no wrapper, no builtin form) that leaves no type parameter of its generic declaration
+## unbound. The builder lays the text out from the module being built, so it is taken only when every
+## struct and enum name in it means the same declaration from the module that wrote it
+## (`type_span_resolves_alike`, the rule `ib_callee_pointee_foreign` applies to a callee's `-> ptr(T)`).
+## A node with no record, or one in no module the file table names, is `RpNone`: never a guess (D6).
+## Asking emits nothing.
+ib_deref_recorded := fn(bp : ptr(mut IbB), de : ptr(Expr)) -> IbRecPt {
+  bv : IbB = deref(bp)
+  sp : TySpell = sty_spell_get(de)
+  f : SpellForm = sp.form
+  match f { SfText => {}; SfBytesView | SfI64 | SfU8 => { return IbRecPt.RpNone } }
+  if sp.n == 0 or sp.layers != 0 or ast::span_is_synthetic(sp.s) { return IbRecPt.RpNone }
+  if sema::sema_spell_mentions_env(sp, bv.decls, bv.src) { return IbRecPt.RpNone }
+  wm : sema::SpanMod = sema::sema_span_module(bv.decls, bv.src, sp.s)
+  if not wm.found { return IbRecPt.RpNone }
+  if not lower_layout::type_span_resolves_alike(bv.decls, bv.src, sp.s, sp.n, wm.s, wm.n, 4) { return IbRecPt.RpForeign }
+  IbRecPt.RpType(IbSpan(s = sp.s, n = sp.n))
+}
+## The pointee `deref(pe)` reads (`de` the `deref` node): the one its operand's declaration spells
+## (`ib_deref_pointee`), else the one sema recorded (`ib_deref_recorded`). Asking emits nothing.
+ib_deref_pointee_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, de : ptr(Expr), pe : ptr(Expr)) -> Option(IbSpan) {
   po : Option(IbSpan) = ib_deref_pointee(bp, a, pe)
+  match po { Some(ps) => { return po }; None => {} }
+  if ib_deref_foreign(bp, a, pe) { return Option(IbSpan).None }
+  rp : IbRecPt = ib_deref_recorded(bp, de)
+  match rp {
+    RpType(rs) => { return Option(IbSpan).Some(rs) }
+    RpForeign => {}
+    RpNone => {}
+  }
+  Option(IbSpan).None
+}
+## #1723: the aggregate type `deref(pe)` reads whole — its pointee (`ib_deref_pointee_of`), when that is an
+## enum the builder lays out or a WORD-tier struct (the only struct a place through a pointer may be, see
+## "places"). Asking emits nothing.
+ib_deref_agg_type := fn(bp : ptr(mut IbB), in out a : rt::Arena, de : ptr(Expr), pe : ptr(Expr)) -> Option(IbSt) {
+  po : Option(IbSpan) = ib_deref_pointee_of(bp, a, de, pe)
   match po {
     Some(ps) => {
       sto : Option(IbSt) = ib_agg_named(bp, a, ps.s, ps.n)
@@ -2811,12 +2850,12 @@ ib_deref_agg_type := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr))
   Option(IbSt).None
 }
 ## #1723: why `deref(pe)` read whole is not built — the construct a refusal names — or `EDeref` when it
-## can be: the pointee is not spelled (`EDerefPointee`), names no aggregate the builder lays out
+## can be: neither spelled nor recorded (`EDerefPointee`), names no aggregate the builder lays out
 ## (`EDerefUnlaid`), is a struct no pointer may reach (`ib_struct_ptr_why`: `EDerefLevered`,
-## `EDerefNested`, `EDerefTier`), or is a call's pointee spelled in another module and not proven to be
-## the same type here (`EDerefForeign`).
-ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> Construct {
-  po : Option(IbSpan) = ib_deref_pointee(bp, a, pe)
+## `EDerefNested`, `EDerefTier`), or is a pointee written in another module and not proven to be the
+## same type here (`EDerefForeign`).
+ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, de : ptr(Expr), pe : ptr(Expr)) -> Construct {
+  po : Option(IbSpan) = ib_deref_pointee_of(bp, a, de, pe)
   match po {
     Some(ps) => {
       sto : Option(IbSt) = ib_agg_named(bp, a, ps.s, ps.n)
@@ -2832,6 +2871,12 @@ ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> C
     None => {}
   }
   if ib_deref_foreign(bp, a, pe) { return Construct.EDerefForeign }
+  rp : IbRecPt = ib_deref_recorded(bp, de)
+  match rp {
+    RpForeign => { return Construct.EDerefForeign }
+    RpType(rs) => {}
+    RpNone => {}
+  }
   Construct.EDerefPointee
 }
 ## Refuse the aggregate expression `e` for reason `w`: a `deref` under the cause `ib_deref_why` names
@@ -2839,7 +2884,7 @@ ib_deref_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, pe : ptr(Expr)) -> C
 ib_refuse_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), w : NyWhy) {
   match deref(e) {
     Expr::Deref(pe) => {
-      c : Construct = ib_deref_why(bp, a, pe)
+      c : Construct = ib_deref_why(bp, a, e, pe)
       sp : Option(u64) = expr_span(e)
       ib_refuse(bp, c, w, sp)
       return

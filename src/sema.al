@@ -4014,8 +4014,8 @@ type_decl_index := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
 ## contiguous in it, so the nearest preceding declaration name lies in the same file as any span
 ## inside that file's declarations. `found = false` for a synthetic span or an offset before every
 ## declaration — the caller then keeps its historical answer.
-SpanMod := struct { found : bool, s : usize, n : usize }
-sema_span_module := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize) -> SpanMod {
+pub SpanMod := struct { found : bool, s : usize, n : usize }
+pub sema_span_module := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize) -> SpanMod {
   if ast::span_is_synthetic(s) { return SpanMod(found = false, s = 0, n = 0) }
   tm := lower_layout::spelling_module_at(src, s)
   match tm {
@@ -10437,7 +10437,7 @@ sema_tparam_pos := fn(decls : ptr(rt::Vec), di : usize, src : ptr(u8), s : usize
 }
 ## Does `sp` mention a type parameter of the generic declaration it is read in (so only an instance's
 ## binding of it says what it is)?
-sema_spell_mentions_env := fn(sp : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+pub sema_spell_mentions_env := fn(sp : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
   if sp.ed == 0 or sp.n == 0 { return false }
   d := deref(decl_get(decls, sp.ed - 1))
   sema_spell_mentions_param(d.params_head, src, sp.s, sp.n, not d.is_fn)

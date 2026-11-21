@@ -1053,8 +1053,9 @@ EOF
   ## or a struct laid out one word per field (IR-37: narrow fields too, `word`, and a narrow field written
   ## through the pointer, `fieldw`), is built. The parent refused it as a bare `expr Deref`. Every other
   ## cause names its own refusal: a byte-layout or `@packed` struct (`tier`, `packed`), an enum the
-  ## builder does not lay out (a `str` component), a pointer with no spelled type (a payload binding), a
-  ## scalar narrower than a word, and a struct with an aggregate field (`nested`).
+  ## builder does not lay out (a `str` component), a scalar narrower than a word, and a struct with an
+  ## aggregate field (`nested`). IR-38 (#1786): a pointer with no spelled type (a payload binding) takes
+  ## the pointee sema recorded for the `deref` node, so `recorded` is built.
   local dw="$T/ir_deref_why.al"
   cat > "$dw" <<'EOF'
 P := struct { a : u64, b : [u8; 2] }
@@ -1067,7 +1068,7 @@ tier := fn(p : ptr(P)) -> u64 {
 unlaid := fn(p : ptr(U)) -> u64 {
   match deref(p) { U.A(s) => { return 1 }; U.B => { return 2 } }
 }
-unspelled := fn(o : Option(ptr(Q))) -> u64 {
+recorded := fn(o : Option(ptr(Q))) -> u64 {
   match o {
     Some(q) => { match deref(q) { Q.A => { return 1 }; Q.B(x) => { return x } } }
     None => { return 0 }
@@ -1098,10 +1099,10 @@ EOF
      && grep -qE '^fn ir_deref_why::packed NotYet\(expr Deref: @packed or byte-layout struct pointee, .*ir_deref_why\.al:32:49\)$' "$rep" \
      && grep -qE '^fn ir_deref_why::nested NotYet\(expr Deref: struct pointee with an array or aggregate field, .*ir_deref_why\.al:28:17\)$' "$rep" \
      && grep -qE '^fn ir_deref_why::unlaid NotYet\(expr Deref: pointee aggregate the builder does not lay out, .*ir_deref_why\.al:9:15\)$' "$rep" \
-     && grep -qE "^fn ir_deref_why::unspelled NotYet\(expr Deref: pointee type not spelled by the operand's declaration, .*ir_deref_why\.al:13:30\)$" "$rep" \
+     && grep -q '^fn ir_deref_why::recorded Built$' "$rep" \
      && grep -qE '^fn ir_deref_why::narrow NotYet\(expr Deref: scalar narrower than a word through a pointer, .*ir_deref_why\.al:17:41\)$' "$rep" \
      && grep -q '^fn ir_deref_why::whole Built$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
-    echo "ok   ir #1723 deref read whole: built for a spelled enum pointee and a word-per-field struct (read and narrow write); each other cause names its refusal"
+    echo "ok   ir #1723 deref read whole: built for a spelled or recorded enum pointee and a word-per-field struct (read and narrow write); each other cause names its refusal"
   else echo "FAIL ir #1723 deref read whole: rc=$rc"; grep -E '^fn ir_deref_why::' "$rep" | head -5 | sed 's/^/     /'; fail=1; fi
   ## #1723: an enum with a niche-folded `Option(ptr(T))` component. x86_64's legacy emitter lays the
   ## component out as the IR does, one pointer word (#852), so x86_64 selects `walk` from the IR. The
@@ -4775,6 +4776,37 @@ ir1723_alias_deref_test() {
     echo "ok   ir1723_alias_deref/enum: refused at the match line"
   else echo "FAIL ir1723_alias_deref/enum: build rc=$rc, neither 42 nor the located refusal: $(head -c 300 "$err")"; fail=1; fi
   rm -rf "$en/target"
+}
+
+## IR-38 (#1786 cause 4) / docs/ir.md §3.8 item 8 — `deref(q)` read whole where `q`'s declaration spells
+## no type: the builder lays the pointee out from the type sema recorded for the `deref` node. Each
+## shape of the fixtures is Built: an inferred local, a match payload binding (`Option(ptr(S))` and a
+## program's generic `Ref(S)`), a struct field by value and through a pointer, and an enum pointee of
+## each. Cross-module, the record is used only once `type_span_resolves_alike` proves the spelling names
+## one type in both modules: `ir38_deref_foreign_same` builds `main::rd`; in `ir38_deref_foreign_amb`
+## the name is ambiguous and `main::rd` is refused `EDerefForeign`, never laid out from a guess.
+ir38_deref_test() {
+  local rep="$T/ir38_deref.ir" ok=1 f fn
+  for f in "ir38_deref_inferred_local via_call via_addr" "ir38_deref_field_ptr by_value by_ptr" \
+           "ir38_deref_payload_ptr opt_sum ref_sum" "ir38_deref_recorded_enum by_local by_payload by_field"; do
+    set -- $f
+    local base="$1"; shift
+    "$CC" ir "$E2E_TEST/$base.al" > "$rep" 2>/dev/null || { echo "FAIL ir38_deref/$base: ir rc=$?"; fail=1; ok=0; continue; }
+    grep -q 'verify_failed=0$' "$rep" || { echo "FAIL ir38_deref/$base: verify_failed"; fail=1; ok=0; }
+    for fn in "$@"; do
+      grep -q "^fn $base::$fn Built\$" "$rep" \
+        || { echo "FAIL ir38_deref/$base::$fn: $(grep "^fn $base::$fn " "$rep")"; fail=1; ok=0; }
+    done
+  done
+  local pk; pk="$(_fixture_tree package)"
+  local sm="$pk/ir38_deref_foreign_same" am="$pk/ir38_deref_foreign_amb"
+  "$CC" ir --modules "$sm/src/m.al" "$sm/src/main.al" > "$rep" 2>/dev/null
+  grep -q '^fn main::rd Built$' "$rep" \
+    || { echo "FAIL ir38_deref/foreign_same: $(grep '^fn main::rd ' "$rep")"; fail=1; ok=0; }
+  "$CC" ir --modules "$am/src/a.al" "$am/src/b.al" "$am/src/m.al" "$am/src/main.al" > "$rep" 2>/dev/null
+  grep -qE '^fn main::rd NotYet\(expr Deref: pointee type written in another module and not proven to be the same type in this module, .*main\.al:2:14\)$' "$rep" \
+    || { echo "FAIL ir38_deref/foreign_amb: $(grep '^fn main::rd ' "$rep")"; fail=1; ok=0; }
+  if [ "$ok" = 1 ]; then echo "ok   ir38_deref: a recorded pointee builds for each shape; a cross-module one only when proven the same type"; fi
 }
 
 ## Modules §1/§4 + Types §4.1 — same-named nominal enums must never let declaration order choose a
@@ -8744,6 +8776,7 @@ issue697_qualified_test
 ## #1725 review (#1723): a callee reached through an import alias reads its pointee as its own module's
 ## type; see `ir1723_alias_deref_test`. The struct package answered 2 on 307ea2f2, the controls 42.
 ir1723_alias_deref_test
+ir38_deref_test
 root_package_test ir1723_alias_deref_struct "T main__main" "T m__get"
 root_package_test ir1723_alias_deref_same "T main__main" "T m__gete" "T m__gets"
 root_package_test ir1723_qualified_deref_struct "T main__main" "T m__get"
