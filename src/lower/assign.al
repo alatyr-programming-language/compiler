@@ -3124,11 +3124,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
         ## `cx.vchk` false, as `emit_gas`' own `Expr::Unchecked` arm does, so a mode-polymorphic
         ## callee in it takes its unchecked instance (Comptime §7.5; round-5 review: 41 for 42)
         old_vchk := cx.vchk
-        uo : Option(ptr(Expr)) = unchecked_operand(v)
-        match uo {
-          Some(u) => { cx.vchk = false }
-          None => {}
-        }
+        if is_unchecked_expr(v) { cx.vchk = false }
         emit_gas(deref_inner_expr(deref_arr_value(v)), sb, cx, a, nl)
         cx.vchk = old_vchk
         push_str(sb, "  popq %rax\n")

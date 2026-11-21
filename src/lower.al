@@ -7024,11 +7024,12 @@ x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), ctslots : ptr(SVec), s
 
 ## The source offset of the declaration of the name at `use_s` (length `nl`) that is in effect there,
 ## searching from its FIRST binding `first` (the slot entry's `ns`). Every occurrence of the name at an
-## identifier boundary, outside string literals and `#` comments, and followed by `:` is a binding's
-## text (`v : T = …`, `v := …`, a parameter `v : T`, a field `v : T`). The latest one still in scope at
-## `use_s` (`binding_in_scope_at`) wins: it shadows or rebinds every earlier one. It counts as a
-## declaration only when it is the name offset of a declaring `Assign` (`decl_event_at`). Any other
-## binding text in scope answers `None`: a lambda parameter, even one on its own line of a parameter
+## identifier boundary, outside string literals and `#` comments, that is the name offset of a declaring
+## `Assign` (`decl_event_at`) is a declaration, whatever lies between the name and its `:` (round-6
+## review: `mut v` / `: u64 = 0` across two lines was missed, and an array copied into the scalar). The
+## latest one still in scope at `use_s` (`binding_in_scope_at`) wins: it shadows or rebinds every earlier
+## one. Any other occurrence followed, past blanks and comments, by `:` is binding text that is not a
+## declaration, and when it is in scope the answer is `None`: a lambda parameter, even one on its own line of a parameter
 ## list (Grammar §2.6 frees newlines inside `( … )`, and the brace count cannot see the `)` that ends
 ## its scope), or a name inside a destructuring `(a, v) := …`. `None` too when nothing is in scope.
 x86_decl_in_effect := fn(src : ptr(u8), ctslots : ptr(SVec), first : usize, use_s : usize, nl : usize) -> Option(u64) {
@@ -7046,13 +7047,13 @@ x86_decl_in_effect := fn(src : ptr(u8), ctslots : ptr(SVec), first : usize, use_
     } else if b == 35 {
       while src_byte(src, i) != 10 and src_byte(src, i) != 0 { i += 1 }
     } else if not lower_layout::ll_ident_byte(src, i - 1) and lower_ctx::streq(src, i, nl, use_s, nl) and not lower_layout::ll_ident_byte(src, i + nl) and src_byte(src, i - 1) != 58 {
-      mut k := i + nl
-      while src_byte(src, k) == 32 or src_byte(src, k) == 9 { k += 1 }
-      if src_byte(src, k) == 58 and src_byte(src, k + 1) != 58 {
-        if binding_in_scope_at(src, i, nl, use_s) {
-          if not decl_event_at(ctslots, i, nl) { return Option(u64).None }
-          best = Option(u64).Some(u64(i))
-        }
+      k := decl_skip_blank(src, i + nl)
+      if decl_event_at(ctslots, i, nl) {
+        ## a recorded declaring `Assign`, however its `:` is laid out (`mut v` / `: u64 = 0`)
+        if binding_in_scope_at(src, i, nl, use_s) { best = Option(u64).Some(u64(i)) }
+      } else if src_byte(src, k) == 58 and src_byte(src, k + 1) != 58 {
+        ## binding text that is not a recorded declaration: a parameter, a field
+        if binding_in_scope_at(src, i, nl, use_s) { return Option(u64).None }
       } else if (src_byte(src, k) == 44 or src_byte(src, k) == 41) and decl_line_opens_tuple(src, i) {
         ## a name inside a destructuring `(a, v) := …` binds it too, with a type this scan cannot read
         return Option(u64).None
@@ -7063,6 +7064,23 @@ x86_decl_in_effect := fn(src : ptr(u8), ctslots : ptr(SVec), first : usize, use_
     }
   }
   best
+}
+
+## The first offset from `k` that is not blank (space, tab, newline, carriage return) or inside a `#`
+## comment: the front end reads `mut v` / `: u64 = 0` as one declaration (`assign_is_decl`).
+decl_skip_blank := fn(src : ptr(u8), k0 : usize) -> usize {
+  mut k := k0
+  loop {
+    b := src_byte(src, k)
+    if b == 32 or b == 9 or b == 10 or b == 13 {
+      k += 1
+    } else if b == 35 {
+      while src_byte(src, k) != 10 and src_byte(src, k) != 0 { k += 1 }
+    } else {
+      break
+    }
+  }
+  k
 }
 
 ## Is offset `s` (length `n`) the name of a declaring `Assign`? `collect_slots` records each one in the
@@ -7112,6 +7130,15 @@ deref_arr_value := fn(v : ptr(Expr)) -> ptr(Expr) {
     }
   }
   e
+}
+
+## Is `e` an `unchecked e'` expression?
+is_unchecked_expr := fn(e : ptr(Expr)) -> bool {
+  uo : Option(ptr(Expr)) = unchecked_operand(e)
+  match uo {
+    Some(inner) => { true }
+    None => { false }
+  }
 }
 
 ## The operand of an `unchecked e` expression, else `None`.
