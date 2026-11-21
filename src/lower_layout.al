@@ -6316,9 +6316,20 @@ targ_is_tparam := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) 
 ## `pub u64 := u8` in a sibling module `z` is not `m`'s `u64` (Modules §3), so `rd(u64, h)` written in
 ## `m` is the prelude's `u64`, not an instance at `u8` (#1808, a one-byte read).
 targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
-  cnt := rt::vec_len(deref(decls))
-  nm := name_tail(src, s, n)
   kqh := type_path_head(src, s, n)
+  ki := targ_kind0_in(decls, src, s, n, kqh)
+  if ki >= 0 or kqh.n == 0 { return ki }
+  ## A qualifier that is a module alias (`ser := std::serialize`, then `ser::T`) names the module it binds.
+  ah := qualified_module_alias(decls, src, kqh.s, kqh.n)
+  if ah.n == 0 { return ki }
+  targ_kind0_in(decls, src, s, n, ah)
+}
+
+## `targ_kind0_decl` with the qualifier `qh` (0/0 for a bare head). The name is the head's LAST path
+## segment (`targ_tail`): `name_tail` stops at the first `::`, so `m::k::C` named no declaration `C`.
+targ_kind0_in := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, qh : LSpan) -> i64 {
+  cnt := rt::vec_len(deref(decls))
+  nm := targ_tail(src, s, n)
   nmod := type_naming_at(src, s)
   mut best := 0 - 1
   mut res := 0 - 1
@@ -6331,7 +6342,7 @@ targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize)
     if lni_skip(decls, cnt, i, th) == false {
       d := deref(decl_get(decls, i))
       if d.kind == DECL_KIND_VALUE and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-        r := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, kqh)
+        r := targ_cand_rank(src, d.mod_start, d.mod_len, nmod, qh)
         if kind0_visible(nmod, r) and (r > best or res < 0) { best = r; res = i64(i) }
       }
     }
@@ -6339,9 +6350,37 @@ targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize)
   res
 }
 
-## Whether a candidate of rank `r` (`alias_cand_rank`) is nameable from the naming module `nmod`: a
-## qualified spelling's module or the §3 chain (`r >= 0`). With no naming module published every rank is
-## -1 and the historical unranked answer stands, as in `type_decl_ranked`.
+## The rank of a candidate declared in module `[ms, ms+ml)` for a head spelled in `nmod` with the
+## qualifier `qh`, -1 when that spelling cannot name it. A bare head ranks by the §3 chain
+## (`type_mod_rank_in`). A qualified head names one module (Modules §2): the qualifier navigated from
+## the spelling module or one of its ancestors, nearest first (`k::C` written in `m` is `m::k::C`, §1),
+## else from the root (`m::k::C` written anywhere), else a library module by its last segment
+## (`type_mod_head_matches`' leniency). A qualified head never falls back to a same-named declaration
+## of the spelling module: `k::C` beside `m`'s own `C := u8` is `m::k`'s `C` (#1808).
+targ_cand_rank := fn(src : ptr(u8), ms : usize, ml : usize, nmod : Option(ModSpan), qh : LSpan) -> i64 {
+  if qh.n == 0 { return type_mod_rank_in(src, ms, ml, nmod) }
+  top : i64 = 1099511627776
+  match nmod {
+    Some(m) => {
+      if ml > qh.n + 2 {
+        pl := ml - qh.n - 2
+        sep := str_at((src + ms + pl), 2)
+        if (sep == "__" or sep == "::") and type_module_eq(src, ms + pl + 2, qh.n, qh.s, qh.n)
+           and type_anc_rank_from(src, ms, pl, m.s, m.l) >= 0 {
+          return top + i64(pl) + 1
+        }
+      }
+    }
+    None => {}
+  }
+  if type_module_eq(src, ms, ml, qh.s, qh.n) { return top }
+  if type_mod_head_matches(src, ms, ml, qh.s, qh.n) { return top - 1 }
+  0 - 1
+}
+
+## Whether a candidate of rank `r` (`targ_cand_rank`) is nameable from the naming module `nmod`: the
+## module a qualified spelling names, or the §3 chain (`r >= 0`). With no naming module published every
+## bare rank is -1 and the historical unranked answer stands, as in `type_decl_ranked`.
 kind0_visible := fn(nmod : Option(ModSpan), r : i64) -> bool {
   match nmod {
     Some(m) => { return r >= 0 }
