@@ -634,10 +634,24 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
   match cio {
     Some(ci) => {
       cd : Decl = deref(lower_ctx::decl_get(x.decls, usize(ci)))
-      if not sx_plain_label(x, cd) { return false }
+      ## IR-40 (#1786): a generic instance is called at the label `emit_program` defines it under
+      ## (`emit_generic_label`, the one mangling its definition and every legacy call site use), and
+      ## only when that definition is certain (`x86_inst_label_ok`); a plain callee at its bare label.
+      ito : Option(ir::IrTArgs) = ir::sym_targs(x.p, ir::SymId(usize(ir::i_av(ip))))
+      mut inst := false
+      mut t := ir::IrTArgs(ts = 0, tl = 0, ts2 = 0, tl2 = 0, ts3 = 0, tl3 = 0)
+      match ito {
+        Some(w) => {
+          if not x86_inst_label_ok(x.decls, x.src, usize(ci), w.ts, w.tl, w.ts2, w.tl2, w.ts3, w.tl3) { return false }
+          inst = true
+          t = w
+        }
+        None => { if not sx_plain_label(x, cd) { return false } }
+      }
       ## #1622: a callee with a narrow-element view in its signature is called only at its IR-built
       ## copy, and only when the plan emits one (`x86_isel_plan`); its legacy label is never named here.
-      nvw := ir::sig_has_narrow_view(x.src, cd)
+      ## An instance's signature holds no view (the builder takes scalars and pointers only).
+      nvw := not inst and ir::sig_has_narrow_view(x.src, cd)
       if nvw and not sx_nv_in(usize(ci)) { return false }
       mut j : usize = 0
       while j < n {
@@ -647,7 +661,8 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
         j = j + 1
       }
       sx_put(sb, "  call ")
-      if nvw { sx_nv_label(sb, x.src, cd) } else { emit_mangled_def(sb, x.src, cd.mod_start, cd.mod_len, cd.name_start, cd.name_len) }
+      if inst { emit_generic_label(sb, x.src, cd.mod_start, cd.mod_len, cd.name_start, cd.name_len, t.ts, t.tl, t.ts2, t.tl2, t.ts3, t.tl3) }
+      else if nvw { sx_nv_label(sb, x.src, cd) } else { emit_mangled_def(sb, x.src, cd.mod_start, cd.mod_len, cd.name_start, cd.name_len) }
       sx_put(sb, "\n")
       ## Slice 3d: an aggregate result arrives in %rax (and %rdx) — x86_64's legacy convention for a
       ## struct of up to two words — and is stored into its frame object.
