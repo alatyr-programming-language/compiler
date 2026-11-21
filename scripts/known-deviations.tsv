@@ -280,6 +280,8 @@ aarch64	test/issue169_wasm_nested_return.al	run/133	#1191
 aarch64	test/issue171_global_const_str.al	run/133	#1200
 aarch64	test/issue1746_shadow_callee_earlier.al	run/133	#1189
 aarch64	test/issue1746_shadow_callee_later.al	run/133	#1189
+aarch64	test/issue1822_alloc_enclosing_param.al	compile/1	#1468
+aarch64	test/issue1822_binding_controls.al	run/133	#1199
 aarch64	test/issue263_slice_narrow_field_write.al	run/133	#263
 aarch64	test/issue345_ptr_target_spacing.al	run/133	#550
 aarch64	test/issue349_arena_bad_alignment.al	run/133	#1199
@@ -442,6 +444,8 @@ aarch64	test/package/issue1753_method_recv_scoped/src/m.al	link/1	#3
 aarch64	test/package/issue1772_bare_callee_ir/package.al	assemble/1	#1206
 aarch64	test/package/issue1772_bare_callee_ir/src/a.al	link/1	#3
 aarch64	test/package/issue1772_bare_callee_ir/src/b.al	link/1	#3
+aarch64	test/package/issue1822_alias_short_call_reject/src/m.al	link/1	#3
+aarch64	test/package/issue1822_qualified_short_call_reject/src/m.al	link/1	#3
 aarch64	test/package/issue703_global_module_scope/package.al	run/133	#1187
 aarch64	test/package/issue703_global_module_scope/src/a.al	link/1	#3
 aarch64	test/package/issue703_global_module_scope/src/z.al	link/1	#3
@@ -905,6 +909,8 @@ riscv64	test/issue169_wasm_nested_return.al	run/133	#1191
 riscv64	test/issue171_global_const_str.al	run/133	#1200
 riscv64	test/issue1746_shadow_callee_earlier.al	run/133	#1189
 riscv64	test/issue1746_shadow_callee_later.al	run/133	#1189
+riscv64	test/issue1822_alloc_enclosing_param.al	compile/1	#1468
+riscv64	test/issue1822_binding_controls.al	run/133	#1199
 riscv64	test/issue263_slice_narrow_field_write.al	run/133	#263
 riscv64	test/issue345_ptr_target_spacing.al	run/133	#550
 riscv64	test/issue349_arena_bad_alignment.al	run/133	#1199
@@ -1071,6 +1077,8 @@ riscv64	test/package/issue1753_method_recv_scoped/src/m.al	link/1	#3
 riscv64	test/package/issue1772_bare_callee_ir/package.al	assemble/1	#1206
 riscv64	test/package/issue1772_bare_callee_ir/src/a.al	link/1	#3
 riscv64	test/package/issue1772_bare_callee_ir/src/b.al	link/1	#3
+riscv64	test/package/issue1822_alias_short_call_reject/src/m.al	link/1	#3
+riscv64	test/package/issue1822_qualified_short_call_reject/src/m.al	link/1	#3
 riscv64	test/package/issue703_global_module_scope/package.al	run/133	#1187
 riscv64	test/package/issue703_global_module_scope/src/a.al	link/1	#3
 riscv64	test/package/issue703_global_module_scope/src/z.al	link/1	#3
@@ -1530,6 +1538,8 @@ wasm	test/issue169_wasm_nested_return.al	run/134	#1191
 wasm	test/issue171_global_const_str.al	run/134	#1200
 wasm	test/issue1746_shadow_callee_earlier.al	run/134	#1189
 wasm	test/issue1746_shadow_callee_later.al	run/134	#1189
+wasm	test/issue1822_alloc_enclosing_param.al	compile/1	#1468
+wasm	test/issue1822_binding_controls.al	run/134	#1186
 wasm	test/issue263_slice_narrow_field_write.al	run/134	#263
 wasm	test/issue345_ptr_target_spacing.al	run/134	#1186
 wasm	test/issue349_arena_bad_alignment.al	run/134	#1186
@@ -1686,6 +1696,8 @@ wasm	test/package/issue1753_method_recv_scoped/src/m.al	assemble/1	#3
 wasm	test/package/issue1772_bare_callee_ir/package.al	assemble/1	#1206
 wasm	test/package/issue1772_bare_callee_ir/src/a.al	assemble/1	#3
 wasm	test/package/issue1772_bare_callee_ir/src/b.al	assemble/1	#3
+wasm	test/package/issue1822_alias_short_call_reject/src/m.al	assemble/1	#3
+wasm	test/package/issue1822_qualified_short_call_reject/src/m.al	assemble/1	#3
 wasm	test/package/issue703_global_module_scope/package.al	run/134	#1187
 wasm	test/package/issue703_global_module_scope/src/a.al	assemble/1	#3
 wasm	test/package/issue703_global_module_scope/src/z.al	assemble/1	#3
@@ -1874,6 +1886,7 @@ x86_64	test/inout_agg_whole_assign_in_alias.al	compile/1	#1637
 x86_64	test/inout_agg_whole_assign_in_alias_part.al	compile/1	#1637
 x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
+x86_64	test/issue1822_alloc_enclosing_param.al	compile/1	#1468
 x86_64	test/issue926_const_qualified_same_name_ok.al	compile/139	#1567
 x86_64	test/issue987_user_generic_ufcs_not_completed.al	run/139	#1654
 x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336

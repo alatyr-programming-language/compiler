@@ -80,48 +80,49 @@ apply := fn(op : u8, l : i64, r : i64) -> i64 {
 ## reduced to a single literal. A `Bin` whose folded children are both `Num` becomes one
 ## `Num`; otherwise it is rebuilt over the folded children (a partial fold).
 ## The allocator parameter `a` is the **ambient** within this body (Functions §5.5
-## step 2), so `newnode` / `fold` calls elide it — `newnode(Expr.Num(v))` rather than
-## `newnode(a, Expr.Num(v))`. The default allocation is the enclosing `a`.
+## step 2), so `newnode` / `fold` could elide it. The compiler does not take an enclosing
+## allocator parameter as the ambient yet (#1468), and its call-binding check (#1822) refuses
+## the elided form, so every call here passes `a` explicitly: `newnode(a, Expr.Num(v))`.
 pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
   node := deref(e)
   match node {
-    Expr::Num(v, s, n) => { newnode(Expr.Num(v, s, n)) }
-    Expr::BoolLit(v) => { newnode(Expr.BoolLit(v)) }
-    Expr::Var(s, n) => { newnode(Expr.Var(s, n)) }
+    Expr::Num(v, s, n) => { newnode(a, Expr.Num(v, s, n)) }
+    Expr::BoolLit(v) => { newnode(a, Expr.BoolLit(v)) }
+    Expr::Var(s, n) => { newnode(a, Expr.Var(s, n)) }
     Expr::Bin(op, l, r) => {
-      fl := fold(l)
-      fr := fold(r)
+      fl := fold(l, a)
+      fr := fold(r, a)
       lnode := deref(fl)
       match lnode {
         Expr::Num(lv, ls, ln) => {
           rnode := deref(fr)
           match rnode {
-            Expr::Num(rv, rs, rn) => { newnode(Expr.Num(apply(op, lv, rv), 0, 0)) }
+            Expr::Num(rv, rs, rn) => { newnode(a, Expr.Num(apply(op, lv, rv), 0, 0)) }
             Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
               | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref
               | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
               | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
-              | Expr::Loop => { newnode(Expr.Bin(op, fl, fr)) }
+              | Expr::Loop => { newnode(a, Expr.Bin(op, fl, fr)) }
           }
         }
         Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
           | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
           | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
-          | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { newnode(Expr.Bin(op, fl, fr)) }
+          | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { newnode(a, Expr.Bin(op, fl, fr)) }
       }
     }
     ## An `if`/`else`: fold each part and rebuild over the folded children (a constant
     ## condition could select a branch, but a structural rebuild is sufficient and correct).
     Expr::If(c, t, f) => {
-      fc := fold(c)
-      ft := fold(t)
-      ff := fold(f)
-      newnode(Expr.If(fc, ft, ff))
+      fc := fold(c, a)
+      ft := fold(t, a)
+      ff := fold(f, a)
+      newnode(a, Expr.If(fc, ft, ff))
     }
     ## A `match`: fold the scrutinee, then rebuild every arm over its folded body into a
     ## fresh arena-linked `Arm` list, and rebuild the `Match` node pointing at it.
     Expr::Match(scrut, head) => {
-      fs := fold(scrut)
+      fs := fold(scrut, a)
       mut nhead : Option(ptr(mut Arm)) = Option.None
       mut ntail : Option(ptr(mut Arm)) = Option.None
       mut arm : Option(ptr(mut Arm)) = head
@@ -129,7 +130,7 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
         match arm {
           Some(armq) => {
             am := deref(arm_p(armq))
-            fb := fold(am.body)
+            fb := fold(am.body, a)
             anew := newarm(a, Arm(wild = am.wild, lit = am.lit, body = fb, next = Option.None, vs = am.vs, vl = am.vl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = am.hi))
             match ntail {
               Some(ntailq) => {
@@ -146,7 +147,7 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
           None => { break }
         }
       }
-      newnode(Expr.Match(fs, nhead))
+      newnode(a, Expr.Match(fs, nhead))
     }
     ## `name(a0, …, a5)` — a call. A call is not constant-folded further here (its result is
     ## a runtime value); the correct rewrite is a structural rebuild over the folded
@@ -161,7 +162,7 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
         match garm {
           Some(garmq) => {
             gold := deref(arg_p(garmq))
-            gfe := fold(gold.e)
+            gfe := fold(gold.e, a)
             gnew := newgarg(a, Arg(e = gfe, next = Option.None))
             match gtail {
               Some(gtail0) => {
@@ -178,7 +179,7 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
           None => { break }
         }
       }
-      newnode(Expr.Call(cs, cl, nargs, ghead))
+      newnode(a, Expr.Call(cs, cl, nargs, ghead))
     }
     ## `S(f0 = e0, …, fN = eN)` — a struct construction: structural rebuild over the folded
     ## field-value expressions into a fresh arena-linked `Arg` list (mirroring the `Call` arm),
@@ -193,7 +194,7 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
         match sfa {
           Some(sfaq) => {
             sfold := deref(arg_p(sfaq))
-            sffe := fold(sfold.e)
+            sffe := fold(sfold.e, a)
             sfnew := newgarg(a, Arg(e = sffe, next = Option.None))
             match sft {
               Some(sft0) => {
@@ -210,12 +211,12 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
           None => { break }
         }
       }
-      newnode(Expr.StructLit(scs, scl, snf, sfh))
+      newnode(a, Expr.StructLit(scs, scl, snf, sfh))
     }
     ## `base.f` — a field read: structural rebuild over the folded base expression.
     Expr::Field(fbase, flds, fldl) => {
-      gb := fold(fbase)
-      newnode(Expr.Field(gb, flds, fldl))
+      gb := fold(fbase, a)
+      newnode(a, Expr.Field(gb, flds, fldl))
     }
     ## `E.V(p0, …, pN)` — an enum-variant construction: structural rebuild over the folded
     ## payload-arg expressions into a fresh arena-linked `Arg` list, preserving the
@@ -228,7 +229,7 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
         match epa {
           Some(epaq) => {
             epold := deref(arg_p(epaq))
-            epfe := fold(epold.e)
+            epfe := fold(epold.e, a)
             epnew := newgarg(a, Arg(e = epfe, next = Option.None))
             match ept {
               Some(ept0) => {
@@ -245,22 +246,22 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
           None => { break }
         }
       }
-      newnode(Expr.EnumLit(ees, eel, evs, evl, enp, eph))
+      newnode(a, Expr.EnumLit(ees, eel, evs, evl, enp, eph))
     }
     ## `ptr(<place>)` / `deref(<ptr>)` — pointer intrinsics: not constant-folded
     ## (their value is a runtime address / load); structural rebuild over the folded inner
     ## expression, preserving the variant.
     Expr::AddrOf(pe) => {
-      gp := fold(pe)
-      newnode(Expr.AddrOf(gp))
+      gp := fold(pe, a)
+      newnode(a, Expr.AddrOf(gp))
     }
     Expr::Deref(pe) => {
-      gp := fold(pe)
-      newnode(Expr.Deref(gp))
+      gp := fold(pe, a)
+      newnode(a, Expr.Deref(gp))
     }
     ## A string literal is not constant-folded (its value is a runtime {ptr, len}); rebuild it
     ## structurally, preserving the inner-bytes span + label index.
-    Expr::StrLit(ss, sn, slbl, sps, spn) => { newnode(Expr.StrLit(ss, sn, slbl, sps, spn)) }
+    Expr::StrLit(ss, sn, slbl, sps, spn) => { newnode(a, Expr.StrLit(ss, sn, slbl, sps, spn)) }
     ## `[e0, …, eN]` — an array literal: structural rebuild over the folded element
     ## expressions into a fresh arena-linked `Arg` list, preserving the element count.
     Expr::ArrayLit(anel, aehead) => {
@@ -271,7 +272,7 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
         match aea {
           Some(aeaq) => {
             aeold := deref(arg_p(aeaq))
-            aefe := fold(aeold.e)
+            aefe := fold(aeold.e, a)
             aenew := newgarg(a, Arg(e = aefe, next = Option.None))
             match aet {
               Some(aet0) => {
@@ -288,50 +289,50 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
           None => { break }
         }
       }
-      newnode(Expr.ArrayLit(anel, aeh))
+      newnode(a, Expr.ArrayLit(anel, aeh))
     }
     ## `a[i]` — an element read: not constant-folded (a runtime projection); structural
     ## rebuild over the folded base + index expressions, preserving the variant.
     Expr::Index(ibase, iidx) => {
-      gib := fold(ibase)
-      gii := fold(iidx)
-      newnode(Expr.Index(gib, gii))
+      gib := fold(ibase, a)
+      gii := fold(iidx, a)
+      newnode(a, Expr.Index(gib, gii))
     }
     ## `inner?` — the tryable `?` operator: not constant-folded (a runtime control-flow
     ## construct); structural rebuild over the folded inner expression, preserving the variant.
     Expr::Try(inner) => {
-      gtr := fold(inner)
-      newnode(Expr.Try(gtr))
+      gtr := fold(inner, a)
+      newnode(a, Expr.Try(gtr))
     }
     ## `unchecked <inner>` — PRESERVE the verification-mode wrapper over the folded inner (so the
     ## `unchecked` scope survives to lower, where `emit_gas` sets `verify.checked` false for it).
     Expr::Unchecked(inner) => {
-      gux := fold(inner)
-      newnode(Expr.Unchecked(gux))
+      gux := fold(inner, a)
+      newnode(a, Expr.Unchecked(gux))
     }
     ## Issue #680 — the seven variants this `match` never named. With no arm and no `_` a `match` that
     ## takes no arm yields −1, so any of them reaching `fold` came back as a wild pointer; the
     ## exhaustiveness check now sees `node := deref(e)` and refuses the gap instead. None of them is a
     ## constant to reduce: leaves are copied, and expression children are folded and rebuilt in place.
     ## `Lambda` and `Loop` keep their statement-list payloads, which `fold` does not walk.
-    Expr::FloatLit(fls, fln) => { newnode(Expr.FloatLit(fls, fln)) }
+    Expr::FloatLit(fls, fln) => { newnode(a, Expr.FloatLit(fls, fln)) }
     Expr::Slice(sb, slo, shi) => {
-      gsb := fold(sb)
-      gslo := fold(slo)
-      gshi := fold(shi)
-      newnode(Expr.Slice(gsb, gslo, gshi))
+      gsb := fold(sb, a)
+      gslo := fold(slo, a)
+      gshi := fold(shi, a)
+      newnode(a, Expr.Slice(gsb, gslo, gshi))
     }
     Expr::CompField(cfb, cfi) => {
-      gcfb := fold(cfb)
-      gcfi := fold(cfi)
-      newnode(Expr.CompField(gcfb, gcfi))
+      gcfb := fold(cfb, a)
+      gcfi := fold(cfi, a)
+      newnode(a, Expr.CompField(gcfb, gcfi))
     }
-    Expr::Lambda(lpos, lparams, lrts, lrtl, lbody, lval) => { newnode(Expr.Lambda(lpos, lparams, lrts, lrtl, lbody, lval)) }
-    Expr::FnRef(frs, frn, frp) => { newnode(Expr.FnRef(frs, frn, frp)) }
+    Expr::Lambda(lpos, lparams, lrts, lrtl, lbody, lval) => { newnode(a, Expr.Lambda(lpos, lparams, lrts, lrtl, lbody, lval)) }
+    Expr::FnRef(frs, frn, frp) => { newnode(a, Expr.FnRef(frs, frn, frp)) }
     Expr::Bitcast(bci, bcs, bcn) => {
-      gbci := fold(bci)
-      newnode(Expr.Bitcast(gbci, bcs, bcn))
+      gbci := fold(bci, a)
+      newnode(a, Expr.Bitcast(gbci, bcs, bcn))
     }
-    Expr::Loop(lpb) => { newnode(Expr.Loop(lpb)) }
+    Expr::Loop(lpb) => { newnode(a, Expr.Loop(lpb)) }
   }
 }

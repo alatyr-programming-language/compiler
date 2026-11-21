@@ -4733,6 +4733,46 @@ DIAG_FNVAL_FIELD_ACCESS_MARKER : usize = 6904500000000000000
 ## the first `if` in the decoder wins, so one of the two messages is always wrong. 6905000000000000000
 ## clears the values already allocated to #1461, #1465 and #1469 and stays below `DIAG_CT_MARKER`.
 DIAG_NUMERIC_COND_MARKER : usize = 6905000000000000000
+## Issue #1822 / Functions §2.3, §5.1 — the sema-side CALL-BINDING classes: too many arguments
+## (`sema::CALL_TOO_MANY_DIAG_MARKER`, the enum-variant-arity payload) and an unbound parameter
+## (`sema::CALL_UNBOUND_PARAM_DIAG_MARKER`, `(call * SLOT + parameter name) * 4 + kind`, kind 0 `in`,
+## 1 `out` / `in out`, 2 an elided allocator with no ambient). They sit between the numeric-condition
+## class and CT, so only the former's upper bound moves. A call offset of 0 (dropped, see sema) is not
+## in the located list of either renderer, so it renders unlocated rather than at a wrong line.
+DIAG_CALL_TOO_MANY_MARKER : usize = 6906000000000000000
+DIAG_CALL_UNBOUND_PARAM_MARKER : usize = 6906500000000000000
+DIAG_CALL_UNBOUND_PARAM_SLOT : usize = 33554432
+## Is `code` of either call-binding class? One answer for both renderers.
+d_is_call_binding := fn(code : usize) -> bool { code >= DIAG_CALL_TOO_MANY_MARKER and code < DIAG_CT_MARKER }
+## The call's source offset a call-binding `code` carries.
+d_call_binding_span := fn(code : usize) -> usize {
+  if code >= DIAG_CALL_UNBOUND_PARAM_MARKER { return ((code - DIAG_CALL_UNBOUND_PARAM_MARKER) / 4) / DIAG_CALL_UNBOUND_PARAM_SLOT }
+  (code - DIAG_CALL_TOO_MANY_MARKER) / DIAG_ENUM_VARIANT_ARITY_SLOT
+}
+## Stream a call-binding `code`'s message to fd 2: the unbound parameter by name, or both counts.
+d_call_binding_msg := fn(code : usize, base : usize, in out a : rt::Arena) {
+  if code >= DIAG_CALL_UNBOUND_PARAM_MARKER {
+    raw := code - DIAG_CALL_UNBOUND_PARAM_MARKER
+    ps := (raw / 4) % DIAG_CALL_UNBOUND_PARAM_SLOT
+    pk := raw % 4
+    w0 := rt::fd_str(2, "the call leaves parameter `")
+    if ps != 0 { w1 := rt::fd_str(2, str_at(base + ps, d_diag_ident_len(base, ps))) }
+    if pk == 2 {
+      w9 := rt::fd_str(2, "` unbound: an allocator parameter left out of a call takes the ambient allocator, and no `alloc::with` encloses this call (Functions §5.5, Memory §5.2.1) — pass it, or enclose the call; taking the caller's own allocator parameter as the ambient is not implemented yet, #1468")
+    } else if pk == 1 {
+      w2 := rt::fd_str(2, "` unbound: an `out` / `in out` parameter needs a mutable place argument — an `in out` parameter is always bound by one, and binding an `out` by projection is not implemented yet, #1702 (Functions §2.3)")
+    } else {
+      w3 := rt::fd_str(2, "` unbound: an `in` parameter without a default needs an argument (Functions §2.3, §5.1)")
+    }
+  } else {
+    raw := code - DIAG_CALL_TOO_MANY_MARKER
+    w4 := rt::fd_str(2, "the call passes ")
+    w5 := rt::fd_int(2, i64(raw % DIAG_ENUM_VARIANT_ARITY_COUNT_BASE), a)
+    w6 := rt::fd_str(2, " argument(s) to a function that declares ")
+    w7 := rt::fd_int(2, i64((raw / DIAG_ENUM_VARIANT_ARITY_COUNT_BASE) % DIAG_ENUM_VARIANT_ARITY_COUNT_BASE), a)
+    w8 := rt::fd_str(2, " parameter(s): a surplus argument binds no parameter (Functions §2.3, §5.1)")
+  }
+}
 ## Issue #221 / Modules §3 — the exact qualified private-constant value path. Keep this class distinct
 ## from the generic located visibility reject and below the comptime range so older codes stay stable.
 DIAG_QUALIFIED_PRIVATE_CONST_MARKER : usize = 6900000000000000000
@@ -4874,7 +4914,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   scalar_field_access := code >= DIAG_SCALAR_FIELD_ACCESS_MARKER and code < DIAG_CONST_CYCLE_MARKER
   const_cycle := code >= DIAG_CONST_CYCLE_MARKER and code < DIAG_FNVAL_FIELD_ACCESS_MARKER
   fnval_field_access := code >= DIAG_FNVAL_FIELD_ACCESS_MARKER and code < DIAG_NUMERIC_COND_MARKER
-  numeric_cond := code >= DIAG_NUMERIC_COND_MARKER and code < DIAG_CT_MARKER
+  numeric_cond := code >= DIAG_NUMERIC_COND_MARKER and code < DIAG_CALL_TOO_MANY_MARKER
+  call_binding := d_is_call_binding(code)
   multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_BRAND_CONVERSION_MARKER
   brand_conv := code >= DIAG_BRAND_CONVERSION_MARKER and code < DIAG_SIGNEDNESS_CONVERSION_MARKER
@@ -4957,6 +4998,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if numeric_cond {
     raw = code - DIAG_NUMERIC_COND_MARKER
     span = raw / 4
+  } else if call_binding {
+    span = d_call_binding_span(code)
   } else if scalar_field_access {
     raw = code - DIAG_SCALAR_FIELD_ACCESS_MARKER
     span = raw / 4
@@ -5040,6 +5083,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if enum_field_access { wkefa := rt::fd_str(2, "a FIELD ACCESS on an ENUM value: an enum value is a discriminant plus ONE variant's payload and has no fields at all (Types §6.2/§9.4) — reach the payload through `match` and its binding patterns, not through a field name") }
     else if seam_cmp_grant { wscg := rt::fd_str(2, "a COMPARISON between a POINTER and an INTEGER outside `unchecked`: `p == 0` tests a fabricated pointer for null without `Option` (#1030 option B, Memory §4.5) — compare at one type, or spell the crossing inside `unchecked { … }`") }
     else if fnval_field_access { wkfva := rt::fd_str(2, "a FIELD ACCESS on a FUNCTION VALUE: `.` selects a struct or union field, a tuple position `.N`, or a UFCS call (Modules §2), and a function value is one machine word, a code address (Functions §1.5) — a function value has no field to name") }
+    else if call_binding { d_call_binding_msg(code, base, a) }
     else if numeric_cond { wknc := rt::fd_str(2, "a NUMERIC value used as a CONDITION: a numeric scalar is not truthy and provides no `is_true` (Control Flow §4, Stdlib §2.1) — a numeric condition uses an explicit comparison yielding `bool`, `if n != 0 { … }`, and a bare numeric condition is ill-formed") }
     else if scalar_field_access { wksfa := rt::fd_str(2, "a FIELD ACCESS on a SCALAR value: `.` selects a struct or union field, a tuple position `.N`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name") }
     else if const_cycle {
@@ -7890,7 +7934,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   scalar_field_access := r >= DIAG_SCALAR_FIELD_ACCESS_MARKER and r < DIAG_CONST_CYCLE_MARKER
   const_cycle := r >= DIAG_CONST_CYCLE_MARKER and r < DIAG_FNVAL_FIELD_ACCESS_MARKER
   fnval_field_access := r >= DIAG_FNVAL_FIELD_ACCESS_MARKER and r < DIAG_NUMERIC_COND_MARKER
-  numeric_cond := r >= DIAG_NUMERIC_COND_MARKER and r < DIAG_CT_MARKER
+  numeric_cond := r >= DIAG_NUMERIC_COND_MARKER and r < DIAG_CALL_TOO_MANY_MARKER
+  call_binding := d_is_call_binding(r)
   multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_BRAND_CONVERSION_MARKER
   brand_conv := r >= DIAG_BRAND_CONVERSION_MARKER and r < DIAG_SIGNEDNESS_CONVERSION_MARKER
@@ -7973,6 +8018,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if numeric_cond {
     raw = r - DIAG_NUMERIC_COND_MARKER
     span = raw / 4
+  } else if call_binding {
+    span = d_call_binding_span(r)
   } else if scalar_field_access {
     raw = r - DIAG_SCALAR_FIELD_ACCESS_MARKER
     span = raw / 4
@@ -8060,6 +8107,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if enum_field_access { dwkefa := rt::fd_str(2, "a FIELD ACCESS on an ENUM value: an enum value is a discriminant plus ONE variant's payload and has no fields at all (Types §6.2/§9.4) — reach the payload through `match` and its binding patterns, not through a field name") }
     else if seam_cmp_grant { dwscg := rt::fd_str(2, "a COMPARISON between a POINTER and an INTEGER outside `unchecked`: `p == 0` tests a fabricated pointer for null without `Option` (#1030 option B, Memory §4.5) — compare at one type, or spell the crossing inside `unchecked { … }`") }
     else if fnval_field_access { dwkfva := rt::fd_str(2, "a FIELD ACCESS on a FUNCTION VALUE: `.` selects a struct or union field, a tuple position `.N`, or a UFCS call (Modules §2), and a function value is one machine word, a code address (Functions §1.5) — a function value has no field to name") }
+    else if call_binding { d_call_binding_msg(r, base, tar) }
     else if numeric_cond { dwknc := rt::fd_str(2, "a NUMERIC value used as a CONDITION: a numeric scalar is not truthy and provides no `is_true` (Control Flow §4, Stdlib §2.1) — a numeric condition uses an explicit comparison yielding `bool`, `if n != 0 { … }`, and a bare numeric condition is ill-formed") }
     else if scalar_field_access { dwksfa := rt::fd_str(2, "a FIELD ACCESS on a SCALAR value: `.` selects a struct or union field, a tuple position `.N`, or a struct field through a pointer (Modules §2, Types §6.1), and a scalar has no field to name") }
     else if const_cycle {
