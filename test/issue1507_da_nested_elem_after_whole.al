@@ -3,8 +3,8 @@
 ## and expands it into one marker per field; writing every field then initializes `p` completely, so
 ## reading it whole is well-formed (Type System §9.4, field-sensitive definite assignment). The checker
 ## used to discharge that marker with a call passing seven arguments to a five-parameter function, so
-## the marker stayed behind and `q := p` was refused as `unbound name`. Only element 1 is read: the
-## value of the whole-element store itself is #1825.
+## the marker stayed behind and `q := p` was refused as a read of an unassigned name. Only element 1
+## is read: the value of the whole-element store itself is #1825.
 Inner := struct { v : u64, w : u64 }
 Outer := struct { xs : [Inner; 2] }
 main := fn() -> u64 {
