@@ -219,6 +219,14 @@ rdg := fn(h : usize) -> u64 {
   v = deref(p)
   v[0] + v[1] - 26
 }
+## Blanks between the tokens of an attribute do not change the type (Grammar §1; round-11 review: the
+## declaration moved one word).
+rde := fn(h : usize) -> u64 {
+  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)
+  v : @align (16) [u64; 2] = deref(p)
+  w : @ align(16) [u64; 2] = deref(p)
+  v[0] + v[1] + w[0] + w[1] - 52
+}
 main := fn() -> u64 {
   mut arr : [u64; 2] = [21, 5]
   mut wv : u64 = 198914
@@ -228,6 +236,6 @@ main := fn() -> u64 {
   hq := unchecked bitcast(usize, ptr(wq))
   mut pa : ptr([u64; 2]) = ptr(arr)
   hp := unchecked bitcast(usize, ptr(pa))
-  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha) + rdy(hq) + rdy2(hq) + rdz2(ha) + rds2(ha) + rdk(hb) + rdk2(hb) + rdg(ha)
+  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha) + rdy(hq) + rdy2(hq) + rdz2(ha) + rds2(ha) + rdk(hb) + rdk2(hb) + rdg(ha) + rde(ha)
 }
 ## expect: run 42

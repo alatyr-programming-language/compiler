@@ -6953,26 +6953,63 @@ deref_arr_ann_core := fn(src : ptr(u8), ats : CSpan) -> CSpan {
   CSpan(s = p, n = e - p)
 }
 
-## The first offset from `p0` past a run of prefix attributes `@name` / `@name(…)` and the blanks and
-## comments around them; `p0` itself when there is none.
+## The first offset from `p0`, past blanks and comments, that is not part of a run of prefix attributes
+## `@name` / `@name(…)`. Grammar §1 allows blanks and comments between any two tokens, so `@ align (16)` is
+## `@align(16)` (round-11 review of #1821); a string or char literal inside the arguments is stepped over
+## whole, so a `)` in it does not end them.
 type_past_attrs := fn(src : ptr(u8), p0 : usize) -> usize {
   mut p := decl_skip_blank(src, p0)
   while src_byte(src, p) == 64 {
-    p += 1
+    p = decl_skip_blank(src, p + 1)
     while lower_layout::ll_ident_byte(src, p) { p += 1 }
+    p = decl_skip_blank(src, p)
     if src_byte(src, p) == 40 {
       mut depth : usize = 1
       p += 1
       while depth > 0 and src_byte(src, p) != 0 {
         b := src_byte(src, p)
-        if b == 40 { depth += 1 }
-        if b == 41 { depth -= 1 }
+        if b == 34 or b == 39 {
+          p += 1
+          while src_byte(src, p) != b and src_byte(src, p) != 0 {
+            if src_byte(src, p) == 92 { p += 1 }
+            p += 1
+          }
+        } else if b == 35 {
+          while src_byte(src, p) != 10 and src_byte(src, p) != 0 { p += 1 }
+          p -= 1
+        } else if b == 40 {
+          depth += 1
+        } else if b == 41 {
+          depth -= 1
+        }
         p += 1
       }
     }
     p = decl_skip_blank(src, p)
   }
   p
+}
+
+## Does the attributed annotation `ats` still look like an array past what `type_past_attrs` read: it
+## starts with `@`, the text after its attributes is not `[`-led, and that text holds a `;`? Then the
+## attribute skipper misread a spelling, and the copy refuses rather than letting `deref_arr_shape` answer
+## "not an array" and the store move one word (round-11 review: the declaration form had no net).
+deref_arr_attr_unread := fn(src : ptr(u8), ats : CSpan) -> bool {
+  if ats.n == 0 or src_byte(src, decl_skip_blank(src, ats.s)) != 64 { return false }
+  core := deref_arr_ann_core(src, ats)
+  if core.n != 0 and src_byte(src, core.s) == 91 { return false }
+  mut i := core.s
+  while i < core.s + core.n {
+    if src_byte(src, i) == 59 { return true }
+    i += 1
+  }
+  false
+}
+
+## The located refusal for `deref_arr_attr_unread`.
+reject_deref_arr_attr := fn(src : ptr(u8), ns : usize) {
+  lower_show_src_line(src, ns)
+  panic("selfhost: a fixed array copied out of a pointer (`v : [T; N] = deref(p)` or `v = deref(p)`) needs the target's declared type, and this backend does not read this spelling of its prefix attributes through to the `[T; N]` (#1844): write the attribute as `@name(args)` right before the `[`. Refused rather than moving one word")
 }
 
 ## The element count of `[T; N]` when `N` is written as a decimal literal and nothing else (`0` included:
@@ -7009,7 +7046,8 @@ deref_arr_len := fn(src : ptr(u8), ats : CSpan) -> Option(u64) {
 ## (`decl`, the whole annotation: `deref_arr_shape` reads an array past its prefix attributes), so the declaration and the reassignment are refused at compile time, located, on all
 ## three alike.
 pub refuse_deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decl : CSpan) {
-  if not deref_arr_shape(v, src, deref_arr_type(src, ns, nl, decl)) { return }
+  dt := deref_arr_type(src, ns, nl, decl)
+  if not deref_arr_shape(v, src, dt) and not (is_deref_value(v) and deref_arr_attr_unread(src, dt)) { return }
   lower_show_src_line(src, ns)
   panic("selfhost: aarch64, riscv64 and wasm do not yet copy a fixed array out of a pointer (`v : [T; N] = deref(p)` or `v = deref(p)`, #1811): refused rather than moving one word of it")
 }
@@ -7281,6 +7319,7 @@ reject_deref_arr_inferred := fn(src : ptr(u8), ns : usize) {
 }
 
 deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, ats0 : CSpan) -> Option(DerefArrCopy) {
+  if is_deref_value(v) and deref_arr_attr_unread(src, ats0) { reject_deref_arr_attr(src, ns) }
   if not deref_arr_shape(v, src, ats0) { return Option(DerefArrCopy).None }
   ats := deref_arr_ann_core(src, ats0)
   lo := deref_arr_len(src, ats)
