@@ -4735,26 +4735,31 @@ DIAG_FNVAL_FIELD_ACCESS_MARKER : usize = 6904500000000000000
 DIAG_NUMERIC_COND_MARKER : usize = 6905000000000000000
 ## Issue #1822 / Functions §2.3, §5.1 — the sema-side CALL-BINDING classes: too many arguments
 ## (`sema::CALL_TOO_MANY_DIAG_MARKER`, the enum-variant-arity payload) and an unbound parameter
-## (`sema::CALL_UNBOUND_PARAM_DIAG_MARKER`, `(call * SLOT + parameter name) * 2 + place`). They sit
-## between the numeric-condition class and CT, so only the former's upper bound moves.
+## (`sema::CALL_UNBOUND_PARAM_DIAG_MARKER`, `(call * SLOT + parameter name) * 4 + kind`, kind 0 `in`,
+## 1 `out` / `in out`, 2 an elided allocator with no ambient). They sit between the numeric-condition
+## class and CT, so only the former's upper bound moves. A call offset of 0 (dropped, see sema) is not
+## in the located list of either renderer, so it renders unlocated rather than at a wrong line.
 DIAG_CALL_TOO_MANY_MARKER : usize = 6906000000000000000
 DIAG_CALL_UNBOUND_PARAM_MARKER : usize = 6906500000000000000
-DIAG_CALL_UNBOUND_PARAM_SLOT : usize = 67108864
+DIAG_CALL_UNBOUND_PARAM_SLOT : usize = 33554432
 ## Is `code` of either call-binding class? One answer for both renderers.
 d_is_call_binding := fn(code : usize) -> bool { code >= DIAG_CALL_TOO_MANY_MARKER and code < DIAG_CT_MARKER }
 ## The call's source offset a call-binding `code` carries.
 d_call_binding_span := fn(code : usize) -> usize {
-  if code >= DIAG_CALL_UNBOUND_PARAM_MARKER { return ((code - DIAG_CALL_UNBOUND_PARAM_MARKER) / 2) / DIAG_CALL_UNBOUND_PARAM_SLOT }
+  if code >= DIAG_CALL_UNBOUND_PARAM_MARKER { return ((code - DIAG_CALL_UNBOUND_PARAM_MARKER) / 4) / DIAG_CALL_UNBOUND_PARAM_SLOT }
   (code - DIAG_CALL_TOO_MANY_MARKER) / DIAG_ENUM_VARIANT_ARITY_SLOT
 }
 ## Stream a call-binding `code`'s message to fd 2: the unbound parameter by name, or both counts.
 d_call_binding_msg := fn(code : usize, base : usize, in out a : rt::Arena) {
   if code >= DIAG_CALL_UNBOUND_PARAM_MARKER {
     raw := code - DIAG_CALL_UNBOUND_PARAM_MARKER
-    ps := (raw / 2) % DIAG_CALL_UNBOUND_PARAM_SLOT
+    ps := (raw / 4) % DIAG_CALL_UNBOUND_PARAM_SLOT
+    pk := raw % 4
     w0 := rt::fd_str(2, "the call leaves parameter `")
     if ps != 0 { w1 := rt::fd_str(2, str_at(base + ps, d_diag_ident_len(base, ps))) }
-    if raw % 2 == 1 {
+    if pk == 2 {
+      w9 := rt::fd_str(2, "` unbound: an allocator parameter left out of a call takes the ambient allocator, and no `alloc::with` encloses this call (Functions §5.5, Memory §5.2.1) — pass it, or enclose the call; taking the caller's own allocator parameter as the ambient is not implemented yet, #1468")
+    } else if pk == 1 {
       w2 := rt::fd_str(2, "` unbound: an `out` / `in out` parameter needs a mutable place argument — an `in out` parameter is always bound by one, and binding an `out` by projection is not implemented yet, #1702 (Functions §2.3)")
     } else {
       w3 := rt::fd_str(2, "` unbound: an `in` parameter without a default needs an argument (Functions §2.3, §5.1)")
@@ -5044,7 +5049,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or fnval_field_access or numeric_cond or call_binding or const_cycle or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or fnval_field_access or numeric_cond or const_cycle or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::fd_str(2, "@limits(")
       wk1 := rt::fd_str(2, limit_name(kind))
@@ -8065,7 +8070,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or fnval_field_access or numeric_cond or call_binding or const_cycle or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or seam_cmp_grant or scalar_field_access or fnval_field_access or numeric_cond or const_cycle or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::fd_str(2, "duplicate linker symbol") }
       else {
