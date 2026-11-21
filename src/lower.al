@@ -6933,8 +6933,9 @@ deref_arr_type := fn(src : ptr(u8), ns : usize, nl : usize, decl : CSpan) -> CSp
   decl
 }
 
-## The SHAPE alone: the value is a `deref(…)` and `ats` is `[T; N]` with a literal `N`. Shared by the
-## x86_64 copy below and the twins' refusal (`refuse_deref_arr_copy`).
+## The SHAPE alone: the value is a `deref(…)` and `ats` is a fixed array `[T; …]`, whatever its length
+## is written as. Shared by the x86_64 copy below and the twins' refusal (`refuse_deref_arr_copy`), so no
+## length form can fall through to the one-word store (a slice view `[T]` has no top-level `;`).
 deref_arr_shape := fn(v : ptr(Expr), src : ptr(u8), ats : CSpan) -> bool {
   match deref(v) {
     Expr::Deref(dp) => {}
@@ -6944,8 +6945,36 @@ deref_arr_shape := fn(v : ptr(Expr), src : ptr(u8), ats : CSpan) -> bool {
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return false }
   }
   if ats.n < 2 or str_at((src + ats.s), 1) != "[" { return false }
-  parse_arr_len(src, ats.s, ats.n) != 0
+  lower_layout::arrty_semi(src, ats.s, ats.n) != 0
 }
+
+## The element count of `[T; N]` when `N` is written as a decimal literal and nothing else (`0` included:
+## `[T; 0]` is a zero-sized type, Types §6.5, and its copy moves nothing), else `None`. A named constant
+## or a constant expression (`[T; K]`, `[T; 1 + 1]`) is a compile-time value (Types §6.4), but this copy
+## has no evaluator for it (`arr_type_lit_len` reads the leading `1` of `1 + 1`): `None`, which
+## `deref_arr_copy` refuses, located, rather than copying a count it guessed (#1809).
+deref_arr_len := fn(src : ptr(u8), ats : CSpan) -> Option(u64) {
+  semi := lower_layout::arrty_semi(src, ats.s, ats.n)
+  mut e := ats.s + ats.n
+  while e > semi + 1 and lower_layout::type_text_blank(src, e - 1) { e = e - 1 }
+  if e <= semi + 1 or str_at((src + e - 1), 1) != "]" { return Option(u64).None }
+  e = e - 1
+  mut p := semi + 1
+  while p < e and lower_layout::type_text_blank(src, p) { p = p + 1 }
+  while e > p and lower_layout::type_text_blank(src, e - 1) { e = e - 1 }
+  if p >= e { return Option(u64).None }
+  mut n : u64 = 0
+  mut ok := true
+  while p < e {
+    d := lower_layout::dec_digit_val(str_at((src + p), 1))
+    if d < 0 { ok = false }
+    if d >= 0 { n = n * 10 + u64(d) }
+    p = p + 1
+  }
+  if not ok { return Option(u64).None }
+  Option(u64).Some(n)
+}
+
 
 ## #1811 — aarch64, riscv64 and wasm do not copy a whole fixed array out of a pointer yet: aarch64
 ## reserved the block and moved ONE word into it, a wrong value masked only by an unrelated trap. Each
@@ -6980,7 +7009,12 @@ x86_arr_decl_span := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize
 
 deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, ats : CSpan) -> Option(DerefArrCopy) {
   if not deref_arr_shape(v, src, ats) { return Option(DerefArrCopy).None }
-  nel := parse_arr_len(src, ats.s, ats.n)
+  lo := deref_arr_len(src, ats)
+  mut nel : usize = 0
+  match lo {
+    Some(k) => { nel = usize(k) }
+    None => { reject_deref_arr_len(src, ns) }
+  }
   es := array_elem_span(src, ats.s, ats.n)
   beek := byte_type_eek(src, es.s, es.n)
   if beek != 0 { return Option(DerefArrCopy).Some(DerefArrCopy(nel = nel, esz = 1, eek = beek)) }
@@ -7001,6 +7035,12 @@ deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, ats : CSpan) -> O
 reject_deref_arr_elem := fn(src : ptr(u8), ns : usize) {
   lower_show_src_line(src, ns)
   panic("selfhost: a fixed array copied out of a pointer (`v : [T; N] = deref(p)` or `v = deref(p)`) is supported on x86_64 only for a byte or word integer element (u8, i8, bits8, u64, i64, usize, isize; #1809): a narrower element waits on the Types §6.4 stride of [u16|u32|…; N] (#1559), and any other element would be copied at a width nothing checked; refused rather than silently miscompiled")
+}
+
+## The located refusal of `deref_arr_copy` for a length it cannot count (`deref_arr_len`).
+reject_deref_arr_len := fn(src : ptr(u8), ns : usize) {
+  lower_show_src_line(src, ns)
+  panic("selfhost: a fixed array copied out of a pointer (`v : [T; N] = deref(p)` or `v = deref(p)`) needs its length `N` written as an integer literal on this backend (#1809): a named constant or a constant expression is not evaluated by the copy yet (#1833); refused rather than copying a guessed element count")
 }
 
 ## The branch test over `deref_arr_copy` for the binder's and the emitter's `else if` chains.

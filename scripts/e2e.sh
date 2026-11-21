@@ -6497,6 +6497,8 @@ issue1212_located_refusals_test() {
 ## other element is refused there, located, rather than moved one word (the parent's answer). Both are
 ## VALID programs, so they are generated here and add no corpus fixture (see #1212 above). A struct
 ## element waits on a per-field copy; a `u16` element on the Types §6.4 stride of `[u16; N]` (#1559).
+## A length written as a named constant or a constant expression (`[u64; K]`, `[u64; 1 + 1]`) is refused
+## too until the copy evaluates it (#1833): the parent answered garbage and 41 where 42 is due.
 issue1809_deref_arr_refusals_test() {
   local d="$T/issue1809_deref_arr_refusals" n src out err got
   rm -rf "$d"
@@ -6523,7 +6525,40 @@ issue1809_deref_arr_refusals_test() {
     '  mut w : u64 = 2752513' \
     '  rd(unchecked bitcast(usize, ptr(w)))' \
     '}' > "$d/narrow_reassign.al"
-  for n in struct_elem narrow_reassign; do
+  printf '%s\n' \
+    'K := 2' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  v : [u64; K] = deref(p)' \
+    '  v[0] + v[1]' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/named_len.al"
+  printf '%s\n' \
+    'K := 2' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; K] = [0, 0]' \
+    '  v = deref(p)' \
+    '  v[0] + v[1]' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/named_len_reassign.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  v : [u64; 1 + 1] = deref(p)' \
+    '  v[0] + v.len' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/expr_len.al"
+  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len; do
     src="$d/$n.al"; out="$d/$n.out"; err="$d/$n.err"
     "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
     if [ "$got" = 0 ]; then echo "FAIL issue1809_deref_arr_refusals($n): build succeeded, want a located reject"; fail=1; continue; fi
@@ -6531,6 +6566,9 @@ issue1809_deref_arr_refusals_test() {
     case "$n" in
       struct_elem) grep -qF 'a fixed array copied out of a pointer' "$err" && grep -qF 'v : [P; 2] = deref(p)' "$err" ;;
       narrow_reassign) grep -qF 'a fixed array copied out of a pointer' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      named_len) grep -qF 'needs its length' "$err" && grep -qF 'v : [u64; K] = deref(p)' "$err" ;;
+      named_len_reassign) grep -qF 'needs its length' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      expr_len) grep -qF 'needs its length' "$err" && grep -qF 'v : [u64; 1 + 1] = deref(p)' "$err" ;;
     esac
     if [ $? = 0 ]; then echo "ok   issue1809_deref_arr_refusals($n): refused, located"
     else echo "FAIL issue1809_deref_arr_refusals($n): rc=$got but the reason or its source line is missing"; fail=1; fi
