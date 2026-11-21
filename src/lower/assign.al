@@ -3113,11 +3113,11 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_int(sb, (base - i64(k) + 1) * 8)
       push_str(sb, "(%rbp)\n")
     }
-  } else if is_deref_arr_copy(v, cx.src, ns, deref_arr_type(cx.src, ns, nl2, x86_arr_decl_span(cx.slots, cx.src, ns, nl2))) {
+  } else if is_deref_arr_copy(v, cx.src, ns, deref_arr_type(cx.src, ns, nl2, x86_arr_decl_span(v, cx.slots, cx.src, ns, nl2))) {
     ## #1809 — `v : [T; N] = deref(p)`, or `v = deref(p)` over a local declared `[T; N]`: evaluate the
     ## pointer, then copy all `N` elements out of the pointee (Memory §4.3, Types §6.4) into the block
     ## `collect_slots` reserved from the same shape at the declaration.
-    match deref_arr_copy(v, cx.src, ns, deref_arr_type(cx.src, ns, nl2, x86_arr_decl_span(cx.slots, cx.src, ns, nl2))) {
+    match deref_arr_copy(v, cx.src, ns, deref_arr_type(cx.src, ns, nl2, x86_arr_decl_span(v, cx.slots, cx.src, ns, nl2))) {
       Some(dac) => {
         emit_gas(deref_inner_expr(v), sb, cx, a, nl)
         push_str(sb, "  popq %rax\n")

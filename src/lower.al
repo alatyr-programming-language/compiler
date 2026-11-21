@@ -6937,13 +6937,7 @@ deref_arr_type := fn(src : ptr(u8), ns : usize, nl : usize, decl : CSpan) -> CSp
 ## is written as. Shared by the x86_64 copy below and the twins' refusal (`refuse_deref_arr_copy`), so no
 ## length form can fall through to the one-word store (a slice view `[T]` has no top-level `;`).
 deref_arr_shape := fn(v : ptr(Expr), src : ptr(u8), ats : CSpan) -> bool {
-  match deref(v) {
-    Expr::Deref(dp) => {}
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
-      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return false }
-  }
+  if not is_deref_value(v) { return false }
   if ats.n < 2 or str_at((src + ats.s), 1) != "[" { return false }
   lower_layout::arrty_semi(src, ats.s, ats.n) != 0
 }
@@ -6987,24 +6981,131 @@ pub refuse_deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : u
   panic("selfhost: aarch64, riscv64 and wasm do not yet copy a fixed array out of a pointer (`v : [T; N] = deref(p)` or `v = deref(p)`, #1811): refused rather than moving one word of it")
 }
 
-## x86_64's answer for the declared type of a REASSIGNED array local: the `: T` at the name's declaration
-## site, which is the `ns` its `ek == 5` frame slot recorded (`bind_array_slot`, at the first binding). A
-## parameter is not a local declaration, so it answers {0,0} and keeps its own path.
-x86_arr_decl_span := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+## x86_64's answer for the declared type of a REASSIGNED array local `v = deref(p)`: the `: T` of the
+## declaration of `v` in effect at the assignment `ns`. The frame slot alone cannot say which one that is:
+## a later binding of the same name that is not wider reuses the array's ONE slot entry (a scalar `v`
+## declared after a loop-scoped `[u8; 3]` `v` shares the entry, whose `ns` is the array's declaration), so
+## reading the entry's declaration copied an array into a scalar (round-2 review of #1821: 2 where 42 was
+## due). `x86_decl_in_effect` finds the declaration in scope instead (Declarations §5, §6.1).
+##
+## Only a value `deref(…)` stored into an `ek == 5` local slot asks; a parameter keeps its own path. Every
+## case this cannot read with certainty is refused, located, rather than guessed:
+##  - a declaration it cannot tell apart from other text (`x86_decl_in_effect` answers `None`), and
+##  - an array local declared WITHOUT an annotation (`mut v := [u64(0), u64(0)]`), which has no `[T; N]`
+##    text to read the element type and count from (#1809: it moved one word into a two-word block).
+## A declaration in effect whose annotation is not an array type answers {0,0}: that binding is not an
+## array, and its own store path applies.
+x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+  if not is_deref_value(v) { return CSpan(s = 0, n = 0) }
+  ## a declaration answers from its own `: T` (`deref_arr_type`), or is a new binding by inference: the
+  ## entry `slot_of` reuses may still be an earlier, out-of-scope array of the same name
+  if assign_is_decl(src, ns, nl) { return CSpan(s = 0, n = 0) }
+  le : Option(u64) = local_entry(slots, src, ns, nl)
   mut r := CSpan(s = 0, n = 0)
-  cnt := svec_len(slots)
-  mut i : usize = 0
-  while i < cnt {
-    e := svec_at(SlotEntry, slots, i)
-    if deref(e).nl == nl and deref(e).ek == 5 and not deref(e).is_param {
-      if lower_ctx::streq(src, deref(e).ns, nl, ns, nl) {
-        lt := local_type_span(src, deref(e).ns, deref(e).nl)
-        r = CSpan(s = lt.s, n = lt.n)
+  match le {
+    Some(i) => {
+      e := deref(svec_at(SlotEntry, slots, usize(i)))
+      if e.ek == 5 and not e.is_param {
+        match x86_decl_in_effect(src, e.ns, ns, nl) {
+          Some(ds) => {
+            lt := local_type_span(src, usize(ds), nl)
+            if lt.n == 0 { reject_deref_arr_inferred(src, ns) }
+            if lt.n >= 2 and str_at((src + lt.s), 1) == "[" { r = CSpan(s = lt.s, n = lt.n) }
+          }
+          None => { reject_deref_arr_decl_unknown(src, ns) }
+        }
       }
     }
-    i += 1
+    None => {}
   }
   r
+}
+
+## The source offset of the declaration of the name at `use_s` (length `nl`) that is in effect there,
+## searching from its FIRST binding `first` (the slot entry's `ns`). A declaration is the name, at an
+## identifier boundary and outside string literals and `#` comments, followed by `:` (`v : T = …`,
+## `v := …`) and preceded on its line by nothing or `mut` alone. The latest one still in scope at `use_s`
+## (`binding_in_scope_at`) wins: it shadows or rebinds every earlier one. `None` when a match followed by
+## `:` stands anywhere else on its line (a field, a lambda parameter, a second statement on one line),
+## because it may be a binding this scan cannot place, or when no declaration is in scope at all.
+x86_decl_in_effect := fn(src : ptr(u8), first : usize, use_s : usize, nl : usize) -> Option(u64) {
+  mut best : Option(u64) = Option(u64).None
+  if binding_in_scope_at(src, first, nl, use_s) { best = Option(u64).Some(u64(first)) }
+  mut i : usize = first + nl
+  while i + nl <= use_s {
+    b := src_byte(src, i)
+    if b == 34 or b == 39 {
+      i += 1
+      while src_byte(src, i) != b and src_byte(src, i) != 0 {
+        if src_byte(src, i) == 92 { i += 1 }
+        i += 1
+      }
+      i += 1
+    } else if b == 35 {
+      while src_byte(src, i) != 10 and src_byte(src, i) != 0 { i += 1 }
+    } else if not lower_layout::ll_ident_byte(src, i - 1) and lower_ctx::streq(src, i, nl, use_s, nl) and not lower_layout::ll_ident_byte(src, i + nl) and src_byte(src, i - 1) != 58 {
+      mut k := i + nl
+      while src_byte(src, k) == 32 or src_byte(src, k) == 9 { k += 1 }
+      if src_byte(src, k) == 58 and src_byte(src, k + 1) != 58 {
+        if not decl_line_head(src, i) { return Option(u64).None }
+        if binding_in_scope_at(src, i, nl, use_s) { best = Option(u64).Some(u64(i)) }
+      } else if (src_byte(src, k) == 44 or src_byte(src, k) == 41) and decl_line_opens_tuple(src, i) {
+        ## a name inside a destructuring `(a, v) := …` binds it too, with a type this scan cannot read
+        return Option(u64).None
+      }
+      i += nl
+    } else {
+      i += 1
+    }
+  }
+  best
+}
+
+## Does only blank text, or `mut` alone, precede offset `p` on its line?
+decl_line_head := fn(src : ptr(u8), p : usize) -> bool {
+  mut q := p
+  while q > 0 and (src_byte(src, q - 1) == 32 or src_byte(src, q - 1) == 9) { q -= 1 }
+  if q == 0 or src_byte(src, q - 1) == 10 { return true }
+  if q < 3 or str_at((src + q - 3), 3) != "mut" { return false }
+  mut h := q - 3
+  while h > 0 and (src_byte(src, h - 1) == 32 or src_byte(src, h - 1) == 9) { h -= 1 }
+  h == 0 or src_byte(src, h - 1) == 10
+}
+
+## Does the line holding offset `p` start, after blanks and an optional `mut`, with `(` — the head of a
+## destructuring binding?
+decl_line_opens_tuple := fn(src : ptr(u8), p : usize) -> bool {
+  mut q := p
+  while q > 0 and src_byte(src, q - 1) != 10 { q -= 1 }
+  while src_byte(src, q) == 32 or src_byte(src, q) == 9 { q += 1 }
+  if q + 3 <= p and str_at((src + q), 3) == "mut" and not lower_layout::ll_ident_byte(src, q + 3) {
+    q += 3
+    while src_byte(src, q) == 32 or src_byte(src, q) == 9 { q += 1 }
+  }
+  src_byte(src, q) == 40
+}
+
+## The located refusal of `x86_arr_decl_span` when the declaration in effect cannot be identified.
+reject_deref_arr_decl_unknown := fn(src : ptr(u8), ns : usize) {
+  lower_show_src_line(src, ns)
+  panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs the target's declaration in effect, and this backend could not identify it with certainty (#1809): a binding of the same name written as a field, a lambda parameter or a second statement on one line is ambiguous here; rename one of them. Refused rather than copying with a guessed type")
+}
+
+## Is the assigned value a `deref(…)` — the value half of `deref_arr_shape`.
+is_deref_value := fn(v : ptr(Expr)) -> bool {
+  match deref(v) {
+    Expr::Deref(dp) => { true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+
+## The located refusal of `x86_arr_decl_span` for a reassigned array local declared without `: [T; N]`.
+reject_deref_arr_inferred := fn(src : ptr(u8), ns : usize) {
+  lower_show_src_line(src, ns)
+  panic("selfhost: a fixed array copied out of a pointer into a local declared without a type (`v = deref(p)` over `v := [ … ]`) is not supported on this backend yet (#1809): declare it `v : [T; N] = …` with a literal `N`; refused rather than moving one word of the array")
 }
 
 deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, ats : CSpan) -> Option(DerefArrCopy) {
