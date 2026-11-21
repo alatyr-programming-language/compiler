@@ -23434,7 +23434,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         aidx := mk_arg(deref(cx.mar), Arg(e = vptr, next = phead))
         cidx := mk_expr(deref(cx.mar), Expr.Call(vs, vl, np + 1, Option.Some(aidx)))
         cptr := node_ptr(Expr, deref(cx.mar), cidx)
-        emit_gas(cptr, sb, cx, a)
+        emit_gas(cptr, sb, cx, a, nl)
       } else if np == 0 {
         ## A nullary enum variant is a scalar discriminant when it appears in a comparison or as a
         ## nested one-word payload. The old placeholder erased E.A/E.B/E.C to zero, making every

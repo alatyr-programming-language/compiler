@@ -409,7 +409,7 @@ pub emit_packed_assign := fn(ss : usize, sl : usize, fhead : Option(ptr(mut Arg)
           sli := str_lit_info(ga.e)
           eli := enum_lit_info(ga.e)
           ali := array_lit_info(ga.e)
-          if nsli.is_s { emit_struct_assign(ga.e, aslot, sb, cx, a) }
+          if nsli.is_s { emit_struct_assign(ga.e, aslot, sb, cx, a, nl) }
           else if sli.is_s { emit_str_assign(ga.e, aslot, sb) }
           else if eli.is_e {
             ## A union field is a raw offset-0 aggregate, not an enum's `[disc,payload]` pair.
@@ -822,7 +822,7 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
             if nsli.is_s {
               ## a NESTED struct field (`i = I(…)`) — recurse to store the inner struct's words at the
               ## field's base slot (arbitrary nesting). A scalar emit of a `StructLit` would drop it to 0.
-              emit_struct_assign(ga.e, base - off, sb, cx, a)
+              emit_struct_assign(ga.e, base - off, sb, cx, a, nl)
             } else if is_str_fld {
               ## a `str` FIELD (`name = "hi"`) — a 2-word `{ptr, len}` value; store it exactly as a str
               ## LOCAL binding (ptr at `base+off+1`, len at `base+off+2`), matching the `g.name.ptr`/`.len`
