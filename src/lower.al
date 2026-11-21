@@ -6991,16 +6991,24 @@ type_past_attrs := fn(src : ptr(u8), p0 : usize) -> usize {
 }
 
 ## Does the attributed annotation `ats` still look like an array past what `type_past_attrs` read: it
-## starts with `@`, the text after its attributes is not `[`-led, and that text holds a `;`? Then the
-## attribute skipper misread a spelling, and the copy refuses rather than letting `deref_arr_shape` answer
-## "not an array" and the store move one word (round-11 review: the declaration form had no net).
+## starts with `@`, the text after its attributes is not `[`-led, and that text holds a `;` outside every
+## `( … )` group? Then the attribute skipper misread a spelling (`(16) [u64; 2]`, `align(16) [u64; 2]`),
+## and the copy refuses rather than letting `deref_arr_shape` answer "not an array" and the store move
+## one word (round-11 review: the declaration form had no net). An array inside parentheses, as in
+## `@align(16) ptr([u64; 2])` or an `Option` or tuple of one, is not the target's own type and keeps its
+## store (round-12 review). No spelling the front end accepts reaches the refusal today, so no e2e row
+## exercises it.
 deref_arr_attr_unread := fn(src : ptr(u8), ats : CSpan) -> bool {
   if ats.n == 0 or src_byte(src, decl_skip_blank(src, ats.s)) != 64 { return false }
   core := deref_arr_ann_core(src, ats)
   if core.n != 0 and src_byte(src, core.s) == 91 { return false }
+  mut depth : usize = 0
   mut i := core.s
   while i < core.s + core.n {
-    if src_byte(src, i) == 59 { return true }
+    b := src_byte(src, i)
+    if b == 40 { depth += 1 }
+    if b == 41 and depth > 0 { depth -= 1 }
+    if b == 59 and depth == 0 { return true }
     i += 1
   }
   false

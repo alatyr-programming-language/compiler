@@ -227,6 +227,14 @@ rde := fn(h : usize) -> u64 {
   w : @ align(16) [u64; 2] = deref(p)
   v[0] + v[1] + w[0] + w[1] - 52
 }
+## A pointer to an array, declared with a prefix attribute from `deref`, is one word (Types §8; round-12
+## review: it was refused).
+rdf := fn(h : usize) -> u64 {
+  pp : ptr(ptr([u64; 2])) = unchecked bitcast(ptr(ptr([u64; 2])), h)
+  v : @align(16) ptr([u64; 2]) = deref(pp)
+  a : [u64; 2] = deref(v)
+  a[0] + a[1] - 26
+}
 main := fn() -> u64 {
   mut arr : [u64; 2] = [21, 5]
   mut wv : u64 = 198914
@@ -236,6 +244,6 @@ main := fn() -> u64 {
   hq := unchecked bitcast(usize, ptr(wq))
   mut pa : ptr([u64; 2]) = ptr(arr)
   hp := unchecked bitcast(usize, ptr(pa))
-  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha) + rdy(hq) + rdy2(hq) + rdz2(ha) + rds2(ha) + rdk(hb) + rdk2(hb) + rdg(ha) + rde(ha)
+  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha) + rdy(hq) + rdy2(hq) + rdz2(ha) + rds2(ha) + rdk(hb) + rdk2(hb) + rdg(ha) + rde(ha) + rdf(hp)
 }
 ## expect: run 42
