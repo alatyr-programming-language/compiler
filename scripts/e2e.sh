@@ -9450,7 +9450,12 @@ run tuple_nested_index_legacy 42
 ## stored over two neighbouring locals, and read `tbc.ok` from a slot NOTHING wrote — stale stack. When it
 ## came up non-zero, `array_of_tuples` exited 1 instead of 42 while `fixpoint.sh` and a tree-level `cmp` of
 ## the emitted GAS both stayed green, because `src/` has no array-of-tuple local to expose it.
-build_reject_has reject_narrow_slot_rebind "already bound in this function by a NARROWER binding"
+## The legacy emitter keeps that refusal (`require_reservation`). Since IR-41 (#1786) the shared IR builds
+## this `main` on x86_64 too, as it already did on the twins: the scalar `t` is a virtual register and the
+## struct `t` a 24-byte frame object of its own, so the two never share storage. The program is valid
+## (Declarations §5: scope is lexical and block-structured, and each `t` lives in its own block) and answers
+## 42 on all four backends. The fixture's name records its history, not a refusal.
+run reject_narrow_slot_rebind 42
 ## §4/§8: NESTED mixed-kind tuple element access on a scalar-then-nested-tuple local: t.1.0/t.1.1.
 run tuple_nested_index 42
 ## §4/§8: ONE-level TUPLE-element WRITE `t.N = v` (store dual of the tuple READ `t.N`) — overwrite t.1/t.2 of
@@ -11039,12 +11044,13 @@ run_x86 issue396_tail_match_enum_place 42
 ## discriminant belongs. Every arm then compared unequal and the WILDCARD won: a clean binary, a normal
 ## exit, the wrong number, on a shape whose enum-LOCAL spelling is a fail-loud trap. The same one-word
 ## store dropped every payload word of an enum local wider than one word. Parent 5eb6739 exits 51 on
-## aarch64 and riscv64 (the wildcard); this tree exits 42 on x86_64, aarch64 and riscv64 alike. wat has
-## no lowering for the shape at all (issue #449) and traps, which is why its row asserts the trap.
+## aarch64 and riscv64 (the wildcard); this tree exits 42 on x86_64, aarch64 and riscv64 alike. wat had
+## no legacy lowering for the shape (issue #449) and trapped; since IR-41 (#1786) the shared IR builds
+## `mk`'s struct result too, and wat answers 42.
 run_x86 issue448_enum_place_match 42
 run_a64 issue448_enum_place_match 42
 run_rv64 issue448_enum_place_match 42
-run_wat issue448_enum_place_match 134
+run_wat issue448_enum_place_match 42
 ## issue #448 CONTROL — the spelling the legacy twins could not lower had to STAY fail-loud (133 = 128 +
 ## SIGTRAP), asserted as the exact status because a wildcard landing in a nonzero arm would satisfy a
 ## nonzero-exit check. Since IR slice 3n the twins build the enum field from the shared IR and answer the

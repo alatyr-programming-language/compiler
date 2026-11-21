@@ -20,6 +20,10 @@
 ## reservation — so this fixture asserts the BUILD fails AND that it fails with the diagnostic. The
 ## needle matters: before the guard this same source made the compiler die of an internal overflow
 ## trap (SIGILL, no message), which a bare non-zero exit check would have accepted as "fail-loud".
+##
+## Since IR-41 (#1786) this `main` is built by the shared IR on every backend, so it no longer reaches the
+## legacy guard. The IR keeps each block's `t` in storage of its own, and the program answers 42; that is
+## what Declarations §5 (block scope) asks of it, and what `scripts/e2e.sh` now asserts.
 P := struct { x : u64, y : u64, z : u64 }
 mk3 := fn() -> P { P(x = 10, y = 11, z = 14) }
 main := fn() -> u64 {
