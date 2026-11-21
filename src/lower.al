@@ -3193,7 +3193,7 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
       ct := typearg_at(src, tag_s, 0, jt)
       if ct.n == 0 { got = false } else {
         push_str(sb, "_")
-        push_label_text(sb, src, ct.s, ct.n)
+        emit_nested_targ_tag(sb, src, ct.s, ct.n)
         jt += 1
       }
     }
@@ -3204,12 +3204,24 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
   if str_at((src + tag_s), 1) == "[" {
     aes := array_elem_span(src, tag_s, tag_l)
     push_str(sb, "Array_")
-    push_label_text(sb, src, aes.s, aes.n)
+    emit_nested_targ_tag(sb, src, aes.s, aes.n)
     push_str(sb, "_")
     push_int(sb, i64(parse_arr_len(src, tag_s, tag_l)))
     return
   }
-  push_str(sb, str_at((src + tag_s), tag_l))
+  ## A named struct, enum or union is spelled with the module that DECLARES it (#1808): `Node` written in
+  ## the root and `Node` written in `m` are two types, and `lower_layout::targ_same` keeps them two
+  ## instances, so they need two labels. A root declaration, a scalar, an alias and any name the
+  ## identity does not resolve keep their text, as before.
+  di := mono_targ_decl(src, tag_s, tag_l)
+  if di >= 0 {
+    dp := mono_decls()
+    td := deref(lower_ctx::decl_get(dp, usize(di)))
+    emit_mod_qual(sb, src, td.mod_start, td.mod_len)
+    push_str(sb, str_at((src + td.name_start), td.name_len))
+  } else {
+    push_str(sb, str_at((src + tag_s), tag_l))
+  }
   ## GENERIC type-arguments `Name(T, …)` → `Name_T_…`. Skip when the `(` after the name opens a
   ## struct LITERAL `(field = value, …)` — that happens when the type span's name sits at a struct-lit
   ## initializer (`p := Pt(x = 40, …)`): those are not type-args, and mangling them yielded an invalid
@@ -3221,11 +3233,30 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
       ta := typearg_at(src, tag_s, tag_l, j)
       if ta.n == 0 { going = false } else {
         push_str(sb, "_")
-        push_label_text(sb, src, ta.s, ta.n)
+        emit_nested_targ_tag(sb, src, ta.s, ta.n)
         j += 1
       }
     }
   }
+}
+## A type argument's own type argument, tuple component or array element, spelled by the rule of
+## `emit_type_arg_tag` so a named type in it carries its declaring module too (`Option(Node)` written in
+## two modules, #1808), and its blanks do not reach the label (#1810); `mut T` is `mut_<T>`. Any other
+## shape (a function type) keeps its symbol-safe text (`push_label_text`), as `targ_same` keeps its text.
+emit_nested_targ_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), s : usize, n : usize) {
+  t := lower_layout::targ_trim(src, s, n)
+  if t.n == 0 { return }
+  c := str_at((src + t.s), 1)
+  if lower_layout::targ_is_mut(src, t.s, t.n) {
+    push_str(sb, "mut_")
+    emit_nested_targ_tag(sb, src, t.s + 4, t.n - 4)
+    return
+  }
+  if c == "(" or c == "[" or lower_layout::targ_named_shape(src, t.s, t.n) {
+    emit_type_arg_tag(sb, src, t.s, t.n)
+    return
+  }
+  push_label_text(sb, src, t.s, t.n)
 }
 
 ## Emit a GENERIC fn INSTANCE label `<module>__<fn>__<typetag>` — the same-module prefix + the fn
@@ -31560,25 +31591,10 @@ ivec_push := fn(in out v : IVec, x : Inst) {
   v.len = v.len + 1
 }
 
-## Two type-arg spans denote the SAME instantiation? Compares the bare head lexeme AND every
-## top-level type-argument (via the proven `typearg_at` re-scan), so two generic-instance type-args
-## of one base (`Option(u64)` vs `Option(i64)`, both recorded as the bare head `Option`) are DISTINCT
-## instantiations, not collapsed. For a bare type-arg (no trailing `(…)` → no type-args) this reduces
-## to the head `streq` — byte-identical dedup to before (fixpoint-neutral for `src/`).
+## Two type-arg spans denote the SAME instantiation? The type's identity, not its text (#1808, #1810):
+## `lower_layout::targ_same`, which `emit_type_arg_tag` agrees with, so one instance is one label.
 inst_targ_eq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
-  if lower_ctx::streq(src, a_s, a_n, b_s, b_n) == false { return false }
-  mut j := 0
-  mut eq := true
-  mut going := true
-  while going {
-    ta := typearg_at(src, a_s, a_n, j)
-    tb := typearg_at(src, b_s, b_n, j)
-    if ta.n == 0 and tb.n == 0 { going = false }
-    else if ta.n == 0 or tb.n == 0 { eq = false ; going = false }
-    else if lower_ctx::streq(src, ta.s, ta.n, tb.s, tb.n) == false { eq = false ; going = false }
-    else { j = j + 1 }
-  }
-  eq
+  lower_layout::targ_same(mono_decls(), src, a_s, a_n, b_s, b_n)
 }
 
 ## Record a (generic-fn, typetag) instantiation if not already present (dedup by `gi` + the
@@ -33241,7 +33257,22 @@ x86_plain_label := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
 ## and its order are the ones `emit_program` built itself before e1, so the GAS does not move.
 ## `emit_program` reads it through `mono_insts`; the twins keep their private lists until slice 6.
 mut MONO_INSTS : Option(ptr(mut IVec)) = Option.None
+## The declarations mono's instance identity resolves type names against (#1808): published here, once
+## per compile, for `inst_targ_eq` and `emit_type_arg_tag`, whose signatures every instance-label site
+## shares. `None` before `collect_program`: an instance tag is then spelled from its text alone.
+mut MONO_DECLS : Option(ptr(rt::Vec)) = Option.None
+mono_decls := fn() -> ptr(rt::Vec) {
+  match MONO_DECLS { Some(dp) => { dp }; None => { panic("lower: an instance identity asked before collect_program") } }
+}
+## `lower_layout::targ_decl` against the published declarations; -1 before `collect_program`.
+mono_targ_decl := fn(src : ptr(u8), s : usize, n : usize) -> i64 {
+  match MONO_DECLS {
+    Some(dp) => { return lower_layout::targ_decl(dp, src, s, n) }
+    None => { return 0 - 1 }
+  }
+}
 pub collect_program := fn(decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt::Arena), a : rt::Arena) {
+  MONO_DECLS = Option(ptr(rt::Vec)).Some(decls)
   build_decl_name_hash(decls, src, deref(mar))
   cnt := rt::vec_len(deref(decls))
   hoff := node_alloc(deref(mar), size(IVec))
