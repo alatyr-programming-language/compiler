@@ -808,7 +808,9 @@ sw_fn := fn(in out sb : rt::StrBuf, x : SwX, d : Decl, in out a : rt::Arena) -> 
   ## function stays legacy — with the refusal in `sw_call` it keeps BOTH ends of every such call on one
   ## convention (`ir::sig_pins_legacy`, #1576). An enum with a folded `Option(ptr(T))` component: this
   ## emitter does not lay it out as the IR does (`ir::fn_folded_comp`, #1723).
-  if ir::sig_pins_legacy(x.decls, x.src, d) or ir::fn_folded_comp(x.f) { return false }
+  ## IR-39 (#1786): a struct with an array or aggregate field reached through a pointer or as a parameter
+  ## is proved against x86_64's legacy layout only (`ir::fn_agg_field`).
+  if ir::sig_pins_legacy(x.decls, x.src, d) or ir::fn_folded_comp(x.f) or ir::fn_agg_field(x.f) { return false }
   ## Slice 3w: frame objects live on the shadow stack in linear memory (`docs/ir.md` §6), laid out from
   ## `fp`, the value of the module's `$__sp` at entry. This first step does not pop the frame on return:
   ## the legacy emitter bump-allocates the same way and never reclaims, and a legacy callee may hand back
