@@ -373,10 +373,10 @@ ib_type_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), s0 : usize, n0 : usi
 ## Whether parameter `pm` of function `d` may hold a float (#1728), the refusal both ends of a crossing
 ## ask: the callee's own build (`ib_build_one`, `CSigParamFloat`) and an IR-built call (`ib_arg`).
 ## `ib_type_is_float` reads the DECLARED span, which is the parameter's type only while `d` is not
-## generic: in a generic function a `T` bound to `f64` names no float there (#1731's review, N4). Neither
-## a generic function nor a call to one is built today (`CGeneric`; `ib_callee_decl` skips a generic
-## declaration), so a generic `d` answers true here, refused by name rather than read off a type
-## parameter. When mono instances are built, this must ask the instance's SUBSTITUTED parameter type.
+## generic: in a generic function a `T` bound to `f64` names no float there (#1731's review, N4). A
+## generic body is not built (`CGeneric`), and a call to an instance asks the SUBSTITUTED parameter type
+## itself (`ib_gen_ks`, IR-40), so a generic `d` answers true here, refused by name rather than read off
+## a type parameter.
 ib_param_may_be_float := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl, pm : Param) -> bool {
   if d.is_generic { return true }
   ib_type_is_float(decls, src, pm.ts, pm.tl)
@@ -1647,6 +1647,7 @@ ib_call_user := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : 
   ce : IbCallee = ib_callee(bp, a, cs, cl)
   match ce {
     CeFn(x) => { return ib_call_decl(bp, a, e, usize(x), na, ah) }
+    CeGen(g) => { return ib_call_generic(bp, a, e, cs, cl, usize(g), na, ah) }
     CeNo(c) => { ib_refuse_call(bp, e, NyWhy.NwOutside, c) }
   }
   CallOut.CoRefused
@@ -1780,6 +1781,224 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
   }
   i0 := emit(f, a, it)
   CallOut.CoVoid
+}
+## IR-40 (#1786): a call to generic function `di`, built as a call to its INSTANCE. The builder does not
+## build the instance (a generic body stays `CGeneric`); it calls the one its target's legacy emitter
+## defines. So the call names a symbol that carries the instance's written type arguments
+## (`ir::prog_inst_sym`), and each selector either names it by its own legacy mangling, after checking
+## that the instance is one its emitter defines, or declines the call, which keeps the caller legacy.
+## The function is built only when the instance is fully determined by the call's own text and its
+## signature is in the scalar convention:
+## - every type parameter is passed explicitly (`decl_at(Decl, h)`), so the instance is the written
+##   type arguments and nothing is inferred (Functions §2.4 lets the arguments be omitted; that call is
+##   refused, `ECallGenericImplicit`); at most three of them, the most the legacy monomorphisers carry;
+## - each written type argument is a type the call spells (`lower::type_arg_full_at`, the span the
+##   legacy emitter mangles), not a local or parameter of the caller (`ECallGenericTArg`);
+## - each value parameter and the result is, with the type parameters replaced by the written arguments,
+##   a kernel scalar or a pointer, passed by value and not a float (`ECallGenericSig`). A pointer to a
+##   type parameter is a pointer whatever the argument (`ptr(T)`); any other spelling that names a type
+##   parameter (`Option(T)`, `[T; 4]`) is refused, and so is a signature type of another module that
+##   does not resolve alike from here (#1731's rule, as `ib_sig_resolves_here`);
+## - the callee is not a member of an overload set, an extern, `@inline`, or guarded by `when`.
+## The value arguments are passed in order with the type arguments left out, as the legacy caller erases
+## them. The result is checked against sema's record of the call, which substitutes the instance's
+## arguments (docs/ir.md §3.8 item 8).
+ib_call_generic := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, di : usize, na : usize, ah : Option(ptr(mut Arg))) -> CallOut {
+  src := ib_b_src(bp)
+  decls := ib_b_decls(bp)
+  d : Decl = deref(ib_decl_ptr(decls, di))
+  ntp := lower::tparam_count(decls, i64(di), src, a)
+  if ntp == 0 or not lower_layout::gen_tparam_count_supported(i64(ntp)) { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallGeneric); return CallOut.CoRefused }
+  if lower_layout::generic_overload_set_count(decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) > 1 {
+    ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallOverload)
+    return CallOut.CoRefused
+  }
+  if lower::extern_symbol(src, d.name_start, d.name_len).n != 0 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallExtern); return CallOut.CoRefused }
+  ## The legacy emitter routes a generic call to a non-generic function of the same name when the
+  ## arguments fit it (`lower::nongen_type_match`), a choice made from the argument's shape; the IR call
+  ## would name the generic's instance instead. Any such namesake, in any module, refuses the call.
+  if ib_has_nongen_namesake(decls, src, d.name_start, d.name_len) { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallGenericLegacy); return CallOut.CoRefused }
+  if expr_present(d.when_cond) or lower_attrs::fn_is_inline(src, d.name_start, d.name_len) {
+    ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallGeneric)
+    return CallOut.CoRefused
+  }
+  if na != d.arity { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallGenericImplicit); return CallOut.CoRefused }
+  if na - ntp > 8 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallManyArgs); return CallOut.CoRefused }
+  ## The instance a target defines is the one its legacy instance pass collected, and that pass binds a
+  ## bare generic call by the LAST declaration of the name (`lower::generic_decl_of`), not by the calling
+  ## module's scope. Where the two disagree (`decl_at` declared in five modules) the instance of `di` may
+  ## not exist, so the call is refused: one instance symbol, never a second definition of a guess.
+  bv : IbB = deref(bp)
+  lgi : i64 = lower::generic_decl_of(decls, src, cs, cl, bv.mod_s, bv.mod_n, na, ah, a)
+  if lgi != i64(di) { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallGenericLegacy); return CallOut.CoRefused }
+  ## The written type arguments, at the positions of the first three `: type` parameters.
+  i1 := lower::tparam_idx(decls, i64(di), src, a)
+  i2 := if ntp >= 2 { lower::tparam_idx2(decls, i64(di), src, a) } else { na }
+  i3 := if ntp >= 3 { lower::tparam_idx3(decls, i64(di), src, a) } else { na }
+  mut t := IrTArgs(ts = 0, tl = 0, ts2 = 0, tl2 = 0, ts3 = 0, tl3 = 0)
+  t1 := lower::type_arg_full_at(ah, i1, decls, src, a)
+  t.ts = t1.s
+  t.tl = t1.n
+  if ntp >= 2 {
+    t2 := lower::type_arg_full_at(ah, i2, decls, src, a)
+    t.ts2 = t2.s
+    t.tl2 = t2.n
+  }
+  if ntp >= 3 {
+    t3 := lower::type_arg_full_at(ah, i3, decls, src, a)
+    t.ts3 = t3.s
+    t.tl3 = t3.n
+  }
+  if not ib_targ_written(bp, t.ts, t.tl) or (ntp >= 2 and not ib_targ_written(bp, t.ts2, t.tl2)) or (ntp >= 3 and not ib_targ_written(bp, t.ts3, t.tl3)) {
+    ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallGenericTArg)
+    return CallOut.CoRefused
+  }
+  ## The type parameters' names, for the substitution.
+  g := ib_gen_names(src, d, i1, i2, i3, t)
+  ## The result first, as for a plain call.
+  mut res : Option(IbKS) = Option(IbKS).None
+  if d.ret_tl != 0 {
+    rko : Option(IbKS) = ib_gen_ks(bp, d, g, d.ret_ts, d.ret_tl)
+    match rko {
+      Some(kr) => {
+        res = ib_call_result_is(bp, e, kr)
+        if ib_b_failed(bp) { return CallOut.CoRefused }
+      }
+      None => { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallGenericSig); return CallOut.CoRefused }
+    }
+  }
+  args := wb_new(a, 8)
+  mut pp := d.params_head
+  mut ga : Option(ptr(mut Arg)) = ah
+  mut k : usize = 0
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        match ga {
+          Some(gq) => {
+            av := deref(arg_p(gq))
+            if k != i1 and k != i2 and k != i3 {
+              if pm.pmode != 0 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallGenericSig); return CallOut.CoRefused }
+              wko : Option(IbKS) = ib_gen_ks(bp, d, g, pm.ts, pm.tl)
+              match wko {
+                Some(want) => {
+                  vo : Option(VRegId) = ib_value_at(bp, a, av.e, want)
+                  match vo { Some(v) => { k1 := wb_push(args, a, usize(v)) }; None => { return CallOut.CoRefused } }
+                }
+                None => { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallGenericSig); return CallOut.CoRefused }
+              }
+            }
+            ga = av.next
+          }
+          None => { return CallOut.CoRefused }
+        }
+        k = k + 1
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  f := ib_b_f(bp)
+  mut it := inst0(Op.OpCall)
+  dnm := str_at((src + d.name_start), d.name_len)
+  sym := prog_inst_sym(ib_b_p(bp), a, di, dnm.ptr, dnm.len, src, t)
+  ocallee := o_sym(sym)
+  set_a(it, ocallee)
+  mut j : usize = 0
+  while j < wb_len(args) {
+    slot := pool_push(f, a, wb_get(args, j))
+    if j == 0 { it.pool = slot }
+    j = j + 1
+  }
+  it.n = wb_len(args)
+  match res {
+    Some(kr) => {
+      rv := ib_fresh(bp, a, kr)
+      set_dst(it, rv)
+      i := emit(f, a, it)
+      return CallOut.CoValue(rv)
+    }
+    None => {}
+  }
+  i0 := emit(f, a, it)
+  CallOut.CoVoid
+}
+## Whether a non-generic function or syscall declaration anywhere is named `[s, s+n)`.
+ib_has_nongen_namesake := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d : Decl = deref(ib_decl_ptr(decls, i))
+    named := d.name_len == n and streq(src, d.name_start, d.name_len, s, n)
+    if named and not d.is_generic and (d.kind == lower_layout::DECL_KIND_FN or d.kind == lower_layout::DECL_KIND_SYSCALL) { return true }
+    i = i + 1
+  }
+  false
+}
+## A written type argument `[s, s+n)`: a span the call spells, not a name the caller binds.
+ib_targ_written := fn(bp : ptr(mut IbB), s : usize, n : usize) -> bool {
+  if n == 0 { return false }
+  not ib_name_local(bp, s, n)
+}
+## The names of a generic declaration's (first three) type parameters, each with the written argument
+## that replaces it in the instance.
+IbGenSub := struct { ns : usize, nl : usize, ns2 : usize, nl2 : usize, ns3 : usize, nl3 : usize, t : IrTArgs }
+ib_gen_names := fn(src : ptr(u8), d : Decl, i1 : usize, i2 : usize, i3 : usize, t : IrTArgs) -> IbGenSub {
+  mut g := IbGenSub(ns = 0, nl = 0, ns2 = 0, nl2 = 0, ns3 = 0, nl3 = 0, t = t)
+  mut pp := d.params_head
+  mut k : usize = 0
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if k == i1 { g.ns = pm.ns; g.nl = pm.nl }
+        if k == i2 { g.ns2 = pm.ns; g.nl2 = pm.nl }
+        if k == i3 { g.ns3 = pm.ns; g.nl3 = pm.nl }
+        k = k + 1
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  g
+}
+## The kernel type of the instance's spelling `[s, s+n)` from generic declaration `d`: a bare type
+## parameter is its written argument (resolved here, where the call wrote it); a pointer is a pointer
+## whatever its pointee names; any other spelling must name no type parameter, and from another module
+## must resolve alike from here. A float is refused (#1728). `None` is outside the scalar convention.
+ib_gen_ks := fn(bp : ptr(mut IbB), d : Decl, g : IbGenSub, s : usize, n : usize) -> Option(IbKS) {
+  decls := ib_b_decls(bp)
+  src := ib_b_src(bp)
+  mut ws := s
+  mut wn := n
+  if g.nl != 0 and streq(src, s, n, g.ns, g.nl) { ws = g.t.ts; wn = g.t.tl }
+  else if g.nl2 != 0 and streq(src, s, n, g.ns2, g.nl2) { ws = g.t.ts2; wn = g.t.tl2 }
+  else if g.nl3 != 0 and streq(src, s, n, g.ns3, g.nl3) { ws = g.t.ts3; wn = g.t.tl3 }
+  else {
+    bn := lower_layout::base_type_name(src, s, n)
+    is_ptr := bn.n == 3 and str_at((src + bn.s), 3) == "ptr"
+    if not is_ptr {
+      if ib_span_names(src, s, n, g.ns, g.nl) or ib_span_names(src, s, n, g.ns2, g.nl2) or ib_span_names(src, s, n, g.ns3, g.nl3) { return Option(IbKS).None }
+      bv : IbB = deref(bp)
+      same_mod := d.mod_len == bv.mod_n and streq(src, d.mod_start, d.mod_len, bv.mod_s, bv.mod_n)
+      if not same_mod and not lower_layout::type_span_resolves_alike(decls, src, s, n, d.mod_start, d.mod_len, 4) { return Option(IbKS).None }
+    }
+  }
+  if ib_type_is_float(decls, src, ws, wn) { return Option(IbKS).None }
+  ib_type_ks(decls, src, ws, wn)
+}
+## Whether the type spelling `[s, s+n)` names `[ns, ns+nl)` as a whole identifier.
+ib_span_names := fn(src : ptr(u8), s : usize, n : usize, ns : usize, nl : usize) -> bool {
+  if nl == 0 or nl > n { return false }
+  mut i : usize = 0
+  while i + nl <= n {
+    before_ok := i == 0 or not lower_layout::ll_ident_byte(src, s + i - 1)
+    after_ok := i + nl == n or not lower_layout::ll_ident_byte(src, s + i + nl)
+    if before_ok and after_ok and streq(src, s + i, nl, ns, nl) { return true }
+    i = i + 1
+  }
+  false
 }
 ## #1074, step 1 of the sequencing recorded on the issue: substitute the `@inline` callee `d` at this call
 ## site. `args` holds the argument vregs, already built left to right at each parameter's declared type, so
@@ -2118,10 +2337,11 @@ ib_decl_named_at := fn(decls : ptr(rt::Vec), s : usize, n : usize, want_fn : boo
 ## the module's own binding is an overload set (the mangling's, `docs/ir-slice-2.md`, refused here).
 ib_callee_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize) -> Option(u64) {
   ce : IbCallee = ib_callee(bp, a, cs, cl)
-  match ce { CeFn(x) => { Option(u64).Some(x) }; CeNo(c) => { Option(u64).None } }
+  match ce { CeFn(x) => { Option(u64).Some(x) }; CeGen(g) => { Option(u64).None }; CeNo(c) => { Option(u64).None } }
 }
-## What a callee span resolves to: the declaration a direct call is built against, or why there is none.
-IbCallee := enum { CeFn(u64), CeNo(Construct) }
+## What a callee span resolves to: the declaration a direct call is built against, the generic
+## declaration whose instance it calls (`ib_call_generic`, IR-40), or why there is none.
+IbCallee := enum { CeFn(u64), CeGen(u64), CeNo(Construct) }
 ib_callee := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize) -> IbCallee {
   decls := ib_b_decls(bp)
   src := ib_b_src(bp)
@@ -2129,26 +2349,27 @@ ib_callee := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize)
   match idc {
     Some(x) => {
       dx : Decl = deref(ib_decl_ptr(decls, usize(x)))
-      if dx.is_generic { return IbCallee.CeNo(Construct.ECallGeneric) }
+      if dx.is_generic { return IbCallee.CeGen(x) }
       return IbCallee.CeFn(x)
     }
     None => {}
   }
   cnt := rt::vec_len(deref(decls))
   mut found : Option(u64) = Option(u64).None
+  mut gfound : u64 = 0
   mut hits : usize = 0
   mut i : usize = 0
   while i < cnt {
     d : Decl = deref(ib_decl_ptr(decls, i))
     if d.is_fn and d.name_len == cl and streq(src, d.name_start, d.name_len, cs, cl) {
       hits = hits + 1
-      if not d.is_generic { found = Option(u64).Some(u64(i)) }
+      if d.is_generic { gfound = u64(i) } else { found = Option(u64).Some(u64(i)) }
     }
     i = i + 1
   }
   if hits > 1 { return ib_callee_bare(bp, a, cs, cl) }
   if hits == 1 {
-    match found { Some(x) => { return IbCallee.CeFn(x) }; None => { return IbCallee.CeNo(Construct.ECallGeneric) } }
+    match found { Some(x) => { return IbCallee.CeFn(x) }; None => { return IbCallee.CeGen(gfound) } }
   }
   qo : Option(IbCallee) = ib_callee_qual(bp, a, cs, cl)
   match qo { Some(q) => { return q }; None => {} }
@@ -2218,7 +2439,7 @@ ib_callee_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, ri : i64) -> Option(
   src := bv.src
   d : Decl = deref(ib_decl_ptr(bv.decls, usize(ri)))
   if not d.is_fn { return Option(IbCallee).None }
-  if d.is_generic { return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallGeneric)) }
+  if d.is_generic { return Option(IbCallee).Some(IbCallee.CeGen(u64(ri))) }
   if lower::overload_set_count(bv.decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) > 1 {
     return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallOverload))
   }
@@ -2991,7 +3212,7 @@ ib_agg_call_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) ->
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => {
       ce : IbCallee = ib_callee(bp, a, cs, cl)
-      match ce { CeFn(x) => { Construct.ECallAggPos }; CeNo(c) => { c } }
+      match ce { CeFn(x) => { Construct.ECallAggPos }; CeGen(g) => { Construct.ECallGenericSig }; CeNo(c) => { c } }
     }
     Expr::Var | Expr::StructLit | Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit
       | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Field
@@ -3457,7 +3678,7 @@ ib_decl_init_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : ptr(Expr)) -
   match deref(v) {
     Expr::Call(cs, cl, na, ah) => {
       ce : IbCallee = ib_callee(bp, a, cs, cl)
-      match ce { CeFn(x) => { Construct.SAssignInitCall }; CeNo(c) => { c } }
+      match ce { CeFn(x) => { Construct.SAssignInitCall }; CeGen(g) => { Construct.ECallGenericSig }; CeNo(c) => { c } }
     }
     Expr::Var(s, n) => { Construct.SAssignInitName }
     Expr::Field | Expr::Index | Expr::Deref => { Construct.SAssignInitPlace }

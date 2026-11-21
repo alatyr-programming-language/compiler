@@ -535,7 +535,13 @@ pub IrFn := struct {
 ## `lits` holds three words per `str` literal an `OkLit` operand names: the address of its DECODED bytes
 ## (the builder decodes the source escapes once, `lower_layout::str_lit_byte`), their count, and the
 ## parser's label of the literal.
-pub IrProg := struct { fns : ptr(mut WBuf), syms : ptr(mut WBuf), lits : ptr(mut WBuf) }
+## `isyms` holds eight words per symbol that names a GENERIC INSTANCE (IR-40, #1786): the symbol's id,
+## the source the spans below are offsets into, and the (start, length) of its first three type
+## arguments as the call wrote them (a length 0 where the callee has fewer). A selector names the instance
+## by the mangling its legacy emitter defines it under, or declines the call (`sym_targs`).
+pub IrProg := struct { fns : ptr(mut WBuf), syms : ptr(mut WBuf), lits : ptr(mut WBuf), isyms : ptr(mut WBuf) }
+## The written type arguments of a generic instance symbol, as spans into the program source.
+pub IrTArgs := struct { ts : usize, tl : usize, ts2 : usize, tl2 : usize, ts3 : usize, tl3 : usize }
 
 ## ── the way back out of a WBuf word: one accessor per record type ──
 ## unchecked-ok: `fn_ptr` reads back a word `prog_add` pushed from a `ptr(mut IrFn)`.
@@ -551,7 +557,8 @@ pub prog_new := fn(in out a : rt::Arena) -> IrProg {
   fw := wb_new(a, 8)
   sw := wb_new(a, 24)
   lw := wb_new(a, 8)
-  IrProg(fns = fw, syms = sw, lits = lw)
+  iw := wb_new(a, 8)
+  IrProg(fns = fw, syms = sw, lits = lw, isyms = iw)
 }
 ## A `str` literal whose `n` decoded bytes sit at `b`, as the operand `addr` names it by (#1576).
 ## `lbl` is the parser's label of the literal, unique in the program (the wasm selector places the bytes
@@ -594,14 +601,92 @@ pub prog_sym := fn(p : IrProg, in out a : rt::Arena, decl : usize, name_p : ptr(
   n := wb_len(p.syms) / 3
   mut i : usize = 0
   while i < n {
-    if wb_get(p.syms, i * 3) == decl { return SymId(i) }
+    if wb_get(p.syms, i * 3) == decl and not sym_is_inst(p, i) { return SymId(i) }
     i = i + 1
   }
+  prog_sym_add(p, a, decl, name_p, name_n)
+}
+prog_sym_add := fn(p : IrProg, in out a : rt::Arena, decl : usize, name_p : ptr(u8), name_n : usize) -> SymId {
+  n := wb_len(p.syms) / 3
   k1 := wb_push(p.syms, a, decl)
   ## unchecked-ok: a symbol's name address is kept as its WBuf word; `sym_name` is the only way back.
   k2 := wb_push(p.syms, a, unchecked bitcast(usize, name_p))
   k3 := wb_push(p.syms, a, name_n)
   SymId(n)
+}
+## The symbol of the instance of generic declaration `decl` at the written type arguments `t` (spans
+## into `src`), added on first use (IR-40, #1786). It never shares a symbol with `prog_sym`'s plain one.
+pub prog_inst_sym := fn(p : IrProg, in out a : rt::Arena, decl : usize, name_p : ptr(u8), name_n : usize, src : ptr(u8), t : IrTArgs) -> SymId {
+  k := wb_len(p.isyms) / 8
+  mut j : usize = 0
+  while j < k {
+    b := j * 8
+    s := wb_get(p.isyms, b)
+    same1 := wb_get(p.isyms, b + 2) == t.ts and wb_get(p.isyms, b + 3) == t.tl
+    same2 := wb_get(p.isyms, b + 4) == t.ts2 and wb_get(p.isyms, b + 5) == t.tl2
+    same3 := wb_get(p.isyms, b + 6) == t.ts3 and wb_get(p.isyms, b + 7) == t.tl3
+    if wb_get(p.syms, s * 3) == decl and same1 and same2 and same3 { return SymId(s) }
+    j = j + 1
+  }
+  sid := prog_sym_add(p, a, decl, name_p, name_n)
+  k0 := wb_push(p.isyms, a, usize(sid))
+  ## unchecked-ok: the source address is kept as its WBuf word; `sym_put_targs` is the only way back.
+  k1 := wb_push(p.isyms, a, unchecked bitcast(usize, src))
+  k2 := wb_push(p.isyms, a, t.ts)
+  k3 := wb_push(p.isyms, a, t.tl)
+  k4 := wb_push(p.isyms, a, t.ts2)
+  k5 := wb_push(p.isyms, a, t.tl2)
+  k6 := wb_push(p.isyms, a, t.ts3)
+  k7 := wb_push(p.isyms, a, t.tl3)
+  sid
+}
+## Whether symbol `s` names a generic instance.
+sym_is_inst := fn(p : IrProg, s : usize) -> bool {
+  k := wb_len(p.isyms) / 8
+  mut j : usize = 0
+  while j < k {
+    if wb_get(p.isyms, j * 8) == s { return true }
+    j = j + 1
+  }
+  false
+}
+## Whether operand `(k, v)` is a symbol that names a generic instance: the question a selector asks before
+## it names a call's callee by its declaration's plain label (IR-40, #1786).
+pub opnd_is_inst_sym := fn(p : IrProg, k : OpndK, v : i64) -> bool {
+  match k { OkSym => { sym_is_inst(p, usize(v)) }; OkNone | OkVReg | OkImm | OkFrame | OkFn | OkLabel | OkLit => { false } }
+}
+## The written type arguments of symbol `s` when it names a generic instance; `None` for a plain one.
+## Every selector asks this before it names a call's callee by its declaration alone.
+pub sym_targs := fn(p : IrProg, s : SymId) -> Option(IrTArgs) {
+  k := wb_len(p.isyms) / 8
+  mut j : usize = 0
+  while j < k {
+    b := j * 8
+    if wb_get(p.isyms, b) == usize(s) {
+      return Option(IrTArgs).Some(IrTArgs(ts = wb_get(p.isyms, b + 2), tl = wb_get(p.isyms, b + 3), ts2 = wb_get(p.isyms, b + 4), tl2 = wb_get(p.isyms, b + 5), ts3 = wb_get(p.isyms, b + 6), tl3 = wb_get(p.isyms, b + 7)))
+    }
+    j = j + 1
+  }
+  Option(IrTArgs).None
+}
+## The printer's spelling of an instance symbol's type arguments: `(T1, T2)` after its name.
+sym_put_targs := fn(in out sb : rt::StrBuf, p : IrProg, s : usize) {
+  k := wb_len(p.isyms) / 8
+  mut j : usize = 0
+  while j < k {
+    b := j * 8
+    if wb_get(p.isyms, b) == s {
+      ## unchecked-ok: the word `prog_inst_sym` stored from the source address.
+      src : ptr(u8) = unchecked bitcast(ptr(u8), wb_get(p.isyms, b + 1))
+      put(sb, "(")
+      put(sb, str_at((src + wb_get(p.isyms, b + 2)), wb_get(p.isyms, b + 3)))
+      if wb_get(p.isyms, b + 5) != 0 { put(sb, ", "); put(sb, str_at((src + wb_get(p.isyms, b + 4)), wb_get(p.isyms, b + 5))) }
+      if wb_get(p.isyms, b + 7) != 0 { put(sb, ", "); put(sb, str_at((src + wb_get(p.isyms, b + 6)), wb_get(p.isyms, b + 7))) }
+      put(sb, ")")
+      return
+    }
+    j = j + 1
+  }
 }
 pub prog_nsyms := fn(p : IrProg) -> usize { wb_len(p.syms) / 3 }
 ## The declaration index a symbol names.
@@ -829,6 +914,7 @@ put_sym_opnd := fn(in out sb : rt::StrBuf, p : IrProg, v : i64) {
     nm := sym_name(p, SymId(usize(v)))
     put(sb, "@")
     put(sb, nm)
+    sym_put_targs(sb, p, usize(v))
     return
   }
   put(sb, "@s")
@@ -1763,6 +1849,9 @@ pub Construct := enum {
   ECallGeneric, ECallOverload, ECallBuiltin, ECallFnValue, ECallQualified, ECallMethod, ECallTypeName,
   ECallUnresolved, ECallArity, ECallManyArgs, ECallExtern, ECallResult, ECallResultAgg, ECallAggValue,
   ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer, ECallSigModule, ECallUnbound, ECallStrAtAddr,
+  ## IR-40 (#1786): a generic callee's instance is called only with every type argument written and
+  ## an instance signature in the scalar convention; each other case is refused by its own cause.
+  ECallGenericImplicit, ECallGenericTArg, ECallGenericSig, ECallGenericLegacy,
   ## The assignment family: one arm per cause an `x = e` / `x := e` / `mut x : T` statement is refused for
   ## (`ir::build`'s `ib_bs_assign` and the declaration and store builders it hands to), as for calls.
   ## `SAssign` stays the label of an assignment refused for a cause with no arm of its own.
@@ -1863,6 +1952,10 @@ pub construct_name := fn(c : Construct) -> str {
     ECallSigModule => { "call: callee from another module whose signature names a type declared more than once (#1734)" }
     ECallStrAtAddr => { "call: `str_at` at an integer address (an integer-to-pointer crossing)" }
     ECallUnbound => { "call: bare name the calling module neither declares nor imports, declared in several modules" }
+    ECallGenericImplicit => { "call: generic callee whose type arguments are inferred rather than written" }
+    ECallGenericTArg => { "call: generic callee with a type argument that is not a written type" }
+    ECallGenericSig => { "call: generic callee whose instance has a parameter or result outside the scalar convention" }
+    ECallGenericLegacy => { "call: generic callee whose instance the legacy instance pass binds to another declaration" }
     SAssignTakenNarrow => { "assign: address-taken local of a scalar narrower than a word" }
     SAssignArrInf => { "assign: whole value into an unannotated array local" }
     SAssignRefParam => { "assign: whole value into an out/in out parameter of a type the builder does not lay out" }

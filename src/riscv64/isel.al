@@ -539,6 +539,8 @@ sr_agg_ret := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> b
 sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
   n := ir::i_n(ip)
   if n > 8 { return false }
+  ## IR-40 (#1786): a generic instance is declined, as on aarch64 (`sa_call`, #1804).
+  if ir::opnd_is_inst_sym(x.p, ir::i_ak(ip), ir::i_av(ip)) { return false }
   cdo : Option(Decl) = sr_sym_decl(x, ip)
   match cdo {
     Some(cd) => {
