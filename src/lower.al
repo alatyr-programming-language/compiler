@@ -17424,7 +17424,7 @@ callee_mod_rank := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : u
 ## (`alloc::vec::push(T, …)`) is monomorphized like a same-module generic call — the instance
 ## label `<callee-module>__<fn>__<typetag>` is produced consistently at both the definition
 ## (the decl's own module) and the call site (`emit_mangled_call` splits the head module).
-generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, nargs : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena) -> i64 {
+pub generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, nargs : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena) -> i64 {
   cnt := rt::vec_len(deref(decls))
   nm := callee_name_span(src, cs, cl)
   ## SAME-NAME disambiguation: if the DECL of this tail name in the RESOLVED module is NON-generic,
@@ -17763,7 +17763,7 @@ generic_sig_redirect := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs 
 ## decl's `Param` list for the one whose type annotation is the literal `type`; returns its 0-based
 ## position (0 if none found — the common leading-`T : type` case). Generalizes the old hard-coded
 ## "the type parameter is param 0": `allocate := fn(in out self, T : type, …)` has it at index 1.
-tparam_idx := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
+pub tparam_idx := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
   if gi < 0 { return 0 }
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
@@ -17787,7 +17787,7 @@ tparam_idx := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -
 ## How many comptime `: type` parameters a generic decl has (1 for `id(T,…)`, 2 for
 ## `map(T, U, …)` / `HashMap(K, V, …)`). Drives the two-type-arg mono machinery: a count of 2
 ## erases + binds + mangles BOTH type-args.
-tparam_count := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
+pub tparam_count := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
   if gi < 0 { return 0 }
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
@@ -17807,7 +17807,7 @@ tparam_count := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena)
 
 ## The SOURCE-PARAM index of the SECOND `: type` parameter (0-based); returns 0 if the decl has
 ## fewer than two. For `map(T, U : type, …)` this is 1 (T at 0, U at 1).
-tparam_idx2 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
+pub tparam_idx2 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
   if gi < 0 { return 0 }
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
@@ -17832,7 +17832,7 @@ tparam_idx2 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) 
 }
 ## The source-param INDEX of a generic fn's THIRD comptime `: type` parameter (`Result::map`'s `U` in
 ## `map(T, E, U, …)`). Mirrors `tparam_idx2` (the 3rd `: type` param). 0 if fewer than 3.
-tparam_idx3 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
+pub tparam_idx3 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) -> usize {
   if gi < 0 { return 0 }
   d := deref(lower_ctx::decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
@@ -18069,7 +18069,7 @@ type_arg_span := fn(args_head : Option(ptr(mut Arg)), a : rt::Arena) -> CSpan {
 ## type-param position is rejected before extension by the callee-name check, preserving the old
 ## filter. The full span is required for niche/layout decisions and distinct generic labels
 ## (`ptr(u64)` must not share an instance with `ptr(str)`).
-type_arg_full_at := fn(args_head : Option(ptr(mut Arg)), ti : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+pub type_arg_full_at := fn(args_head : Option(ptr(mut Arg)), ti : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   e := arg_expr_at(args_head, ti, a)
   if unchecked bitcast(usize, e) == 0 { return CSpan(s = 0, n = 0) }
   ## `ptr(T)` is parsed as AddrOf(Var(T)); `deref_var_info` would expose the
@@ -33149,6 +33149,33 @@ x86_plain_label := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
   if extern_symbol(src, d.name_start, d.name_len).n != 0 { return false }
   if overload_set_count(decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) >= 2 { return false }
   not fn_is_naked(src, d.name_start, d.name_len) and not callee_is_abi_c(src, d.name_start, d.name_len)
+}
+## IR-40 (#1786): whether the instance of generic declaration `gi` at the written type arguments is
+## one `emit_program` defines under `emit_generic_label`, so an IR-built call may name that label: mono's
+## list holds it (`add_inst`'s own text equality), its declaration carries no `when` guard that could
+## drop it, and it is reached through the bare instance label (no overload suffix, no foreign or naked
+## convention). Anything else is declined and the calling function stays legacy.
+x86_inst_label_ok := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : usize, ts : usize, tl : usize, ts2 : usize, tl2 : usize, ts3 : usize, tl3 : usize) -> bool {
+  d := deref(lower_ctx::decl_get(decls, gi))
+  if not d.is_fn or not d.is_generic or d.kind != lower_layout::DECL_KIND_FN or d.name_len == 0 { return false }
+  if ir::expr_present(d.when_cond) { return false }
+  if extern_symbol(src, d.name_start, d.name_len).n != 0 { return false }
+  ## A generic overload set's instance label carries `emit_generic_sig_suffix` (#472); this one has none.
+  if generic_overload_set_count(decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) >= 2 { return false }
+  if fn_is_naked(src, d.name_start, d.name_len) or callee_is_abi_c(src, d.name_start, d.name_len) { return false }
+  match MONO_INSTS {
+    Some(hp) => {
+      n := ivec_len(hp)
+      mut i : usize = 0
+      while i < n {
+        e := ivec_at(hp, i)
+        if e.gi == gi and inst_targ_eq(src, e.ts, e.tl, ts, tl) and inst_targ_eq(src, e.ts2, e.tl2, ts2, tl2) and inst_targ_eq(src, e.ts3, e.tl3, ts3, tl3) { return true }
+        i = i + 1
+      }
+      false
+    }
+    None => { false }
+  }
 }
 ## Mono's instance list (docs/ir-slice-1.md §8.1, prerequisite e1 of option A, §7). The x86 GENERICS
 ## pre-pass, moved here unchanged out of `emit_program` so the driver can run it once after parsing and

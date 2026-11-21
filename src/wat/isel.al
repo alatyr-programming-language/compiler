@@ -598,6 +598,8 @@ sw_call := fn(in out sb : rt::StrBuf, x : SwX, ip : ptr(mut ir::IrInst)) -> bool
   ## emitter's, measured) returns the ADDRESS of a block in linear memory holding the words; the words
   ## are copied from there into the receiving object (`sw_agg_res`).
   fdst := ir::opndk_is_frame(ir::i_dk(ip))
+  ## IR-40 (#1786): a generic instance is declined, as on aarch64 (`sa_call`, #1804).
+  if ir::opnd_is_inst_sym(x.p, ir::i_ak(ip), ir::i_av(ip)) { return false }
   cdo : Option(Decl) = sw_sym_decl(x, ip)
   match cdo {
     Some(cd) => {
