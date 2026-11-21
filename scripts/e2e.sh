@@ -6507,8 +6507,8 @@ issue1212_located_refusals_test() {
 ## refused too, rather than copied into a block laid out for the other array (#1847; it answered 2).
 ## A declaration with a `#` comment between its name and its `:` is not read past the comment (#1859):
 ## a reassignment of it is refused (the parent's one-word store was right there, 42), and so is such a
-## declaration whose value is the `deref` (it reserved no array and moved one word: the round-8 review's
-## z07b, `v.len + 40`, gave 40 on head and parent alike).
+## declaration of an array whose value is the `deref` (it reserved no array and moved one word: the
+## round-8 review's z07b, this row, gave 40 on head and parent alike).
 issue1809_deref_arr_refusals_test() {
   local d="$T/issue1809_deref_arr_refusals" n src out err got
   rm -rf "$d"
@@ -6668,7 +6668,7 @@ issue1809_deref_arr_refusals_test() {
     '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
     '  v # the copy' \
     '    : [u64; 2] = deref(p)' \
-    '  v[0] + v[1]' \
+    '  v.len + 40' \
     '}' \
     'main := fn() -> u64 {' \
     '  mut arr : [u64; 2] = [40, 2]' \

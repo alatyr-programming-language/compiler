@@ -6989,8 +6989,10 @@ pub refuse_deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : u
 ## due). `x86_decl_in_effect` finds the declaration in scope instead (Declarations §5, §6.1), among the
 ## declaring `Assign`s `collect_slots` recorded in the side table `ctslots`.
 ##
-## Only a value `deref(…)` stored into an `ek == 5` local slot asks; a parameter keeps its own path. Every
-## case this cannot read with certainty is refused, located, rather than guessed (#1844 tracks copying them):
+## Only a value `deref(…)` asks. A declaration written with a `#` comment between its name and an
+## array annotation is refused first (#1859); otherwise only a store into an `ek == 5` local slot asks, and
+## a parameter keeps its own path. Every case this cannot read with certainty is refused, located, rather
+## than guessed (#1844 tracks copying them):
 ##  - a binding in scope that is not a recorded declaration (`x86_decl_in_effect` answers `None`), and
 ##  - an array local declared WITHOUT an annotation (`mut v := [u64(0), u64(0)]`), which has no `[T; N]`
 ##    text to read the element type and count from (#1809: it moved one word into a two-word block).
@@ -7002,10 +7004,15 @@ x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), ctslots : ptr(SVec), s
   ## entry `slot_of` reuses may still be an earlier, out-of-scope array of the same name
   if assign_is_decl(src, ns, nl) { return CSpan(s = 0, n = 0) }
   ## a declaration with a `#` comment before its `:` is not seen as one by `assign_is_decl` nor its type by
-  ## `local_type_span` (#1859), so neither the binder nor the copy would take it: one word moved (round-8
-  ## review: 40 where 42 is due). Refuse it, located.
+  ## `local_type_span` (#1859). For an ARRAY annotation neither the binder nor the copy takes it, and one
+  ## word moved (round-8 review: 40 where 42 is due), so refuse it, located. A scalar, pointer or struct
+  ## annotation, or `:=`, is a declaration all the same and keeps its own store as without the comment,
+  ## even over an earlier array of the same name (round-9 review).
   kd := decl_skip_blank(src, ns + nl)
-  if src_byte(src, kd) == 58 and src_byte(src, kd + 1) != 58 { reject_deref_arr_ann_unread(src, ns) }
+  if src_byte(src, kd) == 58 and src_byte(src, kd + 1) != 58 {
+    if src_byte(src, kd + 1) != 61 and src_byte(src, decl_skip_blank(src, kd + 1)) == 91 { reject_deref_arr_ann_unread(src, ns) }
+    return CSpan(s = 0, n = 0)
+  }
   le : Option(u64) = local_entry(slots, src, ns, nl)
   mut r := CSpan(s = 0, n = 0)
   match le {

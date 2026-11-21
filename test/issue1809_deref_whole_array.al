@@ -190,6 +190,27 @@ rds2 := fn(h : usize) -> u64 {
   v = deref(q)
   r + v - 21
 }
+## A scalar declared with a `#` comment before its `:` or its `:=` keeps its one-word store: only an
+## unread ARRAY annotation is refused (#1859; round-9 review: these were refused).
+rdk := fn(h : usize) -> u64 {
+  q : ptr(u64) = unchecked bitcast(ptr(u64), h)
+  v # the scalar
+    : u64 = deref(q)
+  w # inferred
+    := deref(q)
+  v + w - 397828
+}
+rdk2 := fn(h : usize) -> u64 {
+  q : ptr(u64) = unchecked bitcast(ptr(u64), h)
+  mut r : u64 = 0
+  for i in 0..1 {
+    mut v : [u8; 3] = [1, 1, 1]
+    r = u64(v[0]) - 1
+  }
+  v # the scalar, over the loop's array
+    : u64 = deref(q)
+  r + v - 198914
+}
 main := fn() -> u64 {
   mut arr : [u64; 2] = [21, 5]
   mut wv : u64 = 198914
@@ -199,6 +220,6 @@ main := fn() -> u64 {
   hq := unchecked bitcast(usize, ptr(wq))
   mut pa : ptr([u64; 2]) = ptr(arr)
   hp := unchecked bitcast(usize, ptr(pa))
-  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha) + rdy(hq) + rdy2(hq) + rdz2(ha) + rds2(ha)
+  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha) + rdy(hq) + rdy2(hq) + rdz2(ha) + rds2(ha) + rdk(hb) + rdk2(hb)
 }
 ## expect: run 42
