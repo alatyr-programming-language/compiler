@@ -527,6 +527,9 @@ pub IrFn := struct {
   folded_comp : bool,
   ## #1723: the builder read an aggregate whole through `deref(p)` (`fn_deref_whole`).
   deref_whole : bool,
+  ## IR-39 (#1786): the builder reached a struct with an array or aggregate field through a pointer or
+  ## as a parameter (`fn_agg_field`).
+  agg_field : bool,
 }
 
 ## A program: its functions, in order (an `OkFn` operand is an index into `fns`), and the symbols its
@@ -625,7 +628,7 @@ pub fn_new := fn(in out a : rt::Arena, name_p : ptr(u8), name_n : usize, has_ret
   pw := wb_new(a, 8)
   nf := IrFn(name_p = name_p, name_n = name_n, nparams = 0, has_ret = has_ret, ret_ty = ret_ty, ret_sg = ret_sg,
              ret_words = 0, vregs = vw, frames = fw, insts = iw, pool = pw, nlabels = 0, folded_comp = false,
-             deref_whole = false)
+             deref_whole = false, agg_field = false)
   deref(f) = nf
   f
 }
@@ -654,6 +657,14 @@ pub fn_set_folded_comp := fn(f : ptr(mut IrFn)) { deref(f).folded_comp = true }
 ## legacy reader trapped). Those two selectors therefore leave such a function to the legacy emitter.
 pub fn_deref_whole := fn(f : ptr(mut IrFn)) -> bool { fv : IrFn = deref(f); fv.deref_whole }
 pub fn_set_deref_whole := fn(f : ptr(mut IrFn)) { deref(f).deref_whole = true }
+## IR-39 (#1786): whether `f` reaches a struct with an array or aggregate field (an enum, a nested
+## struct, a fixed array) through a pointer or as a by-value parameter. The shared layout of such a
+## struct is the WORD-tier image `lower_layout::field_byte_place` answers, proved against x86_64's legacy
+## readers and writers (`docs/ir.md` §3.7). The aarch64, riscv64 and wasm legacy emitters were not proved
+## to share it (they trap at a field access through a pointer, IR-37, or write an aggregate pointee as one
+## word, #1727), so their selectors leave such a function to the legacy emitter.
+pub fn_agg_field := fn(f : ptr(mut IrFn)) -> bool { fv : IrFn = deref(f); fv.agg_field }
+pub fn_set_agg_field := fn(f : ptr(mut IrFn)) { deref(f).agg_field = true }
 fn_nlabels := fn(f : ptr(mut IrFn)) -> usize { fv : IrFn = deref(f); fv.nlabels }
 fn_vregs := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.vregs }
 fn_frames := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.frames }
@@ -1743,6 +1754,8 @@ pub Construct := enum {
   CSigResultView, CSigResultArray, CSigResultScalarAlias, CSigResultFloat, CSigResultFnType, CSigResultNever,
   CSigResultEnumInstance, CSigResultEnum, CSigResultTuple,
   CSigParamMode, CSigParamTaken, CSigParamLevered, CSigParamNestedField,
+  ## IR-39 (#1786): the child kinds a struct parameter's nested field is still refused for, by name.
+  CSigParamNestedNarrow, CSigParamNestedFolded, CSigParamNestedEnumAgg,
   CSigParamPadded, CSigParamUnresolved, CSigParamFloat, CSigSyscall,
   SAssign, SWhile, SFieldAssign, SReturn, SIf, SMatch, SFor, SDerefAssign, SIndexAssign, SIndexFieldAssign,
   SFieldPathAssign, SLoop, SBreak, SContinue, SExprStmt, SCompIf, SCompFor, SCompMatch, SCompForRange,
@@ -1763,6 +1776,8 @@ pub Construct := enum {
   ENum, EBoolLit, EVar, EBin, EIf, EMatch, ECall, EStructLit, EField, EEnumLit, EAddrOf, EDeref,
   ## The `deref` family (#1723): `EDeref` stays the label of a refusal no cause was found for.
   EDerefPointee, EDerefUnlaid, EDerefTier, EDerefLevered, EDerefNested, EDerefNarrow, EDerefForeign,
+  ## IR-39 (#1786): the child kinds a pointee's nested field is still refused for, by name.
+  EDerefNestedNarrow, EDerefNestedFolded, EDerefNestedEnumAgg,
   EStrLit, EArrayLit, EIndex, ETry, EFloatLit, ESlice, ECompField, EUnchecked, ELambda, EFnRef, EBitcast, ELoop,
 }
 pub construct_name := fn(c : Construct) -> str {
@@ -1792,6 +1807,9 @@ pub construct_name := fn(c : Construct) -> str {
     CSigParamTaken => { "signature: address-taken aggregate parameter" }
     CSigParamLevered => { "signature: @packed/@offset/@endian (byte-layout) struct parameter" }
     CSigParamNestedField => { "signature: struct parameter with an array or aggregate field" }
+    CSigParamNestedNarrow => { "signature: struct parameter with an aggregate field and a signed or nested sub-word scalar" }
+    CSigParamNestedFolded => { "signature: struct parameter with a niche-folded Option(ptr) field" }
+    CSigParamNestedEnumAgg => { "signature: struct parameter with an enum field holding an aggregate payload" }
     CSigParamPadded => { "signature: padded struct parameter" }
     CSigParamUnresolved => { "signature: parameter type names no struct or enum resolvable here" }
     CSigParamFloat => { "signature: floating-point parameter" }
@@ -1815,6 +1833,9 @@ pub construct_name := fn(c : Construct) -> str {
     EDerefLevered => { "expr Deref: @packed or byte-layout struct pointee" }
     EDerefNested => { "expr Deref: struct pointee with an array or aggregate field" }
     EDerefNarrow => { "expr Deref: scalar narrower than a word through a pointer" }
+    EDerefNestedNarrow => { "expr Deref: struct pointee with a sub-word scalar in a nested aggregate field" }
+    EDerefNestedFolded => { "expr Deref: struct pointee with a niche-folded Option(ptr) field" }
+    EDerefNestedEnumAgg => { "expr Deref: struct pointee with an enum field holding an aggregate payload" }
     EDerefForeign => { "expr Deref: callee's pointee type not proven to be the same type in this module" }
     EStrLit => { "expr StrLit" }; EArrayLit => { "expr ArrayLit" }
     EIndex => { "expr Index" }; ETry => { "expr Try" }; EFloatLit => { "expr FloatLit" }; ESlice => { "expr Slice" }

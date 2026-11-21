@@ -9,6 +9,11 @@
 ## pointer, until someone measures the shape and lifts the fence on purpose.
 ##
 ## Same status on the parent (7ed9ffd) and on this tree: the build fails and says so.
+##
+## IR-39 (#1786) lifted the fence on the default x86_64 route, measured: the shared IR passes `Outer` by
+## reference at the layout `lower_layout::field_byte_place` gives (`ib_struct_image_why`), reads
+## `o.inner.t` there, and the program answers 22 (`Tag.Green`), its value. The legacy emitter
+## (`alatyr x86-legacy`) still refuses at `resolve_nested_ptr_field`, and the twins still trap.
 Tag := enum { Red, Green, Blue }
 Inner := struct { t : Tag }
 Outer := struct { lead : u64, inner : Inner }
