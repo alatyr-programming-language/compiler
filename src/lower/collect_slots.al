@@ -498,6 +498,13 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               ## emission-neutral way to keep that fix to one slice.
               pps := addr_ptrptr_struct_span(v, ptr(slots), src)
               bind_ptrptrstruct_slot(slots, src, ns, nl, pps.s, pps.n)
+            } else if is_deref_arr_copy(v, src, ns, deref_arr_type(src, ns, nl, CSpan(s = 0, n = 0))) {
+              ## #1809 — `v : [T; N] = deref(p)`: reserve `v` as the WHOLE `N`-element block; the emitter
+              ## copies every element out of the pointee (`deref_arr_copy` is the one shape both read).
+              match deref_arr_copy(v, src, ns, deref_arr_type(src, ns, nl, CSpan(s = 0, n = 0))) {
+                Some(dac) => { bind_array_slot(slots, src, ns, nl, dac.nel, AElem(eek = dac.eek, ess = 0, esl = 0, stride = 1)) }
+                None => {}
+              }
             } else if deref_ptrptr_pointee_span(v, ptr(slots), src).n != 0 {
               ## a `p2 := deref(pp)` binding where `pp` is a pointer-to-pointer-to-struct (eek-1 marker) —
               ## `deref(pp)` is a `ptr(mut Struct)`, so bind `p2` as an ek-7 pointer-to-struct carrying the

@@ -191,6 +191,28 @@ emit_agg_slot_copy := fn(soff : usize, is_ref : bool, dst : i64, nw : usize, in 
   }
 }
 
+## #1809 — the element copy of `v : [T; N] = deref(p)`, the pointer in %rax. Pointee element `k` sits at
+## byte `k * esz` (Types §6.4: contiguous, each at `T`'s own size; `deref_arr_copy` admits 1- and 8-byte
+## elements) and is loaded at that width. A word-tier array keeps element `k` in the frame word
+## `base - k`; a byte-packed array keeps byte `k` at `k` above its origin `-(base*8)(%rbp)` (the layout
+## `emit_array_assign` writes and `v[k]` reads). Element by element, so nothing past the pointee's last
+## element is read. Flat `if`s in a standalone emit fn (see `emit_deref_load`).
+emit_deref_arr_elems := fn(in out sb : strbuf::StrBuf, base : i64, dac : DerefArrCopy) {
+  for k in 0..dac.nel {
+    off := i64(k * dac.esz)
+    if dac.esz == 1 { push_str(sb, "  movzbq ") }
+    if dac.esz == 8 { push_str(sb, "  movq ") }
+    push_int(sb, off)
+    push_str(sb, "(%rax), %rcx\n")
+    packed := is_byte_array_eek(dac.eek)
+    if packed { push_str(sb, "  movb %cl, -") }
+    if packed { push_int(sb, base * 8 - i64(k)) }
+    if not packed { push_str(sb, "  movq %rcx, -") }
+    if not packed { push_int(sb, (base - i64(k) + 1) * 8) }
+    push_str(sb, "(%rbp)\n")
+  }
+}
+
 emit_direct_num_float_assign := fn(v : ptr(Expr), target : u8, base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   emit_gas(v, sb, cx, a, nl)
   push_str(sb, "  popq %rax\n")
@@ -3090,6 +3112,18 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_str(sb, ", -")
       push_int(sb, (base - i64(k) + 1) * 8)
       push_str(sb, "(%rbp)\n")
+    }
+  } else if is_deref_arr_copy(v, cx.src, ns, deref_arr_type(cx.src, ns, nl2, x86_arr_decl_span(v, cx.slots, cx.src, ns, nl2))) {
+    ## #1809 — `v : [T; N] = deref(p)`, or `v = deref(p)` over a local declared `[T; N]`: evaluate the
+    ## pointer, then copy all `N` elements out of the pointee (Memory §4.3, Types §6.4) into the block
+    ## `collect_slots` reserved from the same shape at the declaration.
+    match deref_arr_copy(v, cx.src, ns, deref_arr_type(cx.src, ns, nl2, x86_arr_decl_span(v, cx.slots, cx.src, ns, nl2))) {
+      Some(dac) => {
+        emit_gas(deref_inner_expr(v), sb, cx, a, nl)
+        push_str(sb, "  popq %rax\n")
+        emit_deref_arr_elems(sb, slot_of(cx.slots, cx.src, ns, nl2), dac)
+      }
+      None => {}
     }
   } else if deref_struct_span(v, cx.slots, cx.src).n != 0 {
     ## a `s := deref(p)` where p is a pointer-to-struct: load p's value (the pointee word-0

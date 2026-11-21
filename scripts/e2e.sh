@@ -6425,6 +6425,131 @@ issue1212_located_refusals_test() {
   done
 }
 
+## Issue #1809 — a whole fixed array copied out of a pointer, `v : [T; N] = deref(p)` or `v = deref(p)`,
+## is copied on x86_64 for a byte or word integer element (test/issue1809_deref_whole_array.al); any
+## other element is refused there, located, rather than moved one word (the parent's answer). Both are
+## VALID programs, so they are generated here and add no corpus fixture (see #1212 above). A struct
+## element waits on a per-field copy; a `u16` element on the Types §6.4 stride of `[u16; N]` (#1559).
+## A length written as a named constant or a constant expression (`[u64; K]`, `[u64; 1 + 1]`) is refused
+## too until the copy evaluates it (#1833): the parent answered garbage and 41 where 42 is due. A
+## reassigned array local declared without `: [T; N]` (`mut v := [u64(0), u64(0)]`) has no element type
+## or count to read and is refused (the parent moved one word: 40 and 0 where 42 is due), and so is a
+## reassignment whose declaration in effect cannot be told apart from a same-named lambda parameter
+## (#1844 tracks copying both).
+issue1809_deref_arr_refusals_test() {
+  local d="$T/issue1809_deref_arr_refusals" n src out err got
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue1809_deref_arr_refusals: scratch"; fail=1; return; }
+  printf '%s\n' \
+    'P := struct { a : u64, b : u64 }' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([P; 2]) = unchecked bitcast(ptr([P; 2]), h)' \
+    '  v : [P; 2] = deref(p)' \
+    '  v[1].b' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [P; 2] = [P(a = 1, b = 2), P(a = 3, b = 42)]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/struct_elem.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u16; 2]) = unchecked bitcast(ptr([u16; 2]), h)' \
+    '  mut v : [u16; 2] = [0, 0]' \
+    '  v = deref(p)' \
+    '  u64(v[1])' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut w : u64 = 2752513' \
+    '  rd(unchecked bitcast(usize, ptr(w)))' \
+    '}' > "$d/narrow_reassign.al"
+  printf '%s\n' \
+    'K := 2' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  v : [u64; K] = deref(p)' \
+    '  v[0] + v[1]' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/named_len.al"
+  printf '%s\n' \
+    'K := 2' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; K] = [0, 0]' \
+    '  v = deref(p)' \
+    '  v[0] + v[1]' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/named_len_reassign.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  v : [u64; 1 + 1] = deref(p)' \
+    '  v[0] + v.len' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/expr_len.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v := [u64(0), u64(0)]' \
+    '  v = deref(p)' \
+    '  v[0] + v[1]' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/inferred_reassign.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; 2] = [0, 0]' \
+    '  f := fn(v : u64) -> u64 { v }' \
+    '  v = deref(p)' \
+    '  v[0] + v[1] + f(0)' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/decl_unknown.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v := [u64(0), u64(0)]' \
+    '  v[0] = 1' \
+    '  v = deref(p)' \
+    '  v[1] * 21' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/inferred_reassign_idx.al"
+  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown; do
+    src="$d/$n.al"; out="$d/$n.out"; err="$d/$n.err"
+    "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
+    if [ "$got" = 0 ]; then echo "FAIL issue1809_deref_arr_refusals($n): build succeeded, want a located reject"; fail=1; continue; fi
+    if [ -e "$out" ]; then echo "FAIL issue1809_deref_arr_refusals($n): rejected but left an output artifact"; fail=1; continue; fi
+    case "$n" in
+      struct_elem) grep -qF 'a fixed array copied out of a pointer' "$err" && grep -qF 'v : [P; 2] = deref(p)' "$err" ;;
+      narrow_reassign) grep -qF 'a fixed array copied out of a pointer' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      named_len) grep -qF 'needs its length' "$err" && grep -qF 'v : [u64; K] = deref(p)' "$err" ;;
+      named_len_reassign) grep -qF 'needs its length' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      expr_len) grep -qF 'needs its length' "$err" && grep -qF 'v : [u64; 1 + 1] = deref(p)' "$err" ;;
+      inferred_reassign) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      inferred_reassign_idx) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      decl_unknown) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+    esac
+    if [ $? = 0 ]; then echo "ok   issue1809_deref_arr_refusals($n): refused, located"
+    else echo "FAIL issue1809_deref_arr_refusals($n): rc=$got but the reason or its source line is missing"; fail=1; fi
+  done
+}
+
 issue1663_unemitted_place_shapes_test() {
   d="$T/issue1663_unemitted"; mkdir -p "$d"
   cat > "$d/elem_arg.al" <<'EOF'
@@ -12907,6 +13032,7 @@ build_reject_has reject_map_ufcs_direct_struct "match recv.map(f)"
 ## a payload wider than six words is refused at its constructor; both located (generated programs).
 run issue1212_option_deref_struct 42
 issue1212_located_refusals_test
+issue1809_deref_arr_refusals_test
 run unwrap_bound_generic_call 42
 build_reject_has reject_unwrap_bound_paramladen_call "implicit-UFCS call to a multi-type-parameter"
 
