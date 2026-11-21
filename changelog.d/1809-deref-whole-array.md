@@ -9,4 +9,6 @@
   (`[u64; K]`, `[u64; 1 + 1]`) is refused, located, until the copy evaluates it (#1833).
   A reassignment into an array local declared without `: [T; N]` (`mut v := [u64(0), u64(0)]`)
   is refused, located, until the copy reads the checker's type (#1844).
+  A `[T; N]` local that reuses the frame slot of an earlier, out-of-scope array of the same name
+  with another element type or length is refused, located (#1847).
   aarch64, riscv64 and wasm refuse both forms, at any length, until they copy them (#1811).

@@ -106,6 +106,17 @@ rdp := fn(hp : usize) -> u64 {
   x : [u64; 2] = deref(v)
   r + x[0] + x[1] - 26
 }
+## Signed and `usize` word elements reassigned into literal-declared arrays: the frame block's element
+## tier and count match the copy's, so it is taken (an unmatched block is refused, #1847).
+rdi := fn(h : usize) -> u64 {
+  p : ptr([i64; 2]) = unchecked bitcast(ptr([i64; 2]), h)
+  mut v : [i64; 2] = [0, 0]
+  v = deref(p)
+  q : ptr([usize; 2]) = unchecked bitcast(ptr([usize; 2]), h)
+  mut w : [usize; 2] = [0, 0]
+  w = deref(q)
+  u64(v[0] + v[1]) + u64(w[1]) - 31
+}
 main := fn() -> u64 {
   mut arr : [u64; 2] = [21, 5]
   mut wv : u64 = 198914
@@ -113,6 +124,6 @@ main := fn() -> u64 {
   hb := unchecked bitcast(usize, ptr(wv))
   mut pa : ptr([u64; 2]) = ptr(arr)
   hp := unchecked bitcast(usize, ptr(pa))
-  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp)
+  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha)
 }
 ## expect: run 42

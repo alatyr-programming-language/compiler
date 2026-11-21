@@ -6502,7 +6502,9 @@ issue1212_located_refusals_test() {
 ## reassigned array local declared without `: [T; N]` (`mut v := [u64(0), u64(0)]`) has no element type
 ## or count to read and is refused (the parent moved one word: 40 and 0 where 42 is due), and so is a
 ## reassignment whose declaration in effect cannot be told apart from a same-named lambda parameter
-## (#1844 tracks copying both).
+## (#1844 tracks copying both), including one written on its own line of a parameter list. A
+## `[u64; 2]` local that reuses the frame slot of an earlier, out-of-scope `[u8; 16]` of the same name is
+## refused too, rather than copied into a block laid out for the other array (#1847; it answered 2).
 issue1809_deref_arr_refusals_test() {
   local d="$T/issue1809_deref_arr_refusals" n src out err got
   rm -rf "$d"
@@ -6597,7 +6599,50 @@ issue1809_deref_arr_refusals_test() {
     '  mut arr : [u64; 2] = [40, 2]' \
     '  rd(unchecked bitcast(usize, ptr(arr)))' \
     '}' > "$d/inferred_reassign_idx.al"
-  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown; do
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; 2] = [0, 0]' \
+    '  f := fn(' \
+    '    v : u64' \
+    '  ) -> u64 { v + 1 }' \
+    '  v = deref(p)' \
+    '  v[0] + v[1] + f(0) - 1' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut a : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(a)))' \
+    '}' > "$d/decl_unknown_param_line.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; 2] = [0, 0]' \
+    '  add := fn(k : u64,' \
+    '    v : u64) -> u64 { k + v }' \
+    '  v = deref(p)' \
+    '  v[0] + v[1] + add(0, 0)' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut a : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(a)))' \
+    '}' > "$d/decl_unknown_param_list.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  mut r : u64 = 0' \
+    '  for i in 0..1 {' \
+    '    mut v : [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]' \
+    '    r = u64(v[15])' \
+    '  }' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; 2] = [0, 0]' \
+    '  v = deref(p)' \
+    '  v[0] + v[1] + r' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut a : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(a)))' \
+    '}' > "$d/shared_slot.al"
+  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown decl_unknown_param_line decl_unknown_param_list shared_slot; do
     src="$d/$n.al"; out="$d/$n.out"; err="$d/$n.err"
     "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
     if [ "$got" = 0 ]; then echo "FAIL issue1809_deref_arr_refusals($n): build succeeded, want a located reject"; fail=1; continue; fi
@@ -6611,6 +6656,8 @@ issue1809_deref_arr_refusals_test() {
       inferred_reassign) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       inferred_reassign_idx) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       decl_unknown) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      decl_unknown_param_line|decl_unknown_param_list) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      shared_slot) grep -qF 'shares its frame slot with an earlier array' "$err" && grep -qF 'v = deref(p)' "$err" ;;
     esac
     if [ $? = 0 ]; then echo "ok   issue1809_deref_arr_refusals($n): refused, located"
     else echo "FAIL issue1809_deref_arr_refusals($n): rc=$got but the reason or its source line is missing"; fail=1; fi

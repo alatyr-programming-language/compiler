@@ -6986,16 +6986,17 @@ pub refuse_deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : u
 ## a later binding of the same name that is not wider reuses the array's ONE slot entry (a scalar `v`
 ## declared after a loop-scoped `[u8; 3]` `v` shares the entry, whose `ns` is the array's declaration), so
 ## reading the entry's declaration copied an array into a scalar (round-2 review of #1821: 2 where 42 was
-## due). `x86_decl_in_effect` finds the declaration in scope instead (Declarations §5, §6.1).
+## due). `x86_decl_in_effect` finds the declaration in scope instead (Declarations §5, §6.1), among the
+## declaring `Assign`s `collect_slots` recorded in the side table `ctslots`.
 ##
 ## Only a value `deref(…)` stored into an `ek == 5` local slot asks; a parameter keeps its own path. Every
 ## case this cannot read with certainty is refused, located, rather than guessed (#1844 tracks copying them):
-##  - a declaration it cannot tell apart from other text (`x86_decl_in_effect` answers `None`), and
+##  - a binding in scope that is not a recorded declaration (`x86_decl_in_effect` answers `None`), and
 ##  - an array local declared WITHOUT an annotation (`mut v := [u64(0), u64(0)]`), which has no `[T; N]`
 ##    text to read the element type and count from (#1809: it moved one word into a two-word block).
 ## A declaration in effect whose annotation is not an array type answers {0,0}: that binding is not an
 ## array, and its own store path applies.
-x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), ctslots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
   if not is_deref_value(v) { return CSpan(s = 0, n = 0) }
   ## a declaration answers from its own `: T` (`deref_arr_type`), or is a new binding by inference: the
   ## entry `slot_of` reuses may still be an earlier, out-of-scope array of the same name
@@ -7006,7 +7007,7 @@ x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8), ns : us
     Some(i) => {
       e := deref(svec_at(SlotEntry, slots, usize(i)))
       if e.ek == 5 and not e.is_param {
-        match x86_decl_in_effect(src, e.ns, ns, nl) {
+        match x86_decl_in_effect(src, ctslots, e.ns, ns, nl) {
           Some(ds) => {
             lt := local_type_span(src, usize(ds), nl)
             if lt.n == 0 { reject_deref_arr_inferred(src, ns) }
@@ -7022,16 +7023,17 @@ x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8), ns : us
 }
 
 ## The source offset of the declaration of the name at `use_s` (length `nl`) that is in effect there,
-## searching from its FIRST binding `first` (the slot entry's `ns`). A declaration is the name, at an
-## identifier boundary and outside string literals and `#` comments, followed by `:` (`v : T = …`,
-## `v := …`) and preceded on its line by nothing or `mut` alone. The latest one still in scope at `use_s`
-## (`binding_in_scope_at`) wins: it shadows or rebinds every earlier one. `None` when a match followed by
-## `:` stands anywhere else on its line (a field, a lambda parameter, a second statement on one line),
-## because it may be a binding this scan cannot place, or when no declaration is in scope at all.
-x86_decl_in_effect := fn(src : ptr(u8), first : usize, use_s : usize, nl : usize) -> Option(u64) {
+## searching from its FIRST binding `first` (the slot entry's `ns`). Every occurrence of the name at an
+## identifier boundary, outside string literals and `#` comments, and followed by `:` is a binding's
+## text (`v : T = …`, `v := …`, a parameter `v : T`, a field `v : T`). The latest one still in scope at
+## `use_s` (`binding_in_scope_at`) wins: it shadows or rebinds every earlier one. It counts as a
+## declaration only when it is the name offset of a declaring `Assign` (`decl_event_at`). Any other
+## binding text in scope answers `None`: a lambda parameter, even one on its own line of a parameter
+## list (Grammar §2.6 frees newlines inside `( … )`, and the brace count cannot see the `)` that ends
+## its scope), or a name inside a destructuring `(a, v) := …`. `None` too when nothing is in scope.
+x86_decl_in_effect := fn(src : ptr(u8), ctslots : ptr(SVec), first : usize, use_s : usize, nl : usize) -> Option(u64) {
   mut best : Option(u64) = Option(u64).None
-  if binding_in_scope_at(src, first, nl, use_s) { best = Option(u64).Some(u64(first)) }
-  mut i : usize = first + nl
+  mut i : usize = first
   while i + nl <= use_s {
     b := src_byte(src, i)
     if b == 34 or b == 39 {
@@ -7047,8 +7049,10 @@ x86_decl_in_effect := fn(src : ptr(u8), first : usize, use_s : usize, nl : usize
       mut k := i + nl
       while src_byte(src, k) == 32 or src_byte(src, k) == 9 { k += 1 }
       if src_byte(src, k) == 58 and src_byte(src, k + 1) != 58 {
-        if not decl_line_head(src, i) { return Option(u64).None }
-        if binding_in_scope_at(src, i, nl, use_s) { best = Option(u64).Some(u64(i)) }
+        if binding_in_scope_at(src, i, nl, use_s) {
+          if not decl_event_at(ctslots, i, nl) { return Option(u64).None }
+          best = Option(u64).Some(u64(i))
+        }
       } else if (src_byte(src, k) == 44 or src_byte(src, k) == 41) and decl_line_opens_tuple(src, i) {
         ## a name inside a destructuring `(a, v) := …` binds it too, with a type this scan cannot read
         return Option(u64).None
@@ -7061,15 +7065,17 @@ x86_decl_in_effect := fn(src : ptr(u8), first : usize, use_s : usize, nl : usize
   best
 }
 
-## Does only blank text, or `mut` alone, precede offset `p` on its line?
-decl_line_head := fn(src : ptr(u8), p : usize) -> bool {
-  mut q := p
-  while q > 0 and (src_byte(src, q - 1) == 32 or src_byte(src, q - 1) == 9) { q -= 1 }
-  if q == 0 or src_byte(src, q - 1) == 10 { return true }
-  if q < 3 or str_at((src + q - 3), 3) != "mut" { return false }
-  mut h := q - 3
-  while h > 0 and (src_byte(src, h - 1) == 32 or src_byte(src, h - 1) == 9) { h -= 1 }
-  h == 0 or src_byte(src, h - 1) == 10
+## Is offset `s` (length `n`) the name of a declaring `Assign`? `collect_slots` records each one in the
+## side table at its own name offset (`bind_comptime_shadow`, `ek == 254`; see `slot_declared_before`).
+decl_event_at := fn(ctslots : ptr(SVec), s : usize, n : usize) -> bool {
+  cnt := ctslots_len(ctslots)
+  mut j : usize = 0
+  while j < cnt {
+    c := svec_at(SlotEntry, ctslots, j)
+    if deref(c).ek == 254 and deref(c).ns == s and deref(c).nl == n { return true }
+    j += 1
+  }
+  false
 }
 
 ## Does the line holding offset `p` start, after blanks and an optional `mut`, with `(` — the head of a
@@ -7088,7 +7094,7 @@ decl_line_opens_tuple := fn(src : ptr(u8), p : usize) -> bool {
 ## The located refusal of `x86_arr_decl_span` when the declaration in effect cannot be identified.
 reject_deref_arr_decl_unknown := fn(src : ptr(u8), ns : usize) {
   lower_show_src_line(src, ns)
-  panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs the target's declaration in effect, and this backend could not identify it with certainty (#1844): a binding of the same name written as a field, a lambda parameter or a second statement on one line is ambiguous here; rename one of them. Refused rather than copying with a guessed type")
+  panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs the target's declaration in effect, and this backend could not identify it with certainty (#1844): a binding of the same name that is not a local declaration (a lambda parameter, a destructuring) is in scope here as far as its scan can tell; rename one of them. Refused rather than copying with a guessed type")
 }
 
 ## Is the assigned value a `deref(…)` — the value half of `deref_arr_shape`.
@@ -7100,6 +7106,24 @@ is_deref_value := fn(v : ptr(Expr)) -> bool {
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
+}
+
+## #1847 — the copy writes `dac.nel` elements of tier `dac.eek` into the frame entry `slot_of` resolves the
+## target to. That entry belongs to the FIRST binding of the name; a later array of the same name that is
+## not wider reuses it with the first one's element tier (a `[u64; 2]` after a loop-scoped `[u8; 16]`
+## keeps the byte tier, so word elements were written where byte reads look: 2 where 42 was due). Copy
+## only into an entry of the same tier and count; refuse anything else, located.
+x86_deref_arr_slot_fits := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize, dac : DerefArrCopy) {
+  le : Option(u64) = local_entry(slots, src, ns, nl)
+  match le {
+    Some(i) => {
+      e := deref(svec_at(SlotEntry, slots, usize(i)))
+      if e.ek == 5 and e.eek == dac.eek and e.snl == dac.nel { return }
+    }
+    None => {}
+  }
+  lower_show_src_line(src, ns)
+  panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs a frame block of its own element type and length, and this local shares its frame slot with an earlier array of the same name (#1847): rename one of them. Refused rather than copying into a block laid out for the other array")
 }
 
 ## The located refusal of `x86_arr_decl_span` for a reassigned array local declared without `: [T; N]`.
