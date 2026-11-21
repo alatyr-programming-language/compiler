@@ -6501,7 +6501,8 @@ issue1212_located_refusals_test() {
 ## too until the copy evaluates it (#1833): the parent answered garbage and 41 where 42 is due. A
 ## reassigned array local declared without `: [T; N]` (`mut v := [u64(0), u64(0)]`) has no element type
 ## or count to read and is refused (the parent moved one word: 40 and 0 where 42 is due), and so is a
-## reassignment whose declaration in effect cannot be told apart from a same-named lambda parameter.
+## reassignment whose declaration in effect cannot be told apart from a same-named lambda parameter
+## (#1844 tracks copying both).
 issue1809_deref_arr_refusals_test() {
   local d="$T/issue1809_deref_arr_refusals" n src out err got
   rm -rf "$d"
