@@ -32095,16 +32095,27 @@ add_inst := fn(in out insts : IVec, src : ptr(u8), gi : usize, ts : usize, tl : 
     e := ivec_at(ptr(insts), i)
     if e.gi == gi and inst_targ_eq(src, e.ts, e.tl, ts, tl) and inst_targ_eq(src, e.ts2, e.tl2, ts2, tl2) and inst_targ_eq(src, e.ts3, e.tl3, ts3, tl3) { found = true }
   }
-  ## An instance at an alias IS the instance at the type the alias names (#1808), so its body is bound to
-  ## that type's span, in the alias's own module (`mono_targ_unalias`), not to the alias: the body then
-  ## reads the named type's width and layout whichever spelling registered the instance first. Bound to
-  ## the alias, a `W := u8` argument was read as an unresolved name, eight bytes wide.
   if not found {
-    u1 := mono_targ_unalias(src, ts, tl)
-    u2 := mono_targ_unalias(src, ts2, tl2)
-    u3 := mono_targ_unalias(src, ts3, tl3)
-    ivec_push(insts, Inst(gi = gi, ts = u1.s, tl = u1.n, ts2 = u2.s, tl2 = u2.n, ts3 = u3.s, tl3 = u3.n))
+    b1 := inst_body_span(src, ts, tl)
+    b2 := inst_body_span(src, ts2, tl2)
+    b3 := inst_body_span(src, ts3, tl3)
+    ivec_push(insts, Inst(gi = gi, ts = b1.s, tl = b1.n, ts2 = b2.s, tl2 = b2.n, ts3 = b3.s, tl3 = b3.n))
   }
+}
+
+## The span an instance's body is bound to for a type argument the caller wrote at `[ts, ts+tl)` (#1808).
+## An alias of a BARE type name (`W := u8`, `A := Node`) is bound to that name in the alias's own module
+## (`mono_targ_unalias`): the instance is shared with the name's other spellings, and bound to the alias a
+## `W := u8` was read as an unresolved name, eight bytes wide. Any other argument keeps the caller's own
+## span. That includes an alias of a constructed type (`P := Box(u64)`): the alias resolves through
+## `alias_rhs`, while the written-out `Box(u64)` reads its field `w` as 0 (#1850).
+inst_body_span := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
+  u := mono_targ_unalias(src, ts, tl)
+  if u.s == ts and u.n == tl { return u }
+  if not lower_layout::targ_named_shape(src, u.s, u.n) { return CSpan(s = ts, n = tl) }
+  hd := base_type_name(src, u.s, u.n)
+  if hd.n != u.n { return CSpan(s = ts, n = tl) }
+  u
 }
 
 ## The declared (base) type name of the ENCLOSING-fn parameter named (ns,nl) — resolves a value
