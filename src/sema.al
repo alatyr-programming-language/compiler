@@ -337,17 +337,19 @@ call_too_many_err := fn(s : usize, declared : usize, supplied : usize) -> CheckE
 }
 ## Issue #1822 / Functions §2.3, §5.1, §5.5 — a direct call that leaves a parameter UNBOUND, and which
 ## kind of parameter it is (`CallUnbound`): an `in` one with no default, an `out` / `in out` one (the
-## compiler does not project an `out` yet, #1702), or an allocator parameter the call elides with no
-## ambient to fill it (§5.5 step 4). One word carries the CALL's offset, which locates the diagnostic,
-## the PARAMETER's name offset, which the renderer quotes, and the kind:
-## `(call * CALL_UNBOUND_PARAM_SLOT + param) * 4 + kind`, kind 0 `in`, 1 place, 2 allocator. Each
+## compiler does not project an `out` yet, #1702), an allocator parameter the call elides with no
+## ambient to fill it (§5.5 step 4), or a call that is ambiguous between eliding the allocator and
+## taking a default (spec#171, refused until decided). One word carries the CALL's offset, which
+## locates the diagnostic, the PARAMETER's name offset, which the renderer quotes, and the kind:
+## `(call * CALL_UNBOUND_PARAM_SLOT + param) * 4 + kind`, kind 0 `in`, 1 place, 2 allocator, 3
+## allocator-or-default (the driver's `DIAG_CALL_UNBOUND_KIND_*`). Each
 ## offset is into the WHOLE program's source (every file of the file table), and must be below the slot
 ## (32 MiB); one that is not is dropped to 0. The driver locates this class only by a non-zero call
 ## offset, so a dropped call renders unlocated and a dropped parameter unnamed, never a wrong line or
 ## name. The largest payload is (2^50 + 2^25) * 4 + 3 < 2^53, inside the window up to CT_DIAG_MARKER.
 CALL_UNBOUND_PARAM_DIAG_MARKER : usize = 6906500000000000000
 CALL_UNBOUND_PARAM_SLOT : usize = 33554432
-CallUnbound := enum { UnboundIn, UnboundPlace, UnboundAlloc }
+CallUnbound := enum { UnboundIn, UnboundPlace, UnboundAlloc, UnboundAllocOrDefault }
 call_unbound_param_err := fn(s : usize, ps : usize, w : CallUnbound) -> CheckErr {
   mut cs := diag_span(s)
   mut pn := ps
@@ -358,6 +360,7 @@ call_unbound_param_err := fn(s : usize, ps : usize, w : CallUnbound) -> CheckErr
     CallUnbound::UnboundIn => { wb = 0 }
     CallUnbound::UnboundPlace => { wb = 1 }
     CallUnbound::UnboundAlloc => { wb = 2 }
+    CallUnbound::UnboundAllocOrDefault => { wb = 3 }
   }
   CALL_UNBOUND_PARAM_DIAG_MARKER + (cs * CALL_UNBOUND_PARAM_SLOT + pn) * 4 + wb
 }
@@ -3472,7 +3475,10 @@ sema_call_binding_judged := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, 
 ## allocator still missing has nothing to fill it — step 4's compile error, or step 2, which is not
 ## implemented (#1468). When the in-order reading leaves a parameter unbound and the call has the
 ## elision shape (`callee_elided_alloc_idx`), the written arguments are read around the allocator, and
-## the ALLOCATOR is the parameter named. A call the in-order reading binds whole stays accepted.
+## the ALLOCATOR is the parameter named. When the in-order reading binds the call whole (the parameter
+## it leaves over has a default) and the call has the elision shape too, either reading binds every
+## parameter, and which one the call means is a spec gap (spec#171): refused, naming the allocator,
+## rather than guessed. Inside `alloc::with` the driver's splice hides that shape from sema (#1845).
 sema_call_binding_err := fn(e : ptr(Expr), cs : usize, cl : usize, decls : ptr(rt::Vec), src : ptr(u8)) -> CheckErr {
   mut r : CheckErr = 0
   di : Option(usize) = sema_call_fn_decl(decls, src, cs, cl)
@@ -3511,6 +3517,7 @@ sema_call_binding_err := fn(e : ptr(Expr), cs : usize, cl : usize, decls : ptr(r
         }
       }
       if unbound and el >= 0 { r = call_unbound_param_err(cs, el_name, CallUnbound.UnboundAlloc) }
+      else if r == 0 and el >= 0 { r = call_unbound_param_err(cs, el_name, CallUnbound.UnboundAllocOrDefault) }
     }
     None => {}
   }

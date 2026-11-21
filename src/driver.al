@@ -4735,13 +4735,19 @@ DIAG_FNVAL_FIELD_ACCESS_MARKER : usize = 6904500000000000000
 DIAG_NUMERIC_COND_MARKER : usize = 6905000000000000000
 ## Issue #1822 / Functions §2.3, §5.1 — the sema-side CALL-BINDING classes: too many arguments
 ## (`sema::CALL_TOO_MANY_DIAG_MARKER`, the enum-variant-arity payload) and an unbound parameter
-## (`sema::CALL_UNBOUND_PARAM_DIAG_MARKER`, `(call * SLOT + parameter name) * 4 + kind`, kind 0 `in`,
-## 1 `out` / `in out`, 2 an elided allocator with no ambient). They sit between the numeric-condition
-## class and CT, so only the former's upper bound moves. A call offset of 0 (dropped, see sema) is not
-## in the located list of either renderer, so it renders unlocated rather than at a wrong line.
+## (`sema::CALL_UNBOUND_PARAM_DIAG_MARKER`, `(call * SLOT + parameter name) * 4 + kind`, the kinds of
+## `sema::CallUnbound` below). They sit between the numeric-condition class and CT, so only the
+## former's upper bound moves. A call offset of 0 (dropped, see sema) is not in the located list of
+## either renderer, so it renders unlocated rather than at a wrong line.
 DIAG_CALL_TOO_MANY_MARKER : usize = 6906000000000000000
 DIAG_CALL_UNBOUND_PARAM_MARKER : usize = 6906500000000000000
 DIAG_CALL_UNBOUND_PARAM_SLOT : usize = 33554432
+## `sema::CallUnbound`'s kinds as the payload carries them: an `in` parameter, an `out` / `in out` one,
+## an elided allocator with no ambient, and a call ambiguous between eliding the allocator and taking a
+## default (spec#171).
+DIAG_CALL_UNBOUND_KIND_PLACE : usize = 1
+DIAG_CALL_UNBOUND_KIND_ALLOC : usize = 2
+DIAG_CALL_UNBOUND_KIND_ALLOC_OR_DEFAULT : usize = 3
 ## Is `code` of either call-binding class? One answer for both renderers.
 d_is_call_binding := fn(code : usize) -> bool { code >= DIAG_CALL_TOO_MANY_MARKER and code < DIAG_CT_MARKER }
 ## The call's source offset a call-binding `code` carries.
@@ -4755,11 +4761,17 @@ d_call_binding_msg := fn(code : usize, base : usize, in out a : rt::Arena) {
     raw := code - DIAG_CALL_UNBOUND_PARAM_MARKER
     ps := (raw / 4) % DIAG_CALL_UNBOUND_PARAM_SLOT
     pk := raw % 4
-    w0 := rt::fd_str(2, "the call leaves parameter `")
+    if pk == DIAG_CALL_UNBOUND_KIND_ALLOC_OR_DEFAULT {
+      w10 := rt::fd_str(2, "the call is one argument short of a function with an allocator parameter `")
+    } else {
+      w0 := rt::fd_str(2, "the call leaves parameter `")
+    }
     if ps != 0 { w1 := rt::fd_str(2, str_at(base + ps, d_diag_ident_len(base, ps))) }
-    if pk == 2 {
-      w9 := rt::fd_str(2, "` unbound: an allocator parameter left out of a call takes the ambient allocator, and no `alloc::with` encloses this call (Functions §5.5, Memory §5.2.1) — pass it, or enclose the call; taking the caller's own allocator parameter as the ambient is not implemented yet, #1468")
-    } else if pk == 1 {
+    if pk == DIAG_CALL_UNBOUND_KIND_ALLOC_OR_DEFAULT {
+      w11 := rt::fd_str(2, "` and a parameter with a default: whether the call elides the allocator (Functions §5.5) or takes the default (§5.1) is not specified yet, spec#171 — pass every argument")
+    } else if pk == DIAG_CALL_UNBOUND_KIND_ALLOC {
+      w9 := rt::fd_str(2, "` unbound: the call is one argument short of a function with this allocator parameter, read as eliding it (Functions §5.5), and no ambient allocator reaches the call (Memory §5.2.1) — pass every argument, or enclose the call in `alloc::with`; inside one, a call in a struct literal, index, array literal, lambda body, field base or `deref` is not reached yet (#1846), and the caller's own allocator parameter is not taken as the ambient yet (#1468)")
+    } else if pk == DIAG_CALL_UNBOUND_KIND_PLACE {
       w2 := rt::fd_str(2, "` unbound: an `out` / `in out` parameter needs a mutable place argument — an `in out` parameter is always bound by one, and binding an `out` by projection is not implemented yet, #1702 (Functions §2.3)")
     } else {
       w3 := rt::fd_str(2, "` unbound: an `in` parameter without a default needs an argument (Functions §2.3, §5.1)")

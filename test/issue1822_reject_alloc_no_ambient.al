@@ -7,4 +7,4 @@ main := fn() -> u64 {
   take(41)
   return 42
 }
-## expect: reject "leaves parameter `ar` unbound: an allocator parameter" "at line 7"
+## expect: reject "leaves parameter `ar` unbound: the call is one argument short" "at line 7"
