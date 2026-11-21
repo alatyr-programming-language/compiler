@@ -7214,7 +7214,13 @@ pub variant_disc := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   ## STRIP `(…)` type-args so a parenthesized enum-instance span (`Option(u64)`) resolves the decl.
   ebn := base_type_name(src, s, n)
   if enum_ref_ambiguous(decls, src, ebn.s, ebn.n) {
-    reject_type_ambiguous(src, ebn.s, ebn.n, "enum")
+    mut nmod := ModSpan(s = 0, l = 0)
+    nmo := type_naming_at(src, ebn.s)
+    match nmo {
+      Some(m) => { nmod = m }
+      None => {}
+    }
+    reject_type_ambiguous(src, ebn.s, ebn.n, "enum", nmod)
   }
   di := enum_decl_of(decls, src, ebn.s, ebn.n)
   if di < 0 { return Option(i64).None }

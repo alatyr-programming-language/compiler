@@ -6895,7 +6895,7 @@ da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : 
     }
   }
   if navec_has(da_navec_value(da), src, rs, rn, fs, fln, usize(ix)) {
-    navec_remove_index(da_navec_value(da), src, rs, rn, fs, fln, usize(ix))
+    navec_remove(da_navec_value(da), src, rs, rn, fs, fln, usize(ix))
     di2 := type_decl_index(decls, upto, src, et.ns, et.nl)
     if di2 != 0 {
       d2 := deref(decl_get(decls, di2 - 1))

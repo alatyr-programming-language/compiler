@@ -3442,7 +3442,7 @@ defer_expr_try := fn(e : ptr(Expr)) -> bool {
 ## the comptime forms). A jump out of a cleanup would leave the remainder of the block unrun / jump
 ## into the enclosing scope's stale labels — a SILENT partial-cleanup miscompile; reject it (the defer
 ## handler panics). EXHAUSTIVE over `Stmt` so the walk always terminates.
-defer_stmts_clean := fn(head : Option(ptr(mut Stmt)), a : rt::Arena) -> bool {
+defer_stmts_clean := fn(head : Option(ptr(mut Stmt))) -> bool {
   mut s : Option(ptr(mut Stmt)) = head
   mut ok := true
   loop {
@@ -3454,11 +3454,11 @@ defer_stmts_clean := fn(head : Option(ptr(mut Stmt)), a : rt::Arena) -> bool {
           Stmt::Return(rv, nx) => { ok = false ; s = nx }
           Stmt::Break(bv, bd, nx) => { ok = false ; s = nx }
           Stmt::Continue(cd, nx) => { ok = false ; s = nx }
-          Stmt::While(c, b, nx) => { if defer_expr_try(c) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-          Stmt::Loop(b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-          Stmt::If(c, th, el, nx) => { if defer_expr_try(c) or defer_stmts_clean(th, a) == false or defer_stmts_clean(el, a) == false { ok = false } ; s = nx }
-          Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { if not (ok) { break }; am := deref(arm_p(armq)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts, a) == false { ok = false } ; arm = am.next }; None => { break } } } ; s = nx }
-          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if defer_expr_try(flo) or defer_expr_try(fhi) or defer_stmts_clean(fb, a) == false { ok = false } ; s = nx }
+          Stmt::While(c, b, nx) => { if defer_expr_try(c) or defer_stmts_clean(b) == false { ok = false } ; s = nx }
+          Stmt::Loop(b, nx) => { if defer_stmts_clean(b) == false { ok = false } ; s = nx }
+          Stmt::If(c, th, el, nx) => { if defer_expr_try(c) or defer_stmts_clean(th) == false or defer_stmts_clean(el) == false { ok = false } ; s = nx }
+          Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { if not (ok) { break }; am := deref(arm_p(armq)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts) == false { ok = false } ; arm = am.next }; None => { break } } } ; s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if defer_expr_try(flo) or defer_expr_try(fhi) or defer_stmts_clean(fb) == false { ok = false } ; s = nx }
           Stmt::DerefAssign(p, v, nx) => { if defer_expr_try(p) or defer_expr_try(v) { ok = false } ; s = nx }
           Stmt::IndexAssign(b, i, v, nx) => { if defer_expr_try(b) or defer_expr_try(i) or defer_expr_try(v) { ok = false } ; s = nx }
           Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { if defer_expr_try(b) or defer_expr_try(i) or defer_expr_try(v) { ok = false } ; s = nx }
@@ -3466,12 +3466,12 @@ defer_stmts_clean := fn(head : Option(ptr(mut Stmt)), a : rt::Arena) -> bool {
           Stmt::FieldPathAssign(pl, v, nx) => { if defer_expr_try(pl) or defer_expr_try(v) { ok = false } ; s = nx }
           Stmt::Assign(ns, nl, v, nx) => { if defer_expr_try(v) { ok = false } ; s = nx }
           Stmt::ExprStmt(e, nx) => { if defer_expr_try(e) { ok = false } ; s = nx }
-          Stmt::Unchecked(b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-          Stmt::AllocWith(ae, b, nx) => { if defer_expr_try(ae) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-          Stmt::CompIf(c, th, el, nx) => { if defer_expr_try(c) or defer_stmts_clean(th, a) == false or defer_stmts_clean(el, a) == false { ok = false } ; s = nx }
-          Stmt::CompFor(vs, vl, iv, b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if defer_expr_try(lo) or defer_expr_try(hi) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-          Stmt::CompMatch(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { if not (ok) { break }; am := deref(arm_p(armq)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts, a) == false { ok = false } ; arm = am.next }; None => { break } } } ; s = nx }
+          Stmt::Unchecked(b, nx) => { if defer_stmts_clean(b) == false { ok = false } ; s = nx }
+          Stmt::AllocWith(ae, b, nx) => { if defer_expr_try(ae) or defer_stmts_clean(b) == false { ok = false } ; s = nx }
+          Stmt::CompIf(c, th, el, nx) => { if defer_expr_try(c) or defer_stmts_clean(th) == false or defer_stmts_clean(el) == false { ok = false } ; s = nx }
+          Stmt::CompFor(vs, vl, iv, b, nx) => { if defer_stmts_clean(b) == false { ok = false } ; s = nx }
+          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if defer_expr_try(lo) or defer_expr_try(hi) or defer_stmts_clean(b) == false { ok = false } ; s = nx }
+          Stmt::CompMatch(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { if not (ok) { break }; am := deref(arm_p(armq)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts) == false { ok = false } ; arm = am.next }; None => { break } } } ; s = nx }
         }
       }
       None => { break }
@@ -3883,7 +3883,7 @@ p_stmt := fn(in out pc : PC) -> ptr(mut Stmt) {
       P_DEFER_BLK_NEST = 0
       ## Validate: reject return/break/continue/`?` anywhere inside (recursive walker over all nested
       ## statement blocks + expressions). A non-clean cleanup would be silently-partially-run — fail loud.
-      if defer_stmts_clean(dblk, pc.arena) == false {
+      if defer_stmts_clean(dblk) == false {
         panic("selfhost: defer — a `defer { }` action may not contain return/break/continue or `?`; a cleanup must run to completion (fail-loud rather than a partially-run cleanup)")
       }
       ## Desugar to `__deferblk()` → {block statements} → `__deferblkend()` and return the `__deferblk()`

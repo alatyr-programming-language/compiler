@@ -3308,7 +3308,7 @@ rv_emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Aren
       }
       isagg := nl != 0 and (rv_local_struct_nl(body_head, src, ns, nl, a) != 0 or rv_is_array_local(body_head, src, ns, nl, a))
       if pidx < 0 and off >= 0 and not isagg { push_str(sb, "  addi a0, s0, ") ; push_int(sb, off) ; push_str(sb, "\n") ; done = true }
-      if pidx < 0 and rv_is_global(decls, src, ns, nl) { push_str(sb, "  la a0, ") ; push_str(sb, str_at((src + ns), nl)) ; push_str(sb, "\n") ; done = true }
+      if pidx < 0 and rv_is_global(decls, src, ns, nl, a) { push_str(sb, "  la a0, ") ; push_str(sb, str_at((src + ns), nl)) ; push_str(sb, "\n") ; done = true }
     }
     ## NORMALIZER, and its fallback is OUTSIDE the match (`if not done { emit_rv_expr(…) }` below), so
     ## unlike `a64_emit_out_scalar_arg` this group arm's body stays `{}` and forwards nothing itself.
