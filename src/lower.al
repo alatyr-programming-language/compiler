@@ -6910,6 +6910,107 @@ fixed_arr_copy_len := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8), ns : u
   dn
 }
 
+## #1809 — `v : [T; N] = deref(<e>)` and `v = deref(<e>)` over a local `v : [T; N]`: Memory §4.3 makes
+## `deref(p)` in a value context load the WHOLE place `p` designates, and Types §6.4 makes a `[T; N]` value
+## its `N` contiguous elements, each at `T`'s own size. Before this no binder reserved `v` as an array and
+## no emitter copied one: one scalar word moved, and `v[1]` read the neighbouring frame slot — MEASURED on
+## x86_64, `v[0] + v[1]` over `[30, 12]` gave garbage where the spec owes 42, and `v.len` answered 0. The
+## reassignment form moved one word into the array's block too. A SILENT WRONG VALUE (I11).
+##
+## THE one answer the slot binder (`collect_slots`) and the emitter (`emit_st_assign`) both take, so the
+## words reserved and the elements moved cannot disagree: `Some` when the value is a `deref(…)` and the
+## target's declared type `ats` is `[T; N]` with a literal `N`, carrying the element count, the pointee
+## element size and the frame element kind (`eek` 0 = a word per element, or the byte-packed tier of
+## `fixed_array_byte_eek`). A byte or word integer `T` is the element this copy takes; any other `T` in
+## that shape is refused here, at the assignment (`reject_deref_arr_elem`), rather than copied wrong.
+DerefArrCopy := struct { nel : usize, esz : usize, eek : u8 }
+
+## The declared type of the assignment target `ns..ns+nl` as the copy reads it: the binding's own `: T`
+## when it has one, else `decl` (the caller's answer for the target's declaration, {0,0} when it has none).
+deref_arr_type := fn(src : ptr(u8), ns : usize, nl : usize, decl : CSpan) -> CSpan {
+  lt := local_type_span(src, ns, nl)
+  if lt.n != 0 { return CSpan(s = lt.s, n = lt.n) }
+  decl
+}
+
+## The SHAPE alone: the value is a `deref(…)` and `ats` is `[T; N]` with a literal `N`. Shared by the
+## x86_64 copy below and the twins' refusal (`refuse_deref_arr_copy`).
+deref_arr_shape := fn(v : ptr(Expr), src : ptr(u8), ats : CSpan) -> bool {
+  match deref(v) {
+    Expr::Deref(dp) => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return false }
+  }
+  if ats.n < 2 or str_at((src + ats.s), 1) != "[" { return false }
+  parse_arr_len(src, ats.s, ats.n) != 0
+}
+
+## #1811 — aarch64, riscv64 and wasm do not copy a whole fixed array out of a pointer yet: aarch64
+## reserved the block and moved ONE word into it, a wrong value masked only by an unrelated trap. Each
+## twin asks this at every assignment it emits, passing its own answer for the target's declared array
+## type (`decl`), so the declaration and the reassignment are refused at compile time, located, on all
+## three alike.
+pub refuse_deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decl : CSpan) {
+  if not deref_arr_shape(v, src, deref_arr_type(src, ns, nl, decl)) { return }
+  lower_show_src_line(src, ns)
+  panic("selfhost: aarch64, riscv64 and wasm do not yet copy a fixed array out of a pointer (`v : [T; N] = deref(p)` or `v = deref(p)`, #1811): refused rather than moving one word of it")
+}
+
+## x86_64's answer for the declared type of a REASSIGNED array local: the `: T` at the name's declaration
+## site, which is the `ns` its `ek == 5` frame slot recorded (`bind_array_slot`, at the first binding). A
+## parameter is not a local declaration, so it answers {0,0} and keeps its own path.
+x86_arr_decl_span := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
+  cnt := svec_len(slots)
+  mut i : usize = 0
+  while i < cnt {
+    e := svec_at(SlotEntry, slots, i)
+    if deref(e).nl == nl and deref(e).ek == 5 and not deref(e).is_param {
+      if lower_ctx::streq(src, deref(e).ns, nl, ns, nl) {
+        lt := local_type_span(src, deref(e).ns, deref(e).nl)
+        r = CSpan(s = lt.s, n = lt.n)
+      }
+    }
+    i += 1
+  }
+  r
+}
+
+deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, ats : CSpan) -> Option(DerefArrCopy) {
+  if not deref_arr_shape(v, src, ats) { return Option(DerefArrCopy).None }
+  nel := parse_arr_len(src, ats.s, ats.n)
+  es := array_elem_span(src, ats.s, ats.n)
+  beek := byte_type_eek(src, es.s, es.n)
+  if beek != 0 { return Option(DerefArrCopy).Some(DerefArrCopy(nel = nel, esz = 1, eek = beek)) }
+  t := str_at((src + es.s), es.n)
+  if t == "u64" or t == "i64" or t == "usize" or t == "isize" {
+    return Option(DerefArrCopy).Some(DerefArrCopy(nel = nel, esz = 8, eek = 0))
+  }
+  reject_deref_arr_elem(src, ns)
+  Option(DerefArrCopy).None
+}
+
+## The located refusal of `deref_arr_copy` for an element type it does not take. A 2- or 4-byte integer
+## element is refused as well, with the same reason as #1559: this backend still keeps a local
+## `[u16|u32|…; N]` one element per WORD, so `ptr(a)` of such a local exposes element `k` at `8k` where
+## Types §6.4 puts it at `size(T) * k`. A copy at the spec's stride would misread this backend's own
+## locals, and one at the word stride would misread every other pointee, so neither is correct for both.
+## An aggregate element (a struct, an enum, a nested array) is refused for want of a per-field copy.
+reject_deref_arr_elem := fn(src : ptr(u8), ns : usize) {
+  lower_show_src_line(src, ns)
+  panic("selfhost: a fixed array copied out of a pointer (`v : [T; N] = deref(p)` or `v = deref(p)`) is supported on x86_64 only for a byte or word integer element (u8, i8, bits8, u64, i64, usize, isize; #1809): a narrower element waits on the Types §6.4 stride of [u16|u32|…; N] (#1559), and any other element would be copied at a width nothing checked; refused rather than silently miscompiled")
+}
+
+## The branch test over `deref_arr_copy` for the binder's and the emitter's `else if` chains.
+is_deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, ats : CSpan) -> bool {
+  match deref_arr_copy(v, src, ns, ats) {
+    Some(d) => { true }
+    None => { false }
+  }
+}
+
 ## The ELEMENT TYPE span of an array type `[T; N]` — the text between `[` and `;` (or `]`), trimmed of
 ## surrounding spaces. `[u64; 3]` → `u64`. 0/0 if the span isn't an array. Used to mangle an array
 ## type-arg (`Array_<T>_<N>`) and to bind the element type in `display`'s array unroll.
