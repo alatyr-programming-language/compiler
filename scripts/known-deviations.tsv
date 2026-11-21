@@ -470,6 +470,8 @@ aarch64	test/package/issue1822_alias_short_call_reject/src/m.al	link/1	#3
 aarch64	test/package/issue1822_qualified_short_call_reject/src/m.al	link/1	#3
 aarch64	test/package/issue1808_alias_brand_instance/package.al	run/133	#1193
 aarch64	test/package/issue1808_alias_brand_instance/src/m.al	link/1	#3
+aarch64	test/package/issue1808_alias_call_instance/package.al	run/133	#1193
+aarch64	test/package/issue1808_alias_call_instance/src/m.al	link/1	#3
 aarch64	test/package/issue1808_instance_declaring_module/package.al	run/133	#1193
 aarch64	test/package/issue1808_instance_declaring_module/src/m.al	link/1	#3
 aarch64	test/package/issue703_global_module_scope/package.al	run/133	#1187
@@ -1129,6 +1131,8 @@ riscv64	test/package/issue1822_alias_short_call_reject/src/m.al	link/1	#3
 riscv64	test/package/issue1822_qualified_short_call_reject/src/m.al	link/1	#3
 riscv64	test/package/issue1808_alias_brand_instance/package.al	run/133	#1193
 riscv64	test/package/issue1808_alias_brand_instance/src/m.al	link/1	#3
+riscv64	test/package/issue1808_alias_call_instance/package.al	run/133	#1193
+riscv64	test/package/issue1808_alias_call_instance/src/m.al	link/1	#3
 riscv64	test/package/issue1808_instance_declaring_module/package.al	run/133	#1193
 riscv64	test/package/issue1808_instance_declaring_module/src/m.al	link/1	#3
 riscv64	test/package/issue703_global_module_scope/package.al	run/133	#1187
@@ -1771,6 +1775,8 @@ wasm	test/package/issue1822_alias_short_call_reject/src/m.al	assemble/1	#3
 wasm	test/package/issue1822_qualified_short_call_reject/src/m.al	assemble/1	#3
 wasm	test/package/issue1808_alias_brand_instance/package.al	run/134	#1193
 wasm	test/package/issue1808_alias_brand_instance/src/m.al	assemble/1	#3
+wasm	test/package/issue1808_alias_call_instance/package.al	run/134	#1193
+wasm	test/package/issue1808_alias_call_instance/src/m.al	assemble/1	#3
 wasm	test/package/issue1808_instance_declaring_module/package.al	run/134	#1193
 wasm	test/package/issue1808_instance_declaring_module/src/m.al	assemble/1	#3
 wasm	test/package/issue703_global_module_scope/package.al	run/134	#1187

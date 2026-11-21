@@ -3218,8 +3218,9 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
   }
   ## A named struct, enum, union or brand is spelled with the module that DECLARES it (#1808): `Node`
   ## written in the root and `Node` written in `m` are two types, and `lower_layout::targ_same` keeps them
-  ## two instances, so they need two labels. The anonymous package root's declarations carry no module
-  ## (`emit_mod_qual`); a scalar and any name the identity does not resolve keep their text, as before.
+  ## two instances, so they need two labels. `emit_mod_qual` spells the root's module as the label prefix
+  ## the root's own functions take (`main__` in a package, `<file>__` for a single file); a scalar and any
+  ## name the identity does not resolve keep their text, as before.
   di := mono_targ_decl(src, tag_s, tag_l)
   if di >= 0 {
     dp := mono_decls()

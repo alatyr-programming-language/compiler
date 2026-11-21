@@ -6215,9 +6215,10 @@ targ_tail := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
   LSpan(s = s + t, n = n - t)
 }
 
-## The struct, enum or union declaration the type head `[s, s+n)` NAMES, else -1. The declaration must
-## carry the head's own name, so a type alias answers -1 and keeps its text: two aliases of one generic
-## struct (`u128 := uint(128)`, `u64x := uint(64)`) are different types that one declaration would merge.
+## The struct, enum, union or brand declaration the type head `[s, s+n)` NAMES, or the alias declaration
+## whose right-hand side is not followed, else -1. The declaration must carry the head's own name, so an
+## alias `targ_alias_rhs` follows answers -1 here: it is followed to what it names BEFORE this is asked
+## (`targ_unalias`, Declarations §1.3), not merged into one declaration by it.
 ## A head in a module's text resolves from that module. A SYNTHESIZED head (a type text the compiler built
 ## by substitution, such as the inferred type of `y := vec::new(Pair, …)`, or a type argument inside an
 ## instance) names no module, so it resolves by name alone (`targ_decl_by_name`): without that, one type
@@ -6239,18 +6240,28 @@ pub targ_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
   }
   ## A brand is its own nominal type (Types §4.1, §5.4): `Id := brand(Node)` in the root and in `m` are
   ## two types, whatever they brand, so the brand's declaration is the identity.
+  ## An alias whose right-hand side `targ_alias_rhs` does not follow (a tuple `(Node, u64)`, an array
+  ## `[Node; 2]`, a type function whose declaration this program does not load) is identified by its own
+  ## declaration too, never by its text: `P` in the root and `P` in `m` are two declarations that may name
+  ## two types, and one instance for both is a wrong layout (#1808). An alias that does name the same type
+  ## as another spelling then gets one more instance than §3.4 asks for, which costs code, not a value.
   ki := targ_kind0_decl(decls, src, s, n)
   if ki >= 0 {
     kd := deref(decl_get(decls, usize(ki)))
     if kd.arity == 1 { return ki }
+    fw := targ_alias_rhs(decls, src, s, n)
+    if fw.s == s and fw.n == n { return ki }
   }
   0 - 1
 }
 
-## The best-ranked (Modules §3) alias-shaped or brand-shaped declaration named by the head `[s, s+n)`,
-## from the module that spells it, else -1: kind 0 with a recorded right-hand side, a path in
-## `ret_ts/ret_tl` (`A := m::Node`, arity 0; `Id := brand(U)`, arity 1) or a one-token or generic-instance
-## right-hand side in `alias_ts/alias_tl` (`A := Node`, `u128 := uint(128)`). Ranked as `brand_underlying`.
+## The best-ranked (Modules §3) value declaration (kind 0) named by the head `[s, s+n)`, from the module
+## that spells it, else -1. Its right-hand side may be recorded as a path in `ret_ts/ret_tl`
+## (`A := m::Node`, arity 0; `Id := brand(U)`, arity 1), as a one-token or call-shaped right-hand side in
+## `alias_ts/alias_tl` (`A := Node`, `u128 := uint(128)`, `P := m::Box(u8)`), or not at all. Every
+## same-named declaration competes, recorded or not: a module's own `P` must answer for `P` spelled
+## there even when only another module's `P` has a recorded right-hand side (#1808). Ranked as
+## `brand_underlying`.
 targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
   cnt := rt::vec_len(deref(decls))
   nm := name_tail(src, s, n)
@@ -6266,7 +6277,7 @@ targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize)
     jc = jc + 1
     if lni_skip(decls, cnt, i, th) == false {
       d := deref(decl_get(decls, i))
-      if d.kind == 0 and (d.ret_tl != 0 or d.alias_tl != 0) and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+      if d.kind == DECL_KIND_VALUE and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
         r := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, kqh)
         if r > best or res < 0 { best = r; res = i64(i) }
       }
@@ -6281,8 +6292,9 @@ targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize)
 ## resolved in the module that declares the alias (the right-hand side is that module's text). Two
 ## same-named aliases in two modules are therefore two instances when they name two types, and an alias
 ## shares its target's instance (Comptime §3.4). A call-shaped right-hand side is followed only when its
-## head is a struct or enum declaration (a type-function instance), so a value binding `x := f(1)` stays
-## a name. A brand is not an alias (`targ_decl` answers its declaration).
+## head constructs a type (`targ_type_ctor_head`: a struct or enum declaration, a type function, or the
+## builtin `ptr`, `uint`, `int`), so a value binding `x := f(1)` stays a name. A brand is not an alias
+## (`targ_decl` answers its declaration).
 pub targ_alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
   same := LSpan(s = s, n = n)
   if n == 0 or not spelled_in_file(src, s) { return same }
@@ -6291,12 +6303,23 @@ pub targ_alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   d := deref(decl_get(decls, usize(ki)))
   if d.arity != 0 { return same }
   if d.ret_tl != 0 { return LSpan(s = d.ret_ts, n = d.ret_tl) }
+  if d.alias_tl == 0 { return same }
   bh := base_type_name(src, d.alias_ts, d.alias_tl)
   if bh.n == d.alias_tl { return LSpan(s = d.alias_ts, n = d.alias_tl) }
-  if struct_decl_of(decls, src, bh.s, bh.n) >= 0 or qualified_enum_decl_of(decls, src, bh.s, bh.n) >= 0 {
-    return LSpan(s = d.alias_ts, n = d.alias_tl)
-  }
+  if targ_type_ctor_head(decls, src, bh.s, bh.n) { return LSpan(s = d.alias_ts, n = d.alias_tl) }
   same
+}
+
+## Does the head `[s, s+n)` of a call-shaped alias right-hand side construct a type? A struct or enum
+## declaration, which includes a type function (the parser desugars `Box := fn(T : type) -> type {
+## struct {…} }` and `Box(T) := struct {…}` to one, Comptime §3.1), or a builtin type constructor
+## (`ptr(T)`, `uint(N)`, `int(N)`). `Box(u8)` and `Box(u64)`, and `ptr(main::Node)` and `ptr(m::Node)`,
+## are distinct types (Types §4.1), so an alias of one is followed to its own text rather than merged
+## with a same-named alias in another module (#1808).
+targ_type_ctor_head := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  if struct_decl_of(decls, src, s, n) >= 0 or qualified_enum_decl_of(decls, src, s, n) >= 0 { return true }
+  w := str_at((src + s), n)
+  w == "ptr" or w == "uint" or w == "int"
 }
 
 ## `targ_alias_rhs` followed through a chain of aliases (`A := B`, `B := Node`), at most 8 links, so a

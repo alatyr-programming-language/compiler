@@ -6497,9 +6497,13 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
   mut als_ts := 0
   mut als_tl := 0
   mut als_ok := false
-  if tok_at(pc, rhs_idx).kind == 1 and tok_at(pc, rhs_idx + 1).kind == 10 {
+  ## The callee may be a module path (`P := m::Box(u8)`, #1808): without its span the root's `P` was no
+  ## alias at all, and a same-named alias in `m` answered for it, so the two shared one instance.
+  mut als_h := rhs_idx
+  while str_eq(str_at(pc.src + tok_at(pc, als_h + 1).start, tok_at(pc, als_h + 1).len), "::") { als_h = als_h + 2 }
+  if tok_at(pc, rhs_idx).kind == 1 and tok_at(pc, als_h + 1).kind == 10 {
     nt := ntoks(pc)
-    mut k := rhs_idx + 1
+    mut k := als_h + 1
     mut depth := 0
     mut top_eq := false
     mut close : usize = 0
