@@ -2,7 +2,8 @@
 ## the legacy x86 emitter it is REJECTED with a diagnostic; since IR-41 every backend builds `main`
 ## from the shared IR and answers 42 (the last paragraph below).
 ##
-## Alatyr `:=` locals are FUNCTION-scoped, and the lower's slot map reuses a name's FIRST reservation
+## Alatyr scope is block-structured (Declarations §5, §6.1), but the legacy lower keeps ONE slot per
+## name for the whole function: its slot map reuses a name's FIRST reservation
 ## (`bind_*_slot` no-ops on an already-bound name — deliberate, so a same-shape rebinding does not grow
 ## the frame). Binding `t` as a 1-word scalar and then rebinding the SAME name to a 3-word struct
 ## leaves the struct UNDER-RESERVED, and both ends then go wrong: the 3-register struct return is
