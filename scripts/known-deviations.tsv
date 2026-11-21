@@ -1498,13 +1498,13 @@ wasm	test/ir37_ptr_byte_tier.al	run/134	#1188
 wasm	test/ir37_ptr_narrow_fields.al	run/134	#1188
 wasm	test/ir38_deref_payload_ptr.al	run/134	#1188
 wasm	test/ir38_deref_recorded_enum.al	run/134	#1188
-wasm	test/ir40_generic_handle_cast.al	run/134	#1188
 wasm	test/ir39_param_narrow_fields.al	run/134	#1188
 wasm	test/ir39_ptr_enum_field.al	run/134	#1188
 wasm	test/ir39_ptr_folded_field.al	run/134	#1188
 wasm	test/ir39_ptr_nested_struct.al	run/134	#1188
 wasm	test/ir39_ptr_record.al	run/134	#1188
 wasm	test/ir39_ptr_word_array.al	run/134	#1188
+wasm	test/ir40_generic_handle_cast.al	run/134	#1188
 wasm	test/ir_array_param_convert_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_copy.al	run/134	#1194
