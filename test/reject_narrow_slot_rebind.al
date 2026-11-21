@@ -1,5 +1,6 @@
-## e2e (I11 correct-or-trap) — the NARROW-RESERVATION collision must be REJECTED with a diagnostic,
-## never written next door.
+## e2e (I11 correct-or-trap) — the NARROW-RESERVATION collision must never be written next door. On
+## the legacy x86 emitter it is REJECTED with a diagnostic; since IR-41 every backend builds `main`
+## from the shared IR and answers 42 (the last paragraph below).
 ##
 ## Alatyr `:=` locals are FUNCTION-scoped, and the lower's slot map reuses a name's FIRST reservation
 ## (`bind_*_slot` no-ops on an already-bound name — deliberate, so a same-shape rebinding does not grow
@@ -40,3 +41,4 @@ main := fn() -> u64 {
   }
   n
 }
+## expect: run 42
