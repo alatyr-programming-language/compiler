@@ -134,6 +134,56 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.6.0 — 2026-11-21
+
+- **`deref(ptr(loc)).field` on a struct local reads the field (#554).** On x86_64 the read
+  contributed nothing: `40 + deref(ptr(loc)).b` answered 40 where `loc.b` answered 101 in the same
+  program, with a clean compile and no diagnostic. Memory §4.3 makes `ptr` and `deref` inverse on a
+  memory-resident place, so the expression is the field read itself. It now reads the field at its
+  byte offset with its own width and sign, for narrow-field and `@packed` structs as well as
+  word-sized ones; reading a whole struct, `str` or payload-carrying enum field this way is refused
+  with a located diagnostic instead of copying one word of it, and so is a raw union member,
+  which has no sized member read there yet. aarch64, riscv64 and wasm still stop
+  at their field-access stub there (#1187), a trap rather than a value.
+- The shared IR now builds the `bitcast` crossing between a pointer and a register-width integer, in
+  **either direction**, as one word carried unchanged (`OpBits` at the width the two types share): reading
+  an address out as a `usize`, and fabricating a `ptr(T)` from one (#980; Types §4.2's `reinterpret` row
+  and §4.4, Memory §4.5, ABI §6 one integer register class). Each of the four selectors moves the word.
+  The builder builds the crossing only inside an `unchecked` grant, as Memory §4.5 requires, although
+  `check` does not yet refuse the ungranted form (#1780). `v1_conv`'s `OpBits` rule admits exactly one
+  side being a pointer and refuses a float against a pointer. A width that differs (ill-formed, Types
+  §4.4; still accepted by `check`, #1747) and a float against a pointer stay refused at the `bitcast`.
+  On the emit path a function now selected from the IR on every backend is one that fabricates a pointer
+  to a user type (`bitcast(ptr(S), a)`). A word-scalar or `ptr(<scalar>)` target is still erased into
+  its operand at every emit entry while sema's record stays the target's (#1781), so such a
+  function stays with the legacy emitter, which already lowers it; `alatyr ir` shows the builder's rule
+  for those.
+- The shared IR builder now builds `str_at(p, n)` with the two operations that surround it in a
+  source scanner: byte-pointer arithmetic `p + n` and `==` / `!=` over `str` (#980, slice IR-36).
+  - `str_at` is the raw view of `n` bytes at `p` (Stdlib appendix §3.6).
+  - `p + n` is built for a pointee that is a one-byte integer and an unsigned offset, the one shape
+    where a byte offset and an element offset are the same address (spec#170 asks which one the
+    language means for a wider pointee).
+  - `str` equality compares lengths, then bytes (STD-4).
+  The builder now builds 370 more of the compiler's own functions (1353 of 5299 to 1723 of 5312), which
+  x86_64 takes from the IR rather than from the legacy emitter. It also fixes, for every function
+  the IR now builds, a silent wrong value of the legacy emitter: there, `unchecked str_at(…)` was
+  not recognised as a view (#1782). Every shape left out is refused with a cause of its own: another
+  operator, a wider or unspelled pointee, a signed offset, a `usize` address for `str_at`, and an
+  equality of other views.
+- The shared IR builds a read or write through a pointer to a struct whose fields are scalars narrower
+  than a word, laid out one word per field (`deref(p).f`, `p.f`, `p.f = v`, `v : S = deref(p)`). A
+  narrow field is read with its width's extension and written as the whole canonical word, so the
+  legacy emitters' whole-word accesses still agree (#1786). `alatyr ir` splits the old `expr Deref:
+  struct pointee not in the WORD tier` into the cause that refused: a `@packed` or byte-layout struct
+  pointee (x86_64's legacy `p.f = v` disagrees on that layout, #1790), a struct pointee with an array
+  or aggregate field, or a struct not laid out one word per field.
+- **`check` on a single-file package with a manifest binding no longer depends on a stray register
+  (#1822).** The `check` path built the manifest's hidden `Package` type with one argument too few,
+  so its field count was whatever the register held: harmless by luck under seed 0.5.0, a
+  `rt: StrBuf overflow` once the caller next to it is emitted from the shared IR. It now passes the
+  count the build path passes. The checker hole that accepted the short call is #1822.
+
 ## 0.5.0 — 2026-11-20
 
 - A whole-value assignment `p = v` to an `out` / `in out` struct or enum parameter now reaches the

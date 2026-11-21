@@ -2138,4 +2138,68 @@ The original reading note, verbatim:
 # valid stops compiling or changes its answer — the corpus manifest held at match and ir_diff held at
 # its baseline in run 44592824379 — and #1733, #1758 only name refusal causes.
 # The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.5.0 -> 0.6.0   promoted 2026-11-21   seed/alatyr := Stage2
+#
+# WHY: five PRs landed together, because two of them change the compiler's own emission and owe a
+# reseed. #1787 (IR-35, Refs #1786) builds the integer<->pointer `bitcast` inside an `unchecked`
+# grant as one word carried unchanged (`OpBits`), on all four selectors; #1793 (IR-36, Refs #980,
+# #1786) builds `str_at(p, n)`, byte-pointer `p + n` and `==`/`!=` over `str`. Together they let the
+# shared IR build 526 more of the compiler's own functions: `alatyr ir --modules` over the 41 src
+# files builds 1359 of 5320 under seed 0.5.0 and 1885 of 5320 under Stage2 of this tree (35.4%),
+# verify_failed=0 (scripts/ir_census.sh with ALATYR=target/stage2). The other two carry no emission
+# change of their own: #1484 (#554) makes x86_64 `deref(ptr(local)).field` on a struct local read the
+# field (it read nothing), and refuses a raw union member read through that shape with a located
+# message rather than reading the whole word; #1788 (Refs #1786) holds the src/ and lib/ builder counts
+# with a floor in the full gate (scripts only). #1823 (Refs #1822) passes the missing field count
+# at the `check` path's `d_manifest_type_source(bld)` call: the first candidate of this promotion
+# (5a99f7b8, gate run 44849954824) was red because that call read its count from a stray %rsi, which
+# the IR-built `d_is_root_path` before it leaves holding a stack address where the legacy one left 7
+# (`rt: StrBuf overflow` in `check` on test/package/root_main and the mod8/tool17 root fixtures).
+# Found by splicing the seed's legacy body of each newly IR-selected function back into Stage2's GAS
+# and bisecting to that one function, whose IR body is correct; the checker hole is #1822.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 11459 hunks, 201410 added, 100671 removed. One sentence:
+# 385 more of the compiler's own functions are emitted from the shared IR (1175 -> 1560 marked
+# `# ir: selected from the shared IR`, of the same 5957 symbols on both sides, none added, none
+# dropped, none that was IR-selected falling back): their bodies are now the IR's — values pass through
+# frame slots (`movq %rax, -N(%rbp)` 42065 added, `movq -N(%rbp), %rax` 33851) where legacy staged them
+# on the stack (`pushq %rax` 7982 removed, `popq %rax` 4380), blocks carry `.LxirN_K` labels (17907
+# added) where legacy carried `.LN` (13380 removed), and a condition is materialized and then tested
+# (`testq %rax, %rax` 8779, `jz .LxirN_K` 6982, `movzbl %al, %eax` 6863). Every other symbol is
+# byte-identical once labels are normalized: 5572 of the 5957, and the file preamble — measured per
+# symbol with scripts/gas_normalize.sh over target/promote/gas_seed.s and target/promote/gas1.s with
+# the selector's marker line excluded, and the set of differing symbols equals the set of newly marked
+# ones exactly.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 1928066 lines.
+# GAS SHA-256 (Stage2): f0a5ba9b70cb0c06818c41e41417b99b079bc282d97083bee338ca387e176aa3.
+# Stage2 == Stage3 BINARY SHA-256:
+# bb7c59b4ef6e6583bf53edf00dff797a0a3e8fffb70b609ad919e8a5a15965a2 (7844160 B).
+# All three answer `alatyr 0.6.0, spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.5.0) SHA-256:
+# f11233069581b87805f16f4878ddb0e3eb79103ea41bb2a178585f62b9b1b379.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (1928066 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.5.0 -> 0.6.0, MINOR by CHANGELOG.md "Versioning policy": a backend gains a shape.
+# Measured on omen 2026-11-21 with scripts/corroboration.sh: under the superseded seed binary (0.5.0,
+# sha256 f11233069581b87805f16f4878ddb0e3eb79103ea41bb2a178585f62b9b1b379) test/fmt_operators_enum.al
+# answers x86=RUN42 x86-ir=RUN42 aarch64=TRAP(5) riscv64=TRAP(5) wat=TRAP(6); under Stage2 of this tree
+# it answers RUN42 on all five columns (#1793: the twins and wasm now take from the IR the `str`
+# operations they used to trap on; the corpus expected-delta carries these three EXIT-CHANGED rows from
+# #1793 and one wasm DETAIL-CHANGED row from #1787, test/package/visibility_legal/src/geo.al, whose
+# assemble refusal keeps its exit code and changes only its message). The
+# rest is PATCH: #1484 turns a silent wrong value (#554) into the right one, and turns the raw-union
+# narrow-member read through `deref(ptr(local))` — a wrong value on that path — into a located refusal
+# (test/issue554_deref_ptr_local_union_reject.al); the direct `x.b` form is #1794. Not MAJOR: no program
+# the specification calls valid stops compiling or changes its answer — the corpus manifest moves only
+# by the four declared pairs of scripts/corpus.expected-delta (REALISED), and ir_diff holds its baseline.
+# A pre-existing crash seen while measuring, not moved by this promotion: `alatyr x86-ir` segfaults on
+# test/issue926_const_qualified_same_name_ok.al under seed 0.5.0 and under Stage2 alike (#1567, a
+# known-deviations row).
+# The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
