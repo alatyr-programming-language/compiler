@@ -6505,7 +6505,7 @@ issue1212_located_refusals_test() {
 ## (#1844 tracks copying both), including one written on its own line of a parameter list. A
 ## `[u64; 2]` local that reuses the frame slot of an earlier, out-of-scope `[u8; 16]` of the same name is
 ## refused too, rather than copied into a block laid out for the other array (#1847; it answered 2).
-## A declaration with a `#` comment between its name and its `:` is refused under #1844: its type is
+## A declaration with a `#` comment between its name and its `:` is refused under #1859: its type is
 ## not read past the comment (the parent's one-word store was right there, 42).
 issue1809_deref_arr_refusals_test() {
   local d="$T/issue1809_deref_arr_refusals" n src out err got
@@ -6676,7 +6676,7 @@ issue1809_deref_arr_refusals_test() {
       inferred_reassign_idx) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       decl_unknown) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       decl_unknown_param_line|decl_unknown_param_list) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
-      decl_comment_colon) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(q)' "$err" ;;
+      decl_comment_colon) grep -qF 'not read past a comment' "$err" && grep -qF 'v = deref(q)' "$err" ;;
       shared_slot) grep -qF 'shares its frame slot with an earlier array' "$err" && grep -qF 'v = deref(p)' "$err" ;;
     esac
     if [ $? = 0 ]; then echo "ok   issue1809_deref_arr_refusals($n): refused, located"

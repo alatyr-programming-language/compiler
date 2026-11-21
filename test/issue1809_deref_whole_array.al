@@ -167,6 +167,29 @@ rdy2 := fn(hq : usize) -> u64 {
   v = deref(q)
   r + (v % 4294967296) + (v / 4294967296) - 42
 }
+## A reassignment is not a declaration: the array reassigned twice keeps its `[u64; 2]` copy, and a
+## scalar `v` after a loop-scoped array `v`, assigned and compound-assigned before `v = deref(q)`, keeps
+## its one-word store (round-7 review: both were refused).
+rdz2 := fn(h : usize) -> u64 {
+  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)
+  mut v : [u64; 2] = [0, 0]
+  v = deref(p)
+  v = deref(p)
+  v[0] + v[1] - 26
+}
+rds2 := fn(h : usize) -> u64 {
+  mut r : u64 = 0
+  for i in 0..1 {
+    mut v : [u8; 3] = [1, 1, 1]
+    r = u64(v[0]) - 1
+  }
+  q : ptr(u64) = unchecked bitcast(ptr(u64), h)
+  mut v : u64 = 0
+  v = 5
+  v += 5
+  v = deref(q)
+  r + v - 21
+}
 main := fn() -> u64 {
   mut arr : [u64; 2] = [21, 5]
   mut wv : u64 = 198914
@@ -176,6 +199,6 @@ main := fn() -> u64 {
   hq := unchecked bitcast(usize, ptr(wq))
   mut pa : ptr([u64; 2]) = ptr(arr)
   hp := unchecked bitcast(usize, ptr(pa))
-  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha) + rdy(hq) + rdy2(hq)
+  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha) + rdy(hq) + rdy2(hq) + rdz2(ha) + rds2(ha)
 }
 ## expect: run 42

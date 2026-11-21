@@ -7010,7 +7010,13 @@ x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), ctslots : ptr(SVec), s
         match x86_decl_in_effect(src, ctslots, e.ns, ns, nl) {
           Some(ds) => {
             lt := local_type_span(src, usize(ds), nl)
-            if lt.n == 0 { reject_deref_arr_inferred(src, ns) }
+            if lt.n == 0 {
+              ## `:=` declares by inference (#1844); a `:` whose annotation the reader cannot reach, as
+              ## behind a `#` comment, is #1859
+              kc := decl_skip_blank(src, usize(ds) + nl)
+              if src_byte(src, kc + 1) == 61 { reject_deref_arr_inferred(src, ns) }
+              reject_deref_arr_ann_unread(src, ns)
+            }
             if lt.n >= 2 and str_at((src + lt.s), 1) == "[" { r = CSpan(s = lt.s, n = lt.n) }
           }
           None => { reject_deref_arr_decl_unknown(src, ns) }
@@ -7024,9 +7030,10 @@ x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), ctslots : ptr(SVec), s
 
 ## The source offset of the declaration of the name at `use_s` (length `nl`) that is in effect there,
 ## searching from its FIRST binding `first` (the slot entry's `ns`). Every occurrence of the name at an
-## identifier boundary, outside string literals and `#` comments, that is the name offset of a declaring
-## `Assign` (`decl_event_at`) is a declaration, whatever lies between the name and its `:` (round-6
-## review: `mut v` / `: u64 = 0` across two lines was missed, and an array copied into the scalar). The
+## identifier boundary, outside string literals and `#` comments, that is the name offset of a recorded
+## `Assign` (`decl_event_at`) AND is followed, past blanks and comments, by `:` is a declaration (round-6
+## review: `mut v` / `: u64 = 0` across two lines was missed, and an array copied into the scalar); a
+## recorded `Assign` without the `:` is a reassignment and is passed over (round 7). The
 ## latest one still in scope at `use_s` (`binding_in_scope_at`) wins: it shadows or rebinds every earlier
 ## one. Any other occurrence followed, past blanks and comments, by `:` is binding text that is not a
 ## declaration, and when it is in scope the answer is `None`: a lambda parameter, even one on its own line of a parameter
@@ -7048,10 +7055,12 @@ x86_decl_in_effect := fn(src : ptr(u8), ctslots : ptr(SVec), first : usize, use_
       while src_byte(src, i) != 10 and src_byte(src, i) != 0 { i += 1 }
     } else if not lower_layout::ll_ident_byte(src, i - 1) and lower_ctx::streq(src, i, nl, use_s, nl) and not lower_layout::ll_ident_byte(src, i + nl) and src_byte(src, i - 1) != 58 {
       k := decl_skip_blank(src, i + nl)
+      colon := src_byte(src, k) == 58 and src_byte(src, k + 1) != 58
       if decl_event_at(ctslots, i, nl) {
-        ## a recorded declaring `Assign`, however its `:` is laid out (`mut v` / `: u64 = 0`)
-        if binding_in_scope_at(src, i, nl, use_s) { best = Option(u64).Some(u64(i)) }
-      } else if src_byte(src, k) == 58 and src_byte(src, k + 1) != 58 {
+        ## a recorded `Assign` followed by its `:`, however laid out (`mut v` / `: u64 = 0`), declares;
+        ## one without it is a reassignment or a compound assignment and neither declares nor refuses
+        if colon and binding_in_scope_at(src, i, nl, use_s) { best = Option(u64).Some(u64(i)) }
+      } else if colon {
         ## binding text that is not a recorded declaration: a parameter, a field
         if binding_in_scope_at(src, i, nl, use_s) { return Option(u64).None }
       } else if (src_byte(src, k) == 44 or src_byte(src, k) == 41) and decl_line_opens_tuple(src, i) {
@@ -7083,8 +7092,10 @@ decl_skip_blank := fn(src : ptr(u8), k0 : usize) -> usize {
   k
 }
 
-## Is offset `s` (length `n`) the name of a declaring `Assign`? `collect_slots` records each one in the
-## side table at its own name offset (`bind_comptime_shadow`, `ek == 254`; see `slot_declared_before`).
+## Is offset `s` (length `n`) the name of an ordinary `Assign`? `collect_slots` records EVERY one in the
+## side table at its own name offset (`bind_comptime_shadow`, `ek == 254`; see `slot_declared_before`):
+## declarations, reassignments and compound assignments alike (`v += e` is parsed as an `Assign`). The
+## caller tells a declaration by the `:` after the name (round-7 review of #1821).
 decl_event_at := fn(ctslots : ptr(SVec), s : usize, n : usize) -> bool {
   cnt := ctslots_len(ctslots)
   mut j : usize = 0
@@ -7181,6 +7192,13 @@ x86_deref_arr_slot_fits := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl :
   }
   lower_show_src_line(src, ns)
   panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs a frame block of its own element type and length, and this local shares its frame slot with an earlier array of the same name (#1847): rename one of them. Refused rather than copying into a block laid out for the other array")
+}
+
+## The located refusal of `x86_arr_decl_span` when the declaration in effect has an annotation its type
+## reader does not reach (a `#` comment between the name and the `:`, #1859).
+reject_deref_arr_ann_unread := fn(src : ptr(u8), ns : usize) {
+  lower_show_src_line(src, ns)
+  panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs the target's declared type, and the annotation of its declaration is not read past a comment between the name and the `:` (#1859): put the `:` right after the name. Refused rather than copying with a guessed type")
 }
 
 ## The located refusal of `x86_arr_decl_span` for a reassigned array local declared without `: [T; N]`.
