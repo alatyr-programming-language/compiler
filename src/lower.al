@@ -7001,6 +7001,11 @@ x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), ctslots : ptr(SVec), s
   ## a declaration answers from its own `: T` (`deref_arr_type`), or is a new binding by inference: the
   ## entry `slot_of` reuses may still be an earlier, out-of-scope array of the same name
   if assign_is_decl(src, ns, nl) { return CSpan(s = 0, n = 0) }
+  ## a declaration with a `#` comment before its `:` is not seen as one by `assign_is_decl` nor its type by
+  ## `local_type_span` (#1859), so neither the binder nor the copy would take it: one word moved (round-8
+  ## review: 40 where 42 is due). Refuse it, located.
+  kd := decl_skip_blank(src, ns + nl)
+  if src_byte(src, kd) == 58 and src_byte(src, kd + 1) != 58 { reject_deref_arr_ann_unread(src, ns) }
   le : Option(u64) = local_entry(slots, src, ns, nl)
   mut r := CSpan(s = 0, n = 0)
   match le {
@@ -7013,6 +7018,8 @@ x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), ctslots : ptr(SVec), s
             if lt.n == 0 {
               ## `:=` declares by inference (#1844); a `:` whose annotation the reader cannot reach, as
               ## behind a `#` comment, is #1859
+              ## `x86_decl_in_effect` took `ds` only with a `:` after it, past blanks and comments, so
+              ## `kc` is that `:`
               kc := decl_skip_blank(src, usize(ds) + nl)
               if src_byte(src, kc + 1) == 61 { reject_deref_arr_inferred(src, ns) }
               reject_deref_arr_ann_unread(src, ns)

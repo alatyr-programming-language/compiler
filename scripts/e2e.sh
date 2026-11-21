@@ -6505,8 +6505,10 @@ issue1212_located_refusals_test() {
 ## (#1844 tracks copying both), including one written on its own line of a parameter list. A
 ## `[u64; 2]` local that reuses the frame slot of an earlier, out-of-scope `[u8; 16]` of the same name is
 ## refused too, rather than copied into a block laid out for the other array (#1847; it answered 2).
-## A declaration with a `#` comment between its name and its `:` is refused under #1859: its type is
-## not read past the comment (the parent's one-word store was right there, 42).
+## A declaration with a `#` comment between its name and its `:` is not read past the comment (#1859):
+## a reassignment of it is refused (the parent's one-word store was right there, 42), and so is such a
+## declaration whose value is the `deref` (it reserved no array and moved one word: the round-8 review's
+## z07b, `v.len + 40`, gave 40 on head and parent alike).
 issue1809_deref_arr_refusals_test() {
   local d="$T/issue1809_deref_arr_refusals" n src out err got
   rm -rf "$d"
@@ -6661,7 +6663,18 @@ issue1809_deref_arr_refusals_test() {
     '  mut wq : u64 = 8589934632' \
     '  rd(unchecked bitcast(usize, ptr(wq)))' \
     '}' > "$d/decl_comment_colon.al"
-  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown decl_unknown_param_line decl_unknown_param_list shared_slot decl_comment_colon; do
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  v # the copy' \
+    '    : [u64; 2] = deref(p)' \
+    '  v[0] + v[1]' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/decl_comment_colon_decl.al"
+  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown decl_unknown_param_line decl_unknown_param_list shared_slot decl_comment_colon decl_comment_colon_decl; do
     src="$d/$n.al"; out="$d/$n.out"; err="$d/$n.err"
     "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
     if [ "$got" = 0 ]; then echo "FAIL issue1809_deref_arr_refusals($n): build succeeded, want a located reject"; fail=1; continue; fi
@@ -6676,6 +6689,7 @@ issue1809_deref_arr_refusals_test() {
       inferred_reassign_idx) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       decl_unknown) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       decl_unknown_param_line|decl_unknown_param_list) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      decl_comment_colon_decl) grep -qF 'not read past a comment' "$err" && grep -qF 'v # the copy' "$err" ;;
       decl_comment_colon) grep -qF 'not read past a comment' "$err" && grep -qF 'v = deref(q)' "$err" ;;
       shared_slot) grep -qF 'shares its frame slot with an earlier array' "$err" && grep -qF 'v = deref(p)' "$err" ;;
     esac
