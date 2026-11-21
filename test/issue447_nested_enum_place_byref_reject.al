@@ -14,12 +14,23 @@
 ## reference at the layout `lower_layout::field_byte_place` gives (`ib_struct_image_why`), reads
 ## `o.inner.t` there, and the program answers 22 (`Tag.Green`), its value. The legacy emitter
 ## (`alatyr x86-legacy`) still refuses at `resolve_nested_ptr_field`, and the twins still trap.
+##
+## The `match` is the well-formed one at spec 1.10.0, Control Flow §5.3: arms separated by a newline,
+## never a comma, and no `_` arm after all three variants (a wholly unreachable arm is a compile error),
+## laid out one arm per line as TOOL-23 gives it. Until #1786 it read
+## `{ Red => 11, Green => 22, Blue => 33, _ => 91 }`, which the compiler wrongly accepts (#1528, #1815),
+## and today's `fmt` still prints comma-separated arms (#1528, #1551); 22 is the value of the corrected
+## program.
 Tag := enum { Red, Green, Blue }
 Inner := struct { t : Tag }
 Outer := struct { lead : u64, inner : Inner }
 
 pick := fn(o : Outer) -> u64 {
-  match o.inner.t { Red => 11, Green => 22, Blue => 33, _ => 91 }
+  match o.inner.t {
+    Red => 11
+    Green => 22
+    Blue => 33
+  }
 }
 
 main := fn() -> u64 {
