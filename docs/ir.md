@@ -795,6 +795,21 @@ the crossing (both measured). So `ir::sig_pins_legacy` keeps every signature tha
 instance on those three targets legacy (`span_is_enum_inst_agg`). On x86_64 an instance of one or two
 words crosses in `%rax`/`%rdx`, where both layouts agree; a wider one does not cross there.
 
+A struct with an array or aggregate field is another (IR-39, #1786). On x86_64 it crosses, as a
+parameter, an argument or a place through a pointer, when its whole image is the WORD-tier one
+`lower_layout::field_byte_place` and `field_words` give (`ib_struct_image_why`). That means every child
+is a word scalar, a niche-folded `Option(ptr(T))`, an enum with scalar components, a fixed array of
+words or a struct of the same kind, measured against x86_64's legacy readers and writers
+(`test/ir39_*.al`). A `str` or `Slice(T)` child is not among them: the builder does not lay out a
+struct holding one, so it is refused before this test, under its own label. The twins' legacy
+emitters were not proved to share the image: they trap at a field access through a pointer, and
+aarch64 and riscv64 store an aggregate pointee as one word (#1727). So a function the builder builds
+with such a struct is marked `ir::fn_agg_field`, and the three twin selectors leave it legacy. A
+narrow scalar in such a struct is written by the IR at its own width into a zeroed word, which a legacy
+whole-word reader takes as canonical only when it is unsigned or a `bool`. So a crossing parameter
+refuses a signed one (`CSigParamNestedNarrow`), and any narrow scalar deeper than the top level is
+refused everywhere.
+
 Two more rules hold at every crossing. A scalar payload component is written as the whole word of its
 slot, sign-extended when the component is a narrow signed integer (`ib_store_comp`, #1726). The bytes
 above it are padding to Types §6.2, but the legacy readers load the slot whole. A float parameter is a

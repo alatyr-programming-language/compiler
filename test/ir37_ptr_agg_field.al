@@ -1,10 +1,10 @@
 ## IR-37 (#1786): a struct with an aggregate field (a struct, an `Option`, an enum) beside narrow
-## scalars, reached through a pointer. The shared IR does not lay such a pointee out (`expr Deref: struct
-## pointee with an array or aggregate field`): x86_64's legacy emitter refuses to write a sub-object's
-## field through a pointer, so no layout of the sub-object is proved there. `get`, `put` and `whole` are
-## therefore left to each target's legacy emitter; the program must still answer the spec's value.
-## `I` keeps a word-wide field: x86_64's legacy constructor drops a nested struct whose fields are all
-## narrower than a word (#1792).
+## scalars, reached through a pointer. Since IR-39 the shared IR lays out such a pointee when every
+## child is in the WORD-tier image, but `I` holds a field narrower than a word, so this one is still
+## refused (`expr Deref: struct pointee with a sub-word scalar in a nested aggregate field`). `get`,
+## `put` and `whole` are therefore left to each target's legacy emitter; the program must still answer
+## the spec's value. `I` keeps a word-wide field: x86_64's legacy constructor drops a nested struct whose
+## fields are all narrower than a word (#1792).
 I := struct { q : u8, r : i64 }
 E := enum { A, B(u64) }
 S := struct { a : u8, i : I, o : Option(u64), e : E, c : i16 }

@@ -2980,9 +2980,9 @@ ib_fld_plus := fn(fd : IbFld, off : usize) -> IbFld { IbFld(off = ByteOff(usize(
 ## A field whose type is a struct or an enum the builder lays out is a SUB-OBJECT at the field's byte
 ## place (`lower_layout::field_byte_place`, the one answer every tier gives): a literal for it is built in
 ## place, a field read through it is a place one level deeper (`ib_place_of` on `o.inner`), and a whole
-## read or write of it is a `copy` of its bytes. A struct holding one is never a WORD-tier struct
-## (`ib_struct_scalar_fields`), so it crosses no call and no pointer: the sub-object's layout stays
-## internal to one function.
+## read or write of it is a `copy` of its bytes. A struct holding one crosses a call or a pointer only
+## when its whole image is the WORD-tier one x86_64's legacy emitter shares (`ib_struct_image_why`,
+## IR-39); otherwise the sub-object's layout stays internal to one function.
 
 ## A sub-object: its byte offset in the enclosing object and its own type (flat, for the seed, #912).
 IbSub := struct { off : usize, di : usize, s : usize, n : usize, size : usize }
@@ -4514,9 +4514,17 @@ ib_struct_word_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> 
   if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) {
     return Option(Construct).Some(Construct.CSigParamLevered)
   }
-  ## An array or nested-aggregate field: its place through a pointer is not proved against the legacy
-  ## readers (Q4).
-  if not ib_struct_scalar_fields(bp, st) { return Option(Construct).Some(Construct.CSigParamNestedField) }
+  ## IR-39 (#1786): an array or nested-aggregate field crosses when every child is in the WORD-tier image
+  ## (`ib_struct_image_why`). A narrow field of an IR-built object is written at its own width into a word
+  ## whose upper bytes are zero (the object was zeroed, or copied from a legacy canonical word), and a
+  ## legacy reader loads the whole word: that is the canonical word only for an UNSIGNED narrow field or a
+  ## `bool`, so a signed one keeps the struct from crossing, and so does any narrow field nested deeper.
+  if not ib_struct_scalar_fields(bp, st) {
+    io : Option(Construct) = ib_struct_image_why(bp, a, st, IbNk.NkUnsigned, true)
+    match io { Some(ic) => { return io }; None => {} }
+    fn_set_agg_field(ib_b_f(bp))
+    return io
+  }
   ## Padding: the literal would leave bytes undefined, and the caller's words are not the callee's.
   if ib_struct_padded(bp, a, st) { return Option(Construct).Some(Construct.CSigParamPadded) }
   Option(Construct).None
@@ -4531,8 +4539,8 @@ ib_struct_word_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> 
 ## the canonical word (`ib_store_slot`); riscv64 and wasm trap at every such access, so nothing they
 ## write can disagree. Refused, by name: a levered struct — BYTE tier or `@packed`, where x86_64's
 ## `p.f = v` writes at the word offset while its reads take the §6.1 offset (#1790), and every twin
-## traps — and a struct with an array or aggregate field, whose sub-object x86_64 refuses to write
-## through a pointer.
+## traps. IR-39 (#1786): a struct with an array or aggregate field is reached through a pointer when its
+## image is proved (`ib_struct_image_why`), and refused under the cause that image names otherwise.
 ib_struct_ptr_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> Option(Construct) {
   wo : Option(Construct) = ib_struct_word_why(bp, a, st)
   match wo { None => { return wo }; Some(wc) => {} }
@@ -4541,7 +4549,14 @@ ib_struct_ptr_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> O
   if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) {
     return Option(Construct).Some(Construct.EDerefLevered)
   }
-  if not ib_struct_scalar_fields(bp, st) { return Option(Construct).Some(Construct.EDerefNested) }
+  ## IR-39 (#1786): a struct with an array or aggregate field, when its WORD-tier image is proved
+  ## (`ib_struct_image_why`); its own scalar fields may be narrower than their words, as above.
+  if not ib_struct_scalar_fields(bp, st) {
+    io : Option(Construct) = ib_struct_image_why(bp, a, st, IbNk.NkAny, false)
+    match io { Some(ic) => { return io }; None => {} }
+    fn_set_agg_field(ib_b_f(bp))
+    return io
+  }
   if not ib_struct_word_slots(bp, a, st) { return Option(Construct).Some(Construct.EDerefTier) }
   Option(Construct).None
 }
@@ -4569,6 +4584,140 @@ ib_struct_word_slots := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -
     }
   }
   i != 0 and st.size == 8 * i
+}
+## IR-39 (#1786): which scalars narrower than a word `ib_struct_image_why` admits at the level it checks:
+## none (a nested struct), an unsigned one or a `bool` (a crossing parameter), or any (through a pointer).
+IbNk := enum { NkNone, NkUnsigned, NkAny }
+## Does `nk` admit a narrow scalar field of signedness `sg`?
+ib_nk_admits := fn(nk : IbNk, sg : Sgn) -> bool {
+  match nk {
+    IbNk.NkNone => { false }
+    IbNk.NkUnsigned => { not sgn_eq(sg, Sgn.SgS) }
+    IbNk.NkAny => { true }
+  }
+}
+## IR-39 (#1786): the cause `ib_struct_image_why` refuses a struct for: its image is not the WORD-tier
+## one, a sub-word scalar sits where `IbNk` does not admit it, a niche-folded field is not one word, or an
+## enum field holds an aggregate or folded component.
+IbImgNo := enum { InImage, InNarrow, InFolded, InEnumAgg }
+## IR-39 (#1786): is the WORD-tier image of struct `st` — the one `lower_layout::field_byte_place` and
+## `field_words` give, which x86_64's legacy emitter reads and writes — the image the builder lays out?
+## Field `i` must sit at byte `8 * w`, where `w` is the words of the fields before it, and the struct must
+## be exactly its fields' words. A child is taken only in a kind proved against x86_64's legacy readers
+## and writers (offset, size, word image; measured by `test/ir39_*.al`):
+##   - a kernel scalar: one word. Narrower than a word only at the top level, as `nk` admits: never in
+##     a nested struct, an unsigned one or a `bool` in a crossing parameter (see `ib_struct_word_why`),
+##     any through a pointer (every write of it there is `ib_store_slot`'s canonical word);
+##   - a niche-folded `Option(ptr(T))`: one pointer word (Types §6.2, Memory §4.2), the shape
+##     `ib_folded_shape` admits; x86_64's legacy literal writes it since #1688's fix;
+##   - a fixed array of 8-byte kernel scalars (`ib_arr_of`): a word per element;
+##   - an enum the builder lays out (`ib_enum_named_in`: the tag word, then one word per scalar
+##     component, every component written as its canonical word by `ib_store_comp`), whose components are
+##     scalars — `1 + enum_inst_words` words, legacy x86_64's `field_words`;
+##   - a struct whose own image passes this test with no sub-word scalar: `struct_words` words.
+## Refused, by name: a sub-word scalar inside a nested aggregate, or a signed one at the top level of a
+## crossing parameter (an IR-built literal stores it at its own width; #1792 is x86_64's legacy literal
+## dropping an all-narrow child), and an enum whose payload holds an aggregate or a folded component.
+## `pm` picks the parameter family of labels instead of the `deref` one.
+ib_struct_image_why := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, nk : IbNk, pm : bool) -> Option(Construct) {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  mut w : usize = 0
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        fp := lower_layout::field_byte_place(bv.decls, bv.src, st.s, st.n, fd.ns, fd.nl, a)
+        if not fp.addressable or fp.off != i64(8 * w) { return ib_image_no(pm, IbImgNo.InImage) }
+        ko : Option(IbKS) = ib_name_ks(bv.src, fd.ts, fd.tl)
+        match ko {
+          Some(k) => {
+            if kty_bytes(k.ty) != 8 {
+              if not ib_nk_admits(nk, k.sg) { return ib_image_no(pm, IbImgNo.InNarrow) }
+            }
+            w = w + 1
+          }
+          None => {
+            ro : Option(IbArr) = ib_arr_of(bp, a, fd.ts, fd.tl, true)
+            match ro {
+              Some(r) => {
+                if fd.wsize != r.n { return ib_image_no(pm, IbImgNo.InImage) }
+                w = w + r.n
+              }
+              None => {
+                fsp : IbSpan = ib_type_span_full(bv.src, fd.ts, fd.tl)
+                so : Option(IbSt) = ib_agg_named(bp, a, fsp.s, fsp.n)
+                match so {
+                  Some(sub) => {
+                    if ib_st_is_enum(bp, sub) {
+                      if ib_st_is_folded(bp, sub) {
+                        if sub.size != 8 { return ib_image_no(pm, IbImgNo.InFolded) }
+                      } else {
+                        if not ib_enum_scalar_comps(bp, a, sub) { return ib_image_no(pm, IbImgNo.InEnumAgg) }
+                        if sub.size != 8 * (1 + lower_layout::enum_inst_words(bv.decls, bv.src, fsp.s, fsp.n, a)) { return ib_image_no(pm, IbImgNo.InImage) }
+                      }
+                    } else {
+                      if ib_st_levered(bp, a, sub) { return ib_image_no(pm, IbImgNo.InImage) }
+                      co : Option(Construct) = ib_struct_image_why(bp, a, sub, IbNk.NkNone, pm)
+                      match co { Some(cc) => { return co }; None => {} }
+                    }
+                    if sub.size % 8 != 0 { return ib_image_no(pm, IbImgNo.InImage) }
+                    w = w + sub.size / 8
+                  }
+                  None => { return ib_image_no(pm, IbImgNo.InImage) }
+                }
+              }
+            }
+          }
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  if w == 0 or st.size != 8 * w { return ib_image_no(pm, IbImgNo.InImage) }
+  Option(Construct).None
+}
+## The label of refusal `why`: the parameter family when `pm`, the `deref` one otherwise.
+ib_image_no := fn(pm : bool, why : IbImgNo) -> Option(Construct) {
+  if pm {
+    match why {
+      IbImgNo.InImage => { return Option(Construct).Some(Construct.CSigParamNestedField) }
+      IbImgNo.InNarrow => { return Option(Construct).Some(Construct.CSigParamNestedNarrow) }
+      IbImgNo.InFolded => { return Option(Construct).Some(Construct.CSigParamNestedFolded) }
+      IbImgNo.InEnumAgg => { return Option(Construct).Some(Construct.CSigParamNestedEnumAgg) }
+    }
+  }
+  match why {
+    IbImgNo.InImage => { Option(Construct).Some(Construct.EDerefNested) }
+    IbImgNo.InNarrow => { Option(Construct).Some(Construct.EDerefNestedNarrow) }
+    IbImgNo.InFolded => { Option(Construct).Some(Construct.EDerefNestedFolded) }
+    IbImgNo.InEnumAgg => { Option(Construct).Some(Construct.EDerefNestedEnumAgg) }
+  }
+}
+## Is every payload component of enum `st` a kernel scalar (`ib_variant_comp`), at the fixed word place
+## `ib_comp_fld` gives it — no aggregate and no folded component?
+ib_enum_scalar_comps := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> bool {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        mut i : usize = 0
+        while i < fd.arity {
+          ko : Option(IbKS) = ib_variant_comp(bp, a, st, fq, i)
+          match ko { Some(k) => {}; None => { return false } }
+          i = i + 1
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  true
 }
 ## Store `v` at field place `fd` of a struct reached through a pointer (`ib_struct_ptr_why`): a narrow
 ## field as the canonical WORD its slot is, sign-extended if signed (`ib_store_comp`'s rule, #1726),

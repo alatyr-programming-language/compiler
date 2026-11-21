@@ -1,4 +1,4 @@
-21
+22
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -97,10 +97,19 @@
 # The two alias fixtures, test/inout_agg_whole_assign_in_alias{,_part}.al (#1637), refuse on both paths
 # and add no row.
 #
+# It was 21 and it is 22 because IR-39 (#1786) builds a struct parameter with a nested struct field of
+# a payload-less enum from the shared IR (GitHub gate run 44838352627 on bd722719, part ir, the only new
+# row). The program is valid at the pinned spec 1.10.0 (a by-value struct parameter, Functions §4.1, and
+# a `match` on its field `o.inner.t`), and the default answers 22, `Tag.Green`, its value. Legacy x86
+# keeps its located fence at `resolve_nested_ptr_field` (the fixture header and its e2e rows record
+# both); the twins trap. No legacy-x86 fixes on the IR track (#980):
+#     test/issue447_nested_enum_place_byref_reject.al  legacy build 1   default run 22   (#1786)
+#
 # ir_diff prints every row but #1626's and #1632's as UNEXPLAINED: its `oracle`
 # (scripts/fixture_oracle.sh) reads only the legacy header shapes (`## build_reject`, `## Expected exit:
 # N`) in the first 30 lines, never the `## expect:` directive these files state. #1626's and #1632's
 # files also say `Expected exit 42` in their headers, so ir_diff attributes those rows itself
-# (LEGACY-WRONG; attributed=2 unexplained=19). Every row is explained above, by its file's own directive.
+# (LEGACY-WRONG; attributed=2 unexplained=20). Every row is explained above, by its file's own directive
+# (#1786's issue447 row, which states none and is held by the corpus manifest, by its header and e2e rows).
 #
 # Lowering the number means fixing a row, not editing this file.

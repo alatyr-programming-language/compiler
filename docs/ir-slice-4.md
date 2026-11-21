@@ -150,6 +150,10 @@ is slice 3's construct, built now because 4a gives enums a layout to nest.
 - **No crossing.** A struct holding a sub-object is not WORD tier (`ib_struct_scalar_fields`), so it is
   never a parameter, an argument, a result, or a place through a pointer: the sub-object layout stays
   inside one function, and the legacy emitters' nested layouts are never relied on (Q4).
+  *Superseded in part by IR-39 (#1786):* such a struct is now a parameter, an argument and a place
+  through a pointer when every child is in the WORD-tier image `lower_layout::field_byte_place` gives,
+  proved against x86_64's legacy readers and writers (`ib_struct_image_why`); the twins keep those
+  functions legacy (`ir::fn_agg_field`). It is still never a result.
 
 ### 4.1 Measured (omen, before the gate)
 
