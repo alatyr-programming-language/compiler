@@ -6936,10 +6936,43 @@ deref_arr_type := fn(src : ptr(u8), ns : usize, nl : usize, decl : CSpan) -> CSp
 ## The SHAPE alone: the value is a `deref(…)` and `ats` is a fixed array `[T; …]`, whatever its length
 ## is written as. Shared by the x86_64 copy below and the twins' refusal (`refuse_deref_arr_copy`), so no
 ## length form can fall through to the one-word store (a slice view `[T]` has no top-level `;`).
-deref_arr_shape := fn(v : ptr(Expr), src : ptr(u8), ats : CSpan) -> bool {
+deref_arr_shape := fn(v : ptr(Expr), src : ptr(u8), ats0 : CSpan) -> bool {
   if not is_deref_value(v) { return false }
+  ats := deref_arr_ann_core(src, ats0)
   if ats.n < 2 or str_at((src + ats.s), 1) != "[" { return false }
   lower_layout::arrty_semi(src, ats.s, ats.n) != 0
+}
+
+## The type `ats` past its prefix attributes (Grammar §3.3 `type-expr ::= { attribute } type-atom`;
+## Types §8: `@align(16) [u64; 2]` is a `[u64; 2]` with a raised alignment), so every `[` test of the copy
+## sees the array (round-10 review of #1821: the attributed form moved one word).
+deref_arr_ann_core := fn(src : ptr(u8), ats : CSpan) -> CSpan {
+  e := ats.s + ats.n
+  p := type_past_attrs(src, ats.s)
+  if p >= e { return CSpan(s = 0, n = 0) }
+  CSpan(s = p, n = e - p)
+}
+
+## The first offset from `p0` past a run of prefix attributes `@name` / `@name(…)` and the blanks and
+## comments around them; `p0` itself when there is none.
+type_past_attrs := fn(src : ptr(u8), p0 : usize) -> usize {
+  mut p := decl_skip_blank(src, p0)
+  while src_byte(src, p) == 64 {
+    p += 1
+    while lower_layout::ll_ident_byte(src, p) { p += 1 }
+    if src_byte(src, p) == 40 {
+      mut depth : usize = 1
+      p += 1
+      while depth > 0 and src_byte(src, p) != 0 {
+        b := src_byte(src, p)
+        if b == 40 { depth += 1 }
+        if b == 41 { depth -= 1 }
+        p += 1
+      }
+    }
+    p = decl_skip_blank(src, p)
+  }
+  p
 }
 
 ## The element count of `[T; N]` when `N` is written as a decimal literal and nothing else (`0` included:
@@ -6972,8 +7005,8 @@ deref_arr_len := fn(src : ptr(u8), ats : CSpan) -> Option(u64) {
 
 ## #1811 — aarch64, riscv64 and wasm do not copy a whole fixed array out of a pointer yet: aarch64
 ## reserved the block and moved ONE word into it, a wrong value masked only by an unrelated trap. Each
-## twin asks this at every assignment it emits, passing its own answer for the target's declared array
-## type (`decl`), so the declaration and the reassignment are refused at compile time, located, on all
+## twin asks this at every assignment it emits, passing its own answer for the target's declared type
+## (`decl`, the whole annotation: `deref_arr_shape` reads an array past its prefix attributes), so the declaration and the reassignment are refused at compile time, located, on all
 ## three alike.
 pub refuse_deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decl : CSpan) {
   if not deref_arr_shape(v, src, deref_arr_type(src, ns, nl, decl)) { return }
@@ -7010,7 +7043,7 @@ x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), ctslots : ptr(SVec), s
   ## even over an earlier array of the same name (round-9 review).
   kd := decl_skip_blank(src, ns + nl)
   if src_byte(src, kd) == 58 and src_byte(src, kd + 1) != 58 {
-    if src_byte(src, kd + 1) != 61 and src_byte(src, decl_skip_blank(src, kd + 1)) == 91 { reject_deref_arr_ann_unread(src, ns) }
+    if src_byte(src, kd + 1) != 61 and src_byte(src, type_past_attrs(src, kd + 1)) == 91 { reject_deref_arr_ann_unread(src, ns) }
     return CSpan(s = 0, n = 0)
   }
   le : Option(u64) = local_entry(slots, src, ns, nl)
@@ -7031,7 +7064,16 @@ x86_arr_decl_span := fn(v : ptr(Expr), slots : ptr(SVec), ctslots : ptr(SVec), s
               if src_byte(src, kc + 1) == 61 { reject_deref_arr_inferred(src, ns) }
               reject_deref_arr_ann_unread(src, ns)
             }
-            if lt.n >= 2 and str_at((src + lt.s), 1) == "[" { r = CSpan(s = lt.s, n = lt.n) }
+            core := deref_arr_ann_core(src, CSpan(s = lt.s, n = lt.n))
+            if core.n >= 2 and str_at((src + core.s), 1) == "[" {
+              r = CSpan(s = lt.s, n = lt.n)
+            } else if usize(ds) == e.ns or not decl_type_is_word(src, core) {
+              ## the slot is an array entry: a word store is right only for a later binding that is a
+              ## word and shares the entry (a scalar `v` after a loop-scoped array `v`); the array's own
+              ## declaration with a type this cannot read as `[T; N]`, or a binding of any other type,
+              ## is refused rather than stored one word (round-10 review)
+              reject_deref_arr_ann_unknown(src, ns)
+            }
           }
           None => { reject_deref_arr_decl_unknown(src, ns) }
         }
@@ -7087,6 +7129,13 @@ x86_decl_in_effect := fn(src : ptr(u8), ctslots : ptr(SVec), first : usize, use_
     }
   }
   best
+}
+
+## Is the type text `t` one machine word by its spelling alone: a primitive scalar or a raw pointer?
+decl_type_is_word := fn(src : ptr(u8), t : CSpan) -> bool {
+  if t.n >= 4 and str_at((src + t.s), 4) == "ptr(" { return true }
+  w := str_at((src + t.s), t.n)
+  w == "u8" or w == "u16" or w == "u32" or w == "u64" or w == "i8" or w == "i16" or w == "i32" or w == "i64" or w == "usize" or w == "isize" or w == "bool" or w == "f32" or w == "f64" or w == "bits8" or w == "bits16" or w == "bits32" or w == "bits64"
 }
 
 ## The first offset from `k` that is not blank (space, tab, newline, carriage return) or inside a `#`
@@ -7192,7 +7241,9 @@ is_deref_value := fn(v : ptr(Expr)) -> bool {
 ## target to. That entry belongs to the FIRST binding of the name; a later array of the same name that is
 ## not wider reuses it with the first one's element tier (a `[u64; 2]` after a loop-scoped `[u8; 16]`
 ## keeps the byte tier, so word elements were written where byte reads look: 2 where 42 was due). Copy
-## only into an entry of the same tier and count; refuse anything else, located.
+## only into an entry of the same tier and count; refuse anything else, located. The literal binder lays
+## out an attributed byte array (`mut z : @align(8) [u8; 3] = [0, 0, 0]`) otherwise too, and this
+## refuses its copy as well (round-10 probe a30).
 ## `local_entry` and the emitter's `slot_of` both answer the LAST entry of the name, so this checks the
 ## entry the copy writes.
 x86_deref_arr_slot_fits := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize, dac : DerefArrCopy) {
@@ -7205,7 +7256,15 @@ x86_deref_arr_slot_fits := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl :
     None => {}
   }
   lower_show_src_line(src, ns)
-  panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs a frame block of its own element type and length, and this local shares its frame slot with an earlier array of the same name (#1847): rename one of them. Refused rather than copying into a block laid out for the other array")
+  panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs a frame block of its own element type and length, and this local's block was laid out otherwise: either it shares its frame slot with an earlier array of the same name, or its declaration was laid out at another element tier or length (an attributed `@align(8) [u8; 3]`) (#1847): rename one of them, or spell the type `[T; N]`. Refused rather than copying into a block laid out for another array")
+}
+
+## The located refusal of `x86_arr_decl_span` for a reassignment `v = deref(p)` whose target slot is an
+## array entry but whose declaration in effect has a type the copy reads neither as `[T; N]` nor as one
+## word (a type alias, a generic parameter, a named type, a slice): it would have moved one word.
+reject_deref_arr_ann_unknown := fn(src : ptr(u8), ns : usize) {
+  lower_show_src_line(src, ns)
+  panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs the target's declared type, and the declaration of this local in effect has a type this backend reads neither as `[T; N]` nor as a machine word, while its frame slot is an array's (#1844): spell the array type `[T; N]`. Refused rather than copying with a guessed width")
 }
 
 ## The located refusal of `x86_arr_decl_span` when the declaration in effect has an annotation its type
@@ -7221,8 +7280,9 @@ reject_deref_arr_inferred := fn(src : ptr(u8), ns : usize) {
   panic("selfhost: a fixed array copied out of a pointer into a local declared without a type (`v = deref(p)` over `v := …`) is not supported on this backend yet (#1844): declare it `v : [T; N] = …` with a literal `N`; refused rather than moving one word of the array")
 }
 
-deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, ats : CSpan) -> Option(DerefArrCopy) {
-  if not deref_arr_shape(v, src, ats) { return Option(DerefArrCopy).None }
+deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, ats0 : CSpan) -> Option(DerefArrCopy) {
+  if not deref_arr_shape(v, src, ats0) { return Option(DerefArrCopy).None }
+  ats := deref_arr_ann_core(src, ats0)
   lo := deref_arr_len(src, ats)
   mut nel : usize = 0
   match lo {

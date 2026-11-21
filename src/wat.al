@@ -6647,7 +6647,7 @@ emit_wat_stmts := fn(list_head : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut
         st := deref(stmt_p(Stmt, sq))
         match st {
           Stmt::Assign(ns, nl, v, nx) => {
-            refuse_deref_arr_copy(v, src, ns, nl, wat_local_arrty_span(fn_head, src, ns, nl, a))  ## #1809/#1811 — a whole fixed-array deref copy is refused here, located
+            refuse_deref_arr_copy(v, src, ns, nl, wat_local_ann_span(fn_head, src, ns, nl, a))  ## #1809/#1811 — a whole fixed-array deref copy is refused here, located
             if local_is_comptime(src, ns) { s = nx }
             else {
             slit := expr_struct_name(v)

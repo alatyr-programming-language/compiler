@@ -6508,7 +6508,10 @@ issue1212_located_refusals_test() {
 ## A declaration with a `#` comment between its name and its `:` is not read past the comment (#1859):
 ## a reassignment of it is refused (the parent's one-word store was right there, 42), and so is such a
 ## declaration of an array whose value is the `deref` (it reserved no array and moved one word: the
-## round-8 review's z07b, this row, gave 40 on head and parent alike).
+## round-8 review's z07b, this row, gave 40 on head and parent alike), also when the array type carries a
+## prefix attribute (`@align(16) [u64; 2]`, round-10 probe a01: 40).
+## A byte array declared with a prefix attribute and a literal, `mut z : @align(8) [u8; 3] = [0, 0, 0]`,
+## has a frame block laid out otherwise, so `z = deref(b)` is refused under #1847 (round-10 probe a30: 20).
 issue1809_deref_arr_refusals_test() {
   local d="$T/issue1809_deref_arr_refusals" n src out err got
   rm -rf "$d"
@@ -6674,7 +6677,29 @@ issue1809_deref_arr_refusals_test() {
     '  mut arr : [u64; 2] = [40, 2]' \
     '  rd(unchecked bitcast(usize, ptr(arr)))' \
     '}' > "$d/decl_comment_colon_decl.al"
-  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown decl_unknown_param_line decl_unknown_param_list shared_slot decl_comment_colon decl_comment_colon_decl; do
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  v # the copy' \
+    '    : @align(16) [u64; 2] = deref(p)' \
+    '  v.len + 40' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/decl_comment_colon_attr.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  b : ptr([u8; 3]) = unchecked bitcast(ptr([u8; 3]), h)' \
+    '  mut z : @align(8) [u8; 3] = [0, 0, 0]' \
+    '  z = deref(b)' \
+    '  u64(z[0]) + u64(z[1]) + u64(z[2])' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut w : u64 = 1115412' \
+    '  rd(unchecked bitcast(usize, ptr(w)))' \
+    '}' > "$d/attr_byte_reassign.al"
+  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown decl_unknown_param_line decl_unknown_param_list shared_slot decl_comment_colon decl_comment_colon_decl decl_comment_colon_attr attr_byte_reassign; do
     src="$d/$n.al"; out="$d/$n.out"; err="$d/$n.err"
     "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
     if [ "$got" = 0 ]; then echo "FAIL issue1809_deref_arr_refusals($n): build succeeded, want a located reject"; fail=1; continue; fi
@@ -6689,6 +6714,8 @@ issue1809_deref_arr_refusals_test() {
       inferred_reassign_idx) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       decl_unknown) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       decl_unknown_param_line|decl_unknown_param_list) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      attr_byte_reassign) grep -qF 'laid out at another element tier or length' "$err" && grep -qF 'z = deref(b)' "$err" ;;
+      decl_comment_colon_attr) grep -qF 'not read past a comment' "$err" && grep -qF 'v # the copy' "$err" ;;
       decl_comment_colon_decl) grep -qF 'not read past a comment' "$err" && grep -qF 'v # the copy' "$err" ;;
       decl_comment_colon) grep -qF 'not read past a comment' "$err" && grep -qF 'v = deref(q)' "$err" ;;
       shared_slot) grep -qF 'shares its frame slot with an earlier array' "$err" && grep -qF 'v = deref(p)' "$err" ;;

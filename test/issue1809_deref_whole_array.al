@@ -211,6 +211,14 @@ rdk2 := fn(h : usize) -> u64 {
     : u64 = deref(q)
   r + v - 198914
 }
+## An array type written with a prefix attribute is the same `[T; N]` (Grammar §3.3, Types §8): its
+## reassignment copies both elements (round-10 review: 40 where 42 is due).
+rdg := fn(h : usize) -> u64 {
+  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)
+  mut v : @align(16) [u64; 2] = [0, 0]
+  v = deref(p)
+  v[0] + v[1] - 26
+}
 main := fn() -> u64 {
   mut arr : [u64; 2] = [21, 5]
   mut wv : u64 = 198914
@@ -220,6 +228,6 @@ main := fn() -> u64 {
   hq := unchecked bitcast(usize, ptr(wq))
   mut pa : ptr([u64; 2]) = ptr(arr)
   hp := unchecked bitcast(usize, ptr(pa))
-  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha) + rdy(hq) + rdy2(hq) + rdz2(ha) + rds2(ha) + rdk(hb) + rdk2(hb)
+  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha) + rdy(hq) + rdy2(hq) + rdz2(ha) + rds2(ha) + rdk(hb) + rdk2(hb) + rdg(ha)
 }
 ## expect: run 42
