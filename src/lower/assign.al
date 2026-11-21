@@ -3120,7 +3120,17 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     match deref_arr_copy(v, cx.src, ns, deref_arr_type(cx.src, ns, nl2, x86_arr_decl_span(v, cx.slots, cx.ctslots, cx.src, ns, nl2))) {
       Some(dac) => {
         x86_deref_arr_slot_fits(cx.slots, cx.src, ns, nl2, dac)
+        ## the pointer of `unchecked deref(p)` lies inside the region (Grammar §3.7): emit it with
+        ## `cx.vchk` false, as `emit_gas`' own `Expr::Unchecked` arm does, so a mode-polymorphic
+        ## callee in it takes its unchecked instance (Comptime §7.5; round-5 review: 41 for 42)
+        old_vchk := cx.vchk
+        uo : Option(ptr(Expr)) = unchecked_operand(v)
+        match uo {
+          Some(u) => { cx.vchk = false }
+          None => {}
+        }
         emit_gas(deref_inner_expr(deref_arr_value(v)), sb, cx, a, nl)
+        cx.vchk = old_vchk
         push_str(sb, "  popq %rax\n")
         emit_deref_arr_elems(sb, slot_of(cx.slots, cx.src, ns, nl2), dac)
       }

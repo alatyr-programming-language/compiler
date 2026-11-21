@@ -11,6 +11,12 @@
 ## from a `u64` local, whose little-endian bytes are 2, 9, 3, 0, … (x86_64 takes `ptr` of a local `[u8; N]` one word low, #1812).
 ## aarch64, riscv64 and wasm refuse both forms at compile time until they copy them (#1811).
 ## spec: Memory §4.3; Types §6.4
+Hd := brand(usize)
+mut SEEN : u64 = 0
+to_hd := @convert fn(n : usize) -> Hd {
+  comptime if verify.checked { SEEN = 1 } else { SEEN = 2 }
+  Hd(n)
+}
 rda := fn(h : usize) -> u64 {
   p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)
   v : [u64; 2] = deref(p)
@@ -127,6 +133,13 @@ rdx := fn(h : usize, hb : usize) -> u64 {
   w : [u8; 3] = unchecked deref(b)
   v[0] + v[1] + u64(w[0]) + u64(w[1]) + u64(w[2]) - 40
 }
+## The pointer of `unchecked deref(…)` is evaluated inside the region: the mode-polymorphic conversion
+## in it takes its unchecked instance (Comptime §7.5), so `SEEN` is 2 (an earlier draft gave 1).
+rdm := fn(h : usize) -> u64 {
+  mut v : [u64; 2] = [0, 0]
+  v = unchecked deref(bitcast(ptr([u64; 2]), usize(Hd(h))))
+  v[0] + v[1] + SEEN - 28
+}
 main := fn() -> u64 {
   mut arr : [u64; 2] = [21, 5]
   mut wv : u64 = 198914
@@ -134,6 +147,6 @@ main := fn() -> u64 {
   hb := unchecked bitcast(usize, ptr(wv))
   mut pa : ptr([u64; 2]) = ptr(arr)
   hp := unchecked bitcast(usize, ptr(pa))
-  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb)
+  rda(ha) + rdr(ha) + rdb(hb) + rdc(hb) + rdz(ha) + rds(ha) + rdw(ha) + rdt(ha) + rdu(ha) + rdp(hp) + rdi(ha) + rdx(ha, hb) + rdm(ha)
 }
 ## expect: run 42
