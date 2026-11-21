@@ -777,7 +777,27 @@ IR signature onto registers or wasm params:
   view the builder cannot type, a fixed array (the parser records `[T; N]` by its `[` head), an enum or
   generic enum instance the register tier cannot lay out, a tuple, a scalar reached only through a type
   alias, a float, a function type, `Never`, and last a type that names nothing the builder resolves
-  there. Only the label moves: every one of these was refused before, and still is;
+  there. Only the label moves: every one of these was refused before, and still is.
+  Since IR-41 (#1786) a struct result takes the fields the legacy emitters already return word by word:
+  a sub-word scalar or `bool` (the field owns a whole word; before `ret` the builder rewrites each such
+  word in canonical form — sign-extended, or zero-extended — because the legacy x86_64 and aarch64
+  readers load the whole word, the IR-37 rule), a fixed array of word scalars, a nested struct that is
+  itself word-stored and passes the same test, and a non-generic, unfolded enum whose components are
+  all scalars and whose size is whole words. `ib_ret_field_words` sums the words and the builder then
+  checks the sum against `struct_words`, the byte size and each field's own offset (`8 × words before
+  it`), so a layout the words do not describe exactly is refused as `fields are not laid out word after
+  word` rather than guessed. Still refused, each by its own label: a struct field that is not
+  word-stored (`CSigResultChildLayout`: the legacy x86_64 writer packs a byte-tier child into one word
+  while its reader takes a word per field), an enum field that is generic, folded or holds an aggregate
+  (`CSigResultEnumField`), an array of arrays or of non-word elements, and the cases above. On x86_64
+  the register set is the legacy one, `rax, rdx, rcx, r8, r9, r10, r11`: `sx_agg_ret` / `sx_agg_res`
+  move one to seven words of a struct result and decline at eight, where legacy x86_64 returns through
+  the hidden `%rdi` pointer while aarch64 and riscv64 still return eight words in registers; an enum
+  result keeps its two-word ceiling there. The sret path below is still unbuilt. In `src/` it holds
+  nine functions (`ir::inst0`, `ir::st_mk`, `ib_agarr_place`, `lower::cx_subst`, `sema::lvec_new`,
+  `da_new`, `da_copy`, `da_union_src`, `sema_instruments_take`) and about ten of the 182 remaining
+  `callee result is neither …` call sites; most of the rest call a function with a byte-layout
+  (narrow-tier) struct result, such as the parser's `tok_at` / `cur`;
 - an aggregate result **wider than eight words**, or one the caller asks to receive by address, through a
   hidden first `ptr` parameter (sret) into a caller frame object;
 - the callee symbol — module path, overload suffix, generic instance tag — is computed by the builder,

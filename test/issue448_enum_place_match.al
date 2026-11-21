@@ -16,7 +16,8 @@
 ##   63/64 = a payload arm matched but its payload word was never written (the truncating store).
 ##
 ## Measured with the cross binutils under qemu. Parent 5eb6739: x86_64 42, aarch64 51, riscv64 51.
-## This tree: 42 on all three. wasm traps (134) — it has no lowering for this shape at all (issue #449).
+## This tree: 42 on all three. wasm trapped (134) — it had no lowering for this shape (issue #449); since
+## IR-41 (#1786) the shared IR builds `mk`'s struct result, and wasm answers 42 too.
 Tag := enum { Red, Green, Blue }
 Holder := struct { t : Tag }
 Sized := struct { t : Tag, n : u64 }
@@ -133,4 +134,4 @@ main := fn() -> u64 {
 ## expect(x86_64): run 42
 ## expect(aarch64): run 42
 ## expect(riscv64): run 42
-## expect(wasm): trap
+## expect(wasm): run 42

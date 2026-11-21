@@ -1,4 +1,4 @@
-25
+26
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -130,11 +130,21 @@
 # (#980):
 #     test/issue447_nested_enum_place_byref_reject.al  legacy build 1   default run 22   (#1786)
 #
+# It was 25 and it is 26 because IR-41 lets the shared IR build `main` of an existing fixture (#1786;
+# GitHub gate run 44858013559 on 1c352171, part ir: disagree=23 over 0.6.0's 22, the only new row this one;
+# with IR-38 and IR-39 above, 26). Its two
+# blocks each bind their own `t`, a `u64` and then a three-word struct result; scope is lexical and
+# block-structured (Declarations §5, §6.1), so the program is valid and answers its `## expect: run 42`,
+# which the default, aarch64, riscv64 and wasm all answer. Legacy x86 shares one function-wide slot
+# per name and refuses the rebinding at lowering (`require_reservation`), a located refusal and no
+# wrong value (the IR track takes no legacy-x86 fixes, #980):
+#     test/reject_narrow_slot_rebind.al                 legacy build 1   default run 42
+#
 # ir_diff prints every row but #1626's and #1632's as UNEXPLAINED: its `oracle`
 # (scripts/fixture_oracle.sh) reads only the legacy header shapes (`## build_reject`, `## Expected exit:
 # N`) in the first 30 lines, never the `## expect:` directive these files state. #1626's and #1632's
 # files also say `Expected exit 42` in their headers, so ir_diff attributes those rows itself
-# (LEGACY-WRONG; attributed=2 unexplained=23). Every row is explained above, by its file's own directive
+# (LEGACY-WRONG; attributed=2 unexplained=24). Every row is explained above, by its file's own directive
 # (#1786's issue447 row, which states none and is held by the corpus manifest, by its header and e2e rows).
 #
 # Lowering the number means fixing a row, not editing this file.

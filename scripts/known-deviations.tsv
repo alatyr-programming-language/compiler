@@ -79,7 +79,6 @@ aarch64	test/bitcast_agg2word_unchecked.al	run/133	#551
 aarch64	test/bitcast_ptr_struct.al	run/133	#1187
 aarch64	test/bitcast_ptr_struct_deref.al	run/133	#1188
 aarch64	test/byref_nested_field.al	run/133	#1187
-aarch64	test/callfield_chain.al	run/133	#1187
 aarch64	test/callfield_generic.al	run/133	#1187
 aarch64	test/callfield_ptr_ret.al	run/133	#1199
 aarch64	test/capture_array.al	run/133	#1191
@@ -222,6 +221,9 @@ aarch64	test/ir39_ptr_folded_field.al	run/133	#1188
 aarch64	test/ir39_ptr_nested_struct.al	run/133	#1188
 aarch64	test/ir39_ptr_record.al	run/133	#1188
 aarch64	test/ir39_ptr_word_array.al	run/133	#1188
+aarch64	test/ir41_ret_as_arg.al	run/133	#1191
+aarch64	test/ir41_ret_eight_words.al	run/133	#1191
+aarch64	test/ir41_ret_nested.al	run/133	#577
 aarch64	test/ir_array_param_convert_caller.al	run/133	#1194
 aarch64	test/ir_array_param_legacy_caller.al	run/133	#1194
 aarch64	test/ir_array_param_legacy_copy.al	run/133	#1194
@@ -719,7 +721,6 @@ riscv64	test/bitcast_agg2word_unchecked.al	run/133	#551
 riscv64	test/bitcast_ptr_struct.al	run/133	#1187
 riscv64	test/bitcast_ptr_struct_deref.al	run/133	#1188
 riscv64	test/byref_nested_field.al	run/133	#1187
-riscv64	test/callfield_chain.al	run/133	#1187
 riscv64	test/callfield_generic.al	run/133	#1187
 riscv64	test/callfield_ptr_ret.al	run/133	#1199
 riscv64	test/capture_array.al	run/133	#1191
@@ -863,6 +864,9 @@ riscv64	test/ir39_ptr_folded_field.al	run/133	#1188
 riscv64	test/ir39_ptr_nested_struct.al	run/133	#1188
 riscv64	test/ir39_ptr_record.al	run/133	#1188
 riscv64	test/ir39_ptr_word_array.al	run/133	#1188
+riscv64	test/ir41_ret_as_arg.al	run/133	#1191
+riscv64	test/ir41_ret_eight_words.al	run/133	#1191
+riscv64	test/ir41_ret_nested.al	run/133	#577
 riscv64	test/ir_array_param_convert_caller.al	run/133	#1194
 riscv64	test/ir_array_param_legacy_caller.al	run/133	#1194
 riscv64	test/ir_array_param_legacy_copy.al	run/133	#1194
@@ -1365,7 +1369,6 @@ wasm	test/bitcast_agg2word_unchecked.al	run/134	#1205
 wasm	test/bitcast_ptr_struct.al	run/134	#1186
 wasm	test/bitcast_ptr_struct_deref.al	run/134	#1188
 wasm	test/byref_nested_field.al	run/134	#1187
-wasm	test/callfield_chain.al	run/134	#1187
 wasm	test/callfield_generic.al	run/134	#1187
 wasm	test/callfield_ptr_ret.al	run/134	#1186
 wasm	test/capture_array.al	run/134	#1194
@@ -1505,6 +1508,9 @@ wasm	test/ir39_ptr_nested_struct.al	run/134	#1188
 wasm	test/ir39_ptr_record.al	run/134	#1188
 wasm	test/ir39_ptr_word_array.al	run/134	#1188
 wasm	test/ir40_generic_handle_cast.al	run/134	#1188
+wasm	test/ir41_ret_as_arg.al	run/134	#1191
+wasm	test/ir41_ret_eight_words.al	run/134	#1191
+wasm	test/ir41_ret_nested.al	run/134	#1190
 wasm	test/ir_array_param_convert_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_copy.al	run/134	#1194
