@@ -1199,6 +1199,18 @@ pub type_span_resolves_alike := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usiz
   true
 }
 
+## Whether two spans of one text carry the same module-path head (`type_path_head`, which reads a
+## qualifier the parser left only in the adjacent source). The resolver caches below key a line on the
+## span's text and naming module; without the head, the tail `Node` of `m::Node` and a bare `Node` in
+## the same module shared a line, so the first answer (`m`'s struct) was every later one's, and the
+## root's struct was read with `m`'s layout (#1808, a wrong value).
+same_path_head := fn(src : ptr(u8), as_ : usize, an : usize, bs : usize, bn : usize) -> bool {
+  ha := type_path_head(src, as_, an)
+  hb := type_path_head(src, bs, bn)
+  if ha.n != hb.n { return false }
+  ha.n == 0 or streq(src, ha.s, ha.n, hb.s, hb.n)
+}
+
 ## Find the kind-2 (struct) `Decl` whose TYPE name matches `[s, s+n)` (by tail name, so a
 ## qualified `mod::P` resolves to struct `P`); returns its index in the decl vector, or -1 if
 ## none. Used to resolve a struct local's layout (field list). Candidates are ordered by
@@ -1211,7 +1223,7 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   ## #1734: the cache is keyed by the naming module of THIS span, which is what the answer depends on.
   nmod := type_naming_at(src, s)
   if _sdc_n[h] == n and _sdc_src[h] == src and naming_hit(src, nmod, _sdc_ctx[h], _sdc_ms[h], _sdc_ml[h])
-     and streq(src, _sdc_s[h], _sdc_n[h], s, n) { return _sdc_i[h] }
+     and streq(src, _sdc_s[h], _sdc_n[h], s, n) and same_path_head(src, _sdc_s[h], _sdc_n[h], s, n) { return _sdc_i[h] }
   nm := name_tail(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 2, "struct")
   mut alias_ts := 0
@@ -5651,7 +5663,7 @@ pub enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   ## #1734: keyed by the naming module of THIS span, as `struct_decl_of` is.
   nmod := type_naming_at(src, s)
   if _edc_n[h] == n and _edc_src[h] == src and naming_hit(src, nmod, _edc_ctx[h], _edc_ms[h], _edc_ml[h])
-     and streq(src, _edc_s[h], _edc_n[h], s, n) { return _edc_i[h] }
+     and streq(src, _edc_s[h], _edc_n[h], s, n) and same_path_head(src, _edc_s[h], _edc_n[h], s, n) { return _edc_i[h] }
   nm := name_tail(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 3, "enum or union")
   mut alias_ts := 0
@@ -6136,6 +6148,244 @@ pub base_type_name := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
     i += 1
   }
   LSpan(s = s, n = n)
+}
+
+## ───────────────────────── the identity of a generic instance's type argument ─────────────────────────
+##
+## #1808, #1810 — Comptime §3.2 gives each distinct comptime-argument set its own instance and §3.4 makes
+## identical ones share one. Mono keyed an instance on the type argument's TEXT, which is wrong both
+## ways: `Node` written in the root and `Node` written in module `m` are two types under one text (one
+## instance, one label `m__at__Node`, and the root's struct read with `m`'s layout: a wrong value), and
+## `ptr(u64)` and `ptr( u64 )` are one type under two texts (two definitions of one label). The answer
+## below is the type's identity: a named struct, enum or union is its DECLARATION, resolved from the
+## module whose text spells it (`type_naming_at`, #1734); everything else is its text with insignificant
+## blanks dropped; type arguments, tuple components and an array's element compare by the same rule.
+## `lower::add_inst` dedups with `targ_same`, and `lower::emit_type_arg_tag` spells the declaring module
+## of each declaration `targ_decl` answers, so two arguments are one instance exactly when they have one
+## label.
+
+## `[s, s+n)` without its leading and trailing blanks.
+pub targ_trim := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut b := s
+  mut e := s + n
+  while b < e and is_blank_at(src, b) { b = b + 1 }
+  while e > b and is_blank_at(src, e - 1) { e = e - 1 }
+  LSpan(s = b, n = e - b)
+}
+is_blank_at := fn(src : ptr(u8), i : usize) -> bool {
+  c := str_at((src + i), 1)
+  c == " " or c == "\t" or c == "\n" or c == "\r"
+}
+
+## Whether `[s, s+n)` (trimmed) is `mut T`, the argument text of a `ptr(mut T)`.
+pub targ_is_mut := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  n > 4 and str_at((src + s), 3) == "mut" and is_blank_at(src, s + 3)
+}
+
+## Whether offset `s` lies in a module's text in the published file table (`spelling_module_at`).
+spelled_in_file := fn(src : ptr(u8), s : usize) -> bool {
+  sm := spelling_module_at(src, s)
+  match sm {
+    Some(m) => { return true }
+    None => { return false }
+  }
+}
+
+## The last path segment of `[s, s+n)`: `a::b::T` → `T`.
+targ_tail := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut t : usize = 0
+  mut i : usize = 0
+  while i + 1 < n {
+    if str_at((src + s + i), 2) == "::" {
+      t = i + 2
+      i = i + 2
+    } else {
+      i = i + 1
+    }
+  }
+  LSpan(s = s + t, n = n - t)
+}
+
+## The struct, enum or union declaration the type head `[s, s+n)` NAMES, else -1. The head is a span of a
+## module's text (else -1: a synthesized span, or a single-source compile, keeps the text identity it
+## always had); the declaration must carry the head's own name, so a type alias answers -1 and keeps
+## its text: two aliases of one generic struct (`u128 := uint(128)`, `u64x := uint(64)`) are different
+## types that one declaration would merge.
+pub targ_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  if n == 0 { return 0 - 1 }
+  if not spelled_in_file(src, s) { return 0 - 1 }
+  tl := targ_tail(src, s, n)
+  si := struct_decl_of(decls, src, s, n)
+  if si >= 0 {
+    sd := deref(decl_get(decls, usize(si)))
+    if streq(src, sd.name_start, sd.name_len, tl.s, tl.n) { return si }
+  }
+  ei := qualified_enum_decl_of(decls, src, s, n)
+  if ei >= 0 {
+    ed := deref(decl_get(decls, usize(ei)))
+    if streq(src, ed.name_start, ed.name_len, tl.s, tl.n) { return ei }
+  }
+  0 - 1
+}
+
+## Whether two type texts are equal once blanks are dropped, except one blank between two identifier
+## bytes (`mut T` is not `mutT`).
+pub targ_text_eq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  mut i := a_s
+  mut j := b_s
+  ae := a_s + a_n
+  be := b_s + b_n
+  mut eq := true
+  mut going := true
+  while going {
+    mut ga := false
+    while i < ae and is_blank_at(src, i) {
+      i = i + 1
+      ga = true
+    }
+    mut gb := false
+    while j < be and is_blank_at(src, j) {
+      j = j + 1
+      gb = true
+    }
+    if i >= ae or j >= be {
+      eq = i >= ae and j >= be
+      going = false
+    } else if ga != gb {
+      eq = false
+      going = false
+    } else if str_at((src + i), 1) != str_at((src + j), 1) {
+      eq = false
+      going = false
+    } else {
+      i = i + 1
+      j = j + 1
+    }
+  }
+  eq
+}
+
+## The element span of an array type `[E; N]` (trimmed), and its length text after the `;`.
+pub targ_arr_elem := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  semi := targ_arr_semi(src, s, n)
+  targ_trim(src, s + 1, semi - s - 1)
+}
+targ_arr_len := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  semi := targ_arr_semi(src, s, n)
+  mut e := s + n
+  if e > semi + 1 and str_at((src + e - 1), 1) == "]" { e = e - 1 }
+  targ_trim(src, semi + 1, e - semi - 1)
+}
+## The offset of the top-level `;` of `[E; N]`, or the closing bracket's when there is none (a view
+## `[E]`, whose length text is then empty).
+targ_arr_semi := fn(src : ptr(u8), s : usize, n : usize) -> usize {
+  mut depth := 0
+  mut p := s + 1
+  mut res := s + n - 1
+  mut going := true
+  while going and p < s + n {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" {
+      depth = depth + 1
+    } else if (c == ")" or c == "]") and depth > 0 {
+      depth = depth - 1
+    } else if c == ";" and depth == 0 {
+      res = p
+      going = false
+    }
+    p = p + 1
+  }
+  res
+}
+
+## Whether the trimmed `[s, s+n)` is a NAMED type: a path (`a::b::T`, identifier bytes and `::`), then
+## nothing or one `( … )` list closing at its end (`Option(u64)`).
+pub targ_named_shape := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 0 or not ll_ident_byte(src, s) { return false }
+  if targ_is_mut(src, s, n) { return false }
+  mut p := s
+  e := s + n
+  while p < e and (ll_ident_byte(src, p) or str_at((src + p), 1) == ":") { p = p + 1 }
+  if p == e { return true }
+  if str_at((src + p), 1) != "(" { return false }
+  mut depth := 0
+  mut close := e
+  while p < e and close == e {
+    c := str_at((src + p), 1)
+    if c == "(" {
+      depth = depth + 1
+    } else if c == ")" {
+      depth = depth - 1
+      if depth == 0 { close = p }
+    }
+    p = p + 1
+  }
+  close == e - 1
+}
+
+## Whether two type-argument spans denote the same type (the rule above). An absent argument (`n == 0`)
+## equals only an absent one.
+pub targ_same := fn(decls : ptr(rt::Vec), src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  a := targ_trim(src, a_s, a_n)
+  b := targ_trim(src, b_s, b_n)
+  if a.n == 0 or b.n == 0 { return a.n == 0 and b.n == 0 }
+  ca := str_at((src + a.s), 1)
+  cb := str_at((src + b.s), 1)
+  if ca == "[" or cb == "[" {
+    if ca != cb { return false }
+    ea := targ_arr_elem(src, a.s, a.n)
+    eb := targ_arr_elem(src, b.s, b.n)
+    la := targ_arr_len(src, a.s, a.n)
+    lb := targ_arr_len(src, b.s, b.n)
+    return targ_text_eq(src, la.s, la.n, lb.s, lb.n) and targ_same(decls, src, ea.s, ea.n, eb.s, eb.n)
+  }
+  if ca == "(" or cb == "(" {
+    if ca != cb { return false }
+    return targ_args_same(decls, src, a.s, 0, b.s, 0)
+  }
+  ma := targ_is_mut(src, a.s, a.n)
+  mb := targ_is_mut(src, b.s, b.n)
+  if ma or mb {
+    if ma != mb { return false }
+    return targ_same(decls, src, a.s + 4, a.n - 4, b.s + 4, b.n - 4)
+  }
+  ## Any other shape (a function type, whose return type follows its parameter list) is its text.
+  if not targ_named_shape(src, a.s, a.n) or not targ_named_shape(src, b.s, b.n) {
+    return targ_text_eq(src, a.s, a.n, b.s, b.n)
+  }
+  ha := base_type_name(src, a.s, a.n)
+  hb := base_type_name(src, b.s, b.n)
+  hta := targ_trim(src, ha.s, ha.n)
+  htb := targ_trim(src, hb.s, hb.n)
+  da := targ_decl(decls, src, hta.s, hta.n)
+  db := targ_decl(decls, src, htb.s, htb.n)
+  if da >= 0 or db >= 0 {
+    if da != db { return false }
+  } else if not targ_text_eq(src, hta.s, hta.n, htb.s, htb.n) {
+    return false
+  }
+  targ_args_same(decls, src, ha.s, ha.n, hb.s, hb.n)
+}
+
+## Whether the `( … )` lists right after the heads `[a_s, a_s+a_n)` and `[b_s, b_s+b_n)` hold the same
+## types, one by one (`typearg_at`'s reading; a tuple is the list of its own `(`, with `n == 0`).
+targ_args_same := fn(decls : ptr(rt::Vec), src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  mut j : usize = 0
+  mut eq := true
+  mut going := true
+  while going {
+    ta := typearg_at(src, a_s, a_n, j)
+    tb := typearg_at(src, b_s, b_n, j)
+    if ta.n == 0 and tb.n == 0 {
+      going = false
+    } else if not targ_same(decls, src, ta.s, ta.n, tb.s, tb.n) {
+      eq = false
+      going = false
+    } else {
+      j = j + 1
+    }
+  }
+  eq
 }
 
 ## Resolve a comptime-for RANGE BOUND to its constant value: a literal, a module-level const `N := k`
