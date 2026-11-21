@@ -15,6 +15,8 @@
   constructor: two modules' `P`s over `m::Box(u8)` and `Box(u64)`, over `ptr(Node)` of each module's
   own `Node`, or over `uint(8)` and `uint(64)` are two instances (Types §4.1), and an alias the
   compiler cannot follow (a tuple or an array) is identified by its own declaration rather than its
-  name.
+  name. A generic's type parameter `T` still shadows a module-level `T := u8` inside that generic
+  (Declarations §6.1): `inner(T, h)` and `ptr(T)` in its body name the instance's argument, not the
+  alias.
   aarch64, riscv64 and wasm do not yet call a generic in these shapes and still stop at their
   stubs there, a trap rather than a value.
