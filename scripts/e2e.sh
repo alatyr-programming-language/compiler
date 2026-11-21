@@ -8681,6 +8681,13 @@ root_package_test result_nonroot_prelude "T _start" "T main__main" "T lib__go"
 ## `checked_add` is in the artifact, not merely that a name resolved. The module deliberately never
 ## spells the family's result type, so nothing but the overflow-prefix trigger can pull its prelude.
 root_package_test issue514_overflow_pkg "T _start" "T main__main" "T base__num__checked_add__u64_u64"
+## Issue #1808 — same-named aliases in two modules over type-constructor applications (`m::Box(u8)` and
+## `Box(u64)`, `ptr(Node)` over each module's `Node`, `uint(8)` and `uint(64)`, `m::Box(Node)` over each
+## `Node`) are distinct types (Types §4.1), so each pair is two instances (Comptime §3.2); a tuple or
+## array alias, which is not followed, is identified by its declaration. The generic ignores its type's
+## layout, so the answer is 42 either way; the twelve symbols are the assertion (the parent defined six,
+## `m__tag__P` … `m__tag__V`).
+root_package_test issue1808_alias_call_instance "T main__main" "T m__tag__m__Box_u8" "T m__tag__m__Box_u64" "T m__tag__ptr_main__Node" "T m__tag__ptr_m__Node" "T m__tag__uint_8" "T m__tag__uint_64" "T m__tag__m__Box_main__Node" "T m__tag__m__Box_m__Node" "T m__tag__main__U" "T m__tag__m__U" "T m__tag__main__V" "T m__tag__m__V"
 ## Modules §3 + MOD-12 — a module global crossing a module boundary. A descendant may name an ancestor's
 ## global bare (`pub` or not); anyone may name a `pub` one through a path; a SIBLING's non-`pub` global is
 ## a located reject. Before this, a bare ancestor read silently returned 0, `TAB[2] = 30` from a submodule

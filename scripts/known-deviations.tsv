@@ -445,6 +445,8 @@ aarch64	test/package/issue1772_bare_callee_ir/src/a.al	link/1	#3
 aarch64	test/package/issue1772_bare_callee_ir/src/b.al	link/1	#3
 aarch64	test/package/issue1808_alias_brand_instance/package.al	run/133	#1193
 aarch64	test/package/issue1808_alias_brand_instance/src/m.al	link/1	#3
+aarch64	test/package/issue1808_alias_call_instance/package.al	run/133	#1193
+aarch64	test/package/issue1808_alias_call_instance/src/m.al	link/1	#3
 aarch64	test/package/issue1808_instance_declaring_module/package.al	run/133	#1193
 aarch64	test/package/issue1808_instance_declaring_module/src/m.al	link/1	#3
 aarch64	test/package/issue703_global_module_scope/package.al	run/133	#1187
@@ -1078,6 +1080,8 @@ riscv64	test/package/issue1772_bare_callee_ir/src/a.al	link/1	#3
 riscv64	test/package/issue1772_bare_callee_ir/src/b.al	link/1	#3
 riscv64	test/package/issue1808_alias_brand_instance/package.al	run/133	#1193
 riscv64	test/package/issue1808_alias_brand_instance/src/m.al	link/1	#3
+riscv64	test/package/issue1808_alias_call_instance/package.al	run/133	#1193
+riscv64	test/package/issue1808_alias_call_instance/src/m.al	link/1	#3
 riscv64	test/package/issue1808_instance_declaring_module/package.al	run/133	#1193
 riscv64	test/package/issue1808_instance_declaring_module/src/m.al	link/1	#3
 riscv64	test/package/issue703_global_module_scope/package.al	run/133	#1187
@@ -1697,6 +1701,8 @@ wasm	test/package/issue1772_bare_callee_ir/src/a.al	assemble/1	#3
 wasm	test/package/issue1772_bare_callee_ir/src/b.al	assemble/1	#3
 wasm	test/package/issue1808_alias_brand_instance/package.al	run/134	#1193
 wasm	test/package/issue1808_alias_brand_instance/src/m.al	assemble/1	#3
+wasm	test/package/issue1808_alias_call_instance/package.al	run/134	#1193
+wasm	test/package/issue1808_alias_call_instance/src/m.al	assemble/1	#3
 wasm	test/package/issue1808_instance_declaring_module/package.al	run/134	#1193
 wasm	test/package/issue1808_instance_declaring_module/src/m.al	assemble/1	#3
 wasm	test/package/issue703_global_module_scope/package.al	run/134	#1187
