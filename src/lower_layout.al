@@ -6206,14 +6206,17 @@ targ_tail := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
   LSpan(s = s + t, n = n - t)
 }
 
-## The struct, enum or union declaration the type head `[s, s+n)` NAMES, else -1. The head is a span of a
-## module's text (else -1: a synthesized span, or a single-source compile, keeps the text identity it
-## always had); the declaration must carry the head's own name, so a type alias answers -1 and keeps
-## its text: two aliases of one generic struct (`u128 := uint(128)`, `u64x := uint(64)`) are different
-## types that one declaration would merge.
+## The struct, enum or union declaration the type head `[s, s+n)` NAMES, else -1. The declaration must
+## carry the head's own name, so a type alias answers -1 and keeps its text: two aliases of one generic
+## struct (`u128 := uint(128)`, `u64x := uint(64)`) are different types that one declaration would merge.
+## A head in a module's text resolves from that module. A SYNTHESIZED head (a type text the compiler built
+## by substitution, such as the inferred type of `y := vec::new(Pair, …)`, or a type argument inside an
+## instance) names no module, so it resolves by name alone (`targ_decl_by_name`): without that, one type
+## had two labels, the module-spelled one at the instance's definition and the text one at such a call
+## (`alloc__vec__free__Pair` called, `…__free__<root>__Pair` defined: a link failure).
 pub targ_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
   if n == 0 { return 0 - 1 }
-  if not spelled_in_file(src, s) { return 0 - 1 }
+  if not spelled_in_file(src, s) { return targ_decl_by_name(decls, src, s, n) }
   tl := targ_tail(src, s, n)
   si := struct_decl_of(decls, src, s, n)
   if si >= 0 {
@@ -6225,6 +6228,32 @@ pub targ_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
     ed := deref(decl_get(decls, usize(ei)))
     if streq(src, ed.name_start, ed.name_len, tl.s, tl.n) { return ei }
   }
+  0 - 1
+}
+
+## The ONE struct or enum declaration whose name is the tail of the synthesized head `[s, s+n)`, else -1.
+## Two same-named declarations in different modules leave a synthesized head ambiguous: it keeps its text
+## identity, as before #1808 (the module that spelled it is not recoverable from the text).
+targ_decl_by_name := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  nm := name_tail(src, s, n)
+  cnt := rt::vec_len(deref(decls))
+  th := _fnv_name(src, nm.s, nm.n)
+  mut hits := 0
+  mut res := 0 - 1
+  mut j := lni_lo(decls, cnt, th)
+  je := lni_hi(decls, cnt, th)
+  while j < je {
+    i := lni_at(decls, cnt, j)
+    j = j + 1
+    if lni_skip(decls, cnt, i, th) == false {
+      d := deref(decl_get(decls, i))
+      if (d.kind == DECL_KIND_STRUCT or d.kind == DECL_KIND_ENUM) and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        hits = hits + 1
+        res = i64(i)
+      }
+    }
+  }
+  if hits == 1 { return res }
   0 - 1
 }
 

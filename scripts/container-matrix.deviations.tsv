@@ -13,6 +13,11 @@
 # of the rows. The 3 TRAP 132 cells, hashmap.key.{i8,i64,enumN}, are all #1304: the structural hash's
 # checked `u64(v)` of a negative leaf. The 25 `char` rows of #1244 are gone: since the x86_64 IR flip
 # (#980) those cells build and observe OK.
+# #1808's fix (one instance per type, whatever its spelling) emits `base__alloc__get__…Option_u64` once,
+# so #1280's duplicate label is gone: measured on omen, native x86_64, 428 cells, OK=394 WRONG=0 TRAP=3
+# CRASH=10 REFUSED=21. The two `vec.index_write` Option cells observe OK. The six `v[i]`, `v[a..b]` and
+# `v.ufcs` Option cells now link and CRASH 139 under #1280: the element read passed as an aggregate
+# argument hands its callee a bad pointer (`same(v[i], …)` faults in its `rep movsb`).
 x86_64	deque.front_back.array3	REFUSED	#1250
 x86_64	deque.pop_back.array3	REFUSED	#1250
 x86_64	deque.pop_front.array3	REFUSED	#1250
@@ -30,19 +35,17 @@ x86_64	vec.for_in.option_u64	CRASH 139	#1608
 x86_64	vec.get.array3	REFUSED	#1250
 x86_64	vec.grow.array3	REFUSED	#1250
 x86_64	vec.index_read.array3	REFUSED	#1250
-x86_64	vec.index_read.option_ptr	REFUSED	#1280
-x86_64	vec.index_read.option_u64	REFUSED	#1280
+x86_64	vec.index_read.option_ptr	CRASH 139	#1280
+x86_64	vec.index_read.option_u64	CRASH 139	#1280
 x86_64	vec.index_write.array3	REFUSED	#1250
-x86_64	vec.index_write.option_ptr	REFUSED	#1280
-x86_64	vec.index_write.option_u64	REFUSED	#1280
 x86_64	vec.len.array3	REFUSED	#1250
 x86_64	vec.pop.array3	REFUSED	#1250
 x86_64	vec.push_at.array3	REFUSED	#1250
 x86_64	vec.range.array3	REFUSED	#1250
-x86_64	vec.range.option_ptr	REFUSED	#1280
-x86_64	vec.range.option_u64	REFUSED	#1280
+x86_64	vec.range.option_ptr	CRASH 139	#1280
+x86_64	vec.range.option_u64	CRASH 139	#1280
 x86_64	vec.set.array3	REFUSED	#1250
 x86_64	vec.try_at.array3	REFUSED	#1250
 x86_64	vec.ufcs.array3	REFUSED	#1250
-x86_64	vec.ufcs.option_ptr	REFUSED	#1280
-x86_64	vec.ufcs.option_u64	REFUSED	#1280
+x86_64	vec.ufcs.option_ptr	CRASH 139	#1280
+x86_64	vec.ufcs.option_u64	CRASH 139	#1280
