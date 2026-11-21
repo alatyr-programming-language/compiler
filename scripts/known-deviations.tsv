@@ -426,6 +426,8 @@ aarch64	test/package/ir38_deref_foreign_amb/src/b.al	link/1	#3
 aarch64	test/package/ir38_deref_foreign_amb/src/m.al	link/1	#3
 aarch64	test/package/ir38_deref_foreign_same/package.al	run/133	#1727
 aarch64	test/package/ir38_deref_foreign_same/src/m.al	link/1	#3
+aarch64	test/package/ir40_generic_cross_module/package.al	run/133	#41
+aarch64	test/package/ir40_generic_cross_module/src/m.al	link/1	#3
 aarch64	test/package/issue1734_alias_callee_agg_result/package.al	run/133	#1740
 aarch64	test/package/issue1734_alias_callee_agg_result/src/m.al	link/1	#3
 aarch64	test/package/issue1734_alias_callee_agg_result/src/main.al	run/133	#1741
@@ -1064,6 +1066,8 @@ riscv64	test/package/ir38_deref_foreign_amb/src/b.al	link/1	#3
 riscv64	test/package/ir38_deref_foreign_amb/src/m.al	link/1	#3
 riscv64	test/package/ir38_deref_foreign_same/package.al	run/133	#1727
 riscv64	test/package/ir38_deref_foreign_same/src/m.al	link/1	#3
+riscv64	test/package/ir40_generic_cross_module/package.al	run/133	#41
+riscv64	test/package/ir40_generic_cross_module/src/m.al	link/1	#3
 riscv64	test/package/issue1734_alias_callee_agg_result/package.al	run/133	#1740
 riscv64	test/package/issue1734_alias_callee_agg_result/src/m.al	link/1	#3
 riscv64	test/package/issue1734_alias_callee_agg_result/src/main.al	run/133	#1741
@@ -1482,6 +1486,7 @@ wasm	test/ir37_ptr_byte_tier.al	run/134	#1188
 wasm	test/ir37_ptr_narrow_fields.al	run/134	#1188
 wasm	test/ir38_deref_payload_ptr.al	run/134	#1188
 wasm	test/ir38_deref_recorded_enum.al	run/134	#1188
+wasm	test/ir40_generic_handle_cast.al	run/134	#1188
 wasm	test/ir_array_param_convert_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_copy.al	run/134	#1194
@@ -1684,6 +1689,8 @@ wasm	test/package/ir38_deref_foreign_amb/src/a.al	assemble/1	#3
 wasm	test/package/ir38_deref_foreign_amb/src/b.al	assemble/1	#3
 wasm	test/package/ir38_deref_foreign_amb/src/m.al	assemble/1	#3
 wasm	test/package/ir38_deref_foreign_same/src/m.al	assemble/1	#3
+wasm	test/package/ir40_generic_cross_module/package.al	run/134	#41
+wasm	test/package/ir40_generic_cross_module/src/m.al	assemble/1	#3
 wasm	test/package/issue1734_alias_callee_agg_result/package.al	run/134	#1740
 wasm	test/package/issue1734_alias_callee_agg_result/src/m.al	assemble/1	#3
 wasm	test/package/issue1734_alias_callee_agg_result/src/main.al	run/134	#1741
