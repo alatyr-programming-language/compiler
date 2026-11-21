@@ -6989,7 +6989,7 @@ pub refuse_deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : u
 ## due). `x86_decl_in_effect` finds the declaration in scope instead (Declarations §5, §6.1).
 ##
 ## Only a value `deref(…)` stored into an `ek == 5` local slot asks; a parameter keeps its own path. Every
-## case this cannot read with certainty is refused, located, rather than guessed:
+## case this cannot read with certainty is refused, located, rather than guessed (#1844 tracks copying them):
 ##  - a declaration it cannot tell apart from other text (`x86_decl_in_effect` answers `None`), and
 ##  - an array local declared WITHOUT an annotation (`mut v := [u64(0), u64(0)]`), which has no `[T; N]`
 ##    text to read the element type and count from (#1809: it moved one word into a two-word block).
@@ -7093,7 +7093,7 @@ decl_line_opens_tuple := fn(src : ptr(u8), p : usize) -> bool {
 ## The located refusal of `x86_arr_decl_span` when the declaration in effect cannot be identified.
 reject_deref_arr_decl_unknown := fn(src : ptr(u8), ns : usize) {
   lower_show_src_line(src, ns)
-  panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs the target's declaration in effect, and this backend could not identify it with certainty (#1809): a binding of the same name written as a field, a lambda parameter or a second statement on one line is ambiguous here; rename one of them. Refused rather than copying with a guessed type")
+  panic("selfhost: a fixed array copied out of a pointer (`v = deref(p)`) needs the target's declaration in effect, and this backend could not identify it with certainty (#1844): a binding of the same name written as a field, a lambda parameter or a second statement on one line is ambiguous here; rename one of them. Refused rather than copying with a guessed type")
 }
 
 ## Is the assigned value a `deref(…)` — the value half of `deref_arr_shape`.
@@ -7110,7 +7110,7 @@ is_deref_value := fn(v : ptr(Expr)) -> bool {
 ## The located refusal of `x86_arr_decl_span` for a reassigned array local declared without `: [T; N]`.
 reject_deref_arr_inferred := fn(src : ptr(u8), ns : usize) {
   lower_show_src_line(src, ns)
-  panic("selfhost: a fixed array copied out of a pointer into a local declared without a type (`v = deref(p)` over `v := [ … ]`) is not supported on this backend yet (#1809): declare it `v : [T; N] = …` with a literal `N`; refused rather than moving one word of the array")
+  panic("selfhost: a fixed array copied out of a pointer into a local declared without a type (`v = deref(p)` over `v := [ … ]`) is not supported on this backend yet (#1844): declare it `v : [T; N] = …` with a literal `N`; refused rather than moving one word of the array")
 }
 
 deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, ats : CSpan) -> Option(DerefArrCopy) {
