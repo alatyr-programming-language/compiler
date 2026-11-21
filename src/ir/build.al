@@ -7134,6 +7134,7 @@ ib_ret_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
         oo : Option(IbObj) = ib_agg(bp, a, e, st)
         match oo {
           Some(o) => {
+            if not ib_st_is_enum(bp, st) { ib_ret_canon(bp, a, o.fr, st, 0) }
             av := ib_addr_obj(bp, a, o.fr)
             f := ib_b_f(bp)
             oav := o_vreg(av)
@@ -7197,20 +7198,35 @@ ib_agg_ret := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, in o
       }
     }
   }
+  ib_agg_ret_struct(decls, src, s, n, a)
+}
+## `ib_agg_ret`'s answer for a result `[s, s+n)` that is no view, enum or tuple: a struct's words, or the
+## cause; also asked of a struct FIELD of a result (`ib_ret_field_words`).
+ib_agg_ret_struct := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, in out a : rt::Arena) -> IbAggRet {
   lk := lower_layout::layout_kind(decls, src, s, n, a)
   if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return IbAggRet.ArNo(Construct.CSigResultLevered) }
   sdi := lower_layout::struct_decl_of(decls, src, s, n)
   if sdi < 0 { return IbAggRet.ArNo(ib_agg_ret_nonstruct(decls, src, s, n)) }
   d : Decl = deref(ib_decl_ptr(decls, usize(sdi)))
   if d.is_generic { return IbAggRet.ArNo(Construct.CSigResultGeneric) }
+  ## IR-41 (#1786): the WORD-tier struct's words, field by field (`ib_ret_field_words`). Each field
+  ## starts at the word the words before it end on (`field_byte_place`, the one layout answer), and the
+  ## struct is exactly those words in both models: the IR's size (`layout_type_size_bytes`, what
+  ## `ib_struct_named` allocates) and the legacy emitters' register count (`struct_words`, what x86_64's
+  ## `fn_returns_struct` and aarch64's `a64_ret_struct_words` return in). A result whose two models
+  ## disagree anywhere is refused rather than crossed.
   mut nf : usize = 0
+  mut cw : usize = 0
   mut f := d.fields_head
   loop {
     match f {
       Some(fq) => {
         fd := deref(ast::fld_p(fq))
-        fo : Option(Construct) = ib_agg_fld_why(decls, src, fd)
-        match fo { Some(c) => { return IbAggRet.ArNo(c) }; None => {} }
+        fo : IbAggRet = ib_ret_field_words(decls, src, fd, a)
+        match fo { ArWords(w) => {}; ArNo(c) => { return fo } }
+        fp := lower_layout::field_byte_place(decls, src, s, n, fd.ns, fd.nl, a)
+        if not fp.addressable or fp.off != i64(8 * cw) { return IbAggRet.ArNo(Construct.CSigResultSlots) }
+        match fo { ArWords(w) => { cw = cw + w }; ArNo(c) => {} }
         nf = nf + 1
         f = fd.next
       }
@@ -7219,10 +7235,135 @@ ib_agg_ret := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, in o
   }
   ## The ceiling is the register-return set: aarch64 x0..x7 and riscv64 a0..a7, which is what
   ## `sa_agg_ret` / `sr_agg_ret` emit (their `if w == 0 or w > 8` is the same bound). Widened
-  ## from two words by owner decision on #1026; `ig_notyet`'s golden moved with it.
+  ## from two words by owner decision on #1026; `ig_notyet`'s golden moved with it. x86_64's legacy
+  ## register set holds seven (`fn_returns_struct`), and its selector takes no more (`sx_agg_ret`).
   if nf == 0 { return IbAggRet.ArNo(Construct.CSigResultEmpty) }
-  if nf > 8 { return IbAggRet.ArNo(Construct.CSigResultWide) }
-  IbAggRet.ArWords(nf)
+  if cw > 8 { return IbAggRet.ArNo(Construct.CSigResultWide) }
+  if lower_layout::struct_words(decls, src, s, n, a) != cw { return IbAggRet.ArNo(Construct.CSigResultSlots) }
+  if lower_layout::layout_type_size_bytes(decls, src, s, n, a) != 8 * cw { return IbAggRet.ArNo(Construct.CSigResultSlots) }
+  IbAggRet.ArWords(cw)
+}
+## IR-41 (#1786): the words field `fd` of a WORD-tier struct result takes in the result convention, or
+## why it keeps the result out (`ib_agg_fld_why`). A kernel scalar takes one word — a narrower one too:
+## the WORD tier gives it a word of its own, the legacy emitters move that whole word (IR-37's
+## measurement), and an IR-built function returns it canonical (`ib_ret_canon`). A fixed array of 8-byte
+## kernel scalars takes its length in words, at the stride every model agrees on (`ib_arr_of`). A struct
+## takes its own words when the layout stores it word by word (`layout_struct_is_word_stored`: the
+## WORD-GRANULAR child x86_64 and the twins build alike) and its own fields qualify. An enum takes its
+## tag and payload words when it is a plain, unfolded enum whose every component is a kernel scalar: the
+## shape whose size the layout (`agg_words`) and the twins' legacy emitters (`1 + enum_max_arity`) agree on.
+ib_ret_field_words := fn(decls : ptr(rt::Vec), src : ptr(u8), fd : ast::FieldDecl, in out a : rt::Arena) -> IbAggRet {
+  vt : VTy = sema::sema_vty_name(src, fd.ts, fd.tl, decls)
+  c : VCls = vt.cls
+  match c {
+    VcFloat => { return IbAggRet.ArNo(Construct.CSigResultFloatField) }
+    VcInt | VcBool | VcPtr | VcAbsent | VcUnknown | VcLit | VcAgg => {}
+  }
+  ko : Option(IbKS) = ib_name_ks(src, fd.ts, fd.tl)
+  match ko { Some(k) => { if fd.wsize == 1 and not ib_span_is_fixed_array(src, fd.ts, fd.tl) { return IbAggRet.ArWords(1) } }; None => {} }
+  if fd.wsize != 1 or ib_span_is_fixed_array(src, fd.ts, fd.tl) {
+    if lower_layout::array_type_has_array_element(src, fd.ts, fd.tl) { return IbAggRet.ArNo(Construct.CSigResultArrayField) }
+    es := lower_layout::arr_field_elem_span(src, fd.ts, fd.tl)
+    if es.n == 0 or fd.wsize == 0 { return IbAggRet.ArNo(Construct.CSigResultArrayField) }
+    eo : Option(IbKS) = ib_name_ks(src, es.s, es.n)
+    match eo { Some(ek) => { if ib_ks_word(ek) { return IbAggRet.ArWords(fd.wsize) } }; None => {} }
+    return IbAggRet.ArNo(Construct.CSigResultArrayField)
+  }
+  full : IbSpan = ib_type_span_full(src, fd.ts, fd.tl)
+  sdi := lower_layout::struct_decl_of(decls, src, full.s, full.n)
+  if sdi >= 0 {
+    if not lower_layout::layout_struct_is_word_stored(decls, src, full.s, full.n, a) { return IbAggRet.ArNo(Construct.CSigResultChildLayout) }
+    sub : IbAggRet = ib_agg_ret_struct(decls, src, full.s, full.n, a)
+    return sub
+  }
+  mut efc := false
+  eo2 : Option(IbSt) = ib_enum_named_in(decls, src, a, fd.ts, fd.tl, efc)
+  match eo2 {
+    Some(est) => {
+      if efc or ib_enum_has_agg_comp(decls, src, a, est) { return IbAggRet.ArNo(Construct.CSigResultEnumField) }
+      ed : Decl = deref(ib_decl_ptr(decls, est.di))
+      if ed.is_generic or lower_layout::is_niche_folded(src, est.s, est.n) { return IbAggRet.ArNo(Construct.CSigResultEnumField) }
+      if est.size == 0 or est.size % 8 != 0 { return IbAggRet.ArNo(Construct.CSigResultEnumField) }
+      return IbAggRet.ArWords(est.size / 8)
+    }
+    None => {}
+  }
+  fw : Option(Construct) = ib_agg_fld_why(decls, src, fd)
+  match fw { Some(fc) => { IbAggRet.ArNo(fc) }; None => { IbAggRet.ArWords(1) } }
+}
+## IR-41 (#1786): rewrite every narrower-than-a-word scalar field of the struct `st` held in object `fr`
+## at byte `off` — and of each struct field in it, recursively — as the canonical WORD its slot is
+## (`ib_store_slot`: sign-extended if signed, a `bool` over a zeroed word), just before the object's
+## words are returned. Inside one function the builder stores such a field at its own width, which leaves
+## the bytes above it as they were; the legacy readers of a returned struct load each slot whole
+## (measured for x86_64 and aarch64 on IR-37), so the words must be the ones they would have written. An
+## enum field needs nothing: its components are written whole already (`ib_store_comp`, #1726).
+ib_ret_canon := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId, st : IbSt, off : usize) {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        ko : Option(IbKS) = ib_name_ks(bv.src, fd.ts, fd.tl)
+        match ko {
+          Some(k) => {
+            if fd.wsize == 1 and (kty_is_narrow(k.ty) or kty_is_bool(k.ty)) {
+              flo : Option(IbFld) = ib_field(bp, a, st, fd.ns, fd.nl)
+              match flo {
+                Some(fl) => {
+                  at := ib_fld_plus(fl, off)
+                  v := ib_load_field(bp, a, fr, at)
+                  ofr := o_frame(fr)
+                  ib_store_slot(bp, a, ofr, at, v)
+                }
+                ## A word left non-canonical would be a wrong value in a legacy reader: refuse.
+                None => { ib_refuse(bp, Construct.CSigResultSlots, NyWhy.NwOutside, Option(u64).None) }
+              }
+            }
+          }
+          None => {
+            fsp : IbSpan = ib_type_span_full(bv.src, fd.ts, fd.tl)
+            if lower_layout::struct_decl_of(bv.decls, bv.src, fsp.s, fsp.n) >= 0 {
+              so : Option(IbSt) = ib_agg_named(bp, a, fsp.s, fsp.n)
+              fp := lower_layout::field_byte_place(bv.decls, bv.src, st.s, st.n, fd.ns, fd.nl, a)
+              match so {
+                Some(sub) => {
+                  if not fp.addressable or fp.off < 0 { ib_refuse(bp, Construct.CSigResultSlots, NyWhy.NwOutside, Option(u64).None); return }
+                  ib_ret_canon(bp, a, fr, sub, off + usize(fp.off))
+                }
+                None => { ib_refuse(bp, Construct.CSigResultSlots, NyWhy.NwOutside, Option(u64).None) }
+              }
+            }
+          }
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+}
+## Does enum `est` have a variant component that is not a kernel scalar (`ib_variant_comp_in`)?
+ib_enum_has_agg_comp := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, est : IbSt) -> bool {
+  d : Decl = deref(ib_decl_ptr(decls, est.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        mut i : usize = 0
+        while i < fd.arity {
+          ko : Option(IbKS) = ib_variant_comp_in(decls, src, a, est, fq, i)
+          match ko { Some(k) => {}; None => { return true } }
+          i = i + 1
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  false
 }
 ## Is the type spelled at `[s, s+n)` (or by its `[` head there) a fixed array `[T; N]`, not a view `[T]`?
 ib_span_is_fixed_array := fn(src : ptr(u8), s : usize, n : usize) -> bool {

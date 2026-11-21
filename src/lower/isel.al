@@ -609,22 +609,64 @@ sx_bswap := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
   if not sx_canon(sb, SxR.XrAx, ty, ir::i_sg(ip)) { return false }
   sx_strax(sb, ip)
 }
-## Slice 3d: a call's aggregate result — %rax, then %rdx for a two-word value — into its frame object.
-sx_agg_res := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
+## Word `k` of an aggregate result's register set: x86_64's legacy order (`emit_retreg`), which returns
+## a struct of one to seven words in %rax, %rdx, %rcx, %r8, %r9, %r10, %r11 (`fn_returns_struct`).
+sx_retreg := fn(k : usize) -> str {
+  if k == 0 { return "%rax" }
+  if k == 1 { return "%rdx" }
+  if k == 2 { return "%rcx" }
+  if k == 3 { return "%r8" }
+  if k == 4 { return "%r9" }
+  if k == 5 { return "%r10" }
+  "%r11"
+}
+## The most words an aggregate result crosses in: two for an enum or a view (the convention this
+## selector has always taken), seven for a struct (IR-41, #1786: legacy `fn_returns_struct`; an eight-word
+## struct is legacy's sret, which this selector does not take). `rs`/`rn` is the result's type span.
+sx_agg_max_words := fn(x : SxX, rs : usize, rn : usize) -> usize {
+  if rn != 0 and struct_decl_of(x.decls, x.src, rs, rn) >= 0 { return 7 }
+  2
+}
+## The register that holds the address of an aggregate result's `w` words while they move: %rcx for
+## one or two (what this selector has always emitted), %rsi past that, where %rcx carries word 2.
+sx_agg_base := fn(w : usize) -> SxR { if w <= 2 { return SxR.XrCx }; SxR.XrSi }
+## Slice 3d: a call's aggregate result — %rax, %rdx, … (`sx_retreg`) — into its frame object.
+sx_agg_res := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), cd : Decl) -> bool {
   nb := ir::frame_bytes(x.f, usize(ir::i_dv(ip)))
-  if nb != 8 and nb != 16 { return false }
-  if not sx_base(sb, x, SxR.XrCx, ir::i_dk(ip), ir::i_dv(ip)) { return false }
-  sx_put(sb, "  movq %rax, (%rcx)\n")
-  if nb == 16 { sx_put(sb, "  movq %rdx, 8(%rcx)\n") }
+  if nb == 0 or nb % 8 != 0 or nb / 8 > sx_agg_max_words(x, cd.ret_ts, cd.ret_tl) { return false }
+  br : SxR = sx_agg_base(nb / 8)
+  if not sx_base(sb, x, br, ir::i_dk(ip), ir::i_dv(ip)) { return false }
+  mut k : usize = 0
+  while k * 8 < nb {
+    sx_put(sb, "  movq ")
+    sx_put(sb, sx_retreg(k))
+    sx_put(sb, ", ")
+    if k != 0 { sx_int(sb, i64(k * 8)) }
+    sx_put(sb, "(")
+    sx_put(sb, sx_rq(br))
+    sx_put(sb, ")\n")
+    k = k + 1
+  }
   true
 }
-## Slice 3d: `ret %p` of an aggregate result — its words, read through the address, into %rax (and %rdx).
-sx_agg_ret := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
+## Slice 3d: `ret %p` of an aggregate result — its words, read through the address, into %rax, %rdx, …
+## (`sx_retreg`). `d` is the function being selected.
+sx_agg_ret := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), d : Decl) -> bool {
   w := ir::fn_ret_words(x.f)
-  if w != 1 and w != 2 { return false }
-  if not sx_base(sb, x, SxR.XrCx, ir::i_ak(ip), ir::i_av(ip)) { return false }
-  sx_put(sb, "  movq (%rcx), %rax\n")
-  if w == 2 { sx_put(sb, "  movq 8(%rcx), %rdx\n") }
+  if w == 0 or w > sx_agg_max_words(x, d.ret_ts, d.ret_tl) { return false }
+  br : SxR = sx_agg_base(w)
+  if not sx_base(sb, x, br, ir::i_ak(ip), ir::i_av(ip)) { return false }
+  mut k : usize = 0
+  while k < w {
+    sx_put(sb, "  movq ")
+    if k != 0 { sx_int(sb, i64(k * 8)) }
+    sx_put(sb, "(")
+    sx_put(sb, sx_rq(br))
+    sx_put(sb, "), ")
+    sx_put(sb, sx_retreg(k))
+    sx_put(sb, "\n")
+    k = k + 1
+  }
   true
 }
 sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
@@ -649,9 +691,9 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
       sx_put(sb, "  call ")
       if nvw { sx_nv_label(sb, x.src, cd) } else { emit_mangled_def(sb, x.src, cd.mod_start, cd.mod_len, cd.name_start, cd.name_len) }
       sx_put(sb, "\n")
-      ## Slice 3d: an aggregate result arrives in %rax (and %rdx) — x86_64's legacy convention for a
-      ## struct of up to two words — and is stored into its frame object.
-      if ir::opndk_is_frame(ir::i_dk(ip)) { return sx_agg_res(sb, x, ip) }
+      ## Slice 3d: an aggregate result arrives in %rax, %rdx, … — x86_64's legacy convention for a
+      ## struct of up to seven words (IR-41) — and is stored into its frame object.
+      if ir::opndk_is_frame(ir::i_dk(ip)) { return sx_agg_res(sb, x, ip, cd) }
       dv : Option(SxSlot) = sx_dst(ip)
       match dv {
         Some(d) => {
@@ -755,8 +797,9 @@ sx_end := fn(in out sb : rt::StrBuf, x : SxX) -> bool {
   }
 }
 
-## One instruction. Answers false when the selector does not select it (the function then falls back).
-sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) -> bool {
+## One instruction of function `d`. Answers false when the selector does not select it (the function then
+## falls back).
+sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize, d : Decl) -> bool {
   ip := ir::fn_inst(x.f, i)
   o : ir::Op = ir::i_op(ip)
   match o {
@@ -821,7 +864,7 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
     OpRet => {
       ## Slice 3d: an aggregate result's words go to the result registers instead of a value.
       agg := ir::fn_ret_words(x.f) > 0
-      if agg { if not sx_agg_ret(sb, x, ip) { return false } }
+      if agg { if not sx_agg_ret(sb, x, ip, d) { return false } }
       if not agg {
         match ir::i_ak(ip) {
           OkVReg => { sx_ldv(sb, SxR.XrAx, sx_slot(usize(ir::i_av(ip)))) }
@@ -900,7 +943,7 @@ sx_fn := fn(in out sb : rt::StrBuf, x : SxX, d : Decl, in out a : rt::Arena, nvc
   ni := ir::fn_ninst(x.f)
   mut i : usize = 0
   while i < ni {
-    if not sx_inst(sb, x, a, i) { return false }
+    if not sx_inst(sb, x, a, i, d) { return false }
     i = i + 1
   }
   if ir::wb_len(x.stk) != 0 { return false }

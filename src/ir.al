@@ -1752,6 +1752,9 @@ pub Construct := enum {
   CSigResultArrayField, CSigResultNarrowField, CSigResultBrandField, CSigResultFloatField, CSigResultAggField,
   CSigResultView, CSigResultArray, CSigResultScalarAlias, CSigResultFloat, CSigResultFnType, CSigResultNever,
   CSigResultEnumInstance, CSigResultEnum, CSigResultTuple,
+  ## IR-41 (#1786): a WORD-tier struct result whose fields the convention now takes, refused where the
+  ## IR's layout and the legacy emitters' could part (`ib_agg_ret_struct`).
+  CSigResultSlots, CSigResultChildLayout, CSigResultEnumField,
   CSigParamMode, CSigParamTaken, CSigParamLevered, CSigParamNestedField,
   CSigParamPadded, CSigParamUnresolved, CSigParamFloat, CSigSyscall,
   SAssign, SWhile, SFieldAssign, SReturn, SIf, SMatch, SFor, SDerefAssign, SIndexAssign, SIndexFieldAssign,
@@ -1791,6 +1794,9 @@ pub construct_name := fn(c : Construct) -> str {
     CSigResultBrandField => { "signature: struct result with a brand or alias field the builder does not follow" }
     CSigResultFloatField => { "signature: struct result with a floating-point field" }
     CSigResultAggField => { "signature: struct result with a field whose type is not a scalar" }
+    CSigResultSlots => { "signature: struct result whose fields are not laid out word after word" }
+    CSigResultChildLayout => { "signature: struct result with a struct field not stored word by word" }
+    CSigResultEnumField => { "signature: struct result with an enum field that is generic or folded or holds an aggregate" }
     CSigResultView => { "signature: view result the builder cannot type" }
     CSigResultArray => { "signature: fixed-array result" }
     CSigResultScalarAlias => { "signature: result is a scalar through a type alias the builder does not follow" }
