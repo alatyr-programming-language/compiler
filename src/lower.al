@@ -3209,10 +3209,17 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
     push_int(sb, i64(parse_arr_len(src, tag_s, tag_l)))
     return
   }
-  ## A named struct, enum or union is spelled with the module that DECLARES it (#1808): `Node` written in
-  ## the root and `Node` written in `m` are two types, and `lower_layout::targ_same` keeps them two
-  ## instances, so they need two labels. A root declaration, a scalar, an alias and any name the
-  ## identity does not resolve keep their text, as before.
+  ## An alias is spelled as the type it names (#1808), as `lower_layout::targ_same` compares it: `A := Node`
+  ## shares `Node`'s label, and `A` declared over two modules' `Node`s gets their two labels.
+  ua := mono_targ_unalias(src, ts, tl)
+  if ua.s != ts or ua.n != tl {
+    emit_type_arg_tag(sb, src, ua.s, ua.n)
+    return
+  }
+  ## A named struct, enum, union or brand is spelled with the module that DECLARES it (#1808): `Node`
+  ## written in the root and `Node` written in `m` are two types, and `lower_layout::targ_same` keeps them
+  ## two instances, so they need two labels. The anonymous package root's declarations carry no module
+  ## (`emit_mod_qual`); a scalar and any name the identity does not resolve keep their text, as before.
   di := mono_targ_decl(src, tag_s, tag_l)
   if di >= 0 {
     dp := mono_decls()
@@ -31607,7 +31614,16 @@ add_inst := fn(in out insts : IVec, src : ptr(u8), gi : usize, ts : usize, tl : 
     e := ivec_at(ptr(insts), i)
     if e.gi == gi and inst_targ_eq(src, e.ts, e.tl, ts, tl) and inst_targ_eq(src, e.ts2, e.tl2, ts2, tl2) and inst_targ_eq(src, e.ts3, e.tl3, ts3, tl3) { found = true }
   }
-  if not found { ivec_push(insts, Inst(gi = gi, ts = ts, tl = tl, ts2 = ts2, tl2 = tl2, ts3 = ts3, tl3 = tl3)) }
+  ## An instance at an alias IS the instance at the type the alias names (#1808), so its body is bound to
+  ## that type's span, in the alias's own module (`mono_targ_unalias`), not to the alias: the body then
+  ## reads the named type's width and layout whichever spelling registered the instance first. Bound to
+  ## the alias, a `W := u8` argument was read as an unresolved name, eight bytes wide.
+  if not found {
+    u1 := mono_targ_unalias(src, ts, tl)
+    u2 := mono_targ_unalias(src, ts2, tl2)
+    u3 := mono_targ_unalias(src, ts3, tl3)
+    ivec_push(insts, Inst(gi = gi, ts = u1.s, tl = u1.n, ts2 = u2.s, tl2 = u2.n, ts3 = u3.s, tl3 = u3.n))
+  }
 }
 
 ## The declared (base) type name of the ENCLOSING-fn parameter named (ns,nl) — resolves a value
@@ -33269,6 +33285,19 @@ mono_targ_decl := fn(src : ptr(u8), s : usize, n : usize) -> i64 {
   match MONO_DECLS {
     Some(dp) => { return lower_layout::targ_decl(dp, src, s, n) }
     None => { return 0 - 1 }
+  }
+}
+## `lower_layout::targ_unalias` against the published declarations: the type an alias names, else the
+## trimmed span itself (the span unchanged before `collect_program`).
+mono_targ_unalias := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
+  match MONO_DECLS {
+    Some(dp) => {
+      u := lower_layout::targ_unalias(dp, src, s, n)
+      t := lower_layout::targ_trim(src, s, n)
+      if u.s == t.s and u.n == t.n { return CSpan(s = s, n = n) }
+      return CSpan(s = u.s, n = u.n)
+    }
+    None => { return CSpan(s = s, n = n) }
   }
 }
 pub collect_program := fn(decls : ptr(rt::Vec), src : ptr(u8), mar : ptr(mut rt::Arena), a : rt::Arena) {

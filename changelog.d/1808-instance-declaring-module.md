@@ -7,5 +7,10 @@
   get two symbols (`m__at__m__Node`, `m__at__main__Node`), and a struct named by a qualified path is no
   longer taken for the bare same-named struct. One instance written with different spacing
   (`ptr( u64 )`, `ptr(u64)`) is now emitted once instead of being refused as a duplicate label.
+  An alias is the type it names (Declarations §1.3): `A := Node` shares `Node`'s instance, and two
+  modules' `A`s over their own `Node`s, or `W := u8` and `W := u64`, are two instances, each reading
+  its own layout or width. A brand is its own type (Types §5.4), so two modules' `Id := brand(Node)`
+  are two instances too. A qualified `m::A` now names `m`'s alias even where the root declares its
+  own `A`, in a plain read as well as in a generic.
   aarch64, riscv64 and wasm do not yet call a generic in these shapes and still stop at their
   stubs there, a trap rather than a value.
