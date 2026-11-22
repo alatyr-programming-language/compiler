@@ -5,7 +5,7 @@
 #
 # One `scripts/full.sh --force-sweeps` on a 4-core GitHub runner took 82 minutes (run 42653954256): 18 of
 # them FIXPOINT, then 64 of stages run one after another although they share nothing but the compiler
-# the fixpoint built. `.github/workflows/gate.yml` therefore runs `full.sh` once per part
+# under test. `.github/workflows/gate.yml` therefore runs `full.sh` once per part, FIXPOINT one of them (#1873)
 # (ALATYR_FULL_PART, the table in scripts/full.sh, `full.sh --parts`), each on its own runner, and this
 # script turns the part logs into the gate's verdict. Every reader (the lanes, the reviewers, the
 # integrator) greps a run for one `*** FULL GATE` line and one `xbackend diff:` line, so the aggregate
@@ -221,6 +221,9 @@ sweeps sweeps'
   guards_match_table "$d/f.sh" "$T" > /dev/null; chk "plant: a stage guarded twice is refused" "$?" "1"
   guards_match_table "$ROOT/scripts/full.sh" "$(bash "$ROOT/scripts/full.sh" --parts)"
   chk "the real scripts/full.sh: every guard is a table stage and every table stage is guarded once" "$?" "0"
+  ## #1873: no other part reads what FIXPOINT builds, so it runs once, in a part of its own, rather than
+  ## on the critical path of every part (38-59 of each part's 66-96 minutes, run 44932527031).
+  chk "the real scripts/full.sh: FIXPOINT is a part of its own" "$(bash "$ROOT/scripts/full.sh" --parts | awk '$2 == "fixpoint" { p = $1; k++ } { c[$1]++ } END { print k + 0 ":" c[p] + 0 }')" "1:1"
   [ "$rc" = 0 ] && echo "full parts self-test: $n checks, 0 failed" || echo "full parts self-test: FAILED"
   return "$rc"
 }

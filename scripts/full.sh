@@ -87,18 +87,21 @@ EOF
   echo "ok   full gate self-test: the red-gate stage summary skips dump-failed=/verify-failed= counters (#1491)"
 }
 
-## PARTS (#1568). The stages after FIXPOINT fall into four parts that share nothing but the compiler
-## under test (Stage1 built by the seed, which each part without E2E rebuilds after FIXPOINT, as E2E does
-## for the serial run), so `.github/workflows/gate.yml` runs them as four parallel jobs, each on its own
-## runner, and the authoritative verdict is `scripts/full_parts.sh --aggregate`: GREEN only when every
-## part ran exactly its stages and went GREEN. With ALATYR_FULL_PART unset (the merge queue on omen, a
-## lane's own run) every stage runs in order, as before. Every part runs the cheap pre-build stages and
-## FIXPOINT itself: fixpoint is on the critical path either way, and a compiler built in another job
-## would be an input this job never gated. This table is the ONE place that says which stage belongs to
-## which part. A stage it does not name refuses the gate, and the aggregate refuses a stage that ran
-## twice or not at all. Dependencies decide the grouping: fmt-corpus uses e2e's Stage1 snapshot, and
-## fixture-expect and xbackend read the corpus manifest's observed walk.
-FULL_PART_TABLE='e2e e2e
+## PARTS (#1568). The stages fall into parts that share nothing but the compiler under test (Stage1 built
+## by the seed, which each part without E2E rebuilds for itself, as E2E does for the serial run), so
+## `.github/workflows/gate.yml` runs them as parallel jobs, each on its own runner, and the authoritative
+## verdict is `scripts/full_parts.sh --aggregate`: GREEN only when every part ran exactly its stages and
+## went GREEN. With ALATYR_FULL_PART unset (the merge queue on omen, a lane's own run) every stage runs in
+## order, as before. Every part runs the cheap pre-build stages itself; no compiler crosses jobs.
+## FIXPOINT is a part of its own (#1873): no other part reads what it builds, since each rebuilds Stage1
+## from the seed, and run in all four it was 38-59 of each part's 66-96 minutes (run 44932527031).
+## Its part measures the Stage2 FIXPOINT leaves in target/debug/alatyr, so a stage over Stage2 (#1824)
+## belongs there. This table is the ONE place that says which stage belongs to which part. A stage it
+## does not name refuses the gate, and the aggregate refuses a stage that ran twice or not at all.
+## Dependencies decide the grouping: fmt-corpus uses e2e's Stage1 snapshot, and fixture-expect and
+## xbackend read the corpus manifest's observed walk.
+FULL_PART_TABLE='fixpoint fixpoint
+e2e e2e
 e2e fmt-corpus
 e2e idiom
 e2e pilots
@@ -467,16 +470,19 @@ if [ -z "$sf_cover" ]; then
   fail=1; sf_cover="UNKNOWN — no coverage line"
 fi
 
+if full_part_runs fixpoint; then
 echo "### FIXPOINT ###"
 bash scripts/fixpoint.sh > "$FP_LOG" 2>&1
 grep -iE "TOOL-1 FIXPOINT|FAIL" "$FP_LOG"
 grep -q "TOOL-1 FIXPOINT: seed == Stage1 == Stage2" "$FP_LOG" || { echo "  (fixpoint NOT green — a reseed change needs the 3-stage check; see \"Reproducibility\" in AGENTS.md and docs/rationale/reproducibility.md)"; fail=1; }
+fi
 
 # Run in order, E2E rebuilds Stage1 from the seed into target/debug/alatyr and every later stage measures
-# that binary; FIXPOINT leaves Stage2 there. A part without E2E rebuilds Stage1 the same way here, so it
-# measures the compiler the serial gate measures, also on a FIXPOINT-red tree, where the two binaries
-# differ (#1570 review N1). The rule follows the table, not part names.
-if [ -n "$FULL_PART" ] && ! printf '%s\n' "$FULL_PART_TABLE" | awk -v p="$FULL_PART" '$1 == p && $2 == "e2e" { f = 1 } END { exit !f }'; then
+# that binary; FIXPOINT leaves Stage2 there. A part with neither E2E nor FIXPOINT rebuilds Stage1 the same
+# way here, so it measures the compiler the serial gate measures, also on a FIXPOINT-red tree, where the
+# two binaries differ (#1570 review N1). The FIXPOINT part keeps the Stage2 it built (#1824). The rule
+# follows the table, not part names.
+if [ -n "$FULL_PART" ] && ! printf '%s\n' "$FULL_PART_TABLE" | awk -v p="$FULL_PART" '$1 == p && ($2 == "e2e" || $2 == "fixpoint") { f = 1 } END { exit !f }'; then
   echo "### PART $FULL_PART: Stage1 from the seed (what E2E leaves for the serial gate's later stages) ###"
   rm -f target/alatyr target/alatyr.s target/alatyr.o target/debug/alatyr target/debug/alatyr.s target/debug/alatyr.o
   seed/alatyr build package.al > "$LOGDIR/full_part_stage1.log" 2>&1
