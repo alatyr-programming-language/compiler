@@ -16216,7 +16216,9 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         if nce != 0 { return Result(usize, CheckErr).Err(nce) }
         ## the loop condition must be bool (a known non-bool is a `Mismatch`).
         if not kind_is_unknown(cc.kind) and not kind_is_bool(cc.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
+        while_base := cnt
         cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
+        sema_unshadow_after_block(locals, src, while_base, cnt)
         cur = nx
       }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
@@ -16725,16 +16727,20 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         ## list: the loop variable shadows it (Declarations §6.1), and the innermost entry is the one
         ## `local_lookup` and the records (`sema_vty_var`, keyed by this `fns`) must find.
         vbyte := tag_of_kind(vtag)
+        for_base := cnt
         lvec_push(deref(locals), Local(ns = fns, nl = fnl, tag = vbyte, prov = 0, tns = 0, tnl = 0))
         cnt += 1
         cnt = check_stmts(fb, decls, upto, src, a, locals, cnt, da)?
+        sema_unshadow_after_block(locals, src, for_base, cnt)
         cur = nx
       }
       ## `loop { body }` — the body is checked (locals it introduces thread out, as for `while`);
       ## no condition. `break` is a leaf with no value (a `break` outside a loop is checked by
       ## the scalar structural prepass in `stmts_bad_loop_control`).
       Stmt::Loop(b, nx) => {
+        loop_base := cnt
         cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
+        sema_unshadow_after_block(locals, src, loop_base, cnt)
         cur = nx
       }
       Stmt::Unchecked(b, nx) => {
