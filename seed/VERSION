@@ -51,8 +51,8 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
 # file quietly describing a different compiler.
 #
-current-seed-sha256: 37849383daa5dc485e937452b4355b1108b0459ed97536c384a8950f3c2a3689
-current-seed-version: 0.7.0
+current-seed-sha256: 590c094c7fdef228a552450e34e6b98c2f60363c53cdaedb6fb5fb0bc6e2edd0
+current-seed-version: 0.7.1
 #
 # spec-pin: 1.10.0 (tag v1.10.0, spec commit 624f476)
 #

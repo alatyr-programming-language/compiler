@@ -2263,4 +2263,42 @@ The original reading note, verbatim:
 # passes required arguments the compiler's own calls omitted. Not MAJOR: no program the specification
 # calls valid stops compiling or changes its answer.
 # The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+#
+# ---- 0.7.0 -> 0.7.1   promoted 2026-11-22   seed/alatyr := Stage2 ----
+#
+# WHY: #1820 changed instance-label suffixes in the compiler's emission (a generic instantiated at
+# two same-named types from different modules is now two instances), so seed != Stage1 and the
+# fixpoint reads DIFFER. Every gate on main since c3494689 is red at FIXPOINT.
+#
+# Promoted Stage2 of tree 4ecf44f0 (main at this promotion). Three PRs since 0.7.0:
+# #1820 (instance declaring module, PR #1820), #1821 (deref whole array, PR #1821),
+# #1822 (call binding check, PR #1831).
+#
+# CONVERGENCE (bump first; fixpoint.sh + manual Stage3 on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 2048603 lines.
+# GAS SHA-256 (Stage2): d4ea68bcea67863f50e4bcd18046fae336b4c390202306528a002b21b6fed461.
+# Stage2 == Stage3 BINARY SHA-256:
+# 590c094c7fdef228a552450e34e6b98c2f60363c53cdaedb6fb5fb0bc6e2edd0 (8579296 B).
+# All three answer `alatyr 0.7.1, spec 1.10.0 (a target revision, not conformance; known deviations:
+# https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`.
+# smoke = 42.
+# Superseded seed (0.7.0) SHA-256:
+# 37849383daa5dc485e937452b4355b1108b0459ed97536c384a8950f3c2a3689.
+#
+# Normalized seed-to-Stage1 delta: 788 hunks, 812 lines removed and 812 added, every hunk a
+# one-for-one line change renaming a generic-instance symbol to include its type argument's declaring
+# module (24 distinct symbols, .globl, definition and call sites). One recognizable pattern repeated.
+# gas_normalize.sh does not cover these symbols.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree:
+# *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (2048603 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/full.sh --force-sweeps` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.7.0 -> 0.7.1, PATCH by CHANGELOG.md "Versioning policy": defects fixed with no new
+# surface. #1808/#1810 (instance declaring module: a wrong value and an assembler-refused valid
+# program), #1809 (a whole fixed array out of a pointer), #1822 (call binding check). The
+# assembler-refused program is not MINOR: the assembler's symbol-is-already-defined is a compiler
+# defect, not a language refusal; the program was always specified as valid. No program the
+# specification calls valid stops compiling or changes its answer.
+# The specification pin (spec 1.10.0) did not move.
 ```

@@ -134,6 +134,71 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.7.1 — 2026-11-22
+
+- **A generic instantiated at two same-named types from different modules is two instances (#1808,
+  #1810).** On x86_64 a program that called one generic at `m::Node` and at the root module's own
+  `Node` read the root's struct with `m`'s layout: 2 where the program says 40, with a clean compile.
+  The function that read the wrong value called no generic. Comptime §3.2 gives each distinct set of
+  type arguments its own instance, and Modules §6.7 makes their symbols distinct. An instance's
+  identity and label now come from the module that declares each type argument, so the two instances
+  get two symbols (`m__at__m__Node`, `m__at__main__Node`), and a struct named by a qualified path is no
+  longer taken for the bare same-named struct. One instance written with different spacing
+  (`ptr( u64 )`, `ptr(u64)`) is now emitted once instead of being refused as a duplicate label.
+  An alias is the type it names (Declarations §1.3): `A := Node` shares `Node`'s instance, and two
+  modules' `A`s over their own `Node`s, or `W := u8` and `W := u64`, are two instances, each reading
+  its own layout or width. A brand is its own type (Types §5.4), so two modules' `Id := brand(Node)`
+  are two instances too. A qualified `m::A` now names `m`'s alias even where the root declares its
+  own `A`, in a plain read as well as in a generic. The same holds when the alias applies a type
+  constructor: two modules' `P`s over `m::Box(u8)` and `Box(u64)`, over `ptr(Node)` of each module's
+  own `Node`, or over `uint(8)` and `uint(64)` are two instances (Types §4.1), and an alias the
+  compiler cannot follow (a tuple or an array) is identified by its own declaration rather than its
+  name. A generic's type parameter `T` still shadows a module-level `T := u8` inside that generic
+  (Declarations §6.1): `inner(T, h)` and `ptr(T)` in its body name the instance's argument, not the
+  alias. Only a declaration the spelling module can name takes part (Modules §3): `pub u64 := u8` in
+  a sibling module no longer turns `u64` written in another module into `u8`.
+  aarch64, riscv64 and wasm do not yet call a generic in these shapes and still stop at their
+  stubs there, a trap rather than a value.
+- **A whole fixed array copied out of a pointer is the whole array (#1809).** On x86_64,
+  `v : [u64; 2] = deref(p)` moved one word and left the rest of `v` as whatever the frame held, so
+  `v[1]` changed from run to run, and `v.len` was 0. The reassignment `v = deref(p)` of a local
+  declared `[T; N]` moved one word too. Memory §4.3 makes `deref(p)` load the whole place, and
+  Types §6.4 makes a `[T; N]` value its `N` elements, so both forms now copy every element, for a
+  byte or word integer element. Any other element type (a struct, `u16`, `u32`) is refused at the
+  assignment with its source line, rather than moving one word. A zero-length `[T; 0]` copies
+  nothing (Types §6.5). A length written as a named constant or a constant expression
+  (`[u64; K]`, `[u64; 1 + 1]`) is refused, located, until the copy evaluates it (#1833).
+  An array type written with a prefix attribute (`@align(16) [u64; 2]`) is the same array and
+  copies too. A declaration with a `#` comment between its name and an array annotation is
+  refused, located (#1859).
+  A reassignment into an array local declared without `: [T; N]` (`mut v := [u64(0), u64(0)]`)
+  is refused, located, until the copy reads the checker's type (#1844).
+  A `[T; N]` local that reuses the frame slot of an earlier, out-of-scope array of the same name
+  with another element type or length is refused, located (#1847).
+  aarch64, riscv64 and wasm refuse both forms, at any length, until they copy them (#1811).
+- **A call that leaves a parameter unbound, or passes too many arguments, is refused at `check`
+  (#1822).** A statement call such as `g(1)` against `g := fn(a : u64, n : u64)`, an omitted `out`
+  or `in out` parameter (#1466), a call to a function declared later in the module (the arity half of
+  #1516), and a statement call with a surplus argument used to build or crash the compiler; the
+  callee then read the missing parameter from whatever register held it, a silent wrong value or a
+  crash. Each now fails with a located diagnostic naming the parameter (``the call leaves parameter
+  `n` unbound``) or both counts. The value-position form, refused before as an `unbound name`, gets
+  the same diagnostic. So does a call that omits its allocator parameter with no `alloc::with`
+  around it (Functions §5.5 step 4; #1239 for the direct call); taking the caller's own allocator
+  parameter as the ambient (step 2) is not implemented yet and is refused the same way (#1468), and
+  so is an elided allocator in a struct literal, index, array literal, lambda body, field base or
+  `deref` inside `alloc::with` (#1846), which was refused before as well. A call one argument short
+  of a function with both an allocator parameter and a defaulted one (`dk(42)` against
+  `dk := fn(ar : ptr(mut Arena), k : u64 = 7)`) may mean either; the specification does not say
+  which yet (spec#171), so outside `alloc::with` it is refused rather than read in order, as it used
+  to be (#1845 for inside). This is a patch: newly rejecting programs the specification declares
+  invalid (Functions §2.3, §5.1), plus that one form it leaves undecided. An omitted `in` parameter
+  with a default, and an allocator filled from an enclosing `alloc::with`, stay accepted. Generic,
+  variadic, UFCS, overloaded and function-value callees are not judged yet (#1842, #1763), and a
+  call in a `for` range bound or a `comptime if` arm is not reached (#1843). Binding an `out`
+  parameter by projection is not implemented (#1702), so an omitted `out` is refused with the
+  `in out` one.
+
 ## 0.7.0 — 2026-11-21
 
 - **A whole struct read after `p.xs[j] = …` and leaf writes `p.xs[i].f = …` is no longer refused
