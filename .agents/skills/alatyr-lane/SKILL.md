@@ -408,6 +408,41 @@ Fire on the exact new shape. A broad lowering fix once regressed ~90 stdlib test
 shipped fired only on the shape that was broken. When one fact is recovered by scanning the source in
 more than one place, `grep` for the other copies — that is part of the fix, not a follow-up.
 
+**A wrong value on the legacy x86_64 path: ask the IR first (#1875).** x86_64 emits a function from
+the shared IR when the IR builder builds it and the x86 selector accepts it (#1604); every other function
+goes to the legacy emitter. Before changing the legacy lowering, ask both, with the Stage1 of your base,
+and copy the answers into the PR body:
+- `alatyr ir <repro>`: each function's `fn … Built` or `NotYet(<construct>, …)` line, and any
+  `## …: held to legacy …` line;
+- `alatyr x86-ir <repro>`: a function whose label follows `# ir: selected from the shared IR` is
+  IR-selected; any other was emitted by the legacy path (`scripts/e2e.sh` reads it so, near line 1224).
+
+Then:
+- **IR-selected, and the default build still answers wrong:** the defect is in the IR, the selector or a
+  layer they share with legacy (naming, layout). Fix it there.
+- **Legacy-emitted** (`NotYet`, held, or `Built` but declined by the selector): the unit is a **located
+  refusal** of that exact shape in the legacy path. The real fix is the IR or selector slice that takes
+  the construct. Name its issue in the refusal text, or file it. The fixture keeps `## expect:` at the
+  due value, and the x86_64 miss is a `scripts/known-deviations.tsv` row under that issue (AGENTS.md
+  "Oracles"), deleted when the slice lands; the issue gets its line in
+  `scripts/known-deviations.issues.tsv` (rule not met, observable difference, `rows`) and stays open
+  until then. A `legacy_reject_has` check in `scripts/e2e.sh` holds the located message: it drives
+  `x86-legacy` only and makes no corpus claim. Not `build_reject_has`, which `scripts/fixture_expect.sh`
+  reads as "every backend rejects" and which conflicts with the `## expect:` line (finding (a), a red
+  gate). The refusal must not fire on `src/` or `lib/`: Stage1 still has to build.
+- **A narrow-view signature (#1622)** can be both: `x86_isel_try` keeps the function's own label on the
+  legacy path and may also emit an IR-built copy `<label>.irv` after the marker. Check which copy the
+  wrong call reaches before you pick a branch above.
+- **A legacy fix that recovers types or declarations by scanning source text** needs a stated reason in
+  the PR body: the code is shared with the IR path, or the IR slice is blocked by a named open issue. A
+  reviewer who finds a second source layout that such a scan misreads asks for the refusal, not for
+  another scan.
+
+Why: of the 41 request-changes rounds on PRs opened after #1604 made the IR the x86_64 default, 25 fell
+on the 7 `fix(lower…)` PRs. #1821 drew 9 request-changes rounds, 8 of them a source layout its scan
+misread, and 20 hosted gate runs (16 cancelled), over 23 h. At its base `alatyr ir` reported most of the
+functions in its fixture `NotYet` (`expr Deref`, `expr Unchecked`, sema gaps).
+
 **Write the strict forms.** Before writing code, read `.agents/skills/alatyr-lane/strict_forms.md`.
 It lists the forms this compiler has shipped defects in, the form to write instead, and the check that
 holds each. `scripts/strict_forms_check.sh` is a stage of the full gate. It refuses a new unacknowledged
