@@ -221,9 +221,10 @@ sweeps sweeps'
   guards_match_table "$d/f.sh" "$T" > /dev/null; chk "plant: a stage guarded twice is refused" "$?" "1"
   guards_match_table "$ROOT/scripts/full.sh" "$(bash "$ROOT/scripts/full.sh" --parts)"
   chk "the real scripts/full.sh: every guard is a table stage and every table stage is guarded once" "$?" "0"
-  ## #1873: no other part reads what FIXPOINT builds, so it runs once, in a part of its own, rather than
-  ## on the critical path of every part (38-59 of each part's 66-96 minutes, run 44932527031).
-  chk "the real scripts/full.sh: FIXPOINT is a part of its own" "$(bash "$ROOT/scripts/full.sh" --parts | awk '$2 == "fixpoint" { p = $1; k++ } { c[$1]++ } END { print k + 0 ":" c[p] + 0 }')" "1:1"
+  ## #1873: FIXPOINT runs once, in a part of its own rather than on the critical path of every part
+  ## (38-59 of each part's 66-96 minutes, run 44932527031), together with module-checks, the one stage
+  ## that reads what it writes (target/gas1.s) and that a part without it SKIPPED silently.
+  chk "the real scripts/full.sh: FIXPOINT's part is FIXPOINT and module-checks" "$(bash "$ROOT/scripts/full.sh" --parts | awk '$2 == "fixpoint" { p = $1 } { s[$1] = s[$1] "," $2 } END { print p ":" s[p] }')" "fixpoint:,fixpoint,module-checks"
   [ "$rc" = 0 ] && echo "full parts self-test: $n checks, 0 failed" || echo "full parts self-test: FAILED"
   return "$rc"
 }

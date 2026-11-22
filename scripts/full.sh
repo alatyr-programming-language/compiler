@@ -93,14 +93,15 @@ EOF
 ## verdict is `scripts/full_parts.sh --aggregate`: GREEN only when every part ran exactly its stages and
 ## went GREEN. With ALATYR_FULL_PART unset (the merge queue on omen, a lane's own run) every stage runs in
 ## order, as before. Every part runs the cheap pre-build stages itself; no compiler crosses jobs.
-## FIXPOINT is a part of its own (#1873): no other part reads what it builds, since each rebuilds Stage1
-## from the seed, and run in all four it was 38-59 of each part's 66-96 minutes (run 44932527031).
-## Its part measures the Stage2 FIXPOINT leaves in target/debug/alatyr, so a stage over Stage2 (#1824)
-## belongs there. This table is the ONE place that says which stage belongs to which part. A stage it
+## FIXPOINT is a part of its own (#1873), with the one stage that reads what it writes (module-checks,
+## over target/gas1.s); the other parts rebuild Stage1 from the seed and read nothing of it. Run in all
+## four parts it was 38-59 of each part's 66-96 minutes (run 44932527031). Its part measures the Stage2
+## FIXPOINT leaves in target/debug/alatyr, so a stage over Stage2 (#1824) belongs there. This table is the ONE place that says which stage belongs to which part. A stage it
 ## does not name refuses the gate, and the aggregate refuses a stage that ran twice or not at all.
 ## Dependencies decide the grouping: fmt-corpus uses e2e's Stage1 snapshot, and fixture-expect and
 ## xbackend read the corpus manifest's observed walk.
 FULL_PART_TABLE='fixpoint fixpoint
+fixpoint module-checks
 e2e e2e
 e2e fmt-corpus
 e2e idiom
@@ -475,6 +476,30 @@ echo "### FIXPOINT ###"
 bash scripts/fixpoint.sh > "$FP_LOG" 2>&1
 grep -iE "TOOL-1 FIXPOINT|FAIL" "$FP_LOG"
 grep -q "TOOL-1 FIXPOINT: seed == Stage1 == Stage2" "$FP_LOG" || { echo "  (fixpoint NOT green — a reseed change needs the 3-stage check; see \"Reproducibility\" in AGENTS.md and docs/rationale/reproducibility.md)"; fail=1; }
+fi
+
+# The whole-program MODULE invariants over the compiler's OWN assembly (callee_module_check.sh,
+# type_module_check.sh; their headers say what they hold). They read target/gas1.s, Stage1's emission of
+# the compiler, which only FIXPOINT writes, so they run beside it, in its part (#1873). They ran inside
+# E2E's package_cli_test.sh, which SKIPs them without a gas1.s: on a part runner without FIXPOINT that
+# skip was silent and green. Here a missing or stale gas1.s is red. package_cli_test.sh leaves them to
+# this stage whenever full.sh runs it (ALATYR_FULL_MODULE_CHECKS), so a serial run does them once.
+export ALATYR_FULL_MODULE_CHECKS=1
+if full_part_runs module-checks; then
+echo "### MODULE CHECKS (emitted callee and type identities over Stage1's GAS of the compiler) ###"
+if [ ! -s target/gas1.s ] || [ "$(stat -c %Y target/gas1.s 2>/dev/null || stat -f %m target/gas1.s)" -lt "$gate_started_epoch" ]; then
+  echo "  FAIL module checks: no target/gas1.s written by this run's FIXPOINT ($FP_LOG)"
+  fail=1
+else
+  for _mc in callee type; do
+    if bash "scripts/${_mc}_module_check.sh" target/gas1.s > "$LOGDIR/full_${_mc}_check.log" 2>&1; then
+      echo "ok   ${_mc}_module_check: $(grep -c '^NONPUB' "$LOGDIR/full_${_mc}_check.log") reported §3 non-pub reach(es), 0 violations"
+    else
+      echo "  FAIL ${_mc}_module_check:"; grep -E "^(VIOLATION|${_mc}_module_check)" "$LOGDIR/full_${_mc}_check.log" | head -20 | sed 's/^/    /'
+      fail=1
+    fi
+  done
+fi
 fi
 
 # Run in order, E2E rebuilds Stage1 from the seed into target/debug/alatyr and every later stage measures

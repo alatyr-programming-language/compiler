@@ -8,9 +8,9 @@
 #
 # PARTS (#1568). Run one after another on one 4-core runner, the stages took 82 minutes (run
 # 42653954256). So the `part` jobs run `full.sh` once per part of its table (`scripts/full.sh --parts`,
-# ALATYR_FULL_PART), in parallel. FIXPOINT is a part of its own (#1873): every other part builds its own
-# Stage1 from the seed and never reads what FIXPOINT built, and run in each of them it took 38-59 of
-# each part's 66-96 minutes (run 44932527031). The `verdict` job turns their logs into the gate's ONE
+# ALATYR_FULL_PART), in parallel. FIXPOINT is a part of its own (#1873), with module-checks, the one stage
+# that reads what it writes; every other part builds its own Stage1 from the seed. Run in each part,
+# FIXPOINT took 38-59 of each part's 66-96 minutes (run 44932527031). The `verdict` job turns their logs into the gate's ONE
 # verdict with `scripts/full_parts.sh --aggregate`. A part that is missing, cancelled, red, or that ran
 # other stages than its own reads as red. The run's log carries exactly one `*** FULL GATE` line, the
 # verdict job's, and exactly one `xbackend diff:` line, the corpus part's. Each part prints
