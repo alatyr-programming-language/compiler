@@ -128,7 +128,7 @@ ast_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
 ## Skip trivia from `p` — blanks, newlines and `#` line comments (Grammar §2.5) — and return the first
 ## other offset. The parser drops comments, so a recovery that skips only blanks reads a comment between
 ## a name and its `:` or `=` as the end of the declaration (#1859).
-ast_skip_trivia := fn(src : ptr(u8), end : usize, p0 : usize) -> usize {
+pub ast_skip_trivia := fn(src : ptr(u8), end : usize, p0 : usize) -> usize {
   mut p := p0
   mut scanning := true
   while scanning and p < end {
@@ -202,7 +202,14 @@ pub local_is_uninit := fn(src : ptr(u8), s : usize, n : usize) -> bool {
       if depth > 0 { depth -= 1 }
     }
     if depth == 0 and c == "=" { return false }
-    if depth == 0 and (c == "\n" or c == ";" or c == "}") { return true }
+    if depth == 0 and (c == ";" or c == "}") { return true }
+    ## A line or a `#` comment ends the type, but the parser reads a line-leading `=` as the same
+    ## declaration's initializer (Grammar §2.6; spec#172: a token that cannot begin a statement
+    ## continues the line), so `v : [u64; 2]` / `= [40, 2]` is not uninitialized (#1869).
+    if depth == 0 and (c == "\n" or c == "#") {
+      q := ast_skip_trivia(src, end, p)
+      return not ast_scan_has(src, end, q, "=")
+    }
     p += 1
   }
   false
