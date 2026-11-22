@@ -545,7 +545,7 @@ pub type_mod_rank_from := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize,
 ## file's module; a span outside every file (a compiler-synthesized one, an early pass with no table,
 ## or a buffer this table was not published for) falls back to the published module, unchanged.
 ## `TSM_SEP` is the module TREE beside it (#1808): the ascending buffer offsets of every `__` the driver
-## wrote to join two path segments of an identity (`driver::push_module_name_in`). A `__` the table does
+## wrote to join two path segments of an identity (`driver::push_module_name`). A `__` the table does
 ## not list is part of a segment's own name (Modules §6.6).
 mut TSM_SRC : Option(ptr(u8)) = Option.None
 mut TSM_MS : Option(ptr(rt::Vec)) = Option.None
@@ -6379,11 +6379,37 @@ QualMod := enum { Module(usize, usize), Text(usize, usize), Unbound, Unresolved 
 ## Whether the module span `[ms, ms+ml)` is the anonymous package root (`type_anc_rank_from`'s test).
 qm_is_root := fn(ms : usize, ml : usize) -> bool { ms == TRM_RS and ml == TRM_RL }
 
-## Whether the declaration module `[ds, ds+dl)` is the module `[ms, ms+ml)`.
+## Whether the declaration module `[ds, ds+dl)` is the module `[ms, ms+ml)`. With a published module tree the
+## two identities must be the same PATH, not only the same text (`qm_same_path`): `p_/q.al` and the directory
+## `p/_q/` both spell `p___q`, and `p::_q` does not declare what `p_::q` declares (Modules §1, §6.6, #1808).
 qm_same_mod := fn(src : ptr(u8), ds : usize, dl : usize, ms : usize, ml : usize) -> bool {
   if qm_is_root(ms, ml) { return qm_is_root(ds, dl) }
   if qm_is_root(ds, dl) { return false }
-  type_module_eq(src, ds, dl, ms, ml)
+  if dl != ml { return false }
+  t := qm_tree(src)
+  match t {
+    Some(tr) => { return qm_same_path(src, tr.sv, ds, ms, ml) }
+    None => { return type_module_eq(src, ds, dl, ms, ml) }
+  }
+}
+
+## Whether the identity spans `[as_, as_+l)` and `[bs, bs+l)` name the same module path: equal text, and a
+## path separator at the same offset of each. A separator is a `__` the tree records (`TSM_SEP`) or a `::`
+## (an inline module's, or a qualifier's); any other `__` is part of a segment's own name. A directory-only
+## span anchored on a child file's identity carries that file's separators, so it compares the same way.
+qm_same_path := fn(src : ptr(u8), sv : ptr(rt::Vec), as_ : usize, bs : usize, l : usize) -> bool {
+  if not type_module_eq(src, as_, l, bs, l) { return false }
+  mut i : usize = 0
+  while i + 1 < l {
+    if qm_path_sep(src, sv, as_ + i) != qm_path_sep(src, sv, bs + i) { return false }
+    i += 1
+  }
+  true
+}
+
+## Whether the two bytes at buffer offset `off` are a path separator of the module tree (`qm_same_path`).
+qm_path_sep := fn(src : ptr(u8), sv : ptr(rt::Vec), off : usize) -> bool {
+  str_at((src + off), 2) == "::" or qm_sep_at(sv, off)
 }
 
 ## The first segment of the path `[s, s+n)`: `a::b::c` -> `a`.
@@ -6489,7 +6515,7 @@ qm_tree_parent := fn(src : ptr(u8), ms : usize, ml : usize) -> ModSpan {
         fs : usize = rt::vec_get(deref(tr.mv), k)
         fl : usize = rt::vec_get(deref(tr.lv), k)
         k += 1
-        if fl >= ml and not qm_is_root(fs, fl) and type_module_eq(src, fs, ml, ms, ml)
+        if fl >= ml and not qm_is_root(fs, fl) and qm_same_path(src, tr.sv, fs, ms, ml)
            and (fl == ml or qm_sep_at(tr.sv, fs + ml)) {
           i := qm_seps_below(tr.sv, fs + ml)
           mut p := root
@@ -6566,7 +6592,7 @@ qm_child_in := fn(src : ptr(u8), tr : QmTree, ms : usize, ml : usize, g : LSpan)
 qm_child_prefix := fn(src : ptr(u8), sv : ptr(rt::Vec), fs : usize, fl : usize, ms : usize, ml : usize, root : bool, g : LSpan) -> bool {
   mut pl : usize = 0
   if not root {
-    if not type_module_eq(src, fs, ml, ms, ml) or not qm_sep_at(sv, fs + ml) { return false }
+    if not qm_same_path(src, sv, fs, ms, ml) or not qm_sep_at(sv, fs + ml) { return false }
     pl = ml + 2
   }
   if not streq(src, fs + pl, g.n, g.s, g.n) { return false }
