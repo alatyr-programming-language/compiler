@@ -710,8 +710,9 @@ source "$ROOT/scripts/attribution.sh"
 ##   0  a merge whose second parent is the head of a PR merged into main — provenance established
 ##   3  an integrator tail commit — keep walking to its first parent
 ##   4  by its paths, a seed-forms retirement (#1648) — its shape is checked, then as 3
+##   5  by its paths, an IR coverage floors commit (#1879) — its numbers are checked, then as 3
 ##   1  anything else — refuse
-LAND_TAIL_ORACLE_RE='^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline|scripts/xbackend_diff\.baseline|scripts/ir_census\.src\.baseline|scripts/ir_census\.targets\.baseline)$'
+LAND_TAIL_ORACLE_RE='^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline|scripts/xbackend_diff\.baseline)$'
 LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scripts/package_cli_test\.sh|CHANGELOG\.md|changelog\.d/[1-9][0-9]*-[a-z0-9-]+\.md)$'
 ## A seed-forms retirement (#1648): the promotion's gate is red until the promoted seed's newly
 ## answered form leaves scripts/seed_forms.tsv (scripts/seed_forms_check.sh: "the seed now
@@ -725,6 +726,13 @@ LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scr
 ## under it in a tail no landing has walked yet. That trust is the reseed's own: the integrator's
 ## tail, gated as the promotion before it is pushed.
 LAND_TAIL_RETIRE_RE='^(scripts/seed_forms\.tsv|scripts/seed_forms/[a-z0-9_]+\.al)$'
+## An IR coverage floors commit (#1879): paths alone say only that it COULD be one (return 5). The
+## gate's ratchet compares a measurement with the committed floor and nothing else, so a direct push
+## that lowers a floor would pass the walk and let a later slice drop coverage to it with a green gate.
+## `ir_floors_shape_ok` holds what alatyr-integrate states: a floor never goes down unless the same
+## commit adds a `## <key>-coverage-ok: #<issue>` ack for it. An ack the parent already carried does
+## not count — it excused an earlier shortfall, not this lowering.
+LAND_TAIL_FLOORS_RE='^(scripts/ir_census\.src\.baseline|scripts/ir_census\.targets\.baseline)$'
 main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
   if [ "$1" -ge 2 ]; then
     [ "$2" = yes ] && return 0
@@ -732,6 +740,14 @@ main_provenance_step() { # parent-count pr-merged(yes|no|-) changed-paths commit
     return 1
   fi
   if [ "$1" = 1 ] && [ -n "$3" ]; then
+    ## The floors are checked before the oracle set that also lists them: a floors commit stands
+    ## alone (#1879), so the walk can read its numbers without another oracle riding the same commit.
+    if printf '%s\n' "$3" | grep -Eq "$LAND_TAIL_FLOORS_RE"; then
+      printf '%s\n' "$3" | grep -Evq "$LAND_TAIL_FLOORS_RE" || return 5
+      echo "  REFUSE: main's $4 mixes the IR coverage floors with other paths; a floors commit changes"
+      echo "          scripts/ir_census.{src,targets}.baseline and nothing else (#1879)."
+      return 1
+    fi
     printf '%s\n' "$3" | grep -Evq "$LAND_TAIL_ORACLE_RE" || return 3
     printf '%s\n' "$3" | grep -Evq "$LAND_TAIL_RESEED_RE" || {
       printf '%s\n' "$3" | grep -qx seed/alatyr && return 3; }
@@ -777,6 +793,44 @@ seed_retirement_commit_ok() { # commit — the shape, read from git
   seed_retirement_shape_ok "$(git diff-tree --no-commit-id --name-status -r "$1")" \
     "$(git diff-tree -p --no-color --no-ext-diff --no-textconv "$1^" "$1" -- scripts/seed_forms.tsv |
        sed -n '/^@@/,$p' | grep -E '^[+-]')"
+}
+## Does one floor file's change keep every number, or lower one only under an ack it adds? Input: the
+## path (for the message), the parent's text and the commit's text. Every `<key>=<n>` of the parent
+## must survive with a number at least as large (the smallest, if the key repeats), unless the new text
+## has a `## <key>-coverage-ok:` line citing `#<issue>` that the parent did not have verbatim. A key the
+## parent lacked is new coverage, not a lowering. Parsing the rest is ir_census.sh's: the gate refuses
+## a malformed floor file on its next run.
+ir_floors_shape_ok() { # path parent-text commit-text -> 0 ok, 1 not (says why)
+  local line k v nv a acked why=""
+  while IFS= read -r line; do
+    case "$line" in [a-z0-9_]*=*) ;; *) continue ;; esac
+    k="${line%%=*}"; v="${line#*=}"
+    case "$v" in ''|*[!0-9]*) continue ;; esac
+    nv="$(printf '%s\n' "$3" | awk -F= -v k="$k" '$1 == k { if (m == "" || $2 + 0 < m + 0) m = $2 } END { print m }')"
+    case "$nv" in
+      '') why="$why it drops $k (was $v);"; continue ;;
+      *[!0-9]*) why="$why its $k is not a number ($nv);"; continue ;;
+    esac
+    [ "$nv" -lt "$v" ] || continue
+    acked=no
+    while IFS= read -r a; do
+      [ -n "$a" ] || continue
+      printf '%s\n' "$2" | grep -qxF -- "$a" || acked=yes
+    done <<< "$(printf '%s\n' "$3" | grep -E "^## ${k}-coverage-ok:.*#[0-9]")"
+    [ "$acked" = yes ] || why="$why it lowers $k $v -> $nv with no '## $k-coverage-ok: #<issue>' ack of its own;"
+  done <<< "$2"
+  [ -z "$why" ] && return 0
+  echo "  REFUSE: $1 is not an IR coverage floors follow:$why"
+  echo "          A floor never goes down without an ack (alatyr-integrate, #1879)."
+  return 1
+}
+ir_floors_commit_ok() { # commit — every floor file it changes, read from git
+  local p rc=0
+  for p in $(git diff-tree --no-commit-id --name-only -r "$1"); do
+    ir_floors_shape_ok "$p in $(git rev-parse --short "$1")" \
+      "$(git show "$1^:$p" 2>/dev/null)" "$(git show "$1:$p" 2>/dev/null)" || rc=1
+  done
+  return $rc
 }
 ## The tail's kinds from main's tip down to the PR merge (oracle, reseed, retire): a retirement counts
 ## only above a reseed, the promotion that answers its form. One pushed alone is a row dropped ungated.
@@ -960,7 +1014,7 @@ xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=174  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566, +17 #1648, +2 #1877
+LAND_SELFTEST_EXPECTED=190  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566, +17 #1648, +2 #1877
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -1405,9 +1459,51 @@ Not a bullet.
   # #1877: the IR coverage floors' follow commit (alatyr-integrate, #1786) is an integrator tail; one
   # refused here stopped the merge queue for every PR after #1820's landing (4ecf44f0).
   main_provenance_step 1 - "$(printf '%s\n%s' scripts/ir_census.src.baseline scripts/ir_census.targets.baseline)" f1 >/dev/null 2>&1
-  [ $? = 3 ]; _ck $? provenance-stopped-at-an-ir-coverage-floors-commit
+  [ $? = 5 ]; _ck $? provenance-did-not-take-an-ir-coverage-floors-commit-as-a-candidate
+  main_provenance_step 1 - scripts/ir_census.targets.baseline f3 >/dev/null 2>&1
+  [ $? = 5 ]; _ck $? provenance-did-not-take-a-targets-only-floors-commit-as-a-candidate
   main_provenance_step 1 - "$(printf '%s\n%s' scripts/ir_census.src.baseline src/ir/build.al)" f2 >/dev/null 2>&1
   [ $? = 1 ]; _ck $? provenance-allowed-a-source-change-riding-an-ir-floors-commit
+  main_provenance_step 1 - "$(printf '%s\n%s' scripts/ir_census.targets.baseline scripts/corpus.manifest)" f4 >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? provenance-allowed-another-oracle-riding-an-ir-floors-commit
+  # #1879: a floors commit's numbers. The targets file before and after 5db1b0c0, which raised all four.
+  local fl0 fl1 fa
+  fl0="$(printf 'x86_64=1597\naarch64=2269\nriscv64=2269\nwasm=1692')"
+  fl1="$(printf 'x86_64=1934\naarch64=2384\nriscv64=2384\nwasm=1826')"
+  fa='## wasm-coverage-ok: #1084 — planted: mis-lowered functions now refused; slice N restores them.'
+  ir_floors_shape_ok t "$fl0" "$fl1" >/dev/null; _ck $? floors-refused-the-5db1b0c0-raise
+  ir_floors_shape_ok t "$fl1" "$fl1" >/dev/null; _ck $? floors-refused-an-unchanged-file
+  out="$(ir_floors_shape_ok t "$fl1" "$(printf '%s' "$fl1" | sed 's/^wasm=1826$/wasm=1800/')")"
+  [ $? = 1 ]; _ck $? floors-allowed-a-lowering-without-an-ack
+  case "$out" in *'lowers wasm 1826 -> 1800'*) _ck 0 x ;; *) _ck 1 floors-did-not-name-the-lowered-key ;; esac
+  ir_floors_shape_ok t "$fl1" "$(printf '%s\n%s' "$(printf '%s' "$fl1" | sed 's/^wasm=1826$/wasm=1800/')" "$fa")" >/dev/null
+  _ck $? floors-refused-a-lowering-with-its-own-ack
+  ir_floors_shape_ok t "$(printf '%s\n%s' "$fl1" "$fa")" "$(printf '%s\n%s' "$(printf '%s' "$fl1" | sed 's/^wasm=1826$/wasm=1800/')" "$fa")" >/dev/null
+  [ $? = 1 ]; _ck $? floors-allowed-a-lowering-under-an-ack-the-parent-already-had
+  ir_floors_shape_ok t "$fl1" "$(printf '%s\n%s' "$(printf '%s' "$fl1" | sed 's/^wasm=1826$/wasm=1800/')" '## wasm-coverage-ok: it is fine.')" >/dev/null
+  [ $? = 1 ]; _ck $? floors-allowed-a-lowering-under-an-ack-citing-no-issue
+  ir_floors_shape_ok t "$fl1" "$(printf '%s\n%s' "$(printf '%s' "$fl1" | sed 's/^wasm=1826$/wasm=1800/')" "${fa/wasm-/x86_64-}")" >/dev/null
+  [ $? = 1 ]; _ck $? floors-allowed-a-lowering-under-another-keys-ack
+  ir_floors_shape_ok t "$fl1" "$(printf '%s' "$fl1" | grep -v '^wasm=')" >/dev/null
+  [ $? = 1 ]; _ck $? floors-allowed-a-dropped-key
+  ir_floors_shape_ok t "$fl1" "$(printf '%s\nwasm=10' "$fl1")" >/dev/null
+  [ $? = 1 ]; _ck $? floors-allowed-a-repeated-key-that-lowers
+  ir_floors_shape_ok s "$(printf 'src=2946\nlib=209')" "$(printf 'src=2950\nlib=209\nnew=1')" >/dev/null
+  _ck $? floors-refused-a-src-raise-with-a-new-key
+  # The same, read from git in a planted repository: a raise, a targets-only raise, then a lowering.
+  ( set -e; mkdir -p "$st/fl/scripts"; cd "$st/fl"; git init -q -b main .
+    git config user.email r@x; git config user.name r; git config commit.gpgsign false; git config core.hooksPath /dev/null
+    printf 'src=2900\nlib=209\n' > scripts/ir_census.src.baseline; printf '%s\n' "$fl0" > scripts/ir_census.targets.baseline
+    git add -A; git commit -qm base
+    printf 'src=2946\nlib=209\n' > scripts/ir_census.src.baseline; printf '%s\n' "$fl1" > scripts/ir_census.targets.baseline
+    git commit -qam raise; git tag raise
+    printf '%s\n' "$fl1" | sed 's/^wasm=1826$/wasm=1900/' > scripts/ir_census.targets.baseline
+    git commit -qam targets; git tag targets
+    printf 'src=2000\nlib=209\n' > scripts/ir_census.src.baseline; git commit -qam lower; git tag lower ) >/dev/null 2>&1
+  ( cd "$st/fl" && ir_floors_commit_ok raise ) >/dev/null 2>&1; _ck $? floors-read-from-git-refused-a-raise
+  ( cd "$st/fl" && ir_floors_commit_ok targets ) >/dev/null 2>&1; _ck $? floors-read-from-git-refused-a-targets-only-raise
+  ( cd "$st/fl" && git rev-parse -q --verify lower >/dev/null && ! ir_floors_commit_ok lower ) >/dev/null 2>&1
+  _ck $? floors-read-from-git-allowed-a-lowering
   main_provenance_step 1 - "$(printf '%s\n%s' scripts/corpus.manifest src/lower.al)" x1 >/dev/null 2>&1
   [ $? = 1 ]; _ck $? provenance-allowed-a-source-change-riding-an-oracle-commit
   main_provenance_step 0 - '' root >/dev/null 2>&1
@@ -1704,6 +1800,8 @@ while :; do
   main_provenance_step "$prov_np" "$prov_v" "$prov_files" "$(git rev-parse --short "$prov_c")"; prov_rc=$?
   if [ "$prov_rc" = 4 ]; then
     seed_retirement_commit_ok "$prov_c" && prov_rc=3 || prov_rc=1
+  elif [ "$prov_rc" = 5 ]; then
+    ir_floors_commit_ok "$prov_c" && prov_rc=3 || prov_rc=1
   fi
   case "$prov_rc" in
     0) echo "  $(git rev-parse --short "$prov_c") merges a PR head GitHub records as merged into main"
