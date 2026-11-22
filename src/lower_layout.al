@@ -6315,14 +6315,280 @@ targ_is_tparam := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) 
 ## `brand_underlying`, but only a declaration the spelling module can name competes (`kind0_visible`):
 ## `pub u64 := u8` in a sibling module `z` is not `m`'s `u64` (Modules §3), so `rd(u64, h)` written in
 ## `m` is the prelude's `u64`, not an instance at `u8` (#1808, a one-byte read).
+## A QUALIFIED head first resolves its qualifier to the module it names (`qm_resolve`); the declaration is
+## then that module's own. Only a qualifier no scope binds is ranked by its text (`targ_cand_rank`), and
+## only with no spelling module at all is a module alias found by name alone (`qualified_module_alias`).
 targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
   kqh := type_path_head(src, s, n)
+  if kqh.n != 0 {
+    nmod := type_naming_at(src, s)
+    match nmod {
+      Some(m) => {
+        qm := qm_resolve(decls, src, m.s, m.l, kqh, 0)
+        match qm {
+          QualMod::Module(ms, ml) => { return targ_kind0_at(decls, src, s, n, ms, ml) }
+          QualMod::Text(ts, tn) => { return targ_kind0_in(decls, src, s, n, LSpan(s = ts, n = tn)) }
+          QualMod::Unbound => { return targ_kind0_in(decls, src, s, n, kqh) }
+          QualMod::Unresolved => { return 0 - 1 }
+        }
+      }
+      None => {}
+    }
+  }
   ki := targ_kind0_in(decls, src, s, n, kqh)
   if ki >= 0 or kqh.n == 0 { return ki }
   ## A qualifier that is a module alias (`ser := std::serialize`, then `ser::T`) names the module it binds.
   ah := qualified_module_alias(decls, src, kqh.s, kqh.n)
   if ah.n == 0 { return ki }
   targ_kind0_in(decls, src, s, n, ah)
+}
+
+## The value declaration named by the head's last segment in the module `[ms, ms+ml)` itself, else -1.
+targ_kind0_at := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, ms : usize, ml : usize) -> i64 {
+  nm := targ_tail(src, s, n)
+  di := qm_decl_in(decls, src, ms, ml, nm)
+  match di {
+    Some(i) => { return i64(i) }
+    None => { return 0 - 1 }
+  }
+}
+
+## ---------------------------------------------------------------------------------------------
+## #1808 — the module a QUALIFIED type head's qualifier names. Its first segment resolves the way a bare
+## name resolves (Declarations §5, §6.1; Modules §3): scope by scope, from the spelling module up through
+## its ancestors to the package root, and the FIRST scope that binds the name wins. A scope binds a name
+## by a declaration of that name (a module alias `k := z` or `k := zz::a`, Modules §4.1) or by a child
+## module of that name (Modules §5 counts both as naming the scope, and both at once is a clash). An
+## alias's right-hand side is the declaring scope's text, so it resolves from that scope (Declarations
+## §1.3). The remaining segments then navigate down (Modules §2, §4.2). Before this, the qualifier was
+## ranked as a module path first and the spelling module's own binding was asked only when no module
+## matched at all: `k := z` in `m` lost to the root's child `k`, or to any module whose last segment is
+## `k` (`type_mod_head_matches`' leniency), and `rd(k::C, h)` was registered at that module's `C`.
+##   Module(s, l)  the module identity span the qualifier names
+##   Text(s, n)    an alias whose right-hand side no scope binds (a library path): ranked by that text
+##   Unbound       no scope binds the first segment: the qualifier is ranked by its own text
+##   Unresolved    a scope binds it, but the path names no module: no declaration answers
+QualMod := enum { Module(usize, usize), Text(usize, usize), Unbound, Unresolved }
+
+## Whether the module span `[ms, ms+ml)` is the anonymous package root (`type_anc_rank_from`'s test).
+qm_is_root := fn(ms : usize, ml : usize) -> bool { ms == TRM_RS and ml == TRM_RL }
+
+## Whether the declaration module `[ds, ds+dl)` is the module `[ms, ms+ml)`.
+qm_same_mod := fn(src : ptr(u8), ds : usize, dl : usize, ms : usize, ml : usize) -> bool {
+  if qm_is_root(ms, ml) { return qm_is_root(ds, dl) }
+  if qm_is_root(ds, dl) { return false }
+  type_module_eq(src, ds, dl, ms, ml)
+}
+
+## The first segment of the path `[s, s+n)`: `a::b::c` -> `a`.
+qm_first_seg := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut i : usize = 0
+  while i + 1 < n {
+    if str_at((src + s + i), 2) == "::" { return LSpan(s = s, n = i) }
+    i = i + 1
+  }
+  LSpan(s = s, n = n)
+}
+
+## The path `p` after its first segment `g`: `a::b::c` -> `b::c`, `a` -> empty.
+qm_rest := fn(p : LSpan, g : LSpan) -> LSpan {
+  if g.n + 2 > p.n { return LSpan(s = 0, n = 0) }
+  LSpan(s = p.s + g.n + 2, n = p.n - g.n - 2)
+}
+
+## Whether `[s, s+n)` is a path of identifiers (`z`, `zz::a`), the only right-hand side that can name a module.
+qm_path_shaped := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 0 { return false }
+  mut i : usize = 0
+  while i < n {
+    if not ll_ident_byte(src, s + i) and str_at((src + s + i), 1) != ":" { return false }
+    i += 1
+  }
+  true
+}
+
+## The parent of the module `[ms, ms+ml)`: its path without the last segment, the root for a top-level module.
+qm_parent := fn(src : ptr(u8), ms : usize, ml : usize) -> ModSpan {
+  mut last : usize = 0
+  mut i : usize = 1
+  while i + 2 < ml {
+    w := str_at((src + ms + i), 2)
+    if w == "__" or w == "::" {
+      last = i
+      i = i + 2
+    } else {
+      i = i + 1
+    }
+  }
+  if last == 0 { return ModSpan(s = TRM_RS, l = TRM_RL) }
+  ModSpan(s = ms, l = last)
+}
+
+## The declaration named `g` in the module `[ms, ms+ml)` itself (not its ancestors), else None. Only a value
+## declaration (kind 0) counts: a module alias is one, and a struct or enum of that name is not a module.
+qm_decl_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, g : LSpan) -> Option(u64) {
+  cnt := rt::vec_len(deref(decls))
+  th := _fnv_name(src, g.s, g.n)
+  mut jc := lni_lo(decls, cnt, th)
+  jce := lni_hi(decls, cnt, th)
+  while jc < jce {
+    i := lni_at(decls, cnt, jc)
+    jc = jc + 1
+    if lni_skip(decls, cnt, i, th) == false {
+      d := deref(decl_get(decls, i))
+      if d.kind == DECL_KIND_VALUE and streq(src, d.name_start, d.name_len, g.s, g.n)
+         and qm_same_mod(src, d.mod_start, d.mod_len, ms, ml) {
+        return Option(u64).Some(u64(i))
+      }
+    }
+  }
+  Option(u64).None
+}
+
+## The child module `g` of the module `[ms, ms+ml)`, read off the published file table: files become
+## modules by path, and a directory without its own file still has the children whose paths run through
+## it (Modules §1). A child of the root is a module whose path begins with `g`. None when no file's module
+## path runs through it, or when no table is published for `src`.
+qm_child := fn(src : ptr(u8), ms : usize, ml : usize, g : LSpan) -> Option(ModSpan) {
+  none := Option(ModSpan).None
+  srco : Option(ptr(u8)) = TSM_SRC
+  mso : Option(ptr(rt::Vec)) = TSM_MS
+  mlo : Option(ptr(rt::Vec)) = TSM_ML
+  match srco { Some(ps) => { if ps != src { return none } }; None => { return none } }
+  match mso {
+    Some(mv) => {
+      match mlo {
+        Some(lv) => { return qm_child_in(src, mv, lv, ms, ml, g) }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  none
+}
+
+qm_child_in := fn(src : ptr(u8), mv : ptr(rt::Vec), lv : ptr(rt::Vec), ms : usize, ml : usize, g : LSpan) -> Option(ModSpan) {
+  root := qm_is_root(ms, ml)
+  mut pl : usize = 0
+  if not root { pl = ml + 2 }
+  cnt : usize = rt::vec_len(deref(mv))
+  mut k : usize = 0
+  while k < cnt {
+    fs : usize = rt::vec_get(deref(mv), k)
+    fl : usize = rt::vec_get(deref(lv), k)
+    k += 1
+    if not qm_is_root(fs, fl) and fl >= pl + g.n and qm_child_prefix(src, fs, fl, ms, ml, root, g) {
+      return Option(ModSpan).Some(ModSpan(s = fs, l = pl + g.n))
+    }
+  }
+  Option(ModSpan).None
+}
+
+## Whether the file module `[fs, fs+fl)` is the child `g` of `[ms, ms+ml)` or runs through it, segment-aligned.
+qm_child_prefix := fn(src : ptr(u8), fs : usize, fl : usize, ms : usize, ml : usize, root : bool, g : LSpan) -> bool {
+  mut pl : usize = 0
+  if not root {
+    if not type_module_eq(src, fs, ml, ms, ml) { return false }
+    sep := str_at((src + fs + ml), 2)
+    if sep != "__" and sep != "::" { return false }
+    pl = ml + 2
+  }
+  if not streq(src, fs + pl, g.n, g.s, g.n) { return false }
+  e : usize = pl + g.n
+  if e == fl { return true }
+  if e + 2 > fl { return false }
+  nx := str_at((src + fs + e), 2)
+  nx == "__" or nx == "::"
+}
+
+## What the scope `[ms, ms+ml)` binds the name `g` to, None when it binds no such name.
+qm_bound_at := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, g : LSpan, depth : usize) -> Option(QualMod) {
+  di := qm_decl_in(decls, src, ms, ml, g)
+  match di {
+    Some(i) => { return Option(QualMod).Some(qm_alias_target(decls, src, ms, ml, usize(i), depth)) }
+    None => {}
+  }
+  ch := qm_child(src, ms, ml, g)
+  match ch {
+    Some(c) => { return Option(QualMod).Some(QualMod.Module(c.s, c.l)) }
+    None => {}
+  }
+  Option(QualMod).None
+}
+
+## The module the value declaration `i` of the scope `[ms, ms+ml)` binds, its right-hand side resolved from
+## that scope. A declaration whose right-hand side is not a path (a function, a brand, an inline module, a
+## value) is not followed here: Unbound, so its text ranks as before.
+qm_alias_target := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, i : usize, depth : usize) -> QualMod {
+  d := deref(decl_get(decls, i))
+  mut rs : usize = d.ret_ts
+  mut rn : usize = d.ret_tl
+  if rn == 0 {
+    rs = d.alias_ts
+    rn = d.alias_tl
+  }
+  if d.is_fn or d.arity != 0 or rn == 0 { return QualMod.Unbound }
+  r := targ_trim(src, rs, rn)
+  if not qm_path_shaped(src, r.s, r.n) { return QualMod.Unbound }
+  q := qm_resolve(decls, src, ms, ml, r, depth + 1)
+  match q {
+    QualMod::Unbound => { return QualMod.Text(r.s, r.n) }
+    QualMod::Module(a, b) => { return q }
+    QualMod::Text(a, b) => { return q }
+    QualMod::Unresolved => { return q }
+  }
+}
+
+## The module the path `p`, spelled in the module `[ms, ms+ml)`, names (`QualMod`). Alias chains end after 8
+## links, so a cycle the checker has not refused yet ends Unresolved rather than looping.
+qm_resolve := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, p : LSpan, depth : usize) -> QualMod {
+  if depth > 8 or p.n == 0 { return QualMod.Unresolved }
+  g := qm_first_seg(src, p.s, p.n)
+  mut cs : usize = ms
+  mut cl : usize = ml
+  mut found : Option(QualMod) = Option(QualMod).None
+  loop {
+    found = qm_bound_at(decls, src, cs, cl, g, depth)
+    if qm_found(found) or qm_is_root(cs, cl) { break }
+    nx := qm_parent(src, cs, cl)
+    cs = nx.s
+    cl = nx.l
+  }
+  match found {
+    Some(q) => { return qm_navigate(decls, src, q, qm_rest(p, g), depth) }
+    None => { return QualMod.Unbound }
+  }
+}
+
+qm_found := fn(f : Option(QualMod)) -> bool {
+  match f {
+    Some(q) => { return true }
+    None => { return false }
+  }
+}
+
+## Navigate the segments `rest` down from `base`, each a child module or a module alias of the module
+## reached so far (Modules §2, §4.2). A segment the module does not bind names nothing: Unresolved.
+qm_navigate := fn(decls : ptr(rt::Vec), src : ptr(u8), base : QualMod, rest : LSpan, depth : usize) -> QualMod {
+  mut cur := base
+  mut r := rest
+  while r.n != 0 {
+    g := qm_first_seg(src, r.s, r.n)
+    match cur {
+      QualMod::Module(ms, ml) => {
+        st := qm_bound_at(decls, src, ms, ml, g, depth)
+        match st {
+          Some(q) => { cur = q }
+          None => { return QualMod.Unresolved }
+        }
+      }
+      QualMod::Text(ts, tn) => { return QualMod.Unresolved }
+      QualMod::Unbound => { return QualMod.Unresolved }
+      QualMod::Unresolved => { return QualMod.Unresolved }
+    }
+    r = qm_rest(r, g)
+  }
+  cur
 }
 
 ## `targ_kind0_decl` with the qualifier `qh` (0/0 for a bare head). The name is the head's LAST path
