@@ -5259,10 +5259,161 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
         }
         None => {}
       }
+      return ib_no(bp, e, NyWhy.NwOutside)
+    }
+    None => {}
+  }
+  ib_bx_ptr_field(bp, a, e, b, fs, fl)
+}
+
+## A pointer the builder holds in a vreg, and the span of the type it points at.
+IbPtrAt := struct { v : VRegId, s : usize, n : usize }
+## The pointer NAME `[s, s+n)`, a local or parameter declared `ptr(T)`, and its `T`.
+ib_ptr_name_at := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(IbPtrAt) {
+  if ib_names_global(bp, s, n) { return Option(IbPtrAt).None }
+  bd : IbBind = ib_lookup(bp, s, n)
+  match bd {
+    BdVal(v, vts, vtn) => {
+      if not kty_is_ptr(vreg_ty(ib_b_f(bp), usize(v))) { return Option(IbPtrAt).None }
+      po : Option(IbSpan) = ib_pointee(bp, vts, vtn)
+      match po { Some(ps) => { return Option(IbPtrAt).Some(IbPtrAt(v = v, s = ps.s, n = ps.n)) }; None => {} }
+    }
+    BdAgg(fr, sd, ts, tn) => {}
+    BdMem(mf, mns) => {}
+    BdArr(af, ats, atn) => {}
+    BdArrI(xf, xn, xes, xen) => {}
+    BdArrRef(qv, qn, qes, qel) => {}
+    BdRef(rv, rsd, rts, rtn) => {}
+    BdView(wf, wes, wen) => {}
+    BdStr(sf) => {}
+    BdNone => {}
+  }
+  Option(IbPtrAt).None
+}
+## #1863: `p.f`, `deref(p).f` and `deref(g(…)).f` — a scalar field of a struct behind a pointer, where
+## `ib_place_of` took no place. Two causes are lifted:
+##   (a) the struct is not laid out whole through a pointer (`ib_struct_named` or `ib_struct_ptr_why`
+##       refuses it: an array of non-word elements, an unproven aggregate child), but the field is in
+##       its WORD PREFIX (`ib_prefix_field`);
+##   (c) the pointer is the result of a direct call whose declared result is `ptr(S)`: the call is
+##       built once, then the field is read under the same rules as through a pointer name.
+## The prefix rule is proved against x86_64's legacy layout (`lower_layout::field_byte_place`), as
+## IR-39's image is, so the function is marked `fn_agg_field` and the twins keep it legacy.
+ib_bx_ptr_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : ptr(Expr), fs : usize, fl : usize) -> Option(VRegId) {
+  mut pa : IbPtrAt = IbPtrAt(v = VRegId(0), s = 0, n = 0)
+  mut have : bool = false
+  ## The two arms' locals have distinct names: same-named locals of different `Option(struct)` types in
+  ## sibling scopes are miscompiled (#1886, seed-forms row `sibling_option_locals`).
+  match deref(b) {
+    Expr::Var(s, n) => {
+      npo : Option(IbPtrAt) = ib_ptr_name_at(bp, s, n)
+      match npo { Some(p) => { pa = p; have = true }; None => {} }
+    }
+    Expr::Deref(pe) => {
+      ## The pointee as `deref` reads it whole (#1723, #1725): spelled by a pointer name's or a concrete
+      ## callee's declaration, or recorded by sema; a foreign callee's unproven pointee is `None`. The
+      ## pointer is built once, after the pointee is known.
+      dpo : Option(IbSpan) = ib_deref_pointee_of(bp, a, b, pe)
+      match dpo {
+        Some(ps) => {
+          pv := ib_bx(bp, a, pe)?
+          if not kty_is_ptr(vreg_ty(ib_b_f(bp), usize(pv))) { return ib_no(bp, e, NyWhy.NwDisagree) }
+          pa = IbPtrAt(v = pv, s = ps.s, n = ps.n)
+          have = true
+        }
+        None => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  if not have { return ib_no(bp, e, NyWhy.NwOutside) }
+  mut fo : Option(IbFld) = Option(IbFld).None
+  sto : Option(IbSt) = ib_struct_named(bp, a, pa.s, pa.n)
+  match sto {
+    Some(st) => { if ib_struct_ptr_ok(bp, a, st) { fo = ib_field(bp, a, st, fs, fl) } }
+    None => {}
+  }
+  mut whole : bool = false
+  match fo { Some(f0) => { whole = true }; None => {} }
+  if not whole {
+    fo = ib_prefix_field(bp, a, pa.s, pa.n, fs, fl)
+    match fo { Some(f1) => { fn_set_agg_field(ib_b_f(bp)) }; None => {} }
+  }
+  match fo {
+    Some(fld) => {
+      k := ib_ty(bp, e)?
+      if not ib_ks_eq(k, IbKS(ty = fld.ty, sg = fld.sg)) { return ib_no(bp, e, NyWhy.NwDisagree) }
+      opv := o_vreg(pa.v)
+      lv := ib_load_at(bp, a, opv, fld)
+      return Option(VRegId).Some(lv)
     }
     None => {}
   }
   ib_no(bp, e, NyWhy.NwOutside)
+}
+## #1863 (a): scalar field `[fs, fs+fl)` of the struct named `[s, s+n)` behind a pointer, by the WORD
+## PREFIX rule. The struct need not be laid out whole: the field must come before every child whose
+## layout the builder has not proved. Each field up to and including it is a one-word kernel scalar or
+## a fixed array of 8-byte kernel scalars (`ib_arr_of`), carries no layout attribute, and sits at byte
+## `8 * w`, `w` the words before it, in `lower_layout::field_byte_place` — the place x86_64's legacy
+## emitter reads and writes (`ib_struct_image_why`). Such a field has that offset whatever the children
+## after it turn out to be (Types §6.1: declaration order). A levered (`@packed`, BYTE-tier), `@align`
+## or generic struct is refused. A narrow field is read at its own width at the start of its word, as
+## through any pointer (`ib_struct_ptr_why`, IR-37).
+ib_prefix_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, fs : usize, fl : usize) -> Option(IbFld) {
+  bv : IbB = deref(bp)
+  sdi := lower_layout::struct_decl_of(bv.decls, bv.src, s, n)
+  if sdi < 0 { return Option(IbFld).None }
+  d : Decl = deref(ib_decl_ptr(bv.decls, usize(sdi)))
+  if d.is_generic { return Option(IbFld).None }
+  lk := lower_layout::layout_kind(bv.decls, bv.src, s, n, a)
+  if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return Option(IbFld).None }
+  if lower_layout::struct_align_attr(bv.decls, bv.src, s, n) >= 1 { return Option(IbFld).None }
+  mut f := d.fields_head
+  mut w : usize = 0
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        if lower_layout::field_align_attr(bv.src, fd.ns) >= 0 or lower_layout::field_offset_attr(bv.src, fd.ns) >= 0
+          or lower_layout::field_endian_attr(bv.src, fd.ns) >= 0 { return Option(IbFld).None }
+        fp := lower_layout::field_byte_place(bv.decls, bv.src, s, n, fd.ns, fd.nl, a)
+        if not fp.addressable or fp.off != i64(8 * w) { return Option(IbFld).None }
+        ko : Option(IbKS) = ib_name_ks(bv.src, fd.ts, fd.tl)
+        if fd.nl == fl and streq(bv.src, fd.ns, fd.nl, fs, fl) {
+          match ko {
+            Some(k) => {
+              if fd.wsize != 1 { return Option(IbFld).None }
+              return Option(IbFld).Some(IbFld(off = ByteOff(8 * w), ty = k.ty, sg = k.sg, be = false))
+            }
+            None => { return Option(IbFld).None }
+          }
+        }
+        match ko {
+          Some(k) => {
+            if fd.wsize != 1 { return Option(IbFld).None }
+            w = w + 1
+          }
+          None => {
+            ro : Option(IbArr) = ib_arr_of(bp, a, fd.ts, fd.tl, true)
+            match ro {
+              Some(r) => {
+                if fd.wsize != r.n { return Option(IbFld).None }
+                w = w + r.n
+              }
+              None => { return Option(IbFld).None }
+            }
+          }
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  Option(IbFld).None
 }
 
 ## `T[i]` of a module-global fixed array whose cells the target's data emitter already lays out as a
