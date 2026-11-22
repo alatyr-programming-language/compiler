@@ -86,7 +86,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
 (CSpan, decl_at, decl_get, node_ptr, streq, param_find, effective_param_count, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl, typeinfo_arg_span) := lower_ctx
-(export_name, extern_symbol, field_type_span, fixed_array_byte_return_len, fixed_array_byte_return_len_span, fn_returns_tuple, tuple_words) := lower
+(export_name, extern_symbol, field_type_span, fixed_array_byte_return_len, fixed_array_byte_return_len_span, fn_returns_tuple, refuse_deref_arr_copy, tuple_words) := lower
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
 
@@ -7310,6 +7310,7 @@ emit_a64_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, 
         st := deref(stmt_p(Stmt, sq))
         match st {
           Stmt::Assign(ns, nl, v, nx) => {
+            refuse_deref_arr_copy(v, src, ns, nl, a64_local_ann_span(body_head, src, ns, nl, a))  ## #1809/#1811 — a whole fixed-array deref copy is refused here, located
             ## FLAT (no nesting): a StructLit constructs fields into p's slots; an EnumLit constructs
             ## {disc, payload…}; anything else is the scalar store (PARAM > GLOBAL > LOCAL). Guards
             ## (`isslit`/`iselit`/`useframe`) keep the paths disjoint.

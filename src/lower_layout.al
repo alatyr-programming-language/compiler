@@ -3004,7 +3004,7 @@ pub narrow_signed_min := fn(name : str) -> i64 {
 }
 
 ## Is byte `[p]` a blank inside a TYPE text? Bounded by the caller's `[ts, ts+tl)` extent.
-type_text_blank := fn(src : ptr(u8), p : usize) -> bool {
+pub type_text_blank := fn(src : ptr(u8), p : usize) -> bool {
   c := str_at((src + p), 1)
   c == " " or c == "\n" or c == "\t" or c == "\r"
 }

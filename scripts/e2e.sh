@@ -6492,6 +6492,239 @@ issue1212_located_refusals_test() {
   done
 }
 
+## Issue #1809 — a whole fixed array copied out of a pointer, `v : [T; N] = deref(p)` or `v = deref(p)`,
+## is copied on x86_64 for a byte or word integer element (test/issue1809_deref_whole_array.al); any
+## other element is refused there, located, rather than moved one word (the parent's answer). Both are
+## VALID programs, so they are generated here and add no corpus fixture (see #1212 above). A struct
+## element waits on a per-field copy; a `u16` element on the Types §6.4 stride of `[u16; N]` (#1559).
+## A length written as a named constant or a constant expression (`[u64; K]`, `[u64; 1 + 1]`) is refused
+## too until the copy evaluates it (#1833): the parent answered garbage and 41 where 42 is due. A
+## reassigned array local declared without `: [T; N]` (`mut v := [u64(0), u64(0)]`) has no element type
+## or count to read and is refused (the parent moved one word: 40 and 0 where 42 is due), and so is a
+## reassignment whose declaration in effect cannot be told apart from a same-named lambda parameter
+## (#1844 tracks copying both), including one written on its own line of a parameter list. A
+## `[u64; 2]` local that reuses the frame slot of an earlier, out-of-scope `[u8; 16]` of the same name is
+## refused too, rather than copied into a block laid out for the other array (#1847; it answered 2).
+## A declaration with a `#` comment between its name and its `:` is not read past the comment (#1859):
+## a reassignment of it is refused (the parent's one-word store was right there, 42), and so is such a
+## declaration of an array whose value is the `deref` (it reserved no array and moved one word: the
+## round-8 review's z07b, this row, gave 40 on head and parent alike), also when the array type carries a
+## prefix attribute (`@align(16) [u64; 2]`, round-10 probe a01: 40).
+## A byte array declared with a prefix attribute and a literal, `mut z : @align(8) [u8; 3] = [0, 0, 0]`,
+## has a frame block laid out otherwise, so `z = deref(b)` is refused under #1847 (round-10 probe a30: 20).
+issue1809_deref_arr_refusals_test() {
+  local d="$T/issue1809_deref_arr_refusals" n src out err got
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue1809_deref_arr_refusals: scratch"; fail=1; return; }
+  printf '%s\n' \
+    'P := struct { a : u64, b : u64 }' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([P; 2]) = unchecked bitcast(ptr([P; 2]), h)' \
+    '  v : [P; 2] = deref(p)' \
+    '  v[1].b' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [P; 2] = [P(a = 1, b = 2), P(a = 3, b = 42)]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/struct_elem.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u16; 2]) = unchecked bitcast(ptr([u16; 2]), h)' \
+    '  mut v : [u16; 2] = [0, 0]' \
+    '  v = deref(p)' \
+    '  u64(v[1])' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut w : u64 = 2752513' \
+    '  rd(unchecked bitcast(usize, ptr(w)))' \
+    '}' > "$d/narrow_reassign.al"
+  printf '%s\n' \
+    'K := 2' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  v : [u64; K] = deref(p)' \
+    '  v[0] + v[1]' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/named_len.al"
+  printf '%s\n' \
+    'K := 2' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; K] = [0, 0]' \
+    '  v = deref(p)' \
+    '  v[0] + v[1]' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/named_len_reassign.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  v : [u64; 1 + 1] = deref(p)' \
+    '  v[0] + v.len' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/expr_len.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v := [u64(0), u64(0)]' \
+    '  v = deref(p)' \
+    '  v[0] + v[1]' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/inferred_reassign.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; 2] = [0, 0]' \
+    '  f := fn(v : u64) -> u64 { v }' \
+    '  v = deref(p)' \
+    '  v[0] + v[1] + f(0)' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/decl_unknown.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v := [u64(0), u64(0)]' \
+    '  v[0] = 1' \
+    '  v = deref(p)' \
+    '  v[1] * 21' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/inferred_reassign_idx.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; 2] = [0, 0]' \
+    '  f := fn(' \
+    '    v : u64' \
+    '  ) -> u64 { v + 1 }' \
+    '  v = deref(p)' \
+    '  v[0] + v[1] + f(0) - 1' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut a : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(a)))' \
+    '}' > "$d/decl_unknown_param_line.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; 2] = [0, 0]' \
+    '  add := fn(k : u64,' \
+    '    v : u64) -> u64 { k + v }' \
+    '  v = deref(p)' \
+    '  v[0] + v[1] + add(0, 0)' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut a : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(a)))' \
+    '}' > "$d/decl_unknown_param_list.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  mut r : u64 = 0' \
+    '  for i in 0..1 {' \
+    '    mut v : [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]' \
+    '    r = u64(v[15])' \
+    '  }' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  mut v : [u64; 2] = [0, 0]' \
+    '  v = deref(p)' \
+    '  v[0] + v[1] + r' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut a : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(a)))' \
+    '}' > "$d/shared_slot.al"
+  printf '%s\n' \
+    'rd := fn(hq : usize) -> u64 {' \
+    '  q : ptr(u64) = unchecked bitcast(ptr(u64), hq)' \
+    '  mut v : [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0]' \
+    '  mut r : u64 = 0' \
+    '  if hq != 0 {' \
+    '    mut v # the scalar' \
+    '      : u64 = 0' \
+    '    v = deref(q)' \
+    '    r = (v % 4294967296) + (v / 4294967296)' \
+    '  }' \
+    '  r + u64(v[0])' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut wq : u64 = 8589934632' \
+    '  rd(unchecked bitcast(usize, ptr(wq)))' \
+    '}' > "$d/decl_comment_colon.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  v # the copy' \
+    '    : [u64; 2] = deref(p)' \
+    '  v.len + 40' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/decl_comment_colon_decl.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  p : ptr([u64; 2]) = unchecked bitcast(ptr([u64; 2]), h)' \
+    '  v # the copy' \
+    '    : @align(16) [u64; 2] = deref(p)' \
+    '  v.len + 40' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut arr : [u64; 2] = [40, 2]' \
+    '  rd(unchecked bitcast(usize, ptr(arr)))' \
+    '}' > "$d/decl_comment_colon_attr.al"
+  printf '%s\n' \
+    'rd := fn(h : usize) -> u64 {' \
+    '  b : ptr([u8; 3]) = unchecked bitcast(ptr([u8; 3]), h)' \
+    '  mut z : @align(8) [u8; 3] = [0, 0, 0]' \
+    '  z = deref(b)' \
+    '  u64(z[0]) + u64(z[1]) + u64(z[2])' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut w : u64 = 1115412' \
+    '  rd(unchecked bitcast(usize, ptr(w)))' \
+    '}' > "$d/attr_byte_reassign.al"
+  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown decl_unknown_param_line decl_unknown_param_list shared_slot decl_comment_colon decl_comment_colon_decl decl_comment_colon_attr attr_byte_reassign; do
+    src="$d/$n.al"; out="$d/$n.out"; err="$d/$n.err"
+    "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
+    if [ "$got" = 0 ]; then echo "FAIL issue1809_deref_arr_refusals($n): build succeeded, want a located reject"; fail=1; continue; fi
+    if [ -e "$out" ]; then echo "FAIL issue1809_deref_arr_refusals($n): rejected but left an output artifact"; fail=1; continue; fi
+    case "$n" in
+      struct_elem) grep -qF 'a fixed array copied out of a pointer' "$err" && grep -qF 'v : [P; 2] = deref(p)' "$err" ;;
+      narrow_reassign) grep -qF 'a fixed array copied out of a pointer' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      named_len) grep -qF 'needs its length' "$err" && grep -qF 'v : [u64; K] = deref(p)' "$err" ;;
+      named_len_reassign) grep -qF 'needs its length' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      expr_len) grep -qF 'needs its length' "$err" && grep -qF 'v : [u64; 1 + 1] = deref(p)' "$err" ;;
+      inferred_reassign) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      inferred_reassign_idx) grep -qF 'into a local declared without a type' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      decl_unknown) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      decl_unknown_param_line|decl_unknown_param_list) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+      attr_byte_reassign) grep -qF 'laid out at another element tier or length' "$err" && grep -qF 'z = deref(b)' "$err" ;;
+      decl_comment_colon_attr) grep -qF 'not read past a comment' "$err" && grep -qF 'v # the copy' "$err" ;;
+      decl_comment_colon_decl) grep -qF 'not read past a comment' "$err" && grep -qF 'v # the copy' "$err" ;;
+      decl_comment_colon) grep -qF 'not read past a comment' "$err" && grep -qF 'v = deref(q)' "$err" ;;
+      shared_slot) grep -qF 'shares its frame slot with an earlier array' "$err" && grep -qF 'v = deref(p)' "$err" ;;
+    esac
+    if [ $? = 0 ]; then echo "ok   issue1809_deref_arr_refusals($n): refused, located"
+    else echo "FAIL issue1809_deref_arr_refusals($n): rc=$got but the reason or its source line is missing"; fail=1; fi
+  done
+}
+
 issue1663_unemitted_place_shapes_test() {
   d="$T/issue1663_unemitted"; mkdir -p "$d"
   cat > "$d/elem_arg.al" <<'EOF'
@@ -12984,6 +13217,7 @@ build_reject_has reject_map_ufcs_direct_struct "match recv.map(f)"
 ## a payload wider than six words is refused at its constructor; both located (generated programs).
 run issue1212_option_deref_struct 42
 issue1212_located_refusals_test
+issue1809_deref_arr_refusals_test
 run unwrap_bound_generic_call 42
 build_reject_has reject_unwrap_bound_paramladen_call "implicit-UFCS call to a multi-type-parameter"
 
