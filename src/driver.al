@@ -3215,7 +3215,9 @@ pub compile_pair := fn(sa : str, sb_src : str, in out a : Arena) -> strbuf::StrB
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
-  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(name_start), ptr(name_len), ptr(src_off), ptr(src_len))  ## #1734
+  ## #1808: an in-memory module's name is given whole, one segment of the tree: no separators.
+  mut seps := rt::Vec(data = rt::bump(tar, 8), len = 0, cap = 1)
+  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(name_start), ptr(name_len), ptr(src_off), ptr(src_len), ptr(seps))  ## #1734
   sa_off := la + lb               ## source A begins after the two names
   sb_off := la + lb + lsa         ## source B begins after source A
   ## --- module A: lex its region [sa_off, sa_off+lsa) with lexrt (base_off = sa_off → token
@@ -3308,7 +3310,9 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
-  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(name_start), ptr(name_len), ptr(src_off), ptr(src_len))  ## #1734
+  ## #1808: an in-memory module's name is given whole, one segment of the tree: no separators.
+  mut seps := rt::Vec(data = rt::bump(tar, 8), len = 0, cap = 1)
+  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(name_start), ptr(name_len), ptr(src_off), ptr(src_len), ptr(seps))  ## #1734
   ## --- lex + parse each module's region into ONE rt Decl-handle Vec, threading nstr (all token
   ## records + the shared decls handle Vec + records live in `tar`, created above). ---
   ## Caps reserved from source size (rt::vec_push does not grow): decls ≤ total tokens ≤ total
@@ -3388,6 +3392,12 @@ d_is_root_path := fn(p : str) -> bool {
   return nm == "package"
 }
 
+## Write the `__` that joins two path segments of a module identity, recording where it starts.
+d_push_sep := fn(in out bld : strbuf::StrBuf, in out seps : rt::Vec) {
+  kv := rt::vec_push(seps, strbuf::buf_len(bld))
+  ks := strbuf::push_str(bld, "__")
+}
+
 ## Push module `p`'s NAME into the concat buffer `bld`. A path under a `/lib/` directory (the shipped
 ## ambient stdlib) is named by its lib-RELATIVE path with `/` → `__` and a trailing `.al` stripped —
 ## so `…/lib/std/io.al` becomes module `std__io`, whose `write` definition emits the label
@@ -3395,7 +3405,11 @@ d_is_root_path := fn(p : str) -> bool {
 ## `source_dir`: `…/src/geometry/vec.al` becomes `geometry__vec`, matching the source path
 ## `geometry::vec` and the spec's `::`→`__` symbol rule. Flat/direct files retain basename behavior.
 ## (Caller records the byte count via a buffer delta.)
-pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
+## #1808: `seps` records the buffer offset of every `__` written for a path separator (reserve
+## `d_path_seps(p)` slots). That is the module tree (Modules §1, §6.6): the identity alone cannot say
+## whether `p___q` is `p_/q.al` or `p/_q.al`, or whether `a__b` is `a/b.al` or the single file `a__b.al`;
+## the path can. The offsets ascend as the names are appended, so `lower_layout` searches them.
+pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str, in out seps : rt::Vec) {
   ## Modules §8 — a DEPENDENCY's module is named under its ALIAS: `<alias>__<path under the dep's
   ## source dir>`, so `…/dep/src/math.al` reached as `d` becomes `d__math` and a call spelled
   ## `d::math::answer()` mangles onto it. Check this FIRST: a dependency directory may legally
@@ -3403,13 +3417,13 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
   dpfx := dep_root_prefix(p)
   if dpfx != 0 {
     kal := strbuf::push_str(bld, str_at(DEP_ALIAS_S, DEP_ALIAS_N))
-    kus := strbuf::push_str(bld, "__")
+    d_push_sep(bld, seps)
     mut de := p.len
     if de >= dpfx + 3 and bytes(p)[de - 3] == 46 and bytes(p)[de - 2] == 97 and bytes(p)[de - 1] == 108 { de = de - 3 }
     mut dj := dpfx
     while dj < de {
       c := bytes(p)[dj]
-      if c == 47 { kd1 := strbuf::push_str(bld, "__") }
+      if c == 47 { d_push_sep(bld, seps) }
       else { kd2 := strbuf::push_byte(bld, c) }
       dj += 1
     }
@@ -3453,7 +3467,7 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
       mut j := s
       while j < e {
         c := bytes(p)[j]
-        if c == 47 { k1 := strbuf::push_str(bld, "__") }
+        if c == 47 { d_push_sep(bld, seps) }
         else { k2 := strbuf::push_byte(bld, c) }
         j += 1
       }
@@ -3468,11 +3482,35 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
     mut j := s
     while j < e {
       c := bytes(p)[j]
-      if c == 47 { k1 := strbuf::push_byte(bld, 95); k2 := strbuf::push_byte(bld, 95) }   ## '/' → "__"
+      if c == 47 { d_push_sep(bld, seps) }   ## '/' → "__"
       else { kb := strbuf::push_byte(bld, c) }
       j += 1
     }
   }
+}
+
+## The separators `push_module_name` can record for the path `p`: each stands for a `/` of it, and a
+## dependency's alias adds one more.
+d_path_seps := fn(p : str) -> usize {
+  mut c : usize = 1
+  mut i : usize = 0
+  while i < p.len {
+    if bytes(p)[i] == 47 { c += 1 }
+    i += 1
+  }
+  c
+}
+
+## `d_path_seps` over every path in `pv`.
+d_sep_cap := fn(pv : rt::Vec) -> usize {
+  n := rt::vec_len(pv)
+  mut c : usize = 1
+  mut k : usize = 0
+  while k < n {
+    c += d_path_seps(rt::svec_str_get(pv, k))
+    k += 1
+  }
+  c
 }
 
 ## Issue #655 — the PROVENANCE question `sema` used to answer by spelling. `push_module_name` above
@@ -5474,6 +5512,8 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   mut name_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut mod_start := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut mod_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
+  scap := d_sep_cap(pv)
+  mut seps := rt::Vec(data = rt::bump(tar, scap * 8), len = 0, cap = scap)   ## #1808: the module tree
   mut src_off := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   ## --- append all module NAMES (filename stems) first ---
@@ -5488,7 +5528,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     p := rt::svec_str_get(pv, k)
     rt::vec_push(name_start, strbuf::buf_len(bld))
     before := strbuf::buf_len(bld)
-    push_module_name(bld, p)                 ## stem, OR a `/lib/` path's mangled name (std__io)
+    push_module_name(bld, p, seps)   ## stem, OR a `/lib/` path's mangled name (std__io); #1808 records its tree
     nl := strbuf::buf_len(bld) - before
     rt::vec_push(name_len, nl)
     ## `name_*` stays the file's DIAGNOSTIC name (`… at line N in <module>`) for every file. `mod_*`
@@ -5536,7 +5576,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
-  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(mod_start), ptr(mod_len), ptr(src_off), ptr(src_len))  ## #1734
+  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(mod_start), ptr(mod_len), ptr(src_off), ptr(src_len), ptr(seps))  ## #1734, #1808
   if manifest_len != 0 {
     d_manifest_scan(str_at(base + manifest_off, manifest_len), manifest_off)
     if MANIFEST_HAS {
@@ -6959,6 +6999,8 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   mut name_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut mod_start := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut mod_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
+  scap := d_sep_cap(pv)
+  mut seps := rt::Vec(data = rt::bump(tar, scap * 8), len = 0, cap = scap)   ## #1808: the module tree
   mut src_off := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   ## --- module NAMES (filename stems, or a `/lib/` path's mangled name `std__math`) ---
@@ -6975,7 +7017,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     p := rt::svec_str_get(pv, k)
     rt::vec_push(name_start, strbuf::buf_len(bld))
     before := strbuf::buf_len(bld)
-    push_module_name(bld, p)
+    push_module_name(bld, p, seps)   ## #1808 records its tree
     nl := strbuf::buf_len(bld) - before
     rt::vec_push(name_len, nl)
     if d_is_bare_root_path(p) and d_is_root_path(p) == false {
@@ -7018,7 +7060,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
-  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(mod_start), ptr(mod_len), ptr(src_off), ptr(src_len))  ## #1734
+  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(mod_start), ptr(mod_len), ptr(src_off), ptr(src_len), ptr(seps))  ## #1734, #1808
   dcap := strbuf::buf_len(bld) + 16
   mut decls := rt::Vec(data = rt::bump(tar, dcap * 8), len = 0, cap = dcap)
   parser::set_structs_tbl(0)
@@ -7424,7 +7466,9 @@ pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   ## PC's own `mod_s`/`mod_l` stay 0/0 on purpose: they are stamped onto every `Decl`, and fmt's
   ## OUTPUT must not change.
   fmns := strbuf::buf_len(bld)
-  push_module_name(bld, path)
+  fscap := d_path_seps(path)
+  mut fseps := rt::Vec(data = rt::bump(tar, fscap * 8), len = 0, cap = fscap)
+  push_module_name(bld, path, fseps)
   fmnl := strbuf::buf_len(bld) - fmns
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
@@ -7708,6 +7752,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   mut name_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut mod_start := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut mod_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
+  scap := d_sep_cap(pv)
+  mut seps := rt::Vec(data = rt::bump(tar, scap * 8), len = 0, cap = scap)   ## #1808: the module tree
   mut src_off := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut root_k := n
@@ -7716,7 +7762,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     p := rt::svec_str_get(pv, k)
     rt::vec_push(name_start, strbuf::buf_len(bld))
     before := strbuf::buf_len(bld)
-    push_module_name(bld, p)                 ## stem, OR a `/lib/` path's mangled name (std__io)
+    push_module_name(bld, p, seps)   ## stem, OR a `/lib/` path's mangled name (std__io); #1808 records its tree
     nl := strbuf::buf_len(bld) - before
     rt::vec_push(name_len, nl)
     ## `name_*` stays the file's DIAGNOSTIC name (`… at line N in <module>`) for every file. `mod_*`
@@ -7761,7 +7807,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
   ast::set_src_extent(strbuf::buf_len(bld))
-  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(mod_start), ptr(mod_len), ptr(src_off), ptr(src_len))  ## #1734
+  lower_layout::set_spelling_modules(strbuf::strbuf_base(bld), ptr(mod_start), ptr(mod_len), ptr(src_off), ptr(src_len), ptr(seps))  ## #1734, #1808
   if manifest_len != 0 {
     d_manifest_scan(str_at(base + manifest_off, manifest_len), manifest_off)
     if MANIFEST_HAS {

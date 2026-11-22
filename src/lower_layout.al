@@ -544,17 +544,22 @@ pub type_mod_rank_from := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize,
 ## file's declarations, and the file's extent in the buffer. A span inside a file is named by that
 ## file's module; a span outside every file (a compiler-synthesized one, an early pass with no table,
 ## or a buffer this table was not published for) falls back to the published module, unchanged.
+## `TSM_SEP` is the module TREE beside it (#1808): the ascending buffer offsets of every `__` the driver
+## wrote to join two path segments of an identity (`driver::push_module_name`). A `__` the table does
+## not list is part of a segment's own name (Modules §6.6).
 mut TSM_SRC : Option(ptr(u8)) = Option.None
 mut TSM_MS : Option(ptr(rt::Vec)) = Option.None
 mut TSM_ML : Option(ptr(rt::Vec)) = Option.None
 mut TSM_SO : Option(ptr(rt::Vec)) = Option.None
 mut TSM_SL : Option(ptr(rt::Vec)) = Option.None
-pub set_spelling_modules := fn(src : ptr(u8), ms : ptr(rt::Vec), ml : ptr(rt::Vec), so : ptr(rt::Vec), sl : ptr(rt::Vec)) {
+mut TSM_SEP : Option(ptr(rt::Vec)) = Option.None
+pub set_spelling_modules := fn(src : ptr(u8), ms : ptr(rt::Vec), ml : ptr(rt::Vec), so : ptr(rt::Vec), sl : ptr(rt::Vec), seps : ptr(rt::Vec)) {
   TSM_SRC = Option(ptr(u8)).Some(src)
   TSM_MS = Option(ptr(rt::Vec)).Some(ms)
   TSM_ML = Option(ptr(rt::Vec)).Some(ml)
   TSM_SO = Option(ptr(rt::Vec)).Some(so)
   TSM_SL = Option(ptr(rt::Vec)).Some(sl)
+  TSM_SEP = Option(ptr(rt::Vec)).Some(seps)
 }
 ## A single-source pipeline has one module, so the published module already answers every name.
 pub clear_spelling_modules := fn() {
@@ -563,6 +568,7 @@ pub clear_spelling_modules := fn() {
   TSM_ML = Option(ptr(rt::Vec)).None
   TSM_SO = Option(ptr(rt::Vec)).None
   TSM_SL = Option(ptr(rt::Vec)).None
+  TSM_SEP = Option(ptr(rt::Vec)).None
 }
 
 ## The naming module of one type query, a module identity span `[s, s+l)`. A query has none (`None`)
@@ -658,6 +664,15 @@ pub type_mod_rank_in := fn(src : ptr(u8), as_ : usize, al : usize, nm : Option(M
     Some(m) => { return type_mod_rank_from(src, as_, al, m.s, m.l) }
     None => { return -1 }
   }
+}
+
+## The rank of an alias- or brand-shaped candidate declared in module `[ms, ms+ml)`: `type_decl_ranked`'s
+## rule (1) above the §3 chain, so a QUALIFIED spelling (`m::A`, head `qh`) names its module outright.
+## Without it the alias loops ranked by the spelling module alone, and `m::A` written in the root resolved
+## to the root's own `A` (a non-generic read of `m`'s struct with the root's layout, #1808).
+alias_cand_rank := fn(src : ptr(u8), ms : usize, ml : usize, nmod : Option(ModSpan), qh : LSpan) -> i64 {
+  if qh.n != 0 and type_module_eq(src, ms, ml, qh.s, qh.n) { return 1099511627776 }
+  type_mod_rank_in(src, ms, ml, nmod)
 }
 
 ## Write the SOURCE LINE containing byte offset `off` to stderr, then a span / a literal — the
@@ -1199,6 +1214,18 @@ pub type_span_resolves_alike := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usiz
   true
 }
 
+## Whether two spans of one text carry the same module-path head (`type_path_head`, which reads a
+## qualifier the parser left only in the adjacent source). The resolver caches below key a line on the
+## span's text and naming module; without the head, the tail `Node` of `m::Node` and a bare `Node` in
+## the same module shared a line, so the first answer (`m`'s struct) was every later one's, and the
+## root's struct was read with `m`'s layout (#1808, a wrong value).
+same_path_head := fn(src : ptr(u8), as_ : usize, an : usize, bs : usize, bn : usize) -> bool {
+  ha := type_path_head(src, as_, an)
+  hb := type_path_head(src, bs, bn)
+  if ha.n != hb.n { return false }
+  ha.n == 0 or streq(src, ha.s, ha.n, hb.s, hb.n)
+}
+
 ## Find the kind-2 (struct) `Decl` whose TYPE name matches `[s, s+n)` (by tail name, so a
 ## qualified `mod::P` resolves to struct `P`); returns its index in the decl vector, or -1 if
 ## none. Used to resolve a struct local's layout (field list). Candidates are ordered by
@@ -1211,8 +1238,9 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   ## #1734: the cache is keyed by the naming module of THIS span, which is what the answer depends on.
   nmod := type_naming_at(src, s)
   if _sdc_n[h] == n and _sdc_src[h] == src and naming_hit(src, nmod, _sdc_ctx[h], _sdc_ms[h], _sdc_ml[h])
-     and streq(src, _sdc_s[h], _sdc_n[h], s, n) { return _sdc_i[h] }
+     and streq(src, _sdc_s[h], _sdc_n[h], s, n) and same_path_head(src, _sdc_s[h], _sdc_n[h], s, n) { return _sdc_i[h] }
   nm := name_tail(src, s, n)
+  sqh := type_path_head(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 2, "struct")
   mut alias_ts := 0
   mut alias_tl := 0
@@ -1231,14 +1259,14 @@ pub struct_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
     ## alias declarations are ranked by the SAME §3 rule as the struct itself: an ancestor's alias
     ## shadows an unrelated module's same-named one instead of losing to declaration order.
     if d.kind == 0 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-      ar := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+      ar := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, sqh)
       if ar >= a_best { a_best = ar; alias_ts = d.ret_ts; alias_tl = d.ret_tl }
     }
     ## a GENERIC-INSTANCE type alias (TYP-10 slice C, `u128 := uint(128)`, Types §7) — the same
     ## one-level follow, keyed on the parser-recorded alias span: its BASE HEAD names the aliased
     ## generic struct (`uint`). (`alias_rhs` below recovers the FULL span, value args included.)
     if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-      ar2 := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+      ar2 := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, sqh)
       if ar2 >= a_best {
         abh := base_type_name(src, d.alias_ts, d.alias_tl)
         a_best = ar2; alias_ts = abh.s; alias_tl = abh.n
@@ -1270,6 +1298,7 @@ pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
   cnt := rt::vec_len(deref(decls))
   nm := name_tail(src, s, n)
   nmod := type_naming_at(src, s)
+  rqh := type_path_head(src, s, n)
   mut rs := s
   mut rn := n
   ## Modules §3: the alias declarations of one name are ranked, so an unrelated module's same-named
@@ -1285,8 +1314,8 @@ pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
     jc = jc + 1
     d := deref(decl_get(decls, i))
     if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n)
-       and type_mod_rank_in(src, d.mod_start, d.mod_len, nmod) >= a_best {
-      a_best = type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+       and alias_cand_rank(src, d.mod_start, d.mod_len, nmod, rqh) >= a_best {
+      a_best = alias_cand_rank(src, d.mod_start, d.mod_len, nmod, rqh)
       bh := base_type_name(src, d.alias_ts, d.alias_tl)
       sdi := struct_decl_of(decls, src, bh.s, bh.n)
       edi := enum_decl_of(decls, src, bh.s, bh.n)
@@ -1317,6 +1346,7 @@ pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
 pub brand_underlying := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
   cnt := rt::vec_len(deref(decls))
   nm := name_tail(src, s, n)
+  bqh := type_path_head(src, s, n)
   nmod := type_naming_at(src, s)
   mut best := 0 - 1
   mut found := false
@@ -1336,7 +1366,7 @@ pub brand_underlying := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
       ## the underlying type. `>=` keeps the last of equal-rank candidates, i.e. the historical
       ## answer (the FIRST match) whenever no naming module is published (every rank -1).
       if d.kind == 0 and d.arity == 1 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-        r := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+        r := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, bqh)
         if r > best or found == false { best = r; found = true; rs = d.ret_ts; rn = d.ret_tl }
       }
     }
@@ -5651,8 +5681,9 @@ pub enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   ## #1734: keyed by the naming module of THIS span, as `struct_decl_of` is.
   nmod := type_naming_at(src, s)
   if _edc_n[h] == n and _edc_src[h] == src and naming_hit(src, nmod, _edc_ctx[h], _edc_ms[h], _edc_ml[h])
-     and streq(src, _edc_s[h], _edc_n[h], s, n) { return _edc_i[h] }
+     and streq(src, _edc_s[h], _edc_n[h], s, n) and same_path_head(src, _edc_s[h], _edc_n[h], s, n) { return _edc_i[h] }
   nm := name_tail(src, s, n)
+  eqh := type_path_head(src, s, n)
   mut res := type_decl_ranked(decls, src, s, n, 3, "enum or union")
   mut alias_ts := 0
   mut alias_tl := 0
@@ -5666,7 +5697,7 @@ pub enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
     if lni_skip(decls, cnt, i, th) == false {
       d := deref(decl_get(decls, i))
       if d.kind == 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
-        ar := type_mod_rank_in(src, d.mod_start, d.mod_len, nmod)
+        ar := alias_cand_rank(src, d.mod_start, d.mod_len, nmod, eqh)
         if ar >= a_best {
           if d.ret_tl != 0 { a_best = ar; alias_ts = d.ret_ts; alias_tl = d.ret_tl }
           else if d.alias_tl != 0 {
@@ -6136,6 +6167,882 @@ pub base_type_name := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
     i += 1
   }
   LSpan(s = s, n = n)
+}
+
+## ───────────────────────── the identity of a generic instance's type argument ─────────────────────────
+##
+## #1808, #1810 — Comptime §3.2 gives each distinct comptime-argument set its own instance and §3.4 makes
+## identical ones share one. Mono keyed an instance on the type argument's TEXT, which is wrong both
+## ways: `Node` written in the root and `Node` written in module `m` are two types under one text (one
+## instance, one label `m__at__Node`, and the root's struct read with `m`'s layout: a wrong value), and
+## `ptr(u64)` and `ptr( u64 )` are one type under two texts (two definitions of one label). The answer
+## below is the type's identity: a named struct, enum or union is its DECLARATION, resolved from the
+## module whose text spells it (`type_naming_at`, #1734); everything else is its text with insignificant
+## blanks dropped; type arguments, tuple components and an array's element compare by the same rule.
+## `lower::add_inst` dedups with `targ_same`, and `lower::emit_type_arg_tag` spells the declaring module
+## of each declaration `targ_decl` answers, so two arguments are one instance exactly when they have one
+## label.
+
+## `[s, s+n)` without its leading and trailing blanks.
+pub targ_trim := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut b := s
+  mut e := s + n
+  while b < e and type_text_blank(src, b) { b = b + 1 }
+  while e > b and type_text_blank(src, e - 1) { e = e - 1 }
+  LSpan(s = b, n = e - b)
+}
+
+## Whether `[s, s+n)` (trimmed) is `mut T`, the argument text of a `ptr(mut T)`.
+pub targ_is_mut := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  n > 4 and str_at((src + s), 3) == "mut" and type_text_blank(src, s + 3)
+}
+
+## Whether offset `s` lies in a module's text in the published file table (`spelling_module_at`).
+spelled_in_file := fn(src : ptr(u8), s : usize) -> bool {
+  sm := spelling_module_at(src, s)
+  match sm {
+    Some(m) => { return true }
+    None => { return false }
+  }
+}
+
+## The last path segment of `[s, s+n)`: `a::b::T` → `T`.
+targ_tail := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut t : usize = 0
+  mut i : usize = 0
+  while i + 1 < n {
+    if str_at((src + s + i), 2) == "::" {
+      t = i + 2
+      i = i + 2
+    } else {
+      i = i + 1
+    }
+  }
+  LSpan(s = s + t, n = n - t)
+}
+
+## The struct, enum, union or brand declaration the type head `[s, s+n)` NAMES, or the alias declaration
+## whose right-hand side is not followed, else -1. The declaration must carry the head's own name, so an
+## alias `targ_alias_rhs` follows answers -1 here: it is followed to what it names BEFORE this is asked
+## (`targ_unalias`, Declarations §1.3), not merged into one declaration by it.
+## A head in a module's text resolves from that module. A SYNTHESIZED head (a type text the compiler built
+## by substitution, such as the inferred type of `y := vec::new(Pair, …)`, or a type argument inside an
+## instance) names no module, so it resolves by name alone (`targ_decl_by_name`): without that, one type
+## had two labels, the module-spelled one at the instance's definition and the text one at such a call
+## (`alloc__vec__free__Pair` called, `…__free__<root>__Pair` defined: a link failure).
+pub targ_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  if n == 0 { return 0 - 1 }
+  if not spelled_in_file(src, s) { return targ_decl_by_name(decls, src, s, n) }
+  di := targ_decl_named(decls, src, s, n)
+  ## Asked only when a declaration answers, so a name that names none pays no scan (`targ_is_tparam`).
+  if di >= 0 and targ_is_tparam(decls, src, s, n) { return 0 - 1 }
+  di
+}
+
+## `targ_decl`'s answer for a head spelled in a module's text, before a type parameter shadows it.
+targ_decl_named := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  tl := targ_tail(src, s, n)
+  si := struct_decl_of(decls, src, s, n)
+  if si >= 0 {
+    sd := deref(decl_get(decls, usize(si)))
+    if streq(src, sd.name_start, sd.name_len, tl.s, tl.n) { return si }
+  }
+  ei := qualified_enum_decl_of(decls, src, s, n)
+  if ei >= 0 {
+    ed := deref(decl_get(decls, usize(ei)))
+    if streq(src, ed.name_start, ed.name_len, tl.s, tl.n) { return ei }
+  }
+  ## A brand is its own nominal type (Types §4.1, §5.4): `Id := brand(Node)` in the root and in `m` are
+  ## two types, whatever they brand, so the brand's declaration is the identity.
+  ## An alias whose right-hand side `targ_alias_rhs` does not follow (a tuple `(Node, u64)`, an array
+  ## `[Node; 2]`, a type function whose declaration this program does not load) is identified by its own
+  ## declaration too, never by its text: `P` in the root and `P` in `m` are two declarations that may name
+  ## two types, and one instance for both is a wrong layout (#1808). An alias that does name the same type
+  ## as another spelling then gets one more instance than §3.4 asks for, which costs code, not a value.
+  ki := targ_kind0_decl(decls, src, s, n)
+  if ki >= 0 {
+    kd := deref(decl_get(decls, usize(ki)))
+    if kd.arity == 1 { return ki }
+    fw := targ_alias_rhs(decls, src, s, n)
+    if fw.s == s and fw.n == n { return ki }
+  }
+  0 - 1
+}
+
+## Whether the bare name `[s, s+n)` is a type parameter (`T : type`) of the declaration it is spelled in
+## (the one with the greatest `name_start` not after `s`). A parameter shadows a module-level declaration
+## of its name within that declaration (Declarations §6.1), so it is not resolved to one: `T` in
+## `inner(T, h)` within `outer := fn(T : type, …)` beside a module-level `T := u8` is `outer`'s parameter,
+## which the instance's substitution replaces. Resolved as the alias, `inner` was registered at `u8`, the
+## call named `…__inner__u64`, and the link failed (#1808). One scan of the declarations finds the
+## enclosing one; the callers ask only when a module-level declaration of the name answers.
+targ_is_tparam := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  tl := targ_tail(src, s, n)
+  if tl.s != s or n == 0 { return false }
+  cnt := rt::vec_len(deref(decls))
+  mut enc : Option(usize) = Option.None
+  mut lo : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.name_start <= s and d.name_start >= lo {
+      enc = Option(usize).Some(i)
+      lo = d.name_start
+    }
+    i += 1
+  }
+  mut pq : Option(ptr(mut Param)) = Option.None
+  match enc {
+    Some(ei) => {
+      ed := deref(decl_get(decls, ei))
+      pq = ed.params_head
+    }
+    None => { return false }
+  }
+  loop {
+    match pq {
+      Some(pqq) => {
+        pm := deref(param_p(pqq))
+        if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, s, n) { return true }
+        pq = pm.next
+      }
+      None => { break }
+    }
+  }
+  false
+}
+
+## The best-ranked (Modules §3) value declaration (kind 0) named by the head `[s, s+n)`, from the module
+## that spells it, else -1. Its right-hand side may be recorded as a path in `ret_ts/ret_tl`
+## (`A := m::Node`, arity 0; `Id := brand(U)`, arity 1), as a one-token or call-shaped right-hand side in
+## `alias_ts/alias_tl` (`A := Node`, `u128 := uint(128)`, `P := m::Box(u8)`), or not at all. Every
+## same-named declaration competes, recorded or not: a module's own `P` must answer for `P` spelled
+## there even when only another module's `P` has a recorded right-hand side (#1808). Ranked as
+## `brand_underlying`, but only a declaration the spelling module can name competes (`kind0_visible`):
+## `pub u64 := u8` in a sibling module `z` is not `m`'s `u64` (Modules §3), so `rd(u64, h)` written in
+## `m` is the prelude's `u64`, not an instance at `u8` (#1808, a one-byte read).
+## A QUALIFIED head first resolves its qualifier to the module it names (`qm_resolve`); the declaration is
+## then that module's own. Only a qualifier no scope binds is ranked by its text (`targ_cand_rank`), and
+## only with no spelling module at all is a module alias found by name alone (`qualified_module_alias`).
+targ_kind0_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  kqh := type_path_head(src, s, n)
+  if kqh.n != 0 {
+    nmod := type_naming_at(src, s)
+    match nmod {
+      Some(m) => {
+        qm := qm_resolve(decls, src, m.s, m.l, kqh, 0)
+        match qm {
+          QualMod::Module(ms, ml) => { return targ_kind0_at(decls, src, s, n, ms, ml) }
+          QualMod::Text(ts, tn) => { return targ_kind0_in(decls, src, s, n, LSpan(s = ts, n = tn)) }
+          QualMod::Unbound => { return targ_kind0_in(decls, src, s, n, kqh) }
+          QualMod::Unresolved => { return 0 - 1 }
+        }
+      }
+      None => {}
+    }
+  }
+  ki := targ_kind0_in(decls, src, s, n, kqh)
+  if ki >= 0 or kqh.n == 0 { return ki }
+  ## A qualifier that is a module alias (`ser := std::serialize`, then `ser::T`) names the module it binds.
+  ah := qualified_module_alias(decls, src, kqh.s, kqh.n)
+  if ah.n == 0 { return ki }
+  targ_kind0_in(decls, src, s, n, ah)
+}
+
+## The value declaration named by the head's last segment in the module `[ms, ms+ml)` itself, else -1.
+targ_kind0_at := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, ms : usize, ml : usize) -> i64 {
+  nm := targ_tail(src, s, n)
+  di := qm_decl_in(decls, src, ms, ml, nm)
+  match di {
+    Some(i) => { return i64(i) }
+    None => { return 0 - 1 }
+  }
+}
+
+## ---------------------------------------------------------------------------------------------
+## #1808 — the module a QUALIFIED type head's qualifier names. Its first segment resolves the way a bare
+## name resolves (Declarations §5, §6.1; Modules §3): scope by scope, from the spelling module up through
+## its ancestors to the package root, and the FIRST scope that binds the name wins. A scope binds a name
+## by a declaration of that name (a module alias `k := z` or `k := zz::a`, Modules §4.1) or by a child
+## module of that name (Modules §5 counts both as naming the scope, and both at once is a clash). An
+## alias's right-hand side is the declaring scope's text, so it resolves from that scope (Declarations
+## §1.3). The remaining segments then navigate down (Modules §2, §4.2). Before this, the qualifier was
+## ranked as a module path first and the spelling module's own binding was asked only when no module
+## matched at all: `k := z` in `m` lost to the root's child `k`, or to any module whose last segment is
+## `k` (`type_mod_head_matches`' leniency), and `rd(k::C, h)` was registered at that module's `C`.
+##   Module(s, l)  the module identity span the qualifier names
+##   Text(s, n)    an alias whose right-hand side no scope binds (a library path): ranked by that text
+##   Unbound       no scope binds the first segment: the qualifier is ranked by its own text
+##   Unresolved    a scope binds it, but the path names no module: no declaration answers
+QualMod := enum { Module(usize, usize), Text(usize, usize), Unbound, Unresolved }
+
+## Whether the module span `[ms, ms+ml)` is the anonymous package root (`type_anc_rank_from`'s test).
+qm_is_root := fn(ms : usize, ml : usize) -> bool { ms == TRM_RS and ml == TRM_RL }
+
+## Whether the declaration module `[ds, ds+dl)` is the module `[ms, ms+ml)`. With a published module tree the
+## two identities must be the same PATH, not only the same text (`qm_same_path`): `p_/q.al` and the directory
+## `p/_q/` both spell `p___q`, and `p::_q` does not declare what `p_::q` declares (Modules §1, §6.6, #1808).
+qm_same_mod := fn(src : ptr(u8), ds : usize, dl : usize, ms : usize, ml : usize) -> bool {
+  if qm_is_root(ms, ml) { return qm_is_root(ds, dl) }
+  if qm_is_root(ds, dl) { return false }
+  if dl != ml { return false }
+  t := qm_tree(src)
+  match t {
+    Some(tr) => { return qm_same_path(src, tr.sv, ds, ms, ml) }
+    None => { return type_module_eq(src, ds, dl, ms, ml) }
+  }
+}
+
+## Whether the identity spans `[as_, as_+l)` and `[bs, bs+l)` name the same module path: equal text, and a
+## path separator at the same offset of each. A separator is a `__` the tree records (`TSM_SEP`) or a `::`
+## (an inline module's, or a qualifier's); any other `__` is part of a segment's own name. A directory-only
+## span anchored on a child file's identity carries that file's separators, so it compares the same way.
+qm_same_path := fn(src : ptr(u8), sv : ptr(rt::Vec), as_ : usize, bs : usize, l : usize) -> bool {
+  if not type_module_eq(src, as_, l, bs, l) { return false }
+  mut i : usize = 0
+  while i + 1 < l {
+    if qm_path_sep(src, sv, as_ + i) != qm_path_sep(src, sv, bs + i) { return false }
+    i += 1
+  }
+  true
+}
+
+## Whether the two bytes at buffer offset `off` are a path separator of the module tree (`qm_same_path`).
+qm_path_sep := fn(src : ptr(u8), sv : ptr(rt::Vec), off : usize) -> bool {
+  str_at((src + off), 2) == "::" or qm_sep_at(sv, off)
+}
+
+## The first segment of the path `[s, s+n)`: `a::b::c` -> `a`.
+qm_first_seg := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut i : usize = 0
+  while i + 1 < n {
+    if str_at((src + s + i), 2) == "::" { return LSpan(s = s, n = i) }
+    i = i + 1
+  }
+  LSpan(s = s, n = n)
+}
+
+## The path `p` after its first segment `g`: `a::b::c` -> `b::c`, `a` -> empty.
+qm_rest := fn(p : LSpan, g : LSpan) -> LSpan {
+  if g.n + 2 > p.n { return LSpan(s = 0, n = 0) }
+  LSpan(s = p.s + g.n + 2, n = p.n - g.n - 2)
+}
+
+## Whether `[s, s+n)` is a path of identifiers (`z`, `zz::a`), the only right-hand side that can name a module.
+qm_path_shaped := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 0 { return false }
+  mut i : usize = 0
+  while i < n {
+    if not ll_ident_byte(src, s + i) and str_at((src + s + i), 1) != ":" { return false }
+    i += 1
+  }
+  true
+}
+
+## The parent of the module `[ms, ms+ml)` (Modules §1), the root for a top-level module. An inline module's
+## identity ends in `::name`, which no file's identity carries, so its parent is the text before the last
+## `::`. A file module's parent, or a directory's, comes from the module tree (`qm_tree_parent`), never from
+## a split on `__` (Modules §6.6): `p___q` is `p_/q.al` or `p/_q.al`, and `a__b` is `a/b.al` or the single
+## file `a__b.al`. Guessing at the text gave each a parent it does not have, so the walk skipped the real
+## parent's bindings, or asked a phantom `a` for its children and took the top-level `a__k` for `a::k` (#1808).
+qm_parent := fn(src : ptr(u8), ms : usize, ml : usize) -> ModSpan {
+  mut j : usize = ml
+  while j > 2 {
+    if str_at((src + ms + j - 2), 2) == "::" { return ModSpan(s = ms, l = j - 2) }
+    j = j - 1
+  }
+  qm_tree_parent(src, ms, ml)
+}
+
+## The published file table and its module tree (`TSM_SEP`), when they were published for `src`.
+QmTree := struct { mv : ptr(rt::Vec), lv : ptr(rt::Vec), sv : ptr(rt::Vec) }
+qm_tree := fn(src : ptr(u8)) -> Option(QmTree) {
+  none := Option(QmTree).None
+  srco : Option(ptr(u8)) = TSM_SRC
+  mso : Option(ptr(rt::Vec)) = TSM_MS
+  mlo : Option(ptr(rt::Vec)) = TSM_ML
+  svo : Option(ptr(rt::Vec)) = TSM_SEP
+  match srco { Some(ps) => { if ps != src { return none } }; None => { return none } }
+  match mso {
+    Some(mv) => {
+      match mlo {
+        Some(lv) => {
+          match svo {
+            Some(sv) => { return Option(QmTree).Some(QmTree(mv = mv, lv = lv, sv = sv)) }
+            None => {}
+          }
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  none
+}
+
+## How many of the tree's separators sit at offsets below `off`.
+qm_seps_below := fn(sv : ptr(rt::Vec), off : usize) -> usize {
+  mut lo : usize = 0
+  mut hi : usize = rt::vec_len(deref(sv))
+  while lo < hi {
+    mid : usize = lo + (hi - lo) / 2
+    if rt::vec_get(deref(sv), mid) < off { lo = mid + 1 } else { hi = mid }
+  }
+  lo
+}
+
+## Whether the `__` at buffer offset `off` joins two path segments, rather than being part of a name.
+qm_sep_at := fn(sv : ptr(rt::Vec), off : usize) -> bool {
+  i := qm_seps_below(sv, off)
+  i < rt::vec_len(deref(sv)) and rt::vec_get(deref(sv), i) == off
+}
+
+## The parent of the module `[ms, ms+ml)` read off the module tree. A file whose identity is that module, or
+## runs through it with a separator right after it, holds it; the parent is that identity up to its last
+## separator before `ms + ml`, the root when there is none. The file whose identity starts at `ms` answers
+## first, since the walk carries the bytes of the file it came from; another file spelling the same text
+## answers otherwise. A module no file holds (no table, or one published without a tree) is top-level.
+qm_tree_parent := fn(src : ptr(u8), ms : usize, ml : usize) -> ModSpan {
+  root := ModSpan(s = TRM_RS, l = TRM_RL)
+  t := qm_tree(src)
+  match t {
+    Some(tr) => {
+      cnt : usize = rt::vec_len(deref(tr.mv))
+      mut found := false
+      mut best := root
+      mut k : usize = 0
+      while k < cnt {
+        fs : usize = rt::vec_get(deref(tr.mv), k)
+        fl : usize = rt::vec_get(deref(tr.lv), k)
+        k += 1
+        if fl >= ml and not qm_is_root(fs, fl) and qm_same_path(src, tr.sv, fs, ms, ml)
+           and (fl == ml or qm_sep_at(tr.sv, fs + ml)) {
+          i := qm_seps_below(tr.sv, fs + ml)
+          mut p := root
+          if i > 0 {
+            b : usize = rt::vec_get(deref(tr.sv), i - 1)
+            if b > fs { p = ModSpan(s = fs, l = b - fs) }
+          }
+          if fs == ms { return p }
+          if not found {
+            best = p
+            found = true
+          }
+        }
+      }
+      return best
+    }
+    None => { return root }
+  }
+}
+
+## The declaration named `g` in the module `[ms, ms+ml)` itself (not its ancestors), else None. Only a value
+## declaration (kind 0) counts: a module alias is one, and a struct or enum of that name is not a module.
+qm_decl_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, g : LSpan) -> Option(u64) {
+  cnt := rt::vec_len(deref(decls))
+  th := _fnv_name(src, g.s, g.n)
+  mut jc := lni_lo(decls, cnt, th)
+  jce := lni_hi(decls, cnt, th)
+  while jc < jce {
+    i := lni_at(decls, cnt, jc)
+    jc = jc + 1
+    if lni_skip(decls, cnt, i, th) == false {
+      d := deref(decl_get(decls, i))
+      if d.kind == DECL_KIND_VALUE and streq(src, d.name_start, d.name_len, g.s, g.n)
+         and qm_same_mod(src, d.mod_start, d.mod_len, ms, ml) {
+        return Option(u64).Some(u64(i))
+      }
+    }
+  }
+  Option(u64).None
+}
+
+## The child module `g` of the module `[ms, ms+ml)`, read off the published module tree: files become
+## modules by path, and a directory without its own file still has the children whose paths run through
+## it (Modules §1). A child of the root is a module whose first path segment is `g`. None when no file's
+## module path runs through it, or when no table is published for `src`.
+qm_child := fn(src : ptr(u8), ms : usize, ml : usize, g : LSpan) -> Option(ModSpan) {
+  t := qm_tree(src)
+  match t {
+    Some(tr) => { return qm_child_in(src, tr, ms, ml, g) }
+    None => { return Option(ModSpan).None }
+  }
+}
+
+qm_child_in := fn(src : ptr(u8), tr : QmTree, ms : usize, ml : usize, g : LSpan) -> Option(ModSpan) {
+  root := qm_is_root(ms, ml)
+  mut pl : usize = 0
+  if not root { pl = ml + 2 }
+  cnt : usize = rt::vec_len(deref(tr.mv))
+  mut k : usize = 0
+  while k < cnt {
+    fs : usize = rt::vec_get(deref(tr.mv), k)
+    fl : usize = rt::vec_get(deref(tr.lv), k)
+    k += 1
+    if not qm_is_root(fs, fl) and fl >= pl + g.n and qm_child_prefix(src, tr.sv, fs, fl, ms, ml, root, g) {
+      return Option(ModSpan).Some(ModSpan(s = fs, l = pl + g.n))
+    }
+  }
+  Option(ModSpan).None
+}
+
+## Whether the file module `[fs, fs+fl)` is the child `g` of `[ms, ms+ml)` or runs through it: a path
+## separator of the tree after `[ms, ms+ml)`, then the segment `g`, ending at a separator or at the
+## identity's end. A `__` inside a segment's own name is no boundary (`a__k.al` is no child of `a`, #1808),
+## and no separator falls inside the matched segment: `a/b/k.al` runs through `a::b`, never through `a__b`.
+qm_child_prefix := fn(src : ptr(u8), sv : ptr(rt::Vec), fs : usize, fl : usize, ms : usize, ml : usize, root : bool, g : LSpan) -> bool {
+  mut pl : usize = 0
+  if not root {
+    if not qm_same_path(src, sv, fs, ms, ml) or not qm_sep_at(sv, fs + ml) { return false }
+    pl = ml + 2
+  }
+  if not streq(src, fs + pl, g.n, g.s, g.n) { return false }
+  e : usize = pl + g.n
+  if qm_seps_below(sv, fs + e) != qm_seps_below(sv, fs + pl) { return false }
+  e == fl or qm_sep_at(sv, fs + e)
+}
+
+## What the scope `[ms, ms+ml)` binds the name `g` to, None when it binds no such name.
+qm_bound_at := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, g : LSpan, depth : usize) -> Option(QualMod) {
+  di := qm_decl_in(decls, src, ms, ml, g)
+  match di {
+    Some(i) => { return Option(QualMod).Some(qm_alias_target(decls, src, ms, ml, usize(i), depth)) }
+    None => {}
+  }
+  lh := qm_listed_head_in(decls, src, ms, ml, g)
+  match lh {
+    Some(h) => { return Option(QualMod).Some(qm_listed_target(decls, src, ms, ml, h, g, depth)) }
+    None => {}
+  }
+  ch := qm_child(src, ms, ml, g)
+  match ch {
+    Some(c) => { return Option(QualMod).Some(QualMod.Module(c.s, c.l)) }
+    None => {}
+  }
+  Option(QualMod).None
+}
+
+## The module-path head `M` of a listed member projection `(…, g, …) := M` of the scope `[ms, ms+ml)` itself,
+## else None (Modules §4.1.1). The parser keeps a projection as a nameless value declaration whose `ret` span
+## is its verbatim text, so every one sits in the empty name's index bucket.
+qm_listed_head_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, g : LSpan) -> Option(LSpan) {
+  cnt := rt::vec_len(deref(decls))
+  th := _fnv_name(src, 0, 0)
+  mut jc := lni_lo(decls, cnt, th)
+  jce := lni_hi(decls, cnt, th)
+  while jc < jce {
+    i := lni_at(decls, cnt, jc)
+    jc = jc + 1
+    if lni_skip(decls, cnt, i, th) == false {
+      d := deref(decl_get(decls, i))
+      if d.kind == DECL_KIND_VALUE and d.name_len == 0 and not d.is_fn and d.arity == 0 and d.ret_tl != 0
+         and qm_same_mod(src, d.mod_start, d.mod_len, ms, ml) {
+        h := ll_projection_head_for(src, d.ret_ts, d.ret_tl, g.s, g.n)
+        if h.n != 0 { return Option(LSpan).Some(h) }
+      }
+    }
+  }
+  Option(LSpan).None
+}
+
+## What a listed projection `(…, g, …) := M` of the scope `[ms, ms+ml)` binds `g` to: `M::g`, with `M`
+## resolved from that scope, exactly as for the single declaration `g := M::g` it is sugar for (§4.1.1). An `M`
+## that names no module of the tree (a library path) is Unbound: `M::g` is not one span of text, so it ranks
+## by its own text as before.
+qm_listed_target := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, h : LSpan, g : LSpan, depth : usize) -> QualMod {
+  if not qm_path_shaped(src, h.s, h.n) { return QualMod.Unbound }
+  q := qm_resolve(decls, src, ms, ml, h, depth + 1)
+  match q {
+    QualMod::Module(a, b) => { return qm_navigate(decls, src, q, g, depth + 1) }
+    QualMod::Text(a, b) => { return QualMod.Unbound }
+    QualMod::Unbound => { return QualMod.Unbound }
+    QualMod::Unresolved => { return q }
+  }
+}
+
+## The module the value declaration `i` of the scope `[ms, ms+ml)` binds, its right-hand side resolved from
+## that scope. A declaration whose right-hand side is not a path (a function, a brand, an inline module, a
+## value) is not followed here: Unbound, so its text ranks as before.
+qm_alias_target := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, i : usize, depth : usize) -> QualMod {
+  d := deref(decl_get(decls, i))
+  mut rs : usize = d.ret_ts
+  mut rn : usize = d.ret_tl
+  if rn == 0 {
+    rs = d.alias_ts
+    rn = d.alias_tl
+  }
+  if d.is_fn or d.arity != 0 or rn == 0 { return QualMod.Unbound }
+  r := targ_trim(src, rs, rn)
+  if not qm_path_shaped(src, r.s, r.n) { return QualMod.Unbound }
+  q := qm_resolve(decls, src, ms, ml, r, depth + 1)
+  match q {
+    QualMod::Unbound => { return QualMod.Text(r.s, r.n) }
+    QualMod::Module(a, b) => { return q }
+    QualMod::Text(a, b) => { return q }
+    QualMod::Unresolved => { return q }
+  }
+}
+
+## The module the path `p`, spelled in the module `[ms, ms+ml)`, names (`QualMod`). Alias chains end after 8
+## links, so a cycle the checker has not refused yet ends Unresolved rather than looping.
+qm_resolve := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, p : LSpan, depth : usize) -> QualMod {
+  if depth > 8 or p.n == 0 { return QualMod.Unresolved }
+  g := qm_first_seg(src, p.s, p.n)
+  mut cs : usize = ms
+  mut cl : usize = ml
+  mut found : Option(QualMod) = Option(QualMod).None
+  loop {
+    found = qm_bound_at(decls, src, cs, cl, g, depth)
+    if qm_found(found) or qm_is_root(cs, cl) { break }
+    nx := qm_parent(src, cs, cl)
+    cs = nx.s
+    cl = nx.l
+  }
+  match found {
+    Some(q) => { return qm_navigate(decls, src, q, qm_rest(p, g), depth) }
+    None => { return QualMod.Unbound }
+  }
+}
+
+qm_found := fn(f : Option(QualMod)) -> bool {
+  match f {
+    Some(q) => { return true }
+    None => { return false }
+  }
+}
+
+## Navigate the segments `rest` down from `base`, each a child module or a module alias of the module
+## reached so far (Modules §2, §4.2). A segment the module does not bind names nothing: Unresolved.
+qm_navigate := fn(decls : ptr(rt::Vec), src : ptr(u8), base : QualMod, rest : LSpan, depth : usize) -> QualMod {
+  mut cur := base
+  mut r := rest
+  while r.n != 0 {
+    g := qm_first_seg(src, r.s, r.n)
+    match cur {
+      QualMod::Module(ms, ml) => {
+        st := qm_bound_at(decls, src, ms, ml, g, depth)
+        match st {
+          Some(q) => { cur = q }
+          None => { return QualMod.Unresolved }
+        }
+      }
+      QualMod::Text(ts, tn) => { return QualMod.Unresolved }
+      QualMod::Unbound => { return QualMod.Unresolved }
+      QualMod::Unresolved => { return QualMod.Unresolved }
+    }
+    r = qm_rest(r, g)
+  }
+  cur
+}
+
+## `targ_kind0_decl` with the qualifier `qh` (0/0 for a bare head). The name is the head's LAST path
+## segment (`targ_tail`): `name_tail` stops at the first `::`, so `m::k::C` named no declaration `C`.
+targ_kind0_in := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, qh : LSpan) -> i64 {
+  cnt := rt::vec_len(deref(decls))
+  nm := targ_tail(src, s, n)
+  nmod := type_naming_at(src, s)
+  mut best := 0 - 1
+  mut res := 0 - 1
+  th := _fnv_name(src, nm.s, nm.n)
+  mut jc := lni_lo(decls, cnt, th)
+  jce := lni_hi(decls, cnt, th)
+  while jc < jce {
+    i := lni_at(decls, cnt, jc)
+    jc = jc + 1
+    if lni_skip(decls, cnt, i, th) == false {
+      d := deref(decl_get(decls, i))
+      if d.kind == DECL_KIND_VALUE and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        r := targ_cand_rank(src, d.mod_start, d.mod_len, nmod, qh)
+        if kind0_visible(nmod, r) and (r > best or res < 0) { best = r; res = i64(i) }
+      }
+    }
+  }
+  res
+}
+
+## The rank of a candidate declared in module `[ms, ms+ml)` for a head spelled in `nmod` with the
+## qualifier `qh`, -1 when that spelling cannot name it. A bare head ranks by the §3 chain
+## (`type_mod_rank_in`). A qualified head names one module (Modules §2): the qualifier navigated from
+## the spelling module or one of its ancestors, nearest first (`k::C` written in `m` is `m::k::C`, §1),
+## else from the root (`m::k::C` written anywhere), else a library module by its last segment
+## (`type_mod_head_matches`' leniency). A qualified head never falls back to a same-named declaration
+## of the spelling module: `k::C` beside `m`'s own `C := u8` is `m::k`'s `C` (#1808).
+targ_cand_rank := fn(src : ptr(u8), ms : usize, ml : usize, nmod : Option(ModSpan), qh : LSpan) -> i64 {
+  if qh.n == 0 { return type_mod_rank_in(src, ms, ml, nmod) }
+  top : i64 = 1099511627776
+  match nmod {
+    Some(m) => {
+      if ml > qh.n + 2 {
+        pl := ml - qh.n - 2
+        sep := str_at((src + ms + pl), 2)
+        if (sep == "__" or sep == "::") and type_module_eq(src, ms + pl + 2, qh.n, qh.s, qh.n)
+           and type_anc_rank_from(src, ms, pl, m.s, m.l) >= 0 {
+          return top + i64(pl) + 1
+        }
+      }
+    }
+    None => {}
+  }
+  if type_module_eq(src, ms, ml, qh.s, qh.n) { return top }
+  if type_mod_head_matches(src, ms, ml, qh.s, qh.n) { return top - 1 }
+  0 - 1
+}
+
+## Whether a candidate of rank `r` (`targ_cand_rank`) is nameable from the naming module `nmod`: the
+## module a qualified spelling names, or the §3 chain (`r >= 0`). With no naming module published every
+## bare rank is -1 and the historical unranked answer stands, as in `type_decl_ranked`.
+kind0_visible := fn(nmod : Option(ModSpan), r : i64) -> bool {
+  match nmod {
+    Some(m) => { return r >= 0 }
+    None => { return true }
+  }
+}
+
+## The type a bare alias head `[s, s+n)` stands for, else `[s, s+n)` itself (#1808). A declaration binds
+## its name to the value of its right-hand side (Declarations §1.3), so `A := Node` makes `A` the type `Node`
+## and `u128 := uint(128)` the type `uint(128)`: an instance at `A` IS the instance at what `A` names,
+## resolved in the module that declares the alias (the right-hand side is that module's text). Two
+## same-named aliases in two modules are therefore two instances when they name two types, and an alias
+## shares its target's instance (Comptime §3.4). A call-shaped right-hand side is followed only when its
+## head constructs a type (`targ_type_ctor_head`: a struct or enum declaration, a type function, or the
+## builtin `ptr`, `uint`, `int`), so a value binding `x := f(1)` stays a name. A brand is not an alias
+## (`targ_decl` answers its declaration).
+pub targ_alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
+  same := LSpan(s = s, n = n)
+  if n == 0 or not spelled_in_file(src, s) { return same }
+  ki := targ_kind0_decl(decls, src, s, n)
+  if ki < 0 { return same }
+  if targ_is_tparam(decls, src, s, n) { return same }
+  d := deref(decl_get(decls, usize(ki)))
+  if d.arity != 0 { return same }
+  if d.ret_tl != 0 { return LSpan(s = d.ret_ts, n = d.ret_tl) }
+  if d.alias_tl == 0 { return same }
+  bh := base_type_name(src, d.alias_ts, d.alias_tl)
+  if bh.n == d.alias_tl { return LSpan(s = d.alias_ts, n = d.alias_tl) }
+  if targ_type_ctor_head(decls, src, bh.s, bh.n) { return LSpan(s = d.alias_ts, n = d.alias_tl) }
+  same
+}
+
+## Does the head `[s, s+n)` of a call-shaped alias right-hand side construct a type? A struct or enum
+## declaration, which includes a type function (the parser desugars `Box := fn(T : type) -> type {
+## struct {…} }` and `Box(T) := struct {…}` to one, Comptime §3.1), or a builtin type constructor
+## (`ptr(T)`, `uint(N)`, `int(N)`). `Box(u8)` and `Box(u64)`, and `ptr(main::Node)` and `ptr(m::Node)`,
+## are distinct types (Types §4.1), so an alias of one is followed to its own text rather than merged
+## with a same-named alias in another module (#1808).
+targ_type_ctor_head := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  if struct_decl_of(decls, src, s, n) >= 0 or qualified_enum_decl_of(decls, src, s, n) >= 0 { return true }
+  w := str_at((src + s), n)
+  w == "ptr" or w == "uint" or w == "int"
+}
+
+## `targ_alias_rhs` followed through a chain of aliases (`A := B`, `B := Node`), at most 8 links, so a
+## cycle the checker has not refused yet ends at a name rather than looping.
+pub targ_unalias := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
+  mut cur := targ_trim(src, s, n)
+  mut k := 0
+  while k < 8 {
+    if not targ_named_shape(src, cur.s, cur.n) { return cur }
+    hd := base_type_name(src, cur.s, cur.n)
+    if hd.n != cur.n { return cur }
+    if targ_decl(decls, src, cur.s, cur.n) >= 0 { return cur }
+    nx := targ_alias_rhs(decls, src, cur.s, cur.n)
+    if nx.s == cur.s and nx.n == cur.n { return cur }
+    cur = targ_trim(src, nx.s, nx.n)
+    k = k + 1
+  }
+  cur
+}
+
+## The ONE struct or enum declaration whose name is the tail of the synthesized head `[s, s+n)`, else -1.
+## Two same-named declarations in different modules leave a synthesized head ambiguous: it keeps its text
+## identity, as before #1808 (the module that spelled it is not recoverable from the text).
+targ_decl_by_name := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  nm := name_tail(src, s, n)
+  cnt := rt::vec_len(deref(decls))
+  th := _fnv_name(src, nm.s, nm.n)
+  mut hits := 0
+  mut res := 0 - 1
+  mut j := lni_lo(decls, cnt, th)
+  je := lni_hi(decls, cnt, th)
+  while j < je {
+    i := lni_at(decls, cnt, j)
+    j = j + 1
+    if lni_skip(decls, cnt, i, th) == false {
+      d := deref(decl_get(decls, i))
+      if (d.kind == DECL_KIND_STRUCT or d.kind == DECL_KIND_ENUM) and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
+        hits = hits + 1
+        res = i64(i)
+      }
+    }
+  }
+  if hits == 1 { return res }
+  0 - 1
+}
+
+## Whether two type texts are equal once blanks are dropped, except one blank between two identifier
+## bytes (`mut T` is not `mutT`).
+pub targ_text_eq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  mut i := a_s
+  mut j := b_s
+  ae := a_s + a_n
+  be := b_s + b_n
+  mut eq := true
+  mut going := true
+  while going {
+    mut ga := false
+    while i < ae and type_text_blank(src, i) {
+      i = i + 1
+      ga = true
+    }
+    mut gb := false
+    while j < be and type_text_blank(src, j) {
+      j = j + 1
+      gb = true
+    }
+    if i >= ae or j >= be {
+      eq = i >= ae and j >= be
+      going = false
+    } else if ga != gb {
+      eq = false
+      going = false
+    } else if str_at((src + i), 1) != str_at((src + j), 1) {
+      eq = false
+      going = false
+    } else {
+      i = i + 1
+      j = j + 1
+    }
+  }
+  eq
+}
+
+## The element span of an array type `[E; N]` (trimmed), and its length text after the `;`.
+pub targ_arr_elem := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  semi := targ_arr_semi(src, s, n)
+  targ_trim(src, s + 1, semi - s - 1)
+}
+targ_arr_len := fn(src : ptr(u8), s : usize, n : usize) -> LSpan {
+  semi := targ_arr_semi(src, s, n)
+  mut e := s + n
+  if e > semi + 1 and str_at((src + e - 1), 1) == "]" { e = e - 1 }
+  targ_trim(src, semi + 1, e - semi - 1)
+}
+## The offset of the top-level `;` of `[E; N]`, or the closing bracket's when there is none (a view
+## `[E]`, whose length text is then empty).
+targ_arr_semi := fn(src : ptr(u8), s : usize, n : usize) -> usize {
+  mut depth := 0
+  mut p := s + 1
+  mut res := s + n - 1
+  mut going := true
+  while going and p < s + n {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" {
+      depth = depth + 1
+    } else if (c == ")" or c == "]") and depth > 0 {
+      depth = depth - 1
+    } else if c == ";" and depth == 0 {
+      res = p
+      going = false
+    }
+    p = p + 1
+  }
+  res
+}
+
+## Whether the trimmed `[s, s+n)` is a NAMED type: a path (`a::b::T`, identifier bytes and `::`), then
+## nothing or one `( … )` list closing at its end (`Option(u64)`).
+pub targ_named_shape := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 0 or not ll_ident_byte(src, s) { return false }
+  if targ_is_mut(src, s, n) { return false }
+  mut p := s
+  e := s + n
+  while p < e and (ll_ident_byte(src, p) or str_at((src + p), 1) == ":") { p = p + 1 }
+  if p == e { return true }
+  if str_at((src + p), 1) != "(" { return false }
+  mut depth := 0
+  mut close := e
+  while p < e and close == e {
+    c := str_at((src + p), 1)
+    if c == "(" {
+      depth = depth + 1
+    } else if c == ")" {
+      depth = depth - 1
+      if depth == 0 { close = p }
+    }
+    p = p + 1
+  }
+  close == e - 1
+}
+
+## Whether two type-argument spans denote the same type (the rule above). An absent argument (`n == 0`)
+## equals only an absent one.
+pub targ_same := fn(decls : ptr(rt::Vec), src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  a := targ_trim(src, a_s, a_n)
+  b := targ_trim(src, b_s, b_n)
+  if a.n == 0 or b.n == 0 { return a.n == 0 and b.n == 0 }
+  ca := str_at((src + a.s), 1)
+  cb := str_at((src + b.s), 1)
+  if ca == "[" or cb == "[" {
+    if ca != cb { return false }
+    ea := targ_arr_elem(src, a.s, a.n)
+    eb := targ_arr_elem(src, b.s, b.n)
+    la := targ_arr_len(src, a.s, a.n)
+    lb := targ_arr_len(src, b.s, b.n)
+    return targ_text_eq(src, la.s, la.n, lb.s, lb.n) and targ_same(decls, src, ea.s, ea.n, eb.s, eb.n)
+  }
+  if ca == "(" or cb == "(" {
+    if ca != cb { return false }
+    return targ_args_same(decls, src, a.s, 0, b.s, 0)
+  }
+  ma := targ_is_mut(src, a.s, a.n)
+  mb := targ_is_mut(src, b.s, b.n)
+  if ma or mb {
+    if ma != mb { return false }
+    return targ_same(decls, src, a.s + 4, a.n - 4, b.s + 4, b.n - 4)
+  }
+  ## Any other shape (a function type, whose return type follows its parameter list) is its text.
+  if not targ_named_shape(src, a.s, a.n) or not targ_named_shape(src, b.s, b.n) {
+    return targ_text_eq(src, a.s, a.n, b.s, b.n)
+  }
+  ## An alias is the type it names (`targ_alias_rhs`); compare what each side names.
+  ua := targ_unalias(decls, src, a.s, a.n)
+  ub := targ_unalias(decls, src, b.s, b.n)
+  if ua.s != a.s or ua.n != a.n or ub.s != b.s or ub.n != b.n {
+    return targ_same(decls, src, ua.s, ua.n, ub.s, ub.n)
+  }
+  ha := base_type_name(src, a.s, a.n)
+  hb := base_type_name(src, b.s, b.n)
+  hta := targ_trim(src, ha.s, ha.n)
+  htb := targ_trim(src, hb.s, hb.n)
+  da := targ_decl(decls, src, hta.s, hta.n)
+  db := targ_decl(decls, src, htb.s, htb.n)
+  if da >= 0 or db >= 0 {
+    if da != db { return false }
+  } else if not targ_text_eq(src, hta.s, hta.n, htb.s, htb.n) {
+    return false
+  }
+  targ_args_same(decls, src, ha.s, ha.n, hb.s, hb.n)
+}
+
+## Whether the `( … )` lists right after the heads `[a_s, a_s+a_n)` and `[b_s, b_s+b_n)` hold the same
+## types, one by one (`typearg_at`'s reading; a tuple is the list of its own `(`, with `n == 0`).
+targ_args_same := fn(decls : ptr(rt::Vec), src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  mut j : usize = 0
+  mut eq := true
+  mut going := true
+  while going {
+    ta := typearg_at(src, a_s, a_n, j)
+    tb := typearg_at(src, b_s, b_n, j)
+    if ta.n == 0 and tb.n == 0 {
+      going = false
+    } else if not targ_same(decls, src, ta.s, ta.n, tb.s, tb.n) {
+      eq = false
+      going = false
+    } else {
+      j = j + 1
+    }
+  }
+  eq
 }
 
 ## Resolve a comptime-for RANGE BOUND to its constant value: a literal, a module-level const `N := k`
