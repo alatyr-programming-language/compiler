@@ -6588,7 +6588,8 @@ qm_child_in := fn(src : ptr(u8), tr : QmTree, ms : usize, ml : usize, g : LSpan)
 
 ## Whether the file module `[fs, fs+fl)` is the child `g` of `[ms, ms+ml)` or runs through it: a path
 ## separator of the tree after `[ms, ms+ml)`, then the segment `g`, ending at a separator or at the
-## identity's end. A `__` inside a segment's own name is no boundary (`a__k.al` is no child of `a`, #1808).
+## identity's end. A `__` inside a segment's own name is no boundary (`a__k.al` is no child of `a`, #1808),
+## and no separator falls inside the matched segment: `a/b/k.al` runs through `a::b`, never through `a__b`.
 qm_child_prefix := fn(src : ptr(u8), sv : ptr(rt::Vec), fs : usize, fl : usize, ms : usize, ml : usize, root : bool, g : LSpan) -> bool {
   mut pl : usize = 0
   if not root {
@@ -6597,6 +6598,7 @@ qm_child_prefix := fn(src : ptr(u8), sv : ptr(rt::Vec), fs : usize, fl : usize, 
   }
   if not streq(src, fs + pl, g.n, g.s, g.n) { return false }
   e : usize = pl + g.n
+  if qm_seps_below(sv, fs + e) != qm_seps_below(sv, fs + pl) { return false }
   e == fl or qm_sep_at(sv, fs + e)
 }
 
