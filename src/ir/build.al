@@ -5278,8 +5278,8 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
 ##    the emitter and NOT by the declared element width (`[u32; 3]` also emits three `.quad`s, measured;
 ##    taking `layout_elem_stride_bytes` here would read byte 4 of an 8-byte cell — Q4's disagreement);
 ##  • the element's recorded width must be 8, so the load's own width equals the cell's width;
-##  • the index must be a literal inside the cell count — no `bound` yet, so nothing is read out of the
-##    run and no bounds trap is invented (a later slice adds `bound`, docs/ir-slice-3.md §1 item 3).
+##  • a literal index must be inside the cell count, so nothing is read out of the run and no bounds trap
+##    is invented; a runtime index is checked by `bound i, N` first (#1865, docs/ir-slice-3.md §1 item 3).
 ## Anything else answers `NotYet` and the function falls back to its target's legacy emitter (D7).
 ## wasm selects it too: `addr @G` is the linear-memory base its legacy data emitter gave `G`
 ## (`agg_global_base`, handed to the selector by `wat.al`), where the same run lies one word per cell.
@@ -5302,9 +5302,10 @@ ib_bx_index_global := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr),
   mut iv : i64 = 0
   mut iok := false
   match io { Some(v) => { iv = v; iok = true } None => {} }
-  ## A literal index INSIDE the run: nothing is read out of it, so no `bound` is owed yet (§1 item 3)
-  ## and no out-of-bounds address can be formed.
-  if not iok or iv < 0 or iv >= cells { return ib_no(bp, e, NyWhy.NwOutside) }
+  ## A literal index INSIDE the run: nothing is read out of it, so no `bound` is owed (§1 item 3) and no
+  ## out-of-bounds address can be formed. A literal outside it is refused (x86_64 owns that case, as for
+  ## an array local, `ib_index_below`).
+  if iok and (iv < 0 or iv >= cells) { return ib_no(bp, e, NyWhy.NwOutside) }
   k := ib_ty(bp, e)?
   ## Only an 8-byte scalar element: the cell is one word, so the load's width must be it.
   if not ib_ks_word(k) { return ib_no(bp, e, NyWhy.NwOutside) }
@@ -5319,6 +5320,26 @@ ib_bx_index_global := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr),
   match ek { Some(x) => { dk = x; eok = true } None => {} }
   if not eok { return ib_no(bp, e, NyWhy.NwOutside) }
   if not ib_ks_eq(k, dk) { return ib_no(bp, e, NyWhy.NwDisagree) }
+  if not iok {
+    ## #1865: a runtime index — §1 item 3's `bound`. The index is evaluated first (an unsigned value,
+    ## `ib_index`), then checked against the run's `cells` in a checked scope (Types §6.4, CG-13: the
+    ## built-in index guard; omitted inside `unchecked`) before any address is formed, then `gep`'d at
+    ## the cell's 8 bytes from `addr @G`. `cells` is the declared `N`: the parser expands `[v; N]` into
+    ## `N` elements, so a repeat initializer is the same run of `N` cells the literal index reads.
+    rix : IbIx = ib_index(bp, a, ix)
+    match rix {
+      IxVal(xv) => {
+        ga := ib_global_addr(bp, a, di, d)
+        q := ib_checked_gep(bp, a, e, IbSeq.SqRef(ga, usize(cells)), xv, 8)
+        oq := o_vreg(q)
+        rv := ib_load_at(bp, a, oq, IbFld(off = ByteOff(0), ty = k.ty, sg = k.sg, be = false))
+        return Option(VRegId).Some(rv)
+      }
+      ## `ib_num_value` answered no literal, so `ib_index` cannot answer one either.
+      IxLit(xl) => { return ib_no(bp, e, NyWhy.NwOutside) }
+      IxRefused => { return Option(VRegId).None }
+    }
+  }
   pa := ib_global_addr(bp, a, di, d)
   opa := o_vreg(pa)
   ofd := IbFld(off = ByteOff(usize(iv) * 8), ty = k.ty, sg = k.sg, be = false)
@@ -5766,8 +5787,8 @@ ib_addr_obj := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId) -> VReg
   d
 }
 
-## `E[i]`: an element of an array local or field (above), else a module-global word array (3c's first
-## tier, `ib_bx_index_global`).
+## `E[i]`: an element of an array local or field (above), a view local, the `[u8]` view `bytes(x)`
+## (#1865, `ib_bx_bytes_index`), else a module-global word array (3c's first tier, `ib_bx_index_global`).
 ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : ptr(Expr), ix : ptr(Expr)) -> Option(VRegId) {
   apo : Option(IbArrAt) = ib_arr_place(bp, a, b)
   match apo {
@@ -5789,7 +5810,46 @@ ib_bx_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
   }
   vwo : Option(IbView) = ib_view_place(bp, a, b)
   match vwo { Some(vw) => { return ib_bx_view_index(bp, a, e, vw, ix) }; None => {} }
+  bao : Option(ptr(Expr)) = ib_bytes_arg(bp, b)
+  match bao { Some(bx) => { return ib_bx_bytes_index(bp, a, e, bx, ix) }; None => {} }
   ib_bx_index_global(bp, a, e, b, ix)
+}
+## The argument `x` of `bytes(x)` when `b` is the built-in `bytes` (the predicate every name-keyed site
+## asks, `lower_layout::intrinsic_callee`, #1434: a program's own `bytes` is a call to it); else `None`.
+ib_bytes_arg := fn(bp : ptr(mut IbB), b : ptr(Expr)) -> Option(ptr(Expr)) {
+  match deref(b) {
+    Expr::Call(cs, cl, na, ah) => {
+      if na == 1 and lower_layout::intrinsic_callee(ib_b_decls(bp), ib_b_src(bp), cs, cl) == "bytes" {
+        a0 := deref(arg_at(ah, "argument list ended early"))
+        return Option(ptr(Expr)).Some(a0.e)
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  Option(ptr(Expr)).None
+}
+## #1865: `bytes(x)[i]` — byte `i` of the `[u8]` view of the `str` `x` (Stdlib appendix §3.6, `bytes(in
+## self) -> [u8]`). The view is `x`'s own `{ptr, len}` pair (Types §7: `str` and `[u8]` are both the
+## two-word view), so `x` is built as the `str` view it is (a local, a parameter, a literal, a call,
+## `str_at(p, n)`), and the read is `ib_bx_view_index`'s over that pair at the `u8` element: `bound i,
+## len` in a checked scope (Types §6.4; Stdlib appendix §3.5), and no code-point guard — that guard is a
+## `str` index's (§3.6), and a `[u8]` index reads any byte. An `x` that is not a `str` is refused at `x`
+## (`ib_view_value`'s `want`), as is one the builder builds no view of. Only the index form is built: a
+## `bytes(x)` bound, passed or returned is #1861's.
+ib_bx_bytes_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), x : ptr(Expr), ix : ptr(Expr)) -> Option(VRegId) {
+  ## Matched rather than `?`: the object is wider than the seed's `?` payload (#752).
+  wo : Option(IbVObj) = ib_view_value(bp, a, x, Option(IbVEl).Some(ib_str_el()))
+  match wo {
+    Some(w) => {
+      el := IbVEl(ty = Kty.KI8, sg = Sgn.SgU, stride = 1, es = 0, en = 0, utf8 = false)
+      return ib_bx_view_index(bp, a, e, ib_view_at(w.fr, el), ix)
+    }
+    None => {}
+  }
+  Option(VRegId).None
 }
 
 ## ── slice views (#1576 step 1) ──

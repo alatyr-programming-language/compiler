@@ -6826,6 +6826,43 @@ check_ir_bitcast_ptr() {
   if [ "$bad" = 0 ]; then echo "ok   ir #980 ptr<->integer bitcast: built under a grant and selected on four backends; narrow, unequal, float and ungranted shapes are never built"; else fail=1; fi
 }
 
+## #1865: two `expr Index` shapes the builder now builds, each a checked read (Types §6.4). A runtime
+## index into a module-global word array, `G[i]` (`ir_index_global_rt`), is `bound i, N` + `gep` from
+## `addr @G`; the twins select it. x86_64 declines `addr @G` of an array (`sx_addr` takes only a scalar
+## cell), so it stays legacy there, as the literal index already did. `bytes(x)[i]` (`ir_index_bytes`)
+## indexes `x`'s own `{ptr, len}` pair at the `u8` element; x86_64 selects it (`check_ir_took` below).
+## Their `run` / `trap` rows alone cannot tell: the legacy emitters answer the same values.
+check_ir_index() {
+  local rep rc bad=0 d="$T/ir_index" f v asm
+  rm -rf "$d"; mkdir -p "$d" || { echo "FAIL ir #1865 index: scratch"; fail=1; return; }
+  rep="$d/global.out"
+  "$CC" ir "$E2E_TEST/ir_index_global_rt.al" > "$rep" 2>/dev/null; rc=$?
+  for f in g_at h_at top; do
+    if [ "$rc" != 0 ] || ! grep -q "^fn ir_index_global_rt::$f Built\$" "$rep"; then
+      echo "FAIL ir #1865 ir_index_global_rt::$f built: rc=$rc"; grep -E "^fn ir_index_global_rt::$f " "$rep" | sed 's/^/     /'; bad=1
+    fi
+  done
+  grep -q 'verify_failed=0$' "$rep" || { echo "FAIL ir #1865 ir_index_global_rt verify"; bad=1; }
+  rep="$d/bytes.out"
+  "$CC" ir "$E2E_TEST/ir_index_bytes.al" > "$rep" 2>/dev/null; rc=$?
+  for f in at lit raw mid; do
+    if [ "$rc" != 0 ] || ! grep -q "^fn ir_index_bytes::$f Built\$" "$rep"; then
+      echo "FAIL ir #1865 ir_index_bytes::$f built: rc=$rc"; grep -E "^fn ir_index_bytes::$f " "$rep" | sed 's/^/     /'; bad=1
+    fi
+  done
+  grep -q 'verify_failed=0$' "$rep" || { echo "FAIL ir #1865 ir_index_bytes verify"; bad=1; }
+  for v in aarch64 riscv64 wat; do
+    asm="$d/global.$v"
+    "$CC" "$v" "$E2E_TEST/ir_index_global_rt.al" > "$asm" 2>/dev/null; rc=$?
+    if [ "$rc" != 0 ] || ! awk '/ir: selected from the shared IR/ { s = 1; next }
+        s && /^[[:space:]]*\.(globl|global|type|p2align|align)/ { next }
+        s { if ($0 ~ /(^|__|[$])g_at([: ]|$)/) f = 1; s = 0 } END { exit !f }' "$asm"; then
+      echo "FAIL ir #1865 ir_index_global_rt::g_at not selected from the shared IR on $v: rc=$rc"; bad=1
+    fi
+  done
+  if [ "$bad" = 0 ]; then echo "ok   ir #1865 index: G[i] and bytes(x)[i] built; G[i] selected on the twins"; else fail=1; fi
+}
+
 _e2e_arm() {
   local f body n=0
   while read -r _ _ f; do
@@ -9986,6 +10023,10 @@ check_ir_took ir_enum_inst_cross sum code wrap unwrap flag fcode
 ## #1726: a narrow signed payload component crosses to a legacy caller as its canonical word.
 run_x86 ir_enum_narrow_payload 42
 check_ir_took ir_enum_narrow_payload mk mk8 mk16 bad pass sz
+## #1865: `bytes(x)[i]` and a runtime-indexed module-global word array (`check_ir_index`).
+check_ir_index
+check_ir_took ir_index_bytes at lit raw mid
+check_ir_took ir_index_bytes_bound at
 ## #1728: a float parameter keeps its function, and every call to it, legacy-emitted.
 run_x86 ir_float_param 42
 ## IR slice 4c: `?` on an Option and a Result, success and failure paths.
