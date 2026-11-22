@@ -472,9 +472,9 @@ git push origin HEAD:refs/heads/gate/<your-branch>    # full.sh --force-sweeps; 
 gh run download <run-id> -n gate-<sha> -D target/gate-<run-id>  # the verdict: the `*** FULL GATE` line of gate.log
 ```
 
-The workflow runs the gate as four parallel parts (#1568, `scripts/full.sh --parts`), each with its own
-fixpoint, and its `verdict` job aggregates them (`scripts/full_parts.sh`). `gate.log` holds every part's
-output and then that one verdict. A part's own `--- full part <part>:` line is not a verdict, and
+The workflow runs the gate as parallel parts (#1568, `scripts/full.sh --parts`), FIXPOINT in a part of
+its own (#1873, so a reseed-owed gate reads `red stages: fixpoint` there), and its `verdict` job
+aggregates them (`scripts/full_parts.sh`). `gate.log` holds every part's output and then that one verdict. A part's own `--- full part <part>:` line is not a verdict, and
 the `gate-<sha>-<part>` artifacts hold each part's per-stage logs.
 
 The gate's first stage is `scripts/corpus_enum_check.sh`, and it refuses in about a second when the

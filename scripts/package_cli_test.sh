@@ -2781,7 +2781,9 @@ run_callee_gate_selftest() {
 ## `call aarch64__param_find`, and `lower.al`'s bare `node_ptr` emitted `call wat__node_ptr__*`
 ## despite `(… node_ptr …) := lower_ctx` saying otherwise.
 run_callee_gate_selftest
-if [ -s "$ROOT/target/gas1.s" ]; then
+if [ "${ALATYR_FULL_MODULE_CHECKS:-}" = 1 ]; then
+  echo "note callee_module_check: scripts/full.sh runs it as its module-checks stage, beside FIXPOINT (#1873)"
+elif [ -s "$ROOT/target/gas1.s" ]; then
   if bash "$ROOT/scripts/callee_module_check.sh" "$ROOT/target/gas1.s" >"$ROOT/target/callee_check.log" 2>&1; then
     echo "ok   callee_module_check: $(grep -c '^NONPUB' "$ROOT/target/callee_check.log") reported §3 non-pub reach(es), 0 violations"
   else
@@ -2851,7 +2853,9 @@ run_type_gate_selftest() {
 ## compiler's own tree at all), so unlike the CALLEE half there was no latent wrong binding here to
 ## find. The gate exists for what comes next: the file split creates exactly those chains.
 run_type_gate_selftest
-if [ -s "$ROOT/target/gas1.s" ]; then
+if [ "${ALATYR_FULL_MODULE_CHECKS:-}" = 1 ]; then
+  echo "note type_module_check: scripts/full.sh runs it as its module-checks stage, beside FIXPOINT (#1873)"
+elif [ -s "$ROOT/target/gas1.s" ]; then
   if bash "$ROOT/scripts/type_module_check.sh" "$ROOT/target/gas1.s" >"$ROOT/target/type_check.log" 2>&1; then
     echo "ok   type_module_check: $(grep -oE '^type_module_check: [0-9]+ distinct' "$ROOT/target/type_check.log" | head -1 | grep -oE '[0-9]+') monomorphized instance(s), $(grep -c '^NONPUB' "$ROOT/target/type_check.log") reported §3 non-pub reach(es), $(grep -c '^AMBIGPUB' "$ROOT/target/type_check.log") tail-only pub ambiguity/ambiguities, 0 violations"
   else
