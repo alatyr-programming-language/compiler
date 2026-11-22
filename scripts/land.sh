@@ -702,14 +702,16 @@ source "$ROOT/scripts/attribution.sh"
 
 ## PROVENANCE. `main` is advanced only over commits that came through a pull request: the merge this
 ## script (or a batch) makes, plus the integrator's own TAIL on top of such a merge — a one-oracle
-## commit (the manifest, optionally with the xbackend ratchet line it moves) or a reseed. A direct push
+## commit (the manifest, optionally with the xbackend ratchet line it moves; or the IR coverage floors,
+## scripts/ir_census.{src,targets}.baseline, that alatyr-integrate has the integrator move after a landing
+## that grows them, #1786/#1877) or a reseed. A direct push
 ## of anything else was never gated as a landing, and building the next merge on it would quietly make
 ## the next gate its first one. One step of the first-parent walk from origin/main's tip:
 ##   0  a merge whose second parent is the head of a PR merged into main — provenance established
 ##   3  an integrator tail commit — keep walking to its first parent
 ##   4  by its paths, a seed-forms retirement (#1648) — its shape is checked, then as 3
 ##   1  anything else — refuse
-LAND_TAIL_ORACLE_RE='^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline|scripts/xbackend_diff\.baseline)$'
+LAND_TAIL_ORACLE_RE='^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline|scripts/xbackend_diff\.baseline|scripts/ir_census\.src\.baseline|scripts/ir_census\.targets\.baseline)$'
 LAND_TAIL_RESEED_RE='^(package\.al|seed/alatyr|seed/VERSION|seed/HISTORY\.md|scripts/package_cli_test\.sh|CHANGELOG\.md|changelog\.d/[1-9][0-9]*-[a-z0-9-]+\.md)$'
 ## A seed-forms retirement (#1648): the promotion's gate is red until the promoted seed's newly
 ## answered form leaves scripts/seed_forms.tsv (scripts/seed_forms_check.sh: "the seed now
@@ -958,7 +960,7 @@ xb_follow_publish_ok() { # N M top publish publish-parent -> 0 ok, 1 REFUSE
 # THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
 # an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
 # diagnostic written for that case can never print. The marker check below is what notices.
-LAND_SELFTEST_EXPECTED=172  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566, +17 #1648
+LAND_SELFTEST_EXPECTED=174  # the exact count run, compared with -ne; +2 #1106, +4 #1091, +4 #1090, +3 #1089, +5 #1093, +2 #1130, +9 #1264, +9 #1264 pre-walk, +4 #1126 S2, +10 #1312, +5 #1319, +17 #1383, +5 #1386, +7 #1526, +2 #1566, +17 #1648, +2 #1877
 ## Can this checkout push? An SSH remote authenticates without a credential helper; an HTTPS one needs
 ## either a helper or a token in the environment. Empty answers on all three means the push at PHASE 7
 ## would stall waiting for a prompt that has no terminal to appear on (#1085, ~30 minutes of nothing).
@@ -1400,6 +1402,12 @@ Not a bullet.
   [ $? = 1 ]; _ck $? provenance-allowed-a-direct-fragment-push-as-a-reseed
   main_provenance_step 1 - CHANGELOG.md c1 >/dev/null 2>&1
   [ $? = 1 ]; _ck $? provenance-allowed-a-direct-CHANGELOG-push-as-a-reseed
+  # #1877: the IR coverage floors' follow commit (alatyr-integrate, #1786) is an integrator tail; one
+  # refused here stopped the merge queue for every PR after #1820's landing (4ecf44f0).
+  main_provenance_step 1 - "$(printf '%s\n%s' scripts/ir_census.src.baseline scripts/ir_census.targets.baseline)" f1 >/dev/null 2>&1
+  [ $? = 3 ]; _ck $? provenance-stopped-at-an-ir-coverage-floors-commit
+  main_provenance_step 1 - "$(printf '%s\n%s' scripts/ir_census.src.baseline src/ir/build.al)" f2 >/dev/null 2>&1
+  [ $? = 1 ]; _ck $? provenance-allowed-a-source-change-riding-an-ir-floors-commit
   main_provenance_step 1 - "$(printf '%s\n%s' scripts/corpus.manifest src/lower.al)" x1 >/dev/null 2>&1
   [ $? = 1 ]; _ck $? provenance-allowed-a-source-change-riding-an-oracle-commit
   main_provenance_step 0 - '' root >/dev/null 2>&1
