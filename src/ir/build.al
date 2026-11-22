@@ -5836,6 +5836,11 @@ IbView := struct { fr : FrameId, ty : Kty, sg : Sgn, stride : usize, es : usize,
 ib_view_at := fn(fr : FrameId, el : IbVEl) -> IbView { IbView(fr = fr, ty = el.ty, sg = el.sg, stride = el.stride, es = el.es, en = el.en, utf8 = el.utf8) }
 ## The element layout of a `str`: bytes, unsigned, at stride 1 (Types §7: a `str` is a view of `u8`).
 ib_str_el := fn() -> IbVEl { IbVEl(ty = Kty.KI8, sg = Sgn.SgU, stride = 1, es = 0, en = 0, utf8 = true) }
+## #1861: the element layout of the `[u8]` that `bytes(s)` answers — bytes, unsigned, at stride 1, with
+## no spelled element (`es`/`en` are 0, as a `str`'s) and no UTF-8 invariant. A view local bound to one
+## keeps `en` 0, which no spelled element has (`ib_view_elem_in` refuses an empty span), and
+## `ib_view_place` reads it back as this layout.
+ib_bytes_el := fn() -> IbVEl { IbVEl(ty = Kty.KI8, sg = Sgn.SgU, stride = 1, es = 0, en = 0, utf8 = false) }
 ## Whether `[ts, ts+tn)` spells `str`.
 ib_spells_str := fn(src : ptr(u8), ts : usize, tn : usize) -> bool { tn == 3 and str_at((src + ts), 3) == "str" }
 ib_view_st := fn() -> IbSt { IbSt(di = 0, s = 0, n = 0, size = 16, align = 8) }
@@ -5883,6 +5888,7 @@ ib_view_place := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : ptr(Expr)) -> O
       bd : IbBind = ib_lookup(bp, s, n)
       match bd {
         BdView(wf, wes, wen) => {
+          if wen == 0 { return Option(IbView).Some(ib_view_at(wf, ib_bytes_el())) }
           elo : Option(IbVEl) = ib_view_elem(bp, a, wes, wen)
           match elo { Some(el) => { return Option(IbView).Some(ib_view_at(wf, el)) }; None => {} }
         }
@@ -5941,7 +5947,7 @@ ib_is_view_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) ->
       match wo { Some(w) => { true }; None => { false } }
     }
     Expr::Call(cs, cl, na, ah) => {
-      if ib_is_str_at(bp, cs, cl) { return true }
+      if ib_is_str_at(bp, cs, cl) or ib_is_bytes(bp, cs, cl) { return true }
       vo : Option(IbVEl) = ib_call_view_el(bp, a, cs, cl)
       match vo { Some(v) => { true }; None => { false } }
     }
@@ -6062,7 +6068,7 @@ ib_view_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), want
       }
     }
     Expr::Call(cs, cl, na, ah) => {
-      if ib_is_str_at(bp, cs, cl) { got = ib_view_str_at(bp, a, e, na, ah) } else {
+      if ib_is_str_at(bp, cs, cl) { got = ib_view_str_at(bp, a, e, na, ah) } else if ib_is_bytes(bp, cs, cl) { got = ib_view_bytes(bp, a, e, na, ah) } else {
         vo : Option(IbVEl) = ib_call_view_el(bp, a, cs, cl)
         match vo {
           Some(vel) => {
@@ -6189,6 +6195,27 @@ ib_view_str_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), na 
         None => {}
       }
     }
+    None => {}
+  }
+  Option(IbVObj).None
+}
+## #1861: is `[cs, cs+cl)` the built-in `bytes` — asked through the one name-keyed predicate
+## (`lower_layout::intrinsic_callee`, #1434), so a program's own `bytes` stays a call to that declaration?
+ib_is_bytes := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> bool {
+  lower_layout::intrinsic_callee(ib_b_decls(bp), ib_b_src(bp), cs, cl) == "bytes"
+}
+## #1861: `bytes(s)` (Stdlib appendix §3.6, `bytes(in self) -> [u8]`) — the `[u8]` view of the same
+## `{ptr, len}` pair as the `str` `s` (Types §7: a `str` is a view of UTF-8 bytes), no copy of the bytes.
+## The operand is built as a `str` view and only its element layout changes (`ib_bytes_el`): the object
+## is the operand's own, so a view local's object is shared exactly as naming the local shares it, and a
+## binding copies it when it is not fresh (`ib_view_owned`). An operand that is not a `str` is refused
+## (`ib_view_value`'s `want`), as is any other arity.
+ib_view_bytes := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), na : usize, ah : Option(ptr(mut Arg))) -> Option(IbVObj) {
+  if na != 1 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallArity); return Option(IbVObj).None }
+  a0 := deref(arg_at(ah, "argument list ended early"))
+  wo : Option(IbVObj) = ib_view_value(bp, a, a0.e, Option(IbVEl).Some(ib_str_el()))
+  match wo {
+    Some(w) => { return Option(IbVObj).Some(ib_vobj(w.fr, w.fresh, ib_bytes_el())) }
     None => {}
   }
   Option(IbVObj).None
