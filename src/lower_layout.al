@@ -544,17 +544,22 @@ pub type_mod_rank_from := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize,
 ## file's declarations, and the file's extent in the buffer. A span inside a file is named by that
 ## file's module; a span outside every file (a compiler-synthesized one, an early pass with no table,
 ## or a buffer this table was not published for) falls back to the published module, unchanged.
+## `TSM_SEP` is the module TREE beside it (#1808): the ascending buffer offsets of every `__` the driver
+## wrote to join two path segments of an identity (`driver::push_module_name_in`). A `__` the table does
+## not list is part of a segment's own name (Modules §6.6).
 mut TSM_SRC : Option(ptr(u8)) = Option.None
 mut TSM_MS : Option(ptr(rt::Vec)) = Option.None
 mut TSM_ML : Option(ptr(rt::Vec)) = Option.None
 mut TSM_SO : Option(ptr(rt::Vec)) = Option.None
 mut TSM_SL : Option(ptr(rt::Vec)) = Option.None
-pub set_spelling_modules := fn(src : ptr(u8), ms : ptr(rt::Vec), ml : ptr(rt::Vec), so : ptr(rt::Vec), sl : ptr(rt::Vec)) {
+mut TSM_SEP : Option(ptr(rt::Vec)) = Option.None
+pub set_spelling_modules := fn(src : ptr(u8), ms : ptr(rt::Vec), ml : ptr(rt::Vec), so : ptr(rt::Vec), sl : ptr(rt::Vec), seps : ptr(rt::Vec)) {
   TSM_SRC = Option(ptr(u8)).Some(src)
   TSM_MS = Option(ptr(rt::Vec)).Some(ms)
   TSM_ML = Option(ptr(rt::Vec)).Some(ml)
   TSM_SO = Option(ptr(rt::Vec)).Some(so)
   TSM_SL = Option(ptr(rt::Vec)).Some(sl)
+  TSM_SEP = Option(ptr(rt::Vec)).Some(seps)
 }
 ## A single-source pipeline has one module, so the published module already answers every name.
 pub clear_spelling_modules := fn() {
@@ -563,6 +568,7 @@ pub clear_spelling_modules := fn() {
   TSM_ML = Option(ptr(rt::Vec)).None
   TSM_SO = Option(ptr(rt::Vec)).None
   TSM_SL = Option(ptr(rt::Vec)).None
+  TSM_SEP = Option(ptr(rt::Vec)).None
 }
 
 ## The naming module of one type query, a module identity span `[s, s+l)`. A query has none (`None`)
@@ -6407,64 +6413,37 @@ qm_path_shaped := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   true
 }
 
-## The parent of the module `[ms, ms+ml)`: its identity without the last segment, the root for a top-level
-## module. The last separator is the last `::`, or the last run of two or more `_` with a byte on each side.
-## A run of three or more is ambiguous as text: `p___q` is `p_` + `q` or `p` + `_q`, since an identifier may
-## begin or end with `_` (Grammar §2.2). Modules §6.6 demangles by the module tree, not a blind split on
-## `__`, so `qm_parent_in_run` picks the split. Taking the first `__` made `p___q`'s parent `p`, a module that
-## does not exist, and the walk skipped `p_`'s own `k := z` (#1808).
+## The parent of the module `[ms, ms+ml)` (Modules §1), the root for a top-level module. An inline module's
+## identity ends in `::name`, which no file's identity carries, so its parent is the text before the last
+## `::`. A file module's parent, or a directory's, comes from the module tree (`qm_tree_parent`), never from
+## a split on `__` (Modules §6.6): `p___q` is `p_/q.al` or `p/_q.al`, and `a__b` is `a/b.al` or the single
+## file `a__b.al`. Guessing at the text gave each a parent it does not have, so the walk skipped the real
+## parent's bindings, or asked a phantom `a` for its children and took the top-level `a__k` for `a::k` (#1808).
 qm_parent := fn(src : ptr(u8), ms : usize, ml : usize) -> ModSpan {
-  root := ModSpan(s = TRM_RS, l = TRM_RL)
-  if ml < 4 { return root }
-  mut j : usize = ml - 1
-  while j > 0 {
-    c := str_at((src + ms + j), 1)
-    if c == ":" and j >= 2 and j + 1 < ml and str_at((src + ms + j - 1), 1) == ":" {
-      return ModSpan(s = ms, l = j - 1)
-    }
-    if c == "_" {
-      mut a : usize = j
-      while a > 0 and str_at((src + ms + a - 1), 1) == "_" { a = a - 1 }
-      if a > 0 and j + 1 < ml and j > a { return qm_parent_in_run(src, ms, a, j + 1 - a) }
-      j = a
-    }
-    if j > 0 { j = j - 1 }
+  mut j : usize = ml
+  while j > 2 {
+    if str_at((src + ms + j - 2), 2) == "::" { return ModSpan(s = ms, l = j - 2) }
+    j = j - 1
   }
-  root
+  qm_tree_parent(src, ms, ml)
 }
 
-## The parent cut inside the separator run of `r` underscores at offset `a` of the identity at `ms`: the
-## longest prefix that is a module with its own file, else the longest prefix, so a segment ending in `_`
-## (`p_`) keeps it. A parent with no file of its own cannot be told apart from text alone; there the
-## longest prefix is taken.
-qm_parent_in_run := fn(src : ptr(u8), ms : usize, a : usize, r : usize) -> ModSpan {
-  hi : usize = a + r - 2
-  mut i : usize = hi
-  loop {
-    if qm_is_file_module(src, ms, i) { return ModSpan(s = ms, l = i) }
-    if i == a { break }
-    i = i - 1
-  }
-  ModSpan(s = ms, l = hi)
-}
-
-## Whether `[s, s+l)` is, byte for byte, the identity of a module with its own file in the published table.
-qm_is_file_module := fn(src : ptr(u8), s : usize, l : usize) -> bool {
+## The published file table and its module tree (`TSM_SEP`), when they were published for `src`.
+QmTree := struct { mv : ptr(rt::Vec), lv : ptr(rt::Vec), sv : ptr(rt::Vec) }
+qm_tree := fn(src : ptr(u8)) -> Option(QmTree) {
+  none := Option(QmTree).None
   srco : Option(ptr(u8)) = TSM_SRC
   mso : Option(ptr(rt::Vec)) = TSM_MS
   mlo : Option(ptr(rt::Vec)) = TSM_ML
-  match srco { Some(ps) => { if ps != src { return false } }; None => { return false } }
+  svo : Option(ptr(rt::Vec)) = TSM_SEP
+  match srco { Some(ps) => { if ps != src { return none } }; None => { return none } }
   match mso {
     Some(mv) => {
       match mlo {
         Some(lv) => {
-          cnt : usize = rt::vec_len(deref(mv))
-          mut k : usize = 0
-          while k < cnt {
-            fs : usize = rt::vec_get(deref(mv), k)
-            fl : usize = rt::vec_get(deref(lv), k)
-            k += 1
-            if fl == l and streq(src, fs, fl, s, l) { return true }
+          match svo {
+            Some(sv) => { return Option(QmTree).Some(QmTree(mv = mv, lv = lv, sv = sv)) }
+            None => {}
           }
         }
         None => {}
@@ -6472,7 +6451,63 @@ qm_is_file_module := fn(src : ptr(u8), s : usize, l : usize) -> bool {
     }
     None => {}
   }
-  false
+  none
+}
+
+## How many of the tree's separators sit at offsets below `off`.
+qm_seps_below := fn(sv : ptr(rt::Vec), off : usize) -> usize {
+  mut lo : usize = 0
+  mut hi : usize = rt::vec_len(deref(sv))
+  while lo < hi {
+    mid : usize = lo + (hi - lo) / 2
+    if rt::vec_get(deref(sv), mid) < off { lo = mid + 1 } else { hi = mid }
+  }
+  lo
+}
+
+## Whether the `__` at buffer offset `off` joins two path segments, rather than being part of a name.
+qm_sep_at := fn(sv : ptr(rt::Vec), off : usize) -> bool {
+  i := qm_seps_below(sv, off)
+  i < rt::vec_len(deref(sv)) and rt::vec_get(deref(sv), i) == off
+}
+
+## The parent of the module `[ms, ms+ml)` read off the module tree. A file whose identity is that module, or
+## runs through it with a separator right after it, holds it; the parent is that identity up to its last
+## separator before `ms + ml`, the root when there is none. The file whose identity starts at `ms` answers
+## first, since the walk carries the bytes of the file it came from; another file spelling the same text
+## answers otherwise. A module no file holds (no table, or one published without a tree) is top-level.
+qm_tree_parent := fn(src : ptr(u8), ms : usize, ml : usize) -> ModSpan {
+  root := ModSpan(s = TRM_RS, l = TRM_RL)
+  t := qm_tree(src)
+  match t {
+    Some(tr) => {
+      cnt : usize = rt::vec_len(deref(tr.mv))
+      mut found := false
+      mut best := root
+      mut k : usize = 0
+      while k < cnt {
+        fs : usize = rt::vec_get(deref(tr.mv), k)
+        fl : usize = rt::vec_get(deref(tr.lv), k)
+        k += 1
+        if fl >= ml and not qm_is_root(fs, fl) and type_module_eq(src, fs, ml, ms, ml)
+           and (fl == ml or qm_sep_at(tr.sv, fs + ml)) {
+          i := qm_seps_below(tr.sv, fs + ml)
+          mut p := root
+          if i > 0 {
+            b : usize = rt::vec_get(deref(tr.sv), i - 1)
+            if b > fs { p = ModSpan(s = fs, l = b - fs) }
+          }
+          if fs == ms { return p }
+          if not found {
+            best = p
+            found = true
+          }
+        }
+      }
+      return best
+    }
+    None => { return root }
+  }
 }
 
 ## The declaration named `g` in the module `[ms, ms+ml)` itself (not its ancestors), else None. Only a value
@@ -6496,60 +6531,47 @@ qm_decl_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, g 
   Option(u64).None
 }
 
-## The child module `g` of the module `[ms, ms+ml)`, read off the published file table: files become
+## The child module `g` of the module `[ms, ms+ml)`, read off the published module tree: files become
 ## modules by path, and a directory without its own file still has the children whose paths run through
-## it (Modules §1). A child of the root is a module whose path begins with `g`. None when no file's module
-## path runs through it, or when no table is published for `src`.
+## it (Modules §1). A child of the root is a module whose first path segment is `g`. None when no file's
+## module path runs through it, or when no table is published for `src`.
 qm_child := fn(src : ptr(u8), ms : usize, ml : usize, g : LSpan) -> Option(ModSpan) {
-  none := Option(ModSpan).None
-  srco : Option(ptr(u8)) = TSM_SRC
-  mso : Option(ptr(rt::Vec)) = TSM_MS
-  mlo : Option(ptr(rt::Vec)) = TSM_ML
-  match srco { Some(ps) => { if ps != src { return none } }; None => { return none } }
-  match mso {
-    Some(mv) => {
-      match mlo {
-        Some(lv) => { return qm_child_in(src, mv, lv, ms, ml, g) }
-        None => {}
-      }
-    }
-    None => {}
+  t := qm_tree(src)
+  match t {
+    Some(tr) => { return qm_child_in(src, tr, ms, ml, g) }
+    None => { return Option(ModSpan).None }
   }
-  none
 }
 
-qm_child_in := fn(src : ptr(u8), mv : ptr(rt::Vec), lv : ptr(rt::Vec), ms : usize, ml : usize, g : LSpan) -> Option(ModSpan) {
+qm_child_in := fn(src : ptr(u8), tr : QmTree, ms : usize, ml : usize, g : LSpan) -> Option(ModSpan) {
   root := qm_is_root(ms, ml)
   mut pl : usize = 0
   if not root { pl = ml + 2 }
-  cnt : usize = rt::vec_len(deref(mv))
+  cnt : usize = rt::vec_len(deref(tr.mv))
   mut k : usize = 0
   while k < cnt {
-    fs : usize = rt::vec_get(deref(mv), k)
-    fl : usize = rt::vec_get(deref(lv), k)
+    fs : usize = rt::vec_get(deref(tr.mv), k)
+    fl : usize = rt::vec_get(deref(tr.lv), k)
     k += 1
-    if not qm_is_root(fs, fl) and fl >= pl + g.n and qm_child_prefix(src, fs, fl, ms, ml, root, g) {
+    if not qm_is_root(fs, fl) and fl >= pl + g.n and qm_child_prefix(src, tr.sv, fs, fl, ms, ml, root, g) {
       return Option(ModSpan).Some(ModSpan(s = fs, l = pl + g.n))
     }
   }
   Option(ModSpan).None
 }
 
-## Whether the file module `[fs, fs+fl)` is the child `g` of `[ms, ms+ml)` or runs through it, segment-aligned.
-qm_child_prefix := fn(src : ptr(u8), fs : usize, fl : usize, ms : usize, ml : usize, root : bool, g : LSpan) -> bool {
+## Whether the file module `[fs, fs+fl)` is the child `g` of `[ms, ms+ml)` or runs through it: a path
+## separator of the tree after `[ms, ms+ml)`, then the segment `g`, ending at a separator or at the
+## identity's end. A `__` inside a segment's own name is no boundary (`a__k.al` is no child of `a`, #1808).
+qm_child_prefix := fn(src : ptr(u8), sv : ptr(rt::Vec), fs : usize, fl : usize, ms : usize, ml : usize, root : bool, g : LSpan) -> bool {
   mut pl : usize = 0
   if not root {
-    if not type_module_eq(src, fs, ml, ms, ml) { return false }
-    sep := str_at((src + fs + ml), 2)
-    if sep != "__" and sep != "::" { return false }
+    if not type_module_eq(src, fs, ml, ms, ml) or not qm_sep_at(sv, fs + ml) { return false }
     pl = ml + 2
   }
   if not streq(src, fs + pl, g.n, g.s, g.n) { return false }
   e : usize = pl + g.n
-  if e == fl { return true }
-  if e + 2 > fl { return false }
-  nx := str_at((src + fs + e), 2)
-  nx == "__" or nx == "::"
+  e == fl or qm_sep_at(sv, fs + e)
 }
 
 ## What the scope `[ms, ms+ml)` binds the name `g` to, None when it binds no such name.
