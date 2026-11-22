@@ -125,6 +125,20 @@ ast_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
   c := (src + p).str_at(1)
   c == " " or c == "\n" or c == "\t" or c == "\r"
 }
+## Skip trivia from `p` — blanks, newlines and `#` line comments (Grammar §2.5) — and return the first
+## other offset. The parser drops comments, so a recovery that skips only blanks reads a comment between
+## a name and its `:` or `=` as the end of the declaration (#1859).
+ast_skip_trivia := fn(src : ptr(u8), end : usize, p0 : usize) -> usize {
+  mut p := p0
+  mut scanning := true
+  while scanning and p < end {
+    if ast_scan_ws(src, end, p) { p += 1 }
+    else if ast_scan_has(src, end, p, "#") {
+      while p < end and ast_scan_has(src, end, p, "\n") == false { p += 1 }
+    } else { scanning = false }
+  }
+  p
+}
 
 ## Recover a local binding's declared type from its name token in the closed source package without
 ## widening `Stmt.Assign`, whose payload shape is a bootstrap-sensitive self-host invariant. The
@@ -134,13 +148,12 @@ ast_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
 ## but source spans retain them, so this remains AST-neutral and works for both initialized and uninitialized
 ## locals.
 pub local_type_span := fn(src : ptr(u8), s : usize, n : usize) -> LocalTypeSpan {
-  mut p := s + n
   end := AST_SRC_N
-  while p < end and ast_scan_ws(src, end, p) { p += 1 }
+  mut p := ast_skip_trivia(src, end, s + n)
   if ast_scan_has(src, end, p, ":") == false { return LocalTypeSpan(s = 0, n = 0) }
   p += 1
   if ast_scan_has(src, end, p, "=") { return LocalTypeSpan(s = 0, n = 0) }
-  while p < end and ast_scan_ws(src, end, p) { p += 1 }
+  p = ast_skip_trivia(src, end, p)
   ts := p
   mut terminated := false
   mut depth := 0
@@ -150,7 +163,8 @@ pub local_type_span := fn(src : ptr(u8), s : usize, n : usize) -> LocalTypeSpan 
     if c2 == ")" or c2 == "]" {
       if depth > 0 { depth -= 1 }
     }
-    if depth == 0 and (c2 == "=" or c2 == "\n" or c2 == ";" or c2 == "}") {
+    ## A `#` comment after the type ends it as a newline would (#1859).
+    if depth == 0 and (c2 == "=" or c2 == "\n" or c2 == ";" or c2 == "}" or c2 == "#") {
       terminated = true
       break
     }
@@ -220,9 +234,8 @@ pub local_is_uninit := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ## fixed 512-byte cap silently reclassified `x <513 spaces> += 1` as a DECLARATION, which made `sema`,
 ## `lower` and `fmt` disagree about the very statement form this helper exists to keep them agreed on.
 pub compound_assign_op_at := fn(src : ptr(u8), ns : usize, nl : usize) -> str {
-  mut p := ns + nl
   end := AST_SRC_N
-  while p < end and ast_scan_ws(src, end, p) { p += 1 }
+  p := ast_skip_trivia(src, end, ns + nl)
   ## Proves `p + 1 < end`, hence `p < end`, so the operator byte below is inside the source too.
   if ast_scan_has(src, end, p + 1, "=") == false { return "" }
   c := (src + p).str_at(1)
@@ -241,16 +254,14 @@ pub compound_assign_op_at := fn(src : ptr(u8), ns : usize, nl : usize) -> str {
 ## with a `match` arm's payload binding (`Result::Err(e) =>`) and a `for` binding (`for i in …`). A
 ## consumer that must act only on a source-level local declaration needs the positive test.
 pub assign_is_decl := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
-  mut p := ns + nl
   end := AST_SRC_N
-  while p < end and ast_scan_ws(src, end, p) { p = p + 1 }
+  p := ast_skip_trivia(src, end, ns + nl)
   ast_scan_has(src, end, p, ":")
 }
 
 pub assign_is_reassign := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
-  mut p := ns + nl
   end := AST_SRC_N
-  while p < end and ast_scan_ws(src, end, p) { p = p + 1 }
+  p := ast_skip_trivia(src, end, ns + nl)
   if ast_scan_has(src, end, p, ":") { return false }
   if compound_assign_op_at(src, ns, nl).len != 0 { return true }
   if ast_scan_has(src, end, p, "=") and ast_scan_has(src, end, p + 1, "=") == false { return true }
