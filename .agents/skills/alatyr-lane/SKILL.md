@@ -408,6 +408,24 @@ Fire on the exact new shape. A broad lowering fix once regressed ~90 stdlib test
 shipped fired only on the shape that was broken. When one fact is recovered by scanning the source in
 more than one place, `grep` for the other copies — that is part of the fix, not a follow-up.
 
+**A wrong value on the legacy x86_64 path: ask the IR builder first (#1875).** x86_64 emits from the
+shared IR and reaches the legacy emitter only for a function the IR declines (#1604). Before changing
+the legacy lowering, run `alatyr ir <repro>` with the Stage1 of your base and copy each affected
+function's line into the PR body.
+- `Built`, and the default build still answers wrong: the defect is in the IR, a selector or a shared
+  layer (naming, layout). Fix it there.
+- `NotYet(<construct>, …)`: the unit is a **located refusal** of that exact shape in the legacy path,
+  with a fixture that fails on the parent. The real fix is the IR slice that builds `<construct>`; name
+  its issue in the refusal text, or file it.
+- A legacy fix that recovers types or declarations by scanning source text needs a stated reason in
+  the PR body: the code is shared with the IR path, or the IR slice is blocked by a named open issue.
+  A reviewer who finds a second source layout such a scan misreads asks for the refusal, not for
+  another scan.
+
+Why: since 2026-11-08 the 33 merged `fix(lower…)`/`fix(x86…)` PRs took 56% of all request-changes
+rounds and 100 h open-to-merged, against 38 h for the rest. #1821 took 14 rounds, one per newly found
+layout, for functions `alatyr ir` reported `NotYet(expr Deref)`.
+
 **Write the strict forms.** Before writing code, read `.agents/skills/alatyr-lane/strict_forms.md`.
 It lists the forms this compiler has shipped defects in, the form to write instead, and the check that
 holds each. `scripts/strict_forms_check.sh` is a stage of the full gate. It refuses a new unacknowledged
