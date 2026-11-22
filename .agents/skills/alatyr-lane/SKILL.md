@@ -424,8 +424,15 @@ Then:
   refusal** of that exact shape in the legacy path. The real fix is the IR or selector slice that takes
   the construct. Name its issue in the refusal text, or file it. The fixture keeps `## expect:` at the
   due value, and the x86_64 miss is a `scripts/known-deviations.tsv` row under that issue (AGENTS.md
-  "Oracles"), deleted when the slice lands. A `build_reject_has` check holds the located message. The
-  refusal must not fire on `src/` or `lib/`: Stage1 still has to build.
+  "Oracles"), deleted when the slice lands; the issue gets its line in
+  `scripts/known-deviations.issues.tsv` (rule not met, observable difference, `rows`) and stays open
+  until then. A `legacy_reject_has` check in `scripts/e2e.sh` holds the located message: it drives
+  `x86-legacy` only and makes no corpus claim. Not `build_reject_has`, which `scripts/fixture_expect.sh`
+  reads as "every backend rejects" and which conflicts with the `## expect:` line (finding (a), a red
+  gate). The refusal must not fire on `src/` or `lib/`: Stage1 still has to build.
+- **A narrow-view signature (#1622)** can be both: `x86_isel_try` keeps the function's own label on the
+  legacy path and may also emit an IR-built copy `<label>.irv` after the marker. Check which copy the
+  wrong call reaches before you pick a branch above.
 - **A legacy fix that recovers types or declarations by scanning source text** needs a stated reason in
   the PR body: the code is shared with the IR path, or the IR slice is blocked by a named open issue. A
   reviewer who finds a second source layout that such a scan misreads asks for the refusal, not for
