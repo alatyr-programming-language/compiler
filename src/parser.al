@@ -416,6 +416,16 @@ src_line_at := fn(pc : PC, off : usize) -> i64 {
   return ln
 }
 
+## `@label(name) { … }` — a labeled block (Grammar §3.7 `labeled-block`, Control Flow §7.1) — is not
+## implemented: the label handlers below expect a loop, and the block's statements were silently
+## dropped on every backend (#1858). Refuse it, located at the label name, until it is. Called with the
+## cursor just past the `)` of `@label(name)`; returns without effect when a `{` does not follow.
+refuse_labeled_block := fn(in out pc : PC, off : usize) {
+  if cur(pc).kind == 12 { ## kind-literal-ok: '{' after @label(name), same pattern as the rest of p_factor
+    rlb := reject_at(pc, "selfhost: a labeled block `@label(name) { … }` is not implemented yet (#1858) - Grammar §3.7 `labeled-block`; label a `loop`, `while` or `for` instead", off)
+  }
+}
+
 ## LOCATED fail-loud parse reject: render `<what> [module M, at line N, near \`<source>\`]` into the AST arena
 ## (the `at line N` spelling matches the driver's sema/parse diagnostics — `alatyr: check: … at line N in M`
 ## — so ONE e2e location assertion covers both diagnostic families)
@@ -1645,6 +1655,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         pc.idx = pc.idx + 1               ## '('
         lnm := cur(pc); pc.idx = pc.idx + 1
         pc.idx = pc.idx + 1               ## ')'
+        refuse_labeled_block(pc, lnm.start)
         P_PEND_S = lnm.start
         P_PEND_L = lnm.len
       }
@@ -3920,6 +3931,7 @@ p_stmt := fn(in out pc : PC) -> ptr(mut Stmt) {
     pc.idx = pc.idx + 1                 ## '('
     lnm := cur(pc); pc.idx = pc.idx + 1 ## the label name
     pc.idx = pc.idx + 1                 ## ')'
+    refuse_labeled_block(pc, lnm.start)
     P_PEND_S = lnm.start
     P_PEND_L = lnm.len
   }
