@@ -6407,21 +6407,72 @@ qm_path_shaped := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   true
 }
 
-## The parent of the module `[ms, ms+ml)`: its path without the last segment, the root for a top-level module.
+## The parent of the module `[ms, ms+ml)`: its identity without the last segment, the root for a top-level
+## module. The last separator is the last `::`, or the last run of two or more `_` with a byte on each side.
+## A run of three or more is ambiguous as text: `p___q` is `p_` + `q` or `p` + `_q`, since an identifier may
+## begin or end with `_` (Grammar §2.2). Modules §6.6 demangles by the module tree, not a blind split on
+## `__`, so `qm_parent_in_run` picks the split. Taking the first `__` made `p___q`'s parent `p`, a module that
+## does not exist, and the walk skipped `p_`'s own `k := z` (#1808).
 qm_parent := fn(src : ptr(u8), ms : usize, ml : usize) -> ModSpan {
-  mut last : usize = 0
-  mut i : usize = 1
-  while i + 2 < ml {
-    w := str_at((src + ms + i), 2)
-    if w == "__" or w == "::" {
-      last = i
-      i = i + 2
-    } else {
-      i = i + 1
+  root := ModSpan(s = TRM_RS, l = TRM_RL)
+  if ml < 4 { return root }
+  mut j : usize = ml - 1
+  while j > 0 {
+    c := str_at((src + ms + j), 1)
+    if c == ":" and j >= 2 and j + 1 < ml and str_at((src + ms + j - 1), 1) == ":" {
+      return ModSpan(s = ms, l = j - 1)
     }
+    if c == "_" {
+      mut a : usize = j
+      while a > 0 and str_at((src + ms + a - 1), 1) == "_" { a = a - 1 }
+      if a > 0 and j + 1 < ml and j > a { return qm_parent_in_run(src, ms, a, j + 1 - a) }
+      j = a
+    }
+    if j > 0 { j = j - 1 }
   }
-  if last == 0 { return ModSpan(s = TRM_RS, l = TRM_RL) }
-  ModSpan(s = ms, l = last)
+  root
+}
+
+## The parent cut inside the separator run of `r` underscores at offset `a` of the identity at `ms`: the
+## longest prefix that is a module with its own file, else the longest prefix, so a segment ending in `_`
+## (`p_`) keeps it. A parent with no file of its own cannot be told apart from text alone; there the
+## longest prefix is taken.
+qm_parent_in_run := fn(src : ptr(u8), ms : usize, a : usize, r : usize) -> ModSpan {
+  hi : usize = a + r - 2
+  mut i : usize = hi
+  loop {
+    if qm_is_file_module(src, ms, i) { return ModSpan(s = ms, l = i) }
+    if i == a { break }
+    i = i - 1
+  }
+  ModSpan(s = ms, l = hi)
+}
+
+## Whether `[s, s+l)` is, byte for byte, the identity of a module with its own file in the published table.
+qm_is_file_module := fn(src : ptr(u8), s : usize, l : usize) -> bool {
+  srco : Option(ptr(u8)) = TSM_SRC
+  mso : Option(ptr(rt::Vec)) = TSM_MS
+  mlo : Option(ptr(rt::Vec)) = TSM_ML
+  match srco { Some(ps) => { if ps != src { return false } }; None => { return false } }
+  match mso {
+    Some(mv) => {
+      match mlo {
+        Some(lv) => {
+          cnt : usize = rt::vec_len(deref(mv))
+          mut k : usize = 0
+          while k < cnt {
+            fs : usize = rt::vec_get(deref(mv), k)
+            fl : usize = rt::vec_get(deref(lv), k)
+            k += 1
+            if fl == l and streq(src, fs, fl, s, l) { return true }
+          }
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  false
 }
 
 ## The declaration named `g` in the module `[ms, ms+ml)` itself (not its ancestors), else None. Only a value
@@ -6508,12 +6559,55 @@ qm_bound_at := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, g
     Some(i) => { return Option(QualMod).Some(qm_alias_target(decls, src, ms, ml, usize(i), depth)) }
     None => {}
   }
+  lh := qm_listed_head_in(decls, src, ms, ml, g)
+  match lh {
+    Some(h) => { return Option(QualMod).Some(qm_listed_target(decls, src, ms, ml, h, g, depth)) }
+    None => {}
+  }
   ch := qm_child(src, ms, ml, g)
   match ch {
     Some(c) => { return Option(QualMod).Some(QualMod.Module(c.s, c.l)) }
     None => {}
   }
   Option(QualMod).None
+}
+
+## The module-path head `M` of a listed member projection `(…, g, …) := M` of the scope `[ms, ms+ml)` itself,
+## else None (Modules §4.1.1). The parser keeps a projection as a nameless value declaration whose `ret` span
+## is its verbatim text, so every one sits in the empty name's index bucket.
+qm_listed_head_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, g : LSpan) -> Option(LSpan) {
+  cnt := rt::vec_len(deref(decls))
+  th := _fnv_name(src, 0, 0)
+  mut jc := lni_lo(decls, cnt, th)
+  jce := lni_hi(decls, cnt, th)
+  while jc < jce {
+    i := lni_at(decls, cnt, jc)
+    jc = jc + 1
+    if lni_skip(decls, cnt, i, th) == false {
+      d := deref(decl_get(decls, i))
+      if d.kind == DECL_KIND_VALUE and d.name_len == 0 and not d.is_fn and d.arity == 0 and d.ret_tl != 0
+         and qm_same_mod(src, d.mod_start, d.mod_len, ms, ml) {
+        h := ll_projection_head_for(src, d.ret_ts, d.ret_tl, g.s, g.n)
+        if h.n != 0 { return Option(LSpan).Some(h) }
+      }
+    }
+  }
+  Option(LSpan).None
+}
+
+## What a listed projection `(…, g, …) := M` of the scope `[ms, ms+ml)` binds `g` to: `M::g`, with `M`
+## resolved from that scope, exactly as for the single declaration `g := M::g` it is sugar for (§4.1.1). An `M`
+## that names no module of the tree (a library path) is Unbound: `M::g` is not one span of text, so it ranks
+## by its own text as before.
+qm_listed_target := fn(decls : ptr(rt::Vec), src : ptr(u8), ms : usize, ml : usize, h : LSpan, g : LSpan, depth : usize) -> QualMod {
+  if not qm_path_shaped(src, h.s, h.n) { return QualMod.Unbound }
+  q := qm_resolve(decls, src, ms, ml, h, depth + 1)
+  match q {
+    QualMod::Module(a, b) => { return qm_navigate(decls, src, q, g, depth + 1) }
+    QualMod::Text(a, b) => { return QualMod.Unbound }
+    QualMod::Unbound => { return QualMod.Unbound }
+    QualMod::Unresolved => { return q }
+  }
 }
 
 ## The module the value declaration `i` of the scope `[ms, ms+ml)` binds, its right-hand side resolved from
