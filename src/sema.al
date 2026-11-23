@@ -2553,9 +2553,12 @@ lvec_push := fn(in out v : LVec, x : Local) {
   ## REMEMBER this binding's name function-wide (survives arm/branch truncation) — see LVec/`remembered`.
   lvec_remember(v, x.ns, x.nl)
 }
+## The address of entry `i`: the one place an `LVec` entry is addressed outside `lvec_push`.
+lvec_slot := fn(v : ptr(LVec), i : usize) -> ptr(mut Local) {
+  unchecked bitcast(ptr(mut Local), deref(v).base + i * lvec_stride())
+}
 lvec_at := fn(v : ptr(LVec), i : usize) -> Local {
-  p : ptr(Local) = unchecked bitcast(ptr(Local), deref(v).base + i * lvec_stride())
-  return deref(p)
+  return deref(lvec_slot(v, i))
 }
 ## Drop the vector back to `n` entries (a no-op if already ≤ n). Used to POP an arm-scoped set of
 ## match-pattern bindings after checking that arm, so the next arm's `lvec_push` reuses the slots and
@@ -4406,6 +4409,30 @@ local_in := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : u
     if streq(src, l.ns, l.nl, s, n) { return true }
   }
   false
+}
+
+## Declarations §5, §6.1 — a block's binding shadows an enclosing local only inside the block: "the
+## outer name is again visible after the inner scope ends". `check_stmts` threads a block's locals out
+## to the statements after it (a new name stays visible, #1003), and `local_lookup` takes the LAST entry
+## of a name, so a block entry `[base, cnt)` that re-binds a name bound before the block (`[0, base)`)
+## kept answering for it after the block: the immutable inner `v` refused `v = 42` (#1867), and a loop
+## variable kept its range type (#1848). Each such entry now takes the enclosing entry's value in place,
+## so the enclosing binding answers again and `cnt` and every index stay as they were.
+sema_unshadow_after_block := fn(locals : ptr(LVec), src : ptr(u8), base : usize, cnt : usize) {
+  mut i : usize = base
+  while i < cnt {
+    l := lvec_at(locals, i)
+    mut outer : Option(u64) = Option(u64).None
+    for j in 0..base {
+      o := lvec_at(locals, j)
+      if streq(src, o.ns, o.nl, l.ns, l.nl) { outer = Option(u64).Some(u64(j)) }
+    }
+    match outer {
+      Some(oj) => { deref(lvec_slot(locals, i)) = lvec_at(locals, usize(oj)) }
+      None => {}
+    }
+    i += 1
+  }
 }
 
 ## Whether a local record is a COMPTIME binding rather than a runtime value. The parser erases both
@@ -16189,7 +16216,9 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         if nce != 0 { return Result(usize, CheckErr).Err(nce) }
         ## the loop condition must be bool (a known non-bool is a `Mismatch`).
         if not kind_is_unknown(cc.kind) and not kind_is_bool(cc.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
+        while_base := cnt
         cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
+        sema_unshadow_after_block(locals, src, while_base, cnt)
         cur = nx
       }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
@@ -16422,6 +16451,7 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         mut branch_escape := sema_comptime_branch_escape_stmts(th, nx, src, locals, cnt, a)
         if branch_escape.n == 0 { branch_escape = sema_comptime_branch_escape_stmts(el, nx, src, locals, cnt, a) }
         if branch_escape.n != 0 { return Result(usize, CheckErr).Err(ambiguous_err(branch_escape.s)) }
+        if_base := cnt
         ## With no unreadied places, preserve the established linear checker path. This is also important
         ## for the self-hosted compiler's large, fully-initialized source tree: branch snapshots are only
         ## materialized when the function actually contains an uninitialized place.
@@ -16455,6 +16485,7 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
           }
           if then_cnt > else_cnt { cnt = then_cnt } else { cnt = else_cnt }
         }
+        sema_unshadow_after_block(locals, src, if_base, cnt)
         cur = nx
       }
       Stmt::Match(sc, ah, nx) => {
@@ -16696,28 +16727,36 @@ check_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), upto : usi
         ## list: the loop variable shadows it (Declarations §6.1), and the innermost entry is the one
         ## `local_lookup` and the records (`sema_vty_var`, keyed by this `fns`) must find.
         vbyte := tag_of_kind(vtag)
+        for_base := cnt
         lvec_push(deref(locals), Local(ns = fns, nl = fnl, tag = vbyte, prov = 0, tns = 0, tnl = 0))
         cnt += 1
         cnt = check_stmts(fb, decls, upto, src, a, locals, cnt, da)?
+        sema_unshadow_after_block(locals, src, for_base, cnt)
         cur = nx
       }
       ## `loop { body }` — the body is checked (locals it introduces thread out, as for `while`);
       ## no condition. `break` is a leaf with no value (a `break` outside a loop is checked by
       ## the scalar structural prepass in `stmts_bad_loop_control`).
       Stmt::Loop(b, nx) => {
+        loop_base := cnt
         cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
+        sema_unshadow_after_block(locals, src, loop_base, cnt)
         cur = nx
       }
       Stmt::Unchecked(b, nx) => {
         ## #529 grant column: restore the depth BEFORE the `?`, so an early return cannot leak it.
         ug := ptrint_grant_enter()
+        unchecked_base := cnt
         ur := check_stmts(b, decls, upto, src, a, locals, cnt, da)
         ptrint_grant_leave(ug)
         cnt = ur?
+        sema_unshadow_after_block(locals, src, unchecked_base, cnt)
         cur = nx
       }
       Stmt::AllocWith(ae, b, nx) => {
+        alloc_base := cnt
         cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
+        sema_unshadow_after_block(locals, src, alloc_base, cnt)
         cur = nx
       }
       Stmt::Break(_bv, _bd, nx) => {
