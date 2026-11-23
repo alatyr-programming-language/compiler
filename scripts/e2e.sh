@@ -10283,6 +10283,10 @@ run unsigned_cmp_backends 42
 ## `run` so the a64/rv64/wasm sweeps carry it too; the explicit per-backend rows below are the direct
 ## e2e assertions.
 run bitcast_cmp_signedness 99
+## #546 / Types §4.2 — `bitcast`'s target type decides a comparison's signedness: a call, a sum and a
+## field operand, the `u64` mirror, and the guard that must refuse. NON-VACUOUS: constant-false on the
+## parent of #627 (`dc4c819`); 42 on all four backends at `dc9e18e2`.
+run issue546_bitcast_cmp_signedness 42
 ## §4: `deref(p) = <struct literal>` stores all fields (was a silent 1-garbage-word scalar store).
 run_x86 deref_assign_struct_lit 42
 ## FIELD write THROUGH a pointer `deref(p).field = v` (p : ptr(mut Rec)): the store dual of the
