@@ -9960,12 +9960,24 @@ sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut
   ## #1268 — several functions share the name (`print`: `fmt::print(fmt, args : ...)` and
   ## `io::print(s)`): the one whose parameter list accepts `na` arguments is the callee when it is the
   ## only such one, so `print("{}", 5 - 6)` gives its hole the variadic's native signed default.
+  ## Front-half rewrite (d_qual_expr): a resolved qualified call `m::f(…)` is rewritten to the
+  ## declaration's own name span, so cs IS the target's name_start. When that identity holds for exactly
+  ## one fn declaration, it is the callee — no name scan or arity filter is needed, and same-named
+  ## functions of other modules do not cause ambiguity. This is the same span-identity test the builder
+  ## uses (ib_bx_var, ib_decl_named_at) and the syscall path uses (sema_vty_syscall).
   nc := callee_fn_name_count(decls, src, cs, cl)
   mut hit : usize = 0
   mut found : usize = 0
+  mut found_by_span := false
   mut i : usize = 0
   while i < upto {
     d := deref(decl_get(decls, i))
+    if d.is_fn and d.name_start == cs and d.name_len == cl {
+      hit = 1
+      found = i
+      found_by_span = true
+      break
+    }
     if d.is_fn and name_matches(src, d.name_start, d.name_len, cs, cl) and (nc == 1 or (d.kind == lower_layout::DECL_KIND_FN and sema_vty_arity_fits(d, na, src))) {
       hit += 1
       found = i
@@ -9973,9 +9985,48 @@ sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut
     }
     i += 1
   }
-  if nc != 0 and hit == 1 {
+  if hit == 1 and (found_by_span or nc != 0) {
     fd := deref(decl_get(decls, found))
     sema_vty_args_at(fd, ah, decls, src)
+    return
+  }
+  ## IR slice 2a — syscall argument types. `callee_fn_name_count` counts DECL_KIND_FN only, so a call to
+  ## a bodyless `@abi(syscall)` declaration (`rt::sys_write(1, 2, p, n)`) leaves nc == 0 and the scan
+  ## above finds nothing. Resolve the one syscall the qualified (or rewritten) name names and push its
+  ## parameter types so the literals take their declared scalar type.
+  if hit == 0 and cl != 0 {
+    nm := lower_layout::name_tail(src, cs, cl)
+    qh := lower_layout::type_path_head(src, cs, cl)
+    mut ms := qh.s
+    mut ml := qh.n
+    if ml != 0 {
+      ma := lower_layout::qualified_module_alias(decls, src, ms, ml)
+      if ma.n != 0 { ms = ma.s ; ml = ma.n }
+    }
+    mut shi : usize = 0
+    mut sfound : usize = 0
+    mut si : usize = 0
+    while si < upto {
+      sd := deref(decl_get(decls, si))
+      if sd.is_fn and sd.kind == lower_layout::DECL_KIND_SYSCALL {
+        ## Front-half rewrite: the Call's callee span IS the declaration's own name span.
+        if sd.name_start == cs {
+          sema_vty_args_at(sd, ah, decls, src)
+          return
+        }
+        if streq(src, sd.name_start, sd.name_len, nm.s, nm.n) {
+          if ml == 0 or lower_layout::type_module_eq(src, sd.mod_start, sd.mod_len, ms, ml) {
+            shi += 1
+            sfound = si
+          }
+        }
+      }
+      si += 1
+    }
+    if shi == 1 {
+      sfd := deref(decl_get(decls, sfound))
+      sema_vty_args_at(sfd, ah, decls, src)
+    }
   }
 }
 ## Is the parameter type span `[ts, ts+tl)` a comptime variadic rest (`args : ...`, no element type)?
