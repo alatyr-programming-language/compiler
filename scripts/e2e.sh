@@ -942,6 +942,16 @@ check_ir_build() {
      && grep -q 'sema_gaps=0 verify_failed=0$' "$rep"; then
     echo "ok   ir issue977_struct_lit_field_ctx: the struct-literal field literal builds through the IR, no sema gap"
   else echo "FAIL ir issue977_struct_lit_field_ctx: rc=$rc"; grep -E 'NotYet|sema_gaps|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
+  ## #1861: `bytes(s)` is the `[u8]` view of the `str`'s own pair (Stdlib appendix §3.6). The program runs
+  ## to its value on the legacy path too, so only Built proves the IR took it: on the parent each of the
+  ## three functions was refused at its `bytes` call.
+  "$CC" ir "$E2E_TEST/ir_bytes_view.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^fn ir_bytes_view::count_in Built$' "$rep" \
+     && grep -q '^fn ir_bytes_view::raw_sum Built$' "$rep" \
+     && grep -q '^fn ir_bytes_view::lit_len Built$' "$rep" \
+     && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir ir_bytes_view: a bytes(s) view, bound, read and passed, builds through the IR"
+  else echo "FAIL ir ir_bytes_view: rc=$rc"; grep -E 'NotYet|verify_failed' "$rep" | head -4 | sed 's/^/     /'; fail=1; fi
   ## #1626/#1632: an array parameter holds an address whatever its direction. Since #1632 the AST keeps
   ## the direction: an element write through an `in` one is refused by the checker (Memory §3.1/§3.4,
   ## test/reject_issue1632_in_array_elem_write.al), and one through an `out` / `in out` one is the
