@@ -19,5 +19,6 @@
 #
 # name	state	due	issue	sites
 #
-# live-rows: 1
+# live-rows: 2
 oneline_call_compound_if_in_while	tree	42	#1652	src/lower.al:fill_inferred_targs
+sibling_option_locals	tree	42	#1886	src/ir/build.al:ib_bx_ptr_field
