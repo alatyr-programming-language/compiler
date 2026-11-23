@@ -134,6 +134,49 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.8.0 — 2026-11-23
+
+- **After a `for`, `while` or `loop` that re-binds an enclosing local's name, the name denotes the
+  enclosing local again (#1848).** `for v in 0..3 { … }` followed by `v + r`, with an outer
+  `mut v : u64`, was refused as a mix of signedness because the checker still typed `v` as the loop
+  variable; a binding declared in a `while` or `loop` body leaked the same way.
+- **A labeled block `@label(name) { … }` is refused, located, instead of losing its body (#1858).**
+  Its statements were silently dropped on every backend. Until labeled blocks are implemented the
+  compiler names the label and the issue; labeled `loop`, `while` and `for` are unchanged.
+- **A `#` comment between a local's name and its `:` no longer drops the type annotation (#1859).**
+  `v # note` / `: [u64; 2] = [40, 2]` was checked as unannotated and refused, and with `= deref(p)`
+  it copied one word, so `v.len` answered 0 on x86_64. A comment after an uninitialized local's type
+  no longer becomes part of the type either.
+- The shared IR now builds two more index forms, each a checked read (#1865; Types §6.4, CG-13). The
+  first is `bytes(x)[i]`, byte `i` of the `[u8]` view of a `str` (Stdlib appendix §3.6). It indexes
+  `x`'s own `{ptr, len}` pair, checks `i` against its runtime length, and adds no code-point guard,
+  because that guard belongs to a `str` index. The second is a runtime index into a module-global word
+  array, `G[i]` with `[usize; N]` or `[i64; N]`. It checks `i` against `N`, then loads the 8-byte cell
+  at `addr @G`. aarch64, riscv64 and wasm select `G[i]` from the IR. On x86_64 it stays with the
+  legacy emitter, because the selector addresses only a scalar global cell, as it already did for a
+  literal index. The compiler's own `src/` builds 103 more functions through the IR (2947 to 3050).
+- **A binding declared in a block no longer outlives the block in the checker when it shadows an
+  enclosing local (#1867).** After `if c { v : u64 = 5 … }`, the statement `v = 42` assigns the
+  enclosing `mut v` again instead of being refused as an immutable binding (Declarations §6.1). The
+  same holds after an `unchecked { … }` block and an allocator block.
+- **A local whose `=` starts the next line is initialized (#1869).** `v : [u64; 2]` / `= [40, 2]` was
+  taken for an uninitialized local: x86_64 laid out nothing (`v.len` answered 0), the other backends
+  trapped, and an index read was refused at check. A line-leading `=` continues the declaration
+  (Grammar §2.6, spec#172).
+- **The GitHub gate runs FIXPOINT once, as a part of its own (#1873).** It ran at the head of each of
+  the four parts, 38-59 minutes apiece, though the other parts build their own Stage1 from the seed.
+  It is now a fifth parallel part, so the gate's critical path no longer adds FIXPOINT to the slowest
+  part, and a FIXPOINT red is named `fixpoint` in one part instead of `before-parts` in all four. The
+  two whole-program module checks over the compiler's own assembly (`callee_module_check.sh`,
+  `type_module_check.sh`), which read FIXPOINT's `target/gas1.s`, run beside it as the
+  `module-checks` stage, red when that file is missing, rather than inside E2E, where they skipped.
+  The serial `scripts/full.sh` runs the same stages, in the same order.
+- **The merge queue no longer stops at the IR coverage floors' follow commit (#1877).** `land.sh`'s
+  main-provenance walk now accepts an integrator tail commit that changes only
+  `scripts/ir_census.src.baseline` and `scripts/ir_census.targets.baseline`, as the integrator
+  procedure requires after every landing that grows IR coverage; before, the next queue pass refused
+  it as a commit that came through no pull request, and no PR could land.
+
 ## 0.7.1 — 2026-11-22
 
 - **A generic instantiated at two same-named types from different modules is two instances (#1808,
@@ -1155,7 +1198,7 @@ under `## Unreleased`. The entries already there stay until the next release.
   a census of its line shapes, Stage2 over `seed/alatyr`, the CURRENT SEED block brought to it, and
   `fixpoint.sh` on the promoted tree. It writes the history entry and the commit message with every
   measured fact, releases `## Unreleased` under the new version, and marks the judgements (the
-  one-sentence delta, the why, the version class) `PROMOTE-OWED`; `commit` refuses while one is left or
+  one-sentence delta, the why, the version class) `four IR builder lanes (index, alias-scalar, builtin, field)`; `commit` refuses while one is left or
   when the files are not the atomic set, and `gate` pushes the exact commit to `gate/**`. `due` answers
   the cadence: a week, an open `reseed-owed` issue, or a live `seed` row in `scripts/seed_forms.tsv`.
   The weekly `scripts/metrics.sh` report asks it, in a new `seed promotion` row.

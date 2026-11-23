@@ -2301,4 +2301,27 @@ The original reading note, verbatim:
 # defect, not a language refusal; the program was always specified as valid. No program the
 # specification calls valid stops compiling or changes its answer.
 # The specification pin (spec 1.10.0) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.7.1 -> 0.8.0   promoted 2026-11-23   seed/alatyr := Stage2
+#
+# WHY: the shared IR builds indexing (#1865), type-alias scalars (#1864), bytes(s) and global-array runtime index (#1861), and struct field read/write through a pointer (#1863).
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 6369 hunks, 44473 added, 29928 removed. One sentence:
+# The shared IR replaces the legacy push/pop register shuffling with frame-addressed locals and .Lxir-labelled branches across four builder lanes.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 2066469 lines.
+# GAS SHA-256 (Stage2): c3d43eb26c5255fbe6fe41d1458db388c95339a5108b3a658b01dab178c79f38.
+# Stage2 == Stage3 BINARY SHA-256:
+# cc1a483f8e05d2bd326bdd1c3699b43716b7553421bf61817e95703c2d93d73b (8710952 B).
+# All three answer `alatyr 0.8.0, spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.7.1) SHA-256:
+# 590c094c7fdef228a552450e34e6b98c2f60363c53cdaedb6fb5fb0bc6e2edd0.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (2066469 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.7.1 -> 0.8.0, MINOR: the shared IR backend gains four shape families (new surface).
+# The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
