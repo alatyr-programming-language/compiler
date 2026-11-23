@@ -13280,6 +13280,10 @@ build_reject_has reject_map_ufcs_direct_struct "match recv.map(f)"
 ## fixture returns 100. The direct `match vec::get(S, …)` stays refused, now naming what it refuses, and
 ## a payload wider than six words is refused at its constructor; both located (generated programs).
 run issue1212_option_deref_struct 42
+## #1212 / Modules §4.1 — `vec::get` through a type alias of a three-word struct keeps every field; the
+## direct `match` is refused, naming a direct `match` on a generic call. NON-VACUOUS: 3 on `cdcecb5c`.
+run_x86 issue1212_alias_vec_get 42
+build_reject_has issue1212_alias_vec_get_direct_reject "truncates the scrutinee to its first word"
 issue1212_located_refusals_test
 issue1809_deref_arr_refusals_test
 run unwrap_bound_generic_call 42
