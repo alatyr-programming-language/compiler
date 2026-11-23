@@ -10437,9 +10437,17 @@ sema_vty_push := fn(e : ptr(Expr), t : ir::VTy) {
     Expr::If(c, th, el) => { sema_vty_push(th, t); sema_vty_push(el, t) }
     Expr::Match(sc, mh) => { sema_vty_arms_push(mh, t) }
     Expr::Loop(lb) => { pr : ir::VTy = sema_vty_breaks_go(lb, 0, t, true) }
+    Expr::Bitcast(inner, ts, tl) => {
+      ## Types §4.4: a bitcast reinterprets bits at the same width. The inner value takes a same-width
+      ## unsigned integer as its context — a literal `0` in `bitcast(ptr(T), 0)` becomes a usize and the
+      ## builder can type it. The context `t` matches the bitcast's target (binding or return annotation);
+      ## when it carries a byte width the inner gets `vty_u(bytes)`.
+      bw : u64 = t.bytes
+      if bw > 0 { sema_vty_push(inner, ir::vty_u(bw)) }
+    }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Call | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
-      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast => {}
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef => {}
   }
 }
 ## A declared type `[s, s+n)` is the context of `e` (an annotated binding, a `return`, a fn's tail).
