@@ -134,6 +134,10 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.8.1 — 2026-11-23
+
+- Seed carries the sema literal type context for syscall and qualified calls, plus the 8→16 call argument limit (#1897). PATCH.
+
 ## 0.8.0 — 2026-11-23
 
 - **After a `for`, `while` or `loop` that re-binds an enclosing local's name, the name denotes the

@@ -2324,4 +2324,28 @@ The original reading note, verbatim:
 #
 # VERSION 0.7.1 -> 0.8.0, MINOR: the shared IR backend gains four shape families (new surface).
 # The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.8.0 -> 0.8.1   promoted 2026-11-23   seed/alatyr := Stage2
+#
+# WHY: the sema literal path now resolves syscall and qualified-call argument types, and the call argument limit is raised from 8 to 16 (#1897).
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 1579 hunks, 21202 added, 9363 removed. One sentence:
+# Each hunk replaces a two-instruction tag match (cmpq+je) with a full XIR dispatch block (cmpq $N/sete/testq/jz under .Lxir labels) and its frame spills, as newly resolved sema literal call sites flow through the shared IR backend.
+# signal to STOP.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 2078764 lines.
+# GAS SHA-256 (Stage2): 02cf3731c8508ceb637f15aafea1329c4da902b5f16f03e381664044c5ecbc3f.
+# Stage2 == Stage3 BINARY SHA-256:
+# 65a85621439be3e5b4ef392e8dce379f1bea0077e979e863e8a24fcb864404d7 (8768296 B).
+# All three answer `alatyr 0.8.1, spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.8.0) SHA-256:
+# cc1a483f8e05d2bd326bdd1c3699b43716b7553421bf61817e95703c2d93d73b.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (2078764 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.8.0 -> 0.8.1, PATCH: internal IR coverage improvement and call-argument limit raise; no new surface for the user.
+# The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
