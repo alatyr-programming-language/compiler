@@ -163,7 +163,6 @@ aarch64	test/for_aggregate_body_local.al	run/133	#1201
 aarch64	test/for_break_labels.al	run/133	#1202
 aarch64	test/for_in_global_array.al	run/133	#1201
 aarch64	test/for_in_global_struct_array.al	run/133	#1201
-aarch64	test/for_over_bytes.al	run/133	#1201
 aarch64	test/for_over_nonvar.al	run/133	#1201
 aarch64	test/for_over_slice.al	run/133	#1200
 aarch64	test/for_over_vec.al	run/133	#1200
@@ -229,6 +228,7 @@ aarch64	test/ir_array_param_legacy_caller.al	run/133	#1194
 aarch64	test/ir_array_param_legacy_copy.al	run/133	#1194
 aarch64	test/ir_array_param_synth_caller.al	run/133	#1194
 aarch64	test/ir_bare_callee_lib_clash.al	run/133	#41
+aarch64	test/ir_bytes_view.al	run/133	#1861
 aarch64	test/ir_deref_agg_call.al	run/133	#1727
 aarch64	test/ir_deref_agg_read.al	run/133	#1188
 aarch64	test/ir_deref_folded_comp.al	run/133	#1724
@@ -886,7 +886,6 @@ riscv64	test/for_aggregate_body_local.al	run/133	#1201
 riscv64	test/for_break_labels.al	run/133	#1202
 riscv64	test/for_in_global_array.al	run/133	#1201
 riscv64	test/for_in_global_struct_array.al	run/133	#1201
-riscv64	test/for_over_bytes.al	run/133	#1201
 riscv64	test/for_over_nonvar.al	run/133	#1201
 riscv64	test/for_over_slice.al	run/133	#1200
 riscv64	test/for_over_vec.al	run/133	#1200
@@ -951,6 +950,7 @@ riscv64	test/ir_array_param_legacy_caller.al	run/133	#1194
 riscv64	test/ir_array_param_legacy_copy.al	run/133	#1194
 riscv64	test/ir_array_param_synth_caller.al	run/133	#1194
 riscv64	test/ir_bare_callee_lib_clash.al	run/133	#41
+riscv64	test/ir_bytes_view.al	run/133	#1861
 riscv64	test/ir_deref_agg_call.al	run/133	#1727
 riscv64	test/ir_deref_agg_read.al	run/133	#1188
 riscv64	test/ir_deref_folded_comp.al	run/133	#1724
@@ -1607,7 +1607,6 @@ wasm	test/fold_capture_multisite.al	run/134	#1195
 wasm	test/for_aggregate_body_local.al	run/134	#1201
 wasm	test/for_in_global_array.al	run/134	#1201
 wasm	test/for_in_global_struct_array.al	run/134	#1201
-wasm	test/for_over_bytes.al	run/134	#1201
 wasm	test/for_over_nonvar.al	run/134	#1186
 wasm	test/for_over_slice.al	run/134	#1186
 wasm	test/for_over_vec.al	run/134	#1186
@@ -1675,6 +1674,7 @@ wasm	test/ir_array_param_legacy_caller.al	run/134	#1194
 wasm	test/ir_array_param_legacy_copy.al	run/134	#1194
 wasm	test/ir_array_param_synth_caller.al	run/134	#1194
 wasm	test/ir_bare_callee_lib_clash.al	run/134	#41
+wasm	test/ir_bytes_view.al	run/134	#1861
 wasm	test/ir_deref_agg_read.al	run/134	#1188
 wasm	test/ir_deref_folded_comp.al	run/134	#1724
 wasm	test/ir_ptr_agree.al	run/134	#1187
