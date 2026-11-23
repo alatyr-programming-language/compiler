@@ -332,9 +332,11 @@ ib_name_ks := fn(src : ptr(u8), s : usize, n : usize) -> Option(IbKS) {
   ib_vty_ks(t)
 }
 ## The kernel type of a declared type in a signature (slice 5a): a scalar name, or a brand / required
-## type over one (`Id := brand(u64)`, `NonZero := @require(p) u64`), which has its underlying type's exact
-## representation (Types §4.4, §8.1) — the value is the underlying value. A chain of brands is followed
-## to a bounded depth; anything else is not a kernel type.
+## type over one (`Id := brand(u64)`, `NonZero := @require(p) u64`), or a type alias to either
+## (`CheckErr := usize`), which has its underlying type's exact representation (Types §4.4, §8.1;
+## Modules §4.1: a type alias is erased) — the value is the underlying value. A chain of brands is
+## followed to a bounded depth; a plain alias falls through to `sema_vty_name`, which resolves alias
+## and brand chains in one pass.
 ib_type_ks := fn(decls : ptr(rt::Vec), src : ptr(u8), s0 : usize, n0 : usize) -> Option(IbKS) {
   mut s := s0
   mut n := n0
@@ -343,7 +345,12 @@ ib_type_ks := fn(decls : ptr(rt::Vec), src : ptr(u8), s0 : usize, n0 : usize) ->
     ko : Option(IbKS) = ib_name_ks(src, s, n)
     match ko { Some(k) => { return ko }; None => {} }
     bu := lower_layout::brand_underlying(decls, src, s, n)
-    if bu.n == 0 { return Option(IbKS).None }
+    if bu.n == 0 {
+      ## Not a brand. A type alias (`CheckErr := usize`) whose target is a kernel scalar, or a
+      ## brand chain over one, is resolved by `sema_vty_name` (#1864 part 4).
+      vt : VTy = sema::sema_vty_name(src, s, n, decls)
+      return ib_vty_ks(vt)
+    }
     s = bu.s
     n = bu.n
     depth = depth + 1
@@ -363,7 +370,14 @@ ib_type_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), s0 : usize, n0 : usi
     c : VCls = t.cls
     match c { VcFloat => { return true }; VcAbsent | VcUnknown | VcLit | VcInt | VcBool | VcPtr | VcAgg => {} }
     bu := lower_layout::brand_underlying(decls, src, s, n)
-    if bu.n == 0 { return false }
+    if bu.n == 0 {
+      ## Not a brand. A type alias whose target is a float (`F := f64`) is resolved by
+      ## `sema_vty_name`, which follows both alias and brand chains.
+      vt : VTy = sema::sema_vty_name(src, s, n, decls)
+      vc : VCls = vt.cls
+      match vc { VcFloat => { return true }; VcAbsent | VcUnknown | VcLit | VcInt | VcBool | VcPtr | VcAgg => {} }
+      return false
+    }
     s = bu.s
     n = bu.n
     depth = depth + 1
