@@ -9067,6 +9067,10 @@ root_package_test qualified_fn_alias "T _start" "T main__main" "T lower__b__run"
 root_package_test issue1734_alias_callee_agg_result "T _start" "T main__main" "T m__mk" "T m__weigh"
 root_package_test issue1734_alias_callee_agg_result_check "T _start" "T main__main" "T m__mk" "T m__weigh"
 root_package_test issue1734_qualified_callee_agg_result "T _start" "T main__main" "T m__mk" "T m__weigh"
+## #1737 / Modules §3, Types §4.1 — a struct's field types are its declaring module's, when the caller
+## declares a same-named type; the control has no collision. NON-VACUOUS: 0 on `b74089f3` (x86_64).
+root_package_test issue1737_field_type_callee_module "T _start" "T main__main" "T wide__mk"
+root_package_test issue1737_field_type_control "T _start" "T main__main" "T wide__mk"
 issue11_signature_type_name_test
 issue11_package_type_name_test
 ## Modules §§4.1/4.1.1 — a one-element listed projection after a bare module alias must remain a
