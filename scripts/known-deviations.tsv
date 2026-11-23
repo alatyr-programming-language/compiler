@@ -182,7 +182,6 @@ aarch64	test/generic_enum_ret.al	run/133	#1187
 aarch64	test/generic_enum_struct_payload.al	run/133	#1187
 aarch64	test/generic_fn_value.al	run/133	#1189
 aarch64	test/generic_ptr_struct_deref.al	run/133	#1188
-aarch64	test/generic_struct_field.al	run/133	#1187
 aarch64	test/global_annotated_struct.al	run/133	#1190
 aarch64	test/global_array_by_ref_arg.al	run/133	#1189
 aarch64	test/global_enum_array_disc_repr.al	run/133	#577
@@ -330,7 +329,6 @@ aarch64	test/issue554_deref_ptr_local_aggregate_field_reject.al	run/133	#1187
 aarch64	test/issue554_deref_ptr_local_narrow_signed.al	run/133	#1187
 aarch64	test/issue554_deref_ptr_local_packed.al	run/133	#1187
 aarch64	test/issue554_deref_ptr_local_union_reject.al	run/133	#1187
-aarch64	test/issue554_deref_ptr_struct_local_field.al	run/133	#1187
 aarch64	test/issue557_exhaustive_six_shapes.al	run/133	#577
 aarch64	test/issue557_or_pattern_six_shapes.al	run/133	#577
 aarch64	test/issue557_wildcard_six_shapes.al	run/133	#577
@@ -348,7 +346,6 @@ aarch64	test/issue771_result_call_match_wide.al	run/133	#1190
 aarch64	test/issue788_exhaustive_controls.al	run/133	#577
 aarch64	test/issue790_enum_copy_through_deref.al	run/133	#577
 aarch64	test/issue791_call_result_agg_field.al	run/133	#1187
-aarch64	test/issue792_enum_field_through_ptr.al	run/133	#1191
 aarch64	test/issue794_callee_saved_registers.al	run/133	#1188
 aarch64	test/issue795_byte_array_literal_arg.al	run/133	#1191
 aarch64	test/issue800_onewords_struct_param_payload.al	run/133	#1190
@@ -611,7 +608,6 @@ aarch64	test/slice_array_elem_view_locals.al	run/133	#1187
 aarch64	test/slice_eq.al	run/133	#1192
 aarch64	test/slice_field_byref.al	run/133	#1191
 aarch64	test/slice_field_elem.al	run/133	#1191
-aarch64	test/slice_field_struct.al	run/133	#1191
 aarch64	test/slice_find_contains.al	run/133	#1200
 aarch64	test/slice_len_field.al	run/133	#1184
 aarch64	test/slice_local_arg.al	run/133	#1184
@@ -668,8 +664,6 @@ aarch64	test/str_strip.al	run/133	#1184
 aarch64	test/str_trim.al	run/133	#1184
 aarch64	test/str_trim_matches.al	run/133	#1184
 aarch64	test/struct_array_param.al	run/133	#1187
-aarch64	test/struct_lit_agg_field.al	run/133	#1191
-aarch64	test/struct_match_field.al	run/133	#1187
 aarch64	test/subword_ptr_deref.al	run/133	#550
 aarch64	test/tail_enum_match.al	run/133	#1191
 aarch64	test/thread_join_many.al	run/133	#1189
@@ -904,7 +898,6 @@ riscv64	test/generic_enum_ret.al	run/133	#1187
 riscv64	test/generic_enum_struct_payload.al	run/133	#1187
 riscv64	test/generic_fn_value.al	run/133	#1189
 riscv64	test/generic_ptr_struct_deref.al	run/133	#1188
-riscv64	test/generic_struct_field.al	run/133	#1187
 riscv64	test/global_annotated_struct.al	run/133	#1190
 riscv64	test/global_array_by_ref_arg.al	run/133	#1189
 riscv64	test/global_enum_array_disc_repr.al	run/133	#577
@@ -1054,7 +1047,6 @@ riscv64	test/issue554_deref_ptr_local_aggregate_field_reject.al	run/133	#1187
 riscv64	test/issue554_deref_ptr_local_narrow_signed.al	run/133	#1187
 riscv64	test/issue554_deref_ptr_local_packed.al	run/133	#1187
 riscv64	test/issue554_deref_ptr_local_union_reject.al	run/133	#1187
-riscv64	test/issue554_deref_ptr_struct_local_field.al	run/133	#1187
 riscv64	test/issue557_exhaustive_six_shapes.al	run/133	#577
 riscv64	test/issue557_or_pattern_six_shapes.al	run/133	#577
 riscv64	test/issue557_wildcard_six_shapes.al	run/133	#577
@@ -1072,7 +1064,6 @@ riscv64	test/issue771_result_call_match_wide.al	run/133	#1190
 riscv64	test/issue788_exhaustive_controls.al	run/133	#577
 riscv64	test/issue790_enum_copy_through_deref.al	run/133	#577
 riscv64	test/issue791_call_result_agg_field.al	run/133	#1187
-riscv64	test/issue792_enum_field_through_ptr.al	run/133	#1191
 riscv64	test/issue794_callee_saved_registers.al	run/133	#1188
 riscv64	test/issue795_byte_array_literal_arg.al	run/133	#1191
 riscv64	test/issue800_onewords_struct_param_payload.al	run/133	#1190
@@ -1339,7 +1330,6 @@ riscv64	test/slice_array_elem_view_locals.al	run/133	#1187
 riscv64	test/slice_eq.al	run/133	#1192
 riscv64	test/slice_field_byref.al	run/133	#1191
 riscv64	test/slice_field_elem.al	run/133	#1191
-riscv64	test/slice_field_struct.al	run/133	#1191
 riscv64	test/slice_find_contains.al	run/133	#1200
 riscv64	test/slice_len_field.al	run/133	#1184
 riscv64	test/slice_local_arg.al	run/133	#1184
@@ -1397,8 +1387,6 @@ riscv64	test/str_trim_matches.al	run/133	#1184
 riscv64	test/struct_array_param.al	run/133	#1187
 riscv64	test/struct_if_expr.al	run/133	#1187
 riscv64	test/struct_if_expr2.al	run/133	#1187
-riscv64	test/struct_lit_agg_field.al	run/133	#1191
-riscv64	test/struct_match_field.al	run/133	#1187
 riscv64	test/subword_ptr_deref.al	run/133	#550
 riscv64	test/tail_enum_match.al	run/133	#1191
 riscv64	test/thread_join_many.al	run/133	#1189
@@ -1625,7 +1613,6 @@ wasm	test/generic_enum_ret.al	run/134	#1191
 wasm	test/generic_enum_struct_payload.al	run/134	#1187
 wasm	test/generic_fn_value.al	run/134	#1189
 wasm	test/generic_ptr_struct_deref.al	run/134	#1188
-wasm	test/generic_struct_field.al	run/134	#1187
 wasm	test/generic_struct_return.al	run/134	#1191
 wasm	test/global_agg_arr_elem_matrix.al	run/134	#1187
 wasm	test/global_agg_struct_whole_assign.al	run/134	#1204
@@ -1776,7 +1763,6 @@ wasm	test/issue554_deref_ptr_local_aggregate_field_reject.al	run/134	#1187
 wasm	test/issue554_deref_ptr_local_narrow_signed.al	run/134	#1187
 wasm	test/issue554_deref_ptr_local_packed.al	run/134	#1187
 wasm	test/issue554_deref_ptr_local_union_reject.al	run/134	#1187
-wasm	test/issue554_deref_ptr_struct_local_field.al	run/134	#1187
 wasm	test/issue557_exhaustive_six_shapes.al	run/134	#1188
 wasm	test/issue557_or_pattern_six_shapes.al	run/134	#1188
 wasm	test/issue557_wildcard_six_shapes.al	run/134	#1188
@@ -1792,7 +1778,6 @@ wasm	test/issue771_result_call_match_wide.al	run/134	#1190
 wasm	test/issue788_exhaustive_controls.al	run/134	#1190
 wasm	test/issue790_enum_copy_through_deref.al	run/134	#1188
 wasm	test/issue791_call_result_agg_field.al	run/134	#1187
-wasm	test/issue792_enum_field_through_ptr.al	run/134	#1188
 wasm	test/issue794_callee_saved_registers.al	run/134	#1188
 wasm	test/issue795_byte_array_literal_arg.al	run/134	#1191
 wasm	test/issue800_onewords_struct_param_payload.al	run/134	#1190
@@ -2046,7 +2031,6 @@ wasm	test/slice_array_elem_view_locals.al	run/134	#1187
 wasm	test/slice_eq.al	run/134	#1192
 wasm	test/slice_field_byref.al	run/134	#1187
 wasm	test/slice_field_elem.al	run/134	#1184
-wasm	test/slice_field_struct.al	run/134	#1187
 wasm	test/slice_find_contains.al	run/134	#1186
 wasm	test/slice_generic_write.al	run/134	#1194
 wasm	test/slice_len_field.al	run/134	#1186
@@ -2103,8 +2087,6 @@ wasm	test/str_trim_matches.al	run/134	#1184
 wasm	test/struct_array_param.al	run/134	#1187
 wasm	test/struct_if_expr.al	run/134	#1187
 wasm	test/struct_if_expr2.al	run/134	#1187
-wasm	test/struct_lit_agg_field.al	run/134	#1187
-wasm	test/struct_match_field.al	run/134	#1187
 wasm	test/subword_ptr_deref.al	run/134	#1186
 wasm	test/thread_join_many.al	run/134	#1189
 wasm	test/thread_spawn.al	run/134	#1200
