@@ -277,6 +277,7 @@ aarch64	test/issue1396_field_branch_enum_eq.al	run/133	#1191
 aarch64	test/issue1397_generic_body_call_reject.al	run/12	#1399
 aarch64	test/issue1397_generic_call_enum_eq.al	run/133	#1191
 aarch64	test/issue1397_generic_option_ret_reject.al	run/12	#1399
+aarch64	test/issue1403_for_byte_slice_rows.al	run/133	#1201
 aarch64	test/issue1403_for_slice_bound_no_annotation.al	run/133	#1201
 aarch64	test/issue1405_slice_param_forward.al	run/133	#1187
 aarch64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
@@ -1001,6 +1002,7 @@ riscv64	test/issue1396_field_branch_enum_eq.al	run/133	#1191
 riscv64	test/issue1397_generic_body_call_reject.al	run/12	#1399
 riscv64	test/issue1397_generic_call_enum_eq.al	run/133	#1191
 riscv64	test/issue1397_generic_option_ret_reject.al	run/12	#1399
+riscv64	test/issue1403_for_byte_slice_rows.al	run/133	#1201
 riscv64	test/issue1403_for_slice_bound_no_annotation.al	run/133	#1201
 riscv64	test/issue1405_slice_param_forward.al	run/133	#1187
 riscv64	test/issue1406_declared_sub_slice_ret.al	run/133	#1191
@@ -1725,6 +1727,7 @@ wasm	test/issue1396_field_branch_enum_eq.al	run/134	#1187
 wasm	test/issue1397_generic_body_call_reject.al	run/13	#1399
 wasm	test/issue1397_generic_call_enum_eq.al	run/134	#1192
 wasm	test/issue1397_generic_option_ret_reject.al	run/134	#1192
+wasm	test/issue1403_for_byte_slice_rows.al	run/134	#1201
 wasm	test/issue1403_for_slice_bound_no_annotation.al	run/134	#1186
 wasm	test/issue1406_declared_sub_slice_ret.al	run/134	#1191
 wasm	test/issue1421_for_direct_slice_call_narrow.al	run/134	#1200

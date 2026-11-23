@@ -14233,6 +14233,9 @@ run issue1406_declared_sub_value 42
 ## arch sweeps' `^run [a-z]` grep skips it): the width fix is in x86_64's `for` arm, and the other
 ## backends' misses are rows of scripts/known-deviations.tsv (#1201 aarch64/riscv64, #1186 wasm).
 run_x86 issue1403_for_slice_bound_no_annotation 42
+## #1403 / Types §6.4, Control Flow §6 — `for` over a `u8`/`i8` slice in the issue's remaining shapes.
+## NON-VACUOUS: 1, 139, 132 and 0 on `e77d025e` / `cdcecb5c` (x86_64).
+run_x86 issue1403_for_byte_slice_rows 42
 ## #1502 / Declarations §5+§6.1 — a local declared in a nested block of one function with a module
 ## constant's name must leave the constant alone; another function's read after it ran answers the
 ## constant. aarch64, riscv64 (`.data` label) and wasm (`global.set`) stored the local into the constant's
