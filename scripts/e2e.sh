@@ -13341,6 +13341,10 @@ run issue725_call_cmp_unsigned 42
 run_wat issue725_call_cmp_unsigned 42
 run_a64 issue725_call_cmp_unsigned 42
 run_rv64 issue725_call_cmp_unsigned 42
+## #765 / Types §3.2 — `/` and `%` with an `i64` struct field (of a local, a parameter or a call
+## result) divide signed. NON-VACUOUS: the twins answered 1 at `b8cf45d`, x86_64 answered 1 on the
+## call-result field at `3e5d7b4`.
+run issue765_signed_field_div 42
 run_wat wasm_locals 42
 run_wat wasm_local_mix 42
 run_wat wasm_reassign 42
