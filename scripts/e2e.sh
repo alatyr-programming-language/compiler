@@ -6699,7 +6699,7 @@ issue1809_deref_arr_refusals_test() {
     '  mut w : u64 = 1115412' \
     '  rd(unchecked bitcast(usize, ptr(w)))' \
     '}' > "$d/attr_byte_reassign.al"
-  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown decl_unknown_param_line decl_unknown_param_list shared_slot decl_comment_colon decl_comment_colon_decl decl_comment_colon_attr attr_byte_reassign; do
+  for n in struct_elem narrow_reassign named_len named_len_reassign expr_len inferred_reassign inferred_reassign_idx decl_unknown decl_unknown_param_line decl_unknown_param_list shared_slot attr_byte_reassign; do
     src="$d/$n.al"; out="$d/$n.out"; err="$d/$n.err"
     "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
     if [ "$got" = 0 ]; then echo "FAIL issue1809_deref_arr_refusals($n): build succeeded, want a located reject"; fail=1; continue; fi
@@ -6715,13 +6715,19 @@ issue1809_deref_arr_refusals_test() {
       decl_unknown) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       decl_unknown_param_line|decl_unknown_param_list) grep -qF 'could not identify it with certainty' "$err" && grep -qF 'v = deref(p)' "$err" ;;
       attr_byte_reassign) grep -qF 'laid out at another element tier or length' "$err" && grep -qF 'z = deref(b)' "$err" ;;
-      decl_comment_colon_attr) grep -qF 'not read past a comment' "$err" && grep -qF 'v # the copy' "$err" ;;
-      decl_comment_colon_decl) grep -qF 'not read past a comment' "$err" && grep -qF 'v # the copy' "$err" ;;
-      decl_comment_colon) grep -qF 'not read past a comment' "$err" && grep -qF 'v = deref(q)' "$err" ;;
       shared_slot) grep -qF 'shares its frame slot with an earlier array' "$err" && grep -qF 'v = deref(p)' "$err" ;;
     esac
     if [ $? = 0 ]; then echo "ok   issue1809_deref_arr_refusals($n): refused, located"
     else echo "FAIL issue1809_deref_arr_refusals($n): rc=$got but the reason or its source line is missing"; fail=1; fi
+  done
+  # comment-before-colon cases now compile successfully (#1859 fix):
+  for n in decl_comment_colon decl_comment_colon_decl decl_comment_colon_attr; do
+    src="$d/$n.al"; out="$d/$n.out"
+    "$CC" -o "$out" "$src" >/dev/null 2>&1
+    if [ $? != 0 ]; then echo "FAIL issue1809_deref_arr_refusals($n): build failed, want exit 42 after #1859 fix"; fail=1; continue; fi
+    "$out"; got=$?
+    if [ "$got" = 42 ]; then echo "ok   issue1809_deref_arr_refusals($n): runs, exit 42 (#1859)"
+    else echo "FAIL issue1809_deref_arr_refusals($n): got $got, want 42"; fail=1; fi
   done
 }
 
