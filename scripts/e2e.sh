@@ -13060,6 +13060,11 @@ run view_var_reassign 11
 ## return position — the exit code truncates mod 256 back to the first byte — while a comparison saw the full
 ## word and took the wrong branch. (A textbook case of the mod-256 gotcha masking a real bug.)
 run view_ptr_deref_byte 100
+## #340 / Grammar §2.5 — whitespace before `:` / `:=` does not move a typed local's layout or an
+## inferred byte pointer's load width across the old 512-byte recovery window. NON-VACUOUS: 0 and 1 at
+## the 502- and 508-space bindings on `8f1dba16` / `88890003` (x86_64).
+run issue340_window_typed_array 42
+run_x86 issue340_window_byte_ptr 42
 ## Types §6.4/§4.5: a raw pointer carries no arithmetic indexing of its own, so `p[i]` on a scalar-pointer local
 ## must be REJECTED, not read. Five spellings used to leaq the pointer's own frame slot and read the surrounding
 ## frame (0 / a neighbouring element / 95 / 80 / 104). Working spellings: deref(p), bytes(s)[i], Slice(u8)(…)[i].
