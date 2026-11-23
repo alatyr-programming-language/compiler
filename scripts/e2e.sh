@@ -14324,6 +14324,10 @@ run_x86 issue1684_out_narrow_word_elem 42
 ## `call`, so CG-10's `@inline` contract holds.
 run_x86 issue1681_inline_variadic_tail 42
 run_x86 issue1681_inline_variadic_fixed 42
+## #1827 / Memory §4.3 — `deref(deref(p)).f` through a pointer-to-pointer. NON-VACUOUS: 0 on the
+## Stage1 of `a5fc9766` and the 0.6.0 seed (x86_64).
+run issue1827_deref_deref_param 42
+run_x86 issue1827_deref_deref_field 42
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
