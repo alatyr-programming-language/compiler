@@ -1689,9 +1689,10 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
   src := ib_b_src(bp)
   d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), di))
   ## Only an Alatyr function with a body is called through the Alatyr convention; a syscall or an extern
-  ## is slice 2's `syscall` / `call_c`, and more than 8 arguments are not modelled (docs/ir-slice-1.md §3).
+  ## is slice 2's `syscall` / `call_c`. More than 16 value arguments are outside the builder's subset;
+  ## each selector has its own limit (x86_64: 6 register args; stack passing is a later slice).
   if d.arity != na { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallArity); return CallOut.CoRefused }
-  if na > 8 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallManyArgs); return CallOut.CoRefused }
+  if na > 16 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallManyArgs); return CallOut.CoRefused }
   if lower::extern_symbol(src, d.name_start, d.name_len).n != 0 {
     ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallExtern)
     return CallOut.CoRefused
@@ -1837,7 +1838,7 @@ ib_call_generic := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs
     return CallOut.CoRefused
   }
   if na != d.arity { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallGenericImplicit); return CallOut.CoRefused }
-  if na - ntp > 8 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallManyArgs); return CallOut.CoRefused }
+  if na - ntp > 16 { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallManyArgs); return CallOut.CoRefused }
   ## The instance a target defines is the one its legacy instance pass collected, and that pass binds a
   ## bare generic call by the LAST declaration of the name (`lower::generic_decl_of`), not by the calling
   ## module's scope. Where the two disagree (`decl_at` declared in five modules) the instance of `di` may

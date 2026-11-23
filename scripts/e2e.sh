@@ -7786,7 +7786,7 @@ check_reject reject_dup_export
 check_build_located reject_dup_export_value 5 "duplicate name"
 check_reject reject_local_type_mismatch
 check_reject reject_ptr_target
-check_accept accept_ptr_target
+run accept_ptr_target 42
 check_reject reject_unbound
 check_located reject_duplicate_name 2
 check_reject reject_call_arg_type

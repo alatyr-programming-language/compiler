@@ -380,7 +380,6 @@ aarch64	test/lambda_capture_multi.al	run/133	#1195
 aarch64	test/lambda_capture_multistmt.al	run/133	#1195
 aarch64	test/lambda_capture_struct.al	run/133	#1195
 aarch64	test/lambda_capture_via_apply.al	run/133	#1195
-aarch64	test/linked_deref.al	run/133	#1188
 aarch64	test/linked_walk.al	run/133	#1188
 aarch64	test/map_container.al	run/133	#1188
 aarch64	test/match_binding_root.al	run/133	#1194
@@ -1105,7 +1104,6 @@ riscv64	test/lambda_capture_multi.al	run/133	#1195
 riscv64	test/lambda_capture_multistmt.al	run/133	#1195
 riscv64	test/lambda_capture_struct.al	run/133	#1195
 riscv64	test/lambda_capture_via_apply.al	run/133	#1195
-riscv64	test/linked_deref.al	run/133	#1188
 riscv64	test/linked_walk.al	run/133	#1188
 riscv64	test/map_container.al	run/133	#1188
 riscv64	test/match_binding_root.al	run/133	#1194
@@ -1818,7 +1816,6 @@ wasm	test/issue988_vec_ufcs_subword_instance.al	run/134	#1186
 wasm	test/issue992_alloc_with_match_arm.al	run/134	#1190
 wasm	test/iter_for_chars.al	run/134	#1184
 wasm	test/iter_for_split.al	run/134	#1184
-wasm	test/linked_deref.al	run/134	#1205
 wasm	test/linked_walk.al	run/134	#1205
 wasm	test/map_container.al	run/134	#1186
 wasm	test/match_binding_root.al	run/134	#1191
