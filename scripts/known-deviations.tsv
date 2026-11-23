@@ -300,6 +300,7 @@ aarch64	test/issue1809_deref_whole_array.al	compile/1	#1811
 aarch64	test/issue1810_instance_spelling.al	run/133	#1193
 aarch64	test/issue1822_alloc_enclosing_param.al	compile/1	#1468
 aarch64	test/issue1822_binding_controls.al	run/133	#1199
+aarch64	test/issue1827_deref_deref_field.al	run/133	#1188
 aarch64	test/issue1859_comment_before_colon_deref.al	compile/1	#1811
 aarch64	test/issue263_slice_narrow_field_write.al	run/133	#263
 aarch64	test/issue340_window_byte_ptr.al	run/133	#1184
@@ -1026,6 +1027,7 @@ riscv64	test/issue1809_deref_whole_array.al	compile/1	#1811
 riscv64	test/issue1810_instance_spelling.al	run/133	#1193
 riscv64	test/issue1822_alloc_enclosing_param.al	compile/1	#1468
 riscv64	test/issue1822_binding_controls.al	run/133	#1199
+riscv64	test/issue1827_deref_deref_field.al	run/133	#1188
 riscv64	test/issue1859_comment_before_colon_deref.al	compile/1	#1811
 riscv64	test/issue263_slice_narrow_field_write.al	run/133	#263
 riscv64	test/issue340_window_byte_ptr.al	run/133	#1184
@@ -1751,6 +1753,7 @@ wasm	test/issue1809_deref_whole_array.al	compile/1	#1811
 wasm	test/issue1810_instance_spelling.al	run/134	#1193
 wasm	test/issue1822_alloc_enclosing_param.al	compile/1	#1468
 wasm	test/issue1822_binding_controls.al	run/134	#1186
+wasm	test/issue1827_deref_deref_field.al	run/134	#1188
 wasm	test/issue1859_comment_before_colon_deref.al	compile/1	#1811
 wasm	test/issue263_slice_narrow_field_write.al	run/134	#263
 wasm	test/issue340_window_byte_ptr.al	run/134	#1184
