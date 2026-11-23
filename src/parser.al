@@ -3520,7 +3520,14 @@ local_uninit_end := fn(pc : PC, ns : usize, nl : usize) -> usize {
       if depth > 0 { depth -= 1 }
     }
     if depth == 0 and c == "=" { return 0 }
-    if depth == 0 and (c == "\n" or c == ";" or c == "}") { return p }
+    if depth == 0 and (c == ";" or c == "}") { return p }
+    ## A line or a `#` comment ends the type, but a line-leading `=` continues the declaration as its
+    ## initializer (Grammar §2.6; spec#172), as `ast::local_is_uninit` answers (#1869).
+    if depth == 0 and (c == "\n" or c == "#") {
+      q := ast::ast_skip_trivia(pc.src, end, p)
+      if q < end and (pc.src + q).str_at(1) == "=" { return 0 }
+      return p
+    }
     p += 1
   }
   0
