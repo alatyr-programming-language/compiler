@@ -2332,7 +2332,6 @@ The original reading note, verbatim:
 #
 # THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 1579 hunks, 21202 added, 9363 removed. One sentence:
 # Each hunk replaces a two-instruction tag match (cmpq+je) with a full XIR dispatch block (cmpq $N/sete/testq/jz under .Lxir labels) and its frame spills, as newly resolved sema literal call sites flow through the shared IR backend.
-# signal to STOP.
 #
 # CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
 # Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 2078764 lines.
@@ -2347,5 +2346,28 @@ The original reading note, verbatim:
 # The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
 #
 # VERSION 0.8.0 -> 0.8.1, PATCH: internal IR coverage improvement and call-argument limit raise; no new surface for the user.
+# The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.8.1 -> 0.8.2   promoted 2026-11-24   seed/alatyr := Stage2
+#
+# WHY: the sema qualified-struct-literal resolution fix and four new IR builder paths: str.ptr field read, str-local reassignment, ptr-to-ptr bitcast, and global-assign type fallback (#1734).
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 0 hunks, 0 added, 0 removed. One sentence:
+# Zero delta: the four new IR builder paths produce identical normalized GAS because every newly Built function's IR output matches its legacy assembly.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 2078764 lines.
+# GAS SHA-256 (Stage2): be9d4c1ec3b4d4533cae7e4afcca738e76f555329455c81ddcc0288124fa88a9.
+# Stage2 == Stage3 BINARY SHA-256:
+# b472348810aecbad820135ff7a14ae9b2b85dc426f4da831b80bb539304cc06f (8768296 B).
+# All three answer `alatyr 0.8.2, spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.8.1) SHA-256:
+# 65a85621439be3e5b4ef392e8dce379f1bea0077e979e863e8a24fcb864404d7.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (2078764 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.8.1 -> 0.8.2, PATCH: sema qualified-struct-literal fix and internal IR coverage; no new surface for the user.
 # The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```

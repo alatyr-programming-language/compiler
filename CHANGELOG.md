@@ -134,6 +134,10 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.8.2 — 2026-11-24
+
+- The sema pass resolves a qualified struct literal `x::S(…)` correctly when the caller's module also declares `S` (#1734). The shared IR backend now builds str.ptr field reads, str-local reassignment, and ptr-to-ptr bitcast. PATCH.
+
 ## 0.8.1 — 2026-11-23
 
 - Seed carries the sema literal type context for syscall and qualified calls, plus the 8→16 call argument limit (#1897). PATCH.
