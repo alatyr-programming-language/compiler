@@ -1,4 +1,4 @@
-28
+31
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -148,11 +148,22 @@
 #     test/issue1848_for_var_shadow.al                  legacy run 43    default run 42   (#432)
 #     test/issue1867_if_block_shadow.al                 legacy build 1   default run 42   (#1867)
 #
+# It was 28 and it is 31 because #1901's and #1902's fixtures are new (gate run 45340874445 on
+# 7e05c43d, part ir, three new rows). `for x in s` over a `u8`/`i8` slice from various source shapes
+# (#1403, the remaining byte-slice for-loop rows) answers the fixture's `## expect: run 42`; the
+# default builds every function from the shared IR and answers 42. Legacy x86 segfaults (139) on the
+# for-over-byte-slice lowering path. The two deref-deref fixtures (#1827) test reading a field or
+# parameter through a double pointer; legacy x86 reads the wrong value (11 or 0) while the IR path
+# answers 42. The IR track takes no legacy-x86 fixes (#980):
+#     test/issue1403_for_byte_slice_rows.al             legacy run 139   default run 42   (#1403)
+#     test/issue1827_deref_deref_field.al               legacy run 11    default run 42   (#1827)
+#     test/issue1827_deref_deref_param.al               legacy run 0     default run 42   (#1827)
+#
 # ir_diff prints every row but #1626's and #1632's as UNEXPLAINED: its `oracle`
 # (scripts/fixture_oracle.sh) reads only the legacy header shapes (`## build_reject`, `## Expected exit:
 # N`) in the first 30 lines, never the `## expect:` directive these files state. #1626's and #1632's
 # files also say `Expected exit 42` in their headers, so ir_diff attributes those rows itself
-# (LEGACY-WRONG; attributed=2 unexplained=26). Every row is explained above, by its file's own directive
+# (LEGACY-WRONG; attributed=2 unexplained=29). Every row is explained above, by its file's own directive
 # (#1786's issue447 row, which states none and is held by the corpus manifest, by its header and e2e rows).
 #
 # Lowering the number means fixing a row, not editing this file.

@@ -12879,7 +12879,7 @@ run slice_param 42
 run slice_struct_param 42
 run slice_struct_local_arg 42
 ## #1181: nested for over Slice(u8) elements — the slice length survives the outer element binding
-run issue1181_nested_for_slice_len 42
+run_x86 issue1181_nested_for_slice_len 42
 ## #1182: an ANNOTATED struct-element view local `xs : Slice(P) = t[0..2]` reads as a local, not a param
 run issue1182_annotated_view_local 42
 ## its review row: a struct-element fixed-array PARAMETER keeps the by-value read (139 on the PR's first
