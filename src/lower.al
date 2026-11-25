@@ -2487,7 +2487,12 @@ vis_check_program := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
 
 module_const_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ptr(Expr) {
   h := lower_layout::_name_hash(src, s, n)
-  if _mcv_n[h] == n and _mcv_src[h] == src and _mcv_ctx[h] == GLOBAL_REF_MOD_SET
+  ## #1567 — a QUALIFIED reference (`m::X`, Modules §2) is never answered from, nor stored in, the cache:
+  ## its key is the name text and the active module, which a bare `X` in the same module shares, so the
+  ## two read each other's declaration (`X : u64 = m::X + 1` chased its own initializer until the stack
+  ## overflowed).
+  gqual := gref_split(src, s, n).qual
+  if not gqual and _mcv_n[h] == n and _mcv_src[h] == src and _mcv_ctx[h] == GLOBAL_REF_MOD_SET
      and _mcv_ml[h] == GLOBAL_REF_MOD_L
      and lower_ctx::streq(src, _mcv_ms[h], _mcv_ml[h], GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
      and lower_ctx::streq(src, _mcv_s[h], _mcv_n[h], s, n) { return unchecked bitcast(ptr(Expr), _mcv_r[h]) }
@@ -2511,7 +2516,7 @@ module_const_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
     }
     j += 1
   }
-  if n != 0 {
+  if n != 0 and not gqual {
     _mcv_s[h] = s; _mcv_n[h] = n; _mcv_src[h] = src; _mcv_r[h] = res
     _mcv_ms[h] = GLOBAL_REF_MOD_S; _mcv_ml[h] = GLOBAL_REF_MOD_L; _mcv_ctx[h] = GLOBAL_REF_MOD_SET
   }
@@ -2523,7 +2528,8 @@ module_const_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
 ## proven `const_struct_field` shape and avoiding the deep-stack fragility of returning a span directly).
 mut_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ptr(Expr) {
   h := lower_layout::_name_hash(src, s, n)
-  if _mgv_n[h] == n and _mgv_src[h] == src and _mgv_ctx[h] == GLOBAL_REF_MOD_SET
+  gqual := gref_split(src, s, n).qual   ## #1567: a qualified reference bypasses the cache, as in `module_const_value`
+  if not gqual and _mgv_n[h] == n and _mgv_src[h] == src and _mgv_ctx[h] == GLOBAL_REF_MOD_SET
      and _mgv_ml[h] == GLOBAL_REF_MOD_L
      and lower_ctx::streq(src, _mgv_ms[h], _mgv_ml[h], GLOBAL_REF_MOD_S, GLOBAL_REF_MOD_L)
      and lower_ctx::streq(src, _mgv_s[h], _mgv_n[h], s, n) { return unchecked bitcast(ptr(Expr), _mgv_r[h]) }
@@ -2545,7 +2551,7 @@ mut_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
     }
     j += 1
   }
-  if n != 0 {
+  if n != 0 and not gqual {
     _mgv_s[h] = s; _mgv_n[h] = n; _mgv_src[h] = src; _mgv_r[h] = res
     _mgv_ms[h] = GLOBAL_REF_MOD_S; _mgv_ml[h] = GLOBAL_REF_MOD_L; _mgv_ctx[h] = GLOBAL_REF_MOD_SET
   }

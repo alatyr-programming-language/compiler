@@ -2194,7 +2194,6 @@ x86_64	test/inout_agg_whole_assign_in_alias_part.al	compile/1	#1637
 x86_64	test/issue1065_het_eq_declared.al	run/1	#1065
 x86_64	test/issue1065_het_eq_undeclared.al	run/42	#1065
 x86_64	test/issue1822_alloc_enclosing_param.al	compile/1	#1468
-x86_64	test/issue926_const_qualified_same_name_ok.al	compile/139	#1567
 x86_64	test/issue987_user_generic_ufcs_not_completed.al	run/139	#1654
 x86_64	test/package/ir38_deref_foreign_amb/package.al	run/41	#1797
 x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
