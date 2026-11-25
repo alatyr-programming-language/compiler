@@ -679,6 +679,7 @@ aarch64	test/struct_array_param.al	run/133	#1187
 aarch64	test/struct_lit_agg_field.al	run/133	#1191
 aarch64	test/struct_match_field.al	run/133	#1187
 aarch64	test/subword_ptr_deref.al	run/133	#550
+aarch64	test/syn12_line_start_bracket.al	run/133	#1191
 aarch64	test/tail_enum_match.al	run/133	#1191
 aarch64	test/thread_join_many.al	run/133	#1189
 aarch64	test/thread_spawn.al	run/133	#1200
@@ -1416,6 +1417,7 @@ riscv64	test/struct_if_expr2.al	run/133	#1187
 riscv64	test/struct_lit_agg_field.al	run/133	#1191
 riscv64	test/struct_match_field.al	run/133	#1187
 riscv64	test/subword_ptr_deref.al	run/133	#550
+riscv64	test/syn12_line_start_bracket.al	run/133	#1191
 riscv64	test/tail_enum_match.al	run/133	#1191
 riscv64	test/thread_join_many.al	run/133	#1189
 riscv64	test/thread_spawn.al	run/133	#1200
@@ -2130,6 +2132,7 @@ wasm	test/struct_if_expr2.al	run/134	#1187
 wasm	test/struct_lit_agg_field.al	run/134	#1187
 wasm	test/struct_match_field.al	run/134	#1187
 wasm	test/subword_ptr_deref.al	run/134	#1186
+wasm	test/syn12_line_start_bracket.al	run/134	#1191
 wasm	test/thread_join_many.al	run/134	#1189
 wasm	test/thread_spawn.al	run/134	#1200
 wasm	test/tuple_array_eq.al	run/134	#1192
