@@ -2746,6 +2746,10 @@ run_pkg_exit issue1753_method_recv_scoped issue1753-method-recv-scoped 42
 # module: `pick(mk())` is judged against the root's own `pick(u64)` and refused. #1755's first head
 # (e43bebee) counted `zed::pick` into an overload set, skipped the check and answered 206.
 run_pkg_check_build_located issue1746_bare_call_foreign_module_reject 4 main "type mismatch"
+# #1915 review / #1920 — a bare call through `f := other::h`, a binding that renames a GENERIC function
+# and shadows the ancestor's own `f`, is refused at the call by `check` and `build` alike. #1915's head
+# cbc4e1a5 accepted it in `check` and the build failed at the linker (undefined `other__h`, rc 14).
+run_pkg_check_build_located issue1915_renamed_generic_alias_reject 2 geo__child "a call through \`f\`, an alias that renames a generic function (\`f := M::g\`, Modules §4.1), is not supported yet, #1920 — call the generic function by its own name or path"
 
 run_tool15_manifest_handle
 

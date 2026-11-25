@@ -4780,6 +4780,9 @@ DIAG_NUMERIC_COND_MARKER : usize = 6905000000000000000
 DIAG_CALL_TOO_MANY_MARKER : usize = 6906000000000000000
 DIAG_CALL_UNBOUND_PARAM_MARKER : usize = 6906500000000000000
 DIAG_CALL_UNBOUND_PARAM_SLOT : usize = 33554432
+## #1915 / #1920 — the third call-binding class, `sema::CALL_RENAMED_GENERIC_DIAG_MARKER`: a bare call
+## through a binding that renames a generic function; payload the call's offset times 4.
+DIAG_CALL_RENAMED_GENERIC_MARKER : usize = 6916000000000000000
 ## `sema::CallUnbound`'s kinds as the payload carries them: an `in` parameter, an `out` / `in out` one,
 ## an elided allocator with no ambient, and a call ambiguous between eliding the allocator and taking a
 ## default (spec#171).
@@ -4790,12 +4793,20 @@ DIAG_CALL_UNBOUND_KIND_ALLOC_OR_DEFAULT : usize = 3
 d_is_call_binding := fn(code : usize) -> bool { code >= DIAG_CALL_TOO_MANY_MARKER and code < DIAG_CT_MARKER }
 ## The call's source offset a call-binding `code` carries.
 d_call_binding_span := fn(code : usize) -> usize {
+  if code >= DIAG_CALL_RENAMED_GENERIC_MARKER { return (code - DIAG_CALL_RENAMED_GENERIC_MARKER) / 4 }
   if code >= DIAG_CALL_UNBOUND_PARAM_MARKER { return ((code - DIAG_CALL_UNBOUND_PARAM_MARKER) / 4) / DIAG_CALL_UNBOUND_PARAM_SLOT }
   (code - DIAG_CALL_TOO_MANY_MARKER) / DIAG_ENUM_VARIANT_ARITY_SLOT
 }
-## Stream a call-binding `code`'s message to fd 2: the unbound parameter by name, or both counts.
+## Stream a call-binding `code`'s message to fd 2: the unbound parameter by name, both counts, or the
+## callee spelling of a renamed generic.
 d_call_binding_msg := fn(code : usize, base : usize, in out a : rt::Arena) {
-  if code >= DIAG_CALL_UNBOUND_PARAM_MARKER {
+  if code >= DIAG_CALL_RENAMED_GENERIC_MARKER {
+    ## #1920 is the issue for real support: instantiate `M::g` under the call's name.
+    sp := (code - DIAG_CALL_RENAMED_GENERIC_MARKER) / 4
+    w12 := rt::fd_str(2, "a call through `")
+    w13 := rt::fd_str(2, str_at(base + sp, d_diag_ident_len(base, sp)))
+    w14 := rt::fd_str(2, "`, an alias that renames a generic function (`f := M::g`, Modules §4.1), is not supported yet, #1920 — call the generic function by its own name or path")
+  } else if code >= DIAG_CALL_UNBOUND_PARAM_MARKER {
     raw := code - DIAG_CALL_UNBOUND_PARAM_MARKER
     ps := (raw / 4) % DIAG_CALL_UNBOUND_PARAM_SLOT
     pk := raw % 4
