@@ -1864,7 +1864,7 @@ pub Construct := enum {
   ## cause was found for, so an unclassified one shows up as a row of its own.
   ECallGeneric, ECallOverload, ECallBuiltin, ECallFnValue, ECallQualified, ECallMethod, ECallTypeName,
   ECallUnresolved, ECallArity, ECallManyArgs, ECallExtern, ECallResult, ECallResultAgg, ECallAggValue,
-  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer, ECallSigModule, ECallUnbound, ECallStrAtAddr,
+  ECallArgMode, ECallArgType, ECallConvert, ECallCast, ECallBrand, ECallRequire, ECallLayoutQ, ECallAggPos, ECallDefer, ECallSigModule, ECallUnbound, ECallStrAtAddr, ECallPanic,
   ## IR-40 (#1786): a generic callee's instance is called only with every type argument written and
   ## an instance signature in the scalar convention; each other case is refused by its own cause.
   ECallGenericImplicit, ECallGenericTArg, ECallGenericSig, ECallGenericLegacy,
@@ -1979,6 +1979,7 @@ pub construct_name := fn(c : Construct) -> str {
     ECallSigModule => { "call: callee from another module whose signature names a type declared more than once (#1734)" }
     ECallStrAtAddr => { "call: `str_at` at an integer address (an integer-to-pointer crossing)" }
     ECallUnbound => { "call: bare name the calling module neither declares nor imports, declared in several modules" }
+    ECallPanic => { "call: panic(msg) — message text not carried through the IR; falls back to legacy" }
     ECallGenericImplicit => { "call: generic callee whose type arguments are inferred rather than written" }
     ECallGenericTArg => { "call: generic callee with a type argument that is not a written type" }
     ECallGenericSig => { "call: generic callee whose instance has a parameter or result outside the scalar convention" }
