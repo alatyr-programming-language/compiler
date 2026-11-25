@@ -1265,6 +1265,57 @@ pub set_structs_tbl := fn(p : usize) { P_STRUCTS_TBL = p }
 ## Whether the struct field-order table is present (non-zero).
 structs_known := fn() -> bool { return P_STRUCTS_TBL != 0 }
 
+## #1718 — does the PROGRAM declare a module-level fn named `bitcast`? `bitcast` is a prelude identifier,
+## not a keyword (Grammar §2.3), and such a declaration joins the name's overload set (Declarations
+## §6.1). The parser builds the reinterpret before any declaration is known, so the driver answers this
+## from PASS 1's decls (`lower_layout::program_declares_fn`) and sets it for PASS 2. When it holds,
+## `bitcast(…)` parses as an ordinary call unless its first argument is a type (`bitcast_type_first`),
+## the one shape only the prelude's reinterpret accepts: the lowerings route an ordinary call to the
+## declaration (`lower_layout::callee_is_program_fn`), and sema refuses, located, a call no program
+## declaration of the name provably accepts (#1719). False on every single-pass path, which keeps the
+## old parse.
+mut P_PROG_BITCAST := false
+
+## Set by the driver between its parse passes (`false` before PASS 1).
+pub set_prog_bitcast := fn(b : bool) { P_PROG_BITCAST = b }
+
+## Is the cursor (on the `(` of `bitcast(`) at an argument list of exactly TWO arguments, the only shape
+## the reinterpret `bitcast(T, v)` has? One comma at paren/bracket/brace depth 0 before the matching `)`.
+## Any other arity is not the prelude's `bitcast` and parses as an ordinary call (#1718), which resolves
+## to the program's declaration or is refused as unresolved.
+bitcast_two_args := fn(pc : PC) -> bool {
+  mut i := pc.idx + 1
+  mut depth : usize = 0
+  mut commas : usize = 0
+  loop {
+    k := tok_at(pc, i).kind
+    if k == 0 { return false }                                 ## kind-literal-ok: lexer token kinds (EOF) have no named form
+    if k == 10 or k == 12 or k == 14 { depth += 1 }            ## kind-literal-ok: `(` `{` `[`
+    else if k == 11 or k == 13 or k == 15 {                    ## kind-literal-ok: `)` `}` `]`
+      if depth == 0 { return commas == 1 }
+      depth -= 1
+    } else if k == 9 and depth == 0 { commas += 1 }            ## kind-literal-ok: `,`
+    i += 1
+  }
+  false
+}
+
+## Beside a program-declared `bitcast` (#1718), is the call written in the prelude's shape — its first
+## argument a TYPE? Declarations §6.1 joins the declaration to the prelude's overload set: a call the
+## program's `bitcast` accepts resolves to it, and any other falls back to the prelude's generic
+## reinterpret. A program function takes values, so a first argument that names a type is a call only
+## the prelude accepts: a built-in scalar or `str` name, `ptr(…)`, or a struct or enum the program
+## declares. Any other first argument parses as an ordinary call, which sema resolves to the
+## declaration or refuses at its line.
+bitcast_type_first := fn(pc : PC) -> bool {
+  t := tok_at(pc, pc.idx + 1)
+  if t.kind != 1 { return false }                                ## kind-literal-ok: lexer token kinds (ident) have no named form
+  nm := str_at(pc.src + t.start, t.len)
+  if nm == "ptr" or scalar_or_str_name(pc.src, t.start, t.len) { return true }
+  if struct_rec_of(pc, t.start, t.len) >= 0 { return true }
+  enums_known(pc) and is_enum_name(pc, t.start, t.len)
+}
+
 ## The table as a `rt::Vec` (valid only when `structs_known()`); isolated so the bitcast/deref is one place.
 structs_tbl := fn() -> rt::Vec { return deref(unchecked bitcast(ptr(rt::Vec), P_STRUCTS_TBL)) }
 
@@ -2014,7 +2065,10 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       ## the compiler's own bitcasts) is the identity class, erased before lowering → fixpoint-neutral. While scanning the target type, capture the pointee name span (the
       ## last ident at paren-depth 1 of a `ptr(…)` head), while `tgt_s`/`tgt_e` retain the complete
       ## target text for the formatter and pointer-specific lower paths.
-      if str_eq(str_at(pc.src + t.start, t.len), "bitcast") and cur(pc).kind == 10 {
+      ## #1718: only the two-argument shape, and beside a program-declared `bitcast` (`P_PROG_BITCAST`)
+      ## only when the first argument is a type (`bitcast_type_first`); otherwise the call falls through
+      ## to the ordinary call parse below.
+      if str_eq(str_at(pc.src + t.start, t.len), "bitcast") and cur(pc).kind == 10 and bitcast_two_args(pc) and (not P_PROG_BITCAST or bitcast_type_first(pc)) {
         pc.idx = pc.idx + 1               ## '('
         mut bdepth := 0
         mut sawptr := false               ## the target head is `ptr`

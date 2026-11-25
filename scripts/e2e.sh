@@ -14301,6 +14301,16 @@ run accept_issue1719_fc_len_u64_call 42
 run accept_issue1719_fc_len_u8_widen 42
 run accept_issue1719_fc_len_ufcs_u64 42
 run accept_issue1719_fc_str_eq_str_fields 42
+## #1718 — a program-declared `bitcast` is a call to that declaration (Grammar §2.3; Declarations §6.1): the
+## parser builds the reinterpret only for two arguments, and beside a program `bitcast` only when the first
+## argument is a type (the call only the prelude accepts).
+## NON-VACUOUS on the parent da8f96af: the two-argument row answered 34 on every backend, the zero- and
+## one-argument rows were refused at parse time.
+run issue1718_declared_bitcast_two_args 42
+run issue1718_declared_bitcast_zero_args 42
+run issue1718_declared_bitcast_one_arg 42
+run issue1718_declared_bitcast_type_arg 42
+check_build_located reject_issue1718_bitcast_one_arg_undeclared 7 "unbound name"
 
 ## #992 — `alloc::with(ar)` inside a match arm, and a match inside `alloc::with`, pass the ambient
 ## `ptr(ar)` to a call that omits its allocator (Memory §5.2.1); the splice never walked a `match`.

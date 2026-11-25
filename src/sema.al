@@ -9068,7 +9068,10 @@ pub is_builtin_callee := fn(src : ptr(u8), s : usize, n : usize) -> bool {
     or nm == "bits8" or nm == "bits16" or nm == "bits32" or nm == "bits64"
     or nm == "typeinfo" or nm == "ptr" or nm == "len" or nm == "size" or nm == "align"
     or nm == "resolves" or nm == "compiles"
-    or nm == "bytes" or nm == "sub" or nm == "expect" or nm == "bitcast"
+    or nm == "bytes" or nm == "sub" or nm == "expect"
+    ## Not `bitcast` (#1718): the reinterpret `bitcast(T, v)` is its own node (`Expr::Bitcast`), never a
+    ## call. A CALL spelled `bitcast` is one the parser left ordinary — a program declaring the name, or
+    ## an argument count other than two — so it must resolve to a declaration or be refused as unbound.
     ## Stage-0 STR/BYTE + shift/rotate + control intrinsics the lower emits directly (no `fn`
     ## declares them in `src/` — `lib/base/str.al`'s `str_at`/`str_eq` are shadowed by the lower's
     ## intrinsic emit): a call to one is legal though unresolvable, so exempt it.
