@@ -1317,33 +1317,39 @@ check_ir_dev_verb() {
     echo "ok   ir --modules #1028 refusal: a later module's function still has its records"
   else echo "FAIL ir --modules #1028 refusal: rc=$rc"; grep '^fn ' "$rep" | sed 's/^/     /'; fail=1; fi
   # #1744: a module-path callee (`m::add(…)`) is resolved by x86's own resolver
-  # (`lower::resolve_callee_idx`), so the caller builds. A callee whose signature names a type both
-  # modules declare (`m::get(s : S)`), and one of an overload set (`m::pick`), stay refused by
-  # their named causes. On the parent every one of these callers answered `qualified callee … no function here`.
+  # (`lower::resolve_callee_idx`), so the caller builds. Since #1737 a callee whose signature names a
+  # type both modules declare (`m::get(s : S)`) builds too: its `S` is resolved in `m`, which spells it.
+  # One of an overload set (`m::pick`) stays refused by its named cause. Before #1744 every one of these
+  # callers answered `qualified callee … no function here`.
   local q1744="$E2E_TEST/package/issue1744_qualified_callee_ir/src" o1744="$E2E_TEST/package/issue1744_qualified_overload_ir/src"
   "$CC" ir --modules "$q1744/main.al" "$q1744/m.al" > "$rep" 2>/dev/null; rc=$?
   if [ "$rc" = 0 ] && grep -qx 'fn main::sum Built' "$rep" && grep -qx 'fn main::fields Built' "$rep" \
-     && grep -q '^fn main::theirs NotYet(call: callee from another module whose signature names a type declared more than once' "$rep" \
+     && grep -qx 'fn main::theirs Built' "$rep" \
      && grep -q 'verify_failed=0$' "$rep"; then
-    echo "ok   ir --modules #1744 qualified callee: m::add and m::mkq callers built, a colliding signature type refused"
+    echo "ok   ir --modules #1744 qualified callee: m::add, m::mkq and m::get (a colliding signature type) callers built"
   else echo "FAIL ir --modules #1744 qualified callee: rc=$rc"; grep '^fn main::' "$rep" | sed 's/^/     /'; fail=1; fi
   "$CC" ir --modules "$o1744/main.al" "$o1744/m.al" > "$rep" 2>/dev/null; rc=$?
   if [ "$rc" = 0 ] && grep -q '^fn main::wide NotYet(call: several functions of that name' "$rep" \
      && grep -qx 'fn main::main Built' "$rep"; then
     echo "ok   ir --modules #1744 qualified overload: a module-path call into an overload set stays refused by name"
   else echo "FAIL ir --modules #1744 qualified overload: rc=$rc"; grep '^fn main::' "$rep" | sed 's/^/     /'; fail=1; fi
-  # #1744, review of PR #1748 (B2): the signature guard follows what the layout follows. `m::sum(t : T)`
-  # with `T := Inner`, a `Box` field and an `E` payload after the first reach a name both modules declare,
-  # so each caller is refused by the named cause. On the PR's first head 0f90e2a9 `main::use` was Built.
+  # #1744, review of PR #1748 (B2), and #1737: `m::sum(t : T)` with `T := Inner`, a `Box` field and an `E`
+  # payload after the first reach a name both modules declare. Each is resolved in `m`, which spells it,
+  # so no caller is refused for it any more (the interim guard that did, until #1737, is deleted):
+  # `use` and `payload` are built, and `boxed` is built or refused by a cause of its own (at the PR's
+  # head, the argument convention: `call: argument to a parameter whose type or mode the convention
+  # does not pass`). The package fixture runs them, due 42.
   local s1744="$E2E_TEST/package/issue1744_sig_alias_ir/src" c ok
   "$CC" ir --modules "$s1744/main.al" "$s1744/m.al" > "$rep" 2>/dev/null; rc=$?
   ok=1
-  for c in use boxed payload; do
-    grep -q "^fn main::$c NotYet(call: callee from another module whose signature names a type declared more than once" "$rep" || ok=0
+  for c in use payload; do
+    grep -qx "fn main::$c Built" "$rep" || ok=0
   done
+  grep -qE '^fn main::boxed (Built$|NotYet\(call: )' "$rep" || ok=0
+  grep -q 'signature names a type declared more than once' "$rep" && ok=0
   if [ "$rc" = 0 ] && [ "$ok" = 1 ] && grep -q 'verify_failed=0$' "$rep"; then
-    echo "ok   ir --modules #1744 signature walk: an alias, a field and a later payload reaching a twice-declared type are refused"
-  else echo "FAIL ir --modules #1744 signature walk: rc=$rc"; grep '^fn main::' "$rep" | sed 's/^/     /'; fail=1; fi
+    echo "ok   ir --modules #1744 signature types: no caller is refused because its callee reaches a twice-declared type (alias, field, later payload)"
+  else echo "FAIL ir --modules #1744 signature types: rc=$rc"; grep '^fn main::' "$rep" | sed 's/^/     /'; fail=1; fi
   # #1772: a bare callee whose name several modules declare is the one the calling module's own scope
   # binds (Modules §4.1, §4.1.1, §5) — its own `twice`, the alias `step := a::step`, the projection
   # `(half, dec) := b`, and `b`'s own `twice` inside `b::useb`. A bare call into the module's own

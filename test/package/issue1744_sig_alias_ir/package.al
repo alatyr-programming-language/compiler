@@ -1,8 +1,9 @@
 ## Issue #1744, review of PR #1748 (B2): callees from another module whose signatures spell only names
 ## declared once, but REACH a name both modules declare: `T` aliases `Inner`, a `Box` field and an `E`
-## payload after the first are `Word`. The IR builder lays a callee's signature types out from the
-## caller's module (#1734), so it must follow the alias, the field and the payload list, and refuse each
-## call by its named cause (`alatyr ir --modules`, the check in scripts/e2e.sh). The three callers read
+## payload after the first are `Word`. Each name is resolved in `m`, which spells it (#1734, #1737), so
+## no caller is refused for it (`alatyr ir --modules`, the check in scripts/e2e.sh): `use` and `payload`
+## are built, `boxed` is refused by the argument convention, a cause of its own; an interim guard
+## refused all three until #1737 was fixed. This run is due 42. The three callers read
 ## no field of `m`'s values, so x86_64's legacy path answers right on both sides of the fix (a field read
 ## of `m::mk()` in the root is the legacy defect #1734 itself, fixed by #1743, and is not measured here).
 ## NON-VACUOUS: on the PR's first head 0f90e2a9 `main::use` was Built; and the review's probe, which

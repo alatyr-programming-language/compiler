@@ -923,18 +923,15 @@ the head's module is missing, the builder refuses (`call: qualified callee that 
 here`), and the legacy emitter keeps its undefined-callee trap. The fixture `issue1744_qualified_collision_ir`
 holds that: before the check, the twins answered the root's `f` for `b::f`.
 
-A resolved callee is still refused by name in three cases: it is generic and the call does not meet the
-conditions for an instance call (below); it is a member of an overload set (its symbol carries the
-per-signature suffix, `docs/ir-slice-2.md` Q3); or it comes from another module and its signature reaches
-a type name declared more than once in the program (`call: callee from another module whose signature
-names a type declared more than once`). "Reaches" follows what the layout follows: the names the
-signature spells, and from each name declared once, its alias right-hand side, its struct field types and
-its enum variant payloads, each declaration entered once and at most 256 of them (past that it refuses).
-The fixture `issue1744_sig_alias_ir` holds a result type `T` declared once that aliases an `Inner` both
-modules declare. The guard exists because the builder lays out a callee's signature types from the
-caller's module (#1734, #1737). #1743 and #1731 resolve the names a signature spells in the callee's
-module, but a struct field's type is still resolved in the caller's (#1737, open); once #1737 is fixed,
-the guard and its helpers are deleted.
+A resolved callee is still refused by name in two cases: it is generic and the call does not meet the
+conditions for an instance call (below); or it is a member of an overload set (its symbol carries the
+per-signature suffix, `docs/ir-slice-2.md` Q3). A callee from another module whose signature reaches a
+type name several modules declare is built like any other: every type name is resolved in the module
+whose text spells it (`lower_layout::spelling_module_at`), the names a signature spells (#1743, #1731)
+and a struct's field types alike (#1737). The interim guard that refused such a call until #1737 was
+fixed is deleted. In the fixture `issue1744_sig_alias_ir` (a result type `T` that aliases an `Inner` both
+modules declare, a `Box` field and an `E` payload of a twice-declared `Word`) the `T` and `E` callers are
+built; the `Box` caller is refused by the argument convention, a cause of its own.
 
 A **bare callee** (`f(…)`) that several modules declare is not an overload set: Functions §1.4 makes an
 overload set several bindings in **one** scope, and a module scope binds a name once (Modules §5,

@@ -2415,9 +2415,9 @@ ib_span_is_qualified := fn(src : ptr(u8), cs : usize, cl : usize) -> bool {
 ## not one symbol the builder may call:
 ## - a generic one, which needs a mono instance;
 ## - a member of an overload set, whose symbol carries the per-signature suffix (Q3 of
-##   `docs/ir-slice-2.md`);
-## - one from another module whose signature reaches a type the two modules might resolve differently
-##   (`ib_sig_types_unique`).
+##   `docs/ir-slice-2.md`).
+## A callee from another module needs no refusal of its own: every type name its signature reaches is
+## resolved in the module whose text spells it (`lower_layout::spelling_module_at`, #1734, #1737).
 ib_callee_qual := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : usize) -> Option(IbCallee) {
   bv : IbB = deref(bp)
   src := bv.src
@@ -2448,7 +2448,7 @@ ib_callee_bare := fn(bp : ptr(mut IbB), in out a : rt::Arena, cs : usize, cl : u
   match co { Some(c) => { c }; None => { IbCallee.CeNo(Construct.ECallUnbound) } }
 }
 ## The callee a resolver answered with the declaration `ri`, unless its identity is not one symbol the
-## builder may call (the three cases listed at `ib_callee_qual`).
+## builder may call (the two cases listed at `ib_callee_qual`).
 ib_callee_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, ri : i64) -> Option(IbCallee) {
   bv : IbB = deref(bp)
   src := bv.src
@@ -2458,128 +2458,7 @@ ib_callee_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, ri : i64) -> Option(
   if lower::overload_set_count(bv.decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) > 1 {
     return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallOverload))
   }
-  same_mod := d.mod_len == bv.mod_n and streq(src, d.mod_start, d.mod_len, bv.mod_s, bv.mod_n)
-  if not same_mod and not ib_sig_types_unique(bv.decls, src, a, d) {
-    return Option(IbCallee).Some(IbCallee.CeNo(Construct.ECallSigModule))
-  }
   Option(IbCallee).Some(IbCallee.CeFn(u64(ri)))
-}
-## Whether every type `d`'s signature REACHES is declared once in the program. The builder resolves a
-## callee's parameter and result types through `lower_layout` from the module being BUILT, the caller's.
-## Modules §3 resolves a bare name where it is written, in the callee's module. That is #1734 and #1737.
-## Both #1743 (a span resolved in its spelling module) and #1731 (`ib_sig_resolves_here`, the names a
-## signature spells) are on main, but a struct field's type is still resolved in the caller's module
-## when another module's struct is laid out (#1737, open), which is what this walk guards. A name
-## declared once means the same declaration from either module. A name declared twice may not, so the
-## call is refused rather than laid out against another module's type.
-## The walk follows what the layout follows, not only the names the signature spells (review of PR #1748,
-## B2: `pub mk := fn() -> T` with `T := Inner` in `m` and a different `Inner` in the caller's module was
-## built and answered garbage): each name declared once is entered, and its alias right-hand side, its
-## struct field types and its enum variant payloads are walked in turn. Each declaration is entered once
-## (the `seen` set; a recursive type ends there), and the walk enters at most `IB_SIG_WALK_MAX`
-## declarations: past that it answers no, so the bound refuses rather than admits.
-## Interim and conservative: once #1737 is fixed, `Construct.ECallSigModule`, this check and its helpers
-## (`ib_sig_queue`, `ib_sig_walk_span`, `ib_payload_list_end`, `lower_layout::ll_nonfn_named`) are deleted.
-IB_SIG_WALK_MAX : usize = 256
-ib_sig_types_unique := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, d : Decl) -> bool {
-  ## `work` holds pending type spans as (start, length) pairs; `seen` the declarations entered.
-  work := wb_new(a, 16)
-  seen := wb_new(a, 16)
-  ib_sig_queue(work, a, d.ret_ts, d.ret_tl)
-  mut pp := d.params_head
-  loop {
-    match pp {
-      Some(pq) => {
-        pm := deref(param_p(pq))
-        ## A pointer parameter's `ts` is `ptr` alone; its pointee is `pps`/`ppl` (`ast::Param`).
-        ib_sig_queue(work, a, pm.ts, pm.tl)
-        ib_sig_queue(work, a, pm.pps, pm.ppl)
-        pp = pm.next
-      }
-      None => { break }
-    }
-  }
-  while wb_len(work) != 0 {
-    wn := wb_get(work, wb_len(work) - 1)
-    p1 := wb_pop(work)
-    ws := wb_get(work, wb_len(work) - 1)
-    p2 := wb_pop(work)
-    if not ib_sig_walk_span(decls, src, a, work, seen, ws, wn) { return false }
-  }
-  true
-}
-## Queue the type span `[s, s+n)` on the walk's `work` list; an empty span names no type.
-ib_sig_queue := fn(work : ptr(mut WBuf), in out a : rt::Arena, s : usize, n : usize) {
-  if n == 0 { return }
-  k1 := wb_push(work, a, s)
-  k2 := wb_push(work, a, n)
-}
-## One span of `ib_sig_types_unique`'s walk: each identifier of the type span `[s, s+n)` (its base name,
-## its type arguments, a path's tail) names at most one non-function declaration, and a declaration it
-## names that `seen` does not hold yet is entered: its spans join `work`. A segment followed by `::` is a
-## module, not a type, and is skipped. A built-in type (`u64`, `ptr`, `mut`) names no declaration.
-ib_sig_walk_span := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena, work : ptr(mut WBuf), seen : ptr(mut WBuf), s : usize, n : usize) -> bool {
-  mut p : usize = 0
-  while p < n {
-    q0 := p
-    while p < n and lower_layout::ll_ident_byte(src, s + p) { p = p + 1 }
-    if p == q0 { p = p + 1 }
-    else if not (p + 1 < n and str_at((src + s + p), 2) == "::") {
-      hh : lower_layout::LNameHits = lower_layout::ll_nonfn_named(decls, src, s + q0, p - q0)
-      if hh.hits > 1 { return false }
-      lo : Option(u64) = hh.last
-      match lo {
-        Some(di) => {
-          mut known := false
-          mut k : usize = 0
-          while k < wb_len(seen) {
-            if wb_get(seen, k) == usize(di) { known = true }
-            k = k + 1
-          }
-          if not known {
-            if wb_len(seen) >= IB_SIG_WALK_MAX { return false }
-            ks := wb_push(seen, a, usize(di))
-            dd : Decl = deref(ib_decl_ptr(decls, usize(di)))
-            ib_sig_queue(work, a, dd.ret_ts, dd.ret_tl)
-            ib_sig_queue(work, a, dd.alias_ts, dd.alias_tl)
-            mut fh := dd.fields_head
-            loop {
-              match fh {
-                Some(fq) => {
-                  fd := deref(ast::fld_p(fq))
-                  ## An enum variant records only its FIRST payload type (`ast::FieldDecl`); a variant of
-                  ## several walks the whole payload list, up to its closing parenthesis.
-                  mut fl := fd.tl
-                  if fd.arity > 1 { fl = ib_payload_list_end(src, fd.ts) - fd.ts }
-                  ib_sig_queue(work, a, fd.ts, fl)
-                  fh = fd.next
-                }
-                None => { break }
-              }
-            }
-          }
-        }
-        None => {}
-      }
-    }
-  }
-  true
-}
-## Where the payload list that starts at `s` ends: the offset of the `)` that closes it (the first one
-## at bracket depth zero), or of the `}` / end of line that ends the variant if the source is cut short.
-ib_payload_list_end := fn(src : ptr(u8), s : usize) -> usize {
-  mut p := s
-  mut depth : usize = 0
-  loop {
-    c := str_at((src + p), 1)
-    if c == "(" or c == "[" { depth = depth + 1 }
-    else if c == ")" or c == "]" {
-      if depth == 0 { return p }
-      depth = depth - 1
-    } else if c == "}" or c == "\n" or c == ";" { return p }
-    p = p + 1
-  }
-  p
 }
 ## Whether `[cs, cs+cl)` names a binding of the function being built — a local or a parameter — which
 ## shadows a module-level name (Declarations §6.1).
