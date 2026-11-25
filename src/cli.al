@@ -5424,6 +5424,7 @@ bare_file_paths := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize) ->
 ## that file is the anonymous ROOT module (Tooling §4): its stem names no module and reaches no symbol
 ## (#972). Published before the check so `check` and every emitter answer from the same root.
 cli_twin_root := fn(p : str) -> i64 {
+  ## unchecked-ok: `set_bare_root_file` takes the path as a pointer/length pair, as at the bare-list site.
   pp := unchecked bitcast(usize, p.ptr)
   driver::set_bare_root_file(pp, p.len)
 }
@@ -6220,6 +6221,11 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if is_pkg { brz := driver::set_bare_root_file(0, 0) }
   mrp := unchecked bitcast(usize, module_root.ptr)
   mrs := driver::set_module_root(mrp, module_root.len)
+  ## spec#192 — a scanned file or directory whose stem is not an identifier makes the package
+  ## ill-formed: a Config diagnostic located by its path, before any source is read. Judged after the
+  ## module root and the bare root are published, so it reads the same module tree the build does.
+  stem_msg := driver::module_stem_refusal(a, paths)
+  if stem_msg.len != 0 { return cli_config_diag(a, stem_msg) }
   ## AMBIENT STDLIB: prepend the `lib/` modules the program (transitively) references via a
   ## 3-segment `alloc::…::…` / `std::…::…` path. Lib modules go FIRST so the user's entry module
   ## (named `main`, or the last) stays the entry. Zero ambient refs (the self-host's own build) →

@@ -3489,6 +3489,133 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str, in out seps : r
   }
 }
 
+## spec#192 (owner decision 2026-11-25; Modules §1 / MOD-17 once the pin moves, refused until then by
+## the latent-gap rule) — a scanned source file or directory whose stem maps to a module path segment
+## must have a stem that is an identifier (Grammar §2.2) and is not a keyword or a reserved word
+## (Grammar §2.3). The word list is §2.3's own: its keyword block (which includes `in`) and the reserved
+## `async` / `await`. The contextual-only `out` and `scoped` are ordinary identifiers outside their
+## positions, and whether such a stem is valid is open (latent spec#199), so they are refused with their
+## own reason until it is decided. This is not the lexer's `kw_kind` set, which answers a different
+## question (how a token is lexed) and omits `mod`, `abi`, `scoped`, `async` and `await`.
+StemWord := enum { StemPlain, StemKeyword, StemContextual }
+d_stem_word := fn(s : str) -> StemWord {
+  if s == "pub" or s == "mut" or s == "comptime" or s == "unchecked" or s == "when" { return StemWord.StemKeyword }
+  if s == "and" or s == "or" or s == "not" { return StemWord.StemKeyword }
+  if s == "if" or s == "else" or s == "match" or s == "loop" or s == "while" or s == "for" { return StemWord.StemKeyword }
+  if s == "in" or s == "break" or s == "continue" or s == "return" or s == "defer" { return StemWord.StemKeyword }
+  if s == "struct" or s == "enum" or s == "union" or s == "fn" or s == "type" or s == "mod" { return StemWord.StemKeyword }
+  if s == "abi" or s == "dyn" or s == "async" or s == "await" { return StemWord.StemKeyword }
+  if s == "out" or s == "scoped" { return StemWord.StemContextual }
+  StemWord.StemPlain
+}
+
+## Grammar §2.2 — `ident ::= ident-start { ident-cont }`, ASCII in v1, and the lone `_` is not one.
+d_stem_is_ident := fn(s : str) -> bool {
+  if s.len == 0 { return false }
+  if s.len == 1 and bytes(s)[0] == 95 { return false }
+  mut i : usize = 0
+  while i < s.len {
+    c := bytes(s)[i]
+    letter := (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
+    digit := c >= 48 and c <= 57
+    if letter == false and digit == false { return false }
+    if i == 0 and digit { return false }
+    i += 1
+  }
+  true
+}
+
+## The refusal of spec#192 for one compile list (newline-joined paths). Empty when every scanned path
+## is well-formed, else the located diagnostic for the first offender: the path of the file or
+## directory whose stem is not an identifier, then the reason. The segments are read off the module
+## identity `push_module_name` builds — the one mapping from a path to its module path — split at the
+## `seps` it records, so the check judges exactly the segments the module tree uses. The root file of
+## a manifest-less invocation and `package.al` are excluded from the scan (Tooling §4, Manifest §3.8),
+## so they are not judged: their stem names no module.
+pub module_stem_refusal := fn(in out a : rt::Arena, paths : str) -> str {
+  ## unchecked-ok: a `str_at` view of one line of `paths` needs its byte base (the `module_name` idiom).
+  pb := unchecked bitcast(usize, paths.ptr)
+  mut seg : usize = 0
+  mut si : usize = 0
+  while si <= paths.len {
+    mut isnl := true
+    if si < paths.len { isnl = bytes(paths)[si] == 10 }
+    if isnl and si > seg {
+      p := str_at(pb + seg, si - seg)
+      if d_is_root_path(p) == false and d_is_bare_root_path(p) == false {
+        msg := d_path_stem_refusal(a, p)
+        if msg.len != 0 { return msg }
+      }
+    }
+    if isnl { seg = si + 1 }
+    si += 1
+  }
+  ""
+}
+
+## `module_stem_refusal` for one path `p`.
+d_path_stem_refusal := fn(in out a : rt::Arena, p : str) -> str {
+  scap := d_path_seps(p)
+  mut seps := rt::Vec(data = rt::bump(a, scap * 8), len = 0, cap = scap)
+  mut bld := strbuf::strbuf(a, p.len * 2 + 256)
+  push_module_name(bld, p, seps)
+  ## unchecked-ok: a `str_at` view of one segment of the identity just built in `bld`.
+  nb := unchecked bitcast(usize, strbuf::strbuf_base(bld))
+  nlen := strbuf::buf_len(bld)
+  m := rt::vec_len(seps) + 1
+  mut j : usize = 0
+  mut start : usize = 0
+  while j < m {
+    mut end := nlen
+    if j + 1 < m { end = rt::vec_get(seps, j) }
+    s := str_at(nb + start, end - start)
+    is_ident := d_stem_is_ident(s)
+    mut word := StemWord.StemPlain
+    if is_ident { word = d_stem_word(s) }
+    mut refused := is_ident == false
+    match word {
+      StemWord::StemPlain => { refused = is_ident == false }
+      StemWord::StemKeyword => { refused = true }
+      StemWord::StemContextual => { refused = true }
+    }
+    if refused {
+      ## Segment `j` of `m` is the path component `m - 1 - j` places before the last: the file's stem
+      ## for the last segment, an enclosing directory before it. Cut `p` at that component's end.
+      mut cut := p.len
+      mut up := m - 1 - j
+      while up > 0 and cut > 0 {
+        cut -= 1
+        if bytes(p)[cut] == 47 { up -= 1 }
+      }
+      mut out := strbuf::strbuf(a, p.len + s.len + 256)
+      ## unchecked-ok: a `str_at` view of the prefix of `p` that names the offending file or directory.
+      pfx := str_at(unchecked bitcast(usize, p.ptr), cut)
+      k0 := strbuf::push_str(out, pfx)
+      if j + 1 < m {
+        k1 := strbuf::push_str(out, ": this directory maps to the module path segment `")
+      } else {
+        k1 := strbuf::push_str(out, ": this file maps to the module path segment `")
+      }
+      k2 := strbuf::push_str(out, s)
+      match word {
+        StemWord::StemPlain => { k3 := strbuf::push_str(out, "`, which is not an identifier (Modules §1, spec#192)") }
+        StemWord::StemKeyword => {
+          k3 := strbuf::push_str(out, "`, which is a keyword or a reserved word (Grammar §2.3), not an identifier (Modules §1, spec#192)")
+        }
+        StemWord::StemContextual => {
+          k3 := strbuf::push_str(out, "`, a contextual keyword (Grammar §2.3); whether it may be a module stem is undecided (spec#199), so it is refused")
+        }
+      }
+      ## unchecked-ok: the message is a `str` view of the arena-owned buffer `out`.
+      ob := unchecked bitcast(usize, strbuf::strbuf_base(out))
+      return str_at(ob, strbuf::buf_len(out))
+    }
+    start = end + 2
+    j += 1
+  }
+  ""
+}
+
 ## The separators `push_module_name` can record for the path `p`: each stands for a `/` of it, and a
 ## dependency's alias adds one more.
 d_path_seps := fn(p : str) -> usize {
