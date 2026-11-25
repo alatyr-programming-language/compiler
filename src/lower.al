@@ -6714,8 +6714,37 @@ arr_elem_info := fn(ehead : Option(ptr(mut Arg)), src : ptr(u8), decls : ptr(rt:
     ## `[ptr(…); N]` literal in `src/`/`lib/` → fixpoint-neutral for the self-build).
     ase := addr_struct_span(ga.e, slots, src)
     res = AElem(eek = 7, ess = ase.s, esl = ase.n, stride = 1)
+  } else {
+    ce := call_elem_info(ga.e, src, decls, a)
+    if ce.eek != 0 { res = ce }
   }
   res
+}
+
+## #1243 — the element kind of an array literal whose first element is an AGGREGATE-RETURNING CALL
+## (`[mk(5), mk(7)]`). The call's declared return type is the element type (Types §6.4: every element
+## of `[T; N]` is a `T`), exactly as a literal's own head is in the arms above. Without this arm a
+## call element took the scalar default (`eek 0`, stride 1): `x := a[1]` bound `x` as a one-word
+## scalar and `x.a` read a slot nothing wrote. A niche-folded `Option(ptr(T))` return is one word and
+## keeps the scalar default; a packed or byte-layout struct is refused as the literal arm refuses it.
+## Answers `eek 0` for every other expression.
+call_elem_info := fn(e : ptr(Expr), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena) -> AElem {
+  none := AElem(eek = 0, ess = 0, esl = 0, stride = 1)
+  if str_ret_call(e, decls, src, a) { return AElem(eek = 4, ess = 0, esl = 0, stride = 2) }
+  if enum_ret_call_d(e, decls, src, a) or enum_sret_ret_call(e, decls, src, a) {
+    es := call_ret_enum_span_d(e, decls, src, a)
+    if es.n == 0 or enum_decl_of(decls, src, es.s, es.n) < 0 or is_union_decl(decls, src, es.s, es.n) { return none }
+    if is_niche_folded(src, es.s, es.n) { return none }
+    return AElem(eek = 3, ess = es.s, esl = es.n, stride = enum_elem_words(decls, src, es.s, es.n, a))
+  }
+  if struct_ret_call(e, decls, src, a) or sret_ret_call(e, decls, src, a) {
+    cs := call_ret_struct_span(e, decls, src, a)
+    if cs.n == 0 or struct_decl_of(decls, src, cs.s, cs.n) < 0 { return none }
+    if is_packed(decls, src, cs.s, cs.n) { panic("selfhost: an array whose element is a @packed struct is not supported (byte-precise element stride + packed field offsets would need byte-granular array addressing, a deferred slice); rejected rather than silently miscompiled to a word-padded layout") }
+    if std_struct_has_byte_layout(decls, src, cs.s, cs.n, a) { panic("selfhost: an array literal of calls returning a standard-layout byte aggregate is not yet supported (#1243); bind each call to a local first") }
+    return AElem(eek = 2, ess = cs.s, esl = cs.n, stride = struct_words(decls, src, cs.s, cs.n, a))
+  }
+  none
 }
 
 ## The WORD COUNT a fixed-array block occupies: `nel * stride` element words, except a tuple-byte
@@ -25194,6 +25223,58 @@ array_slot_is_word_layout := fn(base : i64, cx : ptr(LCtx), a : rt::Arena) -> bo
   packed_byte_slot_for_off(base, cx) < 0 and folded_array_elem_for_off(base, cx).n == 0
 }
 
+## #1243 — the word count `emit_array_assign` stores for the CALL element `e` of the array local whose
+## base slot is `base`, or 0 when `e` keeps the one-word scalar store. Non-zero only when `e` returns
+## an aggregate (`call_elem_info`) and the array local at `base` was bound with that same element kind
+## and stride, so the store fills exactly the element block the binding reserved; any other container
+## (a tuple component, a field array) keeps its existing store.
+call_elem_store_words := fn(e : ptr(Expr), base : i64, cx : ptr(LCtx), a : rt::Arena) -> usize {
+  ce := call_elem_info(e, cx.src, cx.decls, a)
+  if ce.eek == 0 or base < 0 { return 0 }
+  mut i : usize = 0
+  cnt := svec_len(cx.slots)
+  while i < cnt {
+    ent := deref(svec_at(SlotEntry, cx.slots, i))
+    if i64(ent.off) == base and ent.ek == 5 and ent.is_ref == false {
+      if ent.eek == ce.eek and ent.estride == ce.stride { return ce.stride }
+      return 0
+    }
+    i += 1
+  }
+  0
+}
+
+## #1243 — store the aggregate result of the call `e` into the array element whose word 0 is slot
+## `dst` (word k at `-(dst - k + 1)*8`, the layout an element literal gets). A register-returned
+## struct, enum or str is copied out of the return registers; a wide (sret) struct or enum is written
+## by the callee through `cx.sret_call`, as a `q := f(…)` binding does.
+emit_array_call_elem := fn(e : ptr(Expr), dst : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  ce := call_elem_info(e, cx.src, cx.decls, a)
+  if ce.eek == 2 and sret_ret_call(e, cx.decls, cx.src, a) {
+    ov := cx.sret_call
+    cx.sret_call = dst
+    emit_struct_value(e, sb, cx, a, nl)
+    cx.sret_call = ov
+    return
+  }
+  if ce.eek == 3 and enum_sret_ret_call(e, cx.decls, cx.src, a) {
+    ov := cx.sret_call
+    cx.sret_call = dst
+    emit_enum_value(e, sb, cx, a, nl)
+    cx.sret_call = ov
+    return
+  }
+  if ce.stride > 7 { panic("selfhost: an array element call returns more words than the register-return budget without an sret class (#1243)") }
+  if ce.eek == 3 { emit_enum_value(e, sb, cx, a, nl) } else { emit_struct_value(e, sb, cx, a, nl) }
+  for k in 0..ce.stride {
+    push_str(sb, "  movq ")
+    emit_retreg(sb, k)
+    push_str(sb, ", -")
+    push_int(sb, (dst - i64(k) + 1) * 8)
+    push_str(sb, "(%rbp)\n")
+  }
+}
+
 emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
   a := arena_of(cx)
   if tuple_byte_slot_for_off(base, cx) >= 0 {
@@ -25328,13 +25409,16 @@ emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
               ## element's component count. Was `emit_gas` → `$0` (a bare ArrayLit has no frame home), so
               ## every tuple element stored one zero word and `xs[i].N` read 0.
               emit_array_assign(ga.e, ebase, sb, cx, nl)
+            } else if call_elem_store_words(ga.e, base, cx, a) != 0 {
+              emit_array_call_elem(ga.e, ebase, sb, cx, a, nl)
             } else {
               emit_gas(ga.e, sb, cx, a, nl)
               push_str(sb, "  popq %rax\n  movq %rax, -")
               push_int(sb, (ebase + 1) * 8)
               push_str(sb, "(%rbp)\n")
             }
-            cumw += array_lit_elem_words(ga.e, cx, a)
+            cew := call_elem_store_words(ga.e, base, cx, a)
+            if cew != 0 { cumw += i64(cew) } else { cumw += array_lit_elem_words(ga.e, cx, a) }
             g = ga.next
           }
           None => { break }
