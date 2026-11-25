@@ -9873,7 +9873,13 @@ sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)
 sema_vty_struct_args := fn(ss : usize, sl : usize, fh : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) {
   if not ir::sty_on() or sl == 0 { return }
   upto := rt::vec_len(deref(decls))
-  di := type_decl_index(decls, upto, src, ss, sl)
+  mut di := type_decl_index(decls, upto, src, ss, sl)
+  ## A qualified struct literal `m::T(k = 0, v = 42)` — type_decl_index matches by bare name, so the
+  ## full qualified span finds nothing. Fall back to the module-aware qualified-type lookup (#1734).
+  if di == 0 {
+    qi := lower_layout::qualified_type_decl(decls, src, ss, sl)
+    if qi >= 0 { di = usize(qi) + 1 }
+  }
   if di == 0 { return }
   d := deref(decl_get(decls, di - 1))
   mut f := d.fields_head

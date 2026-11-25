@@ -760,7 +760,10 @@ ib_bx_callv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : u
   co : CallOut = ib_call(bp, a, e, cs, cl, na, ah)
   match co {
     CoValue(v) => { Option(VRegId).Some(v) }
-    CoVoid => { ib_no(bp, e, NyWhy.NwDisagree) }
+    CoVoid => {
+      ## A noreturn call (`panic`) sets `term`; the value is dead and no live code reads it (D2).
+      if ib_b_term(bp) { Option(VRegId).None } else { ib_no(bp, e, NyWhy.NwDisagree) }
+    }
     CoRefused => { Option(VRegId).None }
     CoAgg(rf) => { ib_no_call(bp, e, Construct.ECallAggValue) }
   }
@@ -1431,6 +1434,9 @@ ib_bx_bitcast := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), inne
     i3 := e_width(ib_b_f(bp), a, Op.OpBits, k.sg, k.ty, from.ty, bd, xv)
     return Option(VRegId).Some(bd)
   }
+  ## ptr-to-ptr: `bitcast(ptr(mut T), p)` — same representation, the cast is a type annotation with no
+  ## code (ABI §6: all pointers are one register class).
+  if kty_is_ptr(from.ty) and kty_is_ptr(k.ty) { return Option(VRegId).Some(xv) }
   if not kty_is_int(from.ty) or not kty_is_int(k.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
   rs := ib_ext_to(bp, a, xv, k)
   Option(VRegId).Some(rs)
@@ -1485,10 +1491,27 @@ ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize
     }
     None => {}
   }
+  ## `panic(msg)` -- the divergent builtin recognised by name. Emits `trap panic`; the message text
+  ## is not carried through the IR (the aarch64 and riscv64 isels emit `brk`/`ebreak`; a future
+  ## x86_64 isel can emit write(2)+exit(1) from an annotation). This unblocks the containing
+  ## function without changing the program's observable semantics: a function that reaches `panic`
+  ## terminates regardless.
+  if nm == "panic" { return ib_bx_panic(bp, a, e) }
   ib_call_user(bp, a, e, cs, cl, na, ah)
 }
 ib_call_out := fn(v : Option(VRegId)) -> CallOut {
   match v { Some(x) => { CallOut.CoValue(x) }; None => { CallOut.CoRefused } }
+}
+## `panic(msg)`: `trap panic` -- the program stops here. Returns `CoVoid` and sets `term`, so
+## subsequent statements are dead; `ib_bx_callv` recognises the terminated state and does not refuse
+## a function that uses `panic` in value position (a match arm, an `if` branch).
+ib_bx_panic := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> CallOut {
+  mut it := inst0(Op.OpTrap)
+  it.tk = TrapKind.TkPanic
+  set_span(it, ib_span_of(bp, e))
+  k := emit(ib_b_f(bp), a, it)
+  ib_b_set_term(bp, true)
+  CallOut.CoVoid
 }
 
 ## `B(v)` for a brand `B` with an in-scope `@convert` to it: Types §4.6 dispatch step (2) — "An in-scope
@@ -6409,14 +6432,22 @@ ib_view_str_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), na 
   pvo : Option(VRegId) = ib_bx(bp, a, a0.e)
   match pvo {
     Some(pv) => {
-      if not kty_is_ptr(vreg_ty(ib_b_f(bp), usize(pv))) { ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallStrAtAddr); return Option(IbVObj).None }
-      lvo : Option(VRegId) = ib_value_ctx(bp, a, a1.e, ib_ks_i64(Sgn.SgU))
-      match lvo {
-        Some(lv) => {
-          fr := ib_new_obj(bp, a, ib_view_st())
-          ib_store_field(bp, a, fr, ib_view_ptr_fld(), pv)
-          ib_store_field(bp, a, fr, ib_view_len_fld(), lv)
-          return Option(IbVObj).Some(ib_vobj(fr, true, ib_str_el()))
+      ## The address must be a pointer or a pointer-width integer (the `usize` address form of
+      ## Stdlib appendix §3.6, common at `str_at(src + off, n)` where `src` is `usize` --
+      ## an integer-to-pointer crossing).
+      pao : Option(VRegId) = ib_str_at_addr(bp, a, e, pv)
+      match pao {
+        Some(pa) => {
+          lvo : Option(VRegId) = ib_value_ctx(bp, a, a1.e, ib_ks_i64(Sgn.SgU))
+          match lvo {
+            Some(lv) => {
+              fr := ib_new_obj(bp, a, ib_view_st())
+              ib_store_field(bp, a, fr, ib_view_ptr_fld(), pa)
+              ib_store_field(bp, a, fr, ib_view_len_fld(), lv)
+              return Option(IbVObj).Some(ib_vobj(fr, true, ib_str_el()))
+            }
+            None => {}
+          }
         }
         None => {}
       }
@@ -6424,6 +6455,22 @@ ib_view_str_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), na 
     None => {}
   }
   Option(IbVObj).None
+}
+## `str_at`'s first argument as a KPtr vreg: a pointer passes through; a pointer-width integer
+## (the `usize` address the stdlib appendix declares) is cast via `bits` (Memory §4.5).
+## A narrower integer or a non-integer is refused at `ECallStrAtAddr`.
+ib_str_at_addr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pv : VRegId) -> Option(VRegId) {
+  f := ib_b_f(bp)
+  ty : Kty = vreg_ty(f, usize(pv))
+  if kty_is_ptr(ty) { return Option(VRegId).Some(pv) }
+  if not kty_is_int(ty) or kty_bytes(ty) != kty_bytes(Kty.KPtr) {
+    ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallStrAtAddr)
+    return Option(VRegId).None
+  }
+  pk := IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)
+  ppv := ib_fresh(bp, a, pk)
+  i0 := e_width(f, a, Op.OpBits, Sgn.SgNone, Kty.KPtr, ty, ppv, pv)
+  Option(VRegId).Some(ppv)
 }
 ## #1861: is `[cs, cs+cl)` the built-in `bytes` — asked through the one name-keyed predicate
 ## (`lower_layout::intrinsic_callee`, #1434), so a program's own `bytes` stays a call to that declaration?
@@ -6722,6 +6769,17 @@ ib_bs_view_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)
   true
 }
 
+## `mn = "ldrsb x11"` — re-pointing a `str` local: the new value is evaluated as a view expression (a
+## string literal, a `str_at(p, n)`, or another `str` name) and its `{ptr, len}` pair is copied into
+## the existing frame object `sf`. The object was allocated at the declaration; only its contents change.
+ib_bs_str_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), sf : FrameId, v : ptr(Expr)) {
+  wo : Option(IbVObj) = ib_view_value(bp, a, v, Option(IbVEl).Some(ib_str_el()))
+  match wo {
+    Some(w) => { ib_copy_obj(bp, a, sf, w.fr, 16) }
+    None => { ib_refuse_assign(bp, h, Construct.SAssignStr) }
+  }
+}
+
 ## `s[i]` of a view local: `bound i, len` (checked scope only), then a `load T` at `ptr + i * stride`.
 ib_bx_view_index := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), vw : IbView, ix : ptr(Expr)) -> Option(VRegId) {
   k := ib_ty(bp, e)?
@@ -6762,8 +6820,13 @@ ib_bx_view_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), v
     if not ib_ks_eq(k, ib_ks_i64(Sgn.SgU)) { return ib_no(bp, e, NyWhy.NwDisagree) }
     return Option(VRegId).Some(ib_load_field(bp, a, vw.fr, ib_view_len_fld()))
   }
-  ## `s.ptr` stays refused: it would hand an element address of an IR-laid-out array to code whose
-  ## stride agreement is not proved (the boundary this step keeps closed).
+  ## A str's `.ptr` is always an EXTERNAL byte address (a string literal or an arena allocation), never
+  ## an element address of an IR-laid-out array: reading it is safe and the stride concern does not
+  ## apply. A general view's `.ptr` stays refused until stride agreement is proved (#1734).
+  if fl == 3 and str_at((src + fs), 3) == "ptr" and vw.utf8 {
+    if not kty_is_ptr(k.ty) { return ib_no(bp, e, NyWhy.NwDisagree) }
+    return Option(VRegId).Some(ib_load_field(bp, a, vw.fr, ib_view_ptr_fld()))
+  }
   ib_no(bp, e, NyWhy.NwOutside)
 }
 ## `E[i] = v` (IndexAssign) into an array local or field. The order is the spec's: `a[i] = v` is
@@ -7582,6 +7645,21 @@ ib_bs_mem_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt
 ## (`ib_bx_global_at`), or a `store` of the WHOLE one-word cell each target gives it
 ## (`global_has_scalar_cell`: `.quad` on aarch64/riscv64, an `i64` wasm global) — the value widened to
 ## 64 bits first, so a legacy reader of the word sees the canonical value whatever width it loads.
+##
+## The kernel type of an untyped module global's initializer: Num -> i64 signed, BoolLit -> bool.
+## `global_has_scalar_cell` already checks that the value IS one of these two; here we give it a type.
+## This mirrors `sema_vty_global`'s fallback for declarations with no type annotation (Types §2.3).
+ib_global_init_ks := fn(d : Decl) -> Option(IbKS) {
+  vp : ptr(Expr) = d.value
+  match deref(vp) {
+    Expr::Num(x, s, n) => { Option(IbKS).Some(IbKS(ty = Kty.KI64, sg = Sgn.SgS)) }
+    Expr::BoolLit(x) => { Option(IbKS).Some(IbKS(ty = Kty.KBool, sg = Sgn.SgNone)) }
+    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Option(IbKS).None }
+  }
+}
 ib_bs_global_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, v : ptr(Expr)) {
   gd : Option(u64) = ib_global_decl(bp, ns, nl)
   match gd {
@@ -7591,7 +7669,11 @@ ib_bs_global_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut S
       d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), di))
       if ast::local_is_mut(src, d.name_start) and lower_layout::global_has_scalar_cell(d) {
         lts := ast::local_type_span(src, d.name_start, d.name_len)
-        ko : Option(IbKS) = ib_name_ks(src, lts.s, lts.n)
+        mut ko : Option(IbKS) = ib_name_ks(src, lts.s, lts.n)
+        ## When the declaration has no type annotation (`mut X := 0`), `local_type_span` returns an
+        ## empty span and `ib_name_ks` gives None.  Fall back to the declaration's initializer expression,
+        ## which `global_has_scalar_cell` already constrains to Num or BoolLit.
+        match ko { Some(k) => {}; None => { ko = ib_global_init_ks(d) } }
         match ko {
           Some(k) => { ib_store_global(bp, a, di, d, k, v); return }
           None => {}
@@ -8235,7 +8317,9 @@ ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), n
     BdRef(rv, rsd, rts, rtn) => { ib_bs_ref_assign(bp, a, h, rv, rsd, rts, rtn, v) }
     ## Re-pointing a view local is not built yet (#1576 step 1 builds a view only at its declaration).
     BdView(wf, wes, wen) => { ib_refuse_assign(bp, h, Construct.SAssignView) }
-    BdStr(sf) => { ib_refuse_assign(bp, h, Construct.SAssignStr) }
+    ## Re-pointing a `str` local: evaluate the new value as a view, then copy its `{ptr, len}` into the
+    ## existing frame object — the same 16 bytes `ib_view_owned` copies for a fresh declaration.
+    BdStr(sf) => { ib_bs_str_assign(bp, a, h, sf, v) }
     ## A whole `xs = v` into an array parameter is not built (only element writes go through it).
     BdArrRef(qv, qn, qes, qel) => { ib_refuse_assign(bp, h, Construct.SAssignArrParam) }
     BdNone => { ib_bs_global_assign(bp, a, h, ns, nl, v) }
