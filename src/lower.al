@@ -18188,7 +18188,23 @@ pub generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : 
   ## (`(… node_ptr …) := lower_ctx`, `f := M::g`). Only consulted on the path that used to guess.
   mut bms := 0
   mut bml := 0
-  if segcmp == false and bestr < 0 {
+  ## #1915 / Declarations §6.1 — a binding on the caller's chain nearer than the declaring module
+  ## shadows its generic, exactly as `callee_decl_ranked` reads a plain call: its head becomes the
+  ## candidate filter. A renaming binding names another tail, which this by-name walk cannot take.
+  if segcmp == false and bestr >= 0 {
+    sh : Option(CSpan) = shadowing_binding_mod(decls, src, nm.s, nm.n, ms, ml, bestr)
+    match sh {
+      Some(bm) => {
+        sb := binding_head_span(decls, src, nm.s, nm.n, bm.s, bm.n)
+        if sb.tn != 0 and not lower_ctx::streq(src, sb.ts, sb.tn, nm.s, nm.n) { return 0 - 1 }
+        bms = sb.s
+        bml = sb.n
+        bestr = 0 - 1
+      }
+      None => {}
+    }
+  }
+  if segcmp == false and bestr < 0 and bml == 0 {
     bh := binding_head_span(decls, src, nm.s, nm.n, ms, ml)
     bms = bh.s
     bml = bh.n
