@@ -9071,6 +9071,10 @@ root_package_test issue1734_qualified_callee_agg_result "T _start" "T main__main
 ## declares a same-named type; the control has no collision. NON-VACUOUS: 0 on `b74089f3` (x86_64).
 root_package_test issue1737_field_type_callee_module "T _start" "T main__main" "T wide__mk"
 root_package_test issue1737_field_type_control "T _start" "T main__main" "T wide__mk"
+# #1751, #1929: a struct literal's path head names one struct, through a module alias, and its named
+# fields are bound by name (Types §9.3; Modules §4.1, §4.2).
+root_package_test issue1751_alias_head_decoy "T _start" "T main__main"
+root_package_test issue1929_qualified_out_of_order "T _start" "T main__main"
 issue11_signature_type_name_test
 issue11_package_type_name_test
 ## Modules §§4.1/4.1.1 — a one-element listed projection after a bare module alias must remain a
