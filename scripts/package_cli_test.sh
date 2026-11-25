@@ -2574,7 +2574,7 @@ run_pkg_check_build_located module_global_sibling_reject          2 other
 run_pkg_check_build_located module_global_sibling_qual_reject     2 other
 run_pkg_check_build_located module_global_sibling_write_reject    2 other
 run_pkg_check_build_located module_global_sibling_arr_reject      2 other
-run_pkg_check_build_located module_global_bare_nonancestor_reject 2 mod__child
+run_pkg_check_build_located module_global_bare_nonancestor_reject 2 sub__child
 ## Modules §3 for EVERY declaration kind — a function, a type (struct and enum), a constant, an
 ## import/alias binding, a listed member projection (§4.1.1) and a signature-position type. Each of
 ## these compiled and RAN before 2026-08-20 (the check covered module GLOBALS only), silently

@@ -1,4 +1,5 @@
-## selfhost::comptime — a constant-folding pass over the AST.
+## selfhost::ast_fold — a constant-folding pass over the AST (the file was `comptime.al`, a stem that is a
+## keyword and so no module path segment, spec#192).
 ##
 ## The fifth promoted pass: it walks the parser AST and **evaluates the sub-expressions
 ## that are known at compile time**, rewriting a binary node whose folded operands are

@@ -34,7 +34,7 @@ through turns that stalemate into a monotone decrease.
 
 - **A non-enumerable scrutinee.** Over an integer or a byte the domain is not a list anybody can
   spell, and `_` is the only way to write "everything else". The census found **four** such arms in
-  the whole tree — `src/comptime.al`'s binary-op dispatch and `src/lower.al`'s three register-name
+  the whole tree — `src/ast_fold.al`'s binary-op dispatch and `src/lower.al`'s three register-name
   tables — so the rule almost never fires on a correct use. The check decides this from the
   scrutinee's **resolved type**, never from the arm's text: it resolves the type through the sibling
   arms' patterns against the `enum` declarations it parsed out of the tree, so `E::V`, `E.V` and the
