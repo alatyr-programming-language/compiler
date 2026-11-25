@@ -6230,6 +6230,17 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if is_pkg { brz := driver::set_bare_root_file(0, 0) }
   mrp := unchecked bitcast(usize, module_root.ptr)
   mrs := driver::set_module_root(mrp, module_root.len)
+  ## spec#192 — a scanned file or directory whose stem is not an identifier makes the package
+  ## ill-formed: a Config diagnostic located by its path, before any source is read. Judged after the
+  ## module root and the bare root are published, so it reads the same module tree the build does. A
+  ## LONE manifest-less file is the root module and excluded from the scan (Tooling §4), so nothing is
+  ## scanned and nothing is judged; that it still mangles by its stem is #972's open residual.
+  mut stem_judged := true
+  if is_pkg == false { stem_judged = cli_input_n(cmd, fi, path_n) > 1 }
+  if stem_judged {
+    stem_msg := driver::module_stem_refusal(a, paths)
+    if stem_msg.len != 0 { return cli_config_diag(a, stem_msg) }
+  }
   ## AMBIENT STDLIB: prepend the `lib/` modules the program (transitively) references via a
   ## 3-segment `alloc::…::…` / `std::…::…` path. Lib modules go FIRST so the user's entry module
   ## (named `main`, or the last) stays the entry. Zero ambient refs (the self-host's own build) →

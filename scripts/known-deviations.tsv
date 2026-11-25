@@ -581,6 +581,8 @@ aarch64	test/package/issue703_global_module_scope_qualified/src/z.al	link/1	#3
 aarch64	test/package/issue703_global_module_scope_reject/src/z.al	link/1	#3
 aarch64	test/package/issue703_qualified_scalar_read_reject/src/z.al	link/1	#3
 aarch64	test/package/issue703_qualified_scalar_store_reject/src/z.al	link/1	#3
+aarch64	test/package/issue972_stem_dir_reject/src/my-lib/inner.al	assemble/1	#972
+aarch64	test/package/issue972_stem_file_reject/src/a-b.al	assemble/1	#972
 aarch64	test/package/issue987_user_module_alloc__vec_not_completed/package.al	run/133	#1193
 aarch64	test/package/issue987_user_module_alloc__vec_not_completed/src/alloc__vec.al	link/1	#3
 aarch64	test/print_array_display.al	run/133	#1191
@@ -2266,4 +2268,5 @@ x86_64	test/issue1822_alloc_enclosing_param.al	compile/1	#1468
 x86_64	test/issue987_user_generic_ufcs_not_completed.al	run/139	#1654
 x86_64	test/package/ir38_deref_foreign_amb/package.al	run/41	#1797
 x86_64	test/package/issue703_global_module_scope_qualified/package.al	compile/1	#1336
+x86_64	test/package/issue972_stem_file_reject/src/a-b.al	compile/13	#972
 x86_64	test/package/issue987_user_module_alloc__vec_not_completed/package.al	run/139	#1654
