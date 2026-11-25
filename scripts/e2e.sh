@@ -12849,6 +12849,9 @@ run issue1302_container_elem_enum 42
 ## #1334 — `deref(p) = o` with `o` a niche-folded `Option(ptr(T))` wrote a second word past the
 ## pointee. NON-VACUOUS: on the parent `1262da5d` (x86_64) the fixture returns 100.
 run issue1334_folded_deref_store 42
+## #1330: a `for` loop variable whose name an ended sibling scope bound keeps its own index word
+run issue1330_for_var_reuses_name_scalar 42
+run issue1330_for_var_reuses_name_struct 42
 ## #1364 — `Option(E).Some(deref(p))` through a pointer PARAMETER at a multi-word enum (concrete, generic
 ## at `T = EN`, generic at `T = Option(u64)`) lost the payload. NON-VACUOUS: on the parent `32f0f6e8`
 ## (x86_64) the fixture returns 100.

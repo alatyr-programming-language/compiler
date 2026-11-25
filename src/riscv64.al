@@ -2000,6 +2000,11 @@ rv_local_scan := fn(list : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut Stmt)
                 ## an ITERABLE for = the loop var's element words (rv_iter_stride, 1 for scalar) + a hidden index
                 ## word; a RANGE for = 1 word. Scalar stays 2 (stride 1 + 1) — frame layout byte-identical.
                 if unchecked bitcast(usize, fhi) == 0 { b = b + rv_iter_stride(fn_head, src, flo, a, decls) + 1 } else { b = b + 1 }
+              } else if unchecked bitcast(usize, fhi) == 0 {
+                ## #1330 — the loop var's name was bound earlier (Declarations §6.1): the var keeps that slot,
+                ## but the hidden index is this loop's own word (`rv_for_index_off`), never the earlier
+                ## binding's neighbour.
+                b = b + 1
               }
               r := rv_local_scan(fb, fn_head, target, b, src, a, decls)
               if r < 0 { result = r ; found = true } else { b = r ; s = nx }
@@ -2320,6 +2325,17 @@ rv_local_off := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl :
   mut off := 0 - 1
   if r < 0 { off = 16 + ((0 - r) - 1) * 8 }
   off
+}
+
+## #1330 — the frame offset of the hidden index word the local scan reserved for the iterable `For`
+## statement `fq`: right after the loop var's words when the var's first handle is this loop, else the
+## one word the scan gives the loop itself (`rv_local_scan`). -1 when the scan does not reach `fq`.
+rv_for_index_off := fn(head : Option(ptr(mut Stmt)), fq : ptr(mut Stmt), src : ptr(u8), fns : usize, fnl : usize, stride : i64, pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+  r := rv_local_scan(head, head, Option.Some(fq), pcount, src, a, decls)
+  if r >= 0 { return 0 - 1 }
+  mut k : i64 = (0 - r) - 1
+  if stmt_same(rv_first_handle(head, fns, fnl, src, a), Option.Some(fq)) { k = k + stride }
+  16 + k * 8
 }
 
 rv_callee_defined := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a : rt::Arena) -> bool {
@@ -7363,7 +7379,9 @@ emit_rv_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, a
               bns := ex_var_ns(flo)
               bnl := ex_var_nl(flo)
               voff := rv_local_off(body_head, src, fns, fnl, pcount, a, decls)
-              ioff := voff + 8
+              ## #1330 — the index word this loop owns (`rv_for_index_off`), not `voff + 8`: when the var reuses an
+              ## earlier binding's name, the word after that binding is a live local.
+              ioff := rv_for_index_off(body_head, sq, src, fns, fnl, rv_iter_stride(body_head, src, flo, a, decls), pcount, a, decls)
               aoff := rv_local_off(body_head, src, bns, bnl, pcount, a, decls)
               mut isslice := false
               if bnl != 0 { if is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
@@ -7403,7 +7421,7 @@ emit_rv_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, a
               canagg := voff >= 0 and (((isaggarr or isaggslice) and aoff >= 0) or isaggparam)
               if canagg {
                 aggdone = true
-                ioffA := voff + estrideF * 8
+                ioffA := ioff   ## #1330: the loop's own index word, past the var's `estrideF` words when it is fresh here
                 push_str(sb, "  li a0, 0\n  sd a0, ") ; push_int(sb, ioffA) ; push_str(sb, "(s0)\n")
                 push_str(sb, ".Lfitop") ; push_int(sb, id) ; push_str(sb, ":\n")
                 push_str(sb, "  ld a0, ") ; push_int(sb, ioffA) ; push_str(sb, "(s0)\n")
