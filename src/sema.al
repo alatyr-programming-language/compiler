@@ -364,6 +364,12 @@ call_unbound_param_err := fn(s : usize, ps : usize, w : CallUnbound) -> CheckErr
   }
   CALL_UNBOUND_PARAM_DIAG_MARKER + (cs * CALL_UNBOUND_PARAM_SLOT + pn) * 4 + wb
 }
+## #1915 / #1920 — a bare call through a binding that renames a generic function (`f := M::g`,
+## `sema_call_renames_generic`): not supported yet, #1920. The payload is the call's offset times 4. It
+## is the third call-binding class: CALL_UNBOUND_PARAM's largest code is below 6911500000000000000, and
+## this window ends at CT_DIAG_MARKER, so every other decoded range stays byte-identical.
+CALL_RENAMED_GENERIC_DIAG_MARKER : usize = 6916000000000000000
+call_renamed_generic_err := fn(s : usize) -> CheckErr { CALL_RENAMED_GENERIC_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -6134,9 +6140,30 @@ sema_call_fn_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : us
   nm := lower_layout::name_tail(src, cs, cl)
   if qh.n == 0 {
     r := sema_call_fn_scan_in(decls, src, nm.s, nm.n, false, 0, 0)
-    return sema_bare_call_scan(decls, src, cs, nm.s, nm.n, r)
+    bc := sema_bare_call_scan(decls, src, cs, nm.s, nm.n, r)
+    return bc.fns
   }
   sema_call_fn_scan_qual(decls, src, nm.s, nm.n, qh.s, qh.n)
+}
+## #1915 / #1920 — is the direct call `[cs, cs+cl)` a bare call that reads, through a binding that
+## RENAMES (`f := M::g`, Modules §4.1), a generic function? `sema_bare_call_scan` binds it to `M::g`
+## (Declarations §6.1), but the lower's generic resolver (`lower::generic_decl_of`) walks the generic by
+## the CALL's name and cannot instantiate `M::g` under the name `f`: it answered "not generic" and the
+## build stopped at the linker with no location. Refused at the call until #1920 instantiates it.
+sema_call_renames_generic := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
+  if cl == 0 or ast::span_is_synthetic(cs) or ecallee_is(cs) or not sema_direct_named_call(src, cs, cl) { return false }
+  qh := lower_layout::type_path_head(src, cs, cl)
+  if qh.n != 0 { return false }
+  nm := lower_layout::name_tail(src, cs, cl)
+  r := sema_call_fn_scan_in(decls, src, nm.s, nm.n, false, 0, 0)
+  bc := sema_bare_call_scan(decls, src, cs, nm.s, nm.n, r)
+  if not bc.via.qual or streq(src, bc.via.ns, bc.via.nl, nm.s, nm.n) { return false }
+  mut gen := false
+  match bc.fns.last {
+    Some(i) => { gen = deref(decl_get(decls, i)).is_generic }
+    None => {}
+  }
+  gen
 }
 ## The fns `head::name` names: `name` in the module `[hs, hs+hl)` spells, or in the module one alias hop
 ## names. A qualified call and a binding's target (`f := M::g`, #1915) read a path the same way.
@@ -6182,11 +6209,14 @@ sema_call_fn_scan_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl :
 ## `W` receiver: 241 on x86_64, a trap on the twins, depending on which module sorted first.
 ## No candidate on the caller's chain, or a caller the span cannot place, keeps `all`, the historical
 ## name rule. A single candidate needs no ranking, which keeps the module walk off the common path,
-## unless a module aliases the name (`f := M::g` may shadow the one `f`, #1915).
-sema_bare_call_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, ns : usize, nl : usize, all : SemaCallFns) -> SemaCallFns {
-  if all.hits < 2 and not (all.hits == 1 and sema_name_aliased(decls, src, ns, nl)) { return all }
+## unless a module aliases the name (`f := M::g` may shadow the one `f`, #1915). `via` is the binding
+## the call reads its fns through, `qual` false when it names declarations directly.
+SemaBareCall := struct { fns : SemaCallFns, via : SemaGRef }
+sema_bare_call_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, ns : usize, nl : usize, all : SemaCallFns) -> SemaBareCall {
+  direct := SemaGRef(ms = 0, ml = 0, ns = 0, nl = 0, qual = false)
+  if all.hits < 2 and not (all.hits == 1 and sema_name_aliased(decls, src, ns, nl)) { return SemaBareCall(fns = all, via = direct) }
   wm := sema_span_module(decls, src, cs)
-  if not wm.found { return all }
+  if not wm.found { return SemaBareCall(fns = all, via = direct) }
   mut best : i64 = 0 - 1
   mut hits : usize = 0
   mut last : Option(usize) = Option(usize).None
@@ -6215,12 +6245,15 @@ sema_bare_call_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, ns : 
       }
     }
   }
-  if best < 0 { return all }
+  if best < 0 { return SemaBareCall(fns = all, via = direct) }
   ## #1915 / Declarations §6.1 — a binding of the name in the calling module, or in an ancestor nearer
   ## than the declaring one, shadows that declaration, as `lower::shadowing_binding_mod` binds it.
   bg := sema_shadowing_binding(decls, src, ns, nl, wm.s, wm.n, best)
-  if bg.qual { return sema_call_fn_scan_qual(decls, src, bg.ns, bg.nl, bg.ms, bg.ml) }
-  SemaCallFns(hits = hits, last = last)
+  if bg.qual {
+    bf := sema_call_fn_scan_qual(decls, src, bg.ns, bg.nl, bg.ms, bg.ml)
+    return SemaBareCall(fns = bf, via = bg)
+  }
+  SemaBareCall(fns = SemaCallFns(hits = hits, last = last), via = direct)
 }
 ## #1915 — whether some module binds the name `[ns, nl)` by a named alias (`f := M::g`). Its hash
 ## bucket only.
@@ -12253,6 +12286,13 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       mark_failed(locals, cbe)
       return Result(Ty, CheckErr).Err(cbe)
     }
+  }
+  ## #1915 — a bare call reading a generic through a renaming binding (`f := M::g`) is refused here, at
+  ## the call, until #1920 lets the lower instantiate `M::g` under the call's name.
+  if sema_call_renames_generic(decls, src, ecs.s, ecs.n) {
+    rge := call_renamed_generic_err(ecs.s)
+    mark_failed(locals, rge)
+    return Result(Ty, CheckErr).Err(rge)
   }
   cgen := callee_is_generic(decls, upto, src, ecs.s, ecs.n)
   ## Issue #269 — the bounded wrapper-result fence. Run before the broad aggregate↔scalar mirror so

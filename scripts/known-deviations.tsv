@@ -560,6 +560,8 @@ aarch64	test/package/issue1915_generic_alias_shadows_ancestor/src/other.al	link/
 aarch64	test/package/issue1915_projection_shadows_ancestor/package.al	run/133	#1193
 aarch64	test/package/issue1915_projection_shadows_ancestor/src/geo.al	link/1	#3
 aarch64	test/package/issue1915_projection_shadows_ancestor/src/other.al	link/1	#3
+aarch64	test/package/issue1915_renamed_generic_alias_reject/src/geo.al	link/1	#3
+aarch64	test/package/issue1915_renamed_generic_alias_reject/src/other.al	link/1	#3
 aarch64	test/package/issue703_global_module_scope/package.al	run/133	#1187
 aarch64	test/package/issue703_global_module_scope/src/a.al	link/1	#3
 aarch64	test/package/issue703_global_module_scope/src/z.al	link/1	#3
@@ -1306,6 +1308,8 @@ riscv64	test/package/issue1915_generic_alias_shadows_ancestor/src/other.al	link/
 riscv64	test/package/issue1915_projection_shadows_ancestor/package.al	run/133	#1193
 riscv64	test/package/issue1915_projection_shadows_ancestor/src/geo.al	link/1	#3
 riscv64	test/package/issue1915_projection_shadows_ancestor/src/other.al	link/1	#3
+riscv64	test/package/issue1915_renamed_generic_alias_reject/src/geo.al	link/1	#3
+riscv64	test/package/issue1915_renamed_generic_alias_reject/src/other.al	link/1	#3
 riscv64	test/package/issue703_global_module_scope/package.al	run/133	#1187
 riscv64	test/package/issue703_global_module_scope/src/a.al	link/1	#3
 riscv64	test/package/issue703_global_module_scope/src/z.al	link/1	#3
@@ -2036,6 +2040,8 @@ wasm	test/package/issue1915_generic_alias_shadows_ancestor/src/other.al	assemble
 wasm	test/package/issue1915_projection_shadows_ancestor/package.al	run/134	#1193
 wasm	test/package/issue1915_projection_shadows_ancestor/src/geo.al	assemble/1	#3
 wasm	test/package/issue1915_projection_shadows_ancestor/src/other.al	assemble/1	#3
+wasm	test/package/issue1915_renamed_generic_alias_reject/src/geo.al	assemble/1	#3
+wasm	test/package/issue1915_renamed_generic_alias_reject/src/other.al	assemble/1	#3
 wasm	test/package/issue703_global_module_scope/package.al	run/134	#1187
 wasm	test/package/issue703_global_module_scope/src/a.al	assemble/1	#3
 wasm	test/package/issue703_global_module_scope/src/z.al	assemble/1	#3
