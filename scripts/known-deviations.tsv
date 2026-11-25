@@ -262,6 +262,8 @@ aarch64	test/issue1260_comptime_bound_unchecked_wrap.al	run/133	#1232
 aarch64	test/issue1260_comptime_bound_underflow.al	run/133	#1232
 aarch64	test/issue1274_view_in_range.al	run/133	#1187
 aarch64	test/issue1287_for_array_param.al	run/133	#1203
+aarch64	test/issue1289_byte_tier_view_for.al	compile/1	#1194
+aarch64	test/issue1289_byte_tier_view_lo.al	run/133	#1187
 aarch64	test/issue1302_container_elem_enum.al	run/133	#1200
 aarch64	test/issue1303_enum_hash.al	run/133	#1189
 aarch64	test/issue1305_alias_callee_option.al	run/133	#1188
@@ -993,6 +995,8 @@ riscv64	test/issue1260_comptime_bound_unchecked_wrap.al	run/133	#1232
 riscv64	test/issue1260_comptime_bound_underflow.al	run/133	#1232
 riscv64	test/issue1274_view_in_range.al	run/133	#1187
 riscv64	test/issue1287_for_array_param.al	run/133	#1184
+riscv64	test/issue1289_byte_tier_view_for.al	compile/1	#1194
+riscv64	test/issue1289_byte_tier_view_lo.al	run/133	#1187
 riscv64	test/issue1302_container_elem_enum.al	run/133	#1200
 riscv64	test/issue1303_enum_hash.al	run/133	#1189
 riscv64	test/issue1305_alias_callee_option.al	run/133	#1188
@@ -1724,6 +1728,8 @@ wasm	test/issue1260_comptime_bound_unchecked_wrap.al	run/134	#1232
 wasm	test/issue1260_comptime_bound_underflow.al	run/134	#1232
 wasm	test/issue1274_view_in_range.al	run/134	#1190
 wasm	test/issue1287_for_array_param.al	run/134	#1184
+wasm	test/issue1289_byte_tier_view_for.al	run/134	#1191
+wasm	test/issue1289_byte_tier_view_lo.al	run/134	#1191
 wasm	test/issue1302_container_elem_enum.al	run/134	#1186
 wasm	test/issue1303_enum_hash.al	run/134	#1189
 wasm	test/issue1305_alias_callee_option.al	run/134	#1186
