@@ -12887,6 +12887,10 @@ run issue1182_annotated_view_local 42
 run issue1182_for_array_param_agg 42
 ## #1287: `for` over a fixed-array PARAMETER of every element kind (str, word, struct, enum, u8, i8, f64)
 run issue1287_for_array_param 42
+## #1388: `for` over a byte-element fixed-array LOCAL (`[u8; N]`, `[i8; N]`): its bytes are packed in the
+## frame, and the loop read the first frame word as a data pointer (139 on x86_64 at da8f96af)
+run issue1388_for_local_u8_array 42
+run issue1388_for_local_i8_array 42
 ## its review's blocking row: the same parameters indexed. #1287 gave a `str` element the two-word
 ## view kind (eek 4) and left the enum (eek 3, #1404), non-plain-scalar struct and float (eek 9)
 ## parameters with no bounds block at all, so `xs[i]` past the static N read the caller's memory and
