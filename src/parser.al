@@ -1384,6 +1384,11 @@ structs_tbl := fn() -> rt::Vec { return deref(unchecked bitcast(ptr(rt::Vec), P_
 ## candidate (a name declared only outside the §3 chain — the ambient prelude case) keeps the
 ## historical first-match answer.
 struct_rec_of := fn(pc : PC, s : usize, n : usize) -> i64 {
+  struct_rec_from(pc, s, n, pc.mod_s, pc.mod_l)
+}
+## `struct_rec_of` as seen from the module `[cms, cms+cml)`, which an alias followed from another
+## module needs (#1751).
+struct_rec_from := fn(pc : PC, s : usize, n : usize, cms : usize, cml : usize) -> i64 {
   if structs_known() == false { return 0 - 1 }
   sv := structs_tbl()
   cnt := rt::vec_len(sv)
@@ -1399,13 +1404,170 @@ struct_rec_of := fn(pc : PC, s : usize, n : usize) -> i64 {
     nf := rt::vec_get(sv, i + 4)
     if str_eq(str_at(pc.src + ns, nl), str_at(pc.src + s, n)) {
       if first < 0 { first = i64(i) }
-      r := lower_layout::type_mod_rank_from(pc.src, ms, ml, pc.mod_s, pc.mod_l)
+      r := lower_layout::type_mod_rank_from(pc.src, ms, ml, cms, cml)
       if r > best { best = r ; besti = i64(i) }
     }
     i = i + 5 + nf * 4
   }
   if best >= 0 { return besti }
   first
+}
+## The record of the struct named `[ns, ns+nl)` that module path `[hs, hs+hl)` declares (segment-aware,
+## with the last-segment lib-path leniency every type query has), else -1.
+struct_rec_in_mod := fn(pc : PC, ns : usize, nl : usize, hs : usize, hl : usize) -> i64 {
+  if structs_known() == false { return 0 - 1 }
+  sv := structs_tbl()
+  cnt := rt::vec_len(sv)
+  mut i : usize = 0
+  while i + 5 <= cnt {
+    nf := rt::vec_get(sv, i + 4)
+    if str_eq(str_at(pc.src + rt::vec_get(sv, i), rt::vec_get(sv, i + 1)), str_at(pc.src + ns, nl))
+       and lower_layout::type_mod_head_matches(pc.src, rt::vec_get(sv, i + 2), rt::vec_get(sv, i + 3), hs, hl) {
+      return i64(i)
+    }
+    i = i + 5 + nf * 4
+  }
+  0 - 1
+}
+## The record of the struct named `[ns, ns+nl)` when exactly one module declares one, else -1: the
+## unique-declaration answer every type query keeps (`lower_layout::type_decl_ranked`, rule 3).
+struct_rec_unique := fn(pc : PC, ns : usize, nl : usize) -> i64 {
+  if structs_known() == false { return 0 - 1 }
+  sv := structs_tbl()
+  cnt := rt::vec_len(sv)
+  mut i : usize = 0
+  mut hit := 0 - 1
+  mut hits : usize = 0
+  while i + 5 <= cnt {
+    nf := rt::vec_get(sv, i + 4)
+    if str_eq(str_at(pc.src + rt::vec_get(sv, i), rt::vec_get(sv, i + 1)), str_at(pc.src + ns, nl)) {
+      hit = i64(i)
+      hits = hits + 1
+    }
+    i = i + 5 + nf * 4
+  }
+  if hits == 1 { return hit }
+  0 - 1
+}
+
+## ALIAS TABLE (#1751) — every `name := path` declaration of the program (a module alias `g := geo`, a
+## type alias `S := n::S` or `T := S`), collected by the driver in PASS 1 beside the field-order table
+## (`driver::collect_alias_table`), so a struct literal's head is resolved through aliases: Modules §4.1
+## and §4.2 erase an alias, so `g::S(…)` is `geo::S(…)` and `T(…)` is `S(…)`. One record per alias:
+## `name_start, name_len, mod_start, mod_len, rhs_start, rhs_len`. `None` (PASS 1, single-pass paths):
+## no alias is followed.
+mut P_ALIAS_TBL : Option(ptr(rt::Vec)) = Option.None
+pub set_alias_tbl := fn(p : ptr(rt::Vec)) { P_ALIAS_TBL = Option(ptr(rt::Vec)).Some(p) }
+pub clear_alias_tbl := fn() { P_ALIAS_TBL = Option(ptr(rt::Vec)).None }
+P_ALIAS_REC : usize = 6
+## The deepest alias chain a struct-literal head follows; a longer one (or a cycle) is not followed.
+P_ALIAS_DEPTH : usize = 8
+
+## The alias record named `[s, s+n)` that module `[cms, cms+cml)` sees — the §3 rank, nearest first,
+## as every type name — else -1. `exact` instead asks for the alias that module path `[cms, cms+cml)`
+## itself declares (a re-export reached through a path, `m::T` with `pub T := S` in `m`).
+alias_rec_of := fn(pc : PC, s : usize, n : usize, cms : usize, cml : usize, exact : bool) -> i64 {
+  apo : Option(ptr(rt::Vec)) = P_ALIAS_TBL
+  match apo {
+    Some(ap) => {
+      av := deref(ap)
+      cnt := rt::vec_len(av)
+      mut i : usize = 0
+      mut best := 0 - 1
+      mut besti := 0 - 1
+      while i + P_ALIAS_REC <= cnt {
+        if str_eq(str_at(pc.src + rt::vec_get(av, i), rt::vec_get(av, i + 1)), str_at(pc.src + s, n)) {
+          ams := rt::vec_get(av, i + 2)
+          aml := rt::vec_get(av, i + 3)
+          if exact {
+            if lower_layout::type_mod_head_matches(pc.src, ams, aml, cms, cml) { return i64(i) }
+          } else {
+            r := lower_layout::type_mod_rank_from(pc.src, ams, aml, cms, cml)
+            if r > best { best = r ; besti = i64(i) }
+          }
+        }
+        i = i + P_ALIAS_REC
+      }
+      return besti
+    }
+    None => { return 0 - 1 }
+  }
+}
+## Word `k` of the alias record at `rec` (from `alias_rec_of`).
+alias_word := fn(rec : i64, k : usize) -> usize {
+  apo : Option(ptr(rt::Vec)) = P_ALIAS_TBL
+  match apo {
+    Some(ap) => { return rt::vec_get(deref(ap), usize(rec) + k) }
+    None => { return 0 }
+  }
+}
+## Whether the span `[s, s+n)` contains a `::`: an alias whose right-hand side is a recorded path.
+span_has_sep := fn(pc : PC, s : usize, n : usize) -> bool {
+  mut i : usize = 0
+  while i + 1 < n {
+    if str_at(pc.src + s + i, 2) == "::" { return true }
+    i = i + 1
+  }
+  false
+}
+## Whether `[s, s+n)` is a plain path (identifiers joined by `::`): what an alias may stand for here.
+## A right-hand side with arguments (`Vec(u64)`) or any other expression is not followed.
+span_is_path := fn(pc : PC, s : usize, n : usize) -> bool {
+  if n == 0 { return false }
+  mut i : usize = 0
+  while i < n {
+    if lower_layout::ll_ident_byte(pc.src, s + i) { i = i + 1 }
+    else if i + 1 < n and str_at(pc.src + s + i, 2) == "::" { i = i + 2 }
+    else { return false }
+  }
+  true
+}
+
+## STRUCT-LITERAL HEAD (#1751, #1929): the field-order record of the struct a literal's head names,
+## else -1. The head is a bare name or a path (`geo::S`, `g::S`), written in the module `[cms, cms+cml)`.
+## Modules §4.1/§4.2 erase an alias, so a module alias in the head and a type alias as the name are
+## followed, each resolved in the module that declares it; Types §4.1 makes the answer one nominal
+## declaration, never "the same name somewhere". A bare name keeps `struct_rec_of`'s §3 answer.
+struct_rec_head := fn(pc : PC, s : usize, n : usize, cms : usize, cml : usize, depth : usize) -> i64 {
+  if depth > P_ALIAS_DEPTH { return 0 - 1 }
+  if not span_is_path(pc, s, n) { return 0 - 1 }
+  ## The last `::` splits the head path from the tail name.
+  mut cut := 0 - 1
+  mut j : usize = 0
+  while j + 1 < n {
+    if str_at(pc.src + s + j, 2) == "::" { cut = i64(j) ; j = j + 2 } else { j = j + 1 }
+  }
+  ## A bare name keeps the §3 answer. A TYPE alias as the name (`T := S`, `S := n::S`) is #1751's
+  ## residual scope: the layout does not follow it in every case yet (`lower_layout::struct_decl_of`
+  ## follows an alias only when no struct of that name is nameable), so following it here alone would
+  ## turn today's refusal into a wrong layout.
+  if cut < 0 { return struct_rec_from(pc, s, n, cms, cml) }
+  hl := usize(cut)
+  ts := s + hl + 2
+  tl := n - hl - 2
+  struct_rec_qual(pc, ts, tl, s, hl, cms, cml, depth)
+}
+## The record of the struct `[ts, ts+tl)` reached through the module path `[hs, hs+hl)` written in
+## `[cms, cms+cml)`: a struct that module declares; else an alias of that name it declares to a path
+## (a re-export, `pub T := n::S`, which the layout follows too), followed; else, when the path is a module alias seen from the writing module, the same
+## question of the module it aliases; else the struct when only one module declares that name.
+struct_rec_of_head := fn(pc : PC, s : usize, n : usize) -> i64 {
+  struct_rec_head(pc, s, n, pc.mod_s, pc.mod_l, 0)
+}
+struct_rec_qual := fn(pc : PC, ts : usize, tl : usize, hs : usize, hl : usize, cms : usize, cml : usize, depth : usize) -> i64 {
+  if depth > P_ALIAS_DEPTH { return 0 - 1 }
+  r := struct_rec_in_mod(pc, ts, tl, hs, hl)
+  if r >= 0 { return r }
+  ra := alias_rec_of(pc, ts, tl, hs, hl, true)
+  if ra >= 0 and span_has_sep(pc, alias_word(ra, 4), alias_word(ra, 5)) {
+    return struct_rec_head(pc, alias_word(ra, 4), alias_word(ra, 5), alias_word(ra, 2), alias_word(ra, 3), depth + 1)
+  }
+  ha := alias_rec_of(pc, hs, hl, cms, cml, false)
+  if ha >= 0 and span_is_path(pc, alias_word(ha, 4), alias_word(ha, 5)) {
+    rq := struct_rec_qual(pc, ts, tl, alias_word(ha, 4), alias_word(ha, 5), alias_word(ha, 2), alias_word(ha, 3), depth + 1)
+    if rq >= 0 { return rq }
+  }
+  struct_rec_unique(pc, ts, tl)
 }
 
 ## The declaration-order INDEX of the field named `[fs, fs+fl)` within the struct RECORD at offset `rec`
@@ -1466,6 +1628,113 @@ relex_default := fn(in out pc : PC, ds : usize, dl : usize) -> ptr(Expr) {
   e := p_or(dpc)
   pc.nstr = dpc.nstr
   e
+}
+
+## A struct literal's `field = expr` list, the cursor just past its `(`, built into the `StructLit` with
+## the head span `[hs, hs+hn)`: the values are REORDERED into the declaration order of the struct
+## record `rec` (by-name construction, TYP-8, Types §9.3), so `P(y = 6, x = 5)` and `P(x = 5, y = 6)`
+## both emit `x, y` and every backend's positional struct-assign is correct. `rec < 0` (no field-order
+## table, a forward reference or a generic-instance head of a BARE name) keeps the written order; a
+## path head that names no struct is refused before this is called (#1929). Shared by the bare and the
+## qualified head (#1751). The reorder keeps scalar-only locals (a multi-word-struct-returning helper
+## mis-lowers under the seed).
+p_struct_lit := fn(in out pc : PC, hs : usize, hn : usize, rec : i64) -> ptr(mut Expr) {
+  mut fihead : Option(ptr(mut FInit)) = Option.None
+  mut fitail : Option(ptr(mut FInit)) = Option.None
+  while cur(pc).kind != 11 and cur(pc).kind != 0 {
+    fnm := cur(pc)                ## the field NAME token (span used to resolve its decl index)
+    pc.idx = pc.idx + 1           ## field name
+    pc.idx = pc.idx + 1           ## '='
+    fe := p_or(pc)
+    finew := finode(pc.arena, FInit(fs = fnm.start, fl = fnm.len, e = fe, next = Option.None))
+    match fitail { Some(ft0) => { deref(ft0).next = Option.Some(finew) }; None => { fihead = Option.Some(finew) } }
+    fitail = Option.Some(finew)
+    if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between fields
+  }
+  pc.idx = pc.idx + 1             ## ')'
+  ## Build the value `Arg` list in DECLARATION order. `fhead`/`ftail` are the emitted list; the
+  ## inline link store mirrors the historical struct-ctor idiom exactly.
+  mut fnf := 0
+  mut fhead : Option(ptr(mut Arg)) = Option.None
+  mut ftail : Option(ptr(mut Arg)) = Option.None
+  if rec < 0 {
+    ## Struct type not in the field-order table (forward-ref / generic-inst head / single-pass
+    ## path): keep the provided order verbatim (historical positional behavior — an in-declaration-
+    ## order literal is byte-identical, so src/lib + the fixpoint are unaffected).
+    mut fig := fihead
+    loop {
+      match fig {
+        Some(gq) => {
+          fnew := gnode(pc.arena, Arg(e = finit_expr(gq), next = Option.None))
+          match ftail { Some(ftail0) => { fp := arg_p(ftail0); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = Option.Some(fnew)) }; None => { fhead = Option.Some(fnew) } }
+          ftail = Option.Some(fnew)
+          fnf += 1
+          fig = finit_next(gq)
+        }
+        None => { break }
+      }
+    }
+  } else {
+    urec := usize(rec)
+    ## PASS A — reject an unknown field name + find the highest declaration index PROVIDED (a
+    ## provider is an explicit `f = v`). Trailing fields above the highest MATERIALIZED index (see
+    ## `hi`) with no provider and no default are dropped = suffix partial init (v1).
+    mut lastprov : i64 = 0 - 1
+    mut g1 := fihead
+    loop {
+      match g1 {
+        Some(g1q) => {
+          fidx := finit_field_idx(pc, urec, g1q)
+          if fidx < 0 { sfail("selfhost: unknown field name in struct construction (no such field on this struct type)") }
+          if fidx > lastprov { lastprov = fidx }
+          g1 = finit_next(g1q)
+        }
+        None => { break }
+      }
+    }
+    ## A DEFAULTED field (spec Types §9.4 / TYP-8) is ALWAYS materialized when omitted, at ANY
+    ## position — so the reordered list must extend to the highest index that has EITHER a provider
+    ## OR a default. `hi` = max(lastprov, highest-defaulted-index).
+    nf := i64(struct_nfields(urec))
+    mut hi := lastprov
+    mut dk : i64 = 0
+    while dk < nf {
+      df := struct_field_def(urec, usize(dk))
+      if df.dl > 0 and dk > hi { hi = dk }
+      dk += 1
+    }
+    ## PASS B — emit values in declaration order 0..=hi. Each slot resolves to EXACTLY one of:
+    ## the single explicit provider (`m == 1`); the field's DEFAULT re-lexed at this site when
+    ## omitted (`m == 0` and `def_len > 0`); else a non-trailing gap with no default → loud reject
+    ## (`m == 0`, no default); a duplicate (`m > 1`) → loud reject. Never a silent wrong value.
+    mut k : i64 = 0
+    while k <= hi {
+      mut fval := expr_null()
+      mut m := 0
+      mut g2 := fihead
+      loop {
+        match g2 {
+          Some(g2q) => {
+            if finit_field_idx(pc, urec, g2q) == k { fval = finit_expr(g2q); m += 1 }
+            g2 = finit_next(g2q)
+          }
+          None => { break }
+        }
+      }
+      if m > 1 { sfail("selfhost: duplicate field name in struct construction (the same field written twice)") }
+      if m == 0 {
+        df := struct_field_def(urec, usize(k))
+        if df.dl > 0 { fval = relex_default(pc, df.ds, df.dl) }
+        else { sfail("selfhost: struct construction leaves a non-trailing field unwritten (a gap before a later written or defaulted field) - provide the field, give it a default, or reorder") }
+      }
+      fnew := gnode(pc.arena, Arg(e = fval, next = Option.None))
+      match ftail { Some(ftail0) => { fp := arg_p(ftail0); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = Option.Some(fnew)) }; None => { fhead = Option.Some(fnew) } }
+      ftail = Option.Some(fnew)
+      fnf += 1
+      k += 1
+    }
+  }
+  return newnode(pc.arena, Expr.StructLit(hs, hn, fnf, fhead))
 }
 
 ## factor := int | ident | '(' expr ')'
@@ -2248,35 +2517,20 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         callee_len := tseg_start + tseg_len - t.start   ## span covers the whole `a::b::…::f`
         pc.idx = pc.idx + 1               ## '('
         ## A qualified STRUCT CONSTRUCTION `mod::Type(field = e, …)` — distinguished, like the
-        ## bare path, by an `=` (kind 21) after the first field-name ident. Types resolve GLOBALLY
-        ## (one decl vector; `struct_decl_of` strips the `mod::` head), so the `StructLit` keeps the
-        ## BARE TAIL name `Type` — the same node a bare `Type(field = e, …)` ctor produces. (Real
-        ## pass code writes `ast::Decl(...)`; this builds it identically to an unqualified ctor.)
+        ## bare path, by an `=` (kind 21) after the first field-name ident. The `StructLit` keeps the
+        ## TAIL span `Type`; the layout recovers the head from the source `::` before it
+        ## (`lower_layout::type_path_head`) and resolves it (#1751).
         is_qstruct := cur(pc).kind == 1 and tok_at(pc, pc.idx + 1).kind == 21
         if is_qstruct {
-          mut qfnf := 0
-          mut qfhead : Option(ptr(mut Arg)) = Option.None
-          mut qftail : Option(ptr(mut Arg)) = Option.None
-          while cur(pc).kind != 11 and cur(pc).kind != 0 {
-            pc.idx = pc.idx + 1           ## field name
-            pc.idx = pc.idx + 1           ## '='
-            qfe := p_or(pc)
-            qfnew := gnode(pc.arena, Arg(e = qfe, next = Option.None))
-            match qftail {
-              Some(qftail0) => {
-                qfp := arg_p(qftail0)
-                qfold := deref(qfp)
-                qfupd := Arg(e = qfold.e, next = Option.Some(qfnew))
-                deref(qfp) = qfupd
-              }
-              None => { qfhead = Option.Some(qfnew) }
-            }
-            qftail = Option.Some(qfnew)
-            qfnf += 1
-            if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between fields
+          ## #1751, #1929: the head path is resolved to ONE struct (through module and type aliases,
+          ## `struct_rec_of_head`) and the named fields are bound by name like a bare head's. A path that
+          ## names no struct is refused here, located: keeping the written order would turn by-name
+          ## construction into positional (Types §9.3).
+          qrec := struct_rec_of_head(pc, t.start, callee_len)
+          if structs_known() and qrec < 0 {
+            zq := reject_at(pc, "selfhost: this struct construction's path head names no struct the program declares - Types §9.3 binds each `field = value` to the field of that name, so the struct must be known (Modules §2 paths, §4.1 aliases)", t.start)
           }
-          pc.idx = pc.idx + 1             ## ')'
-          return newnode(pc.arena, Expr.StructLit(tseg_start, tseg_len, qfnf, qfhead))
+          return p_struct_lit(pc, tseg_start, tseg_len, qrec)
         }
         mut qn := 0
         mut qhead : Option(ptr(mut Arg)) = Option.None
@@ -2360,110 +2614,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         ## a generic instantiation `Vec(u64)` never reaches here with empty parens (is_generic_inst skips
         ## its type-args; a generic struct is a `fn`, kind-1, absent from the kind-2 struct table).
         is_struct := (cur(pc).kind == 1 and tok_at(pc, pc.idx + 1).kind == 21)
-                     or (cur(pc).kind == 11 and struct_rec_of(pc, t.start, t.len) >= 0)
+                     or (cur(pc).kind == 11 and struct_rec_of_head(pc, t.start, t.len) >= 0)
         if is_struct {
           ## `field = expr` pairs are collected into a transient `FInit` list (each carrying the field
           ## NAME span), then REORDERED into the struct's DECLARATION order (by-name construction,
           ## TYP-8): `P(y = 6, x = 5)` and `P(x = 5, y = 6)` both emit values in `x, y` order, so the
           ## positional struct-assign every backend already does is correct. The reorder is inlined here
           ## with scalar-only locals (a multi-word-struct-returning helper mis-lowers under the seed).
-          mut fihead : Option(ptr(mut FInit)) = Option.None
-          mut fitail : Option(ptr(mut FInit)) = Option.None
-          while cur(pc).kind != 11 and cur(pc).kind != 0 {
-            fnm := cur(pc)                ## the field NAME token (span used to resolve its decl index)
-            pc.idx = pc.idx + 1           ## field name
-            pc.idx = pc.idx + 1           ## '='
-            fe := p_or(pc)
-            finew := finode(pc.arena, FInit(fs = fnm.start, fl = fnm.len, e = fe, next = Option.None))
-            match fitail { Some(ft0) => { deref(ft0).next = Option.Some(finew) }; None => { fihead = Option.Some(finew) } }
-            fitail = Option.Some(finew)
-            if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between fields
-          }
-          pc.idx = pc.idx + 1             ## ')'
-          ## Build the value `Arg` list in DECLARATION order. `fhead`/`ftail` are the emitted list; the
-          ## inline link store mirrors the historical struct-ctor idiom exactly.
-          mut fnf := 0
-          mut fhead : Option(ptr(mut Arg)) = Option.None
-          mut ftail : Option(ptr(mut Arg)) = Option.None
-          rec := struct_rec_of(pc, t.start, t.len)
-          if rec < 0 {
-            ## Struct type not in the field-order table (forward-ref / generic-inst head / single-pass
-            ## path): keep the provided order verbatim (historical positional behavior — an in-declaration-
-            ## order literal is byte-identical, so src/lib + the fixpoint are unaffected).
-            mut fig := fihead
-            loop {
-              match fig {
-                Some(gq) => {
-                  fnew := gnode(pc.arena, Arg(e = finit_expr(gq), next = Option.None))
-                  match ftail { Some(ftail0) => { fp := arg_p(ftail0); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = Option.Some(fnew)) }; None => { fhead = Option.Some(fnew) } }
-                  ftail = Option.Some(fnew)
-                  fnf += 1
-                  fig = finit_next(gq)
-                }
-                None => { break }
-              }
-            }
-          } else {
-            urec := usize(rec)
-            ## PASS A — reject an unknown field name + find the highest declaration index PROVIDED (a
-            ## provider is an explicit `f = v`). Trailing fields above the highest MATERIALIZED index (see
-            ## `hi`) with no provider and no default are dropped = suffix partial init (v1).
-            mut lastprov : i64 = 0 - 1
-            mut g1 := fihead
-            loop {
-              match g1 {
-                Some(g1q) => {
-                  fidx := finit_field_idx(pc, urec, g1q)
-                  if fidx < 0 { sfail("selfhost: unknown field name in struct construction (no such field on this struct type)") }
-                  if fidx > lastprov { lastprov = fidx }
-                  g1 = finit_next(g1q)
-                }
-                None => { break }
-              }
-            }
-            ## A DEFAULTED field (spec Types §9.4 / TYP-8) is ALWAYS materialized when omitted, at ANY
-            ## position — so the reordered list must extend to the highest index that has EITHER a provider
-            ## OR a default. `hi` = max(lastprov, highest-defaulted-index).
-            nf := i64(struct_nfields(urec))
-            mut hi := lastprov
-            mut dk : i64 = 0
-            while dk < nf {
-              df := struct_field_def(urec, usize(dk))
-              if df.dl > 0 and dk > hi { hi = dk }
-              dk += 1
-            }
-            ## PASS B — emit values in declaration order 0..=hi. Each slot resolves to EXACTLY one of:
-            ## the single explicit provider (`m == 1`); the field's DEFAULT re-lexed at this site when
-            ## omitted (`m == 0` and `def_len > 0`); else a non-trailing gap with no default → loud reject
-            ## (`m == 0`, no default); a duplicate (`m > 1`) → loud reject. Never a silent wrong value.
-            mut k : i64 = 0
-            while k <= hi {
-              mut fval := expr_null()
-              mut m := 0
-              mut g2 := fihead
-              loop {
-                match g2 {
-                  Some(g2q) => {
-                    if finit_field_idx(pc, urec, g2q) == k { fval = finit_expr(g2q); m += 1 }
-                    g2 = finit_next(g2q)
-                  }
-                  None => { break }
-                }
-              }
-              if m > 1 { sfail("selfhost: duplicate field name in struct construction (the same field written twice)") }
-              if m == 0 {
-                df := struct_field_def(urec, usize(k))
-                if df.dl > 0 { fval = relex_default(pc, df.ds, df.dl) }
-                else { sfail("selfhost: struct construction leaves a non-trailing field unwritten (a gap before a later written or defaulted field) - provide the field, give it a default, or reorder") }
-              }
-              fnew := gnode(pc.arena, Arg(e = fval, next = Option.None))
-              match ftail { Some(ftail0) => { fp := arg_p(ftail0); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = Option.Some(fnew)) }; None => { fhead = Option.Some(fnew) } }
-              ftail = Option.Some(fnew)
-              fnf += 1
-              k += 1
-            }
-          }
-          return newnode(pc.arena, Expr.StructLit(t.start, t.len, fnf, fhead))
+          return p_struct_lit(pc, t.start, t.len, struct_rec_of_head(pc, t.start, t.len))
         }
         mut nargs := 0
         mut ahead : Option(ptr(mut Arg)) = Option.None

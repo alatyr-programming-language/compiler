@@ -488,7 +488,7 @@ pub leave_decl_module := fn(sv : TrmSaved) { TRM_S = sv.s ; TRM_L = sv.l ; TRM_S
 ## reference: module `strbuf` reaching `alloc__strbuf`'s own declarations)? This is the type twin of
 ## `lower::mod_head_matches`, INCLUDING that last-segment leniency, which is PRESERVED DELIBERATELY:
 ## the tree leans on it for every `m := path` binding, and narrowing it is its own decision.
-type_mod_head_matches := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : usize) -> bool {
+pub type_mod_head_matches := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : usize) -> bool {
   if type_module_eq(src, as_, al, ms, ml) { return true }
   mut ls : usize = 0
   mut k : usize = 0
@@ -747,10 +747,20 @@ pub qualified_module_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize
   mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
-    if d.kind == 0 and d.arity == 0 and d.ret_tl != 0
-       and streq(src, d.name_start, d.name_len, hs, hn) {
-      if rn == 0 { rs = d.ret_ts; rn = d.ret_tl }
-      else if not streq(src, rs, rn, d.ret_ts, d.ret_tl) { ambiguous = true }
+    if d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, hs, hn) {
+      ## #1751: the target is a recorded path (`ser := std::serialize`) or a single module name
+      ## (`g := geo`), which the parser keeps as the value `Var` rather than a recorded path.
+      mut ts := d.ret_ts
+      mut tn := d.ret_tl
+      if tn == 0 {
+        vsp := at_var_span(d.value)
+        ts = vsp.s
+        tn = vsp.n
+      }
+      if tn != 0 {
+        if rn == 0 { rs = ts; rn = tn }
+        else if not streq(src, rs, rn, ts, tn) { ambiguous = true }
+      }
     }
     i += 1
   }
@@ -930,7 +940,8 @@ LNI_D = unchecked bitcast(usize, deref(decls).data)
 ##   (3) no naming module published (an early pass) OR the name has exactly ONE declaration in the
 ##       whole program: the historical answer stands. Both are PRESERVED DELIBERATELY — the second is
 ##       the unique-declaration leniency the tree leans on for every ambient prelude type;
-##   (4) a qualified head that is a one-level module ALIAS (`strbuf := rt` -> `strbuf::StrBuf`);
+##   (4) a qualified head that is a one-level module ALIAS (`strbuf := rt` -> `strbuf::StrBuf`) — taken
+##       right after (1), since the alias is erased (#1751);
 ##   (5) the naming module SAID which module it means (Modules §4.1.1: `(A, B) := M`, `T := M::T`);
 ##   (6) otherwise the reference is genuinely unanswerable -> LOCATED REJECT, never "pick one".
 type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, k : usize, what : str) -> i64 {
@@ -965,6 +976,19 @@ type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
     }
   }
   if qi >= 0 { return qi }
+  ## (1b) #1751 — a qualified head that is a module ALIAS (`g := geo`, then `g::S`) names the aliased
+  ## module just as outright (Modules §4.1, §4.2: an alias is erased), so it is followed beside (1),
+  ## above the §3 rank and whether or not a lowering module is published. It used to be followed only
+  ## late, with a lowering module published and the name declared twice; sema's `check` never got
+  ## there and answered the LAST same-named declaration, so `g::S(…)` took a later module's `S` layout
+  ## on every backend.
+  if qh.n != 0 {
+    ah := qualified_module_alias(decls, src, qh.s, qh.n)
+    if ah.n != 0 {
+      ai := type_decl_in_module(decls, src, nm.s, nm.n, k, ah.s, ah.n)
+      if ai >= 0 { return ai }
+    }
+  }
   if besti >= 0 { return besti }
   ## No lowering module published (sema's `check`, an early pass): the historical answer, so the
   ## checker's own located diagnostic speaks rather than this layout reject. Ranking above still
@@ -976,13 +1000,6 @@ type_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
     None => { return res }
   }
   if hits <= 1 { return res }
-  if qh.n != 0 {
-    ah := qualified_module_alias(decls, src, qh.s, qh.n)
-    if ah.n != 0 {
-      ai := type_decl_in_module(decls, src, nm.s, nm.n, k, ah.s, ah.n)
-      if ai >= 0 { return ai }
-    }
-  }
   bi := binding_type_idx(decls, src, nm.s, nm.n, k)
   if bi >= 0 { return bi }
   ## (6) At least one candidate is `pub`. §3 makes a `pub` declaration reachable from anywhere

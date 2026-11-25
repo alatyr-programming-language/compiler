@@ -172,6 +172,53 @@ d_collect_enum_table := fn(decls : rt::Vec, src : ptr(u8), in out ev : rt::Vec) 
   collect_enum_aliases(decls, src, ev)
 }
 
+## Issue #1751 — the PASS-1 alias table the struct-literal parse follows (`parser::set_alias_tbl`):
+## one 6-word record per `name := path` declaration (kind 0, no arity, a right-hand side that is a
+## recorded path or a single name — the shapes `lower_layout::qualified_module_alias` reads), `name,
+## module, rhs` spans. Which of them stand for a module or a struct is the parser's question.
+d_alias_table_words := fn(decls : rt::Vec) -> usize {
+  mut w : usize = 0
+  mut di : usize = 0
+  while di < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, di)))
+    if d.kind == 0 and d.arity == 0 { w = w + 6 }
+    di += 1
+  }
+  w
+}
+collect_alias_table := fn(decls : rt::Vec, in out av : rt::Vec) {
+  mut di : usize = 0
+  while di < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, di)))
+    ## The right-hand side: a recorded path (`n::S`, `a::b`), else a single name (`g := geo`), which
+    ## the parser keeps as the value `Var`.
+    mut ars : usize = 0
+    mut arl : usize = 0
+    if d.kind == 0 and d.arity == 0 {
+      if d.ret_tl != 0 { ars = d.ret_ts ; arl = d.ret_tl }
+      else {
+        vsp := d_var_span(d.value)
+        ars = vsp.s
+        arl = vsp.n
+      }
+    }
+    if arl != 0 {
+      ## bind each span to a local before pushing (the `deref(<call>)` field hazard noted above).
+      ans := d.name_start
+      anl := d.name_len
+      ams := d.mod_start
+      aml := d.mod_len
+      rt::vec_push(av, ans)
+      rt::vec_push(av, anl)
+      rt::vec_push(av, ams)
+      rt::vec_push(av, aml)
+      rt::vec_push(av, ars)
+      rt::vec_push(av, arl)
+    }
+    di += 1
+  }
+}
+
 collect_struct_table := fn(decls : rt::Vec, src : ptr(u8), in out sv : rt::Vec) {
   dcnt := rt::vec_len(decls)
   mut di : usize = 0
@@ -5760,6 +5807,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## parse fine regardless, and only enum-ctor USES are affected, which don't change collection).
   parser::set_structs_tbl(0)
   parser::set_prog_bitcast(false)   ## #1718: PASS 1 keeps the two-argument reinterpret parse
+  parser::clear_alias_tbl()
   mut nstr := 0
   ## --- PASS 1: parse to discover enum-type names (results otherwise discarded) ---
   k = 0
@@ -5789,6 +5837,9 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   parser::set_prog_bitcast(lower_layout::program_declares_fn(ptr(decls), base, "bitcast"))   ## #1718
+  mut av := rt::Vec(data = rt::bump(tar, d_alias_table_words(decls) * 8), len = 0, cap = d_alias_table_words(decls))
+  collect_alias_table(decls, av)
+  parser::set_alias_tbl(ptr(av))
   na.off = 0
   ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
   ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
@@ -7205,6 +7256,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   mut decls := rt::Vec(data = rt::bump(tar, dcap * 8), len = 0, cap = dcap)
   parser::set_structs_tbl(0)
   parser::set_prog_bitcast(false)   ## #1718: PASS 1 keeps the two-argument reinterpret parse
+  parser::clear_alias_tbl()
   mut nstr := 0
   ## --- PASS 1: parse with a NULL enum table to discover enum-type names (results discarded) ---
   k = 0
@@ -7233,6 +7285,9 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   parser::set_prog_bitcast(lower_layout::program_declares_fn(ptr(decls), base, "bitcast"))   ## #1718
+  mut av := rt::Vec(data = rt::bump(tar, d_alias_table_words(decls) * 8), len = 0, cap = d_alias_table_words(decls))
+  collect_alias_table(decls, av)
+  parser::set_alias_tbl(ptr(av))
   na.off = 0
   ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
   ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
@@ -7986,6 +8041,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## disagrees with build, which already rejects them in its equivalent two-pass path.
   parser::set_structs_tbl(0)
   parser::set_prog_bitcast(false)   ## #1718: PASS 1 keeps the two-argument reinterpret parse
+  parser::clear_alias_tbl()
   mut nstr := 0
   mut perr := false
   mut perr_span := 0
@@ -8063,6 +8119,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   collect_struct_table(decls, base, sv)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   parser::set_prog_bitcast(lower_layout::program_declares_fn(ptr(decls), base, "bitcast"))   ## #1718
+  mut av := rt::Vec(data = rt::bump(tar, d_alias_table_words(decls) * 8), len = 0, cap = d_alias_table_words(decls))
+  collect_alias_table(decls, av)
+  parser::set_alias_tbl(ptr(av))
   na.off = 0
   ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
   ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
@@ -8408,6 +8467,7 @@ pub check := fn(src : str, in out a : Arena) -> usize {
   ## only when PASS 2 has the declaration-order table from PASS 1.
   parser::set_structs_tbl(0)
   parser::set_prog_bitcast(false)   ## #1718: PASS 1 keeps the two-argument reinterpret parse
+  parser::clear_alias_tbl()
   ## PASS 1 (null enum table) — discover the enum-type names. The same two-pass shape `check_files`
   ## and `compile_files` run, and for the same reason: with a NULL table every `recv.method(args)`
   ## parses as an `EnumLit` (parser.al `is_ctor`), and sema's call-level checks are keyed on
@@ -8428,6 +8488,9 @@ pub check := fn(src : str, in out a : Arena) -> usize {
       collect_struct_table(decls, base, sv)
       parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
       parser::set_prog_bitcast(lower_layout::program_declares_fn(ptr(decls), base, "bitcast"))   ## #1718
+      mut av := rt::Vec(data = rt::bump(tar, d_alias_table_words(decls) * 8), len = 0, cap = d_alias_table_words(decls))
+      collect_alias_table(decls, av)
+      parser::set_alias_tbl(ptr(av))
       na.off = 0
       ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
       ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
