@@ -1669,6 +1669,48 @@ a64_is_array_local := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize
   r
 }
 
+## #1289 — does the iterable `e` of a `for` (an array local by name, or a slice view of one) hold
+## BYTE-TIER struct elements (Types §6.1: element stride `layout_elem_stride_bytes`, not a word)? The
+## aarch64 `for` arms copy whole words per element, so such an iterable is refused, located, by the
+## caller instead of reading the wrong bytes (the issue's `for q in u[1..3]` answered 0). `dep` bounds
+## the view-of-a-view walk.
+a64_iter_byte_tier := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), e : ptr(Expr), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
+  bnl := ex_var_nl(e)
+  if bnl == 0 or dep > 8 { return false }
+  d : Option(ptr(mut Stmt)) = lower_layout::local_decl_assign(head, src, ex_var_ns(e), bnl)
+  mut r := false
+  match d {
+    Some(dq) => {
+      match deref(stmt_p(Stmt, dq)) {
+        Stmt::Assign(ans, anl, v, nx) => {
+          if ex_is_slice(v) { r = a64_iter_byte_tier(head, src, ex_slice_base(v), a, decls, dep + 1) }
+          else if ex_is_array_lit(v) {
+            match ex_array_lit_ehead(v) {
+              Some(ehq) => {
+                e0 := deref(arg_p(ehq)).e
+                if expr_is_struct_lit(e0) { r = std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) }
+              }
+              None => {}
+            }
+          } else {
+            an := ann_span(src, ans, anl)
+            if an.n != 0 {
+              et := lower_ctx::arrty_elem(src, an.s, an.n)
+              if et.n != 0 { r = std_array_elem_byte_tier(decls, src, et.s, et.n, a) }
+            }
+          }
+        }
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
+    }
+    None => {}
+  }
+  r
+}
+
 ## Element WORD stride of an ARRAY-LIT `v`: struct_words for a StructLit first element, 1+enum_max_arity
 ## for an EnumLit first element, else 1 (scalar). Drives multi-word aggregate-array LAYOUT + iteration —
 ## the aarch64 dual of x86_64's `ent.estride`. An empty array-lit → 1 (scalar-neutral).
@@ -8378,6 +8420,12 @@ emit_a64_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, 
               ## iteration COPIES the estrideF-word element into the loop var's slots (`p.field` then reads
               ## localok). Element base = ARRAY: x29+aoff + i*estrideF*8; VIEW: [x29,aoff] (word0 ptr) + same.
               estrideF := a64_iter_stride(body_head, src, flo, a, decls)
+              ## #1289 — a byte-tier struct iterable: the arms below copy whole words per element, so refuse it,
+              ## located, instead of reading the wrong bytes.
+              if a64_iter_byte_tier(body_head, src, flo, a, decls, 0) {
+                lower::ctfold::lower_show_src_line(src, fns)
+                panic("aarch64: `for` over an array or view of byte-tier struct elements is not supported yet (#1194) — the loop would copy whole words instead of each element's bytes")
+              }
               mut isaggarr := false
               if isarr and estrideF > 1 { isaggarr = true }
               mut isaggslice := false
