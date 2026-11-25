@@ -1005,7 +1005,14 @@ callee_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
     }
     j += 1
   }
-  if besti >= 0 { return besti }
+  if besti >= 0 {
+    ## #1915 — a nearer binding of the name shadows the ancestor's declaration (Declarations §6.1).
+    sh : Option(CSpan) = shadowing_binding_mod(decls, src, cs, cl, ms, ml, best)
+    match sh {
+      Some(bm) => { return binding_callee_idx(decls, src, cs, cl, bm.s, bm.n) }
+      None => { return besti }
+    }
+  }
   if bare and hits > 1 {
     ## §4.1.1 — the calling module may have SAID which module it means (`(f, g) := M`, `f := M::f`).
     ## Only consulted here, so a name that resolves on the ancestor chain or is unique in the program
@@ -1019,6 +1026,53 @@ callee_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
     if callee_arity_collision(decls, src, cs, cl, ms, ml) { return 0 - 1 }
   }
   found
+}
+## #1915 / Declarations §6.1, Modules §4.1, §4.1.1 — the module whose BINDING of the bare name
+## `[cs, cl)` the call from module `[ms, ml)` names instead of the declaration `callee_decl_ranked`
+## found on the ancestor chain at rank `best`. A name a module binds itself, by an alias `f := M::g` or
+## a listed projection `(f, …) := M`, shadows an ancestor's binding of that name within that module and
+## its own descendants; so a binding in the calling module, or in an ancestor nearer than the declaring
+## one, wins, the nearest first. `None`: no such binding, and the declaration stands. The binding is
+## resolved by `binding_callee_idx`, relative to its own module.
+shadowing_binding_mod := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, best : i64) -> Option(CSpan) {
+  ## A named alias sits in the name's own hash bucket; a listed projection has no name, so it sits in
+  ## the empty name's. Neither walk visits any other declaration.
+  named := shadowing_binding_in(decls, src, cs, cl, ms, ml, BindRank(rank = best, s = 0, n = 0), false)
+  proj := shadowing_binding_in(decls, src, cs, cl, ms, ml, named, true)
+  if proj.rank > best { return Option(CSpan).Some(CSpan(s = proj.s, n = proj.n)) }
+  Option(CSpan).None
+}
+## The nearest binding rank so far, and the module that holds it.
+BindRank := struct { rank : i64, s : usize, n : usize }
+## One bucket of `shadowing_binding_mod`: the listed projections (`proj`) or the named aliases of
+## `[cs, cl)`, each ranked on the calling module's chain (`mod_anc_rank_from`: the calling module
+## itself ranks highest, -1 off the chain); a strictly nearer one than `cur` replaces it.
+shadowing_binding_in := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, cur : BindRank, proj : bool) -> BindRank {
+  cnt := rt::vec_len(deref(decls))
+  mut r := cur
+  mut th := name_hash(src, cs, cl)
+  if proj { th = name_hash(src, cs, 0) }
+  mut j := dni_lo(cnt, th)
+  je := dni_hi(cnt, th)
+  while j < je {
+    i := dni_at(cnt, j)
+    j += 1
+    if dnh_skip(cnt, i, th) == false {
+      d := deref(lower_ctx::decl_get(decls, i))
+      if d.is_fn == false and d.kind == lower_layout::DECL_KIND_VALUE and d.arity == 0 and d.ret_tl != 0 {
+        mut binds := false
+        if proj and d.name_len == 0 { binds = projection_head_for(src, d.ret_ts, d.ret_tl, cs, cl).n != 0 }
+        if not proj and d.name_len != 0 and lower_ctx::streq(src, d.name_start, d.name_len, cs, cl) {
+          binds = gref_split(src, d.ret_ts, d.ret_tl).qual
+        }
+        if binds {
+          rk := mod_anc_rank_from(src, d.mod_start, d.mod_len, ms, ml)
+          if rk > r.rank { r = BindRank(rank = rk, s = d.mod_start, n = d.mod_len) }
+        }
+      }
+    }
+  }
+  r
 }
 ## The module HEAD a binding in module `[cs, cl)` gives the bare name `[ns, nl)`, plus the TAIL name
 ## it binds to in that module (they differ for a renaming alias `f := M::g`). `n == 0` = no binding.
@@ -1090,8 +1144,9 @@ binding_rhs_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
 ## This is what makes a cross-module bare call DETERMINISTIC rather than a declaration-order lottery:
 ## `src/aarch64.al` says `(typearg_at, base_type_name) := lower_layout`, so its bare
 ## `base_type_name(…)` means `lower_layout`'s — not `lower`'s same-named copy, which happens to be
-## declared first. Consulted only after the §3 ancestor ranking has found nothing AND the name is
-## declared in more than one module, i.e. only on the path that used to guess.
+## declared first. Consulted when the §3 ancestor ranking has found nothing AND the name is declared in
+## more than one module, i.e. on the path that used to guess, and when a binding nearer than the
+## declaring ancestor shadows that declaration (`shadowing_binding_mod`, #1915).
 binding_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, cs : usize, cl : usize) -> i64 {
   if nl == 0 { return 0 - 1 }
   cnt := rt::vec_len(deref(decls))

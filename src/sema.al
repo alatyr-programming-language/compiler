@@ -6132,12 +6132,20 @@ sema_call_fn_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : us
   if cl == 0 { return SemaCallFns(hits = 0, last = Option(usize).None) }
   qh := lower_layout::type_path_head(src, cs, cl)
   nm := lower_layout::name_tail(src, cs, cl)
-  r := sema_call_fn_scan_in(decls, src, nm.s, nm.n, qh.n != 0, qh.s, qh.n)
-  if qh.n == 0 { return sema_bare_call_scan(decls, src, cs, nm.s, nm.n, r) }
+  if qh.n == 0 {
+    r := sema_call_fn_scan_in(decls, src, nm.s, nm.n, false, 0, 0)
+    return sema_bare_call_scan(decls, src, cs, nm.s, nm.n, r)
+  }
+  sema_call_fn_scan_qual(decls, src, nm.s, nm.n, qh.s, qh.n)
+}
+## The fns `head::name` names: `name` in the module `[hs, hs+hl)` spells, or in the module one alias hop
+## names. A qualified call and a binding's target (`f := M::g`, #1915) read a path the same way.
+sema_call_fn_scan_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, hs : usize, hl : usize) -> SemaCallFns {
+  r := sema_call_fn_scan_in(decls, src, ns, nl, true, hs, hl)
   if r.hits != 0 { return r }
-  ah := lower_layout::qualified_module_alias(decls, src, qh.s, qh.n)
+  ah := lower_layout::qualified_module_alias(decls, src, hs, hl)
   if ah.n == 0 { return r }
-  sema_call_fn_scan_in(decls, src, nm.s, nm.n, true, ah.s, ah.n)
+  sema_call_fn_scan_in(decls, src, ns, nl, true, ah.s, ah.n)
 }
 ## The fns named `[ns, ns+nl)`, in the module `[ms, ms+ml)` spells when `in_mod`, else in any module.
 sema_call_fn_scan_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, in_mod : bool, ms : usize, ml : usize) -> SemaCallFns {
@@ -6173,9 +6181,10 @@ sema_call_fn_scan_in := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl :
 ## one overload set, sema left the arguments unchecked, and the lower bound the root's `get(u64)` to a
 ## `W` receiver: 241 on x86_64, a trap on the twins, depending on which module sorted first.
 ## No candidate on the caller's chain, or a caller the span cannot place, keeps `all`, the historical
-## name rule. A single candidate needs no ranking, which keeps the module walk off the common path.
+## name rule. A single candidate needs no ranking, which keeps the module walk off the common path,
+## unless a module aliases the name (`f := M::g` may shadow the one `f`, #1915).
 sema_bare_call_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, ns : usize, nl : usize, all : SemaCallFns) -> SemaCallFns {
-  if all.hits < 2 { return all }
+  if all.hits < 2 and not (all.hits == 1 and sema_name_aliased(decls, src, ns, nl)) { return all }
   wm := sema_span_module(decls, src, cs)
   if not wm.found { return all }
   mut best : i64 = 0 - 1
@@ -6207,7 +6216,76 @@ sema_bare_call_scan := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, ns : 
     }
   }
   if best < 0 { return all }
+  ## #1915 / Declarations §6.1 — a binding of the name in the calling module, or in an ancestor nearer
+  ## than the declaring one, shadows that declaration, as `lower::shadowing_binding_mod` binds it.
+  bg := sema_shadowing_binding(decls, src, ns, nl, wm.s, wm.n, best)
+  if bg.qual { return sema_call_fn_scan_qual(decls, src, bg.ns, bg.nl, bg.ms, bg.ml) }
   SemaCallFns(hits = hits, last = last)
+}
+## #1915 — whether some module binds the name `[ns, nl)` by a named alias (`f := M::g`). Its hash
+## bucket only.
+sema_name_aliased := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> bool {
+  th := sema_name_hash(src, ns, nl)
+  cnt := rt::vec_len(deref(decls))
+  mut jc := sni_lo(cnt, th)
+  jce := sni_hi(cnt, th)
+  while jc < jce {
+    i := sni_at(cnt, jc)
+    jc = jc + 1
+    ## unchecked-ok: the `SDNH` name-hash table, read as every sema name walk reads it
+    if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
+      d := deref(decl_get(decls, i))
+      if d.is_fn == false and d.kind == lower_layout::DECL_KIND_VALUE and d.arity == 0 and d.ret_tl != 0
+         and d.name_len != 0 and streq(src, d.name_start, d.name_len, ns, nl) { return true }
+    }
+  }
+  false
+}
+## #1915 / Declarations §6.1, Modules §4.1, §4.1.1 — the target `head::tail` of the nearest binding of
+## the bare name `[ns, nl)` on the chain of module `[cs, cl)` that ranks above `best`, the rank of the
+## declaration the bare call would otherwise name; `qual` false when there is none. A name a module binds
+## itself, by an alias `f := M::g` or a listed projection `(f, …) := M`, shadows an ancestor's binding
+## of that name within that module and its own descendants. A named alias sits in the name's hash
+## bucket and a listed projection, which has no name, in the empty name's, so neither walk visits any
+## other declaration. A projection names the member `[ns, nl)` of its whole right-hand side.
+sema_shadowing_binding := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, cs : usize, cl : usize, best : i64) -> SemaGRef {
+  mut r := SemaGRef(ms = 0, ml = 0, ns = 0, nl = 0, qual = false)
+  mut rb := best
+  cnt := rt::vec_len(deref(decls))
+  mut pass : usize = 0
+  while pass < 2 {
+    proj := pass == 1
+    mut th := sema_name_hash(src, ns, nl)
+    if proj { th = sema_name_hash(src, ns, 0) }
+    mut jc := sni_lo(cnt, th)
+    jce := sni_hi(cnt, th)
+    while jc < jce {
+      i := sni_at(cnt, jc)
+      jc = jc + 1
+      ## unchecked-ok: the `SDNH` name-hash table, read as every sema name walk reads it
+      if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
+        d := deref(decl_get(decls, i))
+        if d.is_fn == false and d.kind == lower_layout::DECL_KIND_VALUE and d.arity == 0 and d.ret_tl != 0 {
+          mut g := SemaGRef(ms = 0, ml = 0, ns = 0, nl = 0, qual = false)
+          if proj and d.name_len == 0 {
+            ph := sema_projection_head_for(src, d.ret_ts, d.ret_tl, ns, nl)
+            mut hl := ph.ml
+            if ph.nl != 0 { hl = ph.ns + ph.nl - ph.ms }
+            if ph.qual { g = SemaGRef(ms = ph.ms, ml = hl, ns = ns, nl = nl, qual = true) }
+          }
+          if not proj and d.name_len != 0 and streq(src, d.name_start, d.name_len, ns, nl) {
+            g = sema_gref_split(src, d.ret_ts, d.ret_tl)
+          }
+          if g.qual {
+            rk := sema_mod_anc_rank(src, d.mod_start, d.mod_len, cs, cl)
+            if rk > rb { rb = rk; r = g }
+          }
+        }
+      }
+    }
+    pass += 1
+  }
+  r
 }
 ## Declarations §6.1 — the callee span a direct call's declaration-keyed checks read, `{0,0}` when an
 ## unqualified callee is spelled like a local or parameter in scope: the inner name wins, so the call
