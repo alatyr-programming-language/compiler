@@ -1564,7 +1564,7 @@ emit_fmt_expr_core := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a
         ## Re-insert grouping parens the parser erased: a LEFT child of strictly-lower precedence (or
         ## equal precedence under a non-associative comparison parent) and a RIGHT child of lower-OR-
         ## EQUAL precedence must be wrapped, so the re-parse rebuilds the identical tree.
-        ## §4.3.3, second bullet — a binary-operator CHAIN that overflows breaks BEFORE each of its
+        ## §4.3.3, second bullet — a binary-operator CHAIN that overflows breaks AFTER each of its
         ## operators. Rendered single-line first, then re-rendered broken when the opening line
         ## overflows (or when a descendant already broke a line, which puts the break out here).
         bmark := sb.len
@@ -2624,8 +2624,8 @@ fmt_stmt_lead_attr := fn(src : ptr(u8), name_s : usize, out_s : ptr(mut usize)) 
 ## destructuring probes the §4.3.3 chain renderer needs (`fmt_is_bin` / `fmt_bin_op` / `fmt_bin_left`
 ## sit with the other single-match probes), for the same reason: a `match` nested inside a `match` arm.
 ## `if c { t } else { f }` as an EXPRESSION, in one of its two §4.3.3 spellings: `chain` false is the
-## single-line form, `chain` true breaks the CONDITION before each of its operators at `ind + 2`
-## columns (§4.3.3's operator-chain bullet) and leaves the braced arms on the last continuation line.
+## single-line form, `chain` true breaks the CONDITION after each of its operators at `ind + 2`
+## columns (§4.3.3's operator-chain bullet, TOOL-28) and leaves the braced arms on the last continuation line.
 ## An `else` whose whole content is another `if` is the `else if` CHAIN of Control Flow §4 and stays
 ## FLAT: re-braced as `} else { if … }` it becomes the LAST element of a block, which the parser
 ## classifies as an if-EXPRESSION, so pass 2 sees a different tree and renders it differently — that
@@ -3488,17 +3488,19 @@ fmt_bin_chain_link := fn(l : ptr(Expr), pp : i64, pcmp : bool) -> bool {
   fmt_expr_prec(l) == pp
 }
 
-## The WRAPPED spelling of a binary-operator chain (§4.3.3, second bullet): the chain breaks BEFORE
-## each of its operators, at the continuation indent (one level in), the operator BEGINNING the
-## continuation line. The chain's first operand stays on the opening line; the left spine is walked by
-## recursion, so `a + b + c` — which is `Bin(+, Bin(+, a, b), c)` — comes out with BOTH operators
-## broken, not just the outer one.
+## The WRAPPED spelling of a binary-operator chain (§4.3.3, second bullet; TOOL-28, spec 1.12.0): the
+## chain breaks AFTER each of its operators — the operator ENDS the line and the next operand begins the
+## continuation line at the continuation indent (one level in). Never before: `-` is not a continuing
+## token (Grammar §2.6, SYN-12), so a line beginning with `- b` is a NEW statement and the old layout
+## changed what a `-` chain meant (#1918). A line ENDING in a binary operator is incomplete, so the
+## break never ends the statement, whichever the operator. The chain's first operand stays on the
+## opening line; the left spine is walked by recursion, so `a + b + c` — which is
+## `Bin(+, Bin(+, a, b), c)` — comes out with BOTH operators broken, not just the outer one.
 ##
 ## The parenthesization is the single-line arm's, character for character (`wrap_l` / `wrap_r` over
 ## `fmt_expr_prec`): the parser erases surface parens, so dropping one here would silently RE-GROUP the
 ## expression. A re-parse of the broken text rebuilds the identical left-leaning tree — grammar §2.6
-## continues a line whose successor begins with a continuing token, verified for `+ - * == and` — which
-## is what keeps the render idempotent.
+## continues a line that ends in a binary operator — which is what keeps the render idempotent.
 fmt_emit_bin_chain := fn(e : ptr(Expr), ind : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
   op := fmt_bin_op(e)
   l := fmt_bin_left(e)
@@ -3514,13 +3516,13 @@ fmt_emit_bin_chain := fn(e : ptr(Expr), ind : usize, in out sb : rt::StrBuf, src
     emit_fmt_expr(l, sb, src, a, decls)
     if wrap_l { push_str(sb, ")") }
   }
-  push_str(sb, "\n")
-  fmt_emit_spaces(sb, ind + 2)
   ## bind the str-returning `fmt_op` to a LOCAL before forwarding it — an inline user str-returning
   ## call as a `str` argument mis-lowers under the seed (drops the length / faults).
   sym := fmt_op(op)
-  push_str(sb, sym)
   push_str(sb, " ")
+  push_str(sb, sym)
+  push_str(sb, "\n")
+  fmt_emit_spaces(sb, ind + 2)
   rp := fmt_expr_prec(r)
   wrap_r := rp <= pp
   if wrap_r { push_str(sb, "(") }

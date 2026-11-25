@@ -1,12 +1,12 @@
-## e2e/fmt — §4.3.3, second bullet: a binary-operator CHAIN that overflows 100 columns breaks BEFORE
-## each of its operators, at the continuation indent (one level in), the operator BEGINNING the
-## continuation line. fmt used to emit any chain on one line however wide.
+## e2e/fmt — §4.3.3, second bullet: a binary-operator CHAIN that overflows 100 columns breaks AFTER
+## each of its operators (TOOL-28, spec 1.12.0), the operator ENDING the line and the next operand at
+## the continuation indent (one level in). fmt used to emit any chain on one line however wide.
 ##
 ## Three things are asserted at once. (1) The whole chain breaks, not just its outermost operator:
 ## `a + b + c` is `Bin(+, Bin(+, a, b), c)`, so a naive recursion would break only the outer `+` and
 ## leave `a + b` joined. (2) A chain that FITS is left alone — "a construct that fits at its indent is
-## written on one line". (3) The break is semantics-PRESERVING: grammar §2.6 continues a line whose
-## successor begins with a continuing token, so a re-parse must rebuild the identical left-leaning
+## written on one line". (3) The break is semantics-PRESERVING: grammar §2.6 continues a line that
+## ends in a binary operator, so a re-parse must rebuild the identical left-leaning
 ## tree — this fixture's exit status is the check, since a re-grouped chain of `and`/`==` over these
 ## values changes the answer.
 ##

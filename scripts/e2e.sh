@@ -9369,8 +9369,14 @@ fmt_test_has_all comptime_typeinfo_field_mutable 42 "mut x : u64"
 fmt_test_has_all fmt_wrap_100col 42 "  epsilon_value : u64," "    epsilon = 500000," \
     "    700000000," "    555555555555555555," "small_array_value := [1, 2, 3]" \
     "narrow := fn(a : u64, b : u64) -> u64 {"
-fmt_test_has_all fmt_wrap_binchain 42 "    and alpha2 == 2" "    and alpha6 == 6" \
-    "small_sum := alpha1 + alpha2" "  total_sum := wide("
+fmt_test_has_all fmt_wrap_binchain 42 "every_alpha_is_itself := alpha1 == 1 and" "    alpha2 == 2 and" \
+    "    alpha6 == 6" "small_sum := alpha1 + alpha2" "  total_sum := wide("
+## TOOL-28 (spec 1.12.0, #1918): the break comes AFTER the operator, for every operator. A `-` line start
+## would be a new statement (Grammar §2.6, SYN-12), so the formatted `-` chain must still run to 42.
+fmt_test_has_all fmt_wrap_chain_after_op 42 "xxxxxxxxxxxxxxxxxxxx := aaaaaaaaaaaaaaaaaaaa -" \
+    "    bbbbbbbbbbbbbbbbbbbbbbbbb -" "    ccccccccccccccccccccccc -" "    dddddddddddddddddddd" \
+    "yyyyyyyyyyyyyyyyyyyy := aaaaaaaaaaaaaaaaaaaa +" "zzzzzzzzzzzzzzzzzzzz := aaaaaaaaaaaaaaaaaaaa == 50 and" \
+    "wwwwwwwwwwwwwwwwwwww := aaaaaaaaaaaaaaaaaaaa < bbbbbbbbbbbbbbbbbbbbbbbbb or"
 ## Both spellings, so a fix cannot pass by always writing `mut`: the parser keeps only the POINTEE span
 ## for a sub-word bitcast target, so `mut` was absent from the AST and fmt wrote `ptr(u8)` for both —
 ## the same program today, a different SOURCE, and a build break the day pointer mutability is enforced.
@@ -9387,7 +9393,7 @@ run fmt_elseif_chain_stmt 42
 ## §4.2.3 caps the LINE, but the verdict only ever saw the construct: a parameter list that fits and a
 ## pending `-> R` that does not still overflows, and an inline value-`if` whose condition fits while
 ## ` { 42 } else { 1 }` pushes the line past 100 does too.
-fmt_test_has_all fmt_wrap_if_expr_cond 42 "    and bravo_counter == 1" "    and alpha_counter != 9 {" "    42" "  } else {" "    1"
+fmt_test_has_all fmt_wrap_if_expr_cond 42 "  if alpha_counter == 1 and" "    bravo_counter == 1 and" "    alpha_counter != 9 {" "    42" "  } else {" "    1"
 run fmt_wrap_if_expr_cond 42
 fmt_test_has_all fmt_wrap_params_ret_reserve 42 "  h : u64," ") -> u64 {"
 run fmt_wrap_params_ret_reserve 42
