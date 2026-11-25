@@ -534,6 +534,48 @@ tok_gap_has_newline := fn(pc : PC) -> bool {
   false
 }
 
+## Grammar §2.6 (SYN-12, spec 1.12.0) — does token `i` begin a FRESH line, one that does NOT continue
+## the previous line? The continuing tokens are a closed list, and `-`, `(`, `[` and `..` are not on it:
+## `-` and `..` are prefix forms, and `(` / `[` can begin a statement. So such a token at the start of a
+## line begins a new statement, never a binary `-`, a call / index postfix or a range tail of the line
+## before. Two conditions, both read from the source spans because the lexer emits no newline token:
+##   - the gap between token `i-1` and token `i` contains a newline (a trailing `#` comment on the
+##     previous line ends at that newline, so it changes nothing, as §2.6 says), and
+##   - token `i` is not inside an open `( … )` or `[ … ]`, where newlines are free (§2.6). The innermost
+##     unclosed bracket before `i` decides: a `{` (a block, an arm list) or none (module level) makes
+##     the line fresh. The backward walk runs only for a line-initial `-` `(` `[` `..`, which is rare.
+## Where §2.6 is silent this keeps the old reading: a blank or comment-only line between the two lines
+## (spec#178) is just more gap and decides nothing more than a single newline does.
+tok_line_fresh := fn(pc : PC, i : usize) -> bool {
+  if i == 0 { return false }
+  prev := tok_at(pc, i - 1)
+  curr := tok_at(pc, i)
+  mut p := prev.start + prev.len
+  mut nl := false
+  while p < curr.start {
+    if str_eq(str_at(pc.src + p, 1), "\n") { nl = true }
+    p += 1
+  }
+  if nl == false { return false }
+  ## token kinds: `(` 10, `)` 11, `{` 12, `}` 13, `[` 14, `]` 15
+  mut depth : i64 = 0
+  mut k := i
+  while k > 0 {
+    k -= 1
+    kk := tok_at(pc, k).kind
+    if kk == 11 or kk == 13 or kk == 15 { depth += 1 }
+    if kk == 10 or kk == 14 {
+      if depth == 0 { return false }
+      depth -= 1
+    }
+    if kk == 12 {
+      if depth == 0 { return true }
+      depth -= 1
+    }
+  }
+  true
+}
+
 ## Is the `(`-group AT THE CURSOR the head of a following BINDING (`(A, B) := m` / `(a, b) = v` /
 ## `(x) : T`) rather than a call-argument list applied to the expression just parsed? The lexer emits
 ## NO newline tokens, so the `(` that opens the next declaration/statement directly abuts the previous
@@ -1120,6 +1162,15 @@ parse_pat_alt := fn(in out pc : PC) -> ptr(mut Arm) {
     ## is half-open (wild 5, `lo <= x < hi`); `lo..=hi` is inclusive (wild 6, `lo <= x <= hi`) — the
     ## same two forms as range iteration (§5.4/§6), endpoints comptime-constant scalars.
     lit = pat_endpoint(pc)
+    ## `..` is not a continuing token (Grammar §2.6, SYN-12): a line beginning with it starts a NEW arm,
+    ## so the pattern on the line before has no `=>`. Refuse it here, located, rather than read the two
+    ## lines as one range (`..=` is a continuing token and still joins).
+    ## kind-literal-ok: token kinds are lexer integers; no named token-kind form exists yet (#1910)
+    if cur(pc).kind == 31 {
+      if tok_line_fresh(pc, pc.idx) {
+        zrr := reject_here(pc, "selfhost: a line beginning with `..` does not continue the previous line (Grammar §2.6, SYN-12), so the match arm pattern before it has no `=>`; write the range on one line (`lo..hi`)")
+      }
+    }
     if cur(pc).kind == 31 { pc.idx = pc.idx + 1; hi = pat_endpoint(pc); w = 5 }
     else if cur(pc).kind == 37 { pc.idx = pc.idx + 1; hi = pat_endpoint(pc); w = 6 }
   }
@@ -2131,7 +2182,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
     if tok_at(pc, jla).kind == 7 and tok_at(pc, jla + 1).kind == 0 {
       zpe := reject_eof(pc, "selfhost: a `::` must be followed by a path SEGMENT name - the input ends after it, so this qualified path is incomplete (a truncated file, a partial copy, or a bad merge)")
     }
-    if jla > pc.idx and tok_at(pc, jla).kind == 10 {
+    ## `a::f` then a line beginning with `(`: a fresh statement, not a call (Grammar §2.6, SYN-12).
+    mut qcall := false
+    ## kind-literal-ok: token kinds are lexer integers; no named token-kind form exists yet (#1910)
+    if jla > pc.idx and tok_at(pc, jla).kind == 10 { qcall = true }
+    if qcall {
+      if tok_line_fresh(pc, jla) { qcall = false }
+    }
+    if qcall {
         pc.idx = jla                      ## consume the `::segment …` chain (cursor now at `(`)
         callee_len := tseg_start + tseg_len - t.start   ## span covers the whole `a::b::…::f`
         pc.idx = pc.idx + 1               ## '('
@@ -2226,6 +2284,11 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       ## balanced-group lookahead only classifies a group whose following token is a binding operator.
       mut is_call := false
       if cur(pc).kind == 10 and paren_group_is_binding(pc) == false { is_call = true }
+      ## A `(` that begins a fresh line opens a NEW statement, not this name's argument list (Grammar
+      ## §2.6, SYN-12: `(` is not a continuing token).
+      if is_call {
+        if tok_line_fresh(pc, pc.idx) { is_call = false }
+      }
       ## `ident ( …args… )` — a call (kinds: 10 `(`, 11 `)`, 9 `,`), OR a struct
       ## construction `ident ( field = expr , … )` distinguished by an `=` (kind 21) after
       ## the first argument's field-name ident. A bare ident is a variable reference. The
@@ -2473,6 +2536,12 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
       if expr_is_lambda(base) { panic("selfhost: FN-6 — an immediately-invoked function value `(fn(...){...})(...)` is unsupported; bind it to a name first") }
     }
     while cur(pc).kind == 22 or cur(pc).kind == 14 or cur(pc).kind == 32 {
+      ## A `[` that begins a fresh line opens a NEW statement (an array literal), not an index of this
+      ## base (Grammar §2.6, SYN-12: `[` is not a continuing token).
+      ## kind-literal-ok: token kinds are lexer integers; no named token-kind form exists yet (#1910)
+      if cur(pc).kind == 14 {
+        if tok_line_fresh(pc, pc.idx) { break }
+      }
       ## `base ?` — the TRYABLE `?` operator (token kind 32). A postfix unary that wraps the
       ## base in `Expr::Try` (chains left-to-right with `.field`/`[idx]`, so `f()?` binds the
       ## `?` to the call). Lower checks the inner enum's discriminant: a failure (non-zero)
@@ -2519,6 +2588,14 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
         base = newnode(pc.arena, Expr.CompField(base, cfidx))
       } else {
       fld := cur(pc); pc.idx = pc.idx + 1 ## variant / field name
+      ## `E.V` / `recv.m` then a line beginning with `(`: a fresh statement, not a payload or an argument
+      ## list (Grammar §2.6, SYN-12: `(` is not a continuing token).
+      mut vparen := false
+      ## kind-literal-ok: token kinds are lexer integers; no named token-kind form exists yet (#1910)
+      if cur(pc).kind == 10 { vparen = true }
+      if vparen {
+        if tok_line_fresh(pc, pc.idx) { vparen = false }
+      }
       ## A `.<int>` access (`fld` is an int literal, kind 3): TUPLE INDEXING `t.N` — lowered as an
       ## element read `Index(base, Num(N))`, since a tuple is an N-word aggregate (reusing the array
       ## machinery). A real struct field is always an identifier, so a `.<int>` is unambiguous —
@@ -2532,7 +2609,7 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
       }
       ## `E.V(...)` — enum-variant construction (a `(` after the `.name`). The enum TYPE
       ## name span comes from the base `Var`. Parse 0/1/2 comma-separated payload args.
-      else if cur(pc).kind == 10 {
+      else if vparen {
         en := enum_type_span(base)
         pc.idx = pc.idx + 1               ## '('
         ## N comma-separated payload args into an arena-linked `Arg` list (general arity).
@@ -2978,9 +3055,15 @@ p_term := fn(in out pc : PC) -> ptr(mut Expr) {
 }
 
 ## expr := term { ('+' | '-') term }
+## A `-` that begins a fresh line is the prefix minus of a NEW statement, not this chain's subtraction
+## (Grammar §2.6, SYN-12: `-` is not a continuing token); `+` has no prefix form and always continues.
 p_expr := fn(in out pc : PC) -> ptr(mut Expr) {
     mut lhs := p_term(pc)
     while (cur(pc).kind == 16 or cur(pc).kind == 17) and not op_binding_head(pc) {
+      ## kind-literal-ok: token kinds are lexer integers; no named token-kind form exists yet (#1910)
+      if cur(pc).kind == 17 {
+        if tok_line_fresh(pc, pc.idx) { break }
+      }
       k := cur(pc).kind
       pc.idx = pc.idx + 1
       rhs := p_term(pc)
@@ -4174,6 +4257,14 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     iv := cur(pc); pc.idx = pc.idx + 1 ## loop-variable ident
     pc.idx = pc.idx + 1                 ## 'in'
     lo := p_or(pc)
+    ## `..` is not a continuing token (Grammar §2.6, SYN-12): on a fresh line it cannot be this header's
+    ## range tail, and the header before it has no `{`. Refuse located instead of guessing.
+    ## kind-literal-ok: token kinds are lexer integers; no named token-kind form exists yet (#1910)
+    if cur(pc).kind == 31 {
+      if tok_line_fresh(pc, pc.idx) {
+        zrf := reject_here(pc, "selfhost: a line beginning with `..` does not continue the previous line (Grammar §2.6, SYN-12), so this `for` header ends before its range; write `lo..hi` on the `for` line")
+      }
+    }
     if cur(pc).kind == 31 {
       ## RANGE form `for i in lo .. hi { … }` — the loop var is the integer index.
       pc.idx = pc.idx + 1               ## '..'
