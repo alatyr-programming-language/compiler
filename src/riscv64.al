@@ -2000,7 +2000,7 @@ rv_local_scan := fn(list : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut Stmt)
                 ## an ITERABLE for = the loop var's element words (rv_iter_stride, 1 for scalar) + a hidden index
                 ## word; a RANGE for = 1 word. Scalar stays 2 (stride 1 + 1) — frame layout byte-identical.
                 if unchecked bitcast(usize, fhi) == 0 { b = b + rv_iter_stride(fn_head, src, flo, a, decls) + 1 } else { b = b + 1 }
-              } else if unchecked bitcast(usize, fhi) == 0 {
+              } else if unchecked bitcast(usize, fhi) == 0 {   ## null-ok: #1938 — an iterable `For` carries a null `hi` (ast.al; not an Option)
                 ## #1330 — the loop var's name was bound earlier (Declarations §6.1): the var keeps that slot,
                 ## but the hidden index is this loop's own word (`rv_for_index_off`), never the earlier
                 ## binding's neighbour.

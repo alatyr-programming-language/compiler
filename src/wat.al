@@ -1528,7 +1528,7 @@ local_slot_scan := fn(list : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut Stm
               ## #1330 — when the loop var's name was bound earlier (Declarations §6.1), the var keeps that
               ## local, but the hidden index is this loop's own (`wat_for_index_local`), never the earlier
               ## binding's neighbour.
-              if stmt_same(first_assign_handle(fn_head, fns, fnl, src, a), Option.Some(sq)) { if unchecked bitcast(usize, fhi) == 0 { b = b + 2 } else { b = b + 1 } } else if unchecked bitcast(usize, fhi) == 0 { b = b + 1 }
+              if stmt_same(first_assign_handle(fn_head, fns, fnl, src, a), Option.Some(sq)) { if unchecked bitcast(usize, fhi) == 0 { b = b + 2 } else { b = b + 1 } } else if unchecked bitcast(usize, fhi) == 0 { b = b + 1 }   ## null-ok: #1938 — an iterable `For` carries a null `hi` (ast.al; not an Option)
               r := local_slot_scan(fb, fn_head, target, b, src, a, decls)
               if r < 0 { result = r ; found = true } else { b = r ; s = nx }
             }
