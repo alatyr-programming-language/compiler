@@ -6419,7 +6419,10 @@ emit_rv_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, a
         st := deref(stmt_p(Stmt, sq))
         match st {
           Stmt::Assign(ns, nl, v, nx) => {
-            refuse_deref_arr_copy(v, src, ns, nl, rv_local_ann_span(body_head, src, ns, nl, a))  ## #1809/#1811 — a whole fixed-array deref copy is refused here, located
+            pn := deref_arr_ptr_name(v)  ## #1828 — `t := deref(p)` takes its array type from p's annotation
+            mut pann := CSpan(s = 0, n = 0)
+            if pn.n != 0 { pann = rv_local_ann_span(body_head, src, pn.s, pn.n, a) }
+            refuse_deref_arr_copy(v, src, ns, nl, rv_local_ann_span(body_head, src, ns, nl, a), pann)  ## #1809/#1811 — a whole fixed-array deref copy is refused here, located
             ## FLAT: a StructLit constructs fields; an EnumLit constructs {disc, payload…}; else scalar store.
             ## #1502 — a DECLARATION inside a nested block (this list is not the function body) of a name that
             ## is a module data binding would store into the binding's `.data` label (the paths below prefer
