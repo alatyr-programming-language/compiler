@@ -3316,6 +3316,32 @@ slot_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> i64 {
   res
 }
 
+## #1289 — copy the aggregate element at %rax into an iterable `for`'s loop var at `vslot`: `img`
+## bytes of a byte-tier element's image (Types §6.1), byte `k` at `-((vslot+1)*8 - k)(%rbp)` as
+## `emit_elem_copy_in` lays it, or else `stride` words, word `k` at `k*8(%rax)` into slot `vslot - k`.
+emit_for_agg_elem_copy := fn(in out sb : strbuf::StrBuf, vslot : i64, stride : usize, img : i64) {
+  if img > 0 {
+    push_str(sb, "  movq %rax, %r13\n")
+    mut k : i64 = 0
+    while k < img {
+      push_str(sb, "  movzbq ")
+      push_int(sb, k)
+      push_str(sb, "(%r13), %rax\n  movb %al, -")
+      push_int(sb, (vslot + 1) * 8 - k)
+      push_str(sb, "(%rbp)\n")
+      k += 1
+    }
+    return
+  }
+  for k in 0..stride {
+    push_str(sb, "  movq ")
+    push_int(sb, i64(k * 8))
+    push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
+    push_int(sb, i64((vslot - i64(k) + 1) * 8))
+    push_str(sb, "(%rbp)\n")
+  }
+}
+
 ## The SHADOWING half of `slot_of` (#589): does the name `[s, s+n)` have a frame slot — a bind, a
 ## parameter or a local — declared STRICTLY BEFORE source offset `use_s`? `slot_of` answers "is this
 ## name a slot" for the WHOLE function, which is exactly what `emit_gas`' `Expr::Var` arm asks before
@@ -8382,7 +8408,9 @@ emit_arr_slice_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LC
       push_str(sb, "  pushq %rax\n")
       emit_gas(lo, sb, cx, a, nl)             ## lo → stack
       push_str(sb, "  popq %rcx\n  imulq $")
-      if is_byte_array_eek(aent.eek) { push_int(sb, 1) } else { push_int(sb, i64(aent.estride) * 8) }
+      ## #1289 — the element's own byte stride (Types §6.4): a byte-tier struct element is
+      ## `layout_elem_stride_bytes` apart, not `estride` words (`slot_elem_stride_bytes`, as `u[i]` reads it).
+      if is_byte_array_eek(aent.eek) { push_int(sb, 1) } else { push_int(sb, slot_elem_stride_bytes(aent, cx.decls, cx.src, a)) }
       push_str(sb, ", %rcx\n  popq %rax\n  addq %rcx, %rax\n  pushq %rax\n")   ## ptr = elem0 + lo*stride*8
       emit_gas(hi, sb, cx, a, nl)             ## hi → stack
       emit_gas(lo, sb, cx, a, nl)             ## lo → stack
@@ -8419,7 +8447,9 @@ emit_array_slice_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::Str
       push_str(sb, "  pushq %rax\n")
       emit_gas(lo, sb, cx, a, nl)             ## lo → stack
       push_str(sb, "  popq %rcx\n  imulq $")
-      if is_byte_array_eek(aent.eek) { push_int(sb, 1) } else { push_int(sb, i64(aent.estride) * 8) }
+      ## #1289 — the element's own byte stride (Types §6.4): a byte-tier struct element is
+      ## `layout_elem_stride_bytes` apart, not `estride` words (`slot_elem_stride_bytes`, as `u[i]` reads it).
+      if is_byte_array_eek(aent.eek) { push_int(sb, 1) } else { push_int(sb, slot_elem_stride_bytes(aent, cx.decls, cx.src, a)) }
       push_str(sb, ", %rcx\n  popq %rax\n  addq %rcx, %rax\n  movq %rax, -")   ## ptr = elem0 - lo*stride*8
       push_int(sb, (base + 1) * 8)
       push_str(sb, "(%rbp)\n")
@@ -29524,6 +29554,8 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             mut glob_stride := 1     ## the global array's element width in words
             mut agg_n := 0           ## element count (parsed from the `[T; N]` annotation)
             mut agg_stride : usize = 0      ## element width in words
+            mut agg_elem_sb : i64 = 0       ## #1289 — a byte-tier element's §6.4 byte stride (0: `agg_stride` words)
+            mut agg_img_bytes : i64 = 0     ## #1289 — and its byte image, copied into the loop var (0: word copy)
             mut b_snl := 0           ## the var array's static scalar/float count (bent.snl)
             mut b_estride := 1       ## the var array's element stride in words (bent.estride)
             mut b_is_ref := false
@@ -29688,6 +29720,20 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 agg_stride = bent.estride
                 if bent.is_param == false or bent_slice_param_elem.n == 0 { b_is_ref = false }
               }
+              ## #1289 — a BYTE-tier struct element (Types §6.1, e.g. `struct { a : u8, b : u8 }`) of an array
+              ## local or a view of one sits `layout_elem_stride_bytes` apart (§6.4), not `estride` words, and
+              ## its value is that byte image: the loop stepped a word per element and read past the elements.
+              ## The same stride and image copy `xs[i]` and `e := xs[i]` use (`slot_elem_stride_bytes`,
+              ## `emit_elem_copy_in`); a parameter's element keeps its word path.
+              if (is_agg_arr or is_agg_slice) and not bent.is_param and bent.eek == 2 and bent.snl != 0 and std_array_elem_byte_tier(cx.decls, cx.src, bent.sns, bent.snl, a) {
+                ## kind-literal-ok: #1936 — `std_copy_kind` answers an integer kind until it becomes an enum
+                if std_copy_kind(cx.decls, cx.src, bent.sns, bent.snl, a) != 1 {
+                  lower_show_src_line(cx.src, fns)
+                  panic("selfhost: `for` over a byte-layout element array whose element is outside the byte image copier's domain (#1289) — index it instead. [fail-loud guard: a word copy would read the neighbouring element]")
+                }
+                agg_elem_sb = slot_elem_stride_bytes(bent, cx.decls, cx.src, a)
+                agg_img_bytes = i64(std_copy_image_bytes(cx.decls, cx.src, bent.sns, bent.snl, a))
+              }
               ## #1287 — a fixed-array PARAMETER `xs : [T; N]` (`bind_param`'s array shape: ek 5, is_ref).
               ## Its slot holds the caller's element-0 pointer itself, not a pointer to a `{ptr, len}`
               ## block, and it has no length word at all: its length is the static N of its type. Read as
@@ -29703,6 +29749,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 }
               }
             }
+            if agg_elem_sb == 0 { agg_elem_sb = i64(agg_stride * 8) }   ## #1289: the word-tier stride, unchanged
             ## `s` is a Slice `{ptr, len}`. A by-VALUE local holds ptr @ slot `B`, len @ slot `B+1`. A by-REF
             ## struct PARAM (`is_ref`) holds a POINTER `P` @ slot `B` to the caller's Slice, whose fields ride
             ## the down-growing convention: ptr (field 0) at `(P)`, len (field 1) at `-8(P)`.
@@ -29818,15 +29865,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               push_str(sb, "(%rbp), %rax\n  movq -")
               push_int(sb, i64((islot + 1) * 8))
               push_str(sb, "(%rbp), %rcx\n  imulq $")
-              push_int(sb, i64(agg_stride * 8))
+              push_int(sb, agg_elem_sb)
               push_str(sb, ", %rcx\n  addq %rcx, %rax\n")
-              for k in 0..agg_stride {
-                push_str(sb, "  movq ")
-                push_int(sb, i64(k * 8))
-                push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
-                push_int(sb, i64((vslot - i64(k) + 1) * 8))
-                push_str(sb, "(%rbp)\n")
-              }
+              emit_for_agg_elem_copy(sb, vslot, agg_stride, agg_img_bytes)   ## #1289
             } else if is_agg_slice {
               ## element[__i] of a struct/enum slice: local VIEW has data ptr inline; PARAM points to a caller
               ## block whose word 0 is the data ptr. Then copy `stride` words into the loop var.
@@ -29842,15 +29883,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               push_str(sb, "  movq -")
               push_int(sb, i64((islot + 1) * 8))
               push_str(sb, "(%rbp), %rcx\n  imulq $")
-              push_int(sb, i64(agg_stride * 8))
+              push_int(sb, agg_elem_sb)
               push_str(sb, ", %rcx\n  addq %rcx, %rax\n")
-              for k in 0..agg_stride {
-                push_str(sb, "  movq ")
-                push_int(sb, i64(k * 8))
-                push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
-                push_int(sb, i64((vslot - i64(k) + 1) * 8))
-                push_str(sb, "(%rbp)\n")
-              }
+              emit_for_agg_elem_copy(sb, vslot, agg_stride, agg_img_bytes)   ## #1289
             } else if is_arr {
               ## x = element[__i], read INLINE from the frame: &element0 = -(bslot+1)*8(%rbp), and
               ## element `__i` is `__i * estride` words LOWER (the frame grows DOWN). estride*8 bytes.

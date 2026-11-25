@@ -12882,6 +12882,10 @@ run slice_struct_local_arg 42
 run_x86 issue1181_nested_for_slice_len 42
 ## #1182: an ANNOTATED struct-element view local `xs : Slice(P) = t[0..2]` reads as a local, not a param
 run issue1182_annotated_view_local 42
+## #1289: a range view with a non-zero low bound over a byte-tier struct array (2-byte elements) starts
+## at element `lo`, read, written and iterated (x86_64 at da8f96af: 1 and 1, the base scaled by a word)
+run issue1289_byte_tier_view_lo 42
+run issue1289_byte_tier_view_for 42
 ## its review row: a struct-element fixed-array PARAMETER keeps the by-value read (139 on the PR's first
 ## head f9a2e2d4; 132 before #1287, which bounds the loop by the static N).
 run issue1182_for_array_param_agg 42
