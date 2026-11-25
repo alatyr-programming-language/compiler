@@ -59,7 +59,7 @@
 # ----------------------------------------------------------
 #   literal   every sibling pattern in the same `match` is an integer/char/string literal or a
 #             range: a non-enumerable scrutinee, where `_` is legitimate. FOUR arms tree-wide
-#             (`src/comptime.al` once, `src/lower.al` three times — the register-name tables).
+#             (`src/ast_fold.al` once, `src/lower.al` three times — the register-name tables).
 #   comptime  a `comptime match typeinfo(T)` kind dispatch, or the generic `T.(v)` comptime-variant
 #             pattern `lib/base/derive.al` uses. The kind set is closed, but it is not a project
 #             `enum` declaration this scanner can name, so it is exempt AND reported by count, not

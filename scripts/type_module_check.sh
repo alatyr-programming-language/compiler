@@ -53,7 +53,7 @@ for d in "${DIRS[@]}"; do
     rel="${f#"$d"/}"; mod="${rel%.al}"; mod="${mod//\//__}"
     # EVERY module is registered, not only the ones that declare a type: `<mod>` is what splits a
     # mangled instance symbol, and most instances live in modules that declare no type at all
-    # (`comptime__node_ptr__Arg`, `lower_ctx__node_ptr__Expr`). Without this the scan silently
+    # (`ast_fold__node_ptr__Arg`, `lower_ctx__node_ptr__Expr`). Without this the scan silently
     # inspected 18 of the tree's 25 instances — the exact way this gate could have gone half-vacuous.
     printf 'M %s\n' "$mod"
     gawk -v mod="$mod" '
