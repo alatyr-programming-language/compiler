@@ -33381,12 +33381,45 @@ fill_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
+## #1829 — the declaration a bare type name `[s, s+n)` denotes where its text is spelled (Modules §3,
+## Declarations §5): the spelling module's own, else its NEAREST ancestor's, by the resolvers' one
+## ranking rule `lower_layout::type_mod_rank_from`, so this picks what they will resolve. None for a
+## span with no spelling module (synthetic, or outside the file table), a name no candidate on that
+## chain declares, or two candidates at the best rank (left to the resolvers' located refusal).
+scope_type_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> Option(usize) {
+  mut res : Option(usize) = Option(usize).None
+  match lower_layout::spelling_module_at(src, s) {
+    Some(sm) => {
+      mut best : i64 = -1
+      mut tie := false
+      cnt := rt::vec_len(deref(decls))
+      for i in 0..cnt {
+        d := deref(lower_ctx::decl_get(decls, i))
+        if lower_ctx::streq(src, d.name_start, d.name_len, s, n) {
+          rk := lower_layout::type_mod_rank_from(src, d.mod_start, d.mod_len, sm.s, sm.l)
+          if rk > best {
+            best = rk
+            tie = false
+            res = Option(usize).Some(i)
+          } else if rk == best and rk >= 0 {
+            tie = true
+          }
+        }
+      }
+      if tie { return Option(usize).None }
+    }
+    None => {}
+  }
+  res
+}
+
 ## #987 — the type arguments `fill_inferred_targs` may write: only those whose explicit call is known to
 ## lower right. A builtin scalar or `str` that no declaration shadows, or a bare name that exactly ONE
 ## declaration in the program carries, a non-generic struct or enum. Not a generic application
 ## (`Option(S)`, `Result(S, u64)`: the explicit `at(Option(S), …)` itself answers wrong) and not a path
-## (`geo::S`), nor a name two modules declare — the receiver's type text may sit in another module's
-## source, where the bare name means another type than at the call (`geo::S` vs main's `S`: 63 for 42).
+## (`geo::S`). A name two modules declare only when §3 picks one from the module whose text spells it
+## (#1829, `scope_type_decl`): the receiver's type text may sit in another module's source, and the
+## written `Var` keeps that span, so the resolvers read the bare name in the module that wrote it.
 ## Anything else keeps the implicit call and the parent's behaviour, a located refusal among them.
 fill_targ_plain := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
   if n == 0 { return false }
@@ -33410,7 +33443,15 @@ fill_targ_plain := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize)
     }
   }
   if builtin { return hits == 0 }
-  if hits != 1 { return false }
+  if hits == 0 { return false }
+  ## #1829 — declining a name two modules declare kept the implicit call, whose result no consumer
+  ## types: `v[1].b` over `Vec(Node)` read the constant 0 once another module declared a `Node`.
+  if hits > 1 {
+    match scope_type_decl(decls, src, s, n) {
+      Some(oi) => { hi = oi }
+      None => { return false }
+    }
+  }
   if deref(lower_ctx::decl_get(decls, hi)).is_generic { return false }
   ## the one declaration is the struct or enum the resolvers name (asked only once it is unique, so
   ## their located ambiguity refusal cannot fire here)
