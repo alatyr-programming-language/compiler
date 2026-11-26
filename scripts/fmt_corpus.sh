@@ -81,6 +81,11 @@ ulimit -c 0
 # enumerable it immediately named three stale entries that the `case` had hidden: `FMT-REFUSE
 # embed_missing` and both `while_labels` rows.)
 ALLOW=(
+  ## #654 — `alatyr fmt` deletes every `module` directive. This fixture's two `X`s live in two modules,
+  ## so the flattened text redeclares `X` and names a module `m` that no longer exists: the formatted
+  ## program cannot compile. Unseen until #1567, because the source itself crashed the x86_64 build
+  ## (NOCOMPILE-BASE). Delete this entry with the #654 fix.
+  "COMPILEFAIL issue926_const_qualified_same_name_ok"
 )
 allowed() { # class rel -> 0 if this exact (class, fixture) pair is a known, reasoned residual
   local k="$1 $2" e
