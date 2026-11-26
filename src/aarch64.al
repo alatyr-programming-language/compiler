@@ -8420,11 +8420,11 @@ emit_a64_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, 
               ## iteration COPIES the estrideF-word element into the loop var's slots (`p.field` then reads
               ## localok). Element base = ARRAY: x29+aoff + i*estrideF*8; VIEW: [x29,aoff] (word0 ptr) + same.
               estrideF := a64_iter_stride(body_head, src, flo, a, decls)
-              ## #1289 — a byte-tier struct iterable: the arms below copy whole words per element, so refuse it,
-              ## located, instead of reading the wrong bytes.
+              ## #1289 — a byte-tier struct iterable: the arms below copy whole words per element, so the loop
+              ## traps on entry (a fail-loud stub, #1194) instead of reading the wrong bytes. A trap, not a
+              ## compile refusal: the cross-target sweep holds a twin that emits nothing to be WRONG.
               if a64_iter_byte_tier(body_head, src, flo, a, decls, 0) {
-                lower::ctfold::lower_show_src_line(src, fns)
-                panic("aarch64: `for` over an array or view of byte-tier struct elements is not supported yet (#1194) — the loop would copy whole words instead of each element's bytes")
+                push_str(sb, "  brk #0 // unsupported for over byte-tier struct elements (#1194)\n")
               }
               mut isaggarr := false
               if isarr and estrideF > 1 { isaggarr = true }
