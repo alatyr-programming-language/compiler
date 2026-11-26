@@ -23,7 +23,7 @@ assign_is_reassign := ast::assign_is_reassign
 local_is_comptime := ast::binding_is_comptime
 (Expr, Stmt, bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 (SVec, CSpan, arg_expr_at, var_name_span) := lower_ctx
-(base_type_name, enum_decl_of, enum_elem_words, enum_inst_words, is_niche_folded, pointee_agg_kind, variant_bind_pointee, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
+(base_type_name, enum_decl_of, enum_elem_words, enum_inst_words, is_niche_folded, pointee_agg_kind, variant_bind_pointee, is_union_decl, struct_decl_of, struct_words, targ_unalias, union_words, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
@@ -150,6 +150,20 @@ retype_ptr_copy := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize, 
 unname_slot := fn(slots : ptr(SVec), k : usize) {
   ue := deref(svec_at(SlotEntry, slots, k))
   deref(svec_at(SlotEntry, slots, k)) = SlotEntry(ns = 0, nl = 0, off = ue.off, sns = ue.sns, snl = ue.snl, ek = ue.ek, estride = ue.estride, eek = ue.eek, is_ref = ue.is_ref, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l, pps = ue.pps, ppl = ue.ppl, is_param = ue.is_param)
+}
+
+## #1827 — the type a local's annotation `[ts, ts+tl)` NAMES: a bare type parameter of the instance
+## being lowered is its argument (`T` at `T = ptr(Node)`), and an alias is what it stands for
+## (`P := ptr(Node)`, Declarations §1.3, through `targ_unalias`). Any other spelling comes back unchanged,
+## so a `ptr(Node)` written out keeps its own span.
+ann_named_type := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), sub : ptr(Subst)) -> CSpan {
+  mut s := ts
+  mut n := tl
+  if sub.gpl != 0 and sub.itl != 0 and lower_ctx::streq(src, s, n, sub.gps, sub.gpl) { s = sub.its ; n = sub.itl }
+  else if sub.gpl2 != 0 and sub.itl2 != 0 and lower_ctx::streq(src, s, n, sub.gps2, sub.gpl2) { s = sub.its2 ; n = sub.itl2 }
+  else if sub.gpl3 != 0 and sub.itl3 != 0 and lower_ctx::streq(src, s, n, sub.gps3, sub.gpl3) { s = sub.its3 ; n = sub.itl3 }
+  u := targ_unalias(decls, src, s, n)
+  CSpan(s = u.s, n = u.n)
 }
 
 pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), sub : ptr(Subst), ctslots : ptr(SVec)) {
@@ -830,7 +844,12 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
                   ## resolve through the pointer (the down-growing pointee layout) rather than as a bare
                   ## scalar whose fields collapse onto p's own slot. Preserves the pointee type that a
                   ## bitcast-to-`ptr(Struct)` established. A non-struct-pointer annotation stays ek 0.
-                  pps := ptr_pointee_struct_span(src, lts.s, lts.n, decls, a)
+                  ## #1827 — read the pointee off the type the annotation NAMES: a bare type parameter
+                  ## (`q : T` at `T = ptr(Node)`) through this instance, an alias (`q : P`, `P := ptr(Node)`)
+                  ## through its declaration. Read off the spelling, both bound `q` as a scalar and
+                  ## `deref(q).b` lowered to the constant 0.
+                  pty := ann_named_type(src, lts.s, lts.n, decls, sub)
+                  pps := ptr_pointee_struct_span(src, pty.s, pty.n, decls, a)
                   ## A DECLARED `x : f64 = …` / `x : f32 = …` local binds as a FLOAT slot (ek 9) so a later
                   ## `u64(x)` TRUNCATES the float instead of reading its raw IEEE bits as an integer. The
                   ## value-driven classification above misses it when the initializer is an INDIRECT call
@@ -839,7 +858,7 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
                   ## classified above, so this reclassifies nothing that built before → fixpoint-neutral.
                   ltn := str_at((src + lts.s), lts.n)
                   if ltn == "f64" or ltn == "f32" { bind_float_slot(slots, src, ns, nl) } else {
-                    pes := ptr_pointee_enum_span(src, lts.s, lts.n, decls)
+                    pes := ptr_pointee_enum_span(src, pty.s, pty.n, decls)
                     if pps.n != 0 { bind_ptrstruct_slot(slots, src, ns, nl, pps.s, pps.n) }
                     else if pes.n != 0 { bind_ptrenum_slot(slots, src, ns, nl, pes.s, pes.n) }
                     else { bind_slot_typed(slots, src, ns, nl, lts.s, lts.n) }
