@@ -12893,6 +12893,10 @@ run_x86 issue1181_nested_for_slice_len 42
 run issue1182_annotated_view_local 42
 run issue1243_call_elem_array 75
 run issue1243_call_elem_wide 27
+## #1289: a range view with a non-zero low bound over a byte-tier struct array (2-byte elements) starts
+## at element `lo`, read, written and iterated (x86_64 at da8f96af: 1 and 1, the base scaled by a word)
+run issue1289_byte_tier_view_lo 42
+run issue1289_byte_tier_view_for 42
 ## its review row: a struct-element fixed-array PARAMETER keeps the by-value read (139 on the PR's first
 ## head f9a2e2d4; 132 before #1287, which bounds the loop by the static N).
 run issue1182_for_array_param_agg 42
