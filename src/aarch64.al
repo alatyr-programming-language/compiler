@@ -7310,7 +7310,10 @@ emit_a64_stmts := fn(list_head : Option(ptr(mut Stmt)), in out sb : rt::StrBuf, 
         st := deref(stmt_p(Stmt, sq))
         match st {
           Stmt::Assign(ns, nl, v, nx) => {
-            refuse_deref_arr_copy(v, src, ns, nl, a64_local_ann_span(body_head, src, ns, nl, a))  ## #1809/#1811 — a whole fixed-array deref copy is refused here, located
+            pn := deref_arr_ptr_name(v)  ## #1828 — `t := deref(p)` takes its array type from p's annotation
+            mut pann := CSpan(s = 0, n = 0)
+            if pn.n != 0 { pann = a64_local_ann_span(body_head, src, pn.s, pn.n, a) }
+            refuse_deref_arr_copy(v, src, ns, nl, a64_local_ann_span(body_head, src, ns, nl, a), pann)  ## #1809/#1811 — a whole fixed-array deref copy is refused here, located
             ## FLAT (no nesting): a StructLit constructs fields into p's slots; an EnumLit constructs
             ## {disc, payload…}; anything else is the scalar store (PARAM > GLOBAL > LOCAL). Guards
             ## (`isslit`/`iselit`/`useframe`) keep the paths disjoint.

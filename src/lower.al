@@ -6691,6 +6691,31 @@ balanced_type_span := fn(src : ptr(u8), s : usize) -> CSpan {
   CSpan(s = s, n = p - s)
 }
 
+## #1828 — the whole pointee of a pointer PARAMETER whose pointee is a fixed array, `p : ptr([T; N])`,
+## else {0,0}. The parser records a parameter's pointee by its first token (`Param.pps`/`ppl`), which
+## for an array pointee is the bare `[`: `is_view_type` read that as a slice `[T]`, so the parameter
+## was bound as a pointer to a two-word view and `t := deref(p)` took element 0 as a data pointer and
+## element 1 as a length. Widen the `[` to its balanced span (it ends at the `)` closing `ptr(`) and
+## answer it when a `;` at bracket depth 1 makes it a fixed array (Types §6.4); a slice `[T]` keeps the
+## view path.
+ptr_param_arr_pointee := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
+  if n != 1 or str_at((src + s), 1) != "[" { return CSpan(s = 0, n = 0) }
+  bal := balanced_type_span(src, s)
+  mut te := s + bal.n
+  while te > s and lower_ctx::slice_scan_ws(src, LOWER_SRC_N, te - 1) { te = te - 1 }
+  if te - s < 2 or str_at((src + te - 1), 1) != "]" { return CSpan(s = 0, n = 0) }
+  mut depth : usize = 0
+  mut i := s
+  while i < te {
+    c := str_at((src + i), 1)
+    if c == "[" { depth += 1 }
+    else if c == "]" { if depth > 0 { depth -= 1 } }
+    else if c == ";" and depth == 1 { return CSpan(s = s, n = te - s) }
+    i = i + 1
+  }
+  CSpan(s = 0, n = 0)
+}
+
 ## #1181 — refuse, at `at`, a `Slice(T)` element type `s..s+n` that `byte_view_elem` does not take.
 reject_wide_slice_elem := fn(src : ptr(u8), s : usize, n : usize, at : usize) {
   if n > 7 and str_at((src + s), 6) == "Slice(" and byte_view_elem(src, s, n) == false {
@@ -7034,6 +7059,36 @@ deref_arr_type := fn(src : ptr(u8), ns : usize, nl : usize, decl : CSpan) -> CSp
   decl
 }
 
+## #1828 — the type the copy reads for an INFERRED declaration `t := deref(p)` with `p : ptr([T; N])`.
+## Memory §4.3 makes `deref(p)` in a value context load the whole place, and Types §6.4 makes a `[T; N]`
+## value its `N` elements, so `t` is the whole array: the type is `p`'s pointee, `pointee` here (the
+## caller's answer for it, {0,0} when it has none). Without this `t` bound one word: `t.len` read a frame
+## slot nothing wrote and `v : [u64; 2] = t` repeated the one word (40 or 80 where 42 was due). Anything
+## else answers `deref_arr_type`'s own answer, so a binding with its own `: T`, a reassignment, and a
+## pointee that is not a fixed array keep their paths.
+deref_arr_decl_type := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decl : CSpan, pointee : CSpan) -> CSpan {
+  dt := deref_arr_type(src, ns, nl, decl)
+  if dt.n != 0 or pointee.n == 0 { return dt }
+  if not assign_is_decl(src, ns, nl) or not is_deref_value(v) { return dt }
+  core := deref_arr_ann_core(src, pointee)
+  if core.n < 2 or str_at((src + core.s), 1) != "[" { return dt }
+  pointee
+}
+
+## The pointer NAME `p` of a value `deref(p)` (bare or under `unchecked`), else {0,0}.
+pub deref_arr_ptr_name := fn(v : ptr(Expr)) -> CSpan {
+  if not is_deref_value(v) { return CSpan(s = 0, n = 0) }
+  var_name_span(deref_inner_expr(deref_arr_value(v)))
+}
+
+## x86_64's answer for `deref_arr_decl_type`'s `pointee`: the pointee its frame table records for the
+## pointer local or parameter `p` of `deref(p)` (an annotation, or the preserved `bitcast(ptr(T), …)`).
+x86_deref_arr_pointee := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan {
+  pv := deref_arr_ptr_name(v)
+  if pv.n == 0 or slot_of(slots, src, pv.s, pv.n) < 0 { return CSpan(s = 0, n = 0) }
+  slot_ptr_pointee_span(slots, src, pv.s, pv.n)
+}
+
 ## The SHAPE alone: the value is a `deref(…)` and `ats` is a fixed array `[T; …]`, whatever its length
 ## is written as. Shared by the x86_64 copy below and the twins' refusal (`refuse_deref_arr_copy`), so no
 ## length form can fall through to the one-word store (a slice view `[T]` has no top-level `;`).
@@ -7153,9 +7208,11 @@ deref_arr_len := fn(src : ptr(u8), ats : CSpan) -> Option(u64) {
 ## reserved the block and moved ONE word into it, a wrong value masked only by an unrelated trap. Each
 ## twin asks this at every assignment it emits, passing its own answer for the target's declared type
 ## (`decl`, the whole annotation: `deref_arr_shape` reads an array past its prefix attributes), so the declaration and the reassignment are refused at compile time, located, on all
-## three alike.
-pub refuse_deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decl : CSpan) {
-  dt := deref_arr_type(src, ns, nl, decl)
+## three alike. `pann` is the twin's answer for the declared type of the pointer `p` of `deref(p)`
+## (`deref_arr_ptr_name`), so an inferred declaration `t := deref(p)` over `p : ptr([T; N])` is refused
+## too rather than trapping at run time (#1828).
+pub refuse_deref_arr_copy := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decl : CSpan, pann : CSpan) {
+  dt := deref_arr_decl_type(v, src, ns, nl, decl, ptr_ann_pointee(src, pann.s, pann.n))
   if not deref_arr_shape(v, src, dt) and not (is_deref_value(v) and deref_arr_attr_unread(src, dt)) { return }
   lower_show_src_line(src, ns)
   panic("selfhost: aarch64, riscv64 and wasm do not yet copy a fixed array out of a pointer (`v : [T; N] = deref(p)` or `v = deref(p)`, #1811): refused rather than moving one word of it")
@@ -14281,6 +14338,16 @@ deref_store_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
   return 1
 }
 
+## The pointee `T` of a pointer type spelled `ptr(T)` or `ptr(mut T)` at `[ts, ts+tn)`, else {0,0}. The one
+## reading of a pointer annotation's pointee, shared by `slot_ptr_pointee_span` and the twins' refusal of
+## an inferred whole-array copy (`refuse_deref_arr_copy`, #1828).
+ptr_ann_pointee := fn(src : ptr(u8), ts : usize, tn : usize) -> CSpan {
+  if tn < 5 or str_at((src + ts), 4) != "ptr(" { return CSpan(s = 0, n = 0) }
+  mut ps := ts + 4
+  mut pl := tn - 5
+  if pl > 4 and str_at((src + ps), 4) == "mut " { ps = ps + 4 ; pl = pl - 4 }
+  CSpan(s = ps, n = pl)
+}
 
 ## Recover the pointee name of a pointer local. An annotated local is covered by `local_type_span`;
 ## an inferred local needs the source spelling of the preserved `bitcast(ptr(T), …)` target because
@@ -14304,15 +14371,7 @@ slot_ptr_pointee_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usi
   if ent.ek == 0 and ent.ppl != 0 { return CSpan(s = ent.pps, n = ent.ppl) }
   if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return CSpan(s = 0, n = 0) }
   lts := local_type_span(src, ent.ns, ent.nl)
-  if lts.n != 0 {
-    if str_at((src + lts.s), 4) == "ptr(" {
-      mut ps := lts.s + 4
-      mut pl := lts.n - 5
-      if pl > 4 and str_at((src + ps), 4) == "mut " { ps = ps + 4 ; pl = pl - 4 }
-      return CSpan(s = ps, n = pl)
-    }
-    return CSpan(s = 0, n = 0)
-  }
+  if lts.n != 0 { return ptr_ann_pointee(src, lts.s, lts.n) }
   mut p := ent.ns + ent.nl
   end := LOWER_SRC_N
   while p < end and lower_ctx::slice_scan_ws(src, end, p) { p = p + 1 }
@@ -30593,6 +30652,14 @@ bind_param_shape := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : p
       ## like any scalar param.
       off := svec_len(ptr(slots))
       svec_push(slots, SlotEntry(ns = pm.ns, nl = pm.nl, off = off, sns = 0, snl = 0, ek = 8, estride = 1, eek = 0, is_ref = true))
+    } else if str_at((src + pts), ptl) == "ptr" and ptr_param_arr_pointee(src, ppn_s, ppn_l).n != 0 {
+      ## #1828 — `p : ptr([T; N])`: the one-word scalar pointer the fallback below binds, plus the WHOLE
+      ## pointee in `pps`/`ppl`, which `slot_ptr_pointee_span` reads first. It is the answer an annotated
+      ## local `p : ptr([T; N])` already gives, so `t := deref(p)` copies the array (`deref_arr_decl_type`)
+      ## instead of the view branch below binding `p` as a pointer to a `[T]` pair off the bare `[`.
+      fap := ptr_param_arr_pointee(src, ppn_s, ppn_l)
+      off := svec_len(ptr(slots))
+      svec_push(slots, SlotEntry(ns = pm.ns, nl = pm.nl, off = off, sns = bs, snl = bl, ek = 0, estride = 1, eek = 0, is_ref = false, tmod_s = 0, tmod_l = 0, pps = fap.s, ppl = fap.n))
     } else if str_at((src + pts), ptl) == "ptr" and is_view_type(src, ppn_s, ppn_l) {
       ## POINTER-TO-VIEW param `s : ptr(str)` / `s : ptr([T])` (Stdlib §3.5/§3.6 — a `str` is the same
       ## two-word `{ptr, len}` pair a slice is; Memory §4.1 makes `deref(s)` an ordinary read through it).

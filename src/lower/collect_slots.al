@@ -498,10 +498,11 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               ## emission-neutral way to keep that fix to one slice.
               pps := addr_ptrptr_struct_span(v, ptr(slots), src)
               bind_ptrptrstruct_slot(slots, src, ns, nl, pps.s, pps.n)
-            } else if is_deref_arr_copy(v, src, ns, deref_arr_type(src, ns, nl, CSpan(s = 0, n = 0))) {
+            } else if is_deref_arr_copy(v, src, ns, deref_arr_decl_type(v, src, ns, nl, CSpan(s = 0, n = 0), x86_deref_arr_pointee(v, ptr(slots), src))) {
               ## #1809 — `v : [T; N] = deref(p)`: reserve `v` as the WHOLE `N`-element block; the emitter
               ## copies every element out of the pointee (`deref_arr_copy` is the one shape both read).
-              match deref_arr_copy(v, src, ns, deref_arr_type(src, ns, nl, CSpan(s = 0, n = 0))) {
+              ## #1828 — and `t := deref(p)` over `p : ptr([T; N])`, whose type is `p`'s pointee.
+              match deref_arr_copy(v, src, ns, deref_arr_decl_type(v, src, ns, nl, CSpan(s = 0, n = 0), x86_deref_arr_pointee(v, ptr(slots), src))) {
                 Some(dac) => { bind_array_slot(slots, src, ns, nl, dac.nel, AElem(eek = dac.eek, ess = 0, esl = 0, stride = 1)) }
                 None => {}
               }
