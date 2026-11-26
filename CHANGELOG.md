@@ -134,6 +134,19 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.8.3 — 2026-11-26
+
+- **A name a module binds by an alias `f := other::f` or a listed projection `(f) := other` shadows an
+  ancestor module's `f` in that module and its descendants (#1915, Declarations §6.1).** A bare call
+  `f(40)` in `geo::child` called `geo`'s own `f` instead (140 where 42 was due), a generic `f` alike, and
+  `check` judged the arguments against `geo`'s signature, refusing a valid call. A call through a
+  shadowing alias that renames a generic function (`f := other::h`) is refused at the call with a
+  located diagnostic until #1920 instantiates it, rather than failing at the linker. PATCH.
+- The shared IR now builds pointer subtraction (`p - n`), str-local reassignment, `panic` as
+  noreturn, `str_at` by integer address, `str.ptr` field reads, pointer-to-pointer bitcasts,
+  and pointer arithmetic through struct field pointees (#1923; Memory §4.5). The compiler's own
+  `src/` builds 576 more functions through the IR (3050 to 3626 of 5458, 66.4%). MINOR.
+
 ## 0.8.2 — 2026-11-24
 
 - The sema pass resolves a qualified struct literal `x::S(…)` correctly when the caller's module also declares `S` (#1734). The shared IR backend now builds str.ptr field reads, str-local reassignment, and ptr-to-ptr bitcast. PATCH.

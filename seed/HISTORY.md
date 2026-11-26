@@ -2370,4 +2370,31 @@ The original reading note, verbatim:
 #
 # VERSION 0.8.1 -> 0.8.2, PATCH: sema qualified-struct-literal fix and internal IR coverage; no new surface for the user.
 # The specification pin (spec 1.10.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.8.2 -> 0.8.3   promoted 2026-11-26   seed/alatyr := Stage2
+#
+# WHY: IR coverage batch (#1908/#1923) and alias-shadow fix (#1915/#1919). The IR builder now refuses
+# panic(msg) instead of emitting ud2 (the x86_64 isel loses the diagnostic), so functions containing
+# panic fall back to legacy emission. New builder support: str_at, ptr subtraction, field-ptr
+# arithmetic, deref-of-field foreign check, str.ptr, str reassignment, ptr-to-ptr bitcast.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 9664 hunks, 97911 added, 55934 removed. One sentence:
+# The newly IR-built functions emit stack-frame addressing (movq to/from rbp offsets, .Lxir labels)
+# instead of push/pop sequences (.L labels); functions containing panic(msg) fall back to legacy.
+#
+# CONVERGENCE (bump first; scripts/promote.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 2125029 lines.
+# GAS SHA-256 (Stage2): 4cf716c93caa40a54ae798c4b81b7b5aa7219f83aea9641c6d2fdeec6524c5eb.
+# Stage2 == Stage3 BINARY SHA-256:
+# b0359465aaad162e536f00b91b28618cf84c09e7c7cd50e73e6f71f33b3ef7ac (9101584 B).
+# All three answer `alatyr 0.8.3, spec 1.12.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.8.2) SHA-256:
+# b472348810aecbad820135ff7a14ae9b2b85dc426f4da831b80bb539304cc06f.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (2125029 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.8.2 -> 0.8.3, PATCH: IR coverage batch and alias-shadow fix; no new surface for the user.
+# The specification pin (spec 1.12.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```

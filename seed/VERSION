@@ -51,8 +51,8 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
 # file quietly describing a different compiler.
 #
-current-seed-sha256: b472348810aecbad820135ff7a14ae9b2b85dc426f4da831b80bb539304cc06f
-current-seed-version: 0.8.2
+current-seed-sha256: b0359465aaad162e536f00b91b28618cf84c09e7c7cd50e73e6f71f33b3ef7ac
+current-seed-version: 0.8.3
 #
 # spec-pin: 1.12.0 (tag v1.12.0, spec commit 16a3d92)
 #
@@ -64,10 +64,10 @@ current-seed-version: 0.8.2
 # seed/HISTORY.md keep the pin as it stood when each was written — APPEND-ONLY history; this line, not those, is
 # the current claim.
 #
-# Promoted:      2026-11-24 (see the last entry in seed/HISTORY.md)
+# Promoted:      2026-11-26 (see the last entry in seed/HISTORY.md)
 # Promoted stage: Stage2, of a Stage1 == Stage2 == Stage3 convergence
-# GAS at promotion: 2078764 lines
-# GAS SHA-256:   be9d4c1ec3b4d4533cae7e4afcca738e76f555329455c81ddcc0288124fa88a9
+# GAS at promotion: 2125029 lines
+# GAS SHA-256:   4cf716c93caa40a54ae798c4b81b7b5aa7219f83aea9641c6d2fdeec6524c5eb
 #
 # `current-seed-version` is the `version` field of `package.al` at the moment of the promotion, and by
 # the versioning order in CHANGELOG.md the two must agree at all times: the version moves ON a
