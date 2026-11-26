@@ -134,6 +134,57 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.8.4 — 2026-11-26
+
+- **A range view `u[lo..hi]` over a byte-field struct array starts at element `lo` (#1289).** With
+  `Q := struct { a : u8, b : u8 }`, `u[1..3]` scaled its low bound by a word per element, so on x86_64
+  `qs[0].a` read 0, `qs[1].b = 9` wrote the wrong element, and `for q in u[1..3]` read zeros.
+
+- **A `for x in xs` whose `x` reuses a name bound earlier in the function no longer overwrites a live
+  local (#1330).** The loop's hidden index was placed after the earlier binding, on whichever local
+  followed it, on every backend.
+
+- **`for x in t` over a local `[u8; N]` or `[i8; N]` array yields its elements (#1388).** On x86_64
+  the loop read the packed bytes' first word as a data pointer and died with SIGSEGV.
+
+- **`X : u64 = m::X + 1` beside a module `m` that declares its own `X` builds (#1567).** On x86_64
+  the qualified `m::X` was answered from a cache entry of the bare `X`, and the compiler chased the
+  initializer until it crashed (SIGSEGV).
+
+- **A program that declares `bitcast` calls its own declaration (#1718).** `bitcast(10, 2) + 32`
+  beside `bitcast := fn(a : u64, b : u64) -> u64 { a }` answered 34 on every backend, the call parsed
+  as the prelude's reinterpret; the zero- and one-argument declared forms were refused at parse time.
+  A call written `bitcast(T, v)` with a type first is still the reinterpret (Declarations §6.1).
+
+- A struct literal with a path head is now the struct that path names, its named fields bound by name
+  (Types §9.3; Modules §4.1, §4.2). `g::S(…)` through a module alias `g := geo` used to take a later
+  module's same-named `S` layout on every backend (#1751). `geo::S(b = 2, a = 40)` used to store the
+  values in the order they were written (#1929). A path head that names no struct is now refused at the
+  literal.
+
+- **An index read over a `Vec` of a struct another module also names reads the right struct (#1829).**
+  `v[i].b` over `Vec(Node)` compiled to the constant 0 on x86_64 once any other module of the package
+  declared a `Node`. The bare element type now resolves to the declaration of the module that spells
+  it, else its nearest ancestor's (Declarations §5, MOD-16).
+
+- A line that begins with `-`, `(`, `[` or `..` no longer continues the previous line (#1910; Grammar
+  §2.6, SYN-12): those tokens are not continuing tokens, so the line starts a new statement. The
+  parser used to read `return a` followed by a line `- 8` as `return a - 8`, `g` followed by a line
+  `(42)` as a call, and a line `[0]` as an index of the expression before it. Inside `( … )` and
+  `[ … ]` newlines stay free. A `for` header or a `match` arm pattern whose range `..` starts the next
+  line is now refused, located, because the header or pattern before it is incomplete.
+
+- `alatyr fmt` now breaks an overflowing binary-operator chain after each operator, the operator ending
+  the line and the next operand starting the continuation line one level in (#1918; Tooling §4.3.3,
+  TOOL-28). It used to break before each operator. Under Grammar §2.6 (SYN-12) a line that begins with
+  `-` starts a new statement, so the old layout split a `-` chain into separate statements.
+
+- A scanned source file or directory whose stem is not an identifier (`src/a-b.al`, `src/2d.al`,
+  `src/fn.al`, a directory `src/my-lib/`) is now refused with a Config diagnostic located by its path
+  (spec#192, recorded as MOD-17 after the pinned 1.12.0). A contextual keyword stem (`out`, `scoped`)
+  is refused too while spec#199 is open. Newly rejecting a program the spec declares invalid is a
+  PATCH.
+
 ## 0.8.3 — 2026-11-26
 
 - **A name a module binds by an alias `f := other::f` or a listed projection `(f) := other` shadows an

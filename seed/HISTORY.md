@@ -2398,3 +2398,29 @@ The original reading note, verbatim:
 # VERSION 0.8.2 -> 0.8.3, PATCH: IR coverage batch and alias-shadow fix; no new surface for the user.
 # The specification pin (spec 1.12.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
 ```
+
+# ---------------------------------------------------------------------------------------------
+# 0.8.3 -> 0.8.4   promoted 2026-11-26   seed/alatyr := Stage2
+#
+# WHY: cross-module callee signatures through twice-declared types (#1737/#1942) and struct-literal
+# path-head resolution through module aliases (#1751/#1943). The first removes the ECallSigModule
+# guard; the second resolves the struct that g::S(…) names when g is an alias.
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 0 hunks, 0 added, 0 removed. One sentence:
+# Zero delta: the cross-module callee and struct-literal path-head changes do not alter the
+# compiler's own normalized assembly; the compiler does not exercise those patterns on itself.
+#
+# CONVERGENCE (bump first; scripts/fixpoint.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 2142733 lines.
+# GAS SHA-256 (Stage2): f31951b3c1eae817a24048828cead9c7b27fc3c5bcb9e4249ac830ad141995b7.
+# Stage2 == Stage3 BINARY SHA-256:
+# 6edb6b6d779aff38e177ec8714c0b20f3b4b3b904f19fe3dc51ed27d6348bc90 (9192744 B).
+# All three answer `alatyr 0.8.4, spec 1.12.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)`. smoke = 42.
+# Superseded seed (0.8.3) SHA-256:
+# b0359465aaad162e536f00b91b28618cf84c09e7c7cd50e73e6f71f33b3ef7ac.
+#
+# scripts/fixpoint.sh was re-run on the promoted tree: *** TOOL-1 FIXPOINT: seed == Stage1 == Stage2 (2142733 lines); self-built compiler builds standalone ***
+# The full gate is `scripts/promote.sh gate` on the committed promotion; its run is named in the PR.
+#
+# VERSION 0.8.3 -> 0.8.4, PATCH: cross-module callee and struct-literal path-head; no new surface for the user.
+# The specification pin (spec 1.12.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
