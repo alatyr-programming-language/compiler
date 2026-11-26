@@ -5632,6 +5632,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## are sound). PASS 1 runs with a NULL table (→ the parser's old always-fire behavior; enum DECLS
   ## parse fine regardless, and only enum-ctor USES are affected, which don't change collection).
   parser::set_structs_tbl(0)
+  parser::set_prog_bitcast(false)   ## #1718: PASS 1 keeps the two-argument reinterpret parse
   mut nstr := 0
   ## --- PASS 1: parse to discover enum-type names (results otherwise discarded) ---
   k = 0
@@ -5660,6 +5661,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   d_collect_enum_table(decls, base, ev)
   collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
+  parser::set_prog_bitcast(lower_layout::program_declares_fn(ptr(decls), base, "bitcast"))   ## #1718
   na.off = 0
   ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
   ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
@@ -7075,6 +7077,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   dcap := strbuf::buf_len(bld) + 16
   mut decls := rt::Vec(data = rt::bump(tar, dcap * 8), len = 0, cap = dcap)
   parser::set_structs_tbl(0)
+  parser::set_prog_bitcast(false)   ## #1718: PASS 1 keeps the two-argument reinterpret parse
   mut nstr := 0
   ## --- PASS 1: parse with a NULL enum table to discover enum-type names (results discarded) ---
   k = 0
@@ -7102,6 +7105,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   d_collect_enum_table(decls, base, ev)
   collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
+  parser::set_prog_bitcast(lower_layout::program_declares_fn(ptr(decls), base, "bitcast"))   ## #1718
   na.off = 0
   ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
   ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
@@ -7854,6 +7858,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## `check_files` must publish it before PASS 2; otherwise `check` accepts unknown named fields and
   ## disagrees with build, which already rejects them in its equivalent two-pass path.
   parser::set_structs_tbl(0)
+  parser::set_prog_bitcast(false)   ## #1718: PASS 1 keeps the two-argument reinterpret parse
   mut nstr := 0
   mut perr := false
   mut perr_span := 0
@@ -7930,6 +7935,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   d_collect_enum_table(decls, base, ev)
   collect_struct_table(decls, base, sv)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
+  parser::set_prog_bitcast(lower_layout::program_declares_fn(ptr(decls), base, "bitcast"))   ## #1718
   na.off = 0
   ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
   ast::neg_zero_reset()   ## and every recorded negation zero (#1154)
@@ -8274,6 +8280,7 @@ pub check := fn(src : str, in out a : Arena) -> usize {
   ## Keep the single-file check entry in sync with check_files: struct construction is parsed by name
   ## only when PASS 2 has the declaration-order table from PASS 1.
   parser::set_structs_tbl(0)
+  parser::set_prog_bitcast(false)   ## #1718: PASS 1 keeps the two-argument reinterpret parse
   ## PASS 1 (null enum table) — discover the enum-type names. The same two-pass shape `check_files`
   ## and `compile_files` run, and for the same reason: with a NULL table every `recv.method(args)`
   ## parses as an `EnumLit` (parser.al `is_ctor`), and sema's call-level checks are keyed on
@@ -8293,6 +8300,7 @@ pub check := fn(src : str, in out a : Arena) -> usize {
       d_collect_enum_table(decls, base, ev)
       collect_struct_table(decls, base, sv)
       parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
+      parser::set_prog_bitcast(lower_layout::program_declares_fn(ptr(decls), base, "bitcast"))   ## #1718
       na.off = 0
       ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
       ast::neg_zero_reset()   ## and every recorded negation zero (#1154)

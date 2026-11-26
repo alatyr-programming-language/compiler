@@ -4445,7 +4445,7 @@ pub intrinsic_spelling := fn(src : ptr(u8), cs : usize, cl : usize) -> bool {
   nm == "shl" or nm == "shr" or nm == "rotl" or nm == "rotr"
     or nm == "size" or nm == "align" or nm == "len" or nm == "sub" or nm == "expect"
     or nm == "str_at" or nm == "str_eq" or nm == "byte_at" or nm == "bytes"
-    or nm == "panic" or nm == "forget"
+    or nm == "panic" or nm == "forget" or nm == "bitcast"
 }
 pub callee_is_program_fn := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
   if not intrinsic_spelling(src, cs, cl) { return false }
@@ -4470,6 +4470,20 @@ pub callee_is_program_fn := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, 
 pub decl_is_program_fn_named := fn(dp : ptr(Decl), src : ptr(u8), cs : usize, cl : usize) -> bool {
   d := deref(dp)
   d.kind == DECL_KIND_FN and streq(src, d.name_start, d.name_len, cs, cl) and not module_spelled_ambient(src, d.mod_start, d.mod_len)
+}
+## #1718 — does the program declare a module-level fn spelled `nm` (`decl_is_program_fn_named`'s test,
+## by text)? The driver asks it between its two parse passes, so the parser can leave a call of a
+## program-declared `bitcast` an ordinary call (Declarations §6.1: the declaration joins the name's
+## overload set; Grammar §2.3: `bitcast` is a prelude identifier, not a keyword).
+pub program_declares_fn := fn(decls : ptr(rt::Vec), src : ptr(u8), nm : str) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == DECL_KIND_FN and str_at((src + d.name_start), d.name_len) == nm and not module_spelled_ambient(src, d.mod_start, d.mod_len) { return true }
+    i += 1
+  }
+  false
 }
 ## The spelling an intrinsic arm may match: the callee's text, or the empty str when the callee resolves
 ## to a declaration the program wrote (`callee_is_program_fn`), so that no name-keyed arm matches it.
