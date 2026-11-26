@@ -1087,13 +1087,19 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
               }
             }
             ## ITERABLE `for x in <slice>` (fhi == 0): reserve a hidden loop-index slot immediately after
-            ## the loop var (the lower reads it at `slot_of(x) + 1`). Range-`for` (fhi != 0) reserves nothing.
+            ## the loop var. Range-`for` (fhi != 0) reserves nothing.
+            ## #1330 — the entry is OWNED by this loop: it carries no name (`nl = 0`, so no `slot_of` lookup
+            ## ever finds it) and records the loop var's span start in `ns`, unique to this `for`, so
+            ## `for_index_slot` finds this reservation. "Right after the loop var" holds only when the var's
+            ## name is fresh here: a name bound earlier in the function (a sibling scope that has ended,
+            ## Declarations §6.1) keeps its first slot, the binders above no-op, and `slot_of(x) + 1` is
+            ## whatever was bound after that first binding (a live local the index overwrote).
             ## For a NON-VAR iterable (`for x in f()` / `for c in bytes(s)` — a call/expr, not a Var) also
-            ## reserve a 2-word {ptr,len} MATERIALIZATION temp (at `slot_of(x)+2 .. +3`) so the iterable is
+            ## reserve a 2-word {ptr,len} MATERIALIZATION temp (the two entries right after the index) so the iterable is
             ## evaluated ONCE before the loop into a place the counted loop reads (one-time materialization).
             if unchecked bitcast(usize, fhi) == 0 {
               ioff := svec_len(ptr(slots))
-              svec_push(slots, SlotEntry(ns = 0, nl = 0, off = ioff, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+              svec_push(slots, SlotEntry(ns = fns, nl = 0, off = ioff, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
               if var_name_span(flo).n == 0 {
                 tpo := svec_len(ptr(slots))
                 svec_push(slots, SlotEntry(ns = 0, nl = 0, off = tpo, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))

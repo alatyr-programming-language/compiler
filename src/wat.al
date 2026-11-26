@@ -1525,7 +1525,10 @@ local_slot_scan := fn(list : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut Stm
           Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
             if stmt_same(Option.Some(sq), target) { result = 0 - (b + 1) ; found = true }
             else {
-              if stmt_same(first_assign_handle(fn_head, fns, fnl, src, a), Option.Some(sq)) { if unchecked bitcast(usize, fhi) == 0 { b = b + 2 } else { b = b + 1 } }
+              ## #1330 — when the loop var's name was bound earlier (Declarations §6.1), the var keeps that
+              ## local, but the hidden index is this loop's own (`wat_for_index_local`), never the earlier
+              ## binding's neighbour.
+              if stmt_same(first_assign_handle(fn_head, fns, fnl, src, a), Option.Some(sq)) { if unchecked bitcast(usize, fhi) == 0 { b = b + 2 } else { b = b + 1 } } else if unchecked bitcast(usize, fhi) == 0 { b = b + 1 }   ## null-ok: #1938 — an iterable `For` carries a null `hi` (ast.al; not an Option)
               r := local_slot_scan(fb, fn_head, target, b, src, a, decls)
               if r < 0 { result = r ; found = true } else { b = r ; s = nx }
             }
@@ -1602,6 +1605,17 @@ name_local_index := fn(body_head : Option(ptr(mut Stmt)), src : ptr(u8), ns : us
   mut result := pcount
   if r < 0 { result = pcount + ((0 - r) - 1) }
   result
+}
+
+## #1330 — the WASM local of the hidden index the local scan reserved for the iterable `For` statement
+## `fq`: right after the loop var when the var's first handle is this loop, else the one local the scan
+## gives the loop itself (`local_slot_scan`).
+wat_for_index_local := fn(fn_head : Option(ptr(mut Stmt)), fq : ptr(mut Stmt), src : ptr(u8), fns : usize, fnl : usize, pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+  r := local_slot_scan(fn_head, fn_head, Option.Some(fq), 0, src, a, decls)
+  mut k : i64 = 0
+  if r < 0 { k = (0 - r) - 1 }
+  if stmt_same(first_assign_handle(fn_head, fns, fnl, src, a), Option.Some(fq)) { k = k + 1 }
+  pcount + k
 }
 
 ## Is `[ns, ns+nl)` a local ANYWHERE in the fn tree (a `:=`/`=` in any scope — top-level or nested)?
@@ -7523,7 +7537,7 @@ emit_wat_stmts := fn(list_head : Option(ptr(mut Stmt)), fn_head : Option(ptr(mut
               wat_loop_push(idF, idF, false, false, WAT_DEF_N)
               bn := expr_var_name(flo)
               varidx := name_local_index(fn_head, src, fns, fnl, pcount, a, decls)
-              ididx := varidx + 1
+              ididx := wat_for_index_local(fn_head, sq, src, fns, fnl, pcount, a, decls)   ## #1330: this loop's own index local
               mut isslice := false
               if bn.n != 0 { if is_slice_local(fn_head, src, bn.s, bn.n, a) { isslice = true } }
               mut isarr := false

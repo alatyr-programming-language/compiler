@@ -3377,6 +3377,24 @@ slot_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> i64 {
   res
 }
 
+## #1330 — the hidden loop-index slot `collect_slots` reserved for the iterable `for` whose loop var starts
+## at source offset `fns`: the one entry with no name (`nl == 0`) that records `ns == fns`. It sits right
+## after the loop var only when the var's name was fresh at that `for`; when the name was bound earlier in
+## the function, `slot_of(x) + 1` is the slot of whatever followed that earlier binding, which the loop
+## then overwrote. `None` when no such entry exists.
+for_index_slot := fn(slots : ptr(SVec), fns : usize) -> Option(u64) {
+  cnt := svec_len(slots)
+  st := svec_stride()
+  base := deref(slots).base
+  mut i : usize = 0
+  while i < cnt {
+    e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)  ## unchecked-ok: the slot region walk `slot_of` makes
+    if deref(e).nl == 0 and deref(e).ns == fns { return Option.Some(u64(deref(e).off)) }
+    i += 1
+  }
+  Option.None
+}
+
 ## The SHADOWING half of `slot_of` (#589): does the name `[s, s+n)` have a frame slot — a bind, a
 ## parameter or a local — declared STRICTLY BEFORE source offset `use_s`? `slot_of` answers "is this
 ## name a slot" for the WHOLE function, which is exactly what `emit_gas`' `Expr::Var` arm asks before
@@ -29637,15 +29655,23 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             vslot := slot_of(cx.slots, cx.src, fns, fnl)
             ## The hidden loop index: `collect_slots` reserves it as the ONE entry pushed right after the loop
             ## var, whatever the var's width. An aggregate var's base is the TOP of its block (its fillers
-            ## sit below it, §4 up-growing), so the index is `vslot + 1` for every element kind — a
-            ## `vslot + stride` index landed on the body's first local (#1321).
-            islot := vslot + 1
+            ## sit below it, §4 up-growing), so a `vslot + stride` index landed on the body's first local
+            ## (#1321). And it is `vslot + 1` only when the var's name was fresh at this `for` (#1330): read
+            ## the entry this loop owns, never a neighbour of the var.
+            mut islot : i64 = 0
+            match for_index_slot(cx.slots, fns) {
+              Some(fio) => { islot = i64(fio) }
+              None => {
+                lower_show_src_line(cx.src, fns)
+                panic("selfhost: this iterable `for` has no hidden index slot reserved for it (#1330) — the slot collector did not see this loop. [fail-loud guard: the index would overwrite a neighbouring local]")
+              }
+            }
             ## scalar-word (eek 0) and FLOAT (eek 9) element arrays: both keep the element COUNT in `snl`
             ## and read the element as an inline word (a float rides its slot as bits; the loop var is
             ## tagged `ek==9` by collect_slots so body float ops dispatch the xmm path). Aggregate/str
             ## arrays keep `snl` as a type span (no static count) → they stay on the slice path (future).
             ## A NON-VAR iterable (`for x in f()`) is materialized ONCE into the {ptr,len} temp at
-            ## `vslot+2 .. +3` (reserved by collect_slots), then read like a by-VALUE slice with base there.
+            ## `islot+1 .. +2` (reserved by collect_slots right after the index), then read like a by-VALUE slice with base there.
             ## The iterable's SlotEntry fields as SCALARS (a `mut bent : SlotEntry = …; bent = deref(…)`
             ## struct-local reassignment SILENTLY DROPS some fields — the documented landmine; read the
             ## fields into scalars from an IMMUTABLE `bent := deref(…)` instead).
@@ -29679,13 +29705,14 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             lcont := nl + 2      ## `continue` target: the increment (so the index still advances)
             nl += 3
             if is_nonvar {
-              ## §4 UP-GROWING: the 2-word temp is reserved at slots [vslot+2, vslot+3]; its base (word 0 =
-              ## ptr) is the TOP of that block = vslot+3, so word 1 (len) lands at vslot+2 — BELOW the base,
-              ## clear of the hidden index __i at vslot+1 (a `vslot+2` base would put len at vslot+1 and
+              ## §4 UP-GROWING: the 2-word temp is reserved at slots [islot+1, islot+2]; its base (word 0 =
+              ## ptr) is the TOP of that block = islot+2, so word 1 (len) lands at islot+1 — BELOW the base,
+              ## clear of the hidden index __i at islot (an `islot+1` base would put len at islot and
               ## clobber __i, so the loop bound read 0 and never ran). `emit_arm_val_store` handles a
               ## `Slice(…)` StructLit (emit_struct_assign) AND a `bytes(s)`/`sub(…)` str-view (emit_str_pair
               ## pair pop) — both write ptr @ base, len @ base-1 (the up-growing 2-word layout).
-              bslot = vslot + 3
+              ## #1330: relative to the index this loop owns (`vslot + 3` only when the var name was fresh here)
+              bslot = islot + 2
               emit_arm_val_store(flo, i64(bslot), sb, cx, a, nl)
               ## a `str`-element non-var iterable (`xs[1..n]`, a `Slice(str)`-returning call): the temp now
               ## holds its {ptr, len} by value; each element is a 2-word str (#1177).
@@ -29710,7 +29737,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
               ## a struct/enum-element `Slice(T)`-returning call (#1211): each element is that aggregate,
               ## copied `stride` words from the temp's data ptr (by value: `b_is_ref` stays false). The
               ## loop var is bound that wide by collect_slots, which reserves the index right after it
-              ## (`vslot+1`, unchanged) and the temp after that, so `islot`/`bslot` stay as they are.
+              ## (`islot`) and the temp after that, so `islot`/`bslot` stay as they are.
               fca := for_call_agg_elem(flo, cx.decls, cx.src, a, cx.gp_s, cx.gp_l, cx.it_s, cx.it_l, cx.gp2_s, cx.gp2_l, cx.it2_s, cx.it2_l)
               if fca.is_slice { is_agg_slice = true; agg_stride = fca.stride }
             } else if unchecked bitcast(usize, gfor_mgv) != 0 and array_lit_info(gfor_mgv).is_a {
