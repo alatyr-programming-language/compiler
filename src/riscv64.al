@@ -3790,7 +3790,7 @@ mut RV_AGG := 0
 mut RV_AGG_LIM := 0
 ## MATCH scratch region (§8 enum slice-param / enum PARAM): materialized by-reference enum words live in
 ## this per-fn frame region. A nested payload match must not overwrite its enclosing match, so the region
-## has two lexical levels. A third level is rejected by a generation-time panic rather than lowered with
+## has four lexical levels. A fifth level is rejected by a generation-time panic rather than lowered with
 ## overlapping storage. RV_MTMP is the region start; RV_MTMP_STRIDE is one level's word span.
 mut RV_MTMP := 0
 mut RV_MTMP_STRIDE : i64 = 0
@@ -3825,7 +3825,7 @@ rv_bind_pop := fn(head : Option(ptr(mut Bind))) {
 }
 
 rv_match_tmp_offset := fn() -> i64 {
-  if RV_MDEPTH >= 2 { panic("riscv64: enum match scratch nesting exceeds two levels") }
+  if RV_MDEPTH >= 4 { panic("riscv64: enum match scratch nesting exceeds four levels") }
   RV_MTMP + RV_MDEPTH * RV_MTMP_STRIDE
 }
 ## The AGGREGATE payload-type span of binding `[ns,nl]` — non-0/0 only when it is the CURRENT arm's SINGLE
@@ -7918,10 +7918,10 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   ## materialization writes past the frame top into the CALLER's frame (a raw fault, not a clean trap).
   pemt := rv_param_enum_tmp_words(ephead, src, decls, a)
   if pemt > mtmp { mtmp = pemt }
-  ## Nested enum matches need an independent scratch block for the inner materialization. Reserve two
+  ## Nested enum matches need an independent scratch block for the inner materialization. Reserve four
   ## lexical levels; rv_match_tmp_offset rejects a deeper shape instead of allowing silent overlap.
   mtmp_stride := mtmp
-  if mtmp > 0 { mtmp = mtmp * 2 }
+  if mtmp > 0 { mtmp = mtmp * 4 }
   ## WIDE-STRUCT SRET (LP64 indirect result): a fn returning a PLAIN struct of > 8 words takes the caller's
   ## destination pointer in a0 and must SPILL it to a reserved frame word (it has to survive nested calls
   ## and register churn up to every Return point). A generic INSTANCE is classified from its substituted
