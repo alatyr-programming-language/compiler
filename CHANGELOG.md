@@ -134,6 +134,16 @@ under `## Unreleased`. The entries already there stay until the next release.
 
 ## Unreleased
 
+## 0.8.5 — 2026-11-27
+
+- **Internal: panic(msg) calls are now compiled as unconditional trap instructions instead of being
+  refused by the IR builder (#1863).** This is invisible to users but unblocks ~55 src/ functions
+  from the shared IR path, advancing IR coverage toward the 70% target.
+
+- **Internal: the aarch64 and riscv64 legacy emitters now support up to 4 levels of nested enum
+  match scratch (up from 2).** Fixes a compiler crash (SIGILL) on programs with triple-nested enum
+  match expressions, found by progen.
+
 ## 0.8.4 — 2026-11-26
 
 - **A range view `u[lo..hi]` over a byte-field struct array starts at element `lo` (#1289).** With

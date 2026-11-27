@@ -2424,3 +2424,26 @@ The original reading note, verbatim:
 #
 # VERSION 0.8.3 -> 0.8.4, PATCH: cross-module callee and struct-literal path-head; no new surface for the user.
 # The specification pin (spec 1.12.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.8.4 -> 0.8.5   promoted 2026-11-27   seed/alatyr := Stage2
+#
+# WHY: IR panic-trap (build panic(msg) as OpTrap+TkPanic instead of refusing — unblocks ~55 src/
+# functions from the IR path) and legacy match scratch nesting widened from 2 to 4 levels (fixes
+# progen CRASH on programs with triple-nested enum match expressions in the aarch64/riscv64 emitter).
+#
+# THE DELTA (normalized .L<N> / .Lra<N>_<k> / .Lxir<N>_<k> / .Lxir<N>_s<k>): 2026 hunks, 8342 removed, 10684 added. One sentence:
+# 55 src/ functions containing panic() calls move from the legacy path to the shared IR
+# (the panic-trap change), panic sites across all functions emit ud2 instead of write(2)+exit(1),
+# and the aarch64/riscv64 match scratch region widens from 2 to 4 levels.
+#
+# CONVERGENCE (bump first; scripts/fixpoint.sh on native x86_64):
+# Stage1 == Stage2 == Stage3 GAS byte-identical (normalized) at 2145081 lines.
+# GAS SHA-256 (Stage2): 364748c0713b5c35218a7bd69af655568716cde5a3aede80e7aa71029f07e8d2.
+# Stage2 == Stage3 BINARY SHA-256:
+# a5bb79b181593e9804a558148c70111fb1655c65058a67cbb633079ac97c8972 (9217328 B).
+# Superseded seed (0.8.4) SHA-256:
+# 6edb6b6d779aff38e177ec8714c0b20f3b4b3b904f19fe3dc51ed27d6348bc90.
+#
+# VERSION 0.8.4 -> 0.8.5, PATCH: IR panic-trap + legacy match nesting fix; no new surface for the user.
+# The specification pin (spec 1.12.0 (a target revision, not conformance; known deviations: https://github.com/alatyr-programming-language/compiler/blob/main/scripts/known-deviations.issues.tsv)) did not move.
