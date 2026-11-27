@@ -1971,7 +1971,7 @@ mut A64_AGG := 0
 mut A64_AGG_LIM := 0
 ## MATCH scratch region (§8 enum slice-param / enum PARAM): materialized by-reference enum words live in
 ## this per-fn frame region. A nested payload match must not overwrite its enclosing match, so the region
-## has two lexical levels. A third level is rejected by a generation-time panic rather than lowered with
+## has four lexical levels. A fifth level is rejected by a generation-time panic rather than lowered with
 ## overlapping storage. A64_MTMP is the region start; A64_MTMP_STRIDE is one level's word span.
 mut A64_MTMP := 0
 mut A64_MTMP_STRIDE : i64 = 0
@@ -2008,7 +2008,7 @@ a64_bind_pop := fn(head : Option(ptr(mut Bind))) {
 }
 
 a64_match_tmp_offset := fn() -> i64 {
-  if A64_MDEPTH >= 2 { panic("aarch64: enum match scratch nesting exceeds two levels") }
+  if A64_MDEPTH >= 4 { panic("aarch64: enum match scratch nesting exceeds four levels") }
   A64_MTMP + A64_MDEPTH * A64_MTMP_STRIDE
 }
 ## Current COMPTIME-FOR-VARIANT loop variant (the variant name span the enclosing `wild == 2` unroll is
@@ -8882,10 +8882,10 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   ## trailing VALUE at all). Size it from the PARAM LIST instead — see a64_param_enum_tmp_words.
   pemt := a64_param_enum_tmp_words(ephead, src, decls, a)
   if pemt > mtmp { mtmp = pemt }
-  ## Nested enum matches need an independent scratch block for the inner materialization. Reserve two
+  ## Nested enum matches need an independent scratch block for the inner materialization. Reserve four
   ## lexical levels; a64_match_tmp_offset rejects a deeper shape instead of allowing silent overlap.
   mtmp_stride := mtmp
-  if mtmp > 0 { mtmp = mtmp * 2 }
+  if mtmp > 0 { mtmp = mtmp * 4 }
   ## WIDE-STRUCT SRET (§8 piece 2b): a fn returning a plain struct of > 8 words reserves ONE extra frame
   ## word ABOVE everything to spill the incoming x8 (indirect result pointer). Computed from the DECLARED
   ## return type (a generic `T` return is not a plain struct here → 0, so generic SRET stays trapping),

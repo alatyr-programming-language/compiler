@@ -1505,22 +1505,26 @@ ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize
     }
     None => {}
   }
-  ## `panic(msg)` -- the divergent builtin recognised by name. The message text is not carried
-  ## through the IR, so the containing function falls back to legacy emission, where `panic` inlines
-  ## the write(2)+exit(1) syscall pair. A future isel change can emit the pair from an annotation,
-  ## at which point the refusal is lifted.
+  ## `panic(msg)` -- the divergent builtin recognised by name. Emitted as an unconditional trap
+  ## (`OpTrap`, `TkPanic`); the message text is not carried through the IR (the isel emits `ud2` or
+  ## equivalent). The legacy emitter inlines write(2)+exit(1); a future isel annotation can recover it.
   if nm == "panic" { return ib_bx_panic(bp, a, e) }
   ib_call_user(bp, a, e, cs, cl, na, ah)
 }
 ib_call_out := fn(v : Option(VRegId)) -> CallOut {
   match v { Some(x) => { CallOut.CoValue(x) }; None => { CallOut.CoRefused } }
 }
-## `panic(msg)`: refuses the containing function. The message text is not yet carried through the IR
-## (the x86_64 isel emits `ud2` for all traps, losing the diagnostic). Until the isel learns
-## write(2, msg)+exit(1) for TkPanic, every function that calls `panic` falls back to legacy emission.
+## `panic(msg)`: an unconditional trap. The message text is not carried through the IR — the isel
+## emits `ud2` (x86_64) or the equivalent, so the diagnostic is lost. The runtime's own write(2)+exit(1)
+## path runs only through the legacy emitter; a future isel annotation can recover it. The trap is
+## divergent: `term` is set, and `ib_bx_callv` returns `CoVoid` with the value dead (D2, line 764).
 ib_bx_panic := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> CallOut {
-  ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallPanic)
-  CallOut.CoRefused
+  mut it := inst0(Op.OpTrap)
+  it.tk = TrapKind.TkPanic
+  set_span(it, ib_span_of(bp, e))
+  k := emit(ib_b_f(bp), a, it)
+  ib_b_set_term(bp, true)
+  CallOut.CoVoid
 }
 
 ## `B(v)` for a brand `B` with an in-scope `@convert` to it: Types §4.6 dispatch step (2) — "An in-scope
