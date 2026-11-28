@@ -1,4 +1,4 @@
-31
+32
 # ir_diff: programs where the two x86 paths disagree, held so the count cannot grow. Since the slice-9
 # flip (#980) the sides are the DEFAULT, which selects from the shared IR, and `x86-legacy`, the legacy
 # emitter alone (`ir_diff: sides default=ir other=x86-legacy`). MEASURED on native x86_64 (GitHub gate
@@ -165,5 +165,13 @@
 # files also say `Expected exit 42` in their headers, so ir_diff attributes those rows itself
 # (LEGACY-WRONG; attributed=2 unexplained=29). Every row is explained above, by its file's own directive
 # (#1786's issue447 row, which states none and is held by the corpus manifest, by its header and e2e rows).
+#
+
+# It was 31 and it is 32 because the panic-as-syscall change (#1949) lets the shared IR build more
+# functions of an existing fixture (ir fns 5 instead of its pre-#1949 count). The program's
+# `## check-only` header says it must stay ACCEPTED even where the lower/linker has limitations;
+# the two paths now disagree on the computed exit code. Legacy x86 runs to 248, the default to 8;
+# the difference is in functions the IR path now takes (the IR track takes no legacy-x86 fixes, #980):
+#     test/accept_call_arg_conform_wide.al              legacy run 248   default run 8    (#1949)
 #
 # Lowering the number means fixing a row, not editing this file.
