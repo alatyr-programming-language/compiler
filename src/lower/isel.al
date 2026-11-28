@@ -726,6 +726,37 @@ sx_call := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
 ## (`x86_plain_label`, in the parent: its parts live in sibling modules this file cannot name).
 sx_plain_label := fn(x : SxX, d : Decl) -> bool { x86_plain_label(x.decls, x.src, d) }
 
+## `%r = syscall %nr(args…)` (ABI §5): the Linux x86_64 system-call convention — the number in %rax,
+## up to six arguments in %rdi, %rsi, %rdx, %r10, %r8, %r9, `syscall`, the result in %rax. Argument
+## position 3 uses %r10 (not %rcx — the `syscall` instruction clobbers %rcx and %r11).
+sx_syscall := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
+  n := ir::i_n(ip)
+  if n > 6 { return false }
+  if not sx_lda(sb, SxR.XrAx, ip) { return false }
+  mut j : usize = 0
+  while j < n {
+    av := sx_slot(ir::pool_get(x.f, ir::i_pool(ip) + j))
+    if j == 0 { sx_ldv(sb, SxR.XrDi, av) }
+    else if j == 1 { sx_ldv(sb, SxR.XrSi, av) }
+    else if j == 2 { sx_ldv(sb, SxR.XrDx, av) }
+    else if j == 3 {
+      sx_put(sb, "  movq "); sx_int(sb, sx_off(av)); sx_put(sb, "(%rbp), %r10\n")
+    }
+    else if j == 4 { sx_ldv(sb, SxR.XrR8, av) }
+    else { sx_ldv(sb, SxR.XrR9, av) }
+    j = j + 1
+  }
+  sx_put(sb, "  syscall\n")
+  dv : Option(SxSlot) = sx_dst(ip)
+  match dv {
+    Some(d) => {
+      sx_stv(sb, SxR.XrAx, d)
+      sx_canon_slot(sb, x, d)
+    }
+    None => { true }
+  }
+}
+
 ## ── regions ──
 
 ## The region an opener instruction opens, and what an `end` does for it.
@@ -900,9 +931,10 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize, 
       sx_trap_unless(sb, x, "jz", ir::i_tk(ip), ip)
       true
     }
+    OpSyscall => { sx_syscall(sb, x, ip) }
     OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
       | OpIToF | OpFToI | OpFExt | OpFDemote | OpCallInd
-      | OpCallC | OpSyscall | OpSwitch => { false }
+      | OpCallC | OpSwitch => { false }
   }
 }
 

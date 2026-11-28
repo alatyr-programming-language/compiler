@@ -1505,22 +1505,87 @@ ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize
     }
     None => {}
   }
-  ## `panic(msg)` -- the divergent builtin recognised by name. The message text is not carried
-  ## through the IR, so the containing function falls back to legacy emission, where `panic` inlines
-  ## the write(2)+exit(1) syscall pair. A future isel change can emit the pair from an annotation,
-  ## at which point the refusal is lifted.
-  if nm == "panic" { return ib_bx_panic(bp, a, e) }
+  ## `panic(msg)` — the divergent builtin recognised by name. When the argument is a string literal
+  ## the builder emits inline write(2)+exit(1) syscalls, matching the legacy emitter (line 22764).
+  ## Otherwise it falls back to OpTrap TkPanic (ud2, no message).
+  if nm == "panic" { return ib_bx_panic(bp, a, e, na, ah) }
   ib_call_user(bp, a, e, cs, cl, na, ah)
 }
 ib_call_out := fn(v : Option(VRegId)) -> CallOut {
   match v { Some(x) => { CallOut.CoValue(x) }; None => { CallOut.CoRefused } }
 }
-## `panic(msg)`: refuses the containing function. The message text is not yet carried through the IR
-## (the x86_64 isel emits `ud2` for all traps, losing the diagnostic). Until the isel learns
-## write(2, msg)+exit(1) for TkPanic, every function that calls `panic` falls back to legacy emission.
-ib_bx_panic := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> CallOut {
-  ib_refuse_call(bp, e, NyWhy.NwOutside, Construct.ECallPanic)
-  CallOut.CoRefused
+## `panic(msg)`: when the argument is a string literal, the builder emits the runtime abort inline
+## as two system calls — `write(2, ptr, len)` to stderr, then `exit(1)` — matching the legacy
+## emitter (line 22764). The literal's decoded bytes enter the program's literal table (`prog_lit`
+## -> `OpAddrSym`), and the length is a constant; the two calls are `OpSyscall` instructions the
+## x86_64 isel translates via `sx_syscall`. When the argument is not a string literal or the
+## literal's bytes cannot be decoded (`ib_strlit_addr` returns `None`), the builder falls back to
+## `OpTrap` `TkPanic` — `ud2` without a message — so the function still goes through the IR
+## rather than being refused. The trap is divergent: `term` is set, and `ib_bx_callv` returns
+## `CoVoid` with the value dead (D2, line 764).
+ib_bx_panic := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), na : usize, ah : Option(ptr(mut Arg))) -> CallOut {
+  ## Try the string-literal path: the common `panic("message")` form.
+  if na == 1 {
+    match ah {
+      Some(ap) => {
+        a0 := deref(arg_p(ap))
+        ae : ptr(Expr) = a0.e
+        match deref(ae) {
+          Expr::StrLit(ss, sl, lbl, ps, pn) => {
+            po : Option(VRegId) = ib_strlit_addr(bp, a, ss, sl, lbl)
+            match po {
+              Some(pa) => {
+                f := ib_b_f(bp)
+                ## `write(2, ptr, len)`: syscall 1 on x86_64 (rax=1, rdi=2, rsi=ptr, rdx=len).
+                nr_w := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), 1)
+                fd := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), 2)
+                ln := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), i64(sl))
+                mut wt := inst0(Op.OpSyscall)
+                set_a(wt, o_vreg(nr_w))
+                s0 := pool_push(f, a, usize(fd))
+                wt.pool = s0
+                s1 := pool_push(f, a, usize(pa))
+                s2 := pool_push(f, a, usize(ln))
+                wt.n = 3
+                i1 := emit(f, a, wt)
+                ## `exit(1)`: syscall 60 on x86_64 (rax=60, rdi=1).
+                nr_e := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), 60)
+                ec := ib_konst(bp, a, ib_ks_i64(Sgn.SgU), 1)
+                mut et := inst0(Op.OpSyscall)
+                set_a(et, o_vreg(nr_e))
+                s3 := pool_push(f, a, usize(ec))
+                et.pool = s3
+                et.n = 1
+                i2 := emit(f, a, et)
+                ## The exit syscall never returns, but the verifier needs a terminator to
+                ## close the sequence (V7). An OpTrap after the exit is dead code.
+                mut tt := inst0(Op.OpTrap)
+                tt.tk = TrapKind.TkPanic
+                set_span(tt, ib_span_of(bp, e))
+                i3 := emit(f, a, tt)
+                ib_b_set_term(bp, true)
+                return CallOut.CoVoid
+              }
+              None => {}
+            }
+          }
+          Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+            | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index
+            | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+            | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::Call => {}
+        }
+      }
+      None => {}
+    }
+  }
+  ## Fallback: trap without message (ud2). The function still goes through the IR; the diagnostic
+  ## text is lost, but the program aborts.
+  mut it := inst0(Op.OpTrap)
+  it.tk = TrapKind.TkPanic
+  set_span(it, ib_span_of(bp, e))
+  k := emit(ib_b_f(bp), a, it)
+  ib_b_set_term(bp, true)
+  CallOut.CoVoid
 }
 
 ## `B(v)` for a brand `B` with an in-scope `@convert` to it: Types §4.6 dispatch step (2) — "An in-scope
